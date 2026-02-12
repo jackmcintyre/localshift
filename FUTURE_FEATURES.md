@@ -223,3 +223,15 @@ Additionally, all `async_set_*` methods were missing the 5-second delays between
 
 **Fix:** Removed `battery_low` as a standalone daytime charging justification. The daytime logic changed from `battery_low OR expensive_coming OR solar_gap` to `solar_gap OR expensive_coming`. When `solar_can_reach_target` is ON, the system trusts the Solcast forecast (which already accounts for current SOC and consumption) and waits for solar. Grid charging during daytime now only triggers when there's a genuine solar gap or when cheap arbitrage before a spike is justified. Overnight logic unchanged (still requires `battery_low AND expensive_coming`). Updated `active_mode` sensor to mirror the new logic.
 
+### B12: Daily summary timer doesn't update when options change
+
+**Problem:** The daily summary notification timer is set once at coordinator startup. If the user changes the demand window end time in the integration options, the coordinator needs to be restarted to pick up the new time.
+
+**Fix:** Not yet implemented. Would require listening for config entry option changes and rescheduling the timer.
+
+### B13: target_reached_today flag not persisted across restarts
+
+**Problem:** The `target_reached_today` flag is stored in memory. If Home Assistant restarts mid-day after the battery target was already reached, the flag resets and the system might unnecessarily try to charge the battery again.
+
+**Fix:** Not yet implemented. Would require persisting to config entry options or using HA's storage mechanism.
+
