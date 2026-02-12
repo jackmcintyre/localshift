@@ -77,6 +77,11 @@ PERIODIC_INTERVAL = timedelta(minutes=1)
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
 
+# Spike discharge time window (dummy tariff limitation)
+# Only discharge between 6am-midnight (dummy tariff has low sell price overnight)
+DISCHARGE_EARLIEST_HOUR = 6
+DISCHARGE_LATEST_HOUR = 0  # midnight (0 = 00:00, handled specially)
+
 
 @dataclass
 class CoordinatorData:
@@ -994,6 +999,7 @@ class AmberPowerwallCoordinator:
             d.solar_remaining_kwh = round(total_solar, 2)
 
         # ---- Step 13: solar_export_hold_justified ----
+        # Safe default: assume sun is down if entity unavailable (prevents overnight issues)
         sun_state = self.hass.states.get("sun.sun")
         sun_up = sun_state is not None and sun_state.state == "above_horizon"
         deficit_kwh = d.solar_battery_forecast.get("deficit_kwh", 0)
@@ -1034,12 +1040,18 @@ class AmberPowerwallCoordinator:
             SWITCH_SPIKE_DISCHARGE_ENABLED
         )
 
+        # Check if we're in the valid discharge window (6am-midnight)
+        # The dummy tariff has low sell price overnight, so discharging is pointless
+        current_hour = now_dt.hour
+        in_discharge_window = current_hour >= DISCHARGE_EARLIEST_HOUR
+
         if not automation_enabled:
             d.active_mode = BatteryMode.MANUAL
         elif d.demand_window_active:
             d.active_mode = BatteryMode.DEMAND_BLOCK
-        elif d.price_spike and spike_discharge_enabled:
+        elif d.price_spike and spike_discharge_enabled and in_discharge_window:
             # Spike overrides manual actions (YAML A1/A5 have no manual check)
+            # Only discharge during valid window (6am-midnight)
             d.active_mode = BatteryMode.SPIKE_DISCHARGE
         elif d.manual_override:
             d.active_mode = BatteryMode.MANUAL
