@@ -1,0 +1,361 @@
+# =============================================================================
+# Amber Powerwall Custom Component Dashboard
+# =============================================================================
+#
+# Dashboard that ONLY uses entities from the amber_powerwall custom component.
+# Does not reference any entities from the YAML package.
+#
+# Add to configuration.yaml:
+#   lovelace:
+#     mode: storage
+#     dashboards:
+#       amber-powerwall:
+#         mode: yaml
+#         filename: dashboards/amber_powerwall_component.yaml
+#         title: Powerwall
+#         icon: mdi:battery-sync
+#
+# =============================================================================
+
+title: Powerwall
+views:
+  - title: Control
+    path: control
+    icon: mdi:battery-sync
+    type: sections
+    max_columns: 2
+    sections:
+      # =================================================================
+      # LEFT COLUMN
+      # =================================================================
+
+      # --- Status ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Status
+            heading_style: title
+
+          - type: tile
+            entity: sensor.amber_powerwall_active_mode
+            name: Mode
+
+          - type: gauge
+            entity: sensor.my_home_percentage_charged
+            name: Battery
+            min: 0
+            max: 100
+            severity:
+              green: 50
+              yellow: 20
+              red: 10
+            needle: true
+
+          - type: tile
+            entity: sensor.100h_general_price
+            name: Buy Price
+            icon: mdi:cart-arrow-down
+
+          - type: tile
+            entity: sensor.100h_feed_in_price
+            name: Sell Price
+            icon: mdi:cart-arrow-up
+
+          - type: tile
+            entity: binary_sensor.100h_price_spike
+            name: Price Spike
+            color: red
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_demand_window_active
+            name: Demand Window
+            color: orange
+
+      # --- Controls ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Controls
+            heading_style: title
+
+          - type: tile
+            entity: switch.amber_powerwall_automation_enabled
+            name: Automation
+            icon: mdi:power
+
+          - type: tile
+            entity: switch.amber_powerwall_dry_run
+            name: Dry Run
+            icon: mdi:test-tube
+            color: amber
+
+          - type: tile
+            entity: switch.amber_powerwall_spike_discharge_enabled
+            name: Spike Discharge
+
+          - type: tile
+            entity: switch.amber_powerwall_demand_window_block
+            name: Demand Block
+            color: orange
+
+          - type: tile
+            entity: number.amber_powerwall_cheap_price_threshold
+            name: Cheap Price
+
+          - type: tile
+            entity: number.amber_powerwall_max_pre_charge_price
+            name: Max Pre-charge
+
+          - type: tile
+            entity: number.amber_powerwall_price_deadband
+            name: Deadband
+
+          - type: tile
+            entity: number.amber_powerwall_forecast_lookahead
+            name: Lookahead
+
+          - type: tile
+            entity: number.amber_powerwall_pre_charge_battery_threshold
+            name: Pre-charge SOC
+
+          - type: tile
+            entity: number.amber_powerwall_battery_target
+            name: Battery Target
+
+      # --- Battery Mode ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Battery Mode
+            heading_style: title
+
+          - type: markdown
+            content: >
+              {% set mode = states('sensor.amber_powerwall_active_mode') %}
+              {% if mode == 'manual' %}🟠 **MANUAL OVERRIDE**
+              {%- elif mode == 'spike_discharge' %}🔴 **Spike Discharge** — exporting to grid
+              {%- elif mode == 'boost_charging' %}🟡 **Boost Charge (5kW)** — fast charging from grid
+              {%- elif mode == 'grid_charging' %}🟢 **Grid Charge (3.3kW)** — charging from grid
+              {%- elif mode == 'solar_export_hold' %}🟡 **Solar Export Hold** — exporting solar at high FIT
+              {%- elif mode == 'hold' %}🔵 **Hold** — battery idle, house on grid
+              {%- elif mode == 'holding_for_spike' %}🟠 **Holding for Spike**
+              {%- elif mode == 'demand_block' %}🟠 **Demand Block**
+              {%- else %}⚪ **Self Consumption** — normal operation
+              {%- endif %}
+
+              {% if mode == 'manual' %}Manual control active
+              {%- elif mode == 'demand_block' %}Protecting from grid imports
+              {%- elif mode == 'spike_discharge' %}Price spike detected
+              {%- elif mode in ['grid_charging', 'boost_charging'] %}Price below threshold
+              {%- elif mode == 'solar_export_hold' %}FIT above average
+              {%- elif mode in ['hold', 'holding_for_spike'] %}Preserving battery
+              {%- endif %}
+
+      # --- Actions ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Actions
+            heading_style: title
+
+          - type: button
+            name: Self Consumption
+            icon: mdi:battery-sync
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.amber_powerwall_return_to_self_consumption
+            icon_height: 40px
+
+          - type: button
+            name: Force Charge
+            icon: mdi:battery-charging
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.amber_powerwall_force_charge
+            icon_height: 40px
+
+          - type: button
+            name: Boost Charge
+            icon: mdi:battery-charging-high
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.amber_powerwall_boost_charge_5kw
+            icon_height: 40px
+
+          - type: button
+            name: Hold
+            icon: mdi:battery-lock
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.amber_powerwall_hold_battery
+            icon_height: 40px
+
+          - type: button
+            name: Force Discharge
+            icon: mdi:flash-alert
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.amber_powerwall_force_discharge
+            icon_height: 40px
+
+      # =================================================================
+      # RIGHT COLUMN
+      # =================================================================
+
+      # --- Live System ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Live System
+            heading_style: title
+
+          - type: tile
+            entity: select.my_home_operation_mode
+            name: Operation Mode
+
+          - type: tile
+            entity: number.my_home_backup_reserve
+            name: Backup Reserve
+            icon: mdi:battery-lock
+
+          - type: tile
+            entity: sensor.my_home_battery_power
+            name: Battery Power
+            icon: mdi:battery-charging
+
+          - type: tile
+            entity: sensor.amber_powerwall_grid_import_power
+            name: Grid Import
+            icon: mdi:transmission-tower-import
+
+          - type: tile
+            entity: sensor.amber_powerwall_grid_export_power
+            name: Grid Export
+            icon: mdi:transmission-tower-export
+
+          - type: tile
+            entity: sensor.my_home_solar_power
+            name: Solar Power
+            icon: mdi:solar-power
+
+      # --- Forecast ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Forecast
+            heading_style: title
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_forecast_spike_within_window
+            name: Spike in Window
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_forecast_expensive_period_coming
+            name: Expensive Coming
+
+          - type: entity
+            entity: binary_sensor.amber_powerwall_forecast_spike_within_window
+            attribute: max_forecast_price
+            name: Max Price
+            icon: mdi:arrow-up-bold
+            suffix: "$/kWh"
+
+      # --- Solar Plan ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Solar Plan
+            heading_style: title
+
+          - type: markdown
+            content: >
+              {% set forecast = 'sensor.amber_powerwall_solar_battery_forecast' %}
+              {% set target = states('number.amber_powerwall_battery_target') | round(0) | int %}
+              {% set soc = states('sensor.my_home_percentage_charged') | round(0) | int %}
+              {% set dw_active = is_state('binary_sensor.amber_powerwall_demand_window_active', 'on') %}
+              {% if dw_active %}
+              **Demand window active**
+
+              Battery: **{{ soc }}%** → **{{ target }}%**
+              {% else %}
+              **{{ soc }}%** → **{{ target }}%**
+              ( deficit: {{ state_attr(forecast, 'deficit_kwh') | default(0) }}kWh )
+
+              Solar: {{ state_attr(forecast, 'solar_before_dw_kwh') | default(0) }}kWh
+              Net: {{ state_attr(forecast, 'net_solar_kwh') | default(0) }}kWh
+
+              Hours to DW: {{ state_attr(forecast, 'hours_to_target_time') | default(0) }}h
+
+              Threshold: ${{ states('sensor.amber_powerwall_effective_cheap_price') }}/kWh
+
+              {% if state_attr(forecast, 'can_reach_target') | bool(true) %}
+              ✅ On track
+              {% elif state_attr(forecast, 'boost_needed') | bool(false) %}
+              ⚡ Boost needed
+              {% else %}
+              ⚠️ Solar gap
+              {% endif %}
+              {% endif %}
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_solar_can_reach_target
+            name: Solar On Track
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_boost_charge_needed
+            name: Boost Needed
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_hold_justified
+            name: Hold Justified
+
+          - type: tile
+            entity: binary_sensor.amber_powerwall_solar_export_hold_justified
+            name: Export Hold
+            color: amber
+
+      # --- Cost ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Cost Today
+            heading_style: title
+
+          - type: markdown
+            content: >
+              {% set cost = 'sensor.amber_powerwall_net_electricity_cost_today' %}
+              **Net: ${{ states(cost) }}**
+
+              Import: ${{ state_attr(cost, 'grid_import_cost') | default(0) | round(2) }}
+              Export: ${{ state_attr(cost, 'grid_export_revenue') | default(0) | round(2) }}
+
+              Savings: ${{ state_attr(cost, 'battery_savings') | default(0) | round(2) }}
+              Charge: ${{ state_attr(cost, 'battery_charge_cost') | default(0) | round(2) }}
+
+      # --- Decision Log ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Decision Log
+            heading_style: title
+
+          - type: markdown
+            content: >
+              {% set log = 'sensor.amber_powerwall_decision_log' %}
+              **{{ states(log) }}**
+
+              {{ state_attr(log, 'reason') }}
+
+              SOC: {{ state_attr(log, 'soc') }}%
+              Buy: ${{ state_attr(log, 'buy_price') }}/kWh
+              Sell: ${{ state_attr(log, 'sell_price') }}/kWh
