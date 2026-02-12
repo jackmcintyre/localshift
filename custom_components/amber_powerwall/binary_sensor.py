@@ -1,0 +1,240 @@
+"""Binary sensor platform for the Amber Powerwall integration."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import DOMAIN
+from .coordinator import AmberPowerwallCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Amber Powerwall binary sensor entities."""
+    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+
+    entities: list[BinarySensorEntity] = [
+        ForecastSpikeWithinWindowSensor(coordinator, entry),
+        ForceDischargeActiveSensor(coordinator, entry),
+        ForceChargeActiveSensor(coordinator, entry),
+        BoostChargeActiveSensor(coordinator, entry),
+        HoldActiveSensor(coordinator, entry),
+        ForecastExpensivePeriodSensor(coordinator, entry),
+        SolarCanReachTargetSensor(coordinator, entry),
+        BoostChargeNeededSensor(coordinator, entry),
+        HoldJustifiedSensor(coordinator, entry),
+        SolarExportHoldJustifiedSensor(coordinator, entry),
+        DemandWindowActiveSensor(coordinator, entry),
+    ]
+
+    async_add_entities(entities)
+
+
+class AmberPowerwallBinarySensorBase(BinarySensorEntity):
+    """Base class for Amber Powerwall binary sensors."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: AmberPowerwallCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialise the binary sensor."""
+        self.coordinator = coordinator
+        self._entry = entry
+        self._unsub: Any = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information to link all entities under one device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name="Amber Powerwall",
+            manufacturer="Custom",
+            model="Solar Battery Automation",
+            sw_version="0.1.0",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to coordinator updates."""
+        self._unsub = self.coordinator.async_add_listener(
+            self._handle_coordinator_update
+        )
+        self._update_from_coordinator()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unsubscribe from coordinator updates."""
+        if self._unsub:
+            self._unsub()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_from_coordinator()
+        self.async_write_ha_state()
+
+    def _update_from_coordinator(self) -> None:
+        """Pull latest values from coordinator.data. Override in subclasses."""
+
+
+# ---------------------------------------------------------------------------
+# Binary sensor implementations
+# ---------------------------------------------------------------------------
+
+
+class ForecastSpikeWithinWindowSensor(AmberPowerwallBinarySensorBase):
+    """Whether a price spike is forecast within the lookahead window."""
+
+    _attr_unique_id = "forecast_spike_within_window"
+    _attr_name = "Forecast Spike Within Window"
+    _attr_icon = "mdi:flash-alert-outline"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.forecast_spike_within_window
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return max forecast price within the lookahead window."""
+        return {
+            "max_forecast_price": self.coordinator.data.max_forecast_price,
+        }
+
+
+class ForceDischargeActiveSensor(AmberPowerwallBinarySensorBase):
+    """Whether battery is currently force discharging."""
+
+    _attr_unique_id = "battery_force_discharge_active"
+    _attr_name = "Force Discharge Active"
+    _attr_icon = "mdi:battery-arrow-down"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.force_discharge_active
+
+
+class ForceChargeActiveSensor(AmberPowerwallBinarySensorBase):
+    """Whether battery is currently force charging (backup mode)."""
+
+    _attr_unique_id = "battery_force_charge_active"
+    _attr_name = "Force Charge Active"
+    _attr_icon = "mdi:battery-charging"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.force_charge_active
+
+
+class BoostChargeActiveSensor(AmberPowerwallBinarySensorBase):
+    """Whether battery is currently boost charging (5kW)."""
+
+    _attr_unique_id = "battery_boost_charge_active"
+    _attr_name = "Boost Charge Active"
+    _attr_icon = "mdi:battery-charging-high"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.boost_charge_active
+
+
+class HoldActiveSensor(AmberPowerwallBinarySensorBase):
+    """Whether battery is currently in hold mode."""
+
+    _attr_unique_id = "battery_hold_active"
+    _attr_name = "Hold Active"
+    _attr_icon = "mdi:battery-lock"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.hold_active
+
+
+class ForecastExpensivePeriodSensor(AmberPowerwallBinarySensorBase):
+    """Whether an expensive period is forecast within lookahead."""
+
+    _attr_unique_id = "forecast_expensive_period_coming"
+    _attr_name = "Expensive Period Coming"
+    _attr_icon = "mdi:currency-usd"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = (
+            self.coordinator.data.forecast_expensive_period_coming
+        )
+
+
+class SolarCanReachTargetSensor(AmberPowerwallBinarySensorBase):
+    """Whether solar forecast can fill battery to target by demand window."""
+
+    _attr_unique_id = "solar_can_reach_target"
+    _attr_name = "Solar Can Reach Target"
+    _attr_icon = "mdi:white-balance-sunny"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.solar_can_reach_target
+
+
+class BoostChargeNeededSensor(AmberPowerwallBinarySensorBase):
+    """Whether 3.3kW charge rate is insufficient (need 5kW boost)."""
+
+    _attr_unique_id = "boost_charge_needed"
+    _attr_name = "Boost Charge Needed"
+    _attr_icon = "mdi:speedometer"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.boost_charge_needed
+
+
+class HoldJustifiedSensor(AmberPowerwallBinarySensorBase):
+    """Whether hold mode is justified (solar coming or cheap prices forecast)."""
+
+    _attr_unique_id = "hold_justified"
+    _attr_name = "Hold Justified"
+    _attr_icon = "mdi:shield-check"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.hold_justified
+
+
+class SolarExportHoldJustifiedSensor(AmberPowerwallBinarySensorBase):
+    """Whether solar export hold conditions are met."""
+
+    _attr_unique_id = "solar_export_hold_justified"
+    _attr_name = "Solar Export Hold Justified"
+    _attr_icon = "mdi:solar-power-variant"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.solar_export_hold_justified
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return diagnostic attributes."""
+        d = self.coordinator.data
+        return {
+            "solar_weighted_avg_fit": round(d.solar_weighted_avg_fit, 4),
+            "current_fit": round(d.feed_in_price, 4),
+            "solar_remaining_kwh": round(d.solar_remaining_kwh, 2),
+            "surplus_ratio": d.surplus_ratio,
+        }
+
+
+class DemandWindowActiveSensor(AmberPowerwallBinarySensorBase):
+    """Whether the demand window is currently active."""
+
+    _attr_unique_id = "demand_window_active"
+    _attr_name = "Demand Window Active"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on state."""
+        return "mdi:clock-alert" if self._attr_is_on else "mdi:clock-outline"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.demand_window_active

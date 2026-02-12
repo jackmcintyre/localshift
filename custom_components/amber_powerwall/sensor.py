@@ -1,0 +1,270 @@
+"""Sensor platform for the Amber Powerwall integration."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfPower
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import DOMAIN, SENSOR_KEYS
+from .coordinator import AmberPowerwallCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Amber Powerwall sensor entities."""
+    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+
+    entities: list[SensorEntity] = [
+        EffectiveCheapPriceSensor(coordinator, entry),
+        CheapChargeStopPriceSensor(coordinator, entry),
+        SolarWeightedAvgFITSensor(coordinator, entry),
+        ActiveModeSensor(coordinator, entry),
+        SolarBatteryForecastSensor(coordinator, entry),
+        GridImportPowerSensor(coordinator, entry),
+        GridExportPowerSensor(coordinator, entry),
+        NetElectricityCostSensor(coordinator, entry),
+        DecisionLogSensor(coordinator, entry),
+    ]
+
+    async_add_entities(entities)
+
+
+class AmberPowerwallSensorBase(SensorEntity):
+    """Base class for Amber Powerwall sensors."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: AmberPowerwallCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialise the sensor."""
+        self.coordinator = coordinator
+        self._entry = entry
+        self._unsub: Any = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information to link all entities under one device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name="Amber Powerwall",
+            manufacturer="Custom",
+            model="Solar Battery Automation",
+            sw_version="0.1.0",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to coordinator updates."""
+        self._unsub = self.coordinator.async_add_listener(
+            self._handle_coordinator_update
+        )
+        # Set initial value
+        self._update_from_coordinator()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unsubscribe from coordinator updates."""
+        if self._unsub:
+            self._unsub()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_from_coordinator()
+        self.async_write_ha_state()
+
+    def _update_from_coordinator(self) -> None:
+        """Pull latest values from coordinator.data. Override in subclasses."""
+
+
+# ---------------------------------------------------------------------------
+# Sensor implementations
+# ---------------------------------------------------------------------------
+
+
+class EffectiveCheapPriceSensor(AmberPowerwallSensorBase):
+    """Dynamic cheap price threshold (urgency-adjusted)."""
+
+    _attr_unique_id = "effective_cheap_price"
+    _attr_name = "Effective Cheap Price"
+    _attr_icon = "mdi:tag-outline"
+    _attr_native_unit_of_measurement = "$/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = round(
+            self.coordinator.data.effective_cheap_price, 4
+        )
+
+
+class CheapChargeStopPriceSensor(AmberPowerwallSensorBase):
+    """Effective threshold + deadband."""
+
+    _attr_unique_id = "cheap_charge_stop_price"
+    _attr_name = "Cheap Charge Stop Price"
+    _attr_icon = "mdi:tag-arrow-up-outline"
+    _attr_native_unit_of_measurement = "$/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = round(
+            self.coordinator.data.cheap_charge_stop_price, 4
+        )
+
+
+class SolarWeightedAvgFITSensor(AmberPowerwallSensorBase):
+    """Solar-production-weighted average feed-in tariff."""
+
+    _attr_unique_id = "solar_weighted_avg_fit"
+    _attr_name = "Solar Weighted Average FIT"
+    _attr_icon = "mdi:solar-power-variant"
+    _attr_native_unit_of_measurement = "$/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = round(
+            self.coordinator.data.solar_weighted_avg_fit, 4
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional attributes."""
+        return {
+            "total_solar_remaining_kwh": round(
+                self.coordinator.data.solar_remaining_kwh, 2
+            ),
+        }
+
+
+class ActiveModeSensor(AmberPowerwallSensorBase):
+    """Current battery automation mode."""
+
+    _attr_unique_id = "battery_automation_active_mode"
+    _attr_name = "Active Mode"
+    _attr_icon = "mdi:battery-sync"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = self.coordinator.data.active_mode.value
+
+
+class SolarBatteryForecastSensor(AmberPowerwallSensorBase):
+    """Solar battery SOC forecast with detailed attributes."""
+
+    _attr_unique_id = "solar_battery_forecast"
+    _attr_name = "Solar Battery Forecast"
+    _attr_icon = "mdi:chart-line"
+    _attr_native_unit_of_measurement = "%"
+
+    def _update_from_coordinator(self) -> None:
+        forecast = self.coordinator.data.solar_battery_forecast
+        self._attr_native_value = forecast.get("predicted_soc", 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the full forecast as attributes."""
+        return self.coordinator.data.solar_battery_forecast
+
+
+class GridImportPowerSensor(AmberPowerwallSensorBase):
+    """Grid import power (always >= 0)."""
+
+    _attr_unique_id = "grid_import_power"
+    _attr_name = "Grid Import Power"
+    _attr_icon = "mdi:transmission-tower-import"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = round(
+            self.coordinator.data.grid_import_power_kw, 3
+        )
+
+
+class GridExportPowerSensor(AmberPowerwallSensorBase):
+    """Grid export power (always >= 0)."""
+
+    _attr_unique_id = "grid_export_power"
+    _attr_name = "Grid Export Power"
+    _attr_icon = "mdi:transmission-tower-export"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = round(
+            self.coordinator.data.grid_export_power_kw, 3
+        )
+
+
+class NetElectricityCostSensor(AmberPowerwallSensorBase):
+    """Net electricity cost today (import cost - export revenue)."""
+
+    _attr_unique_id = "net_electricity_cost_today"
+    _attr_name = "Net Electricity Cost Today"
+    _attr_icon = "mdi:cash-register"
+    _attr_native_unit_of_measurement = "$"
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def _update_from_coordinator(self) -> None:
+        d = self.coordinator.data
+        self._attr_native_value = round(
+            d.grid_import_cost - d.grid_export_revenue, 2
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return cost breakdown."""
+        d = self.coordinator.data
+        return {
+            "grid_import_cost": round(d.grid_import_cost, 2),
+            "grid_export_revenue": round(d.grid_export_revenue, 2),
+            "battery_savings": round(d.battery_savings, 2),
+            "battery_charge_cost": round(d.battery_charge_cost, 2),
+        }
+
+
+class DecisionLogSensor(AmberPowerwallSensorBase):
+    """Battery mode change decision log."""
+
+    _attr_unique_id = "battery_automation_decision_log"
+    _attr_name = "Decision Log"
+    _attr_icon = "mdi:history"
+
+    def _update_from_coordinator(self) -> None:
+        log = self.coordinator.data.decision_log
+        if log:
+            self._attr_native_value = log[-1].get("reason", "")
+        else:
+            self._attr_native_value = "No decisions yet"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest decision fields and recent history."""
+        log = self.coordinator.data.decision_log
+        attrs: dict[str, Any] = {"history": log[-10:]}
+        if log:
+            latest = log[-1]
+            attrs["reason"] = latest.get("reason", "")
+            attrs["soc"] = latest.get("soc")
+            attrs["buy_price"] = latest.get("buy_price")
+            attrs["sell_price"] = latest.get("sell_price")
+            attrs["timestamp"] = latest.get("timestamp")
+        return attrs

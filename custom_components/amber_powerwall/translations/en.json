@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Teslemetry Entities",
+        "description": "Select the Teslemetry entities for your Tesla Powerwall.",
+        "data": {
+          "teslemetry_operation_mode": "Operation Mode (select entity)",
+          "teslemetry_backup_reserve": "Backup Reserve (number entity)",
+          "teslemetry_soc": "Battery SOC %",
+          "teslemetry_grid_power": "Grid Power (kW)",
+          "teslemetry_battery_power": "Battery Power (kW)",
+          "teslemetry_solar_power": "Solar Power (kW)",
+          "teslemetry_load_power": "Load Power (kW)",
+          "teslemetry_allow_export": "Allow Export (select entity)"
+        }
+      },
+      "amber": {
+        "title": "Amber Electric Entities",
+        "description": "Select the Amber Electric entities for pricing data.",
+        "data": {
+          "amber_general_price": "General Price ($/kWh)",
+          "amber_feed_in_price": "Feed-in Price ($/kWh)",
+          "amber_general_forecast": "General Price Forecast",
+          "amber_feed_in_forecast": "Feed-in Price Forecast",
+          "amber_price_spike": "Price Spike Sensor"
+        }
+      },
+      "solcast": {
+        "title": "Solcast & Notifications",
+        "description": "Select the Solcast forecast entities and notification service.",
+        "data": {
+          "solcast_forecast_today": "Solar Forecast Today",
+          "solcast_forecast_tomorrow": "Solar Forecast Tomorrow",
+          "notify_service": "Notification Service (e.g. notify.mobile_app_name)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Amber Powerwall Settings",
+        "description": "Adjust automation thresholds and demand window timing.",
+        "data": {
+          "cheap_price_threshold": "Cheap Price Threshold",
+          "max_precharge_price": "Max Pre-charge Price",
+          "cheap_price_deadband": "Price Deadband",
+          "forecast_lookahead_hours": "Forecast Lookahead",
+          "precharge_battery_threshold": "Pre-charge Battery Threshold",
+          "battery_target": "Battery Target",
+          "demand_window_start": "Demand Window Start",
+          "demand_window_end": "Demand Window End"
+        }
+      }
+    }
+  }
+}

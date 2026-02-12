@@ -1,0 +1,2417 @@
+# =============================================================================
+# Amber Powerwall Automation Package
+# =============================================================================
+#
+# Automated Powerwall battery control based on Amber Electric spot pricing.
+#
+# Five battery modes are achieved via a dummy Tesla energy plan:
+#   - Self Consumption: operation_mode=self_consumption, reserve=10%
+#   - Hold (Grid Only): operation_mode=self_consumption, reserve=current SOC
+#     (Reserve=SOC prevents charge/discharge, house draws from grid)
+#   - Force Charge:     operation_mode=backup
+#     (Backup mode charges from grid at ~3.3kW to 100% automatically)
+#   - Boost Charge:     operation_mode=autonomous, reserve=100%
+#     (Charges from grid at ~5kW, used when 3.3kW won't fill by demand window)
+#   - Force Discharge:  operation_mode=autonomous, reserve=10%
+#     (Dummy tariff sell price $2/kWh 6am-midnight tricks PW into exporting)
+#
+# Note: Force discharge does NOT work between midnight-6am (dummy tariff
+# sell price is only 1c during that window).
+#
+# Add to configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages/
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Dashboard Controls
+# -----------------------------------------------------------------------------
+
+input_boolean:
+  battery_automation_enabled:
+    name: "Battery Automation Enabled"
+    icon: mdi:battery-sync
+
+  spike_discharge_enabled:
+    name: "Spike Discharge Enabled"
+    icon: mdi:flash-alert
+
+  battery_automation_dry_run:
+    name: "Battery Automation Dry Run"
+    icon: mdi:test-tube
+
+  manual_override_active:
+    name: "Manual Override Active"
+    icon: mdi:hand-back-right
+
+  demand_window_block_enabled:
+    name: "Demand Window Block"
+    icon: mdi:clock-alert-outline
+
+  battery_target_reached_today:
+    name: "Battery Target Reached Today"
+    icon: mdi:battery-check-outline
+
+  battery_hold_mode:
+    name: "Battery Hold Mode"
+    icon: mdi:battery-lock
+
+  solar_export_hold_active:
+    name: "Solar Export Hold Active"
+    icon: mdi:solar-power-variant-outline
+
+input_number:
+  cheap_price_threshold:
+    name: "Cheap Price Threshold"
+    min: 0.00
+    max: 0.25
+    step: 0.01
+    initial: 0.15
+    unit_of_measurement: "$/kWh"
+    icon: mdi:tag-outline
+    mode: slider
+
+  max_precharge_price:
+    name: "Max Pre-charge Price"
+    min: 0.00
+    max: 0.50
+    step: 0.01
+    initial: 0.20
+    unit_of_measurement: "$/kWh"
+    icon: mdi:tag-arrow-up-outline
+    mode: slider
+
+  cheap_price_deadband:
+    name: "Cheap Price Deadband"
+    min: 0.00
+    max: 0.10
+    step: 0.01
+    initial: 0.03
+    unit_of_measurement: "$/kWh"
+    icon: mdi:arrow-left-right
+    mode: slider
+
+  forecast_lookahead_hours:
+    name: "Forecast Lookahead Hours"
+    min: 1
+    max: 8
+    step: 0.5
+    initial: 2
+    unit_of_measurement: "hours"
+    icon: mdi:clock-fast
+    mode: slider
+
+  precharge_battery_threshold:
+    name: "Pre-charge Battery Threshold"
+    min: 0
+    max: 100
+    step: 5
+    initial: 50
+    unit_of_measurement: "%"
+    icon: mdi:battery-charging-40
+    mode: slider
+
+  battery_target:
+    name: "Battery Target"
+    min: 50
+    max: 100
+    step: 5
+    initial: 100
+    unit_of_measurement: "%"
+    icon: mdi:battery-check
+    mode: slider
+
+  # Cost accumulators — updated per-minute by A16, reset at midnight by A12.
+  # input_number persists across HA restarts (no data loss).
+  grid_import_cost_accumulator:
+    name: "Grid Import Cost"
+    min: 0
+    max: 999
+    step: 0.0001
+    initial: 0
+    unit_of_measurement: "$"
+    mode: box
+    icon: mdi:cash-minus
+
+  grid_export_revenue_accumulator:
+    name: "Grid Export Revenue"
+    min: 0
+    max: 999
+    step: 0.0001
+    initial: 0
+    unit_of_measurement: "$"
+    mode: box
+    icon: mdi:cash-plus
+
+  battery_savings_accumulator:
+    name: "Battery Savings"
+    min: 0
+    max: 999
+    step: 0.0001
+    initial: 0
+    unit_of_measurement: "$"
+    mode: box
+    icon: mdi:piggy-bank-outline
+
+  battery_charge_cost_accumulator:
+    name: "Battery Charge Cost"
+    min: 0
+    max: 999
+    step: 0.0001
+    initial: 0
+    unit_of_measurement: "$"
+    mode: box
+    icon: mdi:cash-fast
+
+# -----------------------------------------------------------------------------
+# Demand Window Times
+# -----------------------------------------------------------------------------
+# input_datetime doesn't support 'initial' in packages — defaults are set by
+# automation A14 on HA startup if values are uninitialised (00:00:00).
+
+input_datetime:
+  demand_window_start:
+    name: "Demand Window Start"
+    has_date: false
+    has_time: true
+    icon: mdi:clock-start
+  demand_window_end:
+    name: "Demand Window End"
+    has_date: false
+    has_time: true
+    icon: mdi:clock-end
+
+# -----------------------------------------------------------------------------
+# Template Sensors
+# -----------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      # ON if any feed-in forecast period within the lookahead window has
+      # spike_status == 'spike'
+      - name: "Forecast Spike Within Window"
+        unique_id: forecast_spike_within_window
+        icon: "{{ 'mdi:flash-alert' if this.state == 'on' else 'mdi:flash-off' }}"
+        state: >
+          {% set ns = namespace(found=false) %}
+          {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+          {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+          {% set forecasts = state_attr('sensor.100h_feed_in_forecast', 'forecasts') %}
+          {% if forecasts is not none %}
+            {% for f in forecasts %}
+              {% set start = f.start_time | as_datetime %}
+              {% if start is not none and start <= cutoff and start >= now() %}
+                {% if f.spike_status == 'spike' %}
+                  {% set ns.found = true %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+          {{ ns.found }}
+        attributes:
+          next_spike_time: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set forecasts = state_attr('sensor.100h_feed_in_forecast', 'forecasts') %}
+            {% set ns = namespace(time='unknown') %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start <= cutoff and start >= now() %}
+                  {% if f.spike_status == 'spike' and ns.time == 'unknown' %}
+                    {% set ns.time = f.start_time %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.time }}
+          next_spike_price: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set forecasts = state_attr('sensor.100h_feed_in_forecast', 'forecasts') %}
+            {% set ns = namespace(price=0) %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start <= cutoff and start >= now() %}
+                  {% if f.spike_status == 'spike' and ns.price == 0 %}
+                    {% set ns.price = f.per_kwh | float(0) | round(2) %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.price }}
+          max_forecast_price: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set forecasts = state_attr('sensor.100h_feed_in_forecast', 'forecasts') %}
+            {% set ns = namespace(max_price=0) %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start <= cutoff and start >= now() %}
+                  {% if f.per_kwh | float(0) > ns.max_price %}
+                    {% set ns.max_price = f.per_kwh | float(0) | round(2) %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.max_price }}
+
+      # ON when the system is currently in force discharge state
+      - name: "Battery Force Discharge Active"
+        unique_id: battery_force_discharge_active
+        icon: mdi:flash-alert
+        state: >
+          {{ is_state('select.my_home_operation_mode', 'autonomous')
+             and states('number.my_home_backup_reserve') | float(0) < 11 }}
+
+      # ON when the system is in any charge state (backup or boost)
+      - name: "Battery Force Charge Active"
+        unique_id: battery_force_charge_active
+        icon: mdi:battery-charging
+        state: >
+          {{ is_state('select.my_home_operation_mode', 'backup')
+             or (is_state('select.my_home_operation_mode', 'autonomous')
+                 and states('number.my_home_backup_reserve') | float(0) > 99) }}
+
+      # ON when the system is in boost charge state (autonomous + reserve 100%)
+      - name: "Battery Boost Charge Active"
+        unique_id: battery_boost_charge_active
+        icon: mdi:battery-charging-high
+        state: >
+          {{ is_state('select.my_home_operation_mode', 'autonomous')
+             and states('number.my_home_backup_reserve') | float(0) > 99 }}
+
+      # ON when the system is in hold mode (grid only, battery idle)
+      - name: "Battery Hold Active"
+        unique_id: battery_hold_active
+        icon: mdi:battery-lock
+        state: >
+          {{ is_state('input_boolean.battery_hold_mode', 'on') }}
+
+      # ON if general (buy) forecast shows spike within lookahead.
+      # Drives pre-charge decisions.
+      - name: "Forecast Expensive Period Coming"
+        unique_id: forecast_expensive_period_coming
+        icon: "{{ 'mdi:cash-clock' if this.state == 'on' else 'mdi:cash-check' }}"
+        state: >
+          {% set ns = namespace(found=false) %}
+          {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+          {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+          {% set forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+          {% if forecasts is not none %}
+            {% for f in forecasts %}
+              {% set start = f.start_time | as_datetime %}
+              {% if start is not none and start <= cutoff and start >= now() %}
+                {% if f.spike_status == 'spike' %}
+                  {% set ns.found = true %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+          {{ ns.found }}
+
+      # ON when solar forecast alone can fill battery to target by demand window.
+      # Defaults to true (safe — don't trigger grid charging on missing data).
+      - name: "Solar Can Reach Target"
+        unique_id: solar_can_reach_target
+        icon: "{{ 'mdi:solar-power' if this.state == 'on' else 'mdi:weather-cloudy' }}"
+        state: >
+          {{ state_attr('sensor.solar_battery_forecast', 'can_reach_target') | default(true) | bool(true) }}
+
+      # ON when boost charging (5kW) is needed because gentle (3.3kW) + solar
+      # can't close the gap before demand window. Defaults to false (safe — don't boost unnecessarily).
+      - name: "Boost Charge Needed"
+        unique_id: boost_charge_needed
+        icon: "{{ 'mdi:battery-charging-high' if this.state == 'on' else 'mdi:battery-charging' }}"
+        state: >
+          {{ state_attr('sensor.solar_battery_forecast', 'boost_needed') | default(false) | bool(false) }}
+
+      # ON when there's a reason to preserve battery charge (hold is justified).
+      # True if either:
+      #   1. Meaningful solar (≥0.5 kWh pessimistic) is forecast within the lookahead window
+      #   2. Cheaper grid prices are forecast within the lookahead window
+      # When false, holding the battery would just cause unnecessary grid imports.
+      # Used by A4, A6, A11 to gate hold decisions.
+      - name: "Hold Justified"
+        unique_id: hold_justified
+        icon: "{{ 'mdi:battery-lock' if this.state == 'on' else 'mdi:battery-lock-open' }}"
+        state: >
+          {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+          {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+          {% set cheap = states('sensor.effective_cheap_price') | float(0.15) %}
+          {# Check 1: meaningful solar forecast (≥0.5 kWh) within lookahead #}
+          {% set ns = namespace(solar_kwh=0, cheap_coming=false) %}
+          {% set forecast_today = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+          {% set forecast_tomorrow = state_attr('sensor.solcast_pv_forecast_forecast_tomorrow', 'detailedForecast') %}
+          {% for forecast in [forecast_today, forecast_tomorrow] %}
+            {% if forecast is not none %}
+              {% for period in forecast %}
+                {% set period_start = period.period_start | as_datetime %}
+                {% if period_start is not none and period_start >= now() and period_start <= cutoff %}
+                  {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+          {# Check 2: cheaper price coming within lookahead #}
+          {% set price_forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+          {% if price_forecasts is not none %}
+            {% for f in price_forecasts %}
+              {% set start = f.start_time | as_datetime %}
+              {% if start is not none and start >= now() and start <= cutoff %}
+                {% if f.per_kwh | float(99) < cheap %}
+                  {% set ns.cheap_coming = true %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+          {{ ns.solar_kwh >= 0.5 or ns.cheap_coming }}
+        attributes:
+          solar_forecast_kwh: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set ns = namespace(solar_kwh=0) %}
+            {% set forecast_today = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+            {% set forecast_tomorrow = state_attr('sensor.solcast_pv_forecast_forecast_tomorrow', 'detailedForecast') %}
+            {% for forecast in [forecast_today, forecast_tomorrow] %}
+              {% if forecast is not none %}
+                {% for period in forecast %}
+                  {% set period_start = period.period_start | as_datetime %}
+                  {% if period_start is not none and period_start >= now() and period_start <= cutoff %}
+                    {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.solar_kwh | round(2) }}
+          cheap_price_coming: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set cheap = states('sensor.effective_cheap_price') | float(0.15) %}
+            {% set ns = namespace(found=false) %}
+            {% set forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start >= now() and start <= cutoff %}
+                  {% if f.per_kwh | float(99) < cheap %}
+                    {% set ns.found = true %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.found }}
+
+      # ON when conditions justify holding battery to export solar at
+      # above-average FIT prices. Requires: sun up, before demand window,
+      # solar surplus confident (1.5x to enter, 1.0x to stay via hysteresis),
+      # current FIT above solar-weighted average, battery not full.
+      - name: "Solar Export Hold Justified"
+        unique_id: solar_export_hold_justified
+        icon: "{{ 'mdi:solar-power-variant' if this.state == 'on' else 'mdi:solar-power-variant-outline' }}"
+        state: >
+          {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+          {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+          {% set before_dw = now().strftime('%H:%M:%S') < target_time %}
+          {% set in_dw = is_state('binary_sensor.demand_window_active', 'on') %}
+          {% set deficit_kwh = state_attr('sensor.solar_battery_forecast', 'deficit_kwh') | float(0) %}
+          {% set net_solar_kwh = state_attr('sensor.solar_battery_forecast', 'net_solar_kwh') | float(0) %}
+          {% set current_fit = states('sensor.100h_feed_in_price') | float(0) %}
+          {% set avg_fit = states('sensor.solar_weighted_avg_fit') | float(0) %}
+          {% set in_solar_export_hold = is_state('input_boolean.solar_export_hold_active', 'on') %}
+          {% set charging = is_state('select.my_home_operation_mode', 'backup')
+                           or (is_state('select.my_home_operation_mode', 'autonomous')
+                               and states('number.my_home_backup_reserve') | float(0) > 99) %}
+          {# Basic prerequisites #}
+          {% if not sun_up or not before_dw or in_dw or deficit_kwh <= 0 or charging %}
+            false
+          {% else %}
+            {# Surplus ratio: how much solar exceeds the deficit #}
+            {% set surplus_ratio = net_solar_kwh / deficit_kwh %}
+            {# Hysteresis: 1.5x to enter, 1.0x to stay #}
+            {% set threshold = 1.0 if in_solar_export_hold else 1.5 %}
+            {# All conditions must be true #}
+            {{ surplus_ratio >= threshold and current_fit > avg_fit and avg_fit > 0 }}
+          {% endif %}
+        attributes:
+          surplus_ratio: >
+            {% set deficit_kwh = state_attr('sensor.solar_battery_forecast', 'deficit_kwh') | float(0) %}
+            {% set net_solar_kwh = state_attr('sensor.solar_battery_forecast', 'net_solar_kwh') | float(0) %}
+            {% if deficit_kwh > 0 %}
+              {{ (net_solar_kwh / deficit_kwh) | round(2) }}
+            {% else %}
+              0
+            {% endif %}
+          current_fit: "{{ states('sensor.100h_feed_in_price') | float(0) | round(4) }}"
+          avg_remaining_fit: "{{ states('sensor.solar_weighted_avg_fit') | float(0) | round(4) }}"
+          entry_threshold: >
+            {{ 1.0 if is_state('input_boolean.solar_export_hold_active', 'on') else 1.5 }}
+
+    sensor:
+      # Today's net electricity cost — convenience sensor for dashboard
+      - name: "Net Electricity Cost Today"
+        unique_id: net_electricity_cost_today
+        unit_of_measurement: "$"
+        icon: mdi:currency-usd
+        state: >
+          {% set import_cost = states('input_number.grid_import_cost_accumulator') | float(0) %}
+          {% set export_revenue = states('input_number.grid_export_revenue_accumulator') | float(0) %}
+          {{ (import_cost - export_revenue) | round(2) }}
+        attributes:
+          import_cost: "{{ states('input_number.grid_import_cost_accumulator') | float(0) | round(2) }}"
+          export_revenue: "{{ states('input_number.grid_export_revenue_accumulator') | float(0) | round(2) }}"
+          battery_savings: "{{ states('input_number.battery_savings_accumulator') | float(0) | round(2) }}"
+          battery_charge_cost: "{{ states('input_number.battery_charge_cost_accumulator') | float(0) | round(2) }}"
+
+  - trigger:
+      # Re-evaluate every minute and when relevant inputs change
+      - trigger: time_pattern
+        minutes: "/1"
+      - trigger: state
+        entity_id:
+          - input_boolean.demand_window_block_enabled
+          - input_datetime.demand_window_start
+          - input_datetime.demand_window_end
+          - input_number.cheap_price_threshold
+          - input_number.max_precharge_price
+          - input_number.cheap_price_deadband
+    binary_sensor:
+      # ON during the demand window when the block is enabled
+      - name: "Demand Window Active"
+        unique_id: demand_window_active
+        icon: "{{ 'mdi:clock-alert' if this.state == 'on' else 'mdi:clock-outline' }}"
+        state: >
+          {% set start = states('input_datetime.demand_window_start') | default('15:00:00') %}
+          {% set end_t = states('input_datetime.demand_window_end') | default('21:00:00') %}
+          {% set now_t = now().strftime('%H:%M:%S') %}
+          {{ is_state('input_boolean.demand_window_block_enabled', 'on')
+             and now_t >= start and now_t < end_t }}
+    sensor:
+      # Dynamic threshold: raises acceptable price as demand window approaches
+      # when solar forecast shows a gap. Uses Amber price forecast to avoid
+      # overpaying when cheaper prices are coming soon.
+      #
+      # Algorithm:
+      #   - No solar gap / after DW / target reached → base threshold
+      #   - Solar gap before DW → urgency-based interpolation:
+      #     urgency = 1 - (hours_to_DW / 8), clamped [0, 1]
+      #     effective = base + (max_precharge - base) × urgency
+      #     Floor: max(min_forecast_price + 2c, base) — wait for cheap windows
+      #     Ceiling: max_precharge_price
+      - name: "Effective Cheap Price"
+        unique_id: effective_cheap_price
+        unit_of_measurement: "$/kWh"
+        icon: mdi:tag-text
+        state: >
+          {% set base = states('input_number.cheap_price_threshold') | float(0.15) %}
+          {% set max_price = states('input_number.max_precharge_price') | float(0.20) %}
+          {% set solar_gap = is_state('binary_sensor.solar_can_reach_target', 'off') %}
+          {% set target_reached = is_state('input_boolean.battery_target_reached_today', 'on') %}
+          {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+          {% set target_hour = target_time.split(':')[0] | int(15) %}
+          {% set before_dw = now().strftime('%H:%M:%S') < target_time %}
+          {% if not solar_gap or not before_dw or target_reached %}
+            {{ base }}
+          {% else %}
+            {% set hours_left = ((today_at(target_time) - now()).total_seconds() / 3600) %}
+            {% set total_window = 8 %}
+            {% set urgency = [1 - (hours_left / total_window), 0] | max %}
+            {% set urgency = [urgency, 1] | min %}
+            {% set urgency_price = base + (max_price - base) * urgency %}
+            {% set forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+            {% set ns = namespace(min_price=max_price) %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start >= now() and start.hour < target_hour %}
+                  {% if f.per_kwh | float(max_price) < ns.min_price %}
+                    {% set ns.min_price = f.per_kwh | float(max_price) %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {% set forecast_floor = [ns.min_price + 0.02, base] | max %}
+            {% set final = [urgency_price, max_price] | min %}
+            {% set final = [final, forecast_floor] | max %}
+            {{ final | round(2) }}
+          {% endif %}
+        attributes:
+          urgency: >
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% if now().strftime('%H:%M:%S') >= target_time %}
+              0
+            {% else %}
+              {% set hours_left = ((today_at(target_time) - now()).total_seconds() / 3600) %}
+              {% set total_window = 8 %}
+              {% set u = [1 - (hours_left / total_window), 0] | max %}
+              {{ [u, 1] | min | round(2) }}
+            {% endif %}
+          is_elevated: >
+            {% set base = states('input_number.cheap_price_threshold') | float(0.15) %}
+            {{ states('sensor.effective_cheap_price') | float(0.15) > base }}
+          min_forecast_price: >
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {% set max_price = states('input_number.max_precharge_price') | float(0.20) %}
+            {% set forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+            {% set ns = namespace(min_price=max_price) %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start >= now() and start.hour < target_hour %}
+                  {% if f.per_kwh | float(max_price) < ns.min_price %}
+                    {% set ns.min_price = f.per_kwh | float(max_price) %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.min_price | round(2) }}
+      # Computed stop price: effective threshold + deadband.
+      # Charging stops and hold mode exits at this price.
+      - name: "Cheap Charge Stop Price"
+        unique_id: cheap_charge_stop_price
+        unit_of_measurement: "$/kWh"
+        icon: mdi:tag-check-outline
+        state: >
+          {{ (states('sensor.effective_cheap_price') | float(0.15)
+              + states('input_number.cheap_price_deadband') | float(0.03)) | round(2) }}
+
+      # Solar-weighted average FIT: expected $/kWh for solar exported
+      # over remaining daylight hours before demand window. Weights each
+      # FIT period by the Solcast solar forecast for that period.
+      # Used by solar export hold to compare current FIT vs remaining average.
+      - name: "Solar Weighted Average FIT"
+        unique_id: solar_weighted_avg_fit
+        unit_of_measurement: "$/kWh"
+        icon: mdi:cash-multiple
+        state: >
+          {% set now_dt = now() %}
+          {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+          {% set target_hour = target_time.split(':')[0] | int(15) %}
+          {% if now_dt.hour >= target_hour %}
+            0
+          {% else %}
+            {% set solar_forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+            {% set fit_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') %}
+            {% if solar_forecast is none or fit_forecast is none %}
+              0
+            {% else %}
+              {% set ns = namespace(weighted_sum=0, total_solar=0) %}
+              {% for period in solar_forecast %}
+                {% set period_start = period.period_start | as_datetime %}
+                {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                  {% set solar_kwh = period.pv_estimate10 | float(0) %}
+                  {% if solar_kwh > 0 %}
+                    {# Find FIT price at the midpoint of this 30-min solar period #}
+                    {% set mid = period_start + timedelta(minutes=15) %}
+                    {% set ns2 = namespace(fit=0, found=false) %}
+                    {% for f in fit_forecast %}
+                      {% if not ns2.found %}
+                        {% set f_start = f.start_time | as_datetime %}
+                        {% set f_end = f.end_time | as_datetime %}
+                        {% if f_start is not none and f_end is not none and f_start <= mid and f_end > mid %}
+                          {% set ns2.fit = f.per_kwh | float(0) %}
+                          {% set ns2.found = true %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+                    {% set ns.weighted_sum = ns.weighted_sum + (solar_kwh * ns2.fit) %}
+                    {% set ns.total_solar = ns.total_solar + solar_kwh %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {% if ns.total_solar > 0 %}
+                {{ (ns.weighted_sum / ns.total_solar) | round(4) }}
+              {% else %}
+                0
+              {% endif %}
+            {% endif %}
+          {% endif %}
+        attributes:
+          total_solar_remaining_kwh: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {% set solar_forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+            {% set ns = namespace(total=0) %}
+            {% if solar_forecast is not none and now_dt.hour < target_hour %}
+              {% for period in solar_forecast %}
+                {% set period_start = period.period_start | as_datetime %}
+                {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                  {% set ns.total = ns.total + (period.pv_estimate10 | float(0)) %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.total | round(2) }}
+
+      # Diagnostic sensor showing what mode the automation wants.
+      # For dashboard display only - does not drive automations.
+      - name: "Battery Automation Active Mode"
+        unique_id: battery_automation_active_mode
+        state: >
+          {% if is_state('input_boolean.battery_automation_enabled', 'off') %}
+            manual
+          {% elif is_state('binary_sensor.demand_window_active', 'on') %}
+            demand_block
+          {% elif is_state('binary_sensor.100h_price_spike', 'on') and is_state('input_boolean.spike_discharge_enabled', 'on') %}
+            spike_discharge
+          {% elif is_state('input_boolean.solar_export_hold_active', 'on') and is_state('input_boolean.battery_hold_mode', 'on') %}
+            solar_export_hold
+          {% elif states('sensor.100h_general_price') | float(99) < states('sensor.effective_cheap_price') | float(0.15) %}
+            {% set battery_low = states('sensor.my_home_percentage_charged') | float(100) < states('input_number.precharge_battery_threshold') | float(50) %}
+            {% set expensive_coming = is_state('binary_sensor.forecast_expensive_period_coming', 'on') %}
+            {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+            {% set solar_gap = is_state('binary_sensor.solar_can_reach_target', 'off') %}
+            {% set target_reached = is_state('input_boolean.battery_target_reached_today', 'on') %}
+            {% if target_reached %}
+              self_consumption
+            {% elif sun_up and (solar_gap or expensive_coming) %}
+              {% if is_state('binary_sensor.boost_charge_needed', 'on') %}
+                boost_charging
+              {% else %}
+                grid_charging
+              {% endif %}
+            {% elif not sun_up and battery_low and expensive_coming %}
+              grid_charging
+            {% else %}
+              self_consumption
+            {% endif %}
+          {% elif states('sensor.100h_general_price') | float(99) < states('sensor.cheap_charge_stop_price') | float(0.18) %}
+            {% if is_state('binary_sensor.battery_force_charge_active', 'on') %}
+              {% if is_state('binary_sensor.battery_boost_charge_active', 'on') %}
+                boost_charging
+              {% else %}
+                grid_charging
+              {% endif %}
+            {% else %}
+              {% if is_state('binary_sensor.hold_justified', 'on') %}holding{% else %}self_consumption{% endif %}
+            {% endif %}
+          {% elif is_state('binary_sensor.forecast_spike_within_window', 'on') %}
+            holding_for_spike
+          {% else %}
+            self_consumption
+          {% endif %}
+        icon: >
+          {% set mode = this.state %}
+          {% if mode == 'demand_block' %}
+            mdi:clock-alert
+          {% elif mode == 'spike_discharge' %}
+            mdi:flash-alert
+          {% elif mode == 'grid_charging' %}
+            mdi:battery-charging
+          {% elif mode == 'holding' %}
+            mdi:battery-lock-open
+          {% elif mode == 'holding_for_spike' %}
+            mdi:battery-lock
+          {% elif mode == 'manual' %}
+            mdi:hand-back-right
+          {% elif mode == 'boost_charging' %}
+            mdi:battery-charging-high
+          {% elif mode == 'solar_export_hold' %}
+            mdi:solar-power-variant
+          {% else %}
+            mdi:battery-sync
+          {% endif %}
+
+      # Solar gap monitor: estimates whether solar can fill the battery to
+      # the target SOC by demand window start. Uses Solcast pessimistic
+      # (estimate10) forecasts and current household load as a consumption proxy.
+      # State is estimated SOC at demand window start. Attributes drive charging decisions.
+      - name: "Solar Battery Forecast"
+        unique_id: solar_battery_forecast
+        unit_of_measurement: "%"
+        icon: mdi:solar-power-variant
+        state: >
+          {% set target = states('input_number.battery_target') | float(100) %}
+          {% set current_soc = states('sensor.my_home_percentage_charged') | float(50) %}
+          {% set capacity = 13.5 %}
+          {% set now_dt = now() %}
+          {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+          {% set target_hour = target_time.split(':')[0] | int(15) %}
+          {# After demand window start, just report current SOC — solar gap not meaningful #}
+          {% if now_dt.hour >= target_hour %}
+            {{ current_soc | round(1) }}
+          {% else %}
+            {% set hours_to_target = ((today_at(target_hour ~ ':00:00') - now_dt).total_seconds() / 3600) %}
+            {% set deficit_kwh = ((target - current_soc) / 100 * capacity) %}
+            {# Sum pessimistic solar forecast (pv_estimate10) for periods between now and demand window #}
+            {% set forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+            {% set ns = namespace(solar_kwh=0) %}
+            {% if forecast is not none %}
+              {% for period in forecast %}
+                {% set period_start = period.period_start | as_datetime %}
+                {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                  {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {# Estimate consumption: current load × hours to target #}
+            {% set load_kw = states('sensor.my_home_load_power') | float(0.5) %}
+            {% set consumption_kwh = load_kw * hours_to_target %}
+            {% set net_solar = ns.solar_kwh - consumption_kwh %}
+            {# Estimated SOC at demand window = current + net solar contribution (in %) #}
+            {% set net_solar_pct = (net_solar / capacity * 100) %}
+            {{ (current_soc + net_solar_pct) | round(1) }}
+          {% endif %}
+        attributes:
+          solar_before_dw_kwh: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {% if now_dt.hour >= target_hour %}
+              0
+            {% else %}
+              {% set forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+              {% set ns = namespace(solar_kwh=0) %}
+              {% if forecast is not none %}
+                {% for period in forecast %}
+                  {% set period_start = period.period_start | as_datetime %}
+                  {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                    {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              {{ ns.solar_kwh | round(2) }}
+            {% endif %}
+          consumption_estimate_kwh: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {% if now_dt.hour >= target_hour %}
+              0
+            {% else %}
+              {% set hours_to_target = ((today_at(target_hour ~ ':00:00') - now_dt).total_seconds() / 3600) %}
+              {% set load_kw = states('sensor.my_home_load_power') | float(0.5) %}
+              {{ (load_kw * hours_to_target) | round(2) }}
+            {% endif %}
+          net_solar_kwh: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {% if now_dt.hour >= target_hour %}
+              0
+            {% else %}
+              {% set hours_to_target = ((today_at(target_hour ~ ':00:00') - now_dt).total_seconds() / 3600) %}
+              {% set forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+              {% set ns = namespace(solar_kwh=0) %}
+              {% if forecast is not none %}
+                {% for period in forecast %}
+                  {% set period_start = period.period_start | as_datetime %}
+                  {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                    {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              {% set load_kw = states('sensor.my_home_load_power') | float(0.5) %}
+              {% set consumption_kwh = load_kw * hours_to_target %}
+              {{ (ns.solar_kwh - consumption_kwh) | round(2) }}
+            {% endif %}
+          deficit_kwh: >
+            {% set target = states('input_number.battery_target') | float(100) %}
+            {% set current_soc = states('sensor.my_home_percentage_charged') | float(50) %}
+            {% set deficit = (target - current_soc) / 100 * 13.5 %}
+            {{ [deficit, 0] | max | round(2) }}
+          can_reach_target: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {# After demand window start or if already at/above target, always true #}
+            {% if now_dt.hour >= target_hour %}
+              true
+            {% elif states('sensor.my_home_percentage_charged') | float(0) >= states('input_number.battery_target') | float(100) %}
+              true
+            {% else %}
+              {% set target = states('input_number.battery_target') | float(100) %}
+              {% set current_soc = states('sensor.my_home_percentage_charged') | float(50) %}
+              {% set capacity = 13.5 %}
+              {% set deficit_kwh = (target - current_soc) / 100 * capacity %}
+              {% set hours_to_target = ((today_at(target_hour ~ ':00:00') - now_dt).total_seconds() / 3600) %}
+              {% set forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+              {% set ns = namespace(solar_kwh=0) %}
+              {% if forecast is not none %}
+                {% for period in forecast %}
+                  {% set period_start = period.period_start | as_datetime %}
+                  {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                    {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              {% set load_kw = states('sensor.my_home_load_power') | float(0.5) %}
+              {% set consumption_kwh = load_kw * hours_to_target %}
+              {% set net_solar = ns.solar_kwh - consumption_kwh %}
+              {{ net_solar >= deficit_kwh }}
+            {% endif %}
+          boost_needed: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {# After demand window start or if already at/above target, never boost #}
+            {% if now_dt.hour >= target_hour %}
+              false
+            {% elif states('sensor.my_home_percentage_charged') | float(0) >= states('input_number.battery_target') | float(100) %}
+              false
+            {% else %}
+              {# Hysteresis: if already boost charging, stay in boost until target #}
+              {# reached or DW starts. Prevents flip-flopping between boost/gentle. #}
+              {% set in_boost = is_state('select.my_home_operation_mode', 'autonomous')
+                                and states('number.my_home_backup_reserve') | float(0) > 99 %}
+              {% if in_boost %}
+                true
+              {% else %}
+                {% set target = states('input_number.battery_target') | float(100) %}
+                {% set current_soc = states('sensor.my_home_percentage_charged') | float(50) %}
+                {% set capacity = 13.5 %}
+                {% set deficit_kwh = (target - current_soc) / 100 * capacity %}
+                {% set hours_to_target = ((today_at(target_hour ~ ':00:00') - now_dt).total_seconds() / 3600) %}
+                {% set forecast = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+                {% set ns = namespace(solar_kwh=0) %}
+                {% if forecast is not none %}
+                  {% for period in forecast %}
+                    {% set period_start = period.period_start | as_datetime %}
+                    {% if period_start is not none and period_start >= now_dt and period_start.hour < target_hour %}
+                      {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+                {% set load_kw = states('sensor.my_home_load_power') | float(0.5) %}
+                {% set consumption_kwh = load_kw * hours_to_target %}
+                {% set net_solar = ns.solar_kwh - consumption_kwh %}
+                {% set remaining_deficit = [deficit_kwh - net_solar, 0] | max %}
+                {% set max_gentle_kwh = 3.3 * hours_to_target * 0.9 %}
+                {{ remaining_deficit > max_gentle_kwh and remaining_deficit > 0 }}
+              {% endif %}
+            {% endif %}
+          hours_to_target_time: >
+            {% set now_dt = now() %}
+            {% set target_time = states('input_datetime.demand_window_start') | default('15:00:00') %}
+            {% set target_hour = target_time.split(':')[0] | int(15) %}
+            {% if now_dt.hour >= target_hour %}
+              0
+            {% else %}
+              {{ ((today_at(target_hour ~ ':00:00') - now_dt).total_seconds() / 3600) | round(1) }}
+            {% endif %}
+
+  # ---------------------------------------------------------------------------
+  # Cost & Energy Tracking Sensors
+  # ---------------------------------------------------------------------------
+  # Instantaneous cost rates ($/hr) and directional power splits.
+  # Fired by state changes on power + price sensors for accurate time-correlation.
+  # Fed into integration sensors (Riemann sum) for cumulative $ and kWh totals.
+  - trigger:
+      - trigger: state
+        entity_id:
+          - sensor.my_home_grid_power
+          - sensor.my_home_battery_power
+          - sensor.my_home_solar_power
+          - sensor.100h_general_price
+          - sensor.100h_feed_in_price
+    sensor:
+      # Grid import power (kW) — only when importing from grid
+      - name: "Grid Import Power"
+        unique_id: grid_import_power
+        unit_of_measurement: "kW"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ [states('sensor.my_home_grid_power') | float(0), 0] | max | round(3) }}
+
+      # Grid export power (kW) — only when exporting to grid (flipped positive)
+      - name: "Grid Export Power"
+        unique_id: grid_export_power
+        unit_of_measurement: "kW"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ [-(states('sensor.my_home_grid_power') | float(0)), 0] | max | round(3) }}
+
+  # ---------------------------------------------------------------------------
+  # Decision Log
+  # ---------------------------------------------------------------------------
+  # Records why each mode change happened. Fires on active_mode state changes.
+  # State shows the transition; attributes capture context and reasoning.
+  - trigger:
+      - trigger: state
+        entity_id: sensor.battery_automation_active_mode
+    sensor:
+      - name: "Battery Automation Decision Log"
+        unique_id: battery_automation_decision_log
+        icon: mdi:clipboard-text-clock
+        state: >
+          {% set old = trigger.from_state.state if trigger.from_state is not none else 'unknown' %}
+          {% set new = trigger.to_state.state if trigger.to_state is not none else 'unknown' %}
+          {% if old == new %}
+            {{ this.state | default('Waiting for first mode change') }}
+          {% else %}
+            {{ old }} → {{ new }}
+          {% endif %}
+        attributes:
+          timestamp: >
+            {% set old = trigger.from_state.state if trigger.from_state is not none else 'unknown' %}
+            {% set new = trigger.to_state.state if trigger.to_state is not none else 'unknown' %}
+            {% if old == new %}
+              {{ state_attr('sensor.battery_automation_decision_log', 'timestamp') | default('') }}
+            {% else %}
+              {{ now().isoformat() }}
+            {% endif %}
+          old_mode: >
+            {% set old = trigger.from_state.state if trigger.from_state is not none else 'unknown' %}
+            {% set new = trigger.to_state.state if trigger.to_state is not none else 'unknown' %}
+            {% if old == new %}
+              {{ state_attr('sensor.battery_automation_decision_log', 'old_mode') | default('') }}
+            {% else %}
+              {{ old }}
+            {% endif %}
+          new_mode: >
+            {% set old = trigger.from_state.state if trigger.from_state is not none else 'unknown' %}
+            {% set new = trigger.to_state.state if trigger.to_state is not none else 'unknown' %}
+            {% if old == new %}
+              {{ state_attr('sensor.battery_automation_decision_log', 'new_mode') | default('') }}
+            {% else %}
+              {{ new }}
+            {% endif %}
+          buy_price: "{{ states('sensor.100h_general_price') | float(0) | round(2) }}"
+          sell_price: "{{ states('sensor.100h_feed_in_price') | float(0) | round(2) }}"
+          soc: "{{ states('sensor.my_home_percentage_charged') | float(0) | round(0) | int }}"
+          effective_threshold: "{{ states('sensor.effective_cheap_price') | float(0) }}"
+          reason: >
+            {% set old = trigger.from_state.state if trigger.from_state is not none else 'unknown' %}
+            {% set new = trigger.to_state.state if trigger.to_state is not none else 'unknown' %}
+            {% if old == new %}
+              {{ state_attr('sensor.battery_automation_decision_log', 'reason') | default('') }}
+            {% else %}
+              {% set price = states('sensor.100h_general_price') | float(0) %}
+              {% set threshold = states('sensor.effective_cheap_price') | float(0.15) %}
+              {% set stop = states('sensor.cheap_charge_stop_price') | float(0.18) %}
+              {% set soc = states('sensor.my_home_percentage_charged') | float(0) %}
+              {% if new == 'spike_discharge' %}
+                Price spike detected (feed-in ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh)
+              {% elif new == 'demand_block' %}
+                Demand window active — protecting from grid imports
+              {% elif new == 'grid_charging' %}
+                Price ${{ price | round(2) }}/kWh below threshold ${{ threshold }}/kWh, SOC {{ soc | round(0) | int }}%
+              {% elif new == 'boost_charging' %}
+                Solar gap — boost charging needed, price ${{ price | round(2) }}/kWh, SOC {{ soc | round(0) | int }}%
+              {% elif new == 'holding' %}
+                Price in deadband (${{ price | round(2) }}/kWh), preserving battery for solar/cheap prices
+              {% elif new == 'holding_for_spike' %}
+                Spike forecast within lookahead — holding battery for discharge
+              {% elif new == 'solar_export_hold' %}
+                Solar export hold — FIT ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh (avg ${{ states('sensor.solar_weighted_avg_fit') | round(2) }}/kWh), surplus {{ state_attr('binary_sensor.solar_export_hold_justified', 'surplus_ratio') }}x
+              {% elif new == 'self_consumption' and old == 'solar_export_hold' %}
+                Solar export hold released — FIT dropped or surplus insufficient
+              {% elif new == 'self_consumption' and old in ['grid_charging', 'boost_charging'] %}
+                Charging ended — price ${{ price | round(2) }}/kWh (above ${{ stop }}/kWh) or justification ended
+              {% elif new == 'self_consumption' and old == 'spike_discharge' %}
+                Price spike cleared
+              {% elif new == 'self_consumption' and old == 'holding' %}
+                Hold ended — price ${{ price | round(2) }}/kWh, using battery
+              {% elif new == 'self_consumption' and old == 'demand_block' %}
+                Demand window ended
+              {% elif new == 'self_consumption' %}
+                Normal operation — no special conditions active
+              {% elif new == 'manual' %}
+                Automation disabled by user
+              {% else %}
+                Mode changed from {{ old }} to {{ new }}
+              {% endif %}
+            {% endif %}
+
+# -----------------------------------------------------------------------------
+# Integration Sensors — Riemann Sum (power → cumulative energy)
+# -----------------------------------------------------------------------------
+# Convert instantaneous kW → kWh using trapezoidal integration.
+# Cost tracking uses input_number accumulators updated per-minute by A16.
+
+sensor:
+  - platform: integration
+    source: sensor.grid_import_power
+    name: grid_import_energy
+    unit_prefix: k
+    unit_time: h
+    round: 2
+    method: trapezoidal
+
+  - platform: integration
+    source: sensor.grid_export_power
+    name: grid_export_energy
+    unit_prefix: k
+    unit_time: h
+    round: 2
+    method: trapezoidal
+
+  - platform: integration
+    source: sensor.my_home_solar_power
+    name: solar_production_energy
+    unit_prefix: k
+    unit_time: h
+    round: 2
+    method: trapezoidal
+
+
+# -----------------------------------------------------------------------------
+# Utility Meters — Daily & Monthly Accumulators
+# -----------------------------------------------------------------------------
+
+utility_meter:
+  # Daily energy meters
+  grid_import_energy_daily:
+    source: sensor.grid_import_energy
+    name: "Grid Import Energy Daily"
+    cycle: daily
+  grid_export_energy_daily:
+    source: sensor.grid_export_energy
+    name: "Grid Export Energy Daily"
+    cycle: daily
+  solar_production_energy_daily:
+    source: sensor.solar_production_energy
+    name: "Solar Production Daily"
+    cycle: daily
+
+# -----------------------------------------------------------------------------
+# Scripts - Reusable Battery Mode Changes
+# -----------------------------------------------------------------------------
+#
+# Order of operations matters for safety:
+#   Force Charge:    mode=backup (single step, charges at ~3.3kW)
+#   Boost Charge:    reserve=100 FIRST, then mode=autonomous
+#                    (prevents brief discharge while still in self_consumption)
+#   Hold:            reserve=current SOC (rounded up) FIRST, then mode=self_consumption
+#                    (prevents brief discharge/charge at wrong reserve level)
+#   Force Discharge: reserve=10 first, then mode=autonomous
+#   Self Consumption: mode=self_consumption first (stops autonomous), then reserve=10
+#
+# 5-second delays give the Teslemetry API and Powerwall gateway time to process.
+
+script:
+  battery_set_self_consumption:
+    alias: "Battery: Set Self Consumption"
+    icon: mdi:battery-sync
+    description: "Normal mode - battery powers house, solar excess to grid"
+    mode: single
+    sequence:
+      # Always clear manual override, hold mode, and solar export hold when returning to self consumption
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.manual_override_active
+            - input_boolean.battery_hold_mode
+            - input_boolean.solar_export_hold_active
+      - if:
+          - condition: state
+            entity_id: input_boolean.battery_automation_dry_run
+            state: "on"
+        then:
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall DRY RUN"
+              message: >
+                [DRY RUN] Would set self consumption mode.
+                Current mode: {{ states('select.my_home_operation_mode') }},
+                reserve: {{ states('number.my_home_backup_reserve') | round(0) | int }}%.
+                Buy: ${{ states('sensor.100h_general_price') | round(2) }}/kWh,
+                sell: ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh.
+          - action: logbook.log
+            data:
+              name: "Battery Automation"
+              message: "[DRY RUN] Would set self_consumption + reserve 10%"
+              entity_id: select.my_home_operation_mode
+        else:
+          - action: select.select_option
+            target:
+              entity_id: select.my_home_operation_mode
+            data:
+              option: self_consumption
+          - delay:
+              seconds: 5
+          - action: number.set_value
+            target:
+              entity_id: number.my_home_backup_reserve
+            data:
+              value: 10
+
+  battery_set_hold:
+    alias: "Battery: Set Hold (Grid Only)"
+    icon: mdi:battery-lock
+    description: "Hold mode — house draws from grid, battery truly idle (reserve = current SOC)"
+    mode: single
+    sequence:
+      # Toggle: if already in hold, return to self consumption
+      - if:
+          - condition: state
+            entity_id: input_boolean.battery_hold_mode
+            state: "on"
+        then:
+          - action: script.battery_set_self_consumption
+          - stop: "Toggled back to self consumption"
+      - if:
+          - condition: state
+            entity_id: input_boolean.battery_automation_dry_run
+            state: "on"
+        then:
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall DRY RUN"
+              message: >
+                [DRY RUN] Would set hold (grid only) mode.
+                Current mode: {{ states('select.my_home_operation_mode') }},
+                reserve: {{ states('number.my_home_backup_reserve') | round(0) | int }}%.
+                Buy: ${{ states('sensor.100h_general_price') | round(2) }}/kWh.
+                Battery: {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+                Would set reserve to {{ [([states('sensor.my_home_percentage_charged') | float(50) | round(0) | int + 1, 10] | max), 100] | min }}%.
+          - action: logbook.log
+            data:
+              name: "Battery Automation"
+              message: "[DRY RUN] Would set self_consumption + reserve={{ [([states('sensor.my_home_percentage_charged') | float(50) | round(0) | int + 1, 10] | max), 100] | min }}% (hold)"
+              entity_id: select.my_home_operation_mode
+        else:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.battery_hold_mode
+          # Set reserve = current SOC (rounded up, clamped 10-100)
+          # This prevents both charge and discharge — true battery idle
+          - action: number.set_value
+            target:
+              entity_id: number.my_home_backup_reserve
+            data:
+              value: >
+                {{ [([states('sensor.my_home_percentage_charged') | float(50) | round(0) | int + 1, 10] | max), 100] | min }}
+          - delay:
+              seconds: 5
+          - action: select.select_option
+            target:
+              entity_id: select.my_home_operation_mode
+            data:
+              option: self_consumption
+
+  battery_set_force_discharge:
+    alias: "Battery: Set Force Discharge"
+    icon: mdi:flash-alert
+    description: "Export mode - toggles between discharge and self consumption"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.battery_hold_mode
+            - input_boolean.solar_export_hold_active
+      # Toggle: if already discharging, return to self consumption
+      - if:
+          - condition: state
+            entity_id: select.my_home_operation_mode
+            state: "autonomous"
+          - condition: numeric_state
+            entity_id: number.my_home_backup_reserve
+            below: 11
+        then:
+          - action: script.battery_set_self_consumption
+          - stop: "Toggled back to self consumption"
+      - if:
+          - condition: state
+            entity_id: input_boolean.battery_automation_dry_run
+            state: "on"
+        then:
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall DRY RUN"
+              message: >
+                [DRY RUN] Would set force discharge (export) mode.
+                Current mode: {{ states('select.my_home_operation_mode') }},
+                reserve: {{ states('number.my_home_backup_reserve') | round(0) | int }}%.
+                Buy: ${{ states('sensor.100h_general_price') | round(2) }}/kWh,
+                sell: ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh.
+                Battery: {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+          - action: logbook.log
+            data:
+              name: "Battery Automation"
+              message: "[DRY RUN] Would set autonomous + reserve 10% (force discharge)"
+              entity_id: select.my_home_operation_mode
+        else:
+          - action: number.set_value
+            target:
+              entity_id: number.my_home_backup_reserve
+            data:
+              value: 10
+          - delay:
+              seconds: 5
+          - action: select.select_option
+            target:
+              entity_id: select.my_home_operation_mode
+            data:
+              option: autonomous
+
+  battery_set_force_charge:
+    alias: "Battery: Set Force Charge"
+    icon: mdi:battery-charging
+    description: "Charge mode (backup) - toggles between charging and self consumption"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.battery_hold_mode
+            - input_boolean.solar_export_hold_active
+      # Toggle: if already charging (backup mode), return to self consumption
+      - if:
+          - condition: state
+            entity_id: select.my_home_operation_mode
+            state: "backup"
+        then:
+          - action: script.battery_set_self_consumption
+          - stop: "Toggled back to self consumption"
+      - if:
+          - condition: state
+            entity_id: input_boolean.battery_automation_dry_run
+            state: "on"
+        then:
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall DRY RUN"
+              message: >
+                [DRY RUN] Would set force charge (backup) mode.
+                Current mode: {{ states('select.my_home_operation_mode') }},
+                reserve: {{ states('number.my_home_backup_reserve') | round(0) | int }}%.
+                Buy: ${{ states('sensor.100h_general_price') | round(2) }}/kWh,
+                sell: ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh.
+                Battery: {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+          - action: logbook.log
+            data:
+              name: "Battery Automation"
+              message: "[DRY RUN] Would set backup mode (force charge at ~3.3kW)"
+              entity_id: select.my_home_operation_mode
+        else:
+          - action: select.select_option
+            target:
+              entity_id: select.my_home_operation_mode
+            data:
+              option: backup
+
+  battery_set_boost_charge:
+    alias: "Battery: Set Boost Charge (5kW)"
+    icon: mdi:battery-charging-high
+    description: "Fast charge (autonomous+reserve=100%) — ~5kW from grid, for catching up before demand window"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.battery_hold_mode
+            - input_boolean.solar_export_hold_active
+      # Toggle: if already in boost state, return to self consumption
+      - if:
+          - condition: state
+            entity_id: select.my_home_operation_mode
+            state: "autonomous"
+          - condition: numeric_state
+            entity_id: number.my_home_backup_reserve
+            above: 99
+        then:
+          - action: script.battery_set_self_consumption
+          - stop: "Toggled back to self consumption"
+      - if:
+          - condition: state
+            entity_id: input_boolean.battery_automation_dry_run
+            state: "on"
+        then:
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall DRY RUN"
+              message: >
+                [DRY RUN] Would set boost charge (5kW) mode.
+                Current mode: {{ states('select.my_home_operation_mode') }},
+                reserve: {{ states('number.my_home_backup_reserve') | round(0) | int }}%.
+                Buy: ${{ states('sensor.100h_general_price') | round(2) }}/kWh.
+                Battery: {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+                Solar forecast: {{ state_attr('sensor.solar_battery_forecast', 'net_solar_kwh') }}kWh net before demand window.
+          - action: logbook.log
+            data:
+              name: "Battery Automation"
+              message: "[DRY RUN] Would set autonomous + reserve 100% (boost charge at ~5kW)"
+              entity_id: select.my_home_operation_mode
+        else:
+          # Order: reserve=100 FIRST, then autonomous (prevents brief discharge)
+          - action: number.set_value
+            target:
+              entity_id: number.my_home_backup_reserve
+            data:
+              value: 100
+          - delay:
+              seconds: 5
+          - action: select.select_option
+            target:
+              entity_id: select.my_home_operation_mode
+            data:
+              option: autonomous
+
+  # ---------------------------------------------------------------------------
+  # Manual Override Wrappers
+  # ---------------------------------------------------------------------------
+  # Called from dashboard buttons. Set manual_override_active so automations
+  # (A4, A6, A10, A11) don't interfere with intentional manual actions.
+  # Spike automations (A1, A5) still override manual actions for safety.
+  # Override clears when battery_set_self_consumption is called.
+  manual_force_charge:
+    alias: "Manual: Force Charge"
+    icon: mdi:battery-charging
+    description: "Dashboard wrapper - sets manual override then force charges"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.manual_override_active
+      - action: script.battery_set_force_charge
+
+  manual_force_discharge:
+    alias: "Manual: Force Discharge"
+    icon: mdi:flash-alert
+    description: "Dashboard wrapper - sets manual override then force discharges"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.manual_override_active
+      - action: script.battery_set_force_discharge
+
+  manual_hold:
+    alias: "Manual: Hold Battery"
+    icon: mdi:battery-lock
+    description: "Dashboard wrapper - sets manual override then holds battery"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.manual_override_active
+      - action: script.battery_set_hold
+
+  manual_boost_charge:
+    alias: "Manual: Boost Charge (5kW)"
+    icon: mdi:battery-charging-high
+    description: "Dashboard wrapper - sets manual override then boost charges at ~5kW"
+    mode: single
+    sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.manual_override_active
+      - action: script.battery_set_boost_charge
+
+# -----------------------------------------------------------------------------
+# Automations
+# -----------------------------------------------------------------------------
+
+automation:
+  # ---------------------------------------------------------------------------
+  # A1: Price Spike -> Force Discharge
+  # ---------------------------------------------------------------------------
+  # When Amber detects a price spike, export battery to grid.
+  # Only during 6am-midnight (autonomous mode won't discharge overnight
+  # due to dummy tariff's low sell price).
+  # Blocked during demand window to prevent grid import risk.
+  - id: amber_spike_discharge_start
+    alias: "Amber: Spike Discharge Start"
+    description: "When price spike detected, force discharge battery to export"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.100h_price_spike
+        to: "on"
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.spike_discharge_enabled
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.100h_price_spike
+        state: "on"
+      - condition: time
+        after: "06:00:00"
+        before: "00:00:00"
+      # Block during demand window — discharging would drain the battery and
+      # the house would import from grid for the rest of the window.
+      # Feature 7 (future) will allow smart spike discharge with a dynamic SOC floor.
+      - condition: state
+        entity_id: binary_sensor.demand_window_active
+        state: "off"
+      # Don't fire if currently in any charging state (A5 handles that case)
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: select.my_home_operation_mode
+            state: "backup"
+      # Don't fire if in boost charge state (autonomous + reserve>99, A5 handles)
+      - condition: not
+        conditions:
+          - condition: and
+            conditions:
+              - condition: state
+                entity_id: select.my_home_operation_mode
+                state: "autonomous"
+              - condition: numeric_state
+                entity_id: number.my_home_backup_reserve
+                above: 99
+      # Don't fire if already in discharge state (avoid script toggle + duplicate notifications)
+      - condition: not
+        conditions:
+          - condition: and
+            conditions:
+              - condition: state
+                entity_id: select.my_home_operation_mode
+                state: "autonomous"
+              - condition: numeric_state
+                entity_id: number.my_home_backup_reserve
+                below: 11
+    actions:
+      - action: script.battery_set_force_discharge
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Price Spike!"
+          message: >
+            Price spike detected. Feed-in: ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+            Switching to force discharge (export).
+          data:
+            push:
+              interruption-level: time-sensitive
+
+  # ---------------------------------------------------------------------------
+  # A2: Price Spike Clears -> Return to Self Consumption
+  # ---------------------------------------------------------------------------
+  # No spike_discharge_enabled check: always return to normal when spike ends.
+  - id: amber_spike_discharge_end
+    alias: "Amber: Spike Discharge End"
+    description: "When price spike clears, return to self consumption"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.100h_price_spike
+        to: "off"
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.100h_price_spike
+        state: "off"
+      - condition: state
+        entity_id: select.my_home_operation_mode
+        state: "autonomous"
+      # Only return to self consumption if we're in discharge state (reserve<=10).
+      # Gentle charging uses backup mode. Boost charging uses autonomous+reserve>99.
+      # The reserve<11 check correctly excludes both — neither will interfere.
+      - condition: numeric_state
+        entity_id: number.my_home_backup_reserve
+        below: 11
+    actions:
+      - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Spike Ended"
+          message: >
+            Price spike has cleared. Feed-in now: ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+            Returning to self consumption.
+
+  # ---------------------------------------------------------------------------
+  # A3: Cheap Grid Price -> Charge Battery
+  # ---------------------------------------------------------------------------
+  # Charges when price is below threshold with a solar-first philosophy:
+  #   - Daytime (sun up): charge if battery low OR expensive forecast OR solar
+  #     can't reach the target by demand window (Solcast-aware gap monitor)
+  #   - Overnight (sun down): charge only if battery low AND expensive period
+  #     forecast (solar will recharge in the morning — don't waste cheap grid)
+  #   - Gated by battery_target_reached_today to prevent charge-drain-recharge
+  # Selects charge speed: gentle 3.3kW (backup) or boost 5kW (autonomous+100%)
+  # based on whether the solar gap + time remaining requires faster charging.
+  # Will not trigger during an active price spike (spike discharge wins).
+  # Will not trigger during the demand window (no grid imports).
+  - id: amber_cheap_charging_start
+    alias: "Amber: Cheap Grid Charging Start"
+    description: "When grid price drops very low, charge battery from grid (solar-aware)"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.100h_general_price
+        below: sensor.effective_cheap_price
+        for:
+          minutes: 5
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      # Don't override manual user actions
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      # Price must be below effective threshold (explicit check for time_pattern trigger)
+      - condition: numeric_state
+        entity_id: sensor.100h_general_price
+        below: sensor.effective_cheap_price
+      # Block grid charging during demand window
+      - condition: state
+        entity_id: binary_sensor.demand_window_active
+        state: "off"
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.100h_price_spike
+            state: "on"
+      # Only trigger if not already in the correct charging state.
+      # Allow re-trigger if in backup (gentle) but boost is needed (upgrade case).
+      # Block if already in boost, or if in backup and boost is not needed.
+      - condition: template
+        value_template: >
+          {% set in_backup = is_state('select.my_home_operation_mode', 'backup') %}
+          {% set in_boost = is_state('select.my_home_operation_mode', 'autonomous')
+                            and states('number.my_home_backup_reserve') | float(0) > 99 %}
+          {% set boost_needed = is_state('binary_sensor.boost_charge_needed', 'on') %}
+          {% if in_boost %}
+            false
+          {% elif in_backup and boost_needed %}
+            true
+          {% elif in_backup %}
+            false
+          {% else %}
+            true
+          {% endif %}
+      # Don't re-charge after target has been reached today
+      - condition: state
+        entity_id: input_boolean.battery_target_reached_today
+        state: "off"
+      # Charging justification — solar-first + Solcast-aware:
+      #   Daytime (sun up):  solar gap (Solcast says can't reach target) OR
+      #                      expensive period forecast (spike arbitrage opportunity)
+      #   Overnight (sun down): battery low AND expensive forecast (both required)
+      # battery_low is NOT a standalone daytime justification — if solar_can_reach_target
+      # says the sun will fill the battery, trust it regardless of current SOC.
+      - condition: template
+        value_template: >
+          {% set battery_low = states('sensor.my_home_percentage_charged') | float(100)
+             < states('input_number.precharge_battery_threshold') | float(50) %}
+          {% set expensive_coming = is_state('binary_sensor.forecast_expensive_period_coming', 'on') %}
+          {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+          {% set solar_gap = is_state('binary_sensor.solar_can_reach_target', 'off') %}
+          {% if sun_up %}
+            {% if solar_gap %}
+              true
+            {% else %}
+              {{ expensive_coming }}
+            {% endif %}
+          {% else %}
+            {{ battery_low and expensive_coming }}
+          {% endif %}
+    actions:
+      - choose:
+          # Boost charge if needed (solar + gentle can't close gap before demand window)
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.boost_charge_needed
+                state: "on"
+            sequence:
+              - action: script.battery_set_boost_charge
+              - action: notify.mobile_app_jacks_iphone
+                data:
+                  title: "Powerwall: Boost Charging (5kW)"
+                  message: >
+                    Grid price is ${{ states('sensor.100h_general_price') | round(2) }}/kWh
+                    (below {% if state_attr('sensor.effective_cheap_price', 'is_elevated') | bool(false) %}dynamic {% endif %}threshold ${{ states('sensor.effective_cheap_price') }}/kWh).
+                    Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%,
+                    target {{ states('input_number.battery_target') | round(0) | int }}%.
+                    Solar forecast insufficient — boost charging at ~5kW to fill before demand window.
+                    Net solar: {{ state_attr('sensor.solar_battery_forecast', 'net_solar_kwh') }}kWh before demand window.
+                  data:
+                    push:
+                      interruption-level: time-sensitive
+        # Default: gentle charge (3.3kW backup mode)
+        default:
+          - action: script.battery_set_force_charge
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall: Cheap Grid Charging"
+              message: >
+                Grid price is ${{ states('sensor.100h_general_price') | round(2) }}/kWh
+                (below {% if state_attr('sensor.effective_cheap_price', 'is_elevated') | bool(false) %}dynamic {% endif %}threshold ${{ states('sensor.effective_cheap_price') }}/kWh).
+                Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+                {% if is_state('sun.sun', 'below_horizon') %}Overnight charge — expensive period forecast.
+                {% elif is_state('binary_sensor.solar_can_reach_target', 'off') %}Solar gap — forecast won't reach {{ states('input_number.battery_target') | round(0) | int }}% by demand window.
+                {% endif %}Charging from grid at ~3.3kW.
+
+  # ---------------------------------------------------------------------------
+  # A4: Price Rises Above Threshold -> Stop Charging (enter Hold or Self Consumption)
+  # ---------------------------------------------------------------------------
+  # Only acts if we're in a charging state (backup mode or boost mode).
+  # If price is in the deadband zone, transitions to Hold (grid only, battery
+  # idle via reserve=SOC). If price is above the deadband, goes straight to self consumption.
+  - id: amber_cheap_charging_end
+    alias: "Amber: Cheap Grid Charging End"
+    description: "When grid price rises above threshold, stop charging and enter hold or self consumption"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.100h_general_price
+        above: sensor.effective_cheap_price
+        for:
+          minutes: 5
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      # Don't interfere with manual actions
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      # Price must be above effective threshold (explicit check for time_pattern trigger)
+      - condition: numeric_state
+        entity_id: sensor.100h_general_price
+        above: sensor.effective_cheap_price
+      # Must be in any charging state (backup mode or boost mode)
+      - condition: template
+        value_template: >
+          {{ is_state('select.my_home_operation_mode', 'backup')
+             or (is_state('select.my_home_operation_mode', 'autonomous')
+                 and states('number.my_home_backup_reserve') | float(0) > 99) }}
+    actions:
+      - choose:
+          # Price is in the deadband zone AND hold is justified -> Hold (grid only, preserve battery)
+          - conditions:
+              - condition: numeric_state
+                entity_id: sensor.100h_general_price
+                below: sensor.cheap_charge_stop_price
+              # Only hold if there's a reason to preserve charge
+              # (solar coming or cheaper prices forecast within lookahead)
+              - condition: state
+                entity_id: binary_sensor.hold_justified
+                state: "on"
+            sequence:
+              - action: script.battery_set_hold
+              - action: notify.mobile_app_jacks_iphone
+                data:
+                  title: "Powerwall: Holding Battery"
+                  message: >
+                    Grid price rose to ${{ states('sensor.100h_general_price') | round(2) }}/kWh
+                    (above {% if state_attr('sensor.effective_cheap_price', 'is_elevated') | bool(false) %}dynamic {% endif %}threshold ${{ states('sensor.effective_cheap_price') }}/kWh, in deadband).
+                    Holding battery — house draws from grid.
+                    Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+        # Price is above deadband OR hold not justified -> Self Consumption
+        default:
+          - action: script.battery_set_self_consumption
+          - action: notify.mobile_app_jacks_iphone
+            data:
+              title: "Powerwall: Charging Stopped"
+              message: >
+                Grid price rose to ${{ states('sensor.100h_general_price') | round(2) }}/kWh
+                (above stop threshold ${{ states('sensor.cheap_charge_stop_price') }}/kWh).
+                Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+                Returning to self consumption.
+
+  # ---------------------------------------------------------------------------
+  # A5: Spike Fires While Charging -> Override to Discharge
+  # ---------------------------------------------------------------------------
+  # Handles the race condition where a spike occurs while grid charging
+  # (either gentle backup or boost autonomous+reserve=100%).
+  # Stops the charge script(s) first, then switches to discharge.
+  - id: amber_spike_override_charging
+    alias: "Amber: Spike Overrides Charging"
+    description: "If spike starts while charging, switch to discharge (spike wins)"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.100h_price_spike
+        to: "on"
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.spike_discharge_enabled
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.100h_price_spike
+        state: "on"
+      # Must be in any charging state (backup or boost)
+      - condition: template
+        value_template: >
+          {{ is_state('select.my_home_operation_mode', 'backup')
+             or (is_state('select.my_home_operation_mode', 'autonomous')
+                 and states('number.my_home_backup_reserve') | float(0) > 99) }}
+      - condition: time
+        after: "06:00:00"
+        before: "00:00:00"
+      # Block during demand window — same as A1, discharging would cause grid imports
+      - condition: state
+        entity_id: binary_sensor.demand_window_active
+        state: "off"
+    actions:
+      - action: script.turn_off
+        target:
+          entity_id:
+            - script.battery_set_force_charge
+            - script.battery_set_boost_charge
+      - delay:
+          seconds: 2
+      - action: script.battery_set_force_discharge
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Spike Override!"
+          message: >
+            Price spike detected while charging! Overriding to force discharge.
+            Feed-in: ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+          data:
+            push:
+              interruption-level: time-sensitive
+
+  # ---------------------------------------------------------------------------
+  # A6: Safety Net - Return to Normal
+  # ---------------------------------------------------------------------------
+  # Runs every 5 minutes. If the system is in a state that doesn't match
+  # current conditions, forces a return to self consumption. Catches:
+  #   - Stuck in discharge (autonomous + reserve<11) with no spike
+  #   - Stuck in charge (backup or boost) when price is above threshold
+  #   - Stuck in charge during demand window
+  #   - Stuck in hold when price is above stop price
+  # Does NOT interfere with manual overrides.
+  - id: amber_return_to_normal
+    alias: "Amber: Return to Normal Safety Net"
+    description: "Periodic check to return to self consumption when stuck in an unjustified state"
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      # Don't interfere with manual actions
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      # Check if system is in any unjustified state
+      - condition: template
+        value_template: >
+          {% set mode = states('select.my_home_operation_mode') %}
+          {% set reserve = states('number.my_home_backup_reserve') | float(0) %}
+          {% set spike = is_state('binary_sensor.100h_price_spike', 'on') %}
+          {% set price = states('sensor.100h_general_price') | float(99) %}
+          {% set effective = states('sensor.effective_cheap_price') | float(0.15) %}
+          {% set stop_price = states('sensor.cheap_charge_stop_price') | float(0.18) %}
+          {% set in_dw = is_state('binary_sensor.demand_window_active', 'on') %}
+          {% set in_hold = is_state('input_boolean.battery_hold_mode', 'on') %}
+          {% set in_discharge = mode == 'autonomous' and reserve < 11 %}
+          {% set in_backup = mode == 'backup' %}
+          {% set in_boost = mode == 'autonomous' and reserve > 99 %}
+          {# Discharge without spike = unjustified #}
+          {% if in_discharge and not spike %}
+            true
+          {# Charging during demand window = unjustified #}
+          {% elif (in_backup or in_boost) and in_dw %}
+            true
+          {# Charging when price above threshold = unjustified #}
+          {% elif (in_backup or in_boost) and price > stop_price %}
+            true
+          {# Charging but active_mode says we shouldn't be — justification no longer met #}
+          {% elif (in_backup or in_boost) and states('sensor.battery_automation_active_mode') == 'self_consumption' %}
+            true
+          {# Hold when price above stop price = unjustified (exempt solar export holds) #}
+          {% elif in_hold and price > stop_price and not in_dw and not is_state('input_boolean.solar_export_hold_active', 'on') %}
+            true
+          {# Hold with no justification (no deadband reason AND no solar export reason) #}
+          {% elif in_hold and not is_state('binary_sensor.hold_justified', 'on') and not is_state('binary_sensor.solar_export_hold_justified', 'on') %}
+            true
+          {% else %}
+            false
+          {% endif %}
+    actions:
+      - delay:
+          seconds: 30
+      # Re-check: still in an unjustified state after 30s?
+      - condition: template
+        value_template: >
+          {% set mode = states('select.my_home_operation_mode') %}
+          {% set reserve = states('number.my_home_backup_reserve') | float(0) %}
+          {% set spike = is_state('binary_sensor.100h_price_spike', 'on') %}
+          {% set price = states('sensor.100h_general_price') | float(99) %}
+          {% set effective = states('sensor.effective_cheap_price') | float(0.15) %}
+          {% set stop_price = states('sensor.cheap_charge_stop_price') | float(0.18) %}
+          {% set in_dw = is_state('binary_sensor.demand_window_active', 'on') %}
+          {% set in_hold = is_state('input_boolean.battery_hold_mode', 'on') %}
+          {% set in_discharge = mode == 'autonomous' and reserve < 11 %}
+          {% set in_backup = mode == 'backup' %}
+          {% set in_boost = mode == 'autonomous' and reserve > 99 %}
+          {% if in_discharge and not spike %}
+            true
+          {% elif (in_backup or in_boost) and in_dw %}
+            true
+          {% elif (in_backup or in_boost) and price > stop_price %}
+            true
+          {% elif (in_backup or in_boost) and states('sensor.battery_automation_active_mode') == 'self_consumption' %}
+            true
+          {# Hold when price above stop price = unjustified (exempt solar export holds) #}
+          {% elif in_hold and price > stop_price and not in_dw and not is_state('input_boolean.solar_export_hold_active', 'on') %}
+            true
+          {# Hold with no justification (no deadband reason AND no solar export reason) #}
+          {% elif in_hold and not is_state('binary_sensor.hold_justified', 'on') and not is_state('binary_sensor.solar_export_hold_justified', 'on') %}
+            true
+          {% else %}
+            false
+          {% endif %}
+      - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Safety Reset"
+          message: >
+            {% set mode = states('select.my_home_operation_mode') %}
+            {% set reserve = states('number.my_home_backup_reserve') | float(0) %}
+            {% if mode == 'autonomous' and reserve < 11 %}Stuck in discharge mode with no active spike.
+            {% elif mode == 'backup' %}Stuck in grid charging mode (conditions no longer met).
+            {% elif mode == 'autonomous' and reserve > 99 %}Stuck in boost charging mode (conditions no longer met).
+            {% elif is_state('input_boolean.battery_hold_mode', 'on') and not is_state('binary_sensor.hold_justified', 'on') and not is_state('binary_sensor.solar_export_hold_justified', 'on') %}Holding with no justification (no deadband reason or solar export reason).
+            {% elif is_state('input_boolean.battery_hold_mode', 'on') %}Stuck in hold mode (price above stop threshold).
+            {% else %}Stuck in unexpected state ({{ mode }}, reserve {{ reserve | round(0) | int }}%).
+            {% endif %}Returning to self consumption.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+
+  # ---------------------------------------------------------------------------
+  # A7: Master Toggle Off -> Restore Defaults
+  # ---------------------------------------------------------------------------
+  # Unconditional return to safe defaults when master switch is disabled.
+  - id: amber_master_toggle_off
+    alias: "Amber: Master Toggle Off - Restore Defaults"
+    description: "When master automation toggle is disabled, return to self consumption"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.battery_automation_enabled
+        to: "off"
+    conditions: []
+    actions:
+      - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Automation Disabled"
+          message: "Battery automation disabled. Returned to self consumption mode."
+
+  # ---------------------------------------------------------------------------
+  # A8: Demand Window Start -> Force Self Consumption
+  # ---------------------------------------------------------------------------
+  # When the demand window starts, if block is enabled, ensure the system is
+  # in normal self consumption (reserve=10%). This prevents grid imports
+  # during the demand window. Must catch ALL non-normal states:
+  #   - backup (charging from grid)
+  #   - autonomous (force discharge or boost charge)
+  #   - hold mode (battery_hold_mode flag — reserve=SOC, house draws from grid)
+  - id: amber_demand_window_start
+    alias: "Amber: Demand Window Start"
+    description: "At demand window start, force self consumption to prevent grid imports"
+    mode: single
+    triggers:
+      - trigger: time
+        at: input_datetime.demand_window_start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.demand_window_block_enabled
+        state: "on"
+    actions:
+      # Stop any running charge/discharge scripts first to prevent race conditions.
+      # A boost charge script mid-sequence (5s delay between reserve=100 and mode=autonomous)
+      # would otherwise overwrite our self_consumption mode after we set it.
+      - action: script.turn_off
+        target:
+          entity_id:
+            - script.battery_set_force_charge
+            - script.battery_set_boost_charge
+            - script.battery_set_force_discharge
+      - delay:
+          seconds: 2
+      - if:
+          - condition: or
+            conditions:
+              # Charging (backup mode)
+              - condition: state
+                entity_id: select.my_home_operation_mode
+                state: "backup"
+              # Discharging (autonomous mode)
+              - condition: state
+                entity_id: select.my_home_operation_mode
+                state: "autonomous"
+              # Hold mode (reserve=SOC, house draws from grid)
+              - condition: state
+                entity_id: input_boolean.battery_hold_mode
+                state: "on"
+        then:
+          - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Demand Window Active"
+          message: >
+            Demand window started ({{ states('input_datetime.demand_window_start')[0:5] }}-{{ states('input_datetime.demand_window_end')[0:5] }}). Grid imports blocked.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+
+  # ---------------------------------------------------------------------------
+  # A9: Demand Window Enforcement
+  # ---------------------------------------------------------------------------
+  # During the demand window, if something puts the system into any non-normal
+  # state, immediately revert to self consumption. Catches:
+  #   - backup (grid charging)
+  #   - autonomous (force discharge or boost charge)
+  #   - hold mode (battery_hold_mode flag — reserve=SOC, house draws from grid)
+  # Runs every 5 minutes during the demand window as a safety check.
+  - id: amber_demand_window_enforce
+    alias: "Amber: Demand Window Enforcement"
+    description: "During demand window, block any non-normal battery states"
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.demand_window_active
+        state: "on"
+      # Act if in any non-normal state
+      - condition: or
+        conditions:
+          # Charging (backup mode)
+          - condition: state
+            entity_id: select.my_home_operation_mode
+            state: "backup"
+          # Discharging (autonomous mode)
+          - condition: state
+            entity_id: select.my_home_operation_mode
+            state: "autonomous"
+          # Hold mode (reserve=SOC, house draws from grid)
+          - condition: state
+            entity_id: input_boolean.battery_hold_mode
+            state: "on"
+    actions:
+      # Stop any running scripts first to prevent race conditions
+      - action: script.turn_off
+        target:
+          entity_id:
+            - script.battery_set_force_charge
+            - script.battery_set_boost_charge
+            - script.battery_set_force_discharge
+      - delay:
+          seconds: 2
+      - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Demand Window Override!"
+          message: >
+            Non-normal state blocked during demand window ({{ states('input_datetime.demand_window_start')[0:5] }}-{{ states('input_datetime.demand_window_end')[0:5] }}).
+            Forced back to self consumption.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+          data:
+            push:
+              interruption-level: time-sensitive
+
+  # ---------------------------------------------------------------------------
+  # A10: Hold -> Self Consumption (price exits deadband)
+  # ---------------------------------------------------------------------------
+  # When price rises above the stop price (threshold + deadband), the hold
+  # mode is no longer justified. Return to self consumption so the battery
+  # can power the house.
+  - id: amber_hold_to_self_consumption
+    alias: "Amber: Hold to Self Consumption"
+    description: "When price exits deadband zone, leave hold mode and return to self consumption"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.100h_general_price
+        above: sensor.cheap_charge_stop_price
+        for:
+          minutes: 5
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      # Don't interfere with manual actions
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      # Price must be above stop price (explicit check for time_pattern trigger)
+      - condition: numeric_state
+        entity_id: sensor.100h_general_price
+        above: sensor.cheap_charge_stop_price
+      # Must be in hold state
+      - condition: state
+        entity_id: input_boolean.battery_hold_mode
+        state: "on"
+      # Don't exit if in solar export hold (FIT-driven, not buy-price-driven)
+      - condition: state
+        entity_id: input_boolean.solar_export_hold_active
+        state: "off"
+    actions:
+      - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Leaving Hold"
+          message: >
+            Grid price rose to ${{ states('sensor.100h_general_price') | round(2) }}/kWh
+            (above stop threshold ${{ states('sensor.cheap_charge_stop_price') }}/kWh).
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+            Returning to self consumption.
+
+  # ---------------------------------------------------------------------------
+  # A11: Self Consumption -> Hold (price drops into deadband)
+  # ---------------------------------------------------------------------------
+  # When price drops into the deadband zone (below stop price but above
+  # threshold), preserve the battery by switching to hold mode. The house
+  # draws from the grid while the battery waits for cheaper prices.
+  # Also catches the case where a spike clears while in the deadband zone:
+  # A2 returns to self consumption, then A11 picks it up within 1 minute.
+  - id: amber_self_consumption_to_hold
+    alias: "Amber: Self Consumption to Hold"
+    description: "When price enters deadband zone, switch to hold to preserve battery"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.100h_general_price
+        below: sensor.cheap_charge_stop_price
+        for:
+          minutes: 5
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      # Don't interfere with manual actions
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      # Never enter hold during demand window — battery must discharge to house
+      - condition: state
+        entity_id: binary_sensor.demand_window_active
+        state: "off"
+      # Price must be in the deadband zone: above effective threshold but below stop price
+      - condition: numeric_state
+        entity_id: sensor.100h_general_price
+        above: sensor.effective_cheap_price
+      - condition: numeric_state
+        entity_id: sensor.100h_general_price
+        below: sensor.cheap_charge_stop_price
+      # Must be in normal self consumption (not already holding)
+      - condition: state
+        entity_id: input_boolean.battery_hold_mode
+        state: "off"
+      - condition: state
+        entity_id: select.my_home_operation_mode
+        state: "self_consumption"
+      # Don't enter hold during a spike (spike discharge should take priority)
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.100h_price_spike
+            state: "on"
+      # Only hold if there's a reason to preserve battery charge
+      # (solar coming or cheaper prices forecast within lookahead).
+      # Without justification, self consumption is better — use the battery.
+      - condition: state
+        entity_id: binary_sensor.hold_justified
+        state: "on"
+    actions:
+      - action: script.battery_set_hold
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Entering Hold"
+          message: >
+            Grid price at ${{ states('sensor.100h_general_price') | round(2) }}/kWh
+            (in deadband zone). Holding battery — house draws from grid.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+
+  # ---------------------------------------------------------------------------
+  # A12: Reset Battery Target Reached at Midnight
+  # ---------------------------------------------------------------------------
+  # Clears the "target reached today" flag so charging decisions start fresh
+  # each day. Without this, the system would never grid-charge again after
+  # the first day the battery reaches the target.
+  - id: amber_reset_target_reached
+    alias: "Amber: Reset Battery Target Reached"
+    description: "At midnight, reset the battery target reached flag and cost accumulators for the new day"
+    mode: single
+    triggers:
+      - trigger: time
+        at: "00:00:00"
+    conditions: []
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.battery_target_reached_today
+      - action: input_number.set_value
+        target:
+          entity_id:
+            - input_number.grid_import_cost_accumulator
+            - input_number.grid_export_revenue_accumulator
+            - input_number.battery_savings_accumulator
+            - input_number.battery_charge_cost_accumulator
+        data:
+          value: 0
+
+  # ---------------------------------------------------------------------------
+  # A13: Mark Battery Target Reached
+  # ---------------------------------------------------------------------------
+  # When the battery SOC crosses above the target, set the flag. This prevents
+  # the charge-drain-recharge cycle — once the battery has been filled to the
+  # target for the day, don't grid-charge again even if SOC drops later.
+  - id: amber_mark_target_reached
+    alias: "Amber: Mark Battery Target Reached"
+    description: "When battery reaches target SOC, set flag to prevent re-charging"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.my_home_percentage_charged
+        above: input_number.battery_target
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.battery_target_reached_today
+
+  # ---------------------------------------------------------------------------
+  # A14: Set Default Demand Window Times on Startup
+  # ---------------------------------------------------------------------------
+  # input_datetime doesn't support 'initial' in packages. This automation
+  # sets 15:00/21:00 defaults on HA startup if the values are uninitialised.
+  # Once set, HA persists the values across restarts — this only runs once.
+  - id: amber_set_demand_window_defaults
+    alias: "Amber: Set Demand Window Defaults"
+    description: "On startup, set default demand window times if uninitialised"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: >
+          {{ states('input_datetime.demand_window_start') == '00:00:00'
+             or states('input_datetime.demand_window_end') == '00:00:00' }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.demand_window_start
+        data:
+          time: "15:00:00"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.demand_window_end
+        data:
+          time: "21:00:00"
+
+  # ---------------------------------------------------------------------------
+  # A15: Daily Summary Notification
+  # ---------------------------------------------------------------------------
+  # After demand window ends, send a summary of the day's energy costs,
+  # solar production, and automation activity. Uses utility_meter daily
+  # sensors for totals.
+  - id: amber_daily_summary
+    alias: "Amber: Daily Summary"
+    description: "Send daily summary of energy costs, solar production, and automation activity"
+    mode: single
+    triggers:
+      - trigger: time
+        at: input_datetime.demand_window_end
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+    actions:
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Daily Summary"
+          message: >
+            {% set import_cost = states('input_number.grid_import_cost_accumulator') | float(0) %}
+            {% set export_rev = states('input_number.grid_export_revenue_accumulator') | float(0) %}
+            {% set savings = states('input_number.battery_savings_accumulator') | float(0) %}
+            {% set charge_cost = states('input_number.battery_charge_cost_accumulator') | float(0) %}
+            {% set import_kwh = states('sensor.grid_import_energy_daily') | float(0) %}
+            {% set export_kwh = states('sensor.grid_export_energy_daily') | float(0) %}
+            {% set solar_kwh = states('sensor.solar_production_energy_daily') | float(0) %}
+            {% set net = import_cost - export_rev %}
+            {% set soc = states('sensor.my_home_percentage_charged') | float(0) | round(0) | int %}
+            Today so far:
+
+            ☀️ Solar: {{ solar_kwh | round(1) }} kWh
+            ⬇️ Grid import: {{ import_kwh | round(1) }} kWh (${{ import_cost | round(2) }})
+            ⬆️ Grid export: {{ export_kwh | round(1) }} kWh (${{ export_rev | round(2) }} revenue)
+            💰 Net cost: ${{ net | round(2) }}
+
+            🔋 Battery savings: ${{ savings | round(2) }}
+            ⚡ Battery charge cost: ${{ charge_cost | round(2) }}
+            🔋 SOC: {{ soc }}%
+
+  # ---------------------------------------------------------------------------
+  # A16: Cost Accumulator (per-minute update)
+  # ---------------------------------------------------------------------------
+  # Every minute, read current power and price, compute the cost for 1 minute
+  # (power_kW * price_$/kWh / 60 = $ for 1 minute), and add to accumulators.
+  # This replaces the broken platform: integration approach for cost tracking.
+  - id: amber_cost_accumulator
+    alias: "Amber: Cost Accumulator"
+    description: "Every minute, accumulate grid/battery costs based on current power and price"
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+    actions:
+      - variables:
+          grid_power: "{{ states('sensor.my_home_grid_power') | float(0) }}"
+          battery_power: "{{ states('sensor.my_home_battery_power') | float(0) }}"
+          buy_price: "{{ states('sensor.100h_general_price') | float(0) }}"
+          sell_price: "{{ states('sensor.100h_feed_in_price') | float(0) }}"
+          import_cost: "{{ ([grid_power, 0] | max * buy_price / 60) }}"
+          export_revenue: "{{ ([(-grid_power), 0] | max * sell_price / 60) }}"
+          savings: "{{ ([(-battery_power), 0] | max * buy_price / 60) }}"
+          charge_cost: "{{ ([battery_power, 0] | max * buy_price / 60) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.grid_import_cost_accumulator
+        data:
+          value: "{{ (states('input_number.grid_import_cost_accumulator') | float(0) + import_cost) | round(4) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.grid_export_revenue_accumulator
+        data:
+          value: "{{ (states('input_number.grid_export_revenue_accumulator') | float(0) + export_revenue) | round(4) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.battery_savings_accumulator
+        data:
+          value: "{{ (states('input_number.battery_savings_accumulator') | float(0) + savings) | round(4) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.battery_charge_cost_accumulator
+        data:
+          value: "{{ (states('input_number.battery_charge_cost_accumulator') | float(0) + charge_cost) | round(4) }}"
+
+  # ---------------------------------------------------------------------------
+  # A17: Solar Export Hold - Enter
+  # ---------------------------------------------------------------------------
+  # When solar surplus is confident and current FIT is above the solar-weighted
+  # average remaining FIT, hold the battery at current SOC to export solar at
+  # the good price. Only fires when in self_consumption (not during charging,
+  # discharge, or existing hold).
+  - id: amber_solar_export_hold_enter
+    alias: "Amber: Solar Export Hold Enter"
+    description: "Hold battery to maximise solar export when FIT is above average"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.solar_export_hold_justified
+        to: "on"
+        for:
+          minutes: 2
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.solar_export_hold_justified
+        state: "on"
+      # Only enter from self_consumption (not during charging, discharge, or existing hold)
+      - condition: state
+        entity_id: select.my_home_operation_mode
+        state: "self_consumption"
+      - condition: state
+        entity_id: input_boolean.battery_hold_mode
+        state: "off"
+      # Don't enter during a spike (spike discharge takes priority)
+      - condition: state
+        entity_id: binary_sensor.100h_price_spike
+        state: "off"
+      # Don't enter during demand window
+      - condition: state
+        entity_id: binary_sensor.demand_window_active
+        state: "off"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.solar_export_hold_active
+      - action: script.battery_set_hold
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Solar Export Hold"
+          message: >
+            Holding battery to export solar at ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh
+            (above avg ${{ states('sensor.solar_weighted_avg_fit') | round(2) }}/kWh).
+            Solar surplus {{ state_attr('binary_sensor.solar_export_hold_justified', 'surplus_ratio') }}x deficit.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
+
+  # ---------------------------------------------------------------------------
+  # A18: Solar Export Hold - Exit
+  # ---------------------------------------------------------------------------
+  # When solar export hold conditions are no longer met, return to self
+  # consumption so the battery can charge from solar. Only acts on solar
+  # export holds (not regular deadband holds).
+  - id: amber_solar_export_hold_exit
+    alias: "Amber: Solar Export Hold Exit"
+    description: "Release solar export hold when FIT drops or solar surplus insufficient"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.solar_export_hold_justified
+        to: "off"
+        for:
+          minutes: 2
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.battery_automation_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.manual_override_active
+        state: "off"
+      # Must be in solar export hold specifically
+      - condition: state
+        entity_id: input_boolean.solar_export_hold_active
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.battery_hold_mode
+        state: "on"
+      # Justification must be gone
+      - condition: state
+        entity_id: binary_sensor.solar_export_hold_justified
+        state: "off"
+    actions:
+      - action: script.battery_set_self_consumption
+      - action: notify.mobile_app_jacks_iphone
+        data:
+          title: "Powerwall: Solar Export Hold Released"
+          message: >
+            FIT now ${{ states('sensor.100h_feed_in_price') | round(2) }}/kWh
+            (avg ${{ states('sensor.solar_weighted_avg_fit') | round(2) }}/kWh).
+            Solar surplus {{ state_attr('binary_sensor.solar_export_hold_justified', 'surplus_ratio') }}x.
+            Resuming self consumption to charge battery.
+            Battery at {{ states('sensor.my_home_percentage_charged') | round(0) | int }}%.
