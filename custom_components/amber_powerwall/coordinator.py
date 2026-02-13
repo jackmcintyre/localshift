@@ -172,6 +172,8 @@ class AmberPowerwallCoordinator:
         self._mode_desired_since: dict[BatteryMode, datetime] = {}
         self._startup_grace_until: datetime | None = None
         self._evaluate_lock = asyncio.Lock()
+        # Flag to skip re-evaluation during programmatic mode transitions
+        self._in_mode_transition: bool = False
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -213,6 +215,8 @@ class AmberPowerwallCoordinator:
     async def async_start(self) -> None:
         """Start listening to entity changes and periodic timer."""
         # Collect all external entity IDs to watch
+        # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
+        # programmatically and don't want to trigger re-evaluation loops
         monitored_entities = [
             self._get_entity_id(CONF_TESLEMETRY_OPERATION_MODE),
             self._get_entity_id(CONF_TESLEMETRY_BACKUP_RESERVE),
@@ -221,7 +225,7 @@ class AmberPowerwallCoordinator:
             self._get_entity_id(CONF_TESLEMETRY_BATTERY_POWER),
             self._get_entity_id(CONF_TESLEMETRY_SOLAR_POWER),
             self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER),
-            self._get_entity_id(CONF_TESLEMETRY_ALLOW_EXPORT),
+            # NOT monitoring allow_export - changes programmatically
             self._get_entity_id(CONF_AMBER_GENERAL_PRICE),
             self._get_entity_id(CONF_AMBER_FEED_IN_PRICE),
             self._get_entity_id(CONF_AMBER_GENERAL_FORECAST),
@@ -423,6 +427,12 @@ class AmberPowerwallCoordinator:
     @callback
     def _handle_state_change(self, event: Event) -> None:
         """Handle a state change from a monitored entity."""
+        # Skip re-evaluation if we're in the middle of a mode transition
+        # This prevents feedback loops when we programmatically change entities
+        if self._in_mode_transition:
+            _LOGGER.debug("Skipping re-evaluation during mode transition")
+            return
+
         self._read_all_external_state()
         self._compute_derived_values()
         self.hass.async_create_task(
@@ -1332,36 +1342,44 @@ class AmberPowerwallCoordinator:
         """Issue battery commands and set state flags for *target* mode."""
         d = self.data
 
-        if target == BatteryMode.SELF_CONSUMPTION:
-            await self.async_set_self_consumption()
+        # Set flag to prevent re-evaluation during mode transition
+        # This prevents feedback loops when we programmatically change entities
+        self._in_mode_transition = True
 
-        elif target == BatteryMode.DEMAND_BLOCK:
-            # Demand block is self_consumption with extra protection
-            await self.async_set_self_consumption()
+        try:
+            if target == BatteryMode.SELF_CONSUMPTION:
+                await self.async_set_self_consumption()
 
-        elif target == BatteryMode.HOLD:
-            d.solar_export_hold = False
-            await self.async_set_hold()
+            elif target == BatteryMode.DEMAND_BLOCK:
+                # Demand block is self_consumption with extra protection
+                await self.async_set_self_consumption()
 
-        elif target == BatteryMode.SOLAR_EXPORT_HOLD:
-            d.solar_export_hold = True
-            await self.async_set_hold()
+            elif target == BatteryMode.HOLD:
+                d.solar_export_hold = False
+                await self.async_set_hold()
 
-        elif target == BatteryMode.HOLDING_FOR_SPIKE:
-            d.solar_export_hold = False
-            await self.async_set_hold()
+            elif target == BatteryMode.SOLAR_EXPORT_HOLD:
+                d.solar_export_hold = True
+                await self.async_set_hold()
 
-        elif target == BatteryMode.GRID_CHARGING:
-            await self.async_set_force_charge()
+            elif target == BatteryMode.HOLDING_FOR_SPIKE:
+                d.solar_export_hold = False
+                await self.async_set_hold()
 
-        elif target == BatteryMode.BOOST_CHARGING:
-            await self.async_set_boost_charge()
+            elif target == BatteryMode.GRID_CHARGING:
+                await self.async_set_force_charge()
 
-        elif target == BatteryMode.SPIKE_DISCHARGE:
-            await self.async_set_force_discharge()
+            elif target == BatteryMode.BOOST_CHARGING:
+                await self.async_set_boost_charge()
 
-        elif target == BatteryMode.MANUAL:
-            pass  # No command — user is controlling manually
+            elif target == BatteryMode.SPIKE_DISCHARGE:
+                await self.async_set_force_discharge()
+
+            elif target == BatteryMode.MANUAL:
+                pass  # No command — user is controlling manually
+        finally:
+            # Always clear the flag, even if an exception occurs
+            self._in_mode_transition = False
 
     async def _send_transition_notification(
         self, old_mode: BatteryMode, new_mode: BatteryMode
