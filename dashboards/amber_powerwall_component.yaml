@@ -385,7 +385,6 @@ views:
             chart_type: line
             span:
               start: day
-              offset: "-24h"
             series:
               - entity: sensor.my_home_percentage_charged
                 name: Actual SOC
