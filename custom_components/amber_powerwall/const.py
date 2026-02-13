@@ -36,6 +36,9 @@ TESLEMETRY_EXPORT_BATTERY_OK = "battery_ok"
 # Teslemetry power charge thresholds
 CHARGE_RATE_BACKUP_KW = 3.3  # Force charge rate (backup mode)
 
+# Powerwall capacity
+BATTERY_CAPACITY_KWH = 13.5
+
 # Force discharge time window (dummy tariff limitation)
 DISCHARGE_EARLIEST_HOUR = 6
 
