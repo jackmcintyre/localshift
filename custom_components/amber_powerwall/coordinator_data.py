@@ -56,6 +56,7 @@ class CoordinatorData:
     grid_export_power_kw: float = 0.0
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
+    forecast_history: list[dict[str, Any]] = field(default_factory=list)
 
     # Cost accumulators (Phase 4)
     grid_import_cost: float = 0.0

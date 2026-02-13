@@ -359,3 +359,63 @@ views:
               SOC: {{ state_attr(log, 'soc') }}%
               Buy: ${{ state_attr(log, 'buy_price') }}/kWh
               Sell: ${{ state_attr(log, 'sell_price') }}/kWh
+
+      # --- Charging Performance ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Charging Performance
+            heading_style: title
+
+          - type: markdown
+            content: >
+              **Planned vs Actual SOC**
+
+              {% set forecast_sensor = 'sensor.amber_powerwall_forecast_history' %}
+              {% set forecast_count = states(forecast_sensor) | int(default=0) %}
+              
+              Forecast history: **{{ forecast_count }}** entries
+              
+              *Note: Requires apexcharts-card from HACS*
+
+          - type: custom:apexcharts-card
+            header:
+              title: Planned vs Actual SOC
+              show: true
+            chart_type: line
+            span:
+              start: day
+              offset: "-24h"
+            series:
+              - entity: sensor.my_home_percentage_charged
+                name: Actual SOC
+                color: "#3B82F6"
+                stroke_width: 3
+                curve: smooth
+                extend_to_end: true
+              - entity: sensor.amber_powerwall_forecast_history
+                name: Planned SOC
+                color: "#F59E0B"
+                stroke_width: 2
+                stroke_dash: 5
+                show:
+                  legend_value: true
+                data_generator: |
+                  return entity.attributes.history.map(entry => ({
+                    x: new Date(entry.timestamp),
+                    y: entry.predicted_soc
+                  }));
+            yaxis:
+              - min: 0
+                max: 100
+                decimals: 0
+                apex_yaxis_id: soc
+            xaxis:
+              type: datetime
+              labels:
+                format: HH:mm
+            hours_12: false
+            now:
+              show: true
+              label: Now
+              color: "#EF4444"

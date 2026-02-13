@@ -37,6 +37,7 @@ async def async_setup_entry(
         GridExportPowerSensor(coordinator, entry),
         NetElectricityCostSensor(coordinator, entry),
         DecisionLogSensor(coordinator, entry),
+        ForecastHistorySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -255,3 +256,20 @@ class DecisionLogSensor(AmberPowerwallSensorBase):
             attrs["sell_price"] = latest.get("sell_price")
             attrs["timestamp"] = latest.get("timestamp")
         return attrs
+
+
+class ForecastHistorySensor(AmberPowerwallSensorBase):
+    """Historical forecast predictions for planned vs actual comparison."""
+
+    _attr_unique_id = "forecast_history"
+    _attr_name = "Forecast History"
+    _attr_icon = "mdi:chart-line-variant"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with the count of stored predictions."""
+        self._attr_native_value = len(self.coordinator.data.forecast_history)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the forecast history as attributes."""
+        return {"history": self.coordinator.data.forecast_history}

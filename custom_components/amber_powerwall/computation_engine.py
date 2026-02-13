@@ -54,7 +54,7 @@ class ComputationEngine:
         get_entity_id_func: callable,
         get_switch_state_func: callable,
     ) -> None:
-        """Initialize the computation engine.
+        """Initialize computation engine.
 
         Args:
             hass: Home Assistant instance
@@ -69,6 +69,7 @@ class ComputationEngine:
         self._historical_load_cache: dict[int, float] = {}
         self._historical_load_cache_date: str = ""
         self._previous_active_mode = None
+        self._last_forecast_hour: int | None = None
 
     def compute_derived_values(self, data: CoordinatorData) -> None:
         """Compute all derived sensor/binary_sensor values from raw state.
@@ -274,6 +275,38 @@ class ComputationEngine:
             # Mark target reached if SOC is there
             if data.soc >= target_pct:
                 data.target_reached_today = True
+
+            # Store forecast history when hour changes (for planned vs actual chart)
+            current_hour = now_dt.hour
+            if (
+                self._last_forecast_hour is None
+                or current_hour != self._last_forecast_hour
+            ):
+                self._store_forecast_history(
+                    data, now_dt, predicted_soc, solar_kwh, consumption_kwh
+                )
+                self._last_forecast_hour = current_hour
+
+    def _store_forecast_history(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        predicted_soc: float,
+        solar_kwh: float,
+        consumption_kwh: float,
+    ) -> None:
+        """Store forecast prediction to history for planned vs actual comparison."""
+        entry = {
+            "timestamp": now_dt.isoformat(),
+            "predicted_soc": round(predicted_soc, 1),
+            "solar_before_dw_kwh": round(solar_kwh, 2),
+            "consumption_estimate_kwh": round(consumption_kwh, 2),
+        }
+        data.forecast_history.append(entry)
+
+        # Keep only last 48 entries (2 days of hourly data)
+        if len(data.forecast_history) > 48:
+            data.forecast_history = data.forecast_history[-48:]
 
     def _compute_effective_cheap_price(
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
