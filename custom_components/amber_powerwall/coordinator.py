@@ -486,6 +486,32 @@ class AmberPowerwallCoordinator:
     # Helper methods
     # ------------------------------------------------------------------
 
+    def _get_expected_load_kw(self, hours_to_target: float) -> float:
+        """Calculate expected load in kW based on historical data.
+        
+        Uses historical daily import averages to predict consumption,
+        smoothing out temporary variations like hot water finishing.
+        """
+        # Try to get historical daily imports
+        daily_imports = []
+        for i in range(1, 8):
+            sensor_id = f"sensor.grid_import_energy_daily_{i}"
+            val = self._read_float(sensor_id, 0.0)
+            if val > 0:
+                daily_imports.append(val)
+        
+        if daily_imports:
+            # Use average daily consumption
+            avg_daily = sum(daily_imports) / len(daily_imports)
+            # Convert to hourly rate (average over 24 hours)
+            avg_hourly = avg_daily / 24.0
+            # Add 10% buffer to be conservative
+            return avg_hourly * 1.1
+        
+        # Fallback to current load or default
+        current_load = self.data.load_power_kw
+        return current_load if current_load > 0 else 0.5
+
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
         time_str = str(self.get_option(key, default))
@@ -823,8 +849,10 @@ class AmberPowerwallCoordinator:
             )
 
             # Consumption estimate: current load extrapolated
-            load_kw = d.load_power_kw if d.load_power_kw > 0 else 0.5
-            consumption_kwh = load_kw * hours_to_target
+            # Use historical average load if available, otherwise use current load
+            # This prevents over-charging when load temporarily drops (e.g., hot water finishes)
+            expected_load_kw = self._get_expected_load_kw(hours_to_target)
+            consumption_kwh = expected_load_kw * hours_to_target
 
             # Net solar (after consumption)
             net_solar = solar_kwh - consumption_kwh
