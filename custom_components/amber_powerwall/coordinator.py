@@ -174,7 +174,9 @@ class AmberPowerwallCoordinator:
         self._evaluate_lock = asyncio.Lock()
         # Flag to skip re-evaluation during programmatic mode transitions
         self._in_mode_transition: bool = False
-
+        # Cache for historical load averages (24 hour cache, cleared at midnight)
+        self._historical_load_cache: dict[int, float] = {}
+        self._historical_load_cache_date: str = ""  # Format: YYYY-MM-DD
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
@@ -487,30 +489,114 @@ class AmberPowerwallCoordinator:
     # ------------------------------------------------------------------
 
     def _get_expected_load_kw(self, hours_to_target: float) -> float:
-        """Calculate expected load in kW based on historical data.
+        """Calculate expected load based on 7-day historical averages.
         
-        Uses historical daily import averages to predict consumption,
+        Uses sensor.my_home_load_power historical data to predict consumption,
         smoothing out temporary variations like hot water finishing.
-        """
-        # Try to get historical daily imports
-        daily_imports = []
-        for i in range(1, 8):
-            sensor_id = f"sensor.grid_import_energy_daily_{i}"
-            val = self._read_float(sensor_id, 0.0)
-            if val > 0:
-                daily_imports.append(val)
         
-        if daily_imports:
-            # Use average daily consumption
-            avg_daily = sum(daily_imports) / len(daily_imports)
-            # Convert to hourly rate (average over 24 hours)
-            avg_hourly = avg_daily / 24.0
+        Returns the expected cumulative load in kWh from now until demand window.
+        """
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        
+        # Get cached historical hourly averages
+        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        
+        if hourly_avg_kw:
+            # Sum hourly averages from current hour until demand window
+            now_dt = dt_util.now()
+            dw_start_time = self._parse_time_option(
+                CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+            )
+            target_hour = dw_start_time.hour
+            current_hour = now_dt.hour
+            
+            total_expected_kwh = 0.0
+            hour = current_hour
+            
+            # Sum hours from now until target hour
+            while hour != target_hour:
+                if hour in hourly_avg_kw:
+                    total_expected_kwh += hourly_avg_kw[hour]
+                hour = (hour + 1) % 24
+                # Safety: don't loop forever
+                if hour == current_hour:
+                    break
+            
             # Add 10% buffer to be conservative
-            return avg_hourly * 1.1
+            total_expected_kwh *= 1.1
+            
+            if total_expected_kwh > 0:
+                return total_expected_kwh
         
         # Fallback to current load or default
         current_load = self.data.load_power_kw
-        return current_load if current_load > 0 else 0.5
+        return (current_load * hours_to_target) if current_load > 0 else (0.5 * hours_to_target)
+
+    def _get_historical_hourly_averages(self, entity_id: str) -> dict[int, float]:
+        """Get 7-day hourly averages, cached until midnight.
+        
+        Queries HA history API once per day and caches the result.
+        """
+        now = dt_util.now()
+        today_str = now.strftime("%Y-%m-%d")
+        
+        # Check if cache is valid for today
+        if self._historical_load_cache_date == today_str and self._historical_load_cache:
+            return self._historical_load_cache
+        
+        # Cache expired or empty - fetch new data
+        start_time = now - timedelta(days=7)
+        
+        try:
+            import requests
+            
+            ha_url = self.hass.config.api.base_url
+            url = f"{ha_url}/api/history/period/{start_time.isoformat()}"
+            headers = {
+                "Authorization": f"Bearer {self.hass.config.api.token}",
+                "Content-Type": "application/json"
+            }
+            params = {
+                "filter_entity_id": entity_id,
+                "end_time": now.isoformat()
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            
+            if response.status_code != 200:
+                return {}
+            
+            data = response.json()
+            if not data or len(data) == 0:
+                return {}
+            
+            # Calculate average from historical data points
+            values = []
+            for state_list in data:
+                for state in state_list:
+                    if state.get("state") not in (None, "unavailable", "unknown"):
+                        try:
+                            val = float(state["state"])
+                            values.append(val)
+                        except (ValueError, TypeError):
+                            pass
+            
+            if not values:
+                return {}
+            
+            # Calculate average power in kW
+            avg_watts = sum(values) / len(values)
+            avg_kw = avg_watts / 1000.0
+            
+            # Store in cache
+            self._historical_load_cache = {h: avg_kw for h in range(24)}
+            self._historical_load_cache_date = today_str
+            
+            return self._historical_load_cache
+            
+        except Exception as e:
+            _LOGGER.debug("Failed to get historical hourly averages: %s", e)
+            return {}
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
