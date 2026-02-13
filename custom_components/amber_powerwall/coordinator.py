@@ -840,17 +840,14 @@ class AmberPowerwallCoordinator:
             # Goal: reach target as close to DW start as possible
             if d.soc >= target_pct:
                 boost_needed = False
-            elif d.boost_charge_active:
-                # Hysteresis: if already boosting, stay until target or DW
-                boost_needed = True
             else:
                 remaining_deficit = max(deficit_kwh - max(net_solar, 0), 0)
                 # Time needed to charge remaining deficit at gentle rate (3.3kW)
                 # Include 90% efficiency factor
                 time_needed_hours = remaining_deficit / (CHARGE_RATE_BACKUP_KW * 0.9) if remaining_deficit > 0 else 0
                 # Only boost if we can't make it in time with gentle charging
-                # Allow 15 minute buffer to ensure we reach target before DW
-                boost_needed = time_needed_hours > (hours_to_target - 0.25) and remaining_deficit > 0
+                # Allow 30 minute buffer to ensure we reach target before DW
+                boost_needed = time_needed_hours > (hours_to_target - 0.5) and remaining_deficit > 0
 
             d.solar_battery_forecast = {
                 "predicted_soc": round(predicted_soc, 1),
