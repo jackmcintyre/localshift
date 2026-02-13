@@ -203,6 +203,16 @@ class StateMachine:
             self._commanded_mode = desired
             self._mode_desired_since.clear()
 
+            # Clear hold_mode flag when transitioning away from hold modes
+            # This prevents flag from persisting and causing unintended
+            # hold mode re-entry
+            if desired not in (
+                BatteryMode.HOLD,
+                BatteryMode.SOLAR_EXPORT_HOLD,
+                BatteryMode.HOLDING_FOR_SPIKE,
+            ):
+                data.hold_mode = False
+
             # Send notification
             await self._notification_service.send_transition_notification(
                 old_mode, desired, data

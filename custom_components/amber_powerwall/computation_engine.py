@@ -194,13 +194,21 @@ class ComputationEngine:
 
         if after_dw:
             # After DW start: report current SOC, safe defaults
+            # Check if sun is down for accurate overnight assessment
+            sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
+            sun_state = self.hass.states.get(sun_entity_id)
+            sun_up = sun_state is not None and sun_state.state == "above_horizon"
+
+            # If sun is down and SOC not at target, can't reach target via solar
+            can_reach = data.soc >= target_pct or sun_up
+
             data.solar_battery_forecast = {
                 "predicted_soc": round(data.soc, 1),
                 "solar_before_dw_kwh": 0.0,
                 "consumption_estimate_kwh": 0.0,
                 "net_solar_kwh": 0.0,
                 "deficit_kwh": 0.0,
-                "can_reach_target": True,
+                "can_reach_target": can_reach,
                 "boost_needed": False,
                 "hours_to_target_time": 0.0,
             }
@@ -392,6 +400,16 @@ class ComputationEngine:
             or min_future_price < absolute_cheap_threshold
         )
 
+        # Don't justify holding overnight (10pm-6am) when there's no sun to charge
+        # This prevents unnecessary hold mode triggered by:
+        # 1. Price drops when solar charging isn't possible anyway
+        # 2. Solar forecasts when there's no sun to benefit
+        overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6
+        if overnight_hours and not data.solar_can_reach_target:
+            cheap_coming = False
+            # Also disable solar-based hold justification overnight
+            solar_kwh_lookahead = 0.0
+
         data.hold_justified = solar_kwh_lookahead >= 0.5 or cheap_coming
 
     def _compute_solar_weighted_avg_fit(
@@ -491,6 +509,24 @@ class ComputationEngine:
         sun_state = self.hass.states.get(sun_entity_id)
         sun_up = sun_state is not None and sun_state.state == "above_horizon"
 
+        # Debug: Log state when considering HOLD mode
+        if data.hold_justified or data.forecast_spike_within_window:
+            _LOGGER.debug(
+                "Hold mode consideration at %s: hold_justified=%s, "
+                "hold_mode=%s, solar_export_hold=%s, "
+                "forecast_spike=%s, solar_can_reach=%s, sun_up=%s, "
+                "price=%.2f, stop_price=%.2f",
+                now_dt.strftime("%H:%M"),
+                data.hold_justified,
+                data.hold_mode,
+                data.solar_export_hold,
+                data.forecast_spike_within_window,
+                data.solar_can_reach_target,
+                sun_up,
+                data.general_price,
+                data.cheap_charge_stop_price,
+            )
+
         if not automation_enabled:
             data.active_mode = BatteryMode.MANUAL
         elif data.demand_window_active:
@@ -537,7 +573,12 @@ class ComputationEngine:
                 else:
                     data.active_mode = BatteryMode.SELF_CONSUMPTION
         elif data.forecast_spike_within_window:
-            data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
+            # Don't hold for spikes overnight (10pm-6am) when there's no sun to benefit
+            overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6
+            if not (overnight_hours and not data.solar_can_reach_target):
+                data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
+            else:
+                data.active_mode = BatteryMode.SELF_CONSUMPTION
         else:
             data.active_mode = BatteryMode.SELF_CONSUMPTION
 
