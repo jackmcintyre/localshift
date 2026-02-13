@@ -235,3 +235,8 @@ Additionally, all `async_set_*` methods were missing the 5-second delays between
 
 **Fix:** Not yet implemented. Would require persisting to config entry options or using HA's storage mechanism.
 
+### B14: mode changing not updating Teslemetry select.my_home_operation_mode
+
+**Problem** When the sensor.amber_powerwall_active_mode changes, it should trigger changes to the teslemetry sensor to change the mode. While the former moved to self-consumption, teslemetry stayed in backup, so the battery kept charging.
+
+### B15: when in hold, the backup % should round down rather than round

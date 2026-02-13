@@ -19,7 +19,7 @@ from .const import (
     CONF_AMBER_PRICE_SPIKE,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
-    CONF_CHEAP_PRICE_THRESHOLD,
+    CONF_CHEAP_PRICE_PERCENTILE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
@@ -38,7 +38,7 @@ from .const import (
     CONF_TESLEMETRY_SOLAR_POWER,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
-    DEFAULT_CHEAP_PRICE_THRESHOLD,
+    DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
@@ -179,7 +179,7 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             }
             # Set default options
             options = {
-                CONF_CHEAP_PRICE_THRESHOLD: DEFAULT_CHEAP_PRICE_THRESHOLD,
+                CONF_CHEAP_PRICE_PERCENTILE: DEFAULT_CHEAP_PRICE_PERCENTILE,
                 CONF_MAX_PRECHARGE_PRICE: DEFAULT_MAX_PRECHARGE_PRICE,
                 CONF_CHEAP_PRICE_DEADBAND: DEFAULT_CHEAP_PRICE_DEADBAND,
                 CONF_FORECAST_LOOKAHEAD_HOURS: DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -242,17 +242,17 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_CHEAP_PRICE_THRESHOLD,
+                        CONF_CHEAP_PRICE_PERCENTILE,
                         default=current.get(
-                            CONF_CHEAP_PRICE_THRESHOLD,
-                            DEFAULT_CHEAP_PRICE_THRESHOLD,
+                            CONF_CHEAP_PRICE_PERCENTILE,
+                            DEFAULT_CHEAP_PRICE_PERCENTILE,
                         ),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=0.00,
-                            max=0.25,
-                            step=0.01,
-                            unit_of_measurement="$/kWh",
+                            min=5,
+                            max=50,
+                            step=1,
+                            unit_of_measurement="%",
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),

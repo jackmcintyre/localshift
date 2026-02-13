@@ -43,7 +43,7 @@
         "title": "Amber Powerwall Settings",
         "description": "Adjust automation thresholds and demand window timing.",
         "data": {
-          "cheap_price_threshold": "Cheap Price Threshold",
+          "cheap_price_percentile": "Cheap Price Percentile",
           "max_precharge_price": "Max Pre-charge Price",
           "cheap_price_deadband": "Price Deadband",
           "forecast_lookahead_hours": "Forecast Lookahead",

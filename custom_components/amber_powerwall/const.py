@@ -106,7 +106,7 @@ DEFAULT_ENTITY_IDS = {
 # Options Flow Keys — User-Configurable Thresholds
 # -----------------------------------------------------------------------------
 
-CONF_CHEAP_PRICE_THRESHOLD = "cheap_price_threshold"
+CONF_CHEAP_PRICE_PERCENTILE = "cheap_price_percentile"
 CONF_MAX_PRECHARGE_PRICE = "max_precharge_price"
 CONF_CHEAP_PRICE_DEADBAND = "cheap_price_deadband"
 CONF_FORECAST_LOOKAHEAD_HOURS = "forecast_lookahead_hours"
@@ -116,7 +116,9 @@ CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 
 # Default values (matching YAML package)
-DEFAULT_CHEAP_PRICE_THRESHOLD = 0.15  # $/kWh
+DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
+# Legacy constant for backward compatibility during migration
+DEFAULT_CHEAP_PRICE_THRESHOLD = 0.15  # $/kWh (deprecated)
 DEFAULT_MAX_PRECHARGE_PRICE = 0.20  # $/kWh
 DEFAULT_CHEAP_PRICE_DEADBAND = 0.03  # $/kWh
 DEFAULT_FORECAST_LOOKAHEAD_HOURS = 2.0  # hours
@@ -127,12 +129,12 @@ DEFAULT_DEMAND_WINDOW_END = "21:00:00"
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
-    CONF_CHEAP_PRICE_THRESHOLD: {
-        "min": 0.00,
-        "max": 0.25,
-        "step": 0.01,
-        "unit": "$/kWh",
-        "icon": "mdi:tag-outline",
+    CONF_CHEAP_PRICE_PERCENTILE: {
+        "min": 5,
+        "max": 50,
+        "step": 1,
+        "unit": "%",
+        "icon": "mdi:chart-box-outline",
     },
     CONF_MAX_PRECHARGE_PRICE: {
         "min": 0.00,
