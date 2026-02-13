@@ -1578,6 +1578,7 @@ class AmberPowerwallCoordinator:
         await self._set_operation_mode("self_consumption")
         await asyncio.sleep(5)
         await self._set_backup_reserve(10)
+        await asyncio.sleep(5)
 
     async def async_set_hold(self) -> None:
         """Set battery to hold mode (reserve=floor(SOC), self_consumption)."""
