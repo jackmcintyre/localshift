@@ -32,7 +32,7 @@ from .const import (
     CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
-    CONF_CHEAP_PRICE_THRESHOLD,
+    CONF_CHEAP_PRICE_PERCENTILE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
@@ -50,7 +50,7 @@ from .const import (
     CONF_TESLEMETRY_SOLAR_POWER,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
-    DEFAULT_CHEAP_PRICE_THRESHOLD,
+    DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -579,6 +579,27 @@ class AmberPowerwallCoordinator:
                     max_price = price
         return round(max_price, 2)
 
+    @staticmethod
+    def _percentile(
+        prices: list[float],
+        percentile: float,
+    ) -> float:
+        """Calculate the Nth percentile of a list of prices.
+        
+        Uses linear interpolation between closest ranks.
+        """
+        if not prices:
+            return 0.0
+        sorted_prices = sorted(prices)
+        n = len(sorted_prices)
+        index = (percentile / 100) * (n - 1)
+        lower = int(index)
+        upper = lower + 1
+        if upper >= n:
+            return sorted_prices[-1]
+        fraction = index - lower
+        return sorted_prices[lower] * (1 - fraction) + sorted_prices[upper] * fraction
+
     # ------------------------------------------------------------------
     # Cost tracking (Phase 4)
     # ------------------------------------------------------------------
@@ -847,11 +868,40 @@ class AmberPowerwallCoordinator:
         )
 
         # ---- Step 7: effective_cheap_price ----
-        base = float(
+        # Calculate base from percentile of forecast prices
+        lookahead = float(
             self.get_option(
-                CONF_CHEAP_PRICE_THRESHOLD, DEFAULT_CHEAP_PRICE_THRESHOLD
+                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
             )
         )
+        cutoff = now_dt + timedelta(hours=lookahead)
+        
+        # Collect forecast prices within lookahead window
+        forecast_prices = []
+        for f in d.general_forecast:
+            start = self._parse_forecast_dt(f.get("start_time"))
+            if start is None:
+                continue
+            start_local = dt_util.as_local(start)
+            if start_local >= now_dt and start_local <= cutoff:
+                forecast_prices.append(float(f.get("per_kwh", 0)))
+        
+        # Calculate percentile-based cheap price
+        percentile = float(
+            self.get_option(
+                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
+            )
+        )
+        if forecast_prices:
+            base = round(self._percentile(forecast_prices, percentile), 2)
+        else:
+            # Fallback to max_precharge_price if no forecast data
+            base = float(
+                self.get_option(
+                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                )
+            )
+        
         max_price = float(
             self.get_option(
                 CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
@@ -1504,23 +1554,29 @@ class AmberPowerwallCoordinator:
         d.solar_export_hold = False
 
         if self.get_switch_state(SWITCH_DRY_RUN):
-            _LOGGER.info("[DRY RUN] Would set self_consumption, reserve=10")
+            _LOGGER.info("[DRY RUN] Would set self_consumption, reserve=10, allow_export=pv_only")
             return
 
+        # Set allow_export to pv_only first (don't allow battery to export)
+        await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY)
+        await asyncio.sleep(5)
         await self._set_operation_mode("self_consumption")
         await asyncio.sleep(5)
         await self._set_backup_reserve(10)
 
     async def async_set_hold(self) -> None:
-        """Set battery to hold mode (reserve=ceil(SOC), self_consumption)."""
+        """Set battery to hold mode (reserve=floor(SOC), self_consumption)."""
         d = self.data
         d.hold_mode = True
-        reserve = max(10, min(100, math.ceil(d.soc)))
+        reserve = max(10, min(100, math.floor(d.soc)))
 
         if self.get_switch_state(SWITCH_DRY_RUN):
-            _LOGGER.info("[DRY RUN] Would set hold, reserve=%d", reserve)
+            _LOGGER.info("[DRY RUN] Would set hold, reserve=%d, allow_export=pv_only", reserve)
             return
 
+        # Set allow_export to pv_only first (don't allow battery to export)
+        await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY)
+        await asyncio.sleep(5)
         await self._set_backup_reserve(reserve)
         await asyncio.sleep(5)
         await self._set_operation_mode("self_consumption")
@@ -1532,9 +1588,12 @@ class AmberPowerwallCoordinator:
         d.solar_export_hold = False
 
         if self.get_switch_state(SWITCH_DRY_RUN):
-            _LOGGER.info("[DRY RUN] Would set force charge (backup)")
+            _LOGGER.info("[DRY RUN] Would set force charge (backup), allow_export=pv_only")
             return
 
+        # Set allow_export to pv_only first (don't allow battery to export)
+        await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY)
+        await asyncio.sleep(5)
         await self._set_operation_mode("backup")
 
     async def async_set_boost_charge(self) -> None:
@@ -1545,10 +1604,13 @@ class AmberPowerwallCoordinator:
 
         if self.get_switch_state(SWITCH_DRY_RUN):
             _LOGGER.info(
-                "[DRY RUN] Would set boost charge (autonomous, reserve=100)"
+                "[DRY RUN] Would set boost charge (autonomous, reserve=100), allow_export=pv_only"
             )
             return
 
+        # Set allow_export to pv_only first (don't allow battery to export)
+        await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY)
+        await asyncio.sleep(5)
         await self._set_backup_reserve(100)
         await asyncio.sleep(5)
         await self._set_operation_mode("autonomous")
@@ -1565,10 +1627,13 @@ class AmberPowerwallCoordinator:
 
         if self.get_switch_state(SWITCH_DRY_RUN):
             _LOGGER.info(
-                "[DRY RUN] Would set force discharge (autonomous, reserve=10)"
+                "[DRY RUN] Would set force discharge (autonomous, reserve=10), allow_export=battery_ok"
             )
             return
 
+        # Set allow_export to battery_ok first (allow battery to export to grid)
+        await self._set_export_mode(TESLEMETRY_EXPORT_BATTERY_OK)
+        await asyncio.sleep(5)
         await self._set_backup_reserve(10)
         await asyncio.sleep(5)
         await self._set_operation_mode("autonomous")
