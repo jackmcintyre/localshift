@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
@@ -23,15 +22,17 @@ from .const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
+    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    CONF_HOLD_MIN_SAVINGS_PERCENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_NOTIFY_SERVICE,
     CONF_PRECHARGE_BATTERY_THRESHOLD,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
-    CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_TESLEMETRY_LOAD_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
@@ -43,6 +44,8 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     DOMAIN,
@@ -187,6 +190,8 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_BATTERY_TARGET: DEFAULT_BATTERY_TARGET,
                 CONF_DEMAND_WINDOW_START: DEFAULT_DEMAND_WINDOW_START,
                 CONF_DEMAND_WINDOW_END: DEFAULT_DEMAND_WINDOW_END,
+                CONF_HOLD_MIN_SAVINGS_PERCENT: DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
+                CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD: DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
             }
             return self.async_create_entry(
                 title="Amber Powerwall",
@@ -345,6 +350,36 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
                             DEFAULT_DEMAND_WINDOW_END,
                         ),
                     ): selector.TimeSelector(),
+                    vol.Required(
+                        CONF_HOLD_MIN_SAVINGS_PERCENT,
+                        default=current.get(
+                            CONF_HOLD_MIN_SAVINGS_PERCENT,
+                            DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=50,
+                            step=1,
+                            unit_of_measurement="%",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+                        default=current.get(
+                            CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+                            DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.00,
+                            max=0.50,
+                            step=0.01,
+                            unit_of_measurement="$/kWh",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
                 }
             ),
         )

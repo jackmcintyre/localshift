@@ -92,6 +92,30 @@ input_number:
     icon: mdi:arrow-left-right
     mode: slider
 
+  # Minimum price drop (%) required to justify holding battery overnight.
+  # Only holds if price is forecast to drop by at least this % from current price.
+  min_savings_percent:
+    name: "Min Savings Percent"
+    min: 0
+    max: 50
+    step: 1
+    initial: 20
+    unit_of_measurement: "%"
+    icon: mdi:percent
+    mode: slider
+
+  # Absolute cheap price threshold ($/kWh) — alternative to % drop.
+  # Holds if any forecast price falls below this threshold, regardless of % drop.
+  absolute_cheap_threshold:
+    name: "Absolute Cheap Threshold"
+    min: 0.00
+    max: 0.50
+    step: 0.01
+    initial: 0.10
+    unit_of_measurement: "$/kWh"
+    icon: mdi:cash
+    mode: slider
+
   forecast_lookahead_hours:
     name: "Forecast Lookahead Hours"
     min: 1
@@ -332,8 +356,13 @@ template:
       # ON when there's a reason to preserve battery charge (hold is justified).
       # True if either:
       #   1. Meaningful solar (≥0.5 kWh pessimistic) is forecast within the lookahead window
-      #   2. Cheaper grid prices are forecast within the lookahead window
-      # When false, holding the battery would just cause unnecessary grid imports.
+      #   2. Cheaper grid prices are forecast within the lookahead window (financial justification)
+      #
+      # Financial justification requires meaningful savings:
+      #   - Price must drop by at least 20% from current price, OR
+      #   - Absolute price must be very cheap (< 10c/kWh)
+      #
+      # This prevents holding overnight for trivial price differences (e.g., 15c -> 14c).
       # Used by A4, A6, A11 to gate hold decisions.
       - name: "Hold Justified"
         unique_id: hold_justified
@@ -343,7 +372,7 @@ template:
           {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
           {% set cheap = states('sensor.effective_cheap_price') | float(0.15) %}
           {# Check 1: meaningful solar forecast (≥0.5 kWh) within lookahead #}
-          {% set ns = namespace(solar_kwh=0, cheap_coming=false) %}
+          {% set ns = namespace(solar_kwh=0, cheap_coming=false, current_price=0.15, min_future_price=0.99, price_drop_pct=0) %}
           {% set forecast_today = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
           {% set forecast_tomorrow = state_attr('sensor.solcast_pv_forecast_forecast_tomorrow', 'detailedForecast') %}
           {% for forecast in [forecast_today, forecast_tomorrow] %}
@@ -356,18 +385,26 @@ template:
               {% endfor %}
             {% endif %}
           {% endfor %}
-          {# Check 2: cheaper price coming within lookahead #}
+          {# Check 2: financially justified price savings within lookahead #}
+          {% set ns.current_price = states('sensor.100h_general_price') | float(0.15) %}
           {% set price_forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
           {% if price_forecasts is not none %}
             {% for f in price_forecasts %}
               {% set start = f.start_time | as_datetime %}
               {% if start is not none and start >= now() and start <= cutoff %}
-                {% if f.per_kwh | float(99) < cheap %}
-                  {% set ns.cheap_coming = true %}
+                {% if f.per_kwh | float(0.99) < ns.min_future_price %}
+                  {% set ns.min_future_price = f.per_kwh | float(0.99) %}
                 {% endif %}
               {% endif %}
             {% endfor %}
           {% endif %}
+          {# Calculate savings: require configurable % drop OR absolute price < configurable threshold #}
+          {% if ns.current_price > 0 %}
+            {% set ns.price_drop_pct = ((ns.current_price - ns.min_future_price) / ns.current_price * 100) | float(0) %}
+          {% endif %}
+          {% set min_savings_percent = states('input_number.min_savings_percent') | float(20) %}
+          {% set absolute_cheap_threshold = states('input_number.absolute_cheap_threshold') | float(0.10) %}
+          {% set ns.cheap_coming = ns.price_drop_pct > min_savings_percent or ns.min_future_price < absolute_cheap_threshold %}
           {{ ns.solar_kwh >= 0.5 or ns.cheap_coming }}
         attributes:
           solar_forecast_kwh: >
@@ -387,23 +424,81 @@ template:
               {% endif %}
             {% endfor %}
             {{ ns.solar_kwh | round(2) }}
-          cheap_price_coming: >
+          current_price: "{{ states('sensor.100h_general_price') | float(0.15) | round(2) }}"
+          min_future_price: >
             {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
             {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
-            {% set cheap = states('sensor.effective_cheap_price') | float(0.15) %}
-            {% set ns = namespace(found=false) %}
+            {% set current_price = states('sensor.100h_general_price') | float(0.15) %}
+            {% set ns = namespace(min_price=0.99) %}
             {% set forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
             {% if forecasts is not none %}
               {% for f in forecasts %}
                 {% set start = f.start_time | as_datetime %}
                 {% if start is not none and start >= now() and start <= cutoff %}
-                  {% if f.per_kwh | float(99) < cheap %}
-                    {% set ns.found = true %}
+                  {% if f.per_kwh | float(0.99) < ns.min_price %}
+                    {% set ns.min_price = f.per_kwh | float(0.99) %}
                   {% endif %}
                 {% endif %}
               {% endfor %}
             {% endif %}
-            {{ ns.found }}
+            {{ ns.min_price | round(2) }}
+          price_drop_percent: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set current_price = states('sensor.100h_general_price') | float(0.15) %}
+            {% set ns = namespace(min_price=0.99) %}
+            {% set forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+            {% if forecasts is not none %}
+              {% for f in forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start >= now() and start <= cutoff %}
+                  {% if f.per_kwh | float(0.99) < ns.min_price %}
+                    {% set ns.min_price = f.per_kwh | float(0.99) %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {% if current_price > 0 %}
+              {{ ((current_price - ns.min_price) / current_price * 100) | round(1) }}
+            {% else %}
+              0
+            {% endif %}
+          hold_justified: >
+            {% set lookahead_hours = states('input_number.forecast_lookahead_hours') | float(2) %}
+            {% set cutoff = now() + timedelta(hours=lookahead_hours) %}
+            {% set current_price = states('sensor.100h_general_price') | float(0.15) %}
+            {% set ns = namespace(min_price=0.99, solar_kwh=0) %}
+            {% set forecast_today = state_attr('sensor.solcast_pv_forecast_forecast_today', 'detailedForecast') %}
+            {% set forecast_tomorrow = state_attr('sensor.solcast_pv_forecast_forecast_tomorrow', 'detailedForecast') %}
+            {% for forecast in [forecast_today, forecast_tomorrow] %}
+              {% if forecast is not none %}
+                {% for period in forecast %}
+                  {% set period_start = period.period_start | as_datetime %}
+                  {% if period_start is not none and period_start >= now() and period_start <= cutoff %}
+                    {% set ns.solar_kwh = ns.solar_kwh + (period.pv_estimate10 | float(0)) %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+            {% set price_forecasts = state_attr('sensor.100h_general_forecast', 'forecasts') %}
+            {% if price_forecasts is not none %}
+              {% for f in price_forecasts %}
+                {% set start = f.start_time | as_datetime %}
+                {% if start is not none and start >= now() and start <= cutoff %}
+                  {% if f.per_kwh | float(0.99) < ns.min_price %}
+                    {% set ns.min_price = f.per_kwh | float(0.99) %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {% if current_price > 0 %}
+              {% set price_drop_pct = ((current_price - ns.min_price) / current_price * 100) | float(0) %}
+            {% else %}
+              {% set price_drop_pct = 0 %}
+            {% endif %}
+            {% set min_savings_percent = states('input_number.min_savings_percent') | float(20) %}
+            {% set absolute_cheap_threshold = states('input_number.absolute_cheap_threshold') | float(0.10) %}
+            {{ ns.solar_kwh >= 0.5 or price_drop_pct > min_savings_percent or ns.min_price < absolute_cheap_threshold }}
 
       # ON when conditions justify holding battery to export solar at
       # above-average FIT prices. Requires: sun up, before demand window,

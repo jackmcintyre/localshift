@@ -47,9 +47,7 @@ async def async_setup_entry(
     """Set up Amber Powerwall switch entities."""
     coordinator: AmberPowerwallCoordinator = entry.runtime_data
 
-    entities = [
-        AmberPowerwallSwitch(coordinator, entry, key) for key in SWITCH_KEYS
-    ]
+    entities = [AmberPowerwallSwitch(coordinator, entry, key) for key in SWITCH_KEYS]
 
     async_add_entities(entities)
 
@@ -94,7 +92,7 @@ class AmberPowerwallSwitch(SwitchEntity):
         """Return True if the switch is on."""
         return self._is_on
 
-    async def async_turn_on(self, **kwargs) -> None:
+    async def async_turn_on(self, **_kwargs) -> None:
         """Turn the switch on."""
         self._is_on = True
         self.coordinator.set_switch_state(self._key, True)
@@ -108,7 +106,7 @@ class AmberPowerwallSwitch(SwitchEntity):
         self.coordinator._notify_listeners()
         await self.coordinator.async_evaluate_state_machine()
 
-    async def async_turn_off(self, **kwargs) -> None:
+    async def async_turn_off(self, **_kwargs) -> None:
         """Turn the switch off."""
         self._is_on = False
         self.coordinator.set_switch_state(self._key, False)
@@ -116,8 +114,7 @@ class AmberPowerwallSwitch(SwitchEntity):
 
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info(
-                "Amber Powerwall automation disabled, "
-                "returning to self consumption"
+                "Amber Powerwall automation disabled, returning to self consumption"
             )
             await self.coordinator.async_set_self_consumption()
 

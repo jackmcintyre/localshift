@@ -7,9 +7,6 @@ config entry options for persistence.
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -21,12 +18,16 @@ from .const import (
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_FORECAST_LOOKAHEAD_HOURS,
+    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    CONF_HOLD_MIN_SAVINGS_PERCENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_PRECHARGE_BATTERY_THRESHOLD,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     DOMAIN,
@@ -34,16 +35,36 @@ from .const import (
 )
 from .coordinator import AmberPowerwallCoordinator
 
-_LOGGER = logging.getLogger(__name__)
-
 # Map of (config_key, name, default) for each number entity
 NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
-    (CONF_CHEAP_PRICE_PERCENTILE, "Cheap Price Percentile", DEFAULT_CHEAP_PRICE_PERCENTILE),
+    (
+        CONF_CHEAP_PRICE_PERCENTILE,
+        "Cheap Price Percentile",
+        DEFAULT_CHEAP_PRICE_PERCENTILE,
+    ),
     (CONF_MAX_PRECHARGE_PRICE, "Max Pre-charge Price", DEFAULT_MAX_PRECHARGE_PRICE),
     (CONF_CHEAP_PRICE_DEADBAND, "Price Deadband", DEFAULT_CHEAP_PRICE_DEADBAND),
-    (CONF_FORECAST_LOOKAHEAD_HOURS, "Forecast Lookahead", DEFAULT_FORECAST_LOOKAHEAD_HOURS),
-    (CONF_PRECHARGE_BATTERY_THRESHOLD, "Pre-charge Battery Threshold", DEFAULT_PRECHARGE_BATTERY_THRESHOLD),
+    (
+        CONF_FORECAST_LOOKAHEAD_HOURS,
+        "Forecast Lookahead",
+        DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    ),
+    (
+        CONF_PRECHARGE_BATTERY_THRESHOLD,
+        "Pre-charge Battery Threshold",
+        DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
+    ),
     (CONF_BATTERY_TARGET, "Battery Target", DEFAULT_BATTERY_TARGET),
+    (
+        CONF_HOLD_MIN_SAVINGS_PERCENT,
+        "Hold Min Savings Percent",
+        DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
+    ),
+    (
+        CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+        "Hold Absolute Cheap Threshold",
+        DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    ),
 ]
 
 
@@ -111,7 +132,5 @@ class AmberPowerwallNumber(NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Update the value in config entry options."""
         new_options = {**self._entry.options, self._conf_key: value}
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_options
-        )
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         self.async_write_ha_state()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
 # -----------------------------------------------------------------------------
 # Domain
@@ -15,7 +15,7 @@ DOMAIN = "amber_powerwall"
 # -----------------------------------------------------------------------------
 
 
-class BatteryMode(StrEnum):
+class BatteryMode(str, Enum):
     """Battery operating modes."""
 
     SELF_CONSUMPTION = "self_consumption"
@@ -29,27 +29,15 @@ class BatteryMode(StrEnum):
     MANUAL = "manual"
 
 
-# Teslemetry operation_mode values
-TESLEMETRY_MODE_SELF_CONSUMPTION = "self_consumption"
-TESLEMETRY_MODE_BACKUP = "backup"
-TESLEMETRY_MODE_AUTONOMOUS = "autonomous"
-
-# Teslemetry reserve values
-RESERVE_SELF_CONSUMPTION = 10
-RESERVE_BOOST_CHARGE = 100
-RESERVE_FORCE_DISCHARGE = 10
-
 # Teslemetry export modes (select.allow_export options)
 TESLEMETRY_EXPORT_PV_ONLY = "pv_only"
 TESLEMETRY_EXPORT_BATTERY_OK = "battery_ok"
 
 # Teslemetry power charge thresholds
 CHARGE_RATE_BACKUP_KW = 3.3  # Force charge rate (backup mode)
-CHARGE_RATE_BOOST_KW = 5.0   # Boost charge rate (autonomous + reserve=100)
 
 # Force discharge time window (dummy tariff limitation)
 DISCHARGE_EARLIEST_HOUR = 6
-DISCHARGE_LATEST_HOUR = 0  # midnight
 
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Entity Selection (Step 1)
@@ -114,11 +102,11 @@ CONF_PRECHARGE_BATTERY_THRESHOLD = "precharge_battery_threshold"
 CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
+CONF_HOLD_MIN_SAVINGS_PERCENT = "hold_min_savings_percent"
+CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD = "hold_absolute_cheap_threshold"
 
 # Default values (matching YAML package)
 DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
-# Legacy constant for backward compatibility during migration
-DEFAULT_CHEAP_PRICE_THRESHOLD = 0.15  # $/kWh (deprecated)
 DEFAULT_MAX_PRECHARGE_PRICE = 0.20  # $/kWh
 DEFAULT_CHEAP_PRICE_DEADBAND = 0.03  # $/kWh
 DEFAULT_FORECAST_LOOKAHEAD_HOURS = 2.0  # hours
@@ -126,6 +114,8 @@ DEFAULT_PRECHARGE_BATTERY_THRESHOLD = 50  # %
 DEFAULT_BATTERY_TARGET = 100  # %
 DEFAULT_DEMAND_WINDOW_START = "15:00:00"
 DEFAULT_DEMAND_WINDOW_END = "21:00:00"
+DEFAULT_HOLD_MIN_SAVINGS_PERCENT = 20  # % price drop required
+DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD = 0.10  # $/kWh
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -170,6 +160,20 @@ THRESHOLD_RANGES = {
         "step": 5,
         "unit": "%",
         "icon": "mdi:battery-check",
+    },
+    CONF_HOLD_MIN_SAVINGS_PERCENT: {
+        "min": 0,
+        "max": 50,
+        "step": 1,
+        "unit": "%",
+        "icon": "mdi:percent",
+    },
+    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD: {
+        "min": 0.00,
+        "max": 0.50,
+        "step": 0.01,
+        "unit": "$/kWh",
+        "icon": "mdi:cash",
     },
 }
 
@@ -230,103 +234,11 @@ BUTTON_NAMES = {
 }
 
 # -----------------------------------------------------------------------------
-# Binary Sensor Keys
-# -----------------------------------------------------------------------------
-
-BINARY_SENSOR_KEYS = {
-    "forecast_spike_within_window": "Forecast Spike Within Window",
-    "battery_force_discharge_active": "Force Discharge Active",
-    "battery_force_charge_active": "Force Charge Active",
-    "battery_boost_charge_active": "Boost Charge Active",
-    "battery_hold_active": "Hold Active",
-    "forecast_expensive_period_coming": "Expensive Period Coming",
-    "solar_can_reach_target": "Solar Can Reach Target",
-    "boost_charge_needed": "Boost Charge Needed",
-    "hold_justified": "Hold Justified",
-    "solar_export_hold_justified": "Solar Export Hold Justified",
-    "demand_window_active": "Demand Window Active",
-}
-
-# -----------------------------------------------------------------------------
-# Sensor Keys
-# -----------------------------------------------------------------------------
-
-SENSOR_KEYS = {
-    "effective_cheap_price": "Effective Cheap Price",
-    "cheap_charge_stop_price": "Cheap Charge Stop Price",
-    "solar_weighted_avg_fit": "Solar Weighted Average FIT",
-    "active_mode": "Active Mode",
-    "solar_battery_forecast": "Solar Battery Forecast",
-    "grid_import_power": "Grid Import Power",
-    "grid_export_power": "Grid Export Power",
-    "net_electricity_cost_today": "Net Electricity Cost Today",
-    "decision_log": "Decision Log",
-}
-
-# -----------------------------------------------------------------------------
-# Internal State Keys (not user-facing, managed by state machine)
-# -----------------------------------------------------------------------------
-
-INTERNAL_MANUAL_OVERRIDE = "manual_override_active"
-INTERNAL_HOLD_MODE = "hold_mode"
-INTERNAL_SOLAR_EXPORT_HOLD = "solar_export_hold_active"
-INTERNAL_TARGET_REACHED = "target_reached_today"
-
-# Cost accumulator keys
-COST_GRID_IMPORT = "grid_import_cost"
-COST_GRID_EXPORT = "grid_export_revenue"
-COST_BATTERY_SAVINGS = "battery_savings"
-COST_BATTERY_CHARGE = "battery_charge_cost"
-
-# -----------------------------------------------------------------------------
-# Mode display configuration
-# -----------------------------------------------------------------------------
-
-MODE_DISPLAY = {
-    BatteryMode.SELF_CONSUMPTION: {
-        "name": "Self Consumption",
-        "icon": "mdi:battery-sync",
-    },
-    BatteryMode.HOLD: {
-        "name": "Hold (Grid Only)",
-        "icon": "mdi:battery-lock",
-    },
-    BatteryMode.SOLAR_EXPORT_HOLD: {
-        "name": "Solar Export Hold",
-        "icon": "mdi:solar-power-variant",
-    },
-    BatteryMode.GRID_CHARGING: {
-        "name": "Grid Charging",
-        "icon": "mdi:battery-charging",
-    },
-    BatteryMode.BOOST_CHARGING: {
-        "name": "Boost Charging (5kW)",
-        "icon": "mdi:battery-charging-high",
-    },
-    BatteryMode.SPIKE_DISCHARGE: {
-        "name": "Spike Discharge",
-        "icon": "mdi:flash-alert",
-    },
-    BatteryMode.HOLDING_FOR_SPIKE: {
-        "name": "Holding for Spike",
-        "icon": "mdi:flash-alert-outline",
-    },
-    BatteryMode.DEMAND_BLOCK: {
-        "name": "Demand Window Block",
-        "icon": "mdi:clock-alert",
-    },
-    BatteryMode.MANUAL: {
-        "name": "Manual Override",
-        "icon": "mdi:hand-back-right",
-    },
-}
-
-# -----------------------------------------------------------------------------
 # Solar Export Hold Thresholds
 # -----------------------------------------------------------------------------
 
 SOLAR_EXPORT_SURPLUS_ENTRY = 1.5  # Surplus ratio to enter solar export hold
-SOLAR_EXPORT_SURPLUS_STAY = 1.0   # Surplus ratio to stay in solar export hold
+SOLAR_EXPORT_SURPLUS_STAY = 1.0  # Surplus ratio to stay in solar export hold
 
 # -----------------------------------------------------------------------------
 # Platforms

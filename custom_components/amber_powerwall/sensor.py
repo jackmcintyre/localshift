@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -16,10 +15,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SENSOR_KEYS
+from .const import DOMAIN
 from .coordinator import AmberPowerwallCoordinator
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -109,9 +106,7 @@ class EffectiveCheapPriceSensor(AmberPowerwallSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
-        self._attr_native_value = round(
-            self.coordinator.data.effective_cheap_price, 4
-        )
+        self._attr_native_value = round(self.coordinator.data.effective_cheap_price, 4)
 
 
 class CheapChargeStopPriceSensor(AmberPowerwallSensorBase):
@@ -139,9 +134,7 @@ class SolarWeightedAvgFITSensor(AmberPowerwallSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
-        self._attr_native_value = round(
-            self.coordinator.data.solar_weighted_avg_fit, 4
-        )
+        self._attr_native_value = round(self.coordinator.data.solar_weighted_avg_fit, 4)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -193,9 +186,7 @@ class GridImportPowerSensor(AmberPowerwallSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
-        self._attr_native_value = round(
-            self.coordinator.data.grid_import_power_kw, 3
-        )
+        self._attr_native_value = round(self.coordinator.data.grid_import_power_kw, 3)
 
 
 class GridExportPowerSensor(AmberPowerwallSensorBase):
@@ -209,9 +200,7 @@ class GridExportPowerSensor(AmberPowerwallSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
-        self._attr_native_value = round(
-            self.coordinator.data.grid_export_power_kw, 3
-        )
+        self._attr_native_value = round(self.coordinator.data.grid_export_power_kw, 3)
 
 
 class NetElectricityCostSensor(AmberPowerwallSensorBase):
@@ -225,9 +214,7 @@ class NetElectricityCostSensor(AmberPowerwallSensorBase):
 
     def _update_from_coordinator(self) -> None:
         d = self.coordinator.data
-        self._attr_native_value = round(
-            d.grid_import_cost - d.grid_export_revenue, 2
-        )
+        self._attr_native_value = round(d.grid_import_cost - d.grid_export_revenue, 2)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

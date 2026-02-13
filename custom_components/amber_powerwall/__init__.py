@@ -7,16 +7,17 @@ Solcast solar forecasts, and configurable thresholds.
 from __future__ import annotations
 
 import logging
+from typing import TypeAlias
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, PLATFORMS
+from .const import PLATFORMS
 from .coordinator import AmberPowerwallCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-type AmberPowerwallConfigEntry = ConfigEntry[AmberPowerwallCoordinator]
+AmberPowerwallConfigEntry: TypeAlias = ConfigEntry[AmberPowerwallCoordinator]
 
 
 async def async_setup_entry(

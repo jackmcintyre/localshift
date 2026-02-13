@@ -63,7 +63,7 @@ After setup, click **Configure** on the integration to adjust:
 
 | Option | Default | Description |
 |---|---|---|
-| Cheap Price Threshold | $0.15/kWh | Base price below which grid charging starts |
+| Cheap Price Percentile | 25% | Percentile of near-term forecast prices used as the base cheap-price trigger |
 | Max Pre-charge Price | $0.20/kWh | Maximum price for pre-DW charging when SOC is low |
 | Price Deadband | $0.03/kWh | Hysteresis band to prevent rapid charge/stop cycling |
 | Forecast Lookahead | 2 hours | How far ahead to scan for spikes and expensive periods |
@@ -121,11 +121,11 @@ All entities are grouped under a single **Amber Powerwall** device in Settings â
 
 | Entity ID | Description |
 |---|---|
-| `number.amber_powerwall_cheap_price_threshold` | Base cheap price threshold ($/kWh) |
-| `number.amber_powerwall_max_pre_charge_price` | Maximum pre-charge price ($/kWh) |
-| `number.amber_powerwall_price_deadband` | Price deadband ($/kWh) |
-| `number.amber_powerwall_forecast_lookahead` | Forecast lookahead window (hours) |
-| `number.amber_powerwall_pre_charge_battery_threshold` | Pre-charge SOC threshold (%) |
+| `number.amber_powerwall_cheap_price_percentile` | Forecast price percentile used for cheap-charge baseline (%) |
+| `number.amber_powerwall_max_precharge_price` | Maximum pre-charge price ($/kWh) |
+| `number.amber_powerwall_cheap_price_deadband` | Price deadband ($/kWh) |
+| `number.amber_powerwall_forecast_lookahead_hours` | Forecast lookahead window (hours) |
+| `number.amber_powerwall_precharge_battery_threshold` | Pre-charge SOC threshold (%) |
 | `number.amber_powerwall_battery_target` | Battery target SOC (%) |
 
 ### Buttons (5)

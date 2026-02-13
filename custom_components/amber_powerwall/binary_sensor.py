@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -13,8 +12,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import AmberPowerwallCoordinator
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -165,9 +162,7 @@ class ForecastExpensivePeriodSensor(AmberPowerwallBinarySensorBase):
     _attr_icon = "mdi:currency-usd"
 
     def _update_from_coordinator(self) -> None:
-        self._attr_is_on = (
-            self.coordinator.data.forecast_expensive_period_coming
-        )
+        self._attr_is_on = self.coordinator.data.forecast_expensive_period_coming
 
 
 class SolarCanReachTargetSensor(AmberPowerwallBinarySensorBase):

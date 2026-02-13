@@ -29,18 +29,20 @@ from .const import (
     CONF_AMBER_GENERAL_FORECAST,
     CONF_AMBER_GENERAL_PRICE,
     CONF_AMBER_PRICE_SPIKE,
-    CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
+    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    CONF_HOLD_MIN_SAVINGS_PERCENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_NOTIFY_SERVICE,
     CONF_PRECHARGE_BATTERY_THRESHOLD,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -54,6 +56,8 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+    DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     SOLAR_EXPORT_SURPLUS_ENTRY,
@@ -66,7 +70,6 @@ from .const import (
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
-    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -80,7 +83,6 @@ BATTERY_CAPACITY_KWH = 13.5
 # Spike discharge time window (dummy tariff limitation)
 # Only discharge between 6am-midnight (dummy tariff has low sell price overnight)
 DISCHARGE_EARLIEST_HOUR = 6
-DISCHARGE_LATEST_HOUR = 0  # midnight (0 = 00:00, handled specially)
 
 
 @dataclass
@@ -177,6 +179,7 @@ class AmberPowerwallCoordinator:
         # Cache for historical load averages (24 hour cache, cleared at midnight)
         self._historical_load_cache: dict[int, float] = {}
         self._historical_load_cache_date: str = ""  # Format: YYYY-MM-DD
+
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
@@ -344,9 +347,7 @@ class AmberPowerwallCoordinator:
         """Read a boolean value from an entity's state (on/off)."""
         return self._read_state(entity_id) == "on"
 
-    def _read_attribute(
-        self, entity_id: str, attr: str, default: Any = None
-    ) -> Any:
+    def _read_attribute(self, entity_id: str, attr: str, default: Any = None) -> Any:
         """Read an attribute from an entity."""
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -388,9 +389,7 @@ class AmberPowerwallCoordinator:
         d.feed_in_price = self._read_float(
             self._get_entity_id(CONF_AMBER_FEED_IN_PRICE)
         )
-        d.price_spike = self._read_bool(
-            self._get_entity_id(CONF_AMBER_PRICE_SPIKE)
-        )
+        d.price_spike = self._read_bool(self._get_entity_id(CONF_AMBER_PRICE_SPIKE))
         d.general_forecast = (
             self._read_attribute(
                 self._get_entity_id(CONF_AMBER_GENERAL_FORECAST), "forecasts", []
@@ -427,7 +426,7 @@ class AmberPowerwallCoordinator:
     # ------------------------------------------------------------------
 
     @callback
-    def _handle_state_change(self, event: Event) -> None:
+    def _handle_state_change(self, _event: Event) -> None:
         """Handle a state change from a monitored entity."""
         # Skip re-evaluation if we're in the middle of a mode transition
         # This prevents feedback loops when we programmatically change entities
@@ -490,17 +489,17 @@ class AmberPowerwallCoordinator:
 
     def _get_expected_load_kw(self, hours_to_target: float) -> float:
         """Calculate expected load based on 7-day historical averages.
-        
+
         Uses sensor.my_home_load_power historical data to predict consumption,
         smoothing out temporary variations like hot water finishing.
-        
+
         Returns the expected cumulative load in kWh from now until demand window.
         """
         load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-        
+
         # Get cached historical hourly averages
         hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-        
+
         if hourly_avg_kw:
             # Sum hourly averages from current hour until demand window
             now_dt = dt_util.now()
@@ -509,10 +508,10 @@ class AmberPowerwallCoordinator:
             )
             target_hour = dw_start_time.hour
             current_hour = now_dt.hour
-            
+
             total_expected_kwh = 0.0
             hour = current_hour
-            
+
             # Sum hours from now until target hour
             while hour != target_hour:
                 if hour in hourly_avg_kw:
@@ -521,55 +520,59 @@ class AmberPowerwallCoordinator:
                 # Safety: don't loop forever
                 if hour == current_hour:
                     break
-            
+
             # Add 10% buffer to be conservative
             total_expected_kwh *= 1.1
-            
+
             if total_expected_kwh > 0:
                 return total_expected_kwh
-        
+
         # Fallback to current load or default
         current_load = self.data.load_power_kw
-        return (current_load * hours_to_target) if current_load > 0 else (0.5 * hours_to_target)
+        return (
+            (current_load * hours_to_target)
+            if current_load > 0
+            else (0.5 * hours_to_target)
+        )
 
     def _get_historical_hourly_averages(self, entity_id: str) -> dict[int, float]:
         """Get 7-day hourly averages, cached until midnight.
-        
+
         Queries HA history API once per day and caches the result.
         """
         now = dt_util.now()
         today_str = now.strftime("%Y-%m-%d")
-        
+
         # Check if cache is valid for today
-        if self._historical_load_cache_date == today_str and self._historical_load_cache:
+        if (
+            self._historical_load_cache_date == today_str
+            and self._historical_load_cache
+        ):
             return self._historical_load_cache
-        
+
         # Cache expired or empty - fetch new data
         start_time = now - timedelta(days=7)
-        
+
         try:
             import requests
-            
+
             ha_url = self.hass.config.api.base_url
             url = f"{ha_url}/api/history/period/{start_time.isoformat()}"
             headers = {
                 "Authorization": f"Bearer {self.hass.config.api.token}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-            params = {
-                "filter_entity_id": entity_id,
-                "end_time": now.isoformat()
-            }
-            
+            params = {"filter_entity_id": entity_id, "end_time": now.isoformat()}
+
             response = requests.get(url, headers=headers, params=params, timeout=10)
-            
+
             if response.status_code != 200:
                 return {}
-            
+
             data = response.json()
             if not data or len(data) == 0:
                 return {}
-            
+
             # Calculate average from historical data points
             values = []
             for state_list in data:
@@ -580,20 +583,20 @@ class AmberPowerwallCoordinator:
                             values.append(val)
                         except (ValueError, TypeError):
                             pass
-            
+
             if not values:
                 return {}
-            
+
             # Calculate average power in kW
             avg_watts = sum(values) / len(values)
             avg_kw = avg_watts / 1000.0
-            
+
             # Store in cache
             self._historical_load_cache = {h: avg_kw for h in range(24)}
             self._historical_load_cache_date = today_str
-            
+
             return self._historical_load_cache
-            
+
         except Exception as e:
             _LOGGER.debug("Failed to get historical hourly averages: %s", e)
             return {}
@@ -633,9 +636,7 @@ class AmberPowerwallCoordinator:
         Includes prorated energy for the in-progress period (the period
         whose start_time <= now < start_time + 30 min).
         """
-        target_dt = now_dt.replace(
-            hour=target_hour, minute=0, second=0, microsecond=0
-        )
+        target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
         period_duration = timedelta(minutes=30)
         total = 0.0
         for period in solcast:
@@ -669,9 +670,7 @@ class AmberPowerwallCoordinator:
     ) -> bool:
         """Return True if any forecast has spike_status == 'spike' in window."""
         for f in forecasts:
-            start = AmberPowerwallCoordinator._parse_forecast_dt(
-                f.get("start_time")
-            )
+            start = AmberPowerwallCoordinator._parse_forecast_dt(f.get("start_time"))
             if start is None:
                 continue
             start_local = dt_util.as_local(start)
@@ -689,9 +688,7 @@ class AmberPowerwallCoordinator:
         """Return the maximum per_kwh price from forecasts within the window."""
         max_price = 0.0
         for f in forecasts:
-            start = AmberPowerwallCoordinator._parse_forecast_dt(
-                f.get("start_time")
-            )
+            start = AmberPowerwallCoordinator._parse_forecast_dt(f.get("start_time"))
             if start is None:
                 continue
             start_local = dt_util.as_local(start)
@@ -707,7 +704,7 @@ class AmberPowerwallCoordinator:
         percentile: float,
     ) -> float:
         """Calculate the Nth percentile of a list of prices.
-        
+
         Uses linear interpolation between closest ranks.
         """
         if not prices:
@@ -760,15 +757,9 @@ class AmberPowerwallCoordinator:
         net = d.grid_import_cost - d.grid_export_revenue
 
         # Read daily energy from utility meter sensors (remain in YAML)
-        import_kwh = self._read_float(
-            "sensor.grid_import_energy_daily", 0.0
-        )
-        export_kwh = self._read_float(
-            "sensor.grid_export_energy_daily", 0.0
-        )
-        solar_kwh = self._read_float(
-            "sensor.solar_production_energy_daily", 0.0
-        )
+        import_kwh = self._read_float("sensor.grid_import_energy_daily", 0.0)
+        export_kwh = self._read_float("sensor.grid_export_energy_daily", 0.0)
+        solar_kwh = self._read_float("sensor.solar_production_energy_daily", 0.0)
 
         soc = round(d.soc)
 
@@ -785,9 +776,7 @@ class AmberPowerwallCoordinator:
             f"SOC: {soc}%"
         )
 
-        await self.async_send_notification(
-            "Powerwall: Daily Summary", message
-        )
+        await self.async_send_notification("Powerwall: Daily Summary", message)
         _LOGGER.info("Daily summary notification sent")
 
     # ------------------------------------------------------------------
@@ -896,9 +885,7 @@ class AmberPowerwallCoordinator:
         )
 
         # ---- Step 4: solar_battery_forecast ----
-        target_pct = float(
-            self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
+        target_pct = float(self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET))
 
         if after_dw:
             # After DW start: report current SOC, safe defaults
@@ -920,14 +907,10 @@ class AmberPowerwallCoordinator:
             target_dt = now_dt.replace(
                 hour=target_hour, minute=0, second=0, microsecond=0
             )
-            hours_to_target = max(
-                (target_dt - now_dt).total_seconds() / 3600, 0
-            )
+            hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
 
             # Deficit: kWh needed to reach target
-            deficit_kwh = max(
-                (target_pct - d.soc) / 100 * BATTERY_CAPACITY_KWH, 0
-            )
+            deficit_kwh = max((target_pct - d.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
 
             # Solar forecast: pessimistic estimate between now and DW
             solar_kwh = self._sum_solar_before_target(
@@ -958,10 +941,17 @@ class AmberPowerwallCoordinator:
                 remaining_deficit = max(deficit_kwh - max(net_solar, 0), 0)
                 # Time needed to charge remaining deficit at gentle rate (3.3kW)
                 # Include 90% efficiency factor
-                time_needed_hours = remaining_deficit / (CHARGE_RATE_BACKUP_KW * 0.9) if remaining_deficit > 0 else 0
+                time_needed_hours = (
+                    remaining_deficit / (CHARGE_RATE_BACKUP_KW * 0.9)
+                    if remaining_deficit > 0
+                    else 0
+                )
                 # Only boost if we can't make it in time with gentle charging
                 # Allow 30 minute buffer to ensure we reach target before DW
-                boost_needed = time_needed_hours > (hours_to_target - 0.5) and remaining_deficit > 0
+                boost_needed = (
+                    time_needed_hours > (hours_to_target - 0.5)
+                    and remaining_deficit > 0
+                )
 
             d.solar_battery_forecast = {
                 "predicted_soc": round(predicted_soc, 1),
@@ -984,9 +974,7 @@ class AmberPowerwallCoordinator:
         )
 
         # ---- Step 6: boost_charge_needed (from forecast) ----
-        d.boost_charge_needed = d.solar_battery_forecast.get(
-            "boost_needed", False
-        )
+        d.boost_charge_needed = d.solar_battery_forecast.get("boost_needed", False)
 
         # ---- Step 7: effective_cheap_price ----
         # Calculate base from percentile of forecast prices
@@ -996,7 +984,7 @@ class AmberPowerwallCoordinator:
             )
         )
         cutoff = now_dt + timedelta(hours=lookahead)
-        
+
         # Collect forecast prices within lookahead window
         forecast_prices = []
         for f in d.general_forecast:
@@ -1006,27 +994,21 @@ class AmberPowerwallCoordinator:
             start_local = dt_util.as_local(start)
             if start_local >= now_dt and start_local <= cutoff:
                 forecast_prices.append(float(f.get("per_kwh", 0)))
-        
+
         # Calculate percentile-based cheap price
         percentile = float(
-            self.get_option(
-                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
-            )
+            self.get_option(CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE)
         )
         if forecast_prices:
             base = round(self._percentile(forecast_prices, percentile), 2)
         else:
             # Fallback to max_precharge_price if no forecast data
             base = float(
-                self.get_option(
-                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-                )
+                self.get_option(CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE)
             )
-        
+
         max_price = float(
-            self.get_option(
-                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-            )
+            self.get_option(CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE)
         )
         solar_gap = not d.solar_can_reach_target
 
@@ -1036,9 +1018,7 @@ class AmberPowerwallCoordinator:
             target_dt = now_dt.replace(
                 hour=target_hour, minute=0, second=0, microsecond=0
             )
-            hours_left = max(
-                (target_dt - now_dt).total_seconds() / 3600, 0
-            )
+            hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
             total_window = 8.0
             urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
             urgency_price = base + (max_price - base) * urgency
@@ -1050,10 +1030,7 @@ class AmberPowerwallCoordinator:
                 if start is None:
                     continue
                 start_local = dt_util.as_local(start)
-                if (
-                    start_local >= now_dt
-                    and start_local.hour < target_hour
-                ):
+                if start_local >= now_dt and start_local.hour < target_hour:
                     price = float(f.get("per_kwh", max_price))
                     if price < min_forecast:
                         min_forecast = price
@@ -1065,13 +1042,9 @@ class AmberPowerwallCoordinator:
 
         # ---- Step 8: cheap_charge_stop_price ----
         deadband = float(
-            self.get_option(
-                CONF_CHEAP_PRICE_DEADBAND, DEFAULT_CHEAP_PRICE_DEADBAND
-            )
+            self.get_option(CONF_CHEAP_PRICE_DEADBAND, DEFAULT_CHEAP_PRICE_DEADBAND)
         )
-        d.cheap_charge_stop_price = round(
-            d.effective_cheap_price + deadband, 2
-        )
+        d.cheap_charge_stop_price = round(d.effective_cheap_price + deadband, 2)
 
         # ---- Step 9: forecast_spike_within_window ----
         lookahead = float(
@@ -1097,28 +1070,53 @@ class AmberPowerwallCoordinator:
         solar_kwh_lookahead = 0.0
         for forecast_list in [d.solcast_today, d.solcast_tomorrow]:
             for period in forecast_list:
-                period_start = self._parse_forecast_dt(
-                    period.get("period_start")
-                )
+                period_start = self._parse_forecast_dt(period.get("period_start"))
                 if period_start is None:
                     continue
                 ps_local = dt_util.as_local(period_start)
                 if ps_local >= now_dt and ps_local <= cutoff:
-                    solar_kwh_lookahead += float(
-                        period.get("pv_estimate10", 0)
-                    )
+                    solar_kwh_lookahead += float(period.get("pv_estimate10", 0))
 
-        # Check 2: cheaper price coming within lookahead
-        cheap_coming = False
+        # Check 2: financially justified price savings within lookahead
+        # Only hold if:
+        #   - Price drops by at least 20% from current price, OR
+        #   - Absolute price is very cheap (< 10c/kWh)
+        # This prevents holding overnight for trivial price differences (e.g., 15c -> 14c)
+        min_future_price = 0.99
         for f in d.general_forecast:
             start = self._parse_forecast_dt(f.get("start_time"))
             if start is None:
                 continue
             start_local = dt_util.as_local(start)
             if start_local >= now_dt and start_local <= cutoff:
-                if float(f.get("per_kwh", 99)) < d.effective_cheap_price:
-                    cheap_coming = True
-                    break
+                price = float(f.get("per_kwh", 0.99))
+                if price < min_future_price:
+                    min_future_price = price
+
+        # Calculate savings as percentage
+        price_drop_pct = 0.0
+        if d.general_price > 0:
+            price_drop_pct = (
+                (d.general_price - min_future_price) / d.general_price
+            ) * 100
+
+        # Read configurable thresholds
+        min_savings_percent = float(
+            self.get_option(
+                CONF_HOLD_MIN_SAVINGS_PERCENT, DEFAULT_HOLD_MIN_SAVINGS_PERCENT
+            )
+        )
+        absolute_cheap_threshold = float(
+            self.get_option(
+                CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+                DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+            )
+        )
+
+        cheap_coming = (
+            price_drop_pct > min_savings_percent
+            or min_future_price < absolute_cheap_threshold
+        )
 
         d.hold_justified = solar_kwh_lookahead >= 0.5 or cheap_coming
 
@@ -1131,9 +1129,7 @@ class AmberPowerwallCoordinator:
             total_solar = 0.0
 
             for period in d.solcast_today:
-                period_start = self._parse_forecast_dt(
-                    period.get("period_start")
-                )
+                period_start = self._parse_forecast_dt(period.get("period_start"))
                 if period_start is None:
                     continue
                 ps_local = dt_util.as_local(period_start)
@@ -1144,12 +1140,8 @@ class AmberPowerwallCoordinator:
                         mid = period_start + timedelta(minutes=15)
                         fit_price = 0.0
                         for f in d.feed_in_forecast:
-                            f_start = self._parse_forecast_dt(
-                                f.get("start_time")
-                            )
-                            f_end = self._parse_forecast_dt(
-                                f.get("end_time")
-                            )
+                            f_start = self._parse_forecast_dt(f.get("start_time"))
+                            f_end = self._parse_forecast_dt(f.get("end_time"))
                             if (
                                 f_start is not None
                                 and f_end is not None
@@ -1162,9 +1154,7 @@ class AmberPowerwallCoordinator:
                         total_solar += solar_kwh_val
 
             if total_solar > 0:
-                d.solar_weighted_avg_fit = round(
-                    weighted_sum / total_solar, 4
-                )
+                d.solar_weighted_avg_fit = round(weighted_sum / total_solar, 4)
             else:
                 d.solar_weighted_avg_fit = 0.0
             d.solar_remaining_kwh = round(total_solar, 2)
@@ -1190,9 +1180,7 @@ class AmberPowerwallCoordinator:
             d.solar_export_hold_justified = False
             d.surplus_ratio = 0.0
         else:
-            surplus_ratio = (
-                net_solar_kwh / deficit_kwh if deficit_kwh > 0 else 0
-            )
+            surplus_ratio = net_solar_kwh / deficit_kwh if deficit_kwh > 0 else 0
             d.surplus_ratio = round(surplus_ratio, 2)
             threshold = (
                 SOLAR_EXPORT_SURPLUS_STAY
@@ -1200,16 +1188,12 @@ class AmberPowerwallCoordinator:
                 else SOLAR_EXPORT_SURPLUS_ENTRY
             )
             d.solar_export_hold_justified = (
-                surplus_ratio >= threshold
-                and current_fit > avg_fit
-                and avg_fit > 0
+                surplus_ratio >= threshold and current_fit > avg_fit and avg_fit > 0
             )
 
         # ---- Step 14: active_mode ----
         automation_enabled = self.get_switch_state(SWITCH_AUTOMATION_ENABLED)
-        spike_discharge_enabled = self.get_switch_state(
-            SWITCH_SPIKE_DISCHARGE_ENABLED
-        )
+        spike_discharge_enabled = self.get_switch_state(SWITCH_SPIKE_DISCHARGE_ENABLED)
 
         # Check if we're in the valid discharge window (6am-midnight)
         # The dummy tariff has low sell price overnight, so discharging is pointless
@@ -1302,10 +1286,7 @@ class AmberPowerwallCoordinator:
     ) -> str:
         """Generate a human-readable reason for a mode transition."""
         if new_mode == BatteryMode.SPIKE_DISCHARGE:
-            return (
-                f"Price spike detected "
-                f"(feed-in ${d.feed_in_price:.2f}/kWh)"
-            )
+            return f"Price spike detected (feed-in ${d.feed_in_price:.2f}/kWh)"
         if new_mode == BatteryMode.DEMAND_BLOCK:
             return "Demand window active -- protecting from grid imports"
         if new_mode == BatteryMode.GRID_CHARGING:
@@ -1326,10 +1307,7 @@ class AmberPowerwallCoordinator:
                 "preserving battery for solar/cheap prices"
             )
         if new_mode == BatteryMode.HOLDING_FOR_SPIKE:
-            return (
-                "Spike forecast within lookahead -- "
-                "holding battery for discharge"
-            )
+            return "Spike forecast within lookahead -- holding battery for discharge"
         if new_mode == BatteryMode.SOLAR_EXPORT_HOLD:
             return (
                 f"Solar export hold -- FIT ${d.feed_in_price:.2f}/kWh "
@@ -1338,8 +1316,7 @@ class AmberPowerwallCoordinator:
         if new_mode == BatteryMode.SELF_CONSUMPTION:
             if old_mode == BatteryMode.SOLAR_EXPORT_HOLD:
                 return (
-                    "Solar export hold released -- "
-                    "FIT dropped or surplus insufficient"
+                    "Solar export hold released -- FIT dropped or surplus insufficient"
                 )
             if old_mode in (
                 BatteryMode.GRID_CHARGING,
@@ -1352,10 +1329,7 @@ class AmberPowerwallCoordinator:
             if old_mode == BatteryMode.SPIKE_DISCHARGE:
                 return "Price spike cleared"
             if old_mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
-                return (
-                    f"Hold ended -- price ${d.general_price:.2f}/kWh, "
-                    "using battery"
-                )
+                return f"Hold ended -- price ${d.general_price:.2f}/kWh, using battery"
             if old_mode == BatteryMode.DEMAND_BLOCK:
                 return "Demand window ended"
             return "Normal operation -- no special conditions active"
@@ -1382,9 +1356,7 @@ class AmberPowerwallCoordinator:
             # --- Startup grace period (30 s) ---
             if self._startup_grace_until is not None:
                 if now < self._startup_grace_until:
-                    _LOGGER.debug(
-                        "State machine in startup grace period, skipping"
-                    )
+                    _LOGGER.debug("State machine in startup grace period, skipping")
                     return
                 self._startup_grace_until = None
                 self._commanded_mode = self._infer_current_hardware_mode()
@@ -1405,9 +1377,7 @@ class AmberPowerwallCoordinator:
                 return
 
             # --- Debounce tracking ---
-            debounce = self._get_debounce_for_transition(
-                self._commanded_mode, desired
-            )
+            debounce = self._get_debounce_for_transition(self._commanded_mode, desired)
 
             if desired not in self._mode_desired_since:
                 # First time this mode is desired — start the timer
@@ -1510,9 +1480,7 @@ class AmberPowerwallCoordinator:
             dw_start = self.get_option(
                 CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
             )
-            dw_end = self.get_option(
-                CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
-            )
+            dw_end = self.get_option(CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END)
             title = f"{prefix}Demand Window Active"
             message = (
                 f"Demand window started ({dw_start}–{dw_end}). "
@@ -1527,9 +1495,7 @@ class AmberPowerwallCoordinator:
             )
         elif new_mode == BatteryMode.BOOST_CHARGING:
             net_solar = d.solar_battery_forecast.get("net_solar_kwh", 0)
-            target_pct = self.get_option(
-                CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
-            )
+            target_pct = self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
             title = f"{prefix}Boost Charging (5kW)"
             message = (
                 f"Grid price is ${d.general_price:.2f}/kWh "
@@ -1567,15 +1533,11 @@ class AmberPowerwallCoordinator:
             message = "Automation disabled or manual override active."
         else:
             title = f"{prefix}Mode Change"
-            message = (
-                f"Mode changed: {old_mode.value} → {new_mode.value}"
-            )
+            message = f"Mode changed: {old_mode.value} → {new_mode.value}"
 
         await self.async_send_notification(title, message)
 
-    def _self_consumption_notification(
-        self, old_mode: BatteryMode
-    ) -> tuple[str, str]:
+    def _self_consumption_notification(self, old_mode: BatteryMode) -> tuple[str, str]:
         """Generate notification text for returning to self consumption."""
         d = self.data
         prefix = "Powerwall: "
@@ -1628,8 +1590,7 @@ class AmberPowerwallCoordinator:
             )
         return (
             f"{prefix}Self Consumption",
-            f"Returning to self consumption. "
-            f"Battery at {d.soc:.0f}%.",
+            f"Returning to self consumption. Battery at {d.soc:.0f}%.",
         )
 
     # ------------------------------------------------------------------
@@ -1642,9 +1603,7 @@ class AmberPowerwallCoordinator:
             "select",
             "select_option",
             {
-                "entity_id": self._get_entity_id(
-                    CONF_TESLEMETRY_ALLOW_EXPORT
-                ),
+                "entity_id": self._get_entity_id(CONF_TESLEMETRY_ALLOW_EXPORT),
                 "option": mode,
             },
         )
@@ -1655,9 +1614,7 @@ class AmberPowerwallCoordinator:
             "select",
             "select_option",
             {
-                "entity_id": self._get_entity_id(
-                    CONF_TESLEMETRY_OPERATION_MODE
-                ),
+                "entity_id": self._get_entity_id(CONF_TESLEMETRY_OPERATION_MODE),
                 "option": mode,
             },
         )
@@ -1668,9 +1625,7 @@ class AmberPowerwallCoordinator:
             "number",
             "set_value",
             {
-                "entity_id": self._get_entity_id(
-                    CONF_TESLEMETRY_BACKUP_RESERVE
-                ),
+                "entity_id": self._get_entity_id(CONF_TESLEMETRY_BACKUP_RESERVE),
                 "value": value,
             },
         )
@@ -1683,7 +1638,9 @@ class AmberPowerwallCoordinator:
         d.solar_export_hold = False
 
         if self.get_switch_state(SWITCH_DRY_RUN):
-            _LOGGER.info("[DRY RUN] Would set self_consumption, reserve=10, allow_export=pv_only")
+            _LOGGER.info(
+                "[DRY RUN] Would set self_consumption, reserve=10, allow_export=pv_only"
+            )
             return
 
         # Set allow_export to pv_only first (don't allow battery to export)
@@ -1698,13 +1655,15 @@ class AmberPowerwallCoordinator:
         """Set battery to hold mode (reserve=floor(SOC), self_consumption)."""
         d = self.data
         d.hold_mode = True
-        
+
         # Re-read SOC just before setting reserve to ensure accuracy
         current_soc = self._read_float(self._get_entity_id(CONF_TESLEMETRY_SOC))
         reserve = max(10, min(100, math.floor(current_soc)))
-        
+
         if self.get_switch_state(SWITCH_DRY_RUN):
-            _LOGGER.info("[DRY RUN] Would set hold, reserve=%d, allow_export=pv_only", reserve)
+            _LOGGER.info(
+                "[DRY RUN] Would set hold, reserve=%d, allow_export=pv_only", reserve
+            )
             return
 
         # Set allow_export to pv_only first (don't allow battery to export)
@@ -1721,7 +1680,9 @@ class AmberPowerwallCoordinator:
         d.solar_export_hold = False
 
         if self.get_switch_state(SWITCH_DRY_RUN):
-            _LOGGER.info("[DRY RUN] Would set force charge (backup), allow_export=pv_only")
+            _LOGGER.info(
+                "[DRY RUN] Would set force charge (backup), allow_export=pv_only"
+            )
             return
 
         # Set allow_export to pv_only first (don't allow battery to export)

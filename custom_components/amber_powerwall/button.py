@@ -10,8 +10,6 @@ Provides manual mode control buttons:
 
 from __future__ import annotations
 
-import logging
-
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -29,8 +27,6 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import AmberPowerwallCoordinator
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
