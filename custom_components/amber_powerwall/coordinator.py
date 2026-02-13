@@ -195,8 +195,18 @@ class AmberPowerwallCoordinator:
         return self.entry.data
 
     def _get_entity_id(self, key: str) -> str:
-        """Get a configured external entity ID by config key."""
-        return self.entry.data[key]
+        """Get a configured external entity ID by config key.
+
+        Returns default from DEFAULT_ENTITY_IDS if key not in entry data
+        (handles missing keys in existing config entries).
+        """
+        if key in self.entry.data:
+            return self.entry.data[key]
+
+        # Fallback to default if key not in entry data
+        from .const import DEFAULT_ENTITY_IDS
+
+        return DEFAULT_ENTITY_IDS.get(key, "")
 
     # ------------------------------------------------------------------
     # Options helpers (read from config entry options)

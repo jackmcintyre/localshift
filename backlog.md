@@ -420,6 +420,235 @@ def _get_expected_load_kw(self, hours_to_target: float) -> float:
 
 ---
 
+## Future Features
+
+### AI-Powered Daily Reports (Planned - Failed Implementation 2026-02-13)
+
+**Status:** FAILED - Attempted implementation caused system instability  
+**Date Attempted:** 2026-02-13  
+**Postmortem:** See separate analysis below  
+
+#### What Was Planned
+AI-powered daily reports to provide intelligent insights about battery automation performance:
+
+**Features:**
+1. **Automatic Daily Reports** - Generated at demand window end (21:00 default)
+2. **Manual Trigger Button** - "Generate AI Report" button for on-demand analysis
+3. **Multiple Detail Levels** - Brief (2-3 sentences), Normal (3-5 paragraphs), Detailed (6 sections)
+4. **Generic AI Integration** - Works with any HA conversation agent (Ollama, OpenAI, Anthropic, etc.)
+5. **Context-Aware Analysis** - Considers energy flows, costs, performance metrics, decision log
+6. **Graceful Fallback** - Returns simple text summary if AI unavailable
+
+**Configuration Options:**
+- `ai_enabled` - Toggle AI reports on/off (default: OFF)
+- `ai_detail_level` - Select detail level (brief/normal/detailed)
+- `ai_agent` - Specify conversation agent (default: "auto" detect)
+
+**Use Cases:**
+- Understand why battery made certain decisions
+- Get actionable recommendations for improvement
+- Track financial performance over time
+- Identify patterns in energy usage and costs
+
+#### Implementation Attempted
+**Approach:**
+1. Added AI configuration constants to `const.py`
+2. Enhanced config flow with AI settings
+3. Implemented non-blocking button using `hass.async_create_task()`
+4. Added AI methods to `coordinator.py`:
+   - `_generate_ai_daily_report()` - Main orchestration
+   - `_compile_ai_report_data()` - Collect performance metrics
+   - `_generate_ai_prompt()` - Build context-aware prompts
+   - `_call_ha_conversation_agent()` - Call HA API with timeout
+   - `_generate_fallback_report()` - Simple text fallback
+5. Updated daily summary to use AI when enabled
+
+**Technical Solution:**
+- Button uses background tasks to avoid blocking HA event loop
+- 30-second timeout protection on AI calls
+- Comprehensive error handling
+- Backward compatible (disabled by default)
+
+#### Why It Failed
+
+**Root Cause:** File corruption during editing
+
+**Technical Issues:**
+1. **File Size:** coordinator.py is ~1800 lines, 87KB - too large for complex edits
+2. **Large SEARCH/REPLACE:** AI methods required 300+ line additions
+3. **Auto-Formatting:** VS Code formatter mangled syntax during saves
+4. **Repeated Restores:** Had to restore from backup 3-4 times, losing progress
+5. **Context Loss:** Lost track of file state across restore/edit cycles
+
+**Symptoms:**
+- coordinator.py became corrupted with syntax errors
+- Memory leak in HA container (47GB RAM)
+- Repeated crashes on startup
+- User had to delete all changes
+
+**Example of Corruption:**
+```python
+# Clean version
+def _get_entity_id(self, key: str) -> str:
+    if key in self.entry.data:
+        return self.entry.data[key]
+    return DEFAULT_ENTITY_IDS.get(key, "")
+
+# Corrupted version (missing fallback)
+def _get_entity_id(self, key: str) -> str:
+    return self.entry.data[key]  # KeyError crash!
+```
+
+**The Non-Blocking Solution Was Correct:**
+The technical implementation of using `hass.async_create_task()` for background AI execution was correct and followed HA best practices. The problem was purely in the file editing process, not the solution design.
+
+#### Postmortem - Root Causes
+
+**Primary Cause: File Editing Strategy**
+- Large, complex SEARCH/REPLACE operations on 1800-line file
+- High risk of corruption, hard to track state
+- Should have created separate module instead
+
+**Secondary Cause: Context Management**
+- Lost track of file state through multiple restore/edit cycles
+- Re-applied changes without tracking what was already done
+- Ended up with partial/corrupted implementations
+
+**Contributing Factor: Auto-Formatting**
+- VS Code auto-formatter changed syntax during saves
+- Indentation, quotes, line breaks mangled
+- Corrupted valid Python code
+
+**Why 47GB Memory Leak?**
+**Hypothesis 1: Exception Loop**
+- Corrupted code caused repeated exceptions
+- Re-called every 1 second in periodic tick
+- Memory accumulated from exception handling
+
+**Hypothesis 2: Task Accumulation**
+- Background tasks created but never completed
+- HA kept references to failed tasks
+- Memory grew indefinitely
+
+**Most likely:** Combination of both
+
+#### Recommendations for Future Implementation
+
+**Approach 1: Separate Module (RECOMMENDED)**
+```
+custom_components/amber_powerwall/
+  ├── coordinator.py           # Existing (don't modify!)
+  ├── ai_reporter.py          # NEW: AI logic here
+  ├── button.py               # Import from ai_reporter
+  └── const.py               # Add AI constants
+```
+
+**Advantages:**
+- coordinator.py unchanged (no corruption risk)
+- ai_reporter.py is small (~300 lines)
+- Easy to test/debug independently
+- Can disable by removing import
+- Isolated failure points
+
+**Implementation Steps:**
+1. Create `ai_reporter.py` with AI methods
+2. Add to config entry's `runtime_data`
+3. Import and use in `button.py`
+4. Test independently before integrating
+5. Only touch coordinator.py after validation
+
+---
+
+**Approach 2: Git-Based Workflow**
+```bash
+# Create feature branch
+git checkout -b feature/ai-integration
+
+# Make changes incrementally
+git commit -am "Add AI button"
+git diff --check  # Validate changes
+python3 -m py_compile custom_components/amber_powerwall/coordinator.py
+
+# Only if all checks pass
+git push
+```
+
+**Advantages:**
+- Easy rollback
+- Track all changes
+- Compare versions
+- Can bisect problems
+
+---
+
+**Approach 3: Minimal Button Only**
+```python
+# button.py - simplest possible version
+async def async_press(self) -> None:
+    """Trigger HA conversation UI directly."""
+    # Just open conversation UI, let HA handle AI
+    await self.hass.services.async_call(
+        "frontend",
+        "navigate",
+        {"navigation_path": "/lovelace/conversation"}
+    )
+```
+
+**Advantages:**
+- No AI integration needed
+- Uses HA's built-in AI
+- Zero risk to coordinator.py
+- Minimal code changes
+
+---
+
+#### Lessons Learned
+
+1. **Large Files Require Careful Editing**
+   - Files > 1000 lines need separate modules or surgical edits
+   - Don't make 300+ line additions in single SEARCH/REPLACE
+
+2. **Validate After Every Change**
+   - Run syntax check immediately: `python3 -m py_compile`
+   - Don't proceed if syntax is invalid
+
+3. **Track File State**
+   - Document file state before/after each change
+   - Know exactly what version you're editing
+
+4. **Test Incrementally**
+   - Test small changes before large integrations
+   - Test button → test module → test full integration
+
+5. **Use Version Control**
+   - Commit working states before risky changes
+   - `git commit -m "Working state before AI integration"`
+
+6. **Consider Low-Powered Hardware**
+   - User has low-powered iGPU
+   - AI should be opt-in (disabled by default)
+   - Small models recommended (llama3:8b, mistral:7b)
+
+#### When to Revisit
+
+**Prerequisites:**
+1. Coordinator code is stable (all critical bugs resolved)
+2. Test coverage exists for coordinator.py
+3. Separate module architecture is standard practice in codebase
+
+**Recommended Approach:**
+1. Start with Approach 1 (separate ai_reporter.py)
+2. Test thoroughly in isolation
+3. Only integrate after validation
+4. Keep disabled by default initially
+5. Add comprehensive logging for debugging
+
+**Estimated Effort:** 4-6 hours with proper testing
+
+**Risk Level:** Low (if using separate module approach)
+
+---
+
 ## Already Resolved / Not Actual Issues
 
 ### Self-Consumption Button Manual Override
