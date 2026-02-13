@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import (
     BUTTON_BOOST_CHARGE,
@@ -87,6 +88,7 @@ class ForceChargeButton(AmberPowerwallButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         self.coordinator.data.manual_override = True
+        self.coordinator._manual_override_set_at = dt_util.now()
         await self.coordinator.async_set_force_charge()
         await self.coordinator.async_send_notification(
             "Powerwall: Manual Force Charge",
@@ -104,6 +106,7 @@ class ForceDischargeButton(AmberPowerwallButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         self.coordinator.data.manual_override = True
+        self.coordinator._manual_override_set_at = dt_util.now()
         await self.coordinator.async_set_force_discharge()
         await self.coordinator.async_send_notification(
             "Powerwall: Manual Force Discharge",
@@ -121,6 +124,7 @@ class HoldButton(AmberPowerwallButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         self.coordinator.data.manual_override = True
+        self.coordinator._manual_override_set_at = dt_util.now()
         await self.coordinator.async_set_hold()
         await self.coordinator.async_send_notification(
             "Powerwall: Manual Hold",
@@ -138,6 +142,7 @@ class BoostChargeButton(AmberPowerwallButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         self.coordinator.data.manual_override = True
+        self.coordinator._manual_override_set_at = dt_util.now()
         await self.coordinator.async_set_boost_charge()
         await self.coordinator.async_send_notification(
             "Powerwall: Manual Boost Charge",

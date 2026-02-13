@@ -130,7 +130,13 @@ class AmberPowerwallNumber(NumberEntity):
         return self._entry.options.get(self._conf_key, self._default)
 
     async def async_set_native_value(self, value: float) -> None:
-        """Update the value in config entry options."""
+        """Update the value in config entry options and trigger re-evaluation."""
         new_options = {**self._entry.options, self._conf_key: value}
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         self.async_write_ha_state()
+
+        # Trigger immediate re-evaluation with new threshold values
+        # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
+        self.coordinator._compute_derived_values()
+        self.coordinator._notify_listeners()
+        await self.coordinator.async_evaluate_state_machine()

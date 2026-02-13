@@ -37,11 +37,13 @@ from .const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     CONF_HOLD_MIN_SAVINGS_PERCENT,
+    CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_NOTIFY_SERVICE,
     CONF_PRECHARGE_BATTERY_THRESHOLD,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_SUN_ENTITY,
     CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
@@ -58,6 +60,7 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
+    DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     SOLAR_EXPORT_SURPLUS_ENTRY,
@@ -179,6 +182,8 @@ class AmberPowerwallCoordinator:
         # Cache for historical load averages (24 hour cache, cleared at midnight)
         self._historical_load_cache: dict[int, float] = {}
         self._historical_load_cache_date: str = ""  # Format: YYYY-MM-DD
+        # Track when manual override was set for auto-clear timeout
+        self._manual_override_set_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -588,8 +593,21 @@ class AmberPowerwallCoordinator:
                 return {}
 
             # Calculate average power in kW
-            avg_watts = sum(values) / len(values)
-            avg_kw = avg_watts / 1000.0
+            # Check the unit of measurement of the source entity
+            state = self.hass.states.get(entity_id)
+            unit = state.attributes.get("unit_of_measurement", "") if state else ""
+
+            avg_value = sum(values) / len(values)
+
+            # Convert to kW if necessary
+            if unit == "W":
+                avg_kw = avg_value / 1000.0
+            elif unit == "kW":
+                avg_kw = avg_value
+            else:
+                # Unknown unit - assume kW (Teslemetry default)
+                _LOGGER.debug("Unknown unit %s for %s, assuming kW", unit, entity_id)
+                avg_kw = avg_value
 
             # Store in cache
             self._historical_load_cache = {h: avg_kw for h in range(24)}
@@ -1161,8 +1179,13 @@ class AmberPowerwallCoordinator:
 
         # ---- Step 13: solar_export_hold_justified ----
         # Safe default: assume sun is down if entity unavailable (prevents overnight issues)
-        sun_state = self.hass.states.get("sun.sun")
+        sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
+        sun_state = self.hass.states.get(sun_entity_id)
         sun_up = sun_state is not None and sun_state.state == "above_horizon"
+        if sun_state is None:
+            _LOGGER.debug(
+                "Sun entity %s not found, assuming sun is down", sun_entity_id
+            )
         deficit_kwh = d.solar_battery_forecast.get("deficit_kwh", 0)
         net_solar_kwh = d.solar_battery_forecast.get("net_solar_kwh", 0)
         current_fit = d.feed_in_price
@@ -1370,6 +1393,27 @@ class AmberPowerwallCoordinator:
                 self._commanded_mode = BatteryMode.MANUAL
                 self._mode_desired_since.clear()
                 return
+
+            # --- Auto-clear manual override after timeout ---
+            if d.manual_override and self._manual_override_set_at is not None:
+                timeout_hours = float(
+                    self.get_option(
+                        CONF_MANUAL_OVERRIDE_TIMEOUT,
+                        DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+                    )
+                )
+                if timeout_hours > 0:
+                    elapsed = now - self._manual_override_set_at
+                    if elapsed >= timedelta(hours=timeout_hours):
+                        _LOGGER.info(
+                            "Manual override timeout (%.1f hours) elapsed, clearing",
+                            timeout_hours,
+                        )
+                        d.manual_override = False
+                        self._manual_override_set_at = None
+                        # Re-evaluate now that override is cleared
+                        self._compute_derived_values()
+                        desired = d.active_mode
 
             # --- No change needed ---
             if desired == self._commanded_mode:

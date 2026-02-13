@@ -31,6 +31,9 @@ from .coordinator import AmberPowerwallCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+# Switch state persistence keys in options
+SWITCH_STATE_PREFIX = "switch_state_"
+
 SWITCH_KEYS = [
     SWITCH_AUTOMATION_ENABLED,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
@@ -67,13 +70,16 @@ class AmberPowerwallSwitch(SwitchEntity):
         self.coordinator = coordinator
         self._entry = entry
         self._key = key
-        self._is_on = SWITCH_DEFAULTS[key]
+
+        # Load persisted state from options, or use default
+        option_key = f"{SWITCH_STATE_PREFIX}{key}"
+        self._is_on = self._entry.options.get(option_key, SWITCH_DEFAULTS[key])
 
         self._attr_unique_id = f"amber_powerwall_{key}"
         self._attr_name = SWITCH_NAMES[key]
         self._attr_icon = SWITCH_ICONS[key]
 
-        # Sync initial default state to coordinator's switch state bridge
+        # Sync initial state to coordinator's switch state bridge
         self.coordinator.set_switch_state(key, self._is_on)
 
     @property
@@ -98,6 +104,11 @@ class AmberPowerwallSwitch(SwitchEntity):
         self.coordinator.set_switch_state(self._key, True)
         self.async_write_ha_state()
 
+        # Persist state to config entry options
+        option_key = f"{SWITCH_STATE_PREFIX}{self._key}"
+        new_options = {**self._entry.options, option_key: True}
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info("Amber Powerwall automation enabled")
 
@@ -111,6 +122,11 @@ class AmberPowerwallSwitch(SwitchEntity):
         self._is_on = False
         self.coordinator.set_switch_state(self._key, False)
         self.async_write_ha_state()
+
+        # Persist state to config entry options
+        option_key = f"{SWITCH_STATE_PREFIX}{self._key}"
+        new_options = {**self._entry.options, option_key: False}
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info(
