@@ -1584,8 +1584,11 @@ class AmberPowerwallCoordinator:
         """Set battery to hold mode (reserve=floor(SOC), self_consumption)."""
         d = self.data
         d.hold_mode = True
-        reserve = max(10, min(100, math.floor(d.soc)))
-
+        
+        # Re-read SOC just before setting reserve to ensure accuracy
+        current_soc = self._read_float(self._get_entity_id(CONF_TESLEMETRY_SOC))
+        reserve = max(10, min(100, math.floor(current_soc)))
+        
         if self.get_switch_state(SWITCH_DRY_RUN):
             _LOGGER.info("[DRY RUN] Would set hold, reserve=%d, allow_export=pv_only", reserve)
             return
