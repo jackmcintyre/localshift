@@ -482,18 +482,24 @@ class ComputationEngine:
                     )
 
             # Determine if we should grid charge
-            # Only grid charge if:
+            # Grid charge if:
             # 1. Not in demand window (zero import constraint)
-            # 2. Not after demand window
-            # 3. Current predicted SOC is below target
+            # 2. Before demand window
+            # 3. SOC is below target
             # 4. Price is at or below effective cheap price
-            # 5. There will be a deficit (we need the charge)
+            # 5. Either: there's a deficit OR we need to charge to reach target
+            has_deficit = net_kwh < 0
+            needs_charge = predicted_soc < target_pct
+
+            # Only grid charge when price is cheap AND we need to charge
             should_grid_charge = (
                 not in_demand_window
                 and slot_hour < target_hour
                 and predicted_soc < target_pct
                 and slot_price <= slot_effective_cheap
-                and net_kwh < 0  # There's a deficit that needs filling
+                and (
+                    has_deficit or needs_charge
+                )  # Charge if deficit OR need to reach target
             )
 
             # Apply realistic battery transfer limits and efficiency
@@ -552,14 +558,18 @@ class ComputationEngine:
                 )
 
                 if battery_is_empty:
-                    # Battery is empty - must import full deficit from grid
-                    # No battery discharge possible, just import
+                    # Battery is empty - but only import if NOT in demand window
+                    # During demand window, we don't import even if empty (for demand charge savings)
                     battery_delta_kwh = 0.0  # Battery can't discharge
-                    grid_import_kwh = -net_kwh  # Import the full deficit
-                    _LOGGER.debug(
-                        "  -> BATTERY EMPTY: grid_import=%.3f (full deficit)",
-                        grid_import_kwh,
-                    )
+                    if in_demand_window:
+                        grid_import_kwh = 0.0  # Block imports during DW even if empty
+                        _LOGGER.debug("  -> BATTERY EMPTY+IN_DW: no import (DW blocks)")
+                    else:
+                        grid_import_kwh = -net_kwh  # Import the full deficit
+                        _LOGGER.debug(
+                            "  -> BATTERY EMPTY: grid_import=%.3f (full deficit)",
+                            grid_import_kwh,
+                        )
                 else:
                     # Battery has charge - can discharge up to max rate
                     battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
