@@ -227,6 +227,7 @@ BUTTON_FORCE_DISCHARGE = "force_discharge"
 BUTTON_HOLD = "hold"
 BUTTON_BOOST_CHARGE = "boost_charge"
 BUTTON_SELF_CONSUMPTION = "self_consumption"
+BUTTON_UPDATE_FORECAST = "update_forecast"
 
 BUTTON_ICONS = {
     BUTTON_FORCE_CHARGE: "mdi:battery-charging",
@@ -234,6 +235,7 @@ BUTTON_ICONS = {
     BUTTON_HOLD: "mdi:battery-lock",
     BUTTON_BOOST_CHARGE: "mdi:battery-charging-high",
     BUTTON_SELF_CONSUMPTION: "mdi:battery-sync",
+    BUTTON_UPDATE_FORECAST: "mdi:refresh",
 }
 
 BUTTON_NAMES = {
@@ -242,6 +244,7 @@ BUTTON_NAMES = {
     BUTTON_HOLD: "Hold Battery",
     BUTTON_BOOST_CHARGE: "Boost Charge (5kW)",
     BUTTON_SELF_CONSUMPTION: "Return to Self Consumption",
+    BUTTON_UPDATE_FORECAST: "Update Forecast",
 }
 
 # -----------------------------------------------------------------------------

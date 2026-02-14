@@ -1,4 +1,4 @@
-"""Sensor platform for the Amber Powerwall integration."""
+"""Sensor platform for Amber Powerwall integration."""
 
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ async def async_setup_entry(
         NetElectricityCostSensor(coordinator, entry),
         DecisionLogSensor(coordinator, entry),
         ForecastHistorySensor(coordinator, entry),
+        DailyForecastSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -53,7 +54,7 @@ class AmberPowerwallSensorBase(SensorEntity):
         coordinator: AmberPowerwallCoordinator,
         entry: ConfigEntry,
     ) -> None:
-        """Initialise the sensor."""
+        """Initialise sensor."""
         self.coordinator = coordinator
         self._entry = entry
         self._unsub: Any = None
@@ -84,7 +85,7 @@ class AmberPowerwallSensorBase(SensorEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
+        """Handle updated data from coordinator."""
         self._update_from_coordinator()
         self.async_write_ha_state()
 
@@ -172,7 +173,7 @@ class SolarBatteryForecastSensor(AmberPowerwallSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the full forecast as attributes."""
+        """Return full forecast as attributes."""
         return self.coordinator.data.solar_battery_forecast
 
 
@@ -266,10 +267,44 @@ class ForecastHistorySensor(AmberPowerwallSensorBase):
     _attr_icon = "mdi:chart-line-variant"
 
     def _update_from_coordinator(self) -> None:
-        """Update with the count of stored predictions."""
+        """Update with count of stored predictions."""
         self._attr_native_value = len(self.coordinator.data.forecast_history)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the forecast history as attributes."""
+        """Return forecast history as attributes."""
         return {"history": self.coordinator.data.forecast_history}
+
+
+class DailyForecastSensor(AmberPowerwallSensorBase):
+    """Full 24-hour forecast with hourly breakdown."""
+
+    _attr_unique_id = "daily_forecast"
+    _attr_name = "Daily Forecast"
+    _attr_icon = "mdi:chart-bar"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with count of hourly entries."""
+        self._attr_native_value = len(self.coordinator.data.daily_forecast)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return daily forecast with hourly breakdown."""
+        sample_counts = self.coordinator.data.consumption_hourly_sample_counts
+        profile_kw = self.coordinator.data.consumption_hourly_profile_kw
+        return {
+            "forecast": self.coordinator.data.daily_forecast,
+            "solcast_today_entries": len(self.coordinator.data.solcast_today),
+            "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
+            "current_load_kw": round(self.coordinator.data.load_power_kw, 3),
+            "consumption_source": self.coordinator.data.consumption_source,
+            "consumption_statistic_id": self.coordinator.data.consumption_statistic_id,
+            "consumption_profile_hours": self.coordinator.data.consumption_profile_hours,
+            "consumption_fallback_hours": self.coordinator.data.consumption_fallback_hours,
+            "consumption_hourly_sample_counts": {
+                str(hour): count for hour, count in sorted(sample_counts.items())
+            },
+            "consumption_hourly_profile_kw": {
+                str(hour): value for hour, value in sorted(profile_kw.items())
+            },
+        }

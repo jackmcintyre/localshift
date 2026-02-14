@@ -57,6 +57,13 @@ class CoordinatorData:
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
+    daily_forecast: list[dict[str, Any]] = field(default_factory=list)
+    consumption_source: str = "unknown"
+    consumption_profile_hours: int = 0
+    consumption_fallback_hours: int = 0
+    consumption_statistic_id: str = ""
+    consumption_hourly_sample_counts: dict[int, int] = field(default_factory=dict)
+    consumption_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
 
     # Cost accumulators (Phase 4)
     grid_import_cost: float = 0.0

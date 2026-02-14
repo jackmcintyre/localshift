@@ -25,6 +25,7 @@ from .const import (
     BUTTON_ICONS,
     BUTTON_NAMES,
     BUTTON_SELF_CONSUMPTION,
+    BUTTON_UPDATE_FORECAST,
     DOMAIN,
 )
 from .coordinator import AmberPowerwallCoordinator
@@ -44,6 +45,7 @@ async def async_setup_entry(
         HoldButton(coordinator, entry),
         BoostChargeButton(coordinator, entry),
         SelfConsumptionButton(coordinator, entry),
+        UpdateForecastButton(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -164,4 +166,24 @@ class SelfConsumptionButton(AmberPowerwallButtonBase):
             "Powerwall: Manual Self Consumption",
             f"Returned to self consumption. Battery at "
             f"{self.coordinator.data.soc:.0f}%.",
+        )
+
+
+class UpdateForecastButton(AmberPowerwallButtonBase):
+    """Force forecast update and clear historical load cache."""
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, BUTTON_UPDATE_FORECAST)
+
+    async def async_press(self) -> None:
+        """Handle button press."""
+        # Clear historical cache to force refresh
+        await self.coordinator.async_clear_historical_cache()
+        
+        # Trigger coordinator refresh to regenerate forecast
+        await self.coordinator.async_evaluate_state_machine()
+        
+        await self.coordinator.async_send_notification(
+            "Powerwall: Forecast Update",
+            "Historical load cache cleared. Forecast will regenerate.",
         )

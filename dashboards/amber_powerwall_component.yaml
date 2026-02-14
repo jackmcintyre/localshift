@@ -208,6 +208,16 @@ views:
                 entity_id: button.amber_powerwall_force_discharge
             icon_height: 40px
 
+          - type: button
+            name: Update Forecast
+            icon: mdi:refresh
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.amber_powerwall_update_forecast
+            icon_height: 40px
+
       # =================================================================
       # RIGHT COLUMN
       # =================================================================
@@ -360,6 +370,20 @@ views:
               Buy: ${{ state_attr(log, 'buy_price') }}/kWh
               Sell: ${{ state_attr(log, 'sell_price') }}/kWh
 
+
+          # --- Daily Forecast ---
+          - type: markdown
+            content: |
+              **24-Hour SOC Forecast**
+              
+              ```
+              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh)
+              ------|---------|-------------|------------|-----------
+              {% for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast') | default([]) %}
+              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}
+              {% endfor %}
+              ```
+
       # --- Charging Performance ---
       - type: grid
         cards:
@@ -391,18 +415,17 @@ views:
                 color: "#3B82F6"
                 stroke_width: 3
                 curve: smooth
-              - entity: sensor.amber_powerwall_forecast_history
+                type: line
+              - entity: sensor.amber_powerwall_daily_forecast
                 name: Planned SOC
                 color: "#F59E0B"
                 stroke_width: 2
                 stroke_dash: 5
-                show:
-                  legend_value: true
+                type: line
                 data_generator: |
-                  return entity.attributes.history.map(entry => ({
-                    x: new Date(entry.timestamp),
-                    y: entry.predicted_soc
-                  }));
+                  return entity.attributes.forecast.map(function(entry) {
+                    return [entry.timestamp, entry.predicted_soc];
+                  });
             yaxis:
               - min: 0
                 max: 100
@@ -412,3 +435,5 @@ views:
               show: true
               label: Now
               color: "#EF4444"
+            cache: true
+            update_interval: "300"

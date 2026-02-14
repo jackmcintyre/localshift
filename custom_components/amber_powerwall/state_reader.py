@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -26,6 +27,8 @@ from .const import (
     DEFAULT_ENTITY_IDS,
 )
 from .coordinator_data import CoordinatorData
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class StateReader:
@@ -75,6 +78,63 @@ class StateReader:
         if state is None:
             return default
         return state.attributes.get(attr, default)
+
+    def _read_solcast_forecast_list(self, entity_id: str) -> list[dict[str, Any]]:
+        """Read Solcast forecast list using resilient attribute fallbacks."""
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            _LOGGER.debug("Solcast entity not found: %s", entity_id)
+            # Fallback: auto-discover a likely Solcast sensor
+            discovered = self._discover_solcast_entity(entity_id)
+            if discovered:
+                state = self.hass.states.get(discovered)
+                _LOGGER.debug("Using discovered Solcast entity %s for %s", discovered, entity_id)
+            else:
+                return []
+
+        if state.state in ("unknown", "unavailable"):
+            _LOGGER.debug("Solcast entity unavailable: %s (%s)", entity_id, state.state)
+            return []
+
+        # Different Solcast versions expose different attribute names
+        for attr_name in ("detailedForecast", "detailedHourly", "forecast"):
+            value = state.attributes.get(attr_name)
+            if isinstance(value, list) and value:
+                return value
+
+        _LOGGER.debug(
+            "No usable Solcast forecast list on %s. Attribute keys: %s",
+            entity_id,
+            sorted(state.attributes.keys()),
+        )
+        return []
+
+    def _discover_solcast_entity(self, requested_entity_id: str) -> str | None:
+        """Try to discover a Solcast forecast sensor when configured ID is missing."""
+        hint = "tomorrow" if "tomorrow" in requested_entity_id else "today"
+        candidates = []
+
+        for st in self.hass.states.async_all("sensor"):
+            attrs = st.attributes
+            has_forecast_list = any(
+                isinstance(attrs.get(name), list)
+                for name in ("detailedForecast", "detailedHourly", "forecast")
+            )
+            if not has_forecast_list:
+                continue
+            entity_id = st.entity_id.lower()
+            if "solcast" in entity_id or "forecast" in entity_id:
+                candidates.append(st.entity_id)
+
+        if not candidates:
+            return None
+
+        # Prefer matching today/tomorrow hint
+        for entity_id in candidates:
+            if hint in entity_id.lower():
+                return entity_id
+
+        return candidates[0]
 
     def read_all_external_state(self, data: CoordinatorData) -> None:
         """Read current state of all monitored external entities.
@@ -128,19 +188,16 @@ class StateReader:
         )
 
         # Solcast
-        data.solcast_today = (
-            self._read_attribute(
-                self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
-                "detailedForecast",
-                [],
-            )
-            or []
-        )
-        data.solcast_tomorrow = (
-            self._read_attribute(
-                self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
-                "detailedForecast",
-                [],
-            )
-            or []
+        today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)
+        tomorrow_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW)
+
+        data.solcast_today = self._read_solcast_forecast_list(today_entity)
+        data.solcast_tomorrow = self._read_solcast_forecast_list(tomorrow_entity)
+
+        _LOGGER.debug(
+            "Solcast ingest: today_entity=%s (%s entries), tomorrow_entity=%s (%s entries)",
+            today_entity,
+            len(data.solcast_today),
+            tomorrow_entity,
+            len(data.solcast_tomorrow),
         )

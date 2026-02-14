@@ -207,6 +207,11 @@ class AmberPowerwallCoordinator:
 
         # Read initial state and compute
         self._read_all_external_state()
+
+        # Fetch historical load data in background (runs in thread pool, won't block)
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        await self._computation_engine.async_get_historical_hourly_averages(load_entity_id)
+
         self._compute_derived_values()
 
         # Startup grace: wait 30 s for entities to populate before acting
@@ -434,3 +439,14 @@ class AmberPowerwallCoordinator:
         except (ValueError, IndexError):
             d_parts = default.split(":")
             return time(int(d_parts[0]), int(d_parts[1]), int(d_parts[2]))
+
+    async def async_clear_historical_cache(self) -> None:
+        """Clear historical load cache to force forecast refresh."""
+        if self._computation_engine is not None:
+            self._computation_engine.clear_historical_cache()
+            _LOGGER.info("Historical load cache cleared")
+
+    async def async_send_notification(self, title: str, message: str) -> None:
+        """Send a notification via the notification service."""
+        if self._notification_service is not None:
+            await self._notification_service.send_notification(title, message)
