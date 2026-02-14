@@ -228,38 +228,60 @@ class StateMachine:
         self._in_mode_transition = True
 
         try:
+            _LOGGER.info("Executing mode transition to %s (dry_run=%s)", target.value, dry_run)
+
             if target == BatteryMode.SELF_CONSUMPTION:
                 await self._battery_controller.set_self_consumption(data, dry_run)
+                _LOGGER.info("Self consumption mode transition completed")
 
             elif target == BatteryMode.DEMAND_BLOCK:
                 # Demand block is self_consumption with extra protection
                 await self._battery_controller.set_self_consumption(data, dry_run)
+                _LOGGER.info("Demand block mode transition completed")
 
             elif target == BatteryMode.HOLD:
                 data.solar_export_hold = False
                 await self._battery_controller.set_hold(data, dry_run)
+                _LOGGER.info("Hold mode transition completed")
 
             elif target == BatteryMode.SOLAR_EXPORT_HOLD:
                 data.solar_export_hold = True
                 await self._battery_controller.set_hold(data, dry_run)
+                _LOGGER.info("Solar export hold mode transition completed")
 
             elif target == BatteryMode.HOLDING_FOR_SPIKE:
                 data.solar_export_hold = False
                 await self._battery_controller.set_hold(data, dry_run)
+                _LOGGER.info("Holding for spike mode transition completed")
 
             elif target == BatteryMode.GRID_CHARGING:
                 await self._battery_controller.set_force_charge(data, dry_run)
+                _LOGGER.info("Grid charging mode transition completed")
 
             elif target == BatteryMode.BOOST_CHARGING:
                 await self._battery_controller.set_boost_charge(data, dry_run)
+                _LOGGER.info("Boost charging mode transition completed")
 
             elif target == BatteryMode.SPIKE_DISCHARGE:
                 await self._battery_controller.set_force_discharge(data, dry_run)
+                _LOGGER.info("Spike discharge mode transition completed")
 
             elif target == BatteryMode.MANUAL:
                 pass  # No command — user is controlling manually
+                _LOGGER.info("Manual mode transition completed (no commands)")
+
+        except Exception as e:
+            _LOGGER.error(
+                "Exception during mode transition to %s: %s",
+                target.value,
+                e,
+                exc_info=True,
+            )
+            # Note: We still clear _in_mode_transition in the finally block
+            # so the state machine can retry the transition on the next evaluation
         finally:
             # Always clear the flag, even if an exception occurs
+            _LOGGER.debug("Mode transition flag cleared, allowing re-evaluation")
             self._in_mode_transition = False
 
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
