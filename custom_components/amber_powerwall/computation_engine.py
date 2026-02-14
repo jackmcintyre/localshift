@@ -183,7 +183,7 @@ class ComputationEngine:
             self._add_to_decision_log(data, now_dt)
 
         # ---- Step 16: daily_forecast ----
-        self._compute_daily_hourly_forecast(data, now_dt)
+        self._compute_daily_15min_forecast(data, now_dt)
 
     def _compute_solar_battery_forecast(
         self,
@@ -312,6 +312,158 @@ class ComputationEngine:
         # Keep only last 48 entries (2 days of hourly data)
         if len(data.forecast_history) > 48:
             data.forecast_history = data.forecast_history[-48:]
+
+
+    def _compute_daily_15min_forecast(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+    ) -> None:
+        """Compute full 24-hour forecast with 15-minute breakdown.
+
+        Provides 4x granularity over hourly forecast, capturing meaningful
+        price variations from Amber's 5-minute pricing data.
+        """
+        data.daily_forecast = []
+
+        # Get historical hourly averages
+        load_entity_id = self._get_entity_id("teslemetry_load_power")
+        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+
+        # Publish consumption profile diagnostics for transparency
+        data.consumption_source = (
+            self._historical_load_source if hourly_avg_kw else "live_load_fallback"
+        )
+        data.consumption_statistic_id = load_entity_id
+        data.consumption_profile_hours = len(hourly_avg_kw)
+        data.consumption_fallback_hours = 0
+        data.consumption_hourly_sample_counts = dict(
+            self._historical_load_sample_counts
+        )
+        data.consumption_hourly_profile_kw = {
+            hour: round(val, 3) for hour, val in sorted(hourly_avg_kw.items())
+        }
+
+        if not all_solcast:
+            _LOGGER.debug("15-min forecast: no Solcast entries available")
+        if not hourly_avg_kw:
+            _LOGGER.debug(
+                "15-min forecast: no historical hourly load profile available; using live load fallback"
+            )
+
+        current_soc = data.soc
+        predicted_soc = current_soc
+        base_slot = now_dt.replace(minute=0, second=0, microsecond=0)
+
+        # Build rolling 24-hour forecast with 15-minute slots (96 total)
+        for offset in range(96):
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+            slot_minute = slot_start.minute
+
+            # Get solar forecast for this 15-minute slot
+            solar_kwh = self._get_solar_for_15min_slot(all_solcast, slot_start)
+
+            # Get expected consumption (hourly_avg / 4 for 15-min)
+            load_kw, load_source = self._estimate_hourly_consumption_kw(
+                hourly_avg_kw,
+                slot_hour,
+                data.load_power_kw,
+            )
+            if load_source != "profile_hour":
+                data.consumption_fallback_hours += 1
+            consumption_kwh = load_kw / 4  # 15-min is 1/4 of hour
+
+            # Calculate raw net energy for 15 minutes
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply realistic battery transfer limits and efficiency
+            # Max transfer: 3.3 kW = 0.825 kWh per 15 minutes
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            if net_kwh >= 0:
+                battery_delta_kwh = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            # Iterative SOC simulation with clamp each 15 minutes
+            predicted_soc = predicted_soc + (
+                battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
+            )
+            predicted_soc = max(0.0, min(100.0, predicted_soc))
+
+            data.daily_forecast.append(
+                {
+                    "hour": slot_hour,
+                    "minute": slot_minute,
+                    "timestamp": slot_start.isoformat(),
+                    "predicted_soc": round(predicted_soc, 1),
+                    "solar_kwh": round(solar_kwh, 3),  # More precision for 15-min
+                    "consumption_kwh": round(consumption_kwh, 3),
+                    "consumption_source": load_source,
+                    "net_kwh": round(net_kwh, 3),
+                }
+            )
+
+    def _get_solar_for_15min_slot(
+        self,
+        solcast_forecasts: list[dict[str, Any]],
+        slot_start: datetime,
+    ) -> float:
+        """Get solar forecast (kWh) for 15-minute slot from Solcast 30-min periods.
+
+        Splits 30-minute Solcast periods into two 15-minute halves.
+        """
+        if not solcast_forecasts:
+            return 0.0
+
+        # Ensure slot boundaries are timezone-aware local datetimes
+        if slot_start.tzinfo is None:
+            slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+        else:
+            slot_start = dt_util.as_local(slot_start)
+
+        slot_end = slot_start + timedelta(minutes=15)
+        period_duration = timedelta(minutes=30)
+
+        for entry in solcast_forecasts:
+            try:
+                if not isinstance(entry, dict):
+                    continue
+
+                period_start_raw = entry.get("period_start") or entry.get("start")
+                if period_start_raw is None:
+                    continue
+
+                start_dt = dt_util.parse_datetime(str(period_start_raw))
+                if not start_dt:
+                    continue
+
+                start_local = dt_util.as_local(start_dt)
+                end_local = start_local + period_duration
+                period_kwh = float(
+                    entry.get("pv_estimate10")
+                    or entry.get("estimate10")
+                    or entry.get("pv_estimate")
+                    or entry.get("estimate")
+                    or 0.0
+                )
+
+                # Check which 15-minute half of 30-min period we're in
+                period_midpoint = start_local + timedelta(minutes=15)
+
+                if slot_start >= start_local and slot_end <= period_midpoint:
+                    # First half of period (0-15 min)
+                    # Simple approach: split evenly (50% each half)
+                    return period_kwh * 0.5
+                elif slot_start >= period_midpoint and slot_end <= end_local:
+                    # Second half of period (15-30 min)
+                    return period_kwh * 0.5
+
+            except (ValueError, TypeError):
+                continue
+
+        return 0.0
 
     def _compute_daily_hourly_forecast(
         self,
