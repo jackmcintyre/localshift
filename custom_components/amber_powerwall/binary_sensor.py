@@ -107,6 +107,7 @@ class ForecastSpikeWithinWindowSensor(AmberPowerwallBinarySensorBase):
         """Return max forecast price within the lookahead window."""
         return {
             "max_forecast_price": self.coordinator.data.max_forecast_price,
+            "max_buy_forecast_price": self.coordinator.data.max_buy_forecast_price,
         }
 
 

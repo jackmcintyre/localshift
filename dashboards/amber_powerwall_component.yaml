@@ -380,13 +380,28 @@ views:
           - type: markdown
             content: |
               **24-Hour SOC Forecast**
-              
+
               ```
-              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh) | Grid In | Grid Out
-              ------|---------|-------------|------------|-----------|---------|----------
-              {% for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
-              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}       | {{ "%.2f"|format(item.grid_import_kwh) | default(0) }}     | {{ "%.2f"|format(item.grid_export_kwh) | default(0) }}
-              {% endfor %}
+              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh) | Grid In | Grid Out | Buy ($/kWh) | Sell ($/kWh)
+              ------|---------|-------------|------------|-----------|---------|----------|--------------|-------------
+              {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
+              {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
+              {%- for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
+              {%- set hour = item.hour %}
+              {%- set buy_price = namespace(value='-') %}
+              {%- set sell_price = namespace(value='-') %}
+              {%- for f in general_forecast if (f.nem_date | as_datetime).hour == hour %}
+                {%- if buy_price.value == '-' %}
+                  {%- set buy_price.value = "%.2f"|format(f.per_kwh) %}
+                {%- endif %}
+              {%- endfor %}
+              {%- for f in feedin_forecast if (f.nem_date | as_datetime).hour == hour %}
+                {%- if sell_price.value == '-' %}
+                  {%- set sell_price.value = "%.2f"|format(f.per_kwh) %}
+                {%- endif %}
+              {%- endfor %}
+              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}       | {{ "%.2f"|format(item.grid_import_kwh) | default(0) }}     | {{ "%.2f"|format(item.grid_export_kwh) | default(0) }}       | {{ buy_price.value }}          | {{ sell_price.value }}
+              {%- endfor %}
               ```
 
       # --- Charging Performance ---
@@ -480,6 +495,7 @@ views:
               
               Forecast Spike Within Window: {{ states('binary_sensor.amber_powerwall_forecast_spike_within_window') }}
               Max Forecast Price: ${{ state_attr('binary_sensor.amber_powerwall_forecast_spike_within_window', 'max_forecast_price') | default(0) }}/kWh
+              Max Buy Forecast Price: ${{ state_attr('binary_sensor.amber_powerwall_forecast_spike_within_window', 'max_buy_forecast_price') | default(0) }}/kWh
               Force Discharge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_discharge' }}
               Force Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_charge' }}
               Boost Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'boost_charging' }}
@@ -564,16 +580,33 @@ views:
           - type: markdown
             content: |
               **Debug: Grid Import/Export Forecast (first 24 slots + hourly)**
-              
+
               Total Grid Import: **{{ state_attr('sensor.amber_powerwall_daily_forecast', 'debug_total_grid_import_kwh') | default(0) }} kWh**
               Total Grid Export: **{{ state_attr('sensor.amber_powerwall_daily_forecast', 'debug_total_grid_export_kwh') | default(0) }} kWh**
-              
+
               First 24 x 15-min slots (next 6 hours):
-              
+
               ```
-              Slot | Time  | SOC  | Solar | Load  | Net   | GridIn | GridOut
-              -----|-------|------|-------|-------|-------|--------|--------
-              {% for slot in state_attr('sensor.amber_powerwall_daily_forecast', 'debug_15min_slots') | default([]) %}
-              {{ loop.index }}    | {{ "%02d:%02d"|format(slot.hour, slot.minute) }}  | {{ "%.1f"|format(slot.soc) }}  | {{ "%.3f"|format(slot.solar) }} | {{ "%.3f"|format(slot.load) }} | {{ "%.3f"|format(slot.net) }} | {{ "%.3f"|format(slot.grid_in) | default(0) }}    | {{ "%.3f"|format(slot.grid_out) | default(0) }}
-              {% endfor %}
+              Slot | Time  | SOC  | Solar | Load  | Net   | GridIn | GridOut | Buy   | Sell
+              -----|-------|------|-------|-------|-------|--------|---------|-------|------
+              {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
+              {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
+              {%- for slot in state_attr('sensor.amber_powerwall_daily_forecast', 'debug_15min_slots') | default([]) %}
+              {%- set slot_minute = (slot.hour * 60 + slot.minute) %}
+              {%- set buy_price = namespace(value='-') %}
+              {%- set sell_price = namespace(value='-') %}
+              {%- for f in general_forecast %}
+                {%- set f_minute = (f.nem_date | as_datetime).hour * 60 + (f.nem_date | as_datetime).minute %}
+                {%- if buy_price.value == '-' and (slot_minute - 30) < f_minute <= (slot_minute + 30) %}
+                  {%- set buy_price.value = "%.2f"|format(f.per_kwh) %}
+                {%- endif %}
+              {%- endfor %}
+              {%- for f in feedin_forecast %}
+                {%- set f_minute = (f.nem_date | as_datetime).hour * 60 + (f.nem_date | as_datetime).minute %}
+                {%- if sell_price.value == '-' and (slot_minute - 30) < f_minute <= (slot_minute + 30) %}
+                  {%- set sell_price.value = "%.2f"|format(f.per_kwh) %}
+                {%- endif %}
+              {%- endfor %}
+              {{ loop.index }}    | {{ "%02d:%02d"|format(slot.hour, slot.minute) }}  | {{ "%.1f"|format(slot.soc) }}  | {{ "%.3f"|format(slot.solar) }} | {{ "%.3f"|format(slot.load) }} | {{ "%.3f"|format(slot.net) }} | {{ "%.3f"|format(slot.grid_in) | default(0) }}    | {{ "%.3f"|format(slot.grid_out) | default(0) }}     | {{ buy_price.value }}  | {{ sell_price.value }}
+              {%- endfor %}
               ```

@@ -3,9 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .const import BatteryMode
+
+
+@dataclass
+class ChargingDecision:
+    """Represents a charging decision for a specific time slot.
+
+    This is the shared decision structure used by both the forecast
+    simulation and the active mode logic to ensure consistency.
+    """
+
+    slot_start: datetime
+    should_grid_charge: bool = False
+    should_boost: bool = False
+    charge_amount_kwh: float = 0.0
+    price_per_kwh: float = 0.0
+    reason: str = ""
 
 
 @dataclass
@@ -44,6 +61,7 @@ class CoordinatorData:
 
     # Extra attributes for binary sensors
     max_forecast_price: float = 0.0
+    max_buy_forecast_price: float = 0.0  # Max buy price (general_forecast) for display
     surplus_ratio: float = 0.0
 
     # Computed sensors
@@ -84,3 +102,9 @@ class CoordinatorData:
     hold_mode: bool = False
     solar_export_hold: bool = False
     target_reached_today: bool = False
+
+    # Shared charging decisions (computed once, used by both forecast and active_mode)
+    forecast_charging_decisions: list[ChargingDecision] = field(default_factory=list)
+    charging_needed_before_dw: float = 0.0  # Total kWh needed before DW
+    optimal_charge_start: datetime | None = None  # Earliest optimal charging slot
+    optimal_charge_end: datetime | None = None  # Latest optimal charging slot
