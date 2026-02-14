@@ -310,13 +310,21 @@ class AmberPowerwallCoordinator:
         """Handle the 1-minute periodic re-evaluation."""
         self._read_all_external_state()
 
-        # Refresh recent load data periodically (every ~5 minutes)
+        # Refresh load data periodically (every ~5 minutes)
         # This is async so we fire it and forget - it will update the cache
         if self._computation_engine is not None:
             load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
             self.hass.async_create_task(
                 self._computation_engine.async_get_recent_load_1hr(load_entity_id),
                 "amber_powerwall_fetch_recent_load",
+            )
+            # Also refresh historical hourly averages (7-day profile)
+            # This ensures the cache is always populated even after restarts
+            self.hass.async_create_task(
+                self._computation_engine.async_get_historical_hourly_averages(
+                    load_entity_id
+                ),
+                "amber_powerwall_fetch_historical_load",
             )
 
         self._compute_derived_values()

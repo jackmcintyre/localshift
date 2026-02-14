@@ -231,6 +231,11 @@ class ComputationEngine:
             # If sun is down and SOC not at target, can't reach target via solar
             can_reach = data.soc >= target_pct or sun_up
 
+            # Mark target reached if SOC is there
+            target_reached = data.soc >= target_pct
+            if target_reached:
+                data.target_reached_today = True
+
             data.solar_battery_forecast = {
                 "predicted_soc": round(data.soc, 1),
                 "solar_before_dw_kwh": 0.0,
@@ -240,10 +245,8 @@ class ComputationEngine:
                 "can_reach_target": can_reach,
                 "boost_needed": False,
                 "hours_to_target_time": 0.0,
+                "target_reached_today": target_reached,
             }
-            # Mark target reached if SOC is there
-            if data.soc >= target_pct:
-                data.target_reached_today = True
         else:
             # Hours remaining until DW start
             target_dt = now_dt.replace(
@@ -289,6 +292,11 @@ class ComputationEngine:
                     and remaining_deficit > 0
                 )
 
+            # Mark target reached if SOC is there
+            target_reached = data.soc >= target_pct
+            if target_reached:
+                data.target_reached_today = True
+
             data.solar_battery_forecast = {
                 "predicted_soc": round(predicted_soc, 1),
                 "solar_before_dw_kwh": round(solar_kwh, 2),
@@ -298,11 +306,8 @@ class ComputationEngine:
                 "can_reach_target": can_reach,
                 "boost_needed": boost_needed,
                 "hours_to_target_time": round(hours_to_target, 1),
+                "target_reached_today": target_reached,
             }
-
-            # Mark target reached if SOC is there
-            if data.soc >= target_pct:
-                data.target_reached_today = True
 
             # Store forecast history when hour changes (for planned vs actual chart)
             current_hour = now_dt.hour

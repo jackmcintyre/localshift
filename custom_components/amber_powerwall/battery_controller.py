@@ -51,12 +51,8 @@ class BatteryController:
             await self.hass.services.async_call(
                 "select",
                 "select_option",
-                {
-                    "entity_id": entity_id,
-                    "option": mode,
-                },
+                {"entity_id": entity_id, "option": mode},
                 blocking=True,
-                context=self._get_call_context(),
             )
             _LOGGER.info("Successfully set export mode to %s", mode)
             return True
@@ -77,12 +73,8 @@ class BatteryController:
             await self.hass.services.async_call(
                 "select",
                 "select_option",
-                {
-                    "entity_id": entity_id,
-                    "option": mode,
-                },
+                {"entity_id": entity_id, "option": mode},
                 blocking=True,
-                context=self._get_call_context(),
             )
             _LOGGER.info("Successfully set operation mode to %s", mode)
             return True
@@ -105,12 +97,8 @@ class BatteryController:
             await self.hass.services.async_call(
                 "number",
                 "set_value",
-                {
-                    "entity_id": entity_id,
-                    "value": value,
-                },
+                {"entity_id": entity_id, "value": value},
                 blocking=True,
-                context=self._get_call_context(),
             )
             _LOGGER.info("Successfully set backup reserve to %s", value)
             return True
@@ -119,12 +107,6 @@ class BatteryController:
                 "Failed to set backup reserve to %s: %s", value, e, exc_info=True
             )
             return False
-
-    def _get_call_context(self):
-        """Get a call context for service calls to identify them as internal."""
-        from homeassistant.helpers.service import async_call_from_config
-
-        return async_call_from_config("amber_powerwall", {})
 
     async def set_self_consumption(
         self, data: CoordinatorData, dry_run: bool = False

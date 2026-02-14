@@ -421,6 +421,7 @@ views:
                 stroke_width: 3
                 curve: smooth
                 type: line
+                extend_to: false
               - entity: sensor.amber_powerwall_daily_forecast
                 name: Planned SOC
                 color: "#F59E0B"
@@ -437,11 +438,11 @@ views:
                 decimals: 0
             hours_12: false
             now:
-              show: true
+              show: false
               label: Now
               color: "#EF4444"
             cache: true
-            update_interval: "300"
+            update_interval: "60sec"
 
       # --- Debug State Summary ---
       - type: grid
