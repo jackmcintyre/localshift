@@ -12,6 +12,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+    TESLEMETRY_EXPORT_BATTERY_OK,
+    TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
 )
 from .coordinator_data import CoordinatorData
@@ -161,6 +163,13 @@ class StateMachine:
             # --- No change needed ---
             if desired == self._commanded_mode:
                 self._mode_desired_since.clear()
+
+                # --- Periodic health check (every minute) ---
+                # Verify hardware state matches commanded state
+                # This catches drift from manual changes, power outages, etc.
+                if not self._get_switch_state("dry_run"):
+                    await self._perform_health_check(data)
+
                 return
 
             # --- Debounce tracking ---
@@ -199,7 +208,20 @@ class StateMachine:
                 elapsed,
             )
 
-            await self._execute_mode_transition(data, desired)
+            # Execute the transition and check if it succeeded
+            transition_success = await self._execute_mode_transition(data, desired)
+
+            # Only update commanded_mode if transition was successful
+            if not transition_success:
+                _LOGGER.warning(
+                    "Mode transition from %s to %s failed - keeping previous commanded mode",
+                    old_mode.value,
+                    desired.value,
+                )
+                # Clear the debounce timer so it will retry on next evaluation
+                self._mode_desired_since.clear()
+                return
+
             self._commanded_mode = desired
             self._mode_desired_since.clear()
 
@@ -220,51 +242,98 @@ class StateMachine:
 
     async def _execute_mode_transition(
         self, data: CoordinatorData, target: BatteryMode
-    ) -> None:
-        """Issue battery commands and set state flags for *target* mode."""
+    ) -> bool:
+        """Issue battery commands and set state flags for *target* mode.
+
+        Returns:
+            True if transition completed successfully, False otherwise.
+        """
         dry_run = self._get_switch_state("dry_run")
 
         # Set flag to prevent re-evaluation during mode transition
         self._in_mode_transition = True
+        transition_success = True
 
         try:
-            _LOGGER.info("Executing mode transition to %s (dry_run=%s)", target.value, dry_run)
+            _LOGGER.info(
+                "Executing mode transition to %s (dry_run=%s)", target.value, dry_run
+            )
 
             if target == BatteryMode.SELF_CONSUMPTION:
-                await self._battery_controller.set_self_consumption(data, dry_run)
-                _LOGGER.info("Self consumption mode transition completed")
+                transition_success = (
+                    await self._battery_controller.set_self_consumption(data, dry_run)
+                )
+                if transition_success:
+                    _LOGGER.info("Self consumption mode transition completed")
+                else:
+                    _LOGGER.error("Self consumption mode transition FAILED")
 
             elif target == BatteryMode.DEMAND_BLOCK:
                 # Demand block is self_consumption with extra protection
-                await self._battery_controller.set_self_consumption(data, dry_run)
-                _LOGGER.info("Demand block mode transition completed")
+                transition_success = (
+                    await self._battery_controller.set_self_consumption(data, dry_run)
+                )
+                if transition_success:
+                    _LOGGER.info("Demand block mode transition completed")
+                else:
+                    _LOGGER.error("Demand block mode transition FAILED")
 
             elif target == BatteryMode.HOLD:
                 data.solar_export_hold = False
-                await self._battery_controller.set_hold(data, dry_run)
-                _LOGGER.info("Hold mode transition completed")
+                transition_success = await self._battery_controller.set_hold(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Hold mode transition completed")
+                else:
+                    _LOGGER.error("Hold mode transition FAILED")
 
             elif target == BatteryMode.SOLAR_EXPORT_HOLD:
                 data.solar_export_hold = True
-                await self._battery_controller.set_hold(data, dry_run)
-                _LOGGER.info("Solar export hold mode transition completed")
+                transition_success = await self._battery_controller.set_hold(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Solar export hold mode transition completed")
+                else:
+                    _LOGGER.error("Solar export hold mode transition FAILED")
 
             elif target == BatteryMode.HOLDING_FOR_SPIKE:
                 data.solar_export_hold = False
-                await self._battery_controller.set_hold(data, dry_run)
-                _LOGGER.info("Holding for spike mode transition completed")
+                transition_success = await self._battery_controller.set_hold(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Holding for spike mode transition completed")
+                else:
+                    _LOGGER.error("Holding for spike mode transition FAILED")
 
             elif target == BatteryMode.GRID_CHARGING:
-                await self._battery_controller.set_force_charge(data, dry_run)
-                _LOGGER.info("Grid charging mode transition completed")
+                transition_success = await self._battery_controller.set_force_charge(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Grid charging mode transition completed")
+                else:
+                    _LOGGER.error("Grid charging mode transition FAILED")
 
             elif target == BatteryMode.BOOST_CHARGING:
-                await self._battery_controller.set_boost_charge(data, dry_run)
-                _LOGGER.info("Boost charging mode transition completed")
+                transition_success = await self._battery_controller.set_boost_charge(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Boost charging mode transition completed")
+                else:
+                    _LOGGER.error("Boost charging mode transition FAILED")
 
             elif target == BatteryMode.SPIKE_DISCHARGE:
-                await self._battery_controller.set_force_discharge(data, dry_run)
-                _LOGGER.info("Spike discharge mode transition completed")
+                transition_success = await self._battery_controller.set_force_discharge(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Spike discharge mode transition completed")
+                else:
+                    _LOGGER.error("Spike discharge mode transition FAILED")
 
             elif target == BatteryMode.MANUAL:
                 pass  # No command — user is controlling manually
@@ -277,12 +346,73 @@ class StateMachine:
                 e,
                 exc_info=True,
             )
+            transition_success = False
             # Note: We still clear _in_mode_transition in the finally block
             # so the state machine can retry the transition on the next evaluation
         finally:
             # Always clear the flag, even if an exception occurs
             _LOGGER.debug("Mode transition flag cleared, allowing re-evaluation")
             self._in_mode_transition = False
+
+        return transition_success
+
+    def _get_expected_state_for_mode(self, mode: BatteryMode) -> tuple[str, int, str]:
+        """Get the expected hardware state for a given mode.
+
+        Returns:
+            Tuple of (operation_mode, backup_reserve, export_mode)
+        """
+        if mode == BatteryMode.SELF_CONSUMPTION:
+            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
+        elif mode == BatteryMode.DEMAND_BLOCK:
+            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
+        elif mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
+            # For hold modes, we can't know exact reserve without data,
+            # so skip reserve check but verify operation and export
+            return ("self_consumption", -1, TESLEMETRY_EXPORT_PV_ONLY)
+        elif mode == BatteryMode.SOLAR_EXPORT_HOLD:
+            return ("self_consumption", -1, TESLEMETRY_EXPORT_PV_ONLY)
+        elif mode == BatteryMode.GRID_CHARGING:
+            return ("backup", 10, TESLEMETRY_EXPORT_PV_ONLY)
+        elif mode == BatteryMode.BOOST_CHARGING:
+            return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY)
+        elif mode == BatteryMode.SPIKE_DISCHARGE:
+            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK)
+        else:  # MANUAL or unknown
+            return ("", -1, "")
+
+    async def _perform_health_check(self, data: CoordinatorData) -> None:
+        """Verify hardware state matches commanded mode.
+
+        This runs every minute to detect drift from manual changes,
+        power outages, or other issues that might cause the hardware
+        state to diverge from what we think it is.
+
+        If drift is detected, we attempt to correct it.
+        """
+        expected_op, expected_reserve, expected_export = (
+            self._get_expected_state_for_mode(self._commanded_mode)
+        )
+
+        # Skip if we don't have expected values
+        if not expected_op:
+            return
+
+        # Use quick verification from battery controller
+        is_valid = await self._battery_controller.verify_current_state(
+            expected_operation_mode=expected_op,
+            expected_backup_reserve=expected_reserve,
+            expected_export_mode=expected_export,
+        )
+
+        if not is_valid:
+            _LOGGER.warning(
+                "Health check failed: hardware state doesn't match commanded mode %s. "
+                "Attempting to correct...",
+                self._commanded_mode.value,
+            )
+            # Attempt to correct the drift
+            await self._execute_mode_transition(data, self._commanded_mode)
 
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
         """Set startup grace period to wait for entities to populate."""
