@@ -88,7 +88,9 @@ class StateReader:
             discovered = self._discover_solcast_entity(entity_id)
             if discovered:
                 state = self.hass.states.get(discovered)
-                _LOGGER.debug("Using discovered Solcast entity %s for %s", discovered, entity_id)
+                _LOGGER.debug(
+                    "Using discovered Solcast entity %s for %s", discovered, entity_id
+                )
             else:
                 return []
 

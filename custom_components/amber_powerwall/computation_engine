@@ -54,14 +54,7 @@ class ComputationEngine:
         get_entity_id_func: callable,
         get_switch_state_func: callable,
     ) -> None:
-        """Initialize computation engine.
-
-        Args:
-            hass: Home Assistant instance
-            entry: Config entry
-            get_entity_id_func: Function to get entity IDs by config key
-            get_switch_state_func: Function to get switch states
-        """
+        """Initialize computation engine."""
         self.hass = hass
         self.entry = entry
         self._get_entity_id = get_entity_id_func
@@ -74,14 +67,9 @@ class ComputationEngine:
         self._last_forecast_hour: int | None = None
 
     def compute_derived_values(self, data: CoordinatorData) -> None:
-        """Compute all derived sensor/binary_sensor values from raw state.
-
-        Ported from Jinja templates in YAML package. Steps are ordered
-        by dependency — later steps can reference earlier results.
-        """
+        """Compute all derived sensor values from raw state."""
         now_dt = dt_util.now()
 
-        # Common time values used by multiple steps
         dw_start_time = self._parse_time_option(
             CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
         )
@@ -93,49 +81,38 @@ class ComputationEngine:
         before_dw = now_t < dw_start_time
         after_dw = now_t >= dw_start_time
 
-        # ---- Step 1: Directional power (always positive) ----
         data.grid_import_power_kw = max(data.grid_power_kw, 0.0)
         data.grid_export_power_kw = max(-data.grid_power_kw, 0.0)
 
-        # ---- Step 2: Mode detection from Teslemetry state ----
         data.force_discharge_active = (
             data.operation_mode == "autonomous" and data.backup_reserve < 11
         )
-        # force_charge_active = ANY charging state (backup OR boost)
         data.force_charge_active = data.operation_mode == "backup" or (
             data.operation_mode == "autonomous" and data.backup_reserve > 99
         )
         data.boost_charge_active = (
             data.operation_mode == "autonomous" and data.backup_reserve > 99
         )
-        # hold_active uses internal flag (matches YAML: input_boolean.battery_hold_mode)
         data.hold_active = data.hold_mode
 
-        # ---- Step 3: demand_window_active ----
         dw_block_enabled = self._get_switch_state("demand_window_block")
         data.demand_window_active = (
             dw_block_enabled and now_t >= dw_start_time and now_t < dw_end_time
         )
 
-        # ---- Step 4: solar_battery_forecast ----
         self._compute_solar_battery_forecast(
             data, now_dt, target_hour, before_dw, after_dw
         )
 
-        # ---- Step 5: solar_can_reach_target (from forecast) ----
         data.solar_can_reach_target = data.solar_battery_forecast.get(
             "can_reach_target", True
         )
-
-        # ---- Step 6: boost_charge_needed (from forecast) ----
         data.boost_charge_needed = data.solar_battery_forecast.get(
             "boost_needed", False
         )
 
-        # ---- Step 7: effective_cheap_price ----
         self._compute_effective_cheap_price(data, now_dt, before_dw, target_hour)
 
-        # ---- Step 8: cheap_charge_stop_price ----
         deadband = float(
             self.entry.options.get(
                 CONF_CHEAP_PRICE_DEADBAND, DEFAULT_CHEAP_PRICE_DEADBAND
@@ -143,7 +120,6 @@ class ComputationEngine:
         )
         data.cheap_charge_stop_price = round(data.effective_cheap_price + deadband, 2)
 
-        # ---- Step 9: forecast_spike_within_window ----
         lookahead = float(
             self.entry.options.get(
                 CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
@@ -157,32 +133,21 @@ class ComputationEngine:
             data.feed_in_forecast, now_dt, cutoff
         )
 
-        # ---- Step 10: forecast_expensive_period_coming ----
         data.forecast_expensive_period_coming = self._scan_forecast_for_spike(
             data.general_forecast, now_dt, cutoff
         )
 
-        # ---- Step 11: hold_justified ----
         self._compute_hold_justified(data, now_dt, cutoff)
-
-        # ---- Step 12: solar_weighted_avg_fit ----
         self._compute_solar_weighted_avg_fit(data, now_dt, target_hour, after_dw)
-
-        # ---- Step 13: solar_export_hold_justified ----
         self._compute_solar_export_hold_justified(data, before_dw)
-
-        # ---- Step 14: active_mode ----
         self._compute_active_mode(data, now_dt)
 
-        # ---- Step 15: decision_log ----
-        # Only add to decision log after startup grace period (when values are populated)
         if (
             data.active_mode != self._previous_active_mode
             and self._previous_active_mode is not None
         ):
             self._add_to_decision_log(data, now_dt)
 
-        # ---- Step 16: daily_forecast ----
         self._compute_daily_hourly_forecast(data, now_dt)
 
     def _compute_solar_battery_forecast(
@@ -199,13 +164,9 @@ class ComputationEngine:
         )
 
         if after_dw:
-            # After DW start: report current SOC, safe defaults
-            # Check if sun is down for accurate overnight assessment
             sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
             sun_state = self.hass.states.get(sun_entity_id)
             sun_up = sun_state is not None and sun_state.state == "above_horizon"
-
-            # If sun is down and SOC not at target, can't reach target via solar
             can_reach = data.soc >= target_pct or sun_up
 
             data.solar_battery_forecast = {
@@ -218,40 +179,26 @@ class ComputationEngine:
                 "boost_needed": False,
                 "hours_to_target_time": 0.0,
             }
-            # Mark target reached if SOC is there
             if data.soc >= target_pct:
                 data.target_reached_today = True
         else:
-            # Hours remaining until DW start
             target_dt = now_dt.replace(
                 hour=target_hour, minute=0, second=0, microsecond=0
             )
             hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
-
-            # Deficit: kWh needed to reach target
             deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
 
-            # Solar forecast: pessimistic estimate between now and DW
             solar_kwh = self._sum_solar_before_target(
                 data.solcast_today, now_dt, target_hour
             )
-
-            # Consumption estimate: current load extrapolated
-            # Use historical average load if available, otherwise use current load
             expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
             consumption_kwh = expected_load_kw * hours_to_target
-
-            # Net solar (after consumption)
             net_solar = solar_kwh - consumption_kwh
 
-            # Predicted SOC at DW
             net_solar_pct = net_solar / BATTERY_CAPACITY_KWH * 100
             predicted_soc = data.soc + net_solar_pct
-
-            # Can solar alone reach target?
             can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
 
-            # Boost needed? Only if gentle charging can't reach target before DW
             if data.soc >= target_pct:
                 boost_needed = False
             else:
@@ -277,11 +224,9 @@ class ComputationEngine:
                 "hours_to_target_time": round(hours_to_target, 1),
             }
 
-            # Mark target reached if SOC is there
             if data.soc >= target_pct:
                 data.target_reached_today = True
 
-            # Store forecast history when hour changes (for planned vs actual chart)
             current_hour = now_dt.hour
             if (
                 self._last_forecast_hour is None
@@ -300,7 +245,7 @@ class ComputationEngine:
         solar_kwh: float,
         consumption_kwh: float,
     ) -> None:
-        """Store forecast prediction to history for planned vs actual comparison."""
+        """Store forecast prediction to history."""
         entry = {
             "timestamp": now_dt.isoformat(),
             "predicted_soc": round(predicted_soc, 1),
@@ -309,7 +254,6 @@ class ComputationEngine:
         }
         data.forecast_history.append(entry)
 
-        # Keep only last 48 entries (2 days of hourly data)
         if len(data.forecast_history) > 48:
             data.forecast_history = data.forecast_history[-48:]
 
@@ -321,45 +265,31 @@ class ComputationEngine:
         """Compute full 24-hour forecast with hourly breakdown."""
         data.daily_forecast = []
 
-        # Get historical hourly averages
         load_entity_id = self._get_entity_id("teslemetry_load_power")
         hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
 
-        # Publish consumption profile diagnostics for transparency
         data.consumption_source = (
             self._historical_load_source if hourly_avg_kw else "live_load_fallback"
         )
         data.consumption_statistic_id = load_entity_id
         data.consumption_profile_hours = len(hourly_avg_kw)
         data.consumption_fallback_hours = 0
-        data.consumption_hourly_sample_counts = dict(
-            self._historical_load_sample_counts
-        )
+        data.consumption_hourly_sample_counts = dict(self._historical_load_sample_counts)
         data.consumption_hourly_profile_kw = {
             hour: round(val, 3) for hour, val in sorted(hourly_avg_kw.items())
         }
-
-        if not all_solcast:
-            _LOGGER.debug("Daily forecast: no Solcast entries available")
-        if not hourly_avg_kw:
-            _LOGGER.debug(
-                "Daily forecast: no historical hourly load profile available; using live load fallback"
-            )
 
         current_soc = data.soc
         predicted_soc = current_soc
         base_slot = now_dt.replace(minute=0, second=0, microsecond=0)
 
-        # Build rolling 24-hour forecast from the current hour
         for offset in range(24):
             slot_start = base_slot + timedelta(hours=offset)
             slot_hour = slot_start.hour
 
-            # Get solar forecast for this slot (aggregated from Solcast half-hour entries)
             solar_kwh = self._get_solar_for_slot(all_solcast, slot_start)
 
-            # Get expected consumption for this slot's hour
             load_kw, load_source = self._estimate_hourly_consumption_kw(
                 hourly_avg_kw,
                 slot_hour,
@@ -369,33 +299,169 @@ class ComputationEngine:
                 data.consumption_fallback_hours += 1
             consumption_kwh = load_kw
 
-            # Calculate raw net energy for the hour
             net_kwh = solar_kwh - consumption_kwh
 
-            # Apply realistic battery transfer limits and efficiency
-            max_hourly_transfer_kwh = CHARGE_RATE_BACKUP_KW  # 1-hour slot
+            max_hourly_transfer_kwh = CHARGE_RATE_BACKUP_KW
             if net_kwh >= 0:
                 battery_delta_kwh = min(net_kwh, max_hourly_transfer_kwh) * 0.92
             else:
                 battery_delta_kwh = max(net_kwh, -max_hourly_transfer_kwh) / 0.95
 
-            # Iterative SOC simulation with clamp each hour
             predicted_soc = predicted_soc + (
                 battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
             )
             predicted_soc = max(0.0, min(100.0, predicted_soc))
 
-            data.daily_forecast.append(
-                {
-                    "hour": slot_hour,
-                    "timestamp": slot_start.isoformat(),
-                    "predicted_soc": round(predicted_soc, 1),
-                    "solar_kwh": round(solar_kwh, 2),
-                    "consumption_kwh": round(consumption_kwh, 2),
-                    "consumption_source": load_source,
-                    "net_kwh": round(net_kwh, 2),
-                }
-            )
+            data.daily_forecast.append({
+                "hour": slot_hour,
+                "timestamp": slot_start.isoformat(),
+                "predicted_soc": round(predicted_soc, 1),
+                "solar_kwh": round(solar_kwh, 2),
+                "consumption_kwh": round(consumption_kwh, 2),
+                "consumption_source": load_source,
+                "net_kwh": round(net_kwh, 2),
+            })
+
+    def _get_historical_hourly_averages(self, entity_id: str) -> dict[int, float]:
+        """Get 7-day hourly averages, cached until midnight."""
+        now = dt_util.now()
+        today_str = now.strftime("%Y-%m-%d")
+
+        if (
+            self._historical_load_cache_date == today_str
+            and self._historical_load_cache
+        ):
+            return self._historical_load_cache
+
+        # Use REST API to get history
+        hourly_avg_kw, sample_counts = self._get_hourly_profile_via_rest(
+            entity_id, now
+        )
+
+        if hourly_avg_kw and len(hourly_avg_kw) >= 6:
+            self._historical_load_cache = hourly_avg_kw
+            self._historical_load_sample_counts = sample_counts
+            self._historical_load_source = "rest_history"
+            self._historical_load_cache_date = today_str
+            return self._historical_load_cache
+
+        self._historical_load_source = "live_load_fallback"
+        return {}
+
+    def _get_hourly_profile_via_rest(
+        self,
+        entity_id: str,
+        now: datetime,
+    ) -> tuple[dict[int, float], dict[int, int]]:
+        """Get hourly profile via HA REST API."""
+        try:
+            import requests
+        except Exception:
+            return {}, {}
+
+        start_time = now - timedelta(days=7)
+
+        ha_url = (
+            getattr(self.hass.config, "internal_url", None)
+            or getattr(self.hass.config, "external_url", None)
+            or getattr(getattr(self.hass.config, "api", None), "base_url", None)
+        )
+        token = getattr(getattr(self.hass.config, "api", None), "token", None)
+
+        if not ha_url or not token:
+            return {}, {}
+
+        url = f"{ha_url}/api/history/period/{start_time.isoformat()}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        params = {"filter_entity_id": entity_id, "end_time": now.isoformat()}
+
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+        except Exception:
+            return {}, {}
+
+        if response.status_code != 200:
+            return {}, {}
+
+        try:
+            history_response = response.json()
+        except Exception:
+            return {}, {}
+
+        if not history_response or len(history_response) == 0:
+            return {}, {}
+
+        state = self.hass.states.get(entity_id)
+        default_unit = (
+            state.attributes.get("unit_of_measurement", "") if state else ""
+        )
+
+        hourly_values: dict[int, list[tuple[float, float]]] = {h: [] for h in range(24)}
+        total_duration_h = 0.0
+
+        for state_list in history_response:
+            timeline: list[tuple[datetime, float]] = []
+            for state_entry in state_list:
+                if state_entry.get("state") not in (None, "unavailable", "unknown"):
+                    try:
+                        raw_val = float(state_entry["state"])
+                        ts = state_entry.get("last_updated") or state_entry.get("last_changed")
+                        parsed_ts = dt_util.parse_datetime(str(ts)) if ts else None
+                        if parsed_ts is None:
+                            continue
+
+                        local_dt = dt_util.as_local(parsed_ts)
+                        hour = local_dt.hour
+
+                        unit = state_entry.get("attributes", {}).get(
+                            "unit_of_measurement", default_unit
+                        )
+                        if unit == "W":
+                            val_kw = raw_val / 1000.0
+                        else:
+                            val_kw = raw_val
+
+                        timeline.append((local_dt, val_kw))
+                    except (ValueError, TypeError):
+                        pass
+
+            if len(timeline) >= 2:
+                timeline.sort(key=lambda x: x[0])
+                for i in range(len(timeline) - 1):
+                    seg_start, seg_kw = timeline[i]
+                    seg_end = timeline[i + 1][0]
+                    if seg_end <= seg_start:
+                        continue
+
+                    cursor = seg_start
+                    while cursor < seg_end:
+                        hour_end = (cursor + timedelta(hours=1)).replace(
+                            minute=0, second=0, microsecond=0
+                        )
+                        chunk_end = min(hour_end, seg_end)
+                        dur_h = (chunk_end - cursor).total_seconds() / 3600.0
+                        if dur_h > 0:
+                            hourly_values[cursor.hour].append((seg_kw, dur_h))
+                            total_duration_h += dur_h
+                        cursor = chunk_end
+
+        if total_duration_h <= 0:
+            return {}, {}
+
+        hourly_avg_kw: dict[int, float] = {}
+        sample_counts: dict[int, int] = {}
+        for hour in range(24):
+            if hourly_values[hour]:
+                total_kwh = sum(kw * dur_h for kw, dur_h in hourly_values[hour])
+                total_hours = sum(dur_h for _, dur_h in hourly_values[hour])
+                if total_hours > 0:
+                    hourly_avg_kw[hour] = total_kwh / total_hours
+                sample_counts[hour] = len(hourly_values[hour])
+
+        return hourly_avg_kw, sample_counts
 
     def _estimate_hourly_consumption_kw(
         self,
@@ -403,18 +469,13 @@ class ComputationEngine:
         slot_hour: int,
         current_load_kw: float,
     ) -> tuple[float, str]:
-        """Estimate hourly household consumption without synthetic smoothing.
-
-        Returns tuple of (kW, source_tag).
-        """
-        # Prefer exact learned hour from profile (no interpolation/smoothing)
+        """Estimate hourly household consumption."""
         if hourly_avg_kw:
             v = hourly_avg_kw.get(slot_hour)
             sample_count = self._historical_load_sample_counts.get(slot_hour, 0)
             if isinstance(v, (int, float)) and v > 0 and sample_count >= 1:
                 return round(float(v), 3), "profile_hour"
 
-        # No usable profile: fallback to current load only
         base_kw = current_load_kw if current_load_kw > 0 else 0.6
         return round(base_kw, 3), "live_load_fallback"
 
@@ -423,11 +484,10 @@ class ComputationEngine:
         solcast_forecasts: list[dict[str, Any]],
         slot_start: datetime,
     ) -> float:
-        """Get solar forecast (kWh) for one hourly slot from Solcast half-hour periods."""
+        """Get solar forecast (kWh) for one hourly slot."""
         if not solcast_forecasts:
             return 0.0
 
-        # Ensure slot boundaries are timezone-aware local datetimes
         if slot_start.tzinfo is None:
             slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
         else:
@@ -437,8 +497,6 @@ class ComputationEngine:
         period_duration = timedelta(minutes=30)
 
         total_solar = 0.0
-        parsed_periods = 0
-        overlap_hits = 0
 
         for entry in solcast_forecasts:
             try:
@@ -454,16 +512,13 @@ class ComputationEngine:
                     continue
 
                 start_local = dt_util.as_local(start_dt)
-                parsed_periods += 1
                 end_local = start_local + period_duration
 
-                # overlap between [start_local, end_local) and [slot_start, slot_end)
                 overlap_start = max(start_local, slot_start)
                 overlap_end = min(end_local, slot_end)
                 overlap_seconds = (overlap_end - overlap_start).total_seconds()
 
                 if overlap_seconds > 0:
-                    # Support common Solcast key variants
                     period_kwh = float(
                         entry.get("pv_estimate10")
                         or entry.get("estimate10")
@@ -473,26 +528,8 @@ class ComputationEngine:
                     )
                     overlap_fraction = overlap_seconds / period_duration.total_seconds()
                     total_solar += period_kwh * overlap_fraction
-                    overlap_hits += 1
             except (ValueError, TypeError):
                 continue
-
-        if (
-            total_solar == 0.0
-            and solcast_forecasts
-            and slot_start.hour in (8, 9, 10, 11, 12, 13, 14, 15, 16)
-        ):
-            sample = (
-                solcast_forecasts[0] if isinstance(solcast_forecasts[0], dict) else {}
-            )
-            _LOGGER.debug(
-                "Solar slot resolved to 0. slot=%s parsed_periods=%s overlap_hits=%s sample_keys=%s sample_period_start=%s",
-                slot_start.isoformat(),
-                parsed_periods,
-                overlap_hits,
-                sorted(sample.keys()) if isinstance(sample, dict) else [],
-                sample.get("period_start") if isinstance(sample, dict) else None,
-            )
 
         return total_solar
 
@@ -500,7 +537,6 @@ class ComputationEngine:
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
     ) -> None:
         """Compute the effective cheap price threshold."""
-        # Calculate base from percentile of forecast prices
         lookahead = float(
             self.entry.options.get(
                 CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
@@ -508,7 +544,6 @@ class ComputationEngine:
         )
         cutoff = now_dt + timedelta(hours=lookahead)
 
-        # Collect forecast prices within lookahead window
         forecast_prices = []
         for f in data.general_forecast:
             start = self._parse_forecast_dt(f.get("start_time"))
@@ -518,7 +553,6 @@ class ComputationEngine:
             if start_local >= now_dt and start_local <= cutoff:
                 forecast_prices.append(float(f.get("per_kwh", 0)))
 
-        # Calculate percentile-based cheap price
         percentile = float(
             self.entry.options.get(
                 CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
@@ -527,7 +561,6 @@ class ComputationEngine:
         if forecast_prices:
             base = round(self._percentile(forecast_prices, percentile), 2)
         else:
-            # Fallback to max_precharge_price if no forecast data
             base = float(
                 self.entry.options.get(
                     CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
@@ -552,7 +585,6 @@ class ComputationEngine:
             urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
             urgency_price = base + (max_price - base) * urgency
 
-            # Find minimum forecast price before DW
             min_forecast = max_price
             for f in data.general_forecast:
                 start = self._parse_forecast_dt(f.get("start_time"))
@@ -573,7 +605,6 @@ class ComputationEngine:
         self, data: CoordinatorData, now_dt: datetime, cutoff: datetime
     ) -> None:
         """Compute whether holding battery is justified."""
-        # Check 1: meaningful solar (>= 0.5 kWh) within lookahead
         solar_kwh_lookahead = 0.0
         for forecast_list in [data.solcast_today, data.solcast_tomorrow]:
             for period in forecast_list:
@@ -584,7 +615,6 @@ class ComputationEngine:
                 if ps_local >= now_dt and ps_local <= cutoff:
                     solar_kwh_lookahead += float(period.get("pv_estimate10", 0))
 
-        # Check 2: financially justified price savings within lookahead
         min_future_price = 0.99
         for f in data.general_forecast:
             start = self._parse_forecast_dt(f.get("start_time"))
@@ -596,14 +626,12 @@ class ComputationEngine:
                 if price < min_future_price:
                     min_future_price = price
 
-        # Calculate savings as percentage
         price_drop_pct = 0.0
         if data.general_price > 0:
             price_drop_pct = (
                 (data.general_price - min_future_price) / data.general_price
             ) * 100
 
-        # Read configurable thresholds
         min_savings_percent = float(
             self.entry.options.get(
                 CONF_HOLD_MIN_SAVINGS_PERCENT, DEFAULT_HOLD_MIN_SAVINGS_PERCENT
@@ -621,14 +649,9 @@ class ComputationEngine:
             or min_future_price < absolute_cheap_threshold
         )
 
-        # Don't justify holding overnight (10pm-6am) when there's no sun to charge
-        # This prevents unnecessary hold mode triggered by:
-        # 1. Price drops when solar charging isn't possible anyway
-        # 2. Solar forecasts when there's no sun to benefit
         overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6
         if overnight_hours and not data.solar_can_reach_target:
             cheap_coming = False
-            # Also disable solar-based hold justification overnight
             solar_kwh_lookahead = 0.0
 
         data.hold_justified = solar_kwh_lookahead >= 0.5 or cheap_coming
@@ -652,7 +675,6 @@ class ComputationEngine:
                 if ps_local >= now_dt and ps_local.hour < target_hour:
                     solar_kwh_val = float(period.get("pv_estimate10", 0))
                     if solar_kwh_val > 0:
-                        # Find FIT price at midpoint of 30-min period
                         mid = period_start + timedelta(minutes=15)
                         fit_price = 0.0
                         for f in data.feed_in_forecast:
@@ -679,14 +701,9 @@ class ComputationEngine:
         self, data: CoordinatorData, before_dw: bool
     ) -> None:
         """Compute whether solar export hold is justified."""
-        # Safe default: assume sun is down if entity unavailable
         sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
         sun_state = self.hass.states.get(sun_entity_id)
         sun_up = sun_state is not None and sun_state.state == "above_horizon"
-        if sun_state is None:
-            _LOGGER.debug(
-                "Sun entity %s not found, assuming sun is down", sun_entity_id
-            )
 
         deficit_kwh = data.solar_battery_forecast.get("deficit_kwh", 0)
         net_solar_kwh = data.solar_battery_forecast.get("net_solar_kwh", 0)
@@ -721,32 +738,12 @@ class ComputationEngine:
         automation_enabled = self._get_switch_state("automation_enabled")
         spike_discharge_enabled = self._get_switch_state("spike_discharge_enabled")
 
-        # Check if we're in valid discharge window (6am-midnight)
         current_hour = now_dt.hour
         in_discharge_window = current_hour >= DISCHARGE_EARLIEST_HOUR
 
-        # Check sun status
         sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
         sun_state = self.hass.states.get(sun_entity_id)
         sun_up = sun_state is not None and sun_state.state == "above_horizon"
-
-        # Debug: Log state when considering HOLD mode
-        if data.hold_justified or data.forecast_spike_within_window:
-            _LOGGER.debug(
-                "Hold mode consideration at %s: hold_justified=%s, "
-                "hold_mode=%s, solar_export_hold=%s, "
-                "forecast_spike=%s, solar_can_reach=%s, sun_up=%s, "
-                "price=%.2f, stop_price=%.2f",
-                now_dt.strftime("%H:%M"),
-                data.hold_justified,
-                data.hold_mode,
-                data.solar_export_hold,
-                data.forecast_spike_within_window,
-                data.solar_can_reach_target,
-                sun_up,
-                data.general_price,
-                data.cheap_charge_stop_price,
-            )
 
         if not automation_enabled:
             data.active_mode = BatteryMode.MANUAL
@@ -759,7 +756,6 @@ class ComputationEngine:
         elif data.solar_export_hold and data.hold_mode:
             data.active_mode = BatteryMode.SOLAR_EXPORT_HOLD
         elif data.general_price < data.effective_cheap_price:
-            # Price below threshold — consider charging
             precharge_threshold = float(
                 self.entry.options.get(
                     CONF_PRECHARGE_BATTERY_THRESHOLD,
@@ -782,7 +778,6 @@ class ComputationEngine:
             else:
                 data.active_mode = BatteryMode.SELF_CONSUMPTION
         elif data.general_price < data.cheap_charge_stop_price:
-            # Price in deadband — maintain charge or hold
             if data.force_charge_active:
                 if data.boost_charge_active:
                     data.active_mode = BatteryMode.BOOST_CHARGING
@@ -794,7 +789,6 @@ class ComputationEngine:
                 else:
                     data.active_mode = BatteryMode.SELF_CONSUMPTION
         elif data.forecast_spike_within_window:
-            # Don't hold for spikes overnight (10pm-6am) when there's no sun to benefit
             overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6
             if not (overnight_hours and not data.solar_can_reach_target):
                 data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
@@ -818,7 +812,6 @@ class ComputationEngine:
             "reason": f"Mode changed: {old_mode} -> {new_mode}",
         }
         data.decision_log.append(entry)
-        # Cap log at 50 entries
         if len(data.decision_log) > 50:
             data.decision_log = data.decision_log[-50:]
 
@@ -827,14 +820,11 @@ class ComputationEngine:
     def _get_expected_load_kw(
         self, data: CoordinatorData, hours_to_target: float
     ) -> float:
-        """Calculate expected load based on 7-day historical averages."""
+        """Calculate expected load based on historical averages."""
         load_entity_id = self._get_entity_id("teslemetry_load_power")
-
-        # Get cached historical hourly averages
         hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
 
         if hourly_avg_kw:
-            # Sum hourly averages from current hour until demand window
             now_dt = dt_util.now()
             dw_start_time = self._parse_time_option(
                 CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
@@ -845,241 +835,20 @@ class ComputationEngine:
             total_expected_kwh = 0.0
             hour = current_hour
 
-            # Sum hours from now until target hour
             while hour != target_hour:
                 if hour in hourly_avg_kw:
                     total_expected_kwh += hourly_avg_kw[hour]
                 hour = (hour + 1) % 24
-                # Safety: don't loop forever
                 if hour == current_hour:
                     break
 
-            # Add 10% buffer to be conservative
             total_expected_kwh *= 1.1
 
             if total_expected_kwh > 0:
-                return total_expected_kwh / max(
-                    hours_to_target, 1
-                )  # Return average kW, not total kWh
+                return total_expected_kwh / max(hours_to_target, 1)
 
-        # Fallback to current load or default
         current_load = data.load_power_kw if hasattr(data, "load_power_kw") else 0
         return current_load if current_load > 0 else 0.5
-
-    async def async_get_historical_hourly_averages(
-        self, entity_id: str
-    ) -> tuple[dict[int, float], dict[int, int], str]:
-        """Get 7-day hourly averages via thread pool, cached until midnight.
-
-        Returns: (hourly_avg_kw, sample_counts, source)
-        """
-        now = dt_util.now()
-        today_str = now.strftime("%Y-%m-%d")
-
-        # Check if cache is valid for today
-        if (
-            self._historical_load_cache_date == today_str
-            and self._historical_load_cache
-        ):
-            return (
-                self._historical_load_cache,
-                self._historical_load_sample_counts,
-                self._historical_load_source,
-            )
-
-        # Run blocking history fetch in thread pool using recorder's executor
-        # This is the proper way to access the database from a custom integration
-        from homeassistant.components import recorder
-
-        _LOGGER.info("Fetching historical load data for entity: %s", entity_id)
-
-        recorder_instance = recorder.get_instance(self.hass)
-        hourly_avg_kw, sample_counts = await recorder_instance.async_add_executor_job(
-            self._fetch_historical_data_sync, entity_id, now
-        )
-
-        _LOGGER.info(
-            "Historical data result: %s hours found",
-            len(hourly_avg_kw) if hourly_avg_kw else 0,
-        )
-
-        if hourly_avg_kw and len(hourly_avg_kw) >= 6:
-            self._historical_load_cache = hourly_avg_kw
-            self._historical_load_sample_counts = sample_counts
-            self._historical_load_source = "statistics"
-            self._historical_load_cache_date = today_str
-            _LOGGER.debug(
-                "Historical load profile fetched: %s hours", len(hourly_avg_kw)
-            )
-        else:
-            self._historical_load_source = "live_load_fallback"
-            _LOGGER.debug(
-                "Using live load fallback (insufficient history: %s hours)",
-                len(hourly_avg_kw) if hourly_avg_kw else 0,
-            )
-
-        return (
-            self._historical_load_cache,
-            self._historical_load_sample_counts,
-            self._historical_load_source,
-        )
-
-    def _fetch_historical_data_sync(
-        self, entity_id: str, now: datetime
-    ) -> tuple[dict[int, float], dict[int, int]]:
-        """Fetch historical data using HA recorder/statistics (runs in thread pool).
-
-        This runs in a thread pool so it won't block the HA event loop.
-        """
-        _LOGGER.info("DEBUG: Starting _fetch_historical_data_sync for %s", entity_id)
-
-        start_time = now - timedelta(days=7)
-
-        try:
-            from homeassistant.components.recorder import (
-                statistics as recorder_statistics,
-            )
-
-            _LOGGER.info("DEBUG: Imported recorder_statistics OK")
-        except Exception as e:
-            _LOGGER.info("DEBUG: Failed to import recorder statistics: %s", e)
-            return {}, {}
-
-        # Get statistics metadata to find the correct statistic_id
-        stat_ids = []
-        try:
-            stat_meta_fn = getattr(recorder_statistics, "list_statistic_ids", None)
-            _LOGGER.info("DEBUG: list_statistic_ids function: %s", stat_meta_fn)
-            if callable(stat_meta_fn):
-                stat_ids = stat_meta_fn(self.hass, None) or []
-                _LOGGER.info(
-                    "DEBUG: Found %d statistic IDs for entity %s",
-                    len(stat_ids),
-                    entity_id,
-                )
-            else:
-                _LOGGER.info("DEBUG: list_statistic_ids is not callable")
-        except Exception as e:
-            _LOGGER.info("DEBUG: Failed to list statistic ids: %s", e)
-            pass
-
-        # Find matching statistic_id
-        resolved_entity_id = entity_id
-        matched = False
-        for sid in stat_ids:
-            if not isinstance(sid, dict):
-                continue
-            stat_id = sid.get("statistic_id", "")
-            if stat_id == entity_id or stat_id.replace(
-                "sensor.", ""
-            ) == entity_id.replace("sensor.", ""):
-                resolved_entity_id = stat_id
-                matched = True
-                _LOGGER.debug(
-                    "Matched statistic_id: %s for entity %s", stat_id, entity_id
-                )
-                break
-
-        if not matched:
-            _LOGGER.debug(
-                "No matching statistic_id found for %s. Available: %s",
-                entity_id,
-                [
-                    s.get("statistic_id") if isinstance(s, dict) else str(s)
-                    for s in stat_ids[:10]
-                ],
-            )
-
-        # Get statistics
-        fn = getattr(recorder_statistics, "statistics_during_period", None)
-        _LOGGER.info("DEBUG: statistics_during_period function: %s", fn)
-        if not callable(fn):
-            return {}, {}
-
-        try:
-            _LOGGER.info(
-                "DEBUG: Calling statistics_during_period with entity=%s, start=%s, end=%s",
-                resolved_entity_id,
-                start_time,
-                now,
-            )
-            # Try to get units from the hass instance, pass None if not available
-            units = getattr(self.hass, "config", None)
-
-            statistics_data = fn(
-                self.hass,
-                start_time,
-                now,
-                [resolved_entity_id],
-                period="hour",
-                types={"mean"},
-                units=None,
-            )
-            _LOGGER.info(
-                "DEBUG: statistics_during_period returned: %s", statistics_data
-            )
-        except Exception as e:
-            _LOGGER.info("DEBUG: statistics_during_period exception: %s", e)
-            return {}, {}
-
-        if not statistics_data or resolved_entity_id not in statistics_data:
-            return {}, {}
-
-        rows = statistics_data.get(resolved_entity_id, [])
-        if not rows:
-            return {}, {}
-
-        # Process statistics into hourly averages
-        by_hour_values: dict[int, list[float]] = {h: [] for h in range(24)}
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-
-            start_val = row.get("start")
-            row_dt = None
-
-            # Handle different timestamp formats
-            if isinstance(start_val, datetime):
-                row_dt = start_val
-            elif isinstance(start_val, (int, float)):
-                # Unix timestamp (seconds since epoch)
-                row_dt = dt_util.utc_from_timestamp(start_val)
-            elif isinstance(start_val, str):
-                # Try parsing as string
-                row_dt = dt_util.parse_datetime(start_val)
-
-            if row_dt is None:
-                continue
-
-            mean_val = row.get("mean")
-            if mean_val in (None, "unknown", "unavailable"):
-                continue
-
-            try:
-                mean_kw = float(mean_val)
-            except (TypeError, ValueError):
-                continue
-
-            hour = dt_util.as_local(row_dt).hour
-            by_hour_values[hour].append(mean_kw)
-
-        hourly_avg_kw: dict[int, float] = {}
-        sample_counts: dict[int, int] = {}
-        for hour in range(24):
-            samples = by_hour_values[hour]
-            if not samples:
-                continue
-            sample_counts[hour] = len(samples)
-            hourly_avg_kw[hour] = sum(samples) / len(samples)
-
-        return hourly_avg_kw, sample_counts
-
-    def _get_historical_hourly_averages(self, entity_id: str) -> dict[int, float]:
-        """Get cached hourly averages (sync version for compute_derived_values).
-
-        Returns cached data - actual fetching happens in async_get_historical_hourly_averages.
-        """
-        return self._historical_load_cache
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -1124,14 +893,11 @@ class ComputationEngine:
             kwh = float(period.get("pv_estimate10", 0))
 
             if ps_local >= target_dt:
-                # Period starts at or after target — skip
                 continue
 
             if ps_local >= now_dt:
-                # Fully future period before target — include all of it
                 total += kwh
             elif period_end > now_dt:
-                # In-progress period — prorate remaining fraction
                 remaining = (period_end - now_dt).total_seconds()
                 fraction = remaining / period_duration.total_seconds()
                 total += kwh * fraction

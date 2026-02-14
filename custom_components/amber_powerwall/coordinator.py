@@ -210,7 +210,9 @@ class AmberPowerwallCoordinator:
 
         # Fetch historical load data in background (runs in thread pool, won't block)
         load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-        await self._computation_engine.async_get_historical_hourly_averages(load_entity_id)
+        await self._computation_engine.async_get_historical_hourly_averages(
+            load_entity_id
+        )
 
         self._compute_derived_values()
 

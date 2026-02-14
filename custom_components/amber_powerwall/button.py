@@ -179,10 +179,10 @@ class UpdateForecastButton(AmberPowerwallButtonBase):
         """Handle button press."""
         # Clear historical cache to force refresh
         await self.coordinator.async_clear_historical_cache()
-        
+
         # Trigger coordinator refresh to regenerate forecast
         await self.coordinator.async_evaluate_state_machine()
-        
+
         await self.coordinator.async_send_notification(
             "Powerwall: Forecast Update",
             "Historical load cache cleared. Forecast will regenerate.",
