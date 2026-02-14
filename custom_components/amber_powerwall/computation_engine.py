@@ -441,12 +441,13 @@ class ComputationEngine:
             # Calculate raw net energy for 15 minutes
             net_kwh = solar_kwh - consumption_kwh
 
-            # Get price for this slot (for price-aware grid charging)
-            slot_price = self._get_price_for_slot(data.general_forecast, slot_start)
+            # Note: slot_price and slot_effective_cheap are still calculated for potential
+            # future use (e.g., logging, or optional price-aware charging), but currently
+            # we prioritize reaching target over price checks
+            _slot_price = self._get_price_for_slot(data.general_forecast, slot_start)
 
-            # Calculate effective cheap price for this slot (with urgency)
-            # Only before demand window and if we haven't reached target
-            slot_effective_cheap = data.effective_cheap_price
+            # Calculate effective cheap price for this slot (with urgency) - for logging
+            _slot_effective_cheap = data.effective_cheap_price
             if (
                 slot_start
                 < now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
@@ -477,7 +478,7 @@ class ComputationEngine:
                         / 100
                         * max_price
                     )  # Rough estimate
-                    slot_effective_cheap = (
+                    _slot_effective_cheap = (
                         base_cheap + (max_price - base_cheap) * urgency
                     )
 
@@ -492,14 +493,13 @@ class ComputationEngine:
             needs_charge = predicted_soc < target_pct
 
             # Only grid charge when price is cheap AND we need to charge
+            # Priority: Reach 95% target, then do it cheaply
+            # Don't block on price - charge whenever we need to reach target
             should_grid_charge = (
                 not in_demand_window
                 and slot_hour < target_hour
                 and predicted_soc < target_pct
-                and slot_price <= slot_effective_cheap
-                and (
-                    has_deficit or needs_charge
-                )  # Charge if deficit OR need to reach target
+                and (has_deficit or needs_charge)
             )
 
             # Apply realistic battery transfer limits and efficiency
