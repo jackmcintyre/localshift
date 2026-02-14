@@ -307,4 +307,5 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
             "consumption_hourly_profile_kw": {
                 str(hour): value for hour, value in sorted(profile_kw.items())
             },
+            "allow_export": self.coordinator.data.allow_export,
         }

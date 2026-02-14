@@ -27,7 +27,7 @@ class CoordinatorData:
     feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
     solcast_today: list[dict[str, Any]] = field(default_factory=list)
     solcast_tomorrow: list[dict[str, Any]] = field(default_factory=list)
-    allow_export: str = ""
+    allow_export: str = "unknown"
 
     # Computed binary sensors
     forecast_spike_within_window: bool = False

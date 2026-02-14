@@ -437,3 +437,103 @@ views:
               color: "#EF4444"
             cache: true
             update_interval: "300"
+
+      # --- Debug State Summary ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Debug State Summary
+            heading_style: title
+
+          - type: markdown
+            content: >
+              ```
+              === DEBUG STATE SUMMARY ===
+              Time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+              
+              === CURRENT STATE ===
+              Mode: {{ states('sensor.amber_powerwall_active_mode') }}
+              SOC: {{ states('sensor.my_home_percentage_charged') }}%
+              Battery Power: {{ states('sensor.my_home_battery_power') }} kW
+              Grid Import: {{ states('sensor.amber_powerwall_grid_import_power') }} kW
+              Grid Export: {{ states('sensor.amber_powerwall_grid_export_power') }} kW
+              Solar Power: {{ states('sensor.my_home_solar_power') }} kW
+              
+              Buy Price: ${{ states('sensor.100h_general_price') }}/kWh
+              Sell Price: ${{ states('sensor.100h_feed_in_price') }}/kWh
+              Price Spike: {{ states('binary_sensor.100h_price_spike') }}
+              Demand Window: {{ states('binary_sensor.amber_powerwall_demand_window_active') }}
+              
+              === INTERNAL STATE FLAGS ===
+              Manual Override: {{ states('switch.amber_powerwall_automation_enabled') == 'off' }}
+              Hold Mode: {{ states('sensor.amber_powerwall_active_mode') in ['hold', 'holding_for_spike'] }}
+              Solar Export Hold: {{ states('sensor.amber_powerwall_active_mode') == 'solar_export_hold' }}
+              Target Reached Today: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'target_reached_today') | default(false) }}
+              
+              Forecast Spike Within Window: {{ states('binary_sensor.amber_powerwall_forecast_spike_within_window') }}
+              Max Forecast Price: ${{ state_attr('binary_sensor.amber_powerwall_forecast_spike_within_window', 'max_forecast_price') | default(0) }}/kWh
+              Force Discharge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_discharge' }}
+              Force Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_charge' }}
+              Boost Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'boost_charging' }}
+              Hold Active: {{ states('sensor.amber_powerwall_active_mode') in ['hold', 'holding_for_spike', 'demand_block'] }}
+              Hold Justified: {{ states('binary_sensor.amber_powerwall_hold_justified') }}
+              Solar Export Hold Justified: {{ states('binary_sensor.amber_powerwall_solar_export_hold_justified') }}
+              Solar Can Reach Target: {{ states('binary_sensor.amber_powerwall_solar_can_reach_target') }}
+              Boost Charge Needed: {{ states('binary_sensor.amber_powerwall_boost_charge_needed') }}
+              
+              === CONFIGURATION & THRESHOLDS ===
+              Cheap Price Percentile: {{ states('number.amber_powerwall_cheap_price_percentile') }}%
+              Max Pre-charge Price: ${{ states('number.amber_powerwall_max_pre_charge_price') }}/kWh
+              Price Deadband: {{ states('number.amber_powerwall_price_deadband') }}
+              Forecast Lookahead: {{ states('number.amber_powerwall_forecast_lookahead') }}h
+              Pre-charge SOC Threshold: {{ states('number.amber_powerwall_pre_charge_battery_threshold') }}%
+              Battery Target: {{ states('number.amber_powerwall_battery_target') }}%
+              
+              Effective Cheap Price: ${{ states('sensor.amber_powerwall_effective_cheap_price') }}/kWh
+              Cheap Charge Stop Price: ${{ states('sensor.amber_powerwall_cheap_charge_stop_price') }}/kWh
+              Solar Weighted Avg FIT: ${{ states('sensor.amber_powerwall_solar_weighted_avg_fit') }}/kWh
+              Solar Remaining: {{ state_attr('sensor.amber_powerwall_solar_weighted_avg_fit', 'total_solar_remaining_kwh') | default(0) }} kWh
+              
+              === FORECAST INFORMATION ===
+              Solar Battery Forecast SOC: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'predicted_soc') | default(0) }}%
+              Forecast Deficit: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'deficit_kwh') | default(0) }} kWh
+              Solar Before DW: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'solar_before_dw_kwh') | default(0) }} kWh
+              Net Solar: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'net_solar_kwh') | default(0) }} kWh
+              Hours to DW: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'hours_to_target_time') | default(0) }}h
+              Can Reach Target: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'can_reach_target') | default(true) }}
+              Boost Needed: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'boost_needed') | default(false) }}
+              
+              Daily Forecast Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast') | default([]) | length }}
+              Solcast Today Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'solcast_today_entries') | default(0) }}
+              Solcast Tomorrow Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'solcast_tomorrow_entries') | default(0) }}
+              Current Load: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'current_load_kw') | default(0) }} kW
+              Consumption Source: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_source') | default('unknown') }}
+              Consumption Profile Hours: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_profile_hours') | default(0) }}
+              Consumption Fallback Hours: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_fallback_hours') | default(0) }}
+              
+              === DECISION LOG ===
+              Latest Decision: {{ state_attr('sensor.amber_powerwall_decision_log', 'reason') | default('No decisions yet') }}
+              Latest SOC: {{ state_attr('sensor.amber_powerwall_decision_log', 'soc') }}%
+              Latest Buy Price: ${{ state_attr('sensor.amber_powerwall_decision_log', 'buy_price') }}/kWh
+              Latest Sell Price: ${{ state_attr('sensor.amber_powerwall_decision_log', 'sell_price') }}/kWh
+              Latest Timestamp: {{ state_attr('sensor.amber_powerwall_decision_log', 'timestamp') }}
+              
+              Recent History:
+              {% for entry in state_attr('sensor.amber_powerwall_decision_log', 'history') | default([]) | slice(-5) %}
+                - {{ entry.get('timestamp', '') }}: {{ entry.get('reason', '') }} (SOC: {{ entry.get('soc') }}%)
+              {% endfor %}
+              
+              === COST TRACKING ===
+              Net Cost Today: ${{ states('sensor.amber_powerwall_net_electricity_cost_today') }}
+              Import Cost: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'grid_import_cost') | default(0) }}
+              Export Revenue: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'grid_export_revenue') | default(0) }}
+              Battery Savings: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'battery_savings') | default(0) }}
+              Battery Charge Cost: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'battery_charge_cost') | default(0) }}
+              
+              === SYSTEM INFO ===
+              Operation Mode: {{ states('select.my_home_operation_mode') }}
+              Backup Reserve: {{ states('number.my_home_backup_reserve') }}%
+              Allow Export: {{ state_attr('sensor.my_home_allow_export') | default('unknown') }}
+              
+              === END OF DEBUG SUMMARY ===
+              ```

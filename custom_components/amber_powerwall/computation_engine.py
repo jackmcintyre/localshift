@@ -72,6 +72,7 @@ class ComputationEngine:
         self._historical_load_cache_date: str = ""
         self._previous_active_mode = None
         self._last_forecast_hour: int | None = None
+        self._last_decision_log_time: datetime | None = None
 
     def compute_derived_values(self, data: CoordinatorData) -> None:
         """Compute all derived sensor/binary_sensor values from raw state.
@@ -175,12 +176,26 @@ class ComputationEngine:
         self._compute_active_mode(data, now_dt)
 
         # ---- Step 15: decision_log ----
-        # Only add to decision log after startup grace period (when values are populated)
-        if (
+        # Add entry when mode changes OR periodically for status updates
+        mode_changed = (
             data.active_mode != self._previous_active_mode
             and self._previous_active_mode is not None
+        )
+
+        # Only skip logging during initial startup when all data is zero
+        # Once we have valid data, always log mode changes and periodic updates
+        if self._last_decision_log_time is None and (
+            data.general_price == 0 or data.feed_in_price == 0 or data.soc == 0
         ):
-            self._add_to_decision_log(data, now_dt)
+            _LOGGER.debug("Skipping decision log - sensor data not yet populated")
+        elif mode_changed:
+            self._add_to_decision_log(data, now_dt, mode_change=True)
+        elif self._last_decision_log_time is None:
+            # First evaluation after startup - log initial state
+            self._add_to_decision_log(data, now_dt, mode_change=False)
+        elif (now_dt - self._last_decision_log_time) >= timedelta(minutes=5):
+            # Periodic status update every 5 minutes
+            self._add_to_decision_log(data, now_dt, mode_change=False)
 
         # ---- Step 16: daily_forecast ----
         self._compute_daily_15min_forecast(data, now_dt)
@@ -244,9 +259,9 @@ class ComputationEngine:
             # Net solar (after consumption)
             net_solar = solar_kwh - consumption_kwh
 
-            # Predicted SOC at DW
+            # Predicted SOC at DW (clamped to 0-100%)
             net_solar_pct = net_solar / BATTERY_CAPACITY_KWH * 100
-            predicted_soc = data.soc + net_solar_pct
+            predicted_soc = max(0.0, min(100.0, data.soc + net_solar_pct))
 
             # Can solar alone reach target?
             can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
@@ -312,7 +327,6 @@ class ComputationEngine:
         # Keep only last 48 entries (2 days of hourly data)
         if len(data.forecast_history) > 48:
             data.forecast_history = data.forecast_history[-48:]
-
 
     def _compute_daily_15min_forecast(
         self,
@@ -427,41 +441,37 @@ class ComputationEngine:
         period_duration = timedelta(minutes=30)
 
         for entry in solcast_forecasts:
-            try:
-                if not isinstance(entry, dict):
-                    continue
-
-                period_start_raw = entry.get("period_start") or entry.get("start")
-                if period_start_raw is None:
-                    continue
-
-                start_dt = dt_util.parse_datetime(str(period_start_raw))
-                if not start_dt:
-                    continue
-
-                start_local = dt_util.as_local(start_dt)
-                end_local = start_local + period_duration
-                period_kwh = float(
-                    entry.get("pv_estimate10")
-                    or entry.get("estimate10")
-                    or entry.get("pv_estimate")
-                    or entry.get("estimate")
-                    or 0.0
-                )
-
-                # Check which 15-minute half of 30-min period we're in
-                period_midpoint = start_local + timedelta(minutes=15)
-
-                if slot_start >= start_local and slot_end <= period_midpoint:
-                    # First half of period (0-15 min)
-                    # Simple approach: split evenly (50% each half)
-                    return period_kwh * 0.5
-                elif slot_start >= period_midpoint and slot_end <= end_local:
-                    # Second half of period (15-30 min)
-                    return period_kwh * 0.5
-
-            except (ValueError, TypeError):
+            if not isinstance(entry, dict):
                 continue
+
+            period_start_raw = entry.get("period_start") or entry.get("start")
+            if period_start_raw is None:
+                continue
+
+            start_dt = dt_util.parse_datetime(str(period_start_raw))
+            if not start_dt:
+                continue
+
+            start_local = dt_util.as_local(start_dt)
+            end_local = start_local + period_duration
+            period_kwh = float(
+                entry.get("pv_estimate10")
+                or entry.get("estimate10")
+                or entry.get("pv_estimate")
+                or entry.get("estimate")
+                or 0.0
+            )
+
+            # Check which 15-minute half of 30-min period we're in
+            period_midpoint = start_local + timedelta(minutes=15)
+
+            if slot_start >= start_local and slot_end <= period_midpoint:
+                # First half of period (0-15 min)
+                # Simple approach: split evenly (50% each half)
+                return period_kwh * 0.5
+            elif slot_start >= period_midpoint and slot_end <= end_local:
+                # Second half of period (15-30 min)
+                return period_kwh * 0.5
 
         return 0.0
 
@@ -563,7 +573,7 @@ class ComputationEngine:
         if hourly_avg_kw:
             v = hourly_avg_kw.get(slot_hour)
             sample_count = self._historical_load_sample_counts.get(slot_hour, 0)
-            if isinstance(v, (int, float)) and v > 0 and sample_count >= 1:
+            if isinstance(v, int | float) and v > 0 and sample_count >= 1:
                 return round(float(v), 3), "profile_hour"
 
         # No usable profile: fallback to current load only
@@ -663,6 +673,8 @@ class ComputationEngine:
         # Collect forecast prices within lookahead window
         forecast_prices = []
         for f in data.general_forecast:
+            if not isinstance(f, dict):
+                continue
             start = self._parse_forecast_dt(f.get("start_time"))
             if start is None:
                 continue
@@ -884,10 +896,11 @@ class ComputationEngine:
 
         # Debug: Log state when considering HOLD mode
         if data.hold_justified or data.forecast_spike_within_window:
-            _LOGGER.debug(
+            _LOGGER.info(
                 "Hold mode consideration at %s: hold_justified=%s, "
                 "hold_mode=%s, solar_export_hold=%s, "
                 "forecast_spike=%s, solar_can_reach=%s, sun_up=%s, "
+                "soc=%.1f%%, backup_reserve=%.1f%%, "
                 "price=%.2f, stop_price=%.2f",
                 now_dt.strftime("%H:%M"),
                 data.hold_justified,
@@ -896,6 +909,8 @@ class ComputationEngine:
                 data.forecast_spike_within_window,
                 data.solar_can_reach_target,
                 sun_up,
+                data.soc,
+                data.backup_reserve,
                 data.general_price,
                 data.cheap_charge_stop_price,
             )
@@ -933,8 +948,8 @@ class ComputationEngine:
                 data.active_mode = BatteryMode.GRID_CHARGING
             else:
                 data.active_mode = BatteryMode.SELF_CONSUMPTION
-        elif data.general_price < data.cheap_charge_stop_price:
-            # Price in deadband — maintain charge or hold
+        elif data.general_price <= data.cheap_charge_stop_price:
+            # Price in deadband or at stop price — maintain charge or hold
             if data.force_charge_active:
                 if data.boost_charge_active:
                     data.active_mode = BatteryMode.BOOST_CHARGING
@@ -955,10 +970,23 @@ class ComputationEngine:
         else:
             data.active_mode = BatteryMode.SELF_CONSUMPTION
 
-    def _add_to_decision_log(self, data: CoordinatorData, now_dt: datetime) -> None:
-        """Add entry to decision log when mode changes."""
+    def _add_to_decision_log(
+        self, data: CoordinatorData, now_dt: datetime, mode_change: bool
+    ) -> None:
+        """Add entry to decision log when mode changes or periodically."""
+        # Startup check is now handled in calling code (Step 15)
+        # This method assumes data is already validated
+
         old_mode = self._previous_active_mode
         new_mode = data.active_mode
+
+        if mode_change:
+            reason = f"Mode changed: {old_mode} -> {new_mode}"
+            # Only update previous mode when it actually changed
+            self._previous_active_mode = new_mode
+        else:
+            reason = f"Status update: {new_mode} (no change)"
+
         entry = {
             "timestamp": now_dt.isoformat(),
             "old_mode": old_mode if old_mode else "unknown",
@@ -967,14 +995,14 @@ class ComputationEngine:
             "sell_price": round(data.feed_in_price, 2),
             "soc": round(data.soc),
             "effective_threshold": data.effective_cheap_price,
-            "reason": f"Mode changed: {old_mode} -> {new_mode}",
+            "reason": reason,
         }
         data.decision_log.append(entry)
         # Cap log at 50 entries
         if len(data.decision_log) > 50:
             data.decision_log = data.decision_log[-50:]
 
-        self._previous_active_mode = new_mode
+        self._last_decision_log_time = now_dt
 
     def _get_expected_load_kw(
         self, data: CoordinatorData, hours_to_target: float
@@ -1155,8 +1183,6 @@ class ComputationEngine:
                 start_time,
                 now,
             )
-            # Try to get units from the hass instance, pass None if not available
-            units = getattr(self.hass, "config", None)
 
             statistics_data = fn(
                 self.hass,
@@ -1193,7 +1219,7 @@ class ComputationEngine:
             # Handle different timestamp formats
             if isinstance(start_val, datetime):
                 row_dt = start_val
-            elif isinstance(start_val, (int, float)):
+            elif isinstance(start_val, int | float):
                 # Unix timestamp (seconds since epoch)
                 row_dt = dt_util.utc_from_timestamp(start_val)
             elif isinstance(start_val, str):
