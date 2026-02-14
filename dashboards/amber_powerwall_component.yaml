@@ -122,6 +122,11 @@ views:
             entity: number.amber_powerwall_battery_target
             name: Battery Target
 
+          - type: tile
+            entity: number.amber_powerwall_load_recent_weight
+            name: Load Weight
+            icon: mdi:scale-balance
+
       # --- Battery Mode ---
       - type: grid
         cards:
@@ -379,7 +384,7 @@ views:
               ```
               Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh)
               ------|---------|-------------|------------|-----------
-              {% for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast') | default([]) %}
+              {% for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
               {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}
               {% endfor %}
               ```
@@ -423,8 +428,8 @@ views:
                 stroke_dash: 5
                 type: line
                 data_generator: |
-                  return entity.attributes.forecast.map(function(entry) {
-                    return [entry.timestamp, entry.predicted_soc];
+                  return (entity.attributes.soc_series_15min || []).map(function(entry) {
+                    return [entry[0], entry[1]];
                   });
             yaxis:
               - min: 0
@@ -468,7 +473,7 @@ views:
               Manual Override: {{ states('switch.amber_powerwall_automation_enabled') == 'off' }}
               Hold Mode: {{ states('sensor.amber_powerwall_active_mode') in ['hold', 'holding_for_spike'] }}
               Solar Export Hold: {{ states('sensor.amber_powerwall_active_mode') == 'solar_export_hold' }}
-              Target Reached Today: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'target_reached_today') | default(false) }}
+              Target Reached Today: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'target_reached_today') }}
               
               Forecast Spike Within Window: {{ states('binary_sensor.amber_powerwall_forecast_spike_within_window') }}
               Max Forecast Price: ${{ state_attr('binary_sensor.amber_powerwall_forecast_spike_within_window', 'max_forecast_price') | default(0) }}/kWh
@@ -501,13 +506,21 @@ views:
               Net Solar: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'net_solar_kwh') | default(0) }} kWh
               Hours to DW: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'hours_to_target_time') | default(0) }}h
               Can Reach Target: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'can_reach_target') | default(true) }}
-              Boost Needed: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'boost_needed') | default(false) }}
+              Boost Needed: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'boost_needed') }}
               
-              Daily Forecast Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast') | default([]) | length }}
+              Daily Forecast Entries: {{ states('sensor.amber_powerwall_daily_forecast') | int(default=0) }}
+              15-min Slots: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_15min_slots') | default(0) }}
+              Forecast Hourly Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) | length }}
               Solcast Today Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'solcast_today_entries') | default(0) }}
               Solcast Tomorrow Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'solcast_tomorrow_entries') | default(0) }}
               Current Load: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'current_load_kw') | default(0) }} kW
-              Consumption Source: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_source') | default('unknown') }}
+              Recent 1hr Load: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_kw') | default(0) }} kW
+              Recent 1hr Statistic ID: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_statistic_id') | default('') }}
+              Recent 1hr Samples: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_samples') | default(0) }}
+              Recent 1hr Error: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_last_error') | default('') }}
+              Consumption Weighting: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_weighting') | default(0) }}
+              Consumption Source: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_source') }}
+              Consumption Source Counts: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_consumption_source_counts') | default({}) }}
               Consumption Profile Hours: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_profile_hours') | default(0) }}
               Consumption Fallback Hours: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_fallback_hours') | default(0) }}
               
@@ -533,7 +546,7 @@ views:
               === SYSTEM INFO ===
               Operation Mode: {{ states('select.my_home_operation_mode') }}
               Backup Reserve: {{ states('number.my_home_backup_reserve') }}%
-              Allow Export: {{ state_attr('sensor.my_home_allow_export') | default('unknown') }}
+              Allow Export: {{ states('select.my_home_allow_export') }}
               
               === END OF DEBUG SUMMARY ===
               ```

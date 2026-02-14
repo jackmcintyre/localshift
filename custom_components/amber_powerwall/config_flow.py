@@ -24,6 +24,7 @@ from .const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     CONF_HOLD_MIN_SAVINGS_PERCENT,
+    CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_NOTIFY_SERVICE,
@@ -48,6 +49,7 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
+    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
@@ -196,6 +198,7 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_HOLD_MIN_SAVINGS_PERCENT: DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
                 CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD: DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
                 CONF_MANUAL_OVERRIDE_TIMEOUT: DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+                CONF_LOAD_WEIGHT_RECENT: DEFAULT_LOAD_WEIGHT_RECENT,
             }
             return self.async_create_entry(
                 title="Amber Powerwall",
@@ -400,6 +403,20 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
                             max=24,
                             step=1,
                             unit_of_measurement="hours",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_LOAD_WEIGHT_RECENT,
+                        default=current.get(
+                            CONF_LOAD_WEIGHT_RECENT,
+                            DEFAULT_LOAD_WEIGHT_RECENT,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.0,
+                            max=1.0,
+                            step=0.05,
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),

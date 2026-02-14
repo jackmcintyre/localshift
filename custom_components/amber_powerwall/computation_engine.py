@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, time, timedelta
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -21,6 +21,7 @@ from .const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     CONF_HOLD_MIN_SAVINGS_PERCENT,
+    CONF_LOAD_WEIGHT_RECENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_PRECHARGE_BATTERY_THRESHOLD,
     CONF_SUN_ENTITY,
@@ -32,6 +33,7 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
+    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     DISCHARGE_EARLIEST_HOUR,
@@ -70,6 +72,12 @@ class ComputationEngine:
         self._historical_load_sample_counts: dict[int, int] = {}
         self._historical_load_source: str = "unknown"
         self._historical_load_cache_date: str = ""
+        self._recent_load_1hr_kw: float = 0.0
+        self._recent_load_cache_time: datetime | None = None
+        self._recent_load_1hr_statistic_id: str = ""
+        self._recent_load_1hr_samples: int = 0
+        self._recent_load_1hr_last_error: str = ""
+        self._last_weighting: float = DEFAULT_LOAD_WEIGHT_RECENT
         self._previous_active_mode = None
         self._last_forecast_hour: int | None = None
         self._last_decision_log_time: datetime | None = None
@@ -339,6 +347,8 @@ class ComputationEngine:
         price variations from Amber's 5-minute pricing data.
         """
         data.daily_forecast = []
+        data.daily_forecast_soc_15min = []
+        data.forecast_consumption_source_counts = {}
 
         # Get historical hourly averages
         load_entity_id = self._get_entity_id("teslemetry_load_power")
@@ -358,6 +368,15 @@ class ComputationEngine:
         data.consumption_hourly_profile_kw = {
             hour: round(val, 3) for hour, val in sorted(hourly_avg_kw.items())
         }
+
+        # Get recent 1-hour load for weighted forecasting
+        # Use cached value if available, otherwise will use 0 (falls back to historical)
+        recent_load_kw = self._recent_load_1hr_kw
+        data.recent_load_1hr_kw = recent_load_kw
+        data.recent_load_1hr_statistic_id = self._recent_load_1hr_statistic_id
+        data.recent_load_1hr_samples = self._recent_load_1hr_samples
+        data.recent_load_1hr_last_error = self._recent_load_1hr_last_error
+        data.consumption_weighting = self._last_weighting
 
         if not all_solcast:
             _LOGGER.debug("15-min forecast: no Solcast entries available")
@@ -380,13 +399,18 @@ class ComputationEngine:
             solar_kwh = self._get_solar_for_15min_slot(all_solcast, slot_start)
 
             # Get expected consumption (hourly_avg / 4 for 15-min)
+            # Pass recent load for weighted forecasting
             load_kw, load_source = self._estimate_hourly_consumption_kw(
                 hourly_avg_kw,
                 slot_hour,
                 data.load_power_kw,
+                recent_load_kw,
             )
             if load_source != "profile_hour":
                 data.consumption_fallback_hours += 1
+            data.forecast_consumption_source_counts[load_source] = (
+                data.forecast_consumption_source_counts.get(load_source, 0) + 1
+            )
             consumption_kwh = load_kw / 4  # 15-min is 1/4 of hour
 
             # Calculate raw net energy for 15 minutes
@@ -406,6 +430,12 @@ class ComputationEngine:
             )
             predicted_soc = max(0.0, min(100.0, predicted_soc))
 
+            # Store a light-weight SOC timeseries to avoid huge attributes
+            # Used by dashboard chart (timestamp, soc)
+            data.daily_forecast_soc_15min.append(
+                [slot_start.isoformat(), round(predicted_soc, 1)]
+            )
+
             data.daily_forecast.append(
                 {
                     "hour": slot_hour,
@@ -418,6 +448,78 @@ class ComputationEngine:
                     "net_kwh": round(net_kwh, 3),
                 }
             )
+
+        # Also keep a compact 24-entry hourly view for the markdown table.
+        data.daily_forecast_hourly = self._build_hourly_forecast_summary(
+            data.daily_forecast
+        )
+
+    @staticmethod
+    def _build_hourly_forecast_summary(
+        forecast_15min: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Summarise 96x 15-min slots into 24 hourly records.
+
+        Keeps attributes smaller while still providing an hour-by-hour view.
+        """
+        hourly: dict[int, dict[str, Any]] = {}
+
+        for row in forecast_15min:
+            if not isinstance(row, dict):
+                continue
+
+            hour_raw = row.get("hour")
+            if hour_raw is None:
+                continue
+            try:
+                hour = int(hour_raw)
+            except (TypeError, ValueError):
+                continue
+
+            if hour < 0 or hour > 23:
+                continue
+
+            bucket = hourly.get(hour)
+            if bucket is None:
+                predicted_soc_raw = row.get("predicted_soc")
+                predicted_soc = (
+                    float(predicted_soc_raw)
+                    if isinstance(predicted_soc_raw, int | float)
+                    else 0.0
+                )
+                bucket = {
+                    "hour": hour,
+                    "predicted_soc": predicted_soc,
+                    "solar_kwh": 0.0,
+                    "consumption_kwh": 0.0,
+                    "net_kwh": 0.0,
+                }
+                hourly[hour] = bucket
+
+            predicted_soc_raw = row.get("predicted_soc")
+            if isinstance(predicted_soc_raw, int | float):
+                bucket["predicted_soc"] = float(predicted_soc_raw)
+
+            for key in ("solar_kwh", "consumption_kwh", "net_kwh"):
+                try:
+                    bucket[key] += float(row.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+
+        # Return in hour order
+        result: list[dict[str, Any]] = []
+        for hour in sorted(hourly.keys()):
+            bucket = hourly[hour]
+            result.append(
+                {
+                    "hour": hour,
+                    "predicted_soc": round(float(bucket["predicted_soc"]), 1),
+                    "solar_kwh": round(float(bucket["solar_kwh"]), 3),
+                    "consumption_kwh": round(float(bucket["consumption_kwh"]), 3),
+                    "net_kwh": round(float(bucket["net_kwh"]), 3),
+                }
+            )
+        return result
 
     def _get_solar_for_15min_slot(
         self,
@@ -564,19 +666,45 @@ class ComputationEngine:
         hourly_avg_kw: dict[int, float],
         slot_hour: int,
         current_load_kw: float,
+        recent_load_kw: float = 0.0,
     ) -> tuple[float, str]:
-        """Estimate hourly household consumption without synthetic smoothing.
+        """Estimate hourly household consumption with weighted blend.
+
+        Blends recent 1-hour average with historical hourly average for
+        more responsive forecasting.
 
         Returns tuple of (kW, source_tag).
         """
-        # Prefer exact learned hour from profile (no interpolation/smoothing)
-        if hourly_avg_kw:
-            v = hourly_avg_kw.get(slot_hour)
-            sample_count = self._historical_load_sample_counts.get(slot_hour, 0)
-            if isinstance(v, int | float) and v > 0 and sample_count >= 1:
-                return round(float(v), 3), "profile_hour"
+        # Get the weighting configuration
+        recent_weight = float(
+            self.entry.options.get(CONF_LOAD_WEIGHT_RECENT, DEFAULT_LOAD_WEIGHT_RECENT)
+        )
+        historical_weight = 1.0 - recent_weight
 
-        # No usable profile: fallback to current load only
+        # Store the weighting for diagnostics
+        self._last_weighting = recent_weight
+
+        historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
+        historical_kw = (
+            float(historical_raw) if isinstance(historical_raw, int | float) else 0.0
+        )
+        sample_count = self._historical_load_sample_counts.get(slot_hour, 0)
+
+        # Check if we have valid historical data
+        has_historical = historical_kw > 0 and sample_count >= 1
+
+        # If we have recent load data and weighting > 0, apply weighted blend
+        if recent_load_kw > 0 and recent_weight > 0 and has_historical:
+            weighted = (recent_weight * recent_load_kw) + (
+                historical_weight * historical_kw
+            )
+            return round(weighted, 3), "weighted_load"
+
+        # Fallback to historical if available
+        if has_historical:
+            return round(historical_kw, 3), "profile_hour"
+
+        # Fallback to current load
         base_kw = current_load_kw if current_load_kw > 0 else 0.6
         return round(base_kw, 3), "live_load_fallback"
 
@@ -1129,12 +1257,18 @@ class ComputationEngine:
             return {}, {}
 
         # Get statistics metadata to find the correct statistic_id
-        stat_ids = []
+        stat_ids: list[dict[str, Any]] = []
         try:
             stat_meta_fn = getattr(recorder_statistics, "list_statistic_ids", None)
             _LOGGER.info("DEBUG: list_statistic_ids function: %s", stat_meta_fn)
             if callable(stat_meta_fn):
-                stat_ids = stat_meta_fn(self.hass, None) or []
+                stat_ids_raw = stat_meta_fn(self.hass, None) or []
+                if isinstance(stat_ids_raw, list):
+                    stat_ids = [
+                        cast(dict[str, Any], s)
+                        for s in stat_ids_raw
+                        if isinstance(s, dict)
+                    ]
                 _LOGGER.info(
                     "DEBUG: Found %d statistic IDs for entity %s",
                     len(stat_ids),
@@ -1187,7 +1321,7 @@ class ComputationEngine:
                 now,
             )
 
-            statistics_data = fn(
+            statistics_data_raw = fn(
                 self.hass,
                 start_time,
                 now,
@@ -1197,16 +1331,27 @@ class ComputationEngine:
                 units=None,
             )
             _LOGGER.info(
-                "DEBUG: statistics_during_period returned: %s", statistics_data
+                "DEBUG: statistics_during_period returned: %s", statistics_data_raw
             )
         except Exception as e:
             _LOGGER.info("DEBUG: statistics_during_period exception: %s", e)
             return {}, {}
 
+        if not isinstance(statistics_data_raw, dict):
+            return {}, {}
+
+        statistics_data = cast(dict[str, Any], statistics_data_raw)
+
         if not statistics_data or resolved_entity_id not in statistics_data:
             return {}, {}
 
-        rows = statistics_data.get(resolved_entity_id, [])
+        rows_raw = statistics_data.get(resolved_entity_id)
+        if not isinstance(rows_raw, list) or not rows_raw:
+            return {}, {}
+
+        rows: list[dict[str, Any]] = [
+            cast(dict[str, Any], r) for r in rows_raw if isinstance(r, dict)
+        ]
         if not rows:
             return {}, {}
 
@@ -1254,6 +1399,198 @@ class ComputationEngine:
             hourly_avg_kw[hour] = sum(samples) / len(samples)
 
         return hourly_avg_kw, sample_counts
+
+    async def async_get_recent_load_1hr(self, entity_id: str) -> float:
+        """Get average load over the last 1 hour from HA statistics.
+
+        Returns: Average power in kW over last hour, or 0.0 if unavailable.
+        """
+        from homeassistant.components import recorder
+
+        now = dt_util.now()
+
+        # Check if cache is valid (within last 5 minutes)
+        if (
+            self._recent_load_cache_time is not None
+            and (now - self._recent_load_cache_time).total_seconds() < 300
+        ):
+            return self._recent_load_1hr_kw
+
+        # Run blocking history fetch in thread pool
+        recorder_instance = recorder.get_instance(self.hass)
+        try:
+            result = await recorder_instance.async_add_executor_job(
+                self._fetch_recent_load_sync, entity_id, now
+            )
+            self._recent_load_1hr_kw = float(result.get("recent_avg_kw", 0.0) or 0.0)
+            self._recent_load_1hr_statistic_id = str(result.get("statistic_id", ""))
+            self._recent_load_1hr_samples = int(result.get("samples", 0) or 0)
+            self._recent_load_1hr_last_error = str(result.get("error", ""))
+            self._recent_load_cache_time = now
+            _LOGGER.debug(
+                "Recent 1hr load: %.3f kW (statistic_id=%s samples=%s error=%s)",
+                self._recent_load_1hr_kw,
+                self._recent_load_1hr_statistic_id,
+                self._recent_load_1hr_samples,
+                self._recent_load_1hr_last_error,
+            )
+            return self._recent_load_1hr_kw
+        except Exception as e:
+            # Cache failures too, so we don't repeatedly hit the recorder DB.
+            _LOGGER.warning("Failed to fetch recent load: %s", e)
+            self._recent_load_1hr_kw = 0.0
+            self._recent_load_1hr_statistic_id = ""
+            self._recent_load_1hr_samples = 0
+            self._recent_load_1hr_last_error = str(e)
+            self._recent_load_cache_time = now
+            return 0.0
+
+    def _fetch_recent_load_sync(self, entity_id: str, now: datetime) -> dict[str, Any]:
+        """Fetch recent 1-hour average (runs in thread pool).
+
+        Returns a dict for diagnostics:
+          - recent_avg_kw: float
+          - samples: int
+          - statistic_id: str
+          - error: str
+        """
+        from homeassistant.components.recorder import statistics as recorder_statistics
+
+        end_time = now
+        start_time = now - timedelta(hours=1)
+
+        # Find matching statistic_id (same logic as historical fetch)
+        stat_ids: list[dict[str, Any]] = []
+        try:
+            stat_meta_fn = getattr(recorder_statistics, "list_statistic_ids", None)
+            if callable(stat_meta_fn):
+                stat_ids_raw = stat_meta_fn(self.hass, None) or []
+                if isinstance(stat_ids_raw, list):
+                    stat_ids = [
+                        cast(dict[str, Any], s)
+                        for s in stat_ids_raw
+                        if isinstance(s, dict)
+                    ]
+        except Exception:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": "",
+                "error": "list_statistic_ids failed",
+            }
+
+        resolved_entity_id = entity_id
+        for sid in stat_ids:
+            if not isinstance(sid, dict):
+                continue
+            stat_id = sid.get("statistic_id", "")
+            if stat_id == entity_id or stat_id.replace(
+                "sensor.", ""
+            ) == entity_id.replace("sensor.", ""):
+                resolved_entity_id = stat_id
+                break
+
+        if not resolved_entity_id:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": "",
+                "error": "empty statistic_id",
+            }
+
+        # Get statistics for last hour
+        fn = getattr(recorder_statistics, "statistics_during_period", None)
+        if not callable(fn):
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "statistics_during_period not callable",
+            }
+
+        try:
+            statistics_data_raw = fn(
+                self.hass,
+                start_time,
+                end_time,
+                [resolved_entity_id],
+                period="hour",
+                types={"mean"},
+                units=None,
+            )
+        except Exception:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "statistics_during_period exception",
+            }
+
+        if not isinstance(statistics_data_raw, dict):
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "statistics_during_period returned non-dict",
+            }
+
+        statistics_data = cast(dict[str, Any], statistics_data_raw)
+
+        if not statistics_data or resolved_entity_id not in statistics_data:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "no statistics data",
+            }
+
+        rows_raw = statistics_data.get(resolved_entity_id)
+        if not isinstance(rows_raw, list) or not rows_raw:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "no rows",
+            }
+
+        rows: list[dict[str, Any]] = [
+            cast(dict[str, Any], r) for r in rows_raw if isinstance(r, dict)
+        ]
+        if not rows:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "no dict rows",
+            }
+
+        # Calculate mean of available samples in the last hour
+        values = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            mean_val = row.get("mean")
+            if mean_val in (None, "unknown", "unavailable"):
+                continue
+            try:
+                values.append(float(mean_val))
+            except (TypeError, ValueError):
+                continue
+
+        if not values:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": resolved_entity_id,
+                "error": "no numeric mean values",
+            }
+
+        return {
+            "recent_avg_kw": sum(values) / len(values),
+            "samples": len(values),
+            "statistic_id": resolved_entity_id,
+            "error": "",
+        }
 
     def _get_historical_hourly_averages(self, entity_id: str) -> dict[int, float]:
         """Get cached hourly averages (sync version for compute_derived_values).

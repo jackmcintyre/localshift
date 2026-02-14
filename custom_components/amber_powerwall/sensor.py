@@ -292,8 +292,14 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
         """Return daily forecast with hourly breakdown."""
         sample_counts = self.coordinator.data.consumption_hourly_sample_counts
         profile_kw = self.coordinator.data.consumption_hourly_profile_kw
+        source_counts = self.coordinator.data.forecast_consumption_source_counts
         return {
-            "forecast": self.coordinator.data.daily_forecast,
+            # NOTE: We intentionally avoid exposing the full 96-slot 15-min forecast
+            # here because it can exceed the recorder 16KB attribute limit.
+            # Instead we expose a compact hourly summary + a light-weight SOC series.
+            "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
+            "soc_series_15min": self.coordinator.data.daily_forecast_soc_15min,
+            "forecast_15min_slots": len(self.coordinator.data.daily_forecast),
             "solcast_today_entries": len(self.coordinator.data.solcast_today),
             "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
             "current_load_kw": round(self.coordinator.data.load_power_kw, 3),
@@ -301,11 +307,19 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
             "consumption_statistic_id": self.coordinator.data.consumption_statistic_id,
             "consumption_profile_hours": self.coordinator.data.consumption_profile_hours,
             "consumption_fallback_hours": self.coordinator.data.consumption_fallback_hours,
+            "forecast_consumption_source_counts": dict(source_counts),
             "consumption_hourly_sample_counts": {
                 str(hour): count for hour, count in sorted(sample_counts.items())
             },
             "consumption_hourly_profile_kw": {
                 str(hour): value for hour, value in sorted(profile_kw.items())
             },
+            "recent_load_1hr_kw": round(self.coordinator.data.recent_load_1hr_kw, 3),
+            "recent_load_1hr_statistic_id": self.coordinator.data.recent_load_1hr_statistic_id,
+            "recent_load_1hr_samples": self.coordinator.data.recent_load_1hr_samples,
+            "recent_load_1hr_last_error": self.coordinator.data.recent_load_1hr_last_error,
+            "consumption_weighting": round(
+                self.coordinator.data.consumption_weighting, 2
+            ),
             "allow_export": self.coordinator.data.allow_export,
         }

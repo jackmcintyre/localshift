@@ -114,6 +114,7 @@ CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_HOLD_MIN_SAVINGS_PERCENT = "hold_min_savings_percent"
 CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD = "hold_absolute_cheap_threshold"
+CONF_LOAD_WEIGHT_RECENT = "load_weight_recent"
 
 # Default values (matching YAML package)
 DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
@@ -127,6 +128,7 @@ DEFAULT_DEMAND_WINDOW_END = "21:00:00"
 DEFAULT_HOLD_MIN_SAVINGS_PERCENT = 20  # % price drop required
 DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD = 0.10  # $/kWh
 DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4  # hours
+DEFAULT_LOAD_WEIGHT_RECENT = 0.67  # 2/3 weighting to recent usage
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -185,6 +187,13 @@ THRESHOLD_RANGES = {
         "step": 0.01,
         "unit": "$/kWh",
         "icon": "mdi:cash",
+    },
+    CONF_LOAD_WEIGHT_RECENT: {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "",
+        "icon": "mdi:scale-balance",
     },
 }
 

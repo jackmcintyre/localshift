@@ -58,12 +58,20 @@ class CoordinatorData:
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast: list[dict[str, Any]] = field(default_factory=list)
+    daily_forecast_hourly: list[dict[str, Any]] = field(default_factory=list)
+    daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
     consumption_source: str = "unknown"
     consumption_profile_hours: int = 0
     consumption_fallback_hours: int = 0
     consumption_statistic_id: str = ""
     consumption_hourly_sample_counts: dict[int, int] = field(default_factory=dict)
     consumption_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
+    forecast_consumption_source_counts: dict[str, int] = field(default_factory=dict)
+    recent_load_1hr_kw: float = 0.0
+    recent_load_1hr_statistic_id: str = ""
+    recent_load_1hr_samples: int = 0
+    recent_load_1hr_last_error: str = ""
+    consumption_weighting: float = 0.67
 
     # Cost accumulators (Phase 4)
     grid_import_cost: float = 0.0
