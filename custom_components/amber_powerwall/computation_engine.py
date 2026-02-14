@@ -483,37 +483,65 @@ class ComputationEngine:
                     )
 
             # Determine if we should grid charge
-            # Grid charge if:
-            # 1. Not in demand window (zero import constraint)
-            # 2. Before demand window
-            # 3. SOC is below target
-            # 4. Either: there's a deficit OR we need to charge to reach target
-            has_deficit = net_kwh < 0
-            needs_charge = predicted_soc < target_pct
+            # Rules:
+            # 1. Never charge during demand window
+            # 2. Don't charge if already at target
+            # 3. Don't spend money if solar can reach target
+            # 4. Only charge if price is cheap (or very cheap for boost)
+
+            gap_to_target = max(target_pct - predicted_soc, 0)
 
             # Handle wrap-around: if current time is past target hour,
-            # the next DW is tomorrow (add 24h)
+            # the next DW is tomorrow
             if now_dt.hour >= target_hour:
-                # Next DW is tomorrow - slots after midnight are "before DW"
                 is_before_dw = slot_hour >= now_dt.hour or slot_hour < target_hour
             else:
-                # Same day - normal comparison
                 is_before_dw = slot_hour < target_hour
 
-            # Priority: Reach 95% target, then do it cheaply
-            # Don't block on price - charge whenever we need to reach target
-            should_grid_charge = not in_demand_window and is_before_dw and needs_charge
+            # Explicit daylight check - must have solar to grid charge
+            is_daylight = solar_kwh > 0.05
+
+            # Calculate price conditions
+            current_price = _slot_price  # Already calculated above
+            price_is_cheap = current_price <= data.effective_cheap_price
+            price_is_very_cheap = current_price <= (
+                data.effective_cheap_price * 0.8
+            )  # 20% cheaper
+
+            # Determine charging decisions
+            should_grid_charge = False
+            should_boost = False
+
+            # Only consider charging if:
+            # 1. Not in demand window
+            # 2. Before target time
+            # 3. It's daylight (have solar) - BLOCK overnight grid charging
+            # 4. Not yet at target - keep charging until we reach 95%
+            if not in_demand_window and is_before_dw and is_daylight:
+                if gap_to_target > 0:  # Not at target - keep charging!
+                    # Always grid charge during daylight until target is reached
+                    # (respect price: boost if very cheap, normal if cheap)
+                    if price_is_very_cheap:
+                        should_boost = True  # Stock up!
+                    elif price_is_cheap:
+                        should_grid_charge = True  # Normal charge
+                    # else: wait for cheaper price (but still charge if needed for target)
+                    # Actually: if we're far from target, charge anyway
+                    if gap_to_target > 10:
+                        should_grid_charge = True  # Need to reach target!
 
             # Debug logging for charging decision
             _LOGGER.debug(
-                "GRID_CHARGE: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d deficit=%s -> charge=%s",
+                "GRID_CHARGE: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d cheap=%s boost=%s -> charge=%s",
                 slot_hour,
                 slot_minute,
                 in_demand_window,
                 is_before_dw,
                 predicted_soc,
                 target_pct,
-                has_deficit,
+                gap_to_target,
+                price_is_cheap,
+                should_boost,
                 should_grid_charge,
             )
 
@@ -530,7 +558,9 @@ class ComputationEngine:
                 / 3600,
                 0,
             )
-            if should_grid_charge and hours_to_dw < 2:
+            if should_boost:
+                max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
+            elif should_grid_charge and hours_to_dw < 2:
                 max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
 
             # Step 1: Calculate base battery delta from solar/load
@@ -542,10 +572,8 @@ class ComputationEngine:
                 battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
 
             # Step 2: Add grid charging if needed (INDEPENDENT of solar!)
-            # We can ALWAYS import from grid when:
-            # - Not in demand window
-            # - Below target
-            # - (solar excess is NOT required!)
+            # If we need to reach target → charge
+            # When → price is cheap (but don't block if we NEED target)
             if should_grid_charge:
                 current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
                 space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
