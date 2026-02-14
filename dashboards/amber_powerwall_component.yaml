@@ -409,11 +409,12 @@ views:
 
           - type: custom:apexcharts-card
             header:
-              title: Planned vs Actual SOC
+              title: SOC - Past 24h & Future 24h
               show: true
             chart_type: line
+            graph_span: 48h
             span:
-              start: day
+              offset: "+24h"
             series:
               - entity: sensor.my_home_percentage_charged
                 name: Actual SOC
@@ -428,6 +429,7 @@ views:
                 stroke_width: 2
                 stroke_dash: 5
                 type: line
+                extend_to: false
                 data_generator: |
                   return (entity.attributes.soc_series_15min || []).map(function(entry) {
                     return [entry[0], entry[1]];
@@ -438,7 +440,7 @@ views:
                 decimals: 0
             hours_12: false
             now:
-              show: false
+              show: true
               label: Now
               color: "#EF4444"
             cache: true
