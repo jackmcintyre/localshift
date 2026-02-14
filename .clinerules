@@ -1,0 +1,1 @@
+Do not use sed, awk, or direct shell commands to edit files. Only use the provided write_to_file or apply_diff tools for modifying code."

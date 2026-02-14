@@ -813,25 +813,22 @@ class ComputationEngine:
                 if period_start is None:
                     continue
                 ps_local = dt_util.as_local(period_start)
-                if ps_local >= now_dt and ps_local.hour <= target_hour:
+                if ps_local >= now_dt and ps_local.hour < target_hour:
                     solar_kwh_val = float(period.get("pv_estimate10", 0))
                     if solar_kwh_val > 0:
                         # Find FIT price at midpoint of 30-min period
-                        # Use local time for both solar midpoint and FIT periods
-                        mid_local = ps_local + timedelta(minutes=15)
+                        mid = period_start + timedelta(minutes=15)
                         fit_price = 0.0
                         for f in data.feed_in_forecast:
                             f_start = self._parse_forecast_dt(f.get("start_time"))
                             f_end = self._parse_forecast_dt(f.get("end_time"))
-                            if f_start is not None and f_end is not None:
-                                # Convert FIT period to local time for comparison
-                                f_start_local = dt_util.as_local(f_start)
-                                f_end_local = dt_util.as_local(f_end)
-                                
-                                # Check if midpoint falls within FIT period
-                                if f_start_local <= mid_local < f_end_local:
-                                    fit_price = float(f.get("per_kwh", 0))
-                                    break
+                            if (
+                                f_start is not None
+                                and f_end is not None
+                                and f_start <= mid < f_end
+                            ):
+                                fit_price = float(f.get("per_kwh", 0))
+                                break
 
                         weighted_sum += solar_kwh_val * fit_price
                         total_solar += solar_kwh_val
