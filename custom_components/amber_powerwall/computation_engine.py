@@ -525,25 +525,34 @@ class ComputationEngine:
             if should_grid_charge and hours_to_dw < 2:
                 max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
 
+            # Step 1: Calculate base battery delta from solar/load
             if net_kwh >= 0:
-                # Excess solar: first charge battery, then export excess
+                # Solar excess: charge battery with what we can
                 battery_delta_kwh = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                # Deficit: battery discharges to cover what it can
+                battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
+                battery_is_empty = battery_kwh <= 0.5
+                battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
 
-                # If we need grid charging and there's room in battery
-                if should_grid_charge:
-                    # Calculate how much we can still add to reach target
-                    current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
-                    space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
-                    grid_charge_amount = min(
-                        max_slot_transfer_kwh * 0.92, space_remaining_kwh
-                    )
-                    battery_delta_kwh += grid_charge_amount
-                    grid_import_kwh = (
-                        grid_charge_amount / 0.92
-                    )  # Account for efficiency
-                else:
-                    grid_import_kwh = 0.0
+            # Step 2: Add grid charging if needed (INDEPENDENT of solar!)
+            # We can ALWAYS import from grid when:
+            # - Not in demand window
+            # - Below target
+            # - (solar excess is NOT required!)
+            if should_grid_charge:
+                current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
+                space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
+                grid_charge_amount = min(
+                    max_slot_transfer_kwh * 0.92, space_remaining_kwh
+                )
+                battery_delta_kwh += grid_charge_amount
+                grid_import_kwh = grid_charge_amount / 0.92
+            else:
+                grid_import_kwh = 0.0
 
+            # Step 3: Calculate grid export (only if solar > battery capacity)
+            if net_kwh >= 0:
                 excess_after_battery = net_kwh - battery_delta_kwh
                 grid_export_kwh = max(excess_after_battery, 0)
             else:
