@@ -487,19 +487,26 @@ class ComputationEngine:
             # 1. Not in demand window (zero import constraint)
             # 2. Before demand window
             # 3. SOC is below target
-            # 4. Price is at or below effective cheap price
-            # 5. Either: there's a deficit OR we need to charge to reach target
+            # 4. Either: there's a deficit OR we need to charge to reach target
             has_deficit = net_kwh < 0
             needs_charge = predicted_soc < target_pct
+            before_dw = slot_hour < target_hour
 
-            # Only grid charge when price is cheap AND we need to charge
             # Priority: Reach 95% target, then do it cheaply
             # Don't block on price - charge whenever we need to reach target
-            should_grid_charge = (
-                not in_demand_window
-                and slot_hour < target_hour
-                and predicted_soc < target_pct
-                and (has_deficit or needs_charge)
+            should_grid_charge = not in_demand_window and before_dw and needs_charge
+
+            # Debug logging for charging decision
+            _LOGGER.debug(
+                "GRID_CHARGE: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d deficit=%s -> charge=%s",
+                slot_hour,
+                slot_minute,
+                in_demand_window,
+                before_dw,
+                predicted_soc,
+                target_pct,
+                has_deficit,
+                should_grid_charge,
             )
 
             # Apply realistic battery transfer limits and efficiency
