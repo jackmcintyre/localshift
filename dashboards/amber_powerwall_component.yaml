@@ -382,10 +382,10 @@ views:
               **24-Hour SOC Forecast**
               
               ```
-              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh)
-              ------|---------|-------------|------------|-----------
+              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh) | Grid In | Grid Out
+              ------|---------|-------------|------------|-----------|---------|----------
               {% for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
-              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}
+              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}       | {{ "%.2f"|format(item.grid_import_kwh) | default(0) }}     | {{ "%.2f"|format(item.grid_export_kwh) | default(0) }}
               {% endfor %}
               ```
 
@@ -552,4 +552,28 @@ views:
               Allow Export: {{ states('select.my_home_allow_export') }}
               
               === END OF DEBUG SUMMARY ===
+              ```
+
+      # --- Debug 15-min Slots ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Debug 15-min Forecast Slots
+            heading_style: title
+
+          - type: markdown
+            content: |
+              **Debug: Grid Import/Export Forecast (first 24 slots + hourly)**
+              
+              Total Grid Import: **{{ state_attr('sensor.amber_powerwall_daily_forecast', 'debug_total_grid_import_kwh') | default(0) }} kWh**
+              Total Grid Export: **{{ state_attr('sensor.amber_powerwall_daily_forecast', 'debug_total_grid_export_kwh') | default(0) }} kWh**
+              
+              First 24 x 15-min slots (next 6 hours):
+              
+              ```
+              Slot | Time  | SOC  | Solar | Load  | Net   | GridIn | GridOut
+              -----|-------|------|-------|-------|-------|--------|--------
+              {% for slot in state_attr('sensor.amber_powerwall_daily_forecast', 'debug_15min_slots') | default([]) %}
+              {{ loop.index }}    | {{ "%02d:%02d"|format(slot.hour, slot.minute) }}  | {{ "%.1f"|format(slot.soc) }}  | {{ "%.3f"|format(slot.solar) }} | {{ "%.3f"|format(slot.load) }} | {{ "%.3f"|format(slot.net) }} | {{ "%.3f"|format(slot.grid_in) | default(0) }}    | {{ "%.3f"|format(slot.grid_out) | default(0) }}
+              {% endfor %}
               ```

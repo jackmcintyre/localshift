@@ -293,10 +293,40 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
         sample_counts = self.coordinator.data.consumption_hourly_sample_counts
         profile_kw = self.coordinator.data.consumption_hourly_profile_kw
         source_counts = self.coordinator.data.forecast_consumption_source_counts
+
+        # Debug: Include key 15-min slots for debugging grid import/export
+        # Show first 24 slots + every top of hour (to capture midday, evening etc)
+        debug_15min = []
+
+        for idx, slot in enumerate(self.coordinator.data.daily_forecast):
+            hour = slot.get("hour", 0)
+            minute = slot.get("minute", 0)
+            # Include: first 24 slots OR any slot at top of hour (minute == 0)
+            if idx < 24 or minute == 0:
+                debug_15min.append(
+                    {
+                        "hour": hour,
+                        "minute": minute,
+                        "soc": slot.get("predicted_soc"),
+                        "solar": slot.get("solar_kwh"),
+                        "load": slot.get("consumption_kwh"),
+                        "net": slot.get("net_kwh"),
+                        "grid_in": slot.get("grid_import_kwh"),
+                        "grid_out": slot.get("grid_export_kwh"),
+                    }
+                )
+
+        # Calculate totals for diagnostics
+        total_grid_import = sum(slot.get("grid_import_kwh", 0) for slot in debug_15min)
+        total_grid_export = sum(slot.get("grid_export_kwh", 0) for slot in debug_15min)
+
         return {
             # NOTE: We intentionally avoid exposing the full 96-slot 15-min forecast
             # here because it can exceed the recorder 16KB attribute limit.
             # Instead we expose a compact hourly summary + a light-weight SOC series.
+            "debug_15min_slots": debug_15min,
+            "debug_total_grid_import_kwh": round(total_grid_import, 3),
+            "debug_total_grid_export_kwh": round(total_grid_export, 3),
             "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
             "soc_series_15min": self.coordinator.data.daily_forecast_soc_15min,
             "forecast_15min_slots": len(self.coordinator.data.daily_forecast),

@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_BACKUP_KW,
+    CHARGE_RATE_BOOST_KW,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
@@ -394,11 +395,30 @@ class ComputationEngine:
         predicted_soc = current_soc
         base_slot = now_dt.replace(minute=0, second=0, microsecond=0)
 
+        # Get target SOC for grid charging decisions
+        target_pct = float(
+            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+        target_kwh = target_pct / 100 * BATTERY_CAPACITY_KWH
+
+        # Get demand window times for zero-grid-import constraint
+        dw_start_time = self._parse_time_option(
+            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        )
+        dw_end_time = self._parse_time_option(
+            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+        )
+        target_hour = dw_start_time.hour
+
         # Build rolling 24-hour forecast with 15-minute slots (96 total)
         for offset in range(96):
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
             slot_minute = slot_start.minute
+            slot_time = slot_start.time()
+
+            # Check if we're in demand window (zero grid import constraint)
+            in_demand_window = dw_start_time <= slot_time < dw_end_time
 
             # Get solar forecast for this 15-minute slot
             solar_kwh = self._get_solar_for_15min_slot(all_solcast, slot_start)
@@ -421,13 +441,149 @@ class ComputationEngine:
             # Calculate raw net energy for 15 minutes
             net_kwh = solar_kwh - consumption_kwh
 
+            # Get price for this slot (for price-aware grid charging)
+            slot_price = self._get_price_for_slot(data.general_forecast, slot_start)
+
+            # Calculate effective cheap price for this slot (with urgency)
+            # Only before demand window and if we haven't reached target
+            slot_effective_cheap = data.effective_cheap_price
+            if (
+                slot_start
+                < now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+                and predicted_soc < target_pct
+            ):
+                # Apply urgency: as we get closer to DW, willing to pay more
+                hours_to_target = max(
+                    (
+                        slot_start.replace(hour=target_hour, minute=0) - slot_start
+                    ).total_seconds()
+                    / 3600,
+                    0,
+                )
+                if hours_to_target > 0:
+                    urgency = max(min(1 - (hours_to_target / 8.0), 1.0), 0.0)
+                    max_price = float(
+                        self.entry.options.get(
+                            CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                        )
+                    )
+                    base_cheap = (
+                        float(
+                            self.entry.options.get(
+                                CONF_CHEAP_PRICE_PERCENTILE,
+                                DEFAULT_CHEAP_PRICE_PERCENTILE,
+                            )
+                        )
+                        / 100
+                        * max_price
+                    )  # Rough estimate
+                    slot_effective_cheap = (
+                        base_cheap + (max_price - base_cheap) * urgency
+                    )
+
+            # Determine if we should grid charge
+            # Only grid charge if:
+            # 1. Not in demand window (zero import constraint)
+            # 2. Not after demand window
+            # 3. Current predicted SOC is below target
+            # 4. Price is at or below effective cheap price
+            # 5. There will be a deficit (we need the charge)
+            should_grid_charge = (
+                not in_demand_window
+                and slot_hour < target_hour
+                and predicted_soc < target_pct
+                and slot_price <= slot_effective_cheap
+                and net_kwh < 0  # There's a deficit that needs filling
+            )
+
             # Apply realistic battery transfer limits and efficiency
-            # Max transfer: 3.3 kW = 0.825 kWh per 15 minutes
+            # Max transfer: 3.3 kW = 0.825 kWh per 15 minutes (backup mode)
             max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+
+            # Determine if we should use boost charging (5kW) based on urgency
+            # If very close to DW and far from target, use boost
+            hours_to_dw = max(
+                (
+                    slot_start.replace(hour=target_hour, minute=0) - slot_start
+                ).total_seconds()
+                / 3600,
+                0,
+            )
+            if should_grid_charge and hours_to_dw < 2:
+                max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
+
             if net_kwh >= 0:
+                # Excess solar: first charge battery, then export excess
                 battery_delta_kwh = min(net_kwh, max_slot_transfer_kwh) * 0.92
+
+                # If we need grid charging and there's room in battery
+                if should_grid_charge:
+                    # Calculate how much we can still add to reach target
+                    current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
+                    space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
+                    grid_charge_amount = min(
+                        max_slot_transfer_kwh * 0.92, space_remaining_kwh
+                    )
+                    battery_delta_kwh += grid_charge_amount
+                    grid_import_kwh = (
+                        grid_charge_amount / 0.92
+                    )  # Account for efficiency
+                else:
+                    grid_import_kwh = 0.0
+
+                excess_after_battery = net_kwh - battery_delta_kwh
+                grid_export_kwh = max(excess_after_battery, 0)
             else:
-                battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                # Deficit: battery discharges to cover what it can, then import rest from grid
+                battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
+                battery_is_empty = (
+                    battery_kwh <= 0.5
+                )  # Consider empty if < 0.5 kWh (~2% SOC)
+
+                _LOGGER.debug(
+                    "DEFICIT slot %02d:%02d: net=%.3f, soc=%.1f, battery_kwh=%.3f, empty=%s, in_dw=%s",
+                    slot_hour,
+                    slot_minute,
+                    net_kwh,
+                    predicted_soc,
+                    battery_kwh,
+                    battery_is_empty,
+                    in_demand_window,
+                )
+
+                if battery_is_empty:
+                    # Battery is empty - must import full deficit from grid
+                    # No battery discharge possible, just import
+                    battery_delta_kwh = 0.0  # Battery can't discharge
+                    grid_import_kwh = -net_kwh  # Import the full deficit
+                    _LOGGER.debug(
+                        "  -> BATTERY EMPTY: grid_import=%.3f (full deficit)",
+                        grid_import_kwh,
+                    )
+                else:
+                    # Battery has charge - can discharge up to max rate
+                    battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+                    # What's left after battery discharge
+                    deficit_after_battery = net_kwh - battery_delta_kwh
+
+                    # Only import if there's still a deficit after battery
+                    if deficit_after_battery < 0 and not in_demand_window:
+                        # Outside demand window - import the remaining deficit
+                        grid_import_kwh = -deficit_after_battery
+                        _LOGGER.debug(
+                            "  -> HAS_CHARGE+OUTSIDE_DW: deficit_after=%.3f, grid_import=%.3f",
+                            deficit_after_battery,
+                            grid_import_kwh,
+                        )
+                    else:
+                        grid_import_kwh = 0.0
+                        _LOGGER.debug(
+                            "  -> HAS_CHARGE+IN_DW: no import allowed (deficit_after=%.3f)",
+                            deficit_after_battery,
+                        )
+
+                grid_export_kwh = 0.0
 
             # Iterative SOC simulation with clamp each 15 minutes
             predicted_soc = predicted_soc + (
@@ -451,6 +607,8 @@ class ComputationEngine:
                     "consumption_kwh": round(consumption_kwh, 3),
                     "consumption_source": load_source,
                     "net_kwh": round(net_kwh, 3),
+                    "grid_import_kwh": round(grid_import_kwh, 3),
+                    "grid_export_kwh": round(grid_export_kwh, 3),
                 }
             )
 
@@ -498,6 +656,8 @@ class ComputationEngine:
                     "solar_kwh": 0.0,
                     "consumption_kwh": 0.0,
                     "net_kwh": 0.0,
+                    "grid_import_kwh": 0.0,
+                    "grid_export_kwh": 0.0,
                 }
                 hourly[hour] = bucket
 
@@ -505,7 +665,13 @@ class ComputationEngine:
             if isinstance(predicted_soc_raw, int | float):
                 bucket["predicted_soc"] = float(predicted_soc_raw)
 
-            for key in ("solar_kwh", "consumption_kwh", "net_kwh"):
+            for key in (
+                "solar_kwh",
+                "consumption_kwh",
+                "net_kwh",
+                "grid_import_kwh",
+                "grid_export_kwh",
+            ):
                 try:
                     bucket[key] += float(row.get(key) or 0.0)
                 except (TypeError, ValueError):
@@ -522,9 +688,60 @@ class ComputationEngine:
                     "solar_kwh": round(float(bucket["solar_kwh"]), 3),
                     "consumption_kwh": round(float(bucket["consumption_kwh"]), 3),
                     "net_kwh": round(float(bucket["net_kwh"]), 3),
+                    "grid_import_kwh": round(
+                        float(bucket.get("grid_import_kwh", 0)), 3
+                    ),
+                    "grid_export_kwh": round(
+                        float(bucket.get("grid_export_kwh", 0)), 3
+                    ),
                 }
             )
         return result
+
+    def _get_price_for_slot(
+        self,
+        price_forecasts: list[dict[str, Any]],
+        slot_start: datetime,
+    ) -> float:
+        """Get price for a 15-minute slot from Amber forecast.
+
+        Returns the average price for the slot from 5-minute forecast data.
+        """
+        if not price_forecasts:
+            return 0.0
+
+        # Ensure slot boundaries are timezone-aware local datetimes
+        if slot_start.tzinfo is None:
+            slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+        else:
+            slot_start = dt_util.as_local(slot_start)
+
+        slot_end = slot_start + timedelta(minutes=15)
+
+        prices_in_slot = []
+        for entry in price_forecasts:
+            if not isinstance(entry, dict):
+                continue
+
+            start_raw = entry.get("start_time")
+            if start_raw is None:
+                continue
+
+            start_dt = self._parse_forecast_dt(start_raw)
+            if start_dt is None:
+                continue
+
+            start_local = dt_util.as_local(start_dt)
+            end_local = start_local + timedelta(minutes=5)  # Amber prices are 5-min
+
+            # Check if this price period overlaps with our slot
+            if start_local < slot_end and end_local > slot_start:
+                price = float(entry.get("per_kwh", 0.0))
+                prices_in_slot.append(price)
+
+        if prices_in_slot:
+            return sum(prices_in_slot) / len(prices_in_slot)
+        return 0.0
 
     def _get_solar_for_15min_slot(
         self,
