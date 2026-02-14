@@ -539,8 +539,6 @@ class ComputationEngine:
                 battery_delta_kwh = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
                 # Deficit: battery discharges to cover what it can
-                battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
-                battery_is_empty = battery_kwh <= 0.5
                 battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
 
             # Step 2: Add grid charging if needed (INDEPENDENT of solar!)
@@ -564,59 +562,9 @@ class ComputationEngine:
                 excess_after_battery = net_kwh - battery_delta_kwh
                 grid_export_kwh = max(excess_after_battery, 0)
             else:
-                # Deficit: battery discharges to cover what it can, then import rest from grid
-                battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
-                battery_is_empty = (
-                    battery_kwh <= 0.5
-                )  # Consider empty if < 0.5 kWh (~2% SOC)
-
-                _LOGGER.debug(
-                    "DEFICIT slot %02d:%02d: net=%.3f, soc=%.1f, battery_kwh=%.3f, empty=%s, in_dw=%s",
-                    slot_hour,
-                    slot_minute,
-                    net_kwh,
-                    predicted_soc,
-                    battery_kwh,
-                    battery_is_empty,
-                    in_demand_window,
-                )
-
-                if battery_is_empty:
-                    # Battery is empty - but only import if NOT in demand window
-                    # During demand window, we don't import even if empty (for demand charge savings)
-                    battery_delta_kwh = 0.0  # Battery can't discharge
-                    if in_demand_window:
-                        grid_import_kwh = 0.0  # Block imports during DW even if empty
-                        _LOGGER.debug("  -> BATTERY EMPTY+IN_DW: no import (DW blocks)")
-                    else:
-                        grid_import_kwh = -net_kwh  # Import the full deficit
-                        _LOGGER.debug(
-                            "  -> BATTERY EMPTY: grid_import=%.3f (full deficit)",
-                            grid_import_kwh,
-                        )
-                else:
-                    # Battery has charge - can discharge up to max rate
-                    battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
-
-                    # What's left after battery discharge
-                    deficit_after_battery = net_kwh - battery_delta_kwh
-
-                    # Only import if there's still a deficit after battery
-                    if deficit_after_battery < 0 and not in_demand_window:
-                        # Outside demand window - import the remaining deficit
-                        grid_import_kwh = -deficit_after_battery
-                        _LOGGER.debug(
-                            "  -> HAS_CHARGE+OUTSIDE_DW: deficit_after=%.3f, grid_import=%.3f",
-                            deficit_after_battery,
-                            grid_import_kwh,
-                        )
-                    else:
-                        grid_import_kwh = 0.0
-                        _LOGGER.debug(
-                            "  -> HAS_CHARGE+IN_DW: no import allowed (deficit_after=%.3f)",
-                            deficit_after_battery,
-                        )
-
+                # Deficit: battery already handled in Step 1 (discharge)
+                # Grid import already handled in Step 2 (grid charging)
+                # Just calculate export (which is 0 in deficit)
                 grid_export_kwh = 0.0
 
             # Iterative SOC simulation with clamp each 15 minutes
