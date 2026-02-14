@@ -827,7 +827,7 @@ class ComputationEngine:
                                 # Convert FIT period to local time for comparison
                                 f_start_local = dt_util.as_local(f_start)
                                 f_end_local = dt_util.as_local(f_end)
-                                
+
                                 # Check if midpoint falls within FIT period
                                 if f_start_local <= mid_local < f_end_local:
                                     fit_price = float(f.get("per_kwh", 0))
