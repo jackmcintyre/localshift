@@ -490,11 +490,19 @@ class ComputationEngine:
             # 4. Either: there's a deficit OR we need to charge to reach target
             has_deficit = net_kwh < 0
             needs_charge = predicted_soc < target_pct
-            before_dw = slot_hour < target_hour
+
+            # Handle wrap-around: if current time is past target hour,
+            # the next DW is tomorrow (add 24h)
+            if now_dt.hour >= target_hour:
+                # Next DW is tomorrow - slots after midnight are "before DW"
+                is_before_dw = slot_hour >= now_dt.hour or slot_hour < target_hour
+            else:
+                # Same day - normal comparison
+                is_before_dw = slot_hour < target_hour
 
             # Priority: Reach 95% target, then do it cheaply
             # Don't block on price - charge whenever we need to reach target
-            should_grid_charge = not in_demand_window and before_dw and needs_charge
+            should_grid_charge = not in_demand_window and is_before_dw and needs_charge
 
             # Debug logging for charging decision
             _LOGGER.debug(
@@ -502,7 +510,7 @@ class ComputationEngine:
                 slot_hour,
                 slot_minute,
                 in_demand_window,
-                before_dw,
+                is_before_dw,
                 predicted_soc,
                 target_pct,
                 has_deficit,
