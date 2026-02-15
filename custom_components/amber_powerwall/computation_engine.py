@@ -10,7 +10,18 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .computation_engine_lib import HistoryFetcher
+from .computation_engine_lib import (
+    HistoryFetcher,
+    build_hourly_forecast_summary,
+    get_price_for_slot,
+    get_solar_for_15min_slot,
+    get_solar_for_slot,
+    max_forecast_price,
+    parse_forecast_dt,
+    percentile,
+    scan_forecast_for_spike,
+    sum_solar_before_target,
+)
 from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_BACKUP_KW,
@@ -79,6 +90,10 @@ class ComputationEngine:
         self._previous_active_mode = None
         self._last_forecast_hour: int | None = None
         self._last_decision_log_time: datetime | None = None
+
+    # ========================================================================
+    # MAIN ENTRY POINT
+    # ========================================================================
 
     def compute_derived_values(self, data: CoordinatorData) -> None:
         """Compute all derived sensor/binary_sensor values from raw state.
@@ -205,6 +220,10 @@ class ComputationEngine:
 
         # ---- Step 16: daily_forecast ----
         self._compute_daily_15min_forecast(data, now_dt)
+
+    # ========================================================================
+    # SOLAR & BATTERY FORECASTING
+    # ========================================================================
 
     def _compute_solar_battery_forecast(
         self,
@@ -620,191 +639,23 @@ class ComputationEngine:
             )
 
         # Also keep a compact 24-entry hourly view for the markdown table.
-        data.daily_forecast_hourly = self._build_hourly_forecast_summary(
-            data.daily_forecast
-        )
-
-    @staticmethod
-    def _build_hourly_forecast_summary(
-        forecast_15min: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Summarise 96x 15-min slots into 24 hourly records.
-
-        Keeps attributes smaller while still providing an hour-by-hour view.
-        """
-        hourly: dict[int, dict[str, Any]] = {}
-
-        for row in forecast_15min:
-            if not isinstance(row, dict):
-                continue
-
-            hour_raw = row.get("hour")
-            if hour_raw is None:
-                continue
-            try:
-                hour = int(hour_raw)
-            except (TypeError, ValueError):
-                continue
-
-            if hour < 0 or hour > 23:
-                continue
-
-            bucket = hourly.get(hour)
-            if bucket is None:
-                predicted_soc_raw = row.get("predicted_soc")
-                predicted_soc = (
-                    float(predicted_soc_raw)
-                    if isinstance(predicted_soc_raw, int | float)
-                    else 0.0
-                )
-                bucket = {
-                    "hour": hour,
-                    "predicted_soc": predicted_soc,
-                    "solar_kwh": 0.0,
-                    "consumption_kwh": 0.0,
-                    "net_kwh": 0.0,
-                    "grid_import_kwh": 0.0,
-                    "grid_export_kwh": 0.0,
-                }
-                hourly[hour] = bucket
-
-            predicted_soc_raw = row.get("predicted_soc")
-            if isinstance(predicted_soc_raw, int | float):
-                bucket["predicted_soc"] = float(predicted_soc_raw)
-
-            for key in (
-                "solar_kwh",
-                "consumption_kwh",
-                "net_kwh",
-                "grid_import_kwh",
-                "grid_export_kwh",
-            ):
-                try:
-                    bucket[key] += float(row.get(key) or 0.0)
-                except (TypeError, ValueError):
-                    continue
-
-        # Return in hour order
-        result: list[dict[str, Any]] = []
-        for hour in sorted(hourly.keys()):
-            bucket = hourly[hour]
-            result.append(
-                {
-                    "hour": hour,
-                    "predicted_soc": round(float(bucket["predicted_soc"]), 1),
-                    "solar_kwh": round(float(bucket["solar_kwh"]), 3),
-                    "consumption_kwh": round(float(bucket["consumption_kwh"]), 3),
-                    "net_kwh": round(float(bucket["net_kwh"]), 3),
-                    "grid_import_kwh": round(
-                        float(bucket.get("grid_import_kwh", 0)), 3
-                    ),
-                    "grid_export_kwh": round(
-                        float(bucket.get("grid_export_kwh", 0)), 3
-                    ),
-                }
-            )
-        return result
+        data.daily_forecast_hourly = build_hourly_forecast_summary(data.daily_forecast)
 
     def _get_price_for_slot(
         self,
         price_forecasts: list[dict[str, Any]],
         slot_start: datetime,
     ) -> float:
-        """Get price for a 15-minute slot from Amber forecast.
-
-        Returns the average price for the slot from 5-minute forecast data.
-        """
-        if not price_forecasts:
-            return 0.0
-
-        # Ensure slot boundaries are timezone-aware local datetimes
-        if slot_start.tzinfo is None:
-            slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
-        else:
-            slot_start = dt_util.as_local(slot_start)
-
-        slot_end = slot_start + timedelta(minutes=15)
-
-        prices_in_slot = []
-        for entry in price_forecasts:
-            if not isinstance(entry, dict):
-                continue
-
-            start_raw = entry.get("start_time")
-            if start_raw is None:
-                continue
-
-            start_dt = self._parse_forecast_dt(start_raw)
-            if start_dt is None:
-                continue
-
-            start_local = dt_util.as_local(start_dt)
-            end_local = start_local + timedelta(minutes=5)  # Amber prices are 5-min
-
-            # Check if this price period overlaps with our slot
-            if start_local < slot_end and end_local > slot_start:
-                price = float(entry.get("per_kwh", 0.0))
-                prices_in_slot.append(price)
-
-        if prices_in_slot:
-            return sum(prices_in_slot) / len(prices_in_slot)
-        return 0.0
+        """Get price for a 15-minute slot from Amber forecast (delegates to utils)."""
+        return get_price_for_slot(price_forecasts, slot_start)
 
     def _get_solar_for_15min_slot(
         self,
         solcast_forecasts: list[dict[str, Any]],
         slot_start: datetime,
     ) -> float:
-        """Get solar forecast (kWh) for 15-minute slot from Solcast 30-min periods.
-
-        Splits 30-minute Solcast periods into two 15-minute halves.
-        """
-        if not solcast_forecasts:
-            return 0.0
-
-        # Ensure slot boundaries are timezone-aware local datetimes
-        if slot_start.tzinfo is None:
-            slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
-        else:
-            slot_start = dt_util.as_local(slot_start)
-
-        slot_end = slot_start + timedelta(minutes=15)
-        period_duration = timedelta(minutes=30)
-
-        for entry in solcast_forecasts:
-            if not isinstance(entry, dict):
-                continue
-
-            period_start_raw = entry.get("period_start") or entry.get("start")
-            if period_start_raw is None:
-                continue
-
-            start_dt = dt_util.parse_datetime(str(period_start_raw))
-            if not start_dt:
-                continue
-
-            start_local = dt_util.as_local(start_dt)
-            end_local = start_local + period_duration
-            period_kwh = float(
-                entry.get("pv_estimate10")
-                or entry.get("estimate10")
-                or entry.get("pv_estimate")
-                or entry.get("estimate")
-                or 0.0
-            )
-
-            # Check which 15-minute half of 30-min period we're in
-            period_midpoint = start_local + timedelta(minutes=15)
-
-            if slot_start >= start_local and slot_end <= period_midpoint:
-                # First half of period (0-15 min)
-                # Simple approach: split evenly (50% each half)
-                return period_kwh * 0.5
-            elif slot_start >= period_midpoint and slot_end <= end_local:
-                # Second half of period (15-30 min)
-                return period_kwh * 0.5
-
-        return 0.0
+        """Get solar forecast (kWh) for 15-minute slot from Solcast 30-min periods (delegates to utils)."""
+        return get_solar_for_15min_slot(solcast_forecasts, slot_start)
 
     def _compute_daily_hourly_forecast(
         self,
@@ -942,78 +793,8 @@ class ComputationEngine:
         solcast_forecasts: list[dict[str, Any]],
         slot_start: datetime,
     ) -> float:
-        """Get solar forecast (kWh) for one hourly slot from Solcast half-hour periods."""
-        if not solcast_forecasts:
-            return 0.0
-
-        # Ensure slot boundaries are timezone-aware local datetimes
-        if slot_start.tzinfo is None:
-            slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
-        else:
-            slot_start = dt_util.as_local(slot_start)
-
-        slot_end = slot_start + timedelta(hours=1)
-        period_duration = timedelta(minutes=30)
-
-        total_solar = 0.0
-        parsed_periods = 0
-        overlap_hits = 0
-
-        for entry in solcast_forecasts:
-            try:
-                if not isinstance(entry, dict):
-                    continue
-
-                period_start_raw = entry.get("period_start") or entry.get("start")
-                if period_start_raw is None:
-                    continue
-
-                start_dt = dt_util.parse_datetime(str(period_start_raw))
-                if not start_dt:
-                    continue
-
-                start_local = dt_util.as_local(start_dt)
-                parsed_periods += 1
-                end_local = start_local + period_duration
-
-                # overlap between [start_local, end_local) and [slot_start, slot_end)
-                overlap_start = max(start_local, slot_start)
-                overlap_end = min(end_local, slot_end)
-                overlap_seconds = (overlap_end - overlap_start).total_seconds()
-
-                if overlap_seconds > 0:
-                    # Support common Solcast key variants
-                    period_kwh = float(
-                        entry.get("pv_estimate10")
-                        or entry.get("estimate10")
-                        or entry.get("pv_estimate")
-                        or entry.get("estimate")
-                        or 0.0
-                    )
-                    overlap_fraction = overlap_seconds / period_duration.total_seconds()
-                    total_solar += period_kwh * overlap_fraction
-                    overlap_hits += 1
-            except (ValueError, TypeError):
-                continue
-
-        if (
-            total_solar == 0.0
-            and solcast_forecasts
-            and slot_start.hour in (8, 9, 10, 11, 12, 13, 14, 15, 16)
-        ):
-            sample = (
-                solcast_forecasts[0] if isinstance(solcast_forecasts[0], dict) else {}
-            )
-            _LOGGER.debug(
-                "Solar slot resolved to 0. slot=%s parsed_periods=%s overlap_hits=%s sample_keys=%s sample_period_start=%s",
-                slot_start.isoformat(),
-                parsed_periods,
-                overlap_hits,
-                sorted(sample.keys()) if isinstance(sample, dict) else [],
-                sample.get("period_start") if isinstance(sample, dict) else None,
-            )
-
-        return total_solar
+        """Get solar forecast (kWh) for one hourly slot from Solcast half-hour periods (delegates to utils)."""
+        return get_solar_for_slot(solcast_forecasts, slot_start)
 
     def _compute_effective_cheap_price(
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
@@ -1491,13 +1272,8 @@ class ComputationEngine:
 
     @staticmethod
     def _parse_forecast_dt(dt_str: str | None) -> datetime | None:
-        """Parse an ISO format datetime string from forecast data."""
-        if dt_str is None:
-            return None
-        try:
-            return dt_util.parse_datetime(str(dt_str))
-        except (ValueError, TypeError):
-            return None
+        """Parse an ISO format datetime string from forecast data (delegates to utils)."""
+        return parse_forecast_dt(dt_str)
 
     def _sum_solar_before_target(
         self,
@@ -1505,32 +1281,8 @@ class ComputationEngine:
         now_dt: datetime,
         target_hour: int,
     ) -> float:
-        """Sum pessimistic solar kWh (pv_estimate10) from now until target_hour."""
-        target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-        period_duration = timedelta(minutes=30)
-        total = 0.0
-        for period in solcast:
-            period_start = self._parse_forecast_dt(period.get("period_start"))
-            if period_start is None:
-                continue
-            ps_local = dt_util.as_local(period_start)
-            period_end = ps_local + period_duration
-            kwh = float(period.get("pv_estimate10", 0))
-
-            if ps_local >= target_dt:
-                # Period starts at or after target — skip
-                continue
-
-            if ps_local >= now_dt:
-                # Fully future period before target — include all of it
-                total += kwh
-            elif period_end > now_dt:
-                # In-progress period — prorate remaining fraction
-                remaining = (period_end - now_dt).total_seconds()
-                fraction = remaining / period_duration.total_seconds()
-                total += kwh * fraction
-
-        return total
+        """Sum pessimistic solar kWh (pv_estimate10) from now until target_hour (delegates to utils)."""
+        return sum_solar_before_target(solcast, now_dt, target_hour)
 
     @staticmethod
     def _scan_forecast_for_spike(
@@ -1538,16 +1290,8 @@ class ComputationEngine:
         now_dt: datetime,
         cutoff: datetime,
     ) -> bool:
-        """Return True if any forecast has spike_status == 'spike' in window."""
-        for f in forecasts:
-            start = ComputationEngine._parse_forecast_dt(f.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                if f.get("spike_status") == "spike":
-                    return True
-        return False
+        """Return True if any forecast has spike_status == 'spike' in window (delegates to utils)."""
+        return scan_forecast_for_spike(forecasts, now_dt, cutoff)
 
     @staticmethod
     def _max_forecast_price(
@@ -1555,36 +1299,16 @@ class ComputationEngine:
         now_dt: datetime,
         cutoff: datetime,
     ) -> float:
-        """Return maximum per_kwh price from forecasts within window."""
-        max_price = 0.0
-        for f in forecasts:
-            start = ComputationEngine._parse_forecast_dt(f.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                price = float(f.get("per_kwh", 0))
-                if price > max_price:
-                    max_price = price
-        return round(max_price, 2)
+        """Return maximum per_kwh price from forecasts within window (delegates to utils)."""
+        return max_forecast_price(forecasts, now_dt, cutoff)
 
     @staticmethod
     def _percentile(
         prices: list[float],
-        percentile: float,
+        percentile_value: float,
     ) -> float:
-        """Calculate Nth percentile of a list of prices."""
-        if not prices:
-            return 0.0
-        sorted_prices = sorted(prices)
-        n = len(sorted_prices)
-        index = (percentile / 100) * (n - 1)
-        lower = int(index)
-        upper = lower + 1
-        if upper >= n:
-            return sorted_prices[-1]
-        fraction = index - lower
-        return sorted_prices[lower] * (1 - fraction) + sorted_prices[upper] * fraction
+        """Calculate Nth percentile of a list of prices (delegates to utils)."""
+        return percentile(prices, percentile_value)
 
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
