@@ -1,5 +1,6 @@
 """Computation engine library modules."""
 
+from .forecast_computer import ForecastComputer
 from .history_fetcher import HistoryFetcher
 from .solar_utils import (
     get_price_for_slot,
@@ -16,6 +17,7 @@ from .utils import (
 )
 
 __all__ = [
+    "ForecastComputer",
     "HistoryFetcher",
     "build_hourly_forecast_summary",
     "get_price_for_slot",
