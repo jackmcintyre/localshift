@@ -53,6 +53,94 @@ from .coordinator_data import CoordinatorData
 _LOGGER = logging.getLogger(__name__)
 
 
+class ForecastChangeTracker:
+    """Tracks when forecast should regenerate based on significant changes."""
+
+    def __init__(self) -> None:
+        """Initialize change tracker."""
+        self._last_soc: float = -1.0  # -1 = not initialized
+        self._last_price: float = -1.0
+        self._last_feed_in: float = -1.0
+        self._last_forecast_time: datetime | None = None
+
+        # Change thresholds (hardcoded, no config needed)
+        self._SOC_THRESHOLD = 1.0  # 1% SOC change
+        self._MAX_FORECAST_AGE = timedelta(minutes=1)
+
+    def should_recompute_forecast(
+        self,
+        soc: float,
+        price: float,
+        feed_in_price: float,
+        now_dt: datetime,
+        force: bool = False,
+    ) -> tuple[bool, str]:
+        """Check if forecast should recompute.
+
+        Args:
+            soc: Current battery SOC percentage
+            price: Current buy price ($/kWh)
+            feed_in_price: Current feed-in price ($/kWh)
+            now_dt: Current datetime
+            force: If True, skip checks and recompute
+
+        Returns:
+            (should_recompute, reason)
+            reason is a string for logging (e.g., "price_change_0.15")
+        """
+        # Force recompute (e.g., mode change, startup)
+        if force:
+            self._update_cache(soc, price, feed_in_price, now_dt)
+            return True, "forced"
+
+        # First run: no cached values
+        if self._last_soc < 0:
+            self._update_cache(soc, price, feed_in_price, now_dt)
+            return True, "first_run"
+
+        # Price changes (ANY change = recalc)
+        if price != self._last_price:
+            reason = f"price_change_{price:.2f}"
+            self._update_cache(soc, price, feed_in_price, now_dt)
+            return True, reason
+
+        if feed_in_price != self._last_feed_in:
+            reason = f"fit_change_{feed_in_price:.2f}"
+            self._update_cache(soc, price, feed_in_price, now_dt)
+            return True, reason
+
+        # SOC change (1% threshold)
+        soc_change = abs(soc - self._last_soc)
+        if soc_change >= self._SOC_THRESHOLD:
+            reason = f"soc_change_{soc_change:.1f}%"
+            self._update_cache(soc, price, feed_in_price, now_dt)
+            return True, reason
+
+        # Age check (1-minute backup timer)
+        if self._last_forecast_time is not None:
+            age = now_dt - self._last_forecast_time
+            if age > self._MAX_FORECAST_AGE:
+                reason = f"age_{age.total_seconds():.0f}s"
+                self._update_cache(soc, price, feed_in_price, now_dt)
+                return True, reason
+
+        # No significant changes
+        return False, "no_change"
+
+    def _update_cache(
+        self,
+        soc: float,
+        price: float,
+        feed_in_price: float,
+        now_dt: datetime,
+    ) -> None:
+        """Update cached values after recompute."""
+        self._last_soc = soc
+        self._last_price = price
+        self._last_feed_in = feed_in_price
+        self._last_forecast_time = now_dt
+
+
 class ComputationEngine:
     """Computes all derived sensor values from raw state."""
 
@@ -83,6 +171,9 @@ class ComputationEngine:
         self._forecast_computer = ForecastComputer(
             entry, get_entity_id_func, self._get_historical_hourly_averages
         )
+
+        # Change tracker for forecast regeneration
+        self._forecast_change_tracker = ForecastChangeTracker()
 
         # Local cache properties (delegated to history_fetcher for storage)
         self._last_weighting: float = DEFAULT_LOAD_WEIGHT_RECENT
@@ -366,30 +457,49 @@ class ComputationEngine:
 
         Provides 4x granularity over hourly forecast, capturing meaningful
         price variations from Amber's 5-minute pricing data.
+
+        Uses change detection to skip unnecessary recomputations.
         """
-        # Get historical hourly averages
-        load_entity_id = self._get_entity_id("teslemetry_load_power")
-        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-
-        # Get recent 1-hour load for weighted forecasting
-        recent_load_kw = self._recent_load_1hr_kw
-
-        # Delegate to ForecastComputer
-        (
-            data.daily_forecast,
-            data.daily_forecast_soc_15min,
-            data.forecast_consumption_source_counts,
-        ) = self._forecast_computer.compute_forecast(
-            data=data,
-            now_dt=now_dt,
-            historical_avg_kw=hourly_avg_kw,
-            recent_load_kw=recent_load_kw,
-            historical_load_source=self._historical_load_source,
-            historical_load_sample_counts=self._historical_load_sample_counts,
+        # Check if recompute is needed
+        should_recompute, reason = (
+            self._forecast_change_tracker.should_recompute_forecast(
+                soc=data.soc,
+                price=data.general_price,
+                feed_in_price=data.feed_in_price,
+                now_dt=now_dt,
+            )
         )
 
-        # Also keep a compact 24-entry hourly view for the markdown table.
-        data.daily_forecast_hourly = build_hourly_forecast_summary(data.daily_forecast)
+        if should_recompute:
+            _LOGGER.info("Recomputing forecast: %s", reason)
+
+            # Get historical hourly averages
+            load_entity_id = self._get_entity_id("teslemetry_load_power")
+            hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+
+            # Get recent 1-hour load for weighted forecasting
+            recent_load_kw = self._recent_load_1hr_kw
+
+            # Delegate to ForecastComputer
+            (
+                data.daily_forecast,
+                data.daily_forecast_soc_15min,
+                data.forecast_consumption_source_counts,
+            ) = self._forecast_computer.compute_forecast(
+                data=data,
+                now_dt=now_dt,
+                historical_avg_kw=hourly_avg_kw,
+                recent_load_kw=recent_load_kw,
+                historical_load_source=self._historical_load_source,
+                historical_load_sample_counts=self._historical_load_sample_counts,
+            )
+
+            # Also keep a compact 24-entry hourly view for markdown table
+            data.daily_forecast_hourly = build_hourly_forecast_summary(
+                data.daily_forecast
+            )
+        else:
+            _LOGGER.debug("Forecast unchanged, skipping recompute")
 
     def _compute_effective_cheap_price(
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
