@@ -473,31 +473,40 @@ class ComputationEngine:
         if should_recompute:
             _LOGGER.info("Recomputing forecast: %s", reason)
 
-            # Get historical hourly averages
-            load_entity_id = self._get_entity_id("teslemetry_load_power")
-            hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+            try:
+                # Get historical hourly averages
+                load_entity_id = self._get_entity_id("teslemetry_load_power")
+                hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
 
-            # Get recent 1-hour load for weighted forecasting
-            recent_load_kw = self._recent_load_1hr_kw
+                # Get recent 1-hour load for weighted forecasting
+                recent_load_kw = self._recent_load_1hr_kw
 
-            # Delegate to ForecastComputer
-            (
-                data.daily_forecast,
-                data.daily_forecast_soc_15min,
-                data.forecast_consumption_source_counts,
-            ) = self._forecast_computer.compute_forecast(
-                data=data,
-                now_dt=now_dt,
-                historical_avg_kw=hourly_avg_kw,
-                recent_load_kw=recent_load_kw,
-                historical_load_source=self._historical_load_source,
-                historical_load_sample_counts=self._historical_load_sample_counts,
-            )
+                # Delegate to ForecastComputer
+                (
+                    data.daily_forecast,
+                    data.daily_forecast_soc_15min,
+                    data.forecast_consumption_source_counts,
+                ) = self._forecast_computer.compute_forecast(
+                    data=data,
+                    now_dt=now_dt,
+                    historical_avg_kw=hourly_avg_kw,
+                    recent_load_kw=recent_load_kw,
+                    historical_load_source=self._historical_load_source,
+                    historical_load_sample_counts=self._historical_load_sample_counts,
+                )
 
-            # Also keep a compact 24-entry hourly view for markdown table
-            data.daily_forecast_hourly = build_hourly_forecast_summary(
-                data.daily_forecast
-            )
+                # Also keep a compact 24-entry hourly view for markdown table
+                data.daily_forecast_hourly = build_hourly_forecast_summary(
+                    data.daily_forecast
+                )
+
+            except Exception as e:
+                _LOGGER.error("Forecast computation failed: %s", e, exc_info=True)
+                # Keep existing forecast if it exists, otherwise set empty
+                if not data.daily_forecast:
+                    data.daily_forecast = []
+                if not data.daily_forecast_soc_15min:
+                    data.daily_forecast_soc_15min = []
         else:
             _LOGGER.debug("Forecast unchanged, skipping recompute")
 

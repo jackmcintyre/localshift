@@ -587,8 +587,8 @@ views:
               First 24 x 15-min slots (next 6 hours):
 
               ```
-              Slot | Time  | SOC  | Solar | Load  | Net   | GridIn | GridOut | Buy   | Sell
-              -----|-------|------|-------|-------|-------|--------|---------|-------|------
+              Slot | Time  | SOC  | Solar | Load  | Net   | GridIn | GridOut | Buy   | Sell | Proactive | Export
+              -----|-------|------|-------|-------|-------|--------|---------|-------|------|-----------|--------
               {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
               {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
               {%- for slot in state_attr('sensor.amber_powerwall_daily_forecast', 'debug_15min_slots') | default([]) %}
@@ -607,6 +607,9 @@ views:
                   {%- set sell_price.value = "%.2f"|format(f.per_kwh) %}
                 {%- endif %}
               {%- endfor %}
-              {{ loop.index }}    | {{ "%02d:%02d"|format(slot.hour, slot.minute) }}  | {{ "%.1f"|format(slot.soc) }}  | {{ "%.3f"|format(slot.solar) }} | {{ "%.3f"|format(slot.load) }} | {{ "%.3f"|format(slot.net) }} | {{ "%.3f"|format(slot.grid_in) | default(0) }}    | {{ "%.3f"|format(slot.grid_out) | default(0) }}     | {{ buy_price.value }}  | {{ sell_price.value }}
+              {%- set proactive = 'YES' if slot.proactive_export else 'NO' %}
+              {%- set export_amt = slot.export_amt if slot.export_amt > 0 else '-' %}
+              {{ loop.index }}    | {{ "%02d:%02d"|format(slot.hour, slot.minute) }}  | {{ "%.1f"|format(slot.soc) }}  | {{ "%.3f"|format(slot.solar) }} | {{ "%.3f"|format(slot.load) }} | {{ "%.3f"|format(slot.net) }} | {{ "%.3f"|format(slot.grid_in) | default(0) }}    | {{ "%.3f"|format(slot.grid_out) | default(0) }}     | {{ buy_price.value }}  | {{ sell_price.value }} | {{ proactive }}       | {{ export_amt }}
               {%- endfor %}
+              ```
               ```

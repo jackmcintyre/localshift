@@ -103,6 +103,126 @@ class ForecastComputer:
         base_kw = current_load_kw if current_load_kw > 0 else 0.6
         return round(base_kw, 3), "live_load_fallback"
 
+    def _simulate_future_soc_with_solar_only(
+        self,
+        start_soc: float,
+        start_slot: datetime,
+        target_pct: float,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+        dw_start_time: time,
+        max_hours: int = 24,
+    ) -> tuple[float, bool]:
+        """Simulate future SOC trajectory with solar only (no grid charging).
+
+        This helps determine if grid charging is necessary.
+
+        Args:
+            start_soc: Starting SOC percentage
+            start_slot: Starting slot time
+            target_pct: Target SOC percentage
+            all_solcast: Full Solcast forecast (today + tomorrow)
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            dw_start_time: Demand window start time
+            max_hours: How many hours to simulate forward
+
+        Returns:
+            (final_soc_pct, can_reach_target)
+        """
+        soc = start_soc
+        base_slot = start_slot.replace(minute=0, second=0, microsecond=0)
+
+        # Create timezone-aware demand window datetimes
+        dw_start_dt = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=dw_start_time.second,
+        )
+        dw_end_dt = dw_start_dt + timedelta(hours=6)  # Assume 6h DW
+
+        for offset in range(max_hours * 4):  # 4 slots per hour
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+
+            # Stop at demand window
+            if dw_start_dt <= slot_start < dw_end_dt:
+                break
+
+            # Get solar and load for this slot
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply battery delta (no grid charging)
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            if net_kwh >= 0:
+                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            soc += delta / BATTERY_CAPACITY_KWH * 100
+            soc = max(0.0, min(100.0, soc))
+
+        return soc, soc >= target_pct
+
+    def _find_negative_fit_windows(
+        self, feed_in_forecast: list[dict], start_time: datetime, max_hours: int = 24
+    ) -> list[tuple[datetime, datetime, float]]:
+        """Find windows where feed-in price ≤ 0.
+
+        Args:
+            feed_in_forecast: Feed-in price forecast
+            start_time: Start time for search
+            max_hours: How many hours to search ahead
+
+        Returns:
+            List of (window_start, window_end, min_price) tuples
+        """
+        negative_windows = []
+        base_slot = start_time.replace(minute=0, second=0, microsecond=0)
+        current_window_start = None
+        min_price_in_window = 0.0
+
+        for offset in range(max_hours * 12):  # 5-min intervals = 12 per hour
+            slot_time = base_slot + timedelta(minutes=5 * offset)
+            price = get_price_for_slot(feed_in_forecast, slot_time)
+
+            if price is not None and price <= 0:
+                if current_window_start is None:
+                    current_window_start = slot_time
+                    min_price_in_window = price
+                else:
+                    min_price_in_window = min(min_price_in_window, price)
+            elif current_window_start is not None:
+                # Window ended
+                negative_windows.append(
+                    (current_window_start, slot_time, min_price_in_window)
+                )
+                current_window_start = None
+                min_price_in_window = 0.0
+
+        # Close any open window
+        if current_window_start is not None:
+            negative_windows.append(
+                (
+                    current_window_start,
+                    base_slot + timedelta(minutes=5 * max_hours * 12),
+                    min_price_in_window,
+                )
+            )
+
+        return negative_windows
+
     def _should_grid_charge_at_slot(
         self,
         slot_start: datetime,
@@ -115,11 +235,16 @@ class ForecastComputer:
         in_demand_window: bool,
         gap_to_target: float,
         is_daylight: bool,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+        dw_start_time: time,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
-        Single source of truth for grid charging decisions.
-        Used by both forecast simulation and mode control.
+        Smart grid charging with very cheap price as safety net.
+        Uses forecast simulation to avoid unnecessary grid charging.
 
         Args:
             slot_start: Start time of the 15-minute slot
@@ -132,43 +257,75 @@ class ForecastComputer:
             in_demand_window: True if in demand window
             gap_to_target: How many percent to target
             is_daylight: True if solar_kwh > 0.05
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            dw_start_time: Demand window start time
 
         Returns:
             (should_charge, should_boost)
         """
-        # Never charge during demand window
+        # Basic constraints
         if in_demand_window:
             return False, False
 
-        # Never charge after demand window
         if not is_before_dw:
             return False, False
 
-        # Must have solar (daylight) to charge
         if not is_daylight:
             return False, False
 
-        # Already at target - no charging needed
         if gap_to_target <= 0:
             return False, False
 
-        # Price-based decisions
+        # Price-based thresholds
         price_is_cheap = slot_price <= effective_cheap_price
         price_is_very_cheap = slot_price <= (effective_cheap_price * 0.8)
 
-        # Very cheap: boost charge (stock up!)
+        # SAFETY NET: Charge if very cheap (forecast could be wrong)
         if price_is_very_cheap:
+            _LOGGER.info(
+                "Grid charge: VERY CHEAP price $%.2f at %s (safety net)",
+                slot_price,
+                slot_start.strftime("%H:%M"),
+            )
             return True, True
 
-        # Cheap: normal charge
+        # SMART FORECAST: Simulate forward with solar only
+        future_soc, can_reach_with_solar_only = (
+            self._simulate_future_soc_with_solar_only(
+                start_soc=predicted_soc,
+                start_slot=slot_start,
+                target_pct=target_pct,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=current_load_kw,
+                recent_load_kw=recent_load_kw,
+                dw_start_time=dw_start_time,
+                max_hours=24,  # Simulate 6 hours ahead
+            )
+        )
+
+        # Solar forecast says we'll reach target: NO grid charging
+        if can_reach_with_solar_only:
+            _LOGGER.debug(
+                "Grid charge SKIPPED: solar forecast reaches target (%.1f%%)",
+                future_soc,
+            )
+            return False, False
+
+        # Solar not enough: Charge at cheap prices
         if price_is_cheap:
+            _LOGGER.info(
+                "Grid charge: CHEAP price $%.2f at %s (gap to target: %.1f%%)",
+                slot_price,
+                slot_start.strftime("%H:%M"),
+                gap_to_target,
+            )
             return True, False
 
-        # Far from target: charge anyway (urgency)
-        if gap_to_target > 10:
-            return True, False
-
-        # Wait for cheaper price
+        # Not cheap, no urgent need: Wait
         return False, False
 
     def _should_proactive_export_at_slot(
@@ -426,6 +583,11 @@ class ForecastComputer:
                 in_demand_window=in_demand_window,
                 gap_to_target=gap_to_target,
                 is_daylight=is_daylight,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
+                dw_start_time=dw_start_time,
             )
 
             # Debug logging for charging decision

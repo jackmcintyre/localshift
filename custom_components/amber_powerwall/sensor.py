@@ -313,6 +313,8 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
                         "net": slot.get("net_kwh"),
                         "grid_in": slot.get("grid_import_kwh"),
                         "grid_out": slot.get("grid_export_kwh"),
+                        "proactive_export": slot.get("proactive_export", False),
+                        "export_amt": slot.get("export_amount_kwh", 0.0),
                     }
                 )
 
