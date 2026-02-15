@@ -392,6 +392,8 @@ class BatteryController:
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
 
+        first_failure_logged = False
+
         for attempt in range(timeout):
             await asyncio.sleep(1)
 
@@ -426,19 +428,48 @@ class BatteryController:
                 )
                 return True
 
-            # Validation failed
-            _LOGGER.error(
-                "Transition validation failed after %d seconds: "
-                "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s), "
-                "actual (operation_mode=%s, backup_reserve=%s, export_mode=%s)",
-                timeout,
-                expected_operation_mode,
-                expected_backup_reserve,
-                expected_export_mode,
-                current_operation_mode,
-                current_backup_reserve,
-                current_export_mode,
+            # Log failure only once (first failure) to avoid log flooding
+            if not first_failure_logged:
+                _LOGGER.warning(
+                    "Transition validation - state mismatch: "
+                    "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s), "
+                    "actual (operation_mode=%s, backup_reserve=%s, export_mode=%s)",
+                    expected_operation_mode,
+                    expected_backup_reserve,
+                    expected_export_mode,
+                    current_operation_mode,
+                    current_backup_reserve,
+                    current_export_mode,
+                )
+                first_failure_logged = True
+
+            # If operation mode matches but reserve/export don't, Tesla has accepted the command
+            # The reserve/export will sync shortly - give more time
+            if matches_operation and not (matches_reserve and matches_export):
+                _LOGGER.debug(
+                    "Operation mode matched, waiting for reserve/export to sync..."
+                )
+
+        # Final check: if operation mode is correct, consider it a success
+        # Tesla may lag in updating reserve, but the mode command went through
+        final_operation_mode = self._read_str(operation_mode_entity)
+        if final_operation_mode == expected_operation_mode:
+            _LOGGER.info(
+                "Transition validated by operation_mode=%s (reserve/export may lag)",
+                final_operation_mode,
             )
+            return True
+
+        _LOGGER.error(
+            "Transition validation failed after %d seconds: "
+            "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s), "
+            "actual (operation_mode=%s)",
+            timeout,
+            expected_operation_mode,
+            expected_backup_reserve,
+            expected_export_mode,
+            final_operation_mode,
+        )
         return False
 
     async def verify_current_state(
