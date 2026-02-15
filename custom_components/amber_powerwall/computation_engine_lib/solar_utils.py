@@ -6,8 +6,11 @@ that are self-contained and don't modify CoordinatorData directly.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 from homeassistant.util import dt as dt_util
 
@@ -59,16 +62,70 @@ def get_price_for_slot(
     return 0.0
 
 
+def get_price_for_slot_or_none(
+    price_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+) -> float | None:
+    """Get price for a 15-minute slot, returning None when there is no match.
+
+    This is important for logic that needs to distinguish "missing forecast"
+    from an actual $0.00 price.
+    """
+    if not price_forecasts:
+        return None
+
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
+    slot_end = slot_start + timedelta(minutes=15)
+
+    prices_in_slot: list[float] = []
+    for entry in price_forecasts:
+        if not isinstance(entry, dict):
+            continue
+
+        start_raw = entry.get("start_time")
+        if start_raw is None:
+            continue
+
+        start_dt = parse_forecast_dt(start_raw)
+        if start_dt is None:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + timedelta(minutes=5)  # Amber prices are 5-min
+
+        # Check if this price period overlaps with our slot
+        if start_local < slot_end and end_local > slot_start:
+            price = float(entry.get("per_kwh", 0.0))
+            prices_in_slot.append(price)
+
+    if not prices_in_slot:
+        return None
+    return sum(prices_in_slot) / len(prices_in_slot)
+
+
 def get_solar_for_15min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
 ) -> float:
     """Get solar forecast (kWh) for 15-minute slot from Solcast 30-min periods.
 
-    Splits 30-minute Solcast periods into two 15-minute halves.
+    Uses containment check: returns half period kWh if slot is within 30-min period.
+    More robust than exact timestamp matching, handles day boundaries and microsecond differences.
     """
     if not solcast_forecasts:
         return 0.0
+
+    # Debug: Log function entry
+    _LOGGER.debug(
+        "SOLAR_15MIN_LOOKUP: slot=%s, num_entries=%d",
+        slot_start.strftime("%Y-%m-%d %H:%M:%S"),
+        len(solcast_forecasts),
+    )
 
     # Ensure slot boundaries are timezone-aware local datetimes
     if slot_start.tzinfo is None:
@@ -79,7 +136,15 @@ def get_solar_for_15min_slot(
     slot_end = slot_start + timedelta(minutes=15)
     period_duration = timedelta(minutes=30)
 
-    for entry in solcast_forecasts:
+    # Debug: Log search window
+    _LOGGER.debug(
+        "SOLAR_15MIN_LOOKUP: slot=%s -> %s, searching %d entries",
+        slot_start.strftime("%Y-%m-%d %H:%M"),
+        slot_end.strftime("%Y-%m-%d %H:%M"),
+        len(solcast_forecasts),
+    )
+
+    for entry_idx, entry in enumerate(solcast_forecasts):
         if not isinstance(entry, dict):
             continue
 
@@ -101,17 +166,38 @@ def get_solar_for_15min_slot(
             or 0.0
         )
 
-        # Check which 15-minute half of 30-min period we're in
-        period_midpoint = start_local + timedelta(minutes=15)
+        # Debug: Log each period check
+        _LOGGER.debug(
+            "SOLAR_15MIN_LOOKUP: [%d] period=%s -> %s, slot=%s -> %s, kwh=%.3f",
+            entry_idx,
+            start_local.strftime("%Y-%m-%d %H:%M"),
+            end_local.strftime("%Y-%m-%d %H:%M"),
+            slot_start.strftime("%Y-%m-%d %H:%M"),
+            slot_end.strftime("%Y-%m-%d %H:%M"),
+            period_kwh,
+        )
 
-        if slot_start >= start_local and slot_end <= period_midpoint:
-            # First half of period (0-15 min)
-            # Simple approach: split evenly (50% each half)
-            return period_kwh * 0.5
-        elif slot_start >= period_midpoint and slot_end <= end_local:
-            # Second half of period (15-30 min)
+        # Check if slot is within this 30-minute period
+        # Containment check: slot must be fully inside the period
+        if slot_start >= start_local and slot_end <= end_local:
+            # Slot is within this 30-minute period
+            # Return half the period kWh (15 min = 50% of 30 min)
+            _LOGGER.debug(
+                "SOLAR_15MIN_LOOKUP: MATCHED slot=%s -> %s to period=%s -> %s, returning %.3f kWh",
+                slot_start.strftime("%Y-%m-%d %H:%M"),
+                slot_end.strftime("%Y-%m-%d %H:%M"),
+                start_local.strftime("%Y-%m-%d %H:%M"),
+                end_local.strftime("%Y-%m-%d %H:%M"),
+                period_kwh * 0.5,
+            )
             return period_kwh * 0.5
 
+    _LOGGER.debug(
+        "SOLAR_15MIN_LOOKUP: NO MATCH slot=%s -> %s, checked %d periods",
+        slot_start.strftime("%Y-%m-%d %H:%M"),
+        slot_end.strftime("%Y-%m-%d %H:%M"),
+        len(solcast_forecasts),
+    )
     return 0.0
 
 

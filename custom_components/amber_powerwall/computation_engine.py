@@ -255,6 +255,11 @@ class ComputationEngine:
         )
         data.cheap_charge_stop_price = round(data.effective_cheap_price + deadband, 2)
 
+        # ---- Step 16: daily_forecast (moved earlier) ----
+        # This must be computed before _compute_active_mode(), otherwise the active_mode
+        # selection will hit the startup fallback path and log "Forecast unavailable".
+        self._compute_daily_15min_forecast(data, now_dt)
+
         # ---- Step 9: forecast_spike_within_window ----
         lookahead = float(
             self.entry.options.get(
@@ -309,7 +314,7 @@ class ComputationEngine:
             self._add_to_decision_log(data, now_dt, mode_change=False)
 
         # ---- Step 16: daily_forecast ----
-        self._compute_daily_15min_forecast(data, now_dt)
+        # (computed earlier; left intentionally blank)
 
     # ========================================================================
     # SOLAR & BATTERY FORECASTING
@@ -747,7 +752,8 @@ class ComputationEngine:
             return None
 
         current_hour = now_dt.hour
-        current_minute = now_dt.minute
+        # Round down to nearest 15-minute slot (0, 15, 30, 45)
+        current_minute = (now_dt.minute // 15) * 15
 
         # Find matching entry
         for entry in data.daily_forecast:

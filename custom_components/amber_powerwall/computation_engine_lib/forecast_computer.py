@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, time, timedelta
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
@@ -21,7 +22,11 @@ from ..const import (
     DEFAULT_LOAD_WEIGHT_RECENT,
 )
 from ..coordinator_data import CoordinatorData
-from .solar_utils import get_price_for_slot, get_solar_for_15min_slot
+from .solar_utils import (
+    get_price_for_slot,
+    get_price_for_slot_or_none,
+    get_solar_for_15min_slot,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,7 +110,7 @@ class ForecastComputer:
 
     def _simulate_future_soc_with_solar_only(
         self,
-        start_soc: float,
+        actual_current_soc: float,
         start_slot: datetime,
         target_pct: float,
         all_solcast: list[dict],
@@ -113,14 +118,14 @@ class ForecastComputer:
         current_load_kw: float,
         recent_load_kw: float,
         dw_start_time: time,
-        max_hours: int = 24,
-    ) -> tuple[float, bool]:
+        end_time: datetime,
+    ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
         This helps determine if grid charging is necessary.
 
         Args:
-            start_soc: Starting SOC percentage
+            actual_current_soc: ACTUAL current battery SOC (from real-time data)
             start_slot: Starting slot time
             target_pct: Target SOC percentage
             all_solcast: Full Solcast forecast (today + tomorrow)
@@ -128,29 +133,56 @@ class ForecastComputer:
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
-            max_hours: How many hours to simulate forward
+            end_time: End time (exclusive) to simulate until
 
         Returns:
-            (final_soc_pct, can_reach_target)
+            (soc_at_end_pct, max_soc_pct, can_reach_target)
         """
-        soc = start_soc
-        base_slot = start_slot.replace(minute=0, second=0, microsecond=0)
+        soc = actual_current_soc
+        base_slot = start_slot.replace(second=0, microsecond=0)
 
-        # Create timezone-aware demand window datetimes
-        dw_start_dt = base_slot.replace(
-            hour=dw_start_time.hour,
-            minute=dw_start_time.minute,
-            second=dw_start_time.second,
+        # Cap end_time to Solcast horizon to avoid repeated solar lookups outside forecast range.
+        solcast_end: datetime | None = None
+        period_duration = timedelta(minutes=30)
+        for entry in all_solcast:
+            if not isinstance(entry, dict):
+                continue
+            period_start_raw = entry.get("period_start") or entry.get("start")
+            if period_start_raw is None:
+                continue
+            start_dt = dt_util.parse_datetime(str(period_start_raw))
+            if not start_dt:
+                continue
+            start_local = dt_util.as_local(start_dt)
+            end_local = start_local + period_duration
+            if solcast_end is None or end_local > solcast_end:
+                solcast_end = end_local
+
+        sim_end = end_time
+        if solcast_end is not None and sim_end > solcast_end:
+            sim_end = solcast_end
+
+        if sim_end <= base_slot:
+            return soc, soc, soc >= target_pct
+
+        total_slots = int((sim_end - base_slot).total_seconds() // (15 * 60))
+        if (sim_end - base_slot).total_seconds() % (15 * 60) != 0:
+            total_slots += 1
+
+        max_soc = soc
+
+        _LOGGER.debug(
+            "GRID_SIM_DEBUG: Starting simulation from ACTUAL current SOC=%.1f%% at %s, target=%d%%, sim_end=%s, slots=%d",
+            soc,
+            start_slot.strftime("%Y-%m-%d %H:%M"),
+            target_pct,
+            sim_end.strftime("%Y-%m-%d %H:%M"),
+            total_slots,
         )
-        dw_end_dt = dw_start_dt + timedelta(hours=6)  # Assume 6h DW
 
-        for offset in range(max_hours * 4):  # 4 slots per hour
+        for offset in range(total_slots):  # 4 slots per hour
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
-
-            # Stop at demand window
-            if dw_start_dt <= slot_start < dw_end_dt:
-                break
 
             # Get solar and load for this slot
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
@@ -163,6 +195,17 @@ class ForecastComputer:
             consumption_kwh = load_kw / 4
             net_kwh = solar_kwh - consumption_kwh
 
+            # Debug: Log each slot
+            _LOGGER.debug(
+                "GRID_SIM_DEBUG: slot=%s-%d solar=%.3f load=%.3f net=%.3f soc_before=%.1f%%",
+                slot_hour,
+                slot_start.minute,
+                solar_kwh,
+                consumption_kwh,
+                net_kwh,
+                soc,
+            )
+
             # Apply battery delta (no grid charging)
             max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
             if net_kwh >= 0:
@@ -173,7 +216,46 @@ class ForecastComputer:
             soc += delta / BATTERY_CAPACITY_KWH * 100
             soc = max(0.0, min(100.0, soc))
 
-        return soc, soc >= target_pct
+            max_soc = max(max_soc, soc)
+
+            # Fast-path: if we've already reached target, we can stop.
+            if max_soc >= target_pct:
+                return soc, max_soc, True
+
+            # Debug: Log after delta
+            _LOGGER.debug(
+                "GRID_SIM_DEBUG: slot=%s-%d delta=%.3f soc_after=%.1f%%",
+                slot_hour,
+                slot_start.minute,
+                delta / BATTERY_CAPACITY_KWH * 100,
+                soc,
+            )
+
+        _LOGGER.debug(
+            "GRID_SIM_DEBUG: Final result: soc_at_end=%.1f%% max_soc=%.1f%% can_reach=%s target=%d%%",
+            soc,
+            max_soc,
+            max_soc >= target_pct,
+            target_pct,
+        )
+
+        return soc, max_soc, max_soc >= target_pct
+
+    def _next_demand_window_start_dt(
+        self,
+        slot_start: datetime,
+        dw_start_time: time,
+    ) -> datetime:
+        """Get the next demand-window start datetime relative to slot_start."""
+        candidate = slot_start.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=dw_start_time.second,
+            microsecond=0,
+        )
+        if candidate <= slot_start:
+            candidate += timedelta(days=1)
+        return candidate
 
     def _find_negative_fit_windows(
         self, feed_in_forecast: list[dict], start_time: datetime, max_hours: int = 24
@@ -195,7 +277,7 @@ class ForecastComputer:
 
         for offset in range(max_hours * 12):  # 5-min intervals = 12 per hour
             slot_time = base_slot + timedelta(minutes=5 * offset)
-            price = get_price_for_slot(feed_in_forecast, slot_time)
+            price = get_price_for_slot_or_none(feed_in_forecast, slot_time)
 
             if price is not None and price <= 0:
                 if current_window_start is None:
@@ -283,7 +365,55 @@ class ForecastComputer:
         price_is_cheap = slot_price <= effective_cheap_price
         price_is_very_cheap = slot_price <= (effective_cheap_price * 0.8)
 
+        # SMART FORECAST: Simulate forward with solar only
+        # Model: can we reach target *before the next demand window starts* using solar only?
+        # If yes, do NOT grid charge in the morning.
+
+        sim_start = slot_start
+        sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
+
+        _LOGGER.debug(
+            "GRID_CHARGE_DEBUG: slot=%s start_soc=%.1f%% target=%d%% simulating %s -> %s...",
+            slot_start.strftime("%Y-%m-%d %H:%M"),
+            predicted_soc,
+            target_pct,
+            sim_start.strftime("%Y-%m-%d %H:%M"),
+            sim_end.strftime("%Y-%m-%d %H:%M"),
+        )
+
+        soc_at_end, max_soc, can_reach_with_solar_only = (
+            self._simulate_future_soc_with_solar_only(
+                actual_current_soc=predicted_soc,
+                start_slot=sim_start,
+                target_pct=target_pct,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=current_load_kw,
+                recent_load_kw=recent_load_kw,
+                dw_start_time=dw_start_time,
+                end_time=sim_end,
+            )
+        )
+
+        _LOGGER.debug(
+            "GRID_CHARGE_DEBUG: sim_result soc_end=%.1f%% max_soc=%.1f%% can_reach=%s target=%d%%",
+            soc_at_end,
+            max_soc,
+            can_reach_with_solar_only,
+            target_pct,
+        )
+
+        # Solar forecast says we'll reach target: NO grid charging
+        if can_reach_with_solar_only:
+            _LOGGER.info(
+                "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
+                max_soc,
+                target_pct,
+            )
+            return False, False
+
         # SAFETY NET: Charge if very cheap (forecast could be wrong)
+        # IMPORTANT: only applies when solar *cannot* meet the target before DW.
         if price_is_very_cheap:
             _LOGGER.info(
                 "Grid charge: VERY CHEAP price $%.2f at %s (safety net)",
@@ -291,29 +421,6 @@ class ForecastComputer:
                 slot_start.strftime("%H:%M"),
             )
             return True, True
-
-        # SMART FORECAST: Simulate forward with solar only
-        future_soc, can_reach_with_solar_only = (
-            self._simulate_future_soc_with_solar_only(
-                start_soc=predicted_soc,
-                start_slot=slot_start,
-                target_pct=target_pct,
-                all_solcast=all_solcast,
-                historical_avg_kw=historical_avg_kw,
-                current_load_kw=current_load_kw,
-                recent_load_kw=recent_load_kw,
-                dw_start_time=dw_start_time,
-                max_hours=24,  # Simulate 6 hours ahead
-            )
-        )
-
-        # Solar forecast says we'll reach target: NO grid charging
-        if can_reach_with_solar_only:
-            _LOGGER.debug(
-                "Grid charge SKIPPED: solar forecast reaches target (%.1f%%)",
-                future_soc,
-            )
-            return False, False
 
         # Solar not enough: Charge at cheap prices
         if price_is_cheap:
@@ -328,6 +435,139 @@ class ForecastComputer:
         # Not cheap, no urgent need: Wait
         return False, False
 
+    def _calculate_average_fit_price(
+        self, feed_in_forecast: list[dict], start_time: datetime, hours: int = 24
+    ) -> float:
+        """Calculate average FIT price over forecast window.
+
+        Args:
+            feed_in_forecast: Feed-in price forecast
+            start_time: Start time for calculation
+            hours: How many hours to include
+
+        Returns:
+            Average FIT price, or 0.0 if no data
+        """
+        prices = []
+        base_slot = start_time.replace(minute=0, second=0, microsecond=0)
+
+        for offset in range(hours * 12):  # 5-min intervals
+            slot_time = base_slot + timedelta(minutes=5 * offset)
+            price = get_price_for_slot(feed_in_forecast, slot_time)
+            if price is not None:
+                prices.append(price)
+
+        if not prices:
+            return 0.0
+
+        return sum(prices) / len(prices)
+
+    def _calculate_percentile_fit_price(
+        self,
+        feed_in_forecast: list[dict],
+        start_time: datetime,
+        percentile: float = 60.0,
+        hours: int = 24,
+    ) -> float:
+        """Calculate Nth percentile FIT price over forecast window.
+
+        Excludes bottom percentile of prices to identify reasonable export windows.
+        E.g., 60th percentile excludes bottom 40% (mostly zero/negative prices).
+
+        Args:
+            feed_in_forecast: Feed-in price forecast
+            start_time: Start time for calculation
+            percentile: Percentile threshold (0-100, default 60)
+            hours: How many hours to include
+
+        Returns:
+            Percentile FIT price, or 0.0 if no data
+        """
+        prices = []
+        base_slot = start_time.replace(minute=0, second=0, microsecond=0)
+
+        for offset in range(hours * 12):  # 5-min intervals
+            slot_time = base_slot + timedelta(minutes=5 * offset)
+            price = get_price_for_slot(feed_in_forecast, slot_time)
+            if price is not None:
+                prices.append(price)
+
+        if not prices:
+            return 0.0
+
+        # Sort and find percentile
+        prices.sort()
+        index = int(len(prices) * percentile / 100)
+        index = min(index, len(prices) - 1)
+        return prices[index]
+
+    def _simulate_minimum_soc_without_exports(
+        self,
+        start_soc: float,
+        start_slot: datetime,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+        dw_start_time: time,
+        dw_end_time: time,
+        max_hours: int = 24,
+    ) -> tuple[float, float]:
+        """Simulate 24-hour forecast WITHOUT proactive exports to find minimum SOC.
+
+        This helps determine how much we can safely export without dropping
+        below minimum SOC threshold.
+
+        Args:
+            start_soc: Starting SOC percentage
+            start_slot: Starting slot time
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            dw_start_time: Demand window start time
+            dw_end_time: Demand window end time
+            max_hours: How many hours to simulate
+
+        Returns:
+            (minimum_soc_pct, final_soc_pct)
+        """
+        soc = start_soc
+        min_soc = soc
+        base_slot = start_slot.replace(minute=0, second=0, microsecond=0)
+
+        for offset in range(max_hours * 4):  # 4 slots per hour
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+
+            # Get solar and load for this slot
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply realistic battery limits (no grid charging in this simulation)
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+
+            if net_kwh >= 0:
+                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            # Update SOC
+            soc += delta / BATTERY_CAPACITY_KWH * 100
+            soc = max(0.0, min(100.0, soc))
+
+            # Track minimum SOC
+            min_soc = min(min_soc, soc)
+
+        return min_soc, soc
+
     def _should_proactive_export_at_slot(
         self,
         slot_start: datetime,
@@ -335,64 +575,122 @@ class ForecastComputer:
         solar_kwh: float,
         slot_fit_price: float,
         predicted_soc: float,
-        target_pct: float,
-        is_before_dw: bool,
         in_demand_window: bool,
         forecasted_excess_kwh: float,
         remaining_export_budget_kwh: float,
+        feed_in_forecast: list[dict],
+        min_soc_no_exports: float,
     ) -> tuple[bool, float]:
         """Determine if proactive export should happen at this slot.
 
-        Proactive export exports excess battery energy BEFORE feed-in prices
-        go negative, avoiding paying to export on sunny days.
+        Proactive export exports excess battery energy during above-percentile
+        FIT price windows to maximize revenue.
+
+        Strategy:
+        1. Calculate 60th percentile FIT price over next 24 hours
+        2. Only export when current FIT >= percentile (reasonable prices)
+        3. Check ending SOC after export (not just starting SOC)
+        4. Only export if minimum SOC without exports >= 20%
+        5. Only export if we have forecasted excess (won't run short)
 
         Args:
-            slot_start: Start time of the 15-minute slot
-            slot_hour: Hour of the slot
+            slot_start: Start time of 15-minute slot
+            slot_hour: Hour of slot
             solar_kwh: Solar forecast for this slot
             slot_fit_price: Feed-in price for this slot
             predicted_soc: Predicted SOC at start of slot
-            target_pct: Target SOC percentage
-            is_before_dw: True if before demand window
             in_demand_window: True if in demand window
-            forecasted_excess_kwh: Total excess solar forecasted before DW
+            forecasted_excess_kwh: Total excess solar forecasted
             remaining_export_budget_kwh: Exportable energy remaining in budget
+            feed_in_forecast: Full FIT price forecast
+            min_soc_no_exports: Minimum SOC over 24h without proactive exports
 
         Returns:
             (should_export, export_amount_kwh)
         """
+        # Only proactive-export if we're genuinely trying to avoid an upcoming
+        # negative/zero feed-in window (i.e. "make space" has an actual purpose).
+        negative_windows = self._find_negative_fit_windows(
+            feed_in_forecast, start_time=slot_start, max_hours=24
+        )
+        if not negative_windows:
+            return False, 0.0
+
+        next_negative_start = min(w[0] for w in negative_windows)
+
+        # Avoid exporting overnight; if we need to make space, do it closer to the event.
+        overnight = slot_start.hour >= 22 or slot_start.hour < 6
+        if overnight and next_negative_start > (slot_start + timedelta(hours=2)):
+            return False, 0.0
+
         # Never export during demand window
         if in_demand_window:
             return False, 0.0
 
-        # Never export after demand window (need charge for evening)
-        if not is_before_dw:
+        # Need buffer in battery (20% minimum reserve)
+        export_min_soc_pct = 20.0
+        if predicted_soc <= export_min_soc_pct:
             return False, 0.0
 
-        # Must have daylight (solar to recharge later)
-        is_daylight = solar_kwh > 0.05
-        if not is_daylight:
+        # Critical: Don't export if battery will already drop below 20% without exports
+        # This prevents draining of battery too low
+        if min_soc_no_exports < export_min_soc_pct:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: BLOCKED - min SOC without exports (%.1f%%) < %.1f%%",
+                min_soc_no_exports,
+                export_min_soc_pct,
+            )
             return False, 0.0
 
-        # Need buffer in battery (don't export below safe level)
-        min_soc_pct = target_pct - 10
-        if predicted_soc <= min_soc_pct:
-            return False, 0.0
-
-        # Only export if feed-in price is positive
-        if slot_fit_price <= 0:
+        # Additional safety: Need sufficient buffer for overnight drain
+        # If we export now, the ending SOC must be significantly higher than minimum
+        # to account for continued overnight discharge
+        required_buffer_pct = 15.0  # 15% extra buffer above minimum
+        if predicted_soc < (export_min_soc_pct + required_buffer_pct):
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: BLOCKED - SOC %.1f%% < buffer (%.1f%% + %.1f%%)",
+                predicted_soc,
+                export_min_soc_pct,
+                required_buffer_pct,
+            )
             return False, 0.0
 
         # Only export if we have forecasted excess (not just current SOC)
-        # This prevents exporting when we might need the charge later
+        # This prevents exporting when we might need to charge later
         if forecasted_excess_kwh <= 0:
             return False, 0.0
 
+        # Calculate 60th percentile FIT price over next 24 hours
+        # This excludes bottom 40% of prices (mostly zero/negative)
+        percentile_fit_price = self._calculate_percentile_fit_price(
+            feed_in_forecast, slot_start, percentile=60.0, hours=24
+        )
+
+        # Only export if current FIT is at or above percentile threshold
+        if slot_fit_price < percentile_fit_price:
+            return False, 0.0
+
+        # Never proactive-export into a non-positive FIT.
+        if slot_fit_price <= 0:
+            return False, 0.0
+
+        # CRITICAL: Calculate total discharge (export + load) before deciding
+        # If solar_kwh < consumption, battery is already discharging for load
+        # Adding export discharge on top could drain battery too fast
+        # Calculate consumption from slot data (need to estimate it here)
+        # Since we don't have consumption_kwh passed in, estimate from solar and net
+        # For now, assume no load discharge during solar hours, only overnight
+        net_discharge_kwh = 0.0
+        if solar_kwh < 0.001:  # No solar - overnight hours
+            # Estimate consumption: typical overnight load ~0.2-0.4 kWh per 15 min
+            # This is conservative - actual value will vary
+            net_discharge_kwh = 0.3 / 0.95  # 95% discharge efficiency
+
         # Calculate exportable amount from battery (capped by SOC and max rate)
         battery_exportable_kwh = (
-            (predicted_soc - min_soc_pct) / 100 * BATTERY_CAPACITY_KWH
+            (predicted_soc - export_min_soc_pct) / 100 * BATTERY_CAPACITY_KWH
         )
-        max_export_rate_kwh = 3.3 / 4  # 0.825 kWh per 15 min slot
+        max_export_rate_kwh = 8.7 / 4  # 2.175 kWh per 15 min slot
 
         # Export amount = min(battery exportable, remaining budget, max rate)
         export_amount = min(
@@ -401,7 +699,41 @@ class ForecastComputer:
             max_export_rate_kwh,
         )
 
+        # CRITICAL FIX: Check ending SOC after TOTAL discharge (export + load)
+        # This prevents aggressive exports when battery is already discharging for load
+        export_discharge_kwh = export_amount / 0.95  # 95% efficiency
+        total_discharge_kwh = net_discharge_kwh + export_discharge_kwh
+        soc_after_discharge = predicted_soc - (
+            total_discharge_kwh / BATTERY_CAPACITY_KWH * 100
+        )
+
+        # Need buffer above minimum to account for continued overnight drain
+        required_buffer_pct = 15.0  # 15% extra buffer
+        min_safe_soc = export_min_soc_pct + required_buffer_pct
+
+        if soc_after_discharge < min_safe_soc:
+            # Don't export - would drop below safe level
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - ending SOC=%.1f%% < %.1f%% (load=%.3f + export=%.3f)",
+                slot_hour,
+                slot_start.minute,
+                soc_after_discharge,
+                min_safe_soc,
+                net_discharge_kwh,
+                export_discharge_kwh,
+            )
+            return False, 0.0
+
         if export_amount > 0:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f >= pct=$%.2f, amount=%.3f kWh, ending_soc=%.1f%%",
+                slot_hour,
+                slot_start.minute,
+                slot_fit_price,
+                percentile_fit_price,
+                export_amount,
+                soc_after_discharge,
+            )
             return True, round(export_amount, 3)
 
         return False, 0.0
@@ -475,24 +807,20 @@ class ForecastComputer:
         target_hour = dw_start_time.hour
 
         # ========================================================================
-        # CALCULATE FORECASTED EXCESS FOR PROACTIVE EXPORT
+        # CALCULATE FORECASTED EXCESS AND MINIMUM SOC FOR PROACTIVE EXPORT
         # ========================================================================
-        # Sum all solar - consumption before demand window
+        # Sum all solar - consumption for full 24-hour forecast
         # This tells us if we'll have excess energy that should be exported
         # before feed-in prices go negative
         forecasted_excess_kwh = 0.0
         current_kwh = current_soc / 100 * BATTERY_CAPACITY_KWH
         space_to_target_kwh = max(target_kwh - current_kwh, 0)
 
+        # Calculate excess for full 24-hour window (all 96 slots)
+        # This includes both today's remaining hours and tomorrow's solar production
         for offset in range(96):
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
-            slot_time = slot_start.time()
-
-            # Only sum before demand window
-            in_demand_window = dw_start_time <= slot_time < dw_end_time
-            if in_demand_window:
-                break
 
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
             load_kw, _ = self._estimate_hourly_consumption_kw(
@@ -517,10 +845,32 @@ class ForecastComputer:
 
         # Export budget: total excess minus 10% buffer
         export_budget_kwh = max(0, forecasted_excess_kwh * 0.90)
+
+        # Calculate minimum SOC without any proactive exports
+        # This helps us determine safe export limits
+        min_soc_no_exports, final_soc_no_exports = (
+            self._simulate_minimum_soc_without_exports(
+                start_soc=current_soc,
+                start_slot=base_slot,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
+                dw_start_time=dw_start_time,
+                dw_end_time=dw_end_time,
+                max_hours=24,
+            )
+        )
+
         _LOGGER.info(
-            "Forecasted excess: %.2f kWh, export budget: %.2f kWh",
+            "Forecasted excess: %.2f kWh, export budget: %.2f kWh (full 24h forecast)",
             forecasted_excess_kwh,
             export_budget_kwh,
+        )
+        _LOGGER.info(
+            "Minimum SOC without exports: %.1f%%, final SOC: %.1f%%",
+            min_soc_no_exports,
+            final_soc_no_exports,
         )
 
         # Build rolling 24-hour forecast with 15-minute slots (96 total)
@@ -530,6 +880,10 @@ class ForecastComputer:
             slot_hour = slot_start.hour
             slot_minute = slot_start.minute
             slot_time = slot_start.time()
+
+            # SOC at the start of this slot for any decision-making.
+            # For the first slot, use actual SOC. For later slots, use the rolling forecast SOC.
+            soc_at_slot_start = current_soc if offset == 0 else predicted_soc
 
             # Check if we're in demand window (zero grid import constraint)
             in_demand_window = dw_start_time <= slot_time < dw_end_time
@@ -559,7 +913,7 @@ class ForecastComputer:
             _slot_price = get_price_for_slot(data.general_forecast, slot_start)
 
             # Determine if we should grid charge using single source of truth
-            gap_to_target = max(target_pct - predicted_soc, 0)
+            gap_to_target = max(target_pct - soc_at_slot_start, 0)
 
             # Handle wrap-around: if current time is past target hour,
             # next DW is tomorrow
@@ -572,11 +926,12 @@ class ForecastComputer:
             is_daylight = solar_kwh > 0.05
 
             # Use single source of truth for grid charging decision
+            # Pass the SOC at the start of the slot.
             should_grid_charge, should_boost = self._should_grid_charge_at_slot(
                 slot_start=slot_start,
                 solar_kwh=solar_kwh,
                 slot_price=_slot_price,
-                predicted_soc=predicted_soc,
+                predicted_soc=soc_at_slot_start,
                 target_pct=target_pct,
                 effective_cheap_price=data.effective_cheap_price,
                 is_before_dw=is_before_dw,
@@ -597,7 +952,7 @@ class ForecastComputer:
                 slot_minute,
                 in_demand_window,
                 is_before_dw,
-                predicted_soc,
+                soc_at_slot_start,
                 target_pct,
                 gap_to_target,
                 should_grid_charge,
@@ -621,6 +976,11 @@ class ForecastComputer:
                 max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
             elif should_grid_charge and hours_to_dw < 2:
                 max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
+
+            # Check if battery will be at or above 100% after solar charging
+            battery_at_or_above_cap = (
+                predicted_soc + (net_kwh / BATTERY_CAPACITY_KWH * 100)
+            ) >= 100.0
 
             # Step 1: Calculate base battery delta from solar/load
             if net_kwh >= 0:
@@ -656,11 +1016,11 @@ class ForecastComputer:
                     solar_kwh=solar_kwh,
                     slot_fit_price=_slot_fit_price,
                     predicted_soc=predicted_soc,
-                    target_pct=target_pct,
-                    is_before_dw=is_before_dw,
                     in_demand_window=in_demand_window,
                     forecasted_excess_kwh=forecasted_excess_kwh,
                     remaining_export_budget_kwh=remaining_export_budget,
+                    feed_in_forecast=data.feed_in_forecast,
+                    min_soc_no_exports=min_soc_no_exports,
                 )
             )
 
@@ -680,10 +1040,16 @@ class ForecastComputer:
                     remaining_export_budget,
                 )
             else:
-                # Step 3a: Calculate normal grid export (only if solar > battery capacity)
+                # Step 3a: Calculate normal grid export
                 if net_kwh >= 0:
-                    excess_after_battery = net_kwh - battery_delta_kwh
-                    grid_export_kwh = max(excess_after_battery, 0)
+                    # If battery will be at or above 100%, all excess solar goes directly to grid
+                    # No efficiency loss for direct solar-to-grid exports
+                    if battery_at_or_above_cap:
+                        grid_export_kwh = net_kwh
+                    else:
+                        # Battery has capacity, calculate excess after battery charging
+                        excess_after_battery = net_kwh - battery_delta_kwh
+                        grid_export_kwh = max(excess_after_battery, 0)
                 else:
                     # Deficit: battery already handled in Step 1 (discharge)
                     # Grid import already handled in Step 2 (grid charging)
