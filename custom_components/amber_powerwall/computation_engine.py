@@ -29,8 +29,6 @@ from .const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
-    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-    CONF_HOLD_MIN_SAVINGS_PERCENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_SUN_ENTITY,
     DEFAULT_BATTERY_TARGET,
@@ -39,13 +37,9 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
-    DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-    DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DISCHARGE_EARLIEST_HOUR,
-    SOLAR_EXPORT_SURPLUS_ENTRY,
-    SOLAR_EXPORT_SURPLUS_STAY,
     BatteryMode,
 )
 from .coordinator_data import CoordinatorData
@@ -280,13 +274,16 @@ class ComputationEngine:
         )
 
         # ---- Step 11: hold_justified ----
-        self._compute_hold_justified(data, now_dt, cutoff)
+        # Hold mode removed - always False
+        data.hold_justified = False
 
         # ---- Step 12: solar_weighted_avg_fit ----
         self._compute_solar_weighted_avg_fit(data, now_dt, target_hour, after_dw)
 
         # ---- Step 13: solar_export_hold_justified ----
-        self._compute_solar_export_hold_justified(data, before_dw)
+        # Hold mode removed - always False
+        data.solar_export_hold_justified = False
+        data.surplus_ratio = 0.0
 
         # ---- Step 14: active_mode ----
         self._compute_active_mode(data, now_dt)
@@ -593,66 +590,13 @@ class ComputationEngine:
     def _compute_hold_justified(
         self, data: CoordinatorData, now_dt: datetime, cutoff: datetime
     ) -> None:
-        """Compute whether holding battery is justified."""
-        # Check 1: meaningful solar (>= 0.5 kWh) within lookahead
-        solar_kwh_lookahead = 0.0
-        for forecast_list in [data.solcast_today, data.solcast_tomorrow]:
-            for period in forecast_list:
-                period_start = self._parse_forecast_dt(period.get("period_start"))
-                if period_start is None:
-                    continue
-                ps_local = dt_util.as_local(period_start)
-                if ps_local >= now_dt and ps_local <= cutoff:
-                    solar_kwh_lookahead += float(period.get("pv_estimate10", 0))
+        """Compute whether holding battery is justified.
 
-        # Check 2: financially justified price savings within lookahead
-        min_future_price = 0.99
-        for f in data.general_forecast:
-            start = self._parse_forecast_dt(f.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                price = float(f.get("per_kwh", 0.99))
-                if price < min_future_price:
-                    min_future_price = price
-
-        # Calculate savings as percentage
-        price_drop_pct = 0.0
-        if data.general_price > 0:
-            price_drop_pct = (
-                (data.general_price - min_future_price) / data.general_price
-            ) * 100
-
-        # Read configurable thresholds
-        min_savings_percent = float(
-            self.entry.options.get(
-                CONF_HOLD_MIN_SAVINGS_PERCENT, DEFAULT_HOLD_MIN_SAVINGS_PERCENT
-            )
-        )
-        absolute_cheap_threshold = float(
-            self.entry.options.get(
-                CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-                DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-            )
-        )
-
-        cheap_coming = (
-            price_drop_pct > min_savings_percent
-            or min_future_price < absolute_cheap_threshold
-        )
-
-        # Don't justify holding overnight (10pm-6am) when there's no sun to charge
-        # This prevents unnecessary hold mode triggered by:
-        # 1. Price drops when solar charging isn't possible anyway
-        # 2. Solar forecasts when there's no sun to benefit
-        overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6
-        if overnight_hours and not data.solar_can_reach_target:
-            cheap_coming = False
-            # Also disable solar-based hold justification overnight
-            solar_kwh_lookahead = 0.0
-
-        data.hold_justified = solar_kwh_lookahead >= 0.5 or cheap_coming
+        NOTE: Hold mode has been removed. This method is kept for compatibility
+        but always sets hold_justified to False.
+        """
+        # Hold mode removed - always False
+        data.hold_justified = False
 
     def _compute_solar_weighted_avg_fit(
         self, data: CoordinatorData, now_dt: datetime, target_hour: int, after_dw: bool
@@ -702,43 +646,14 @@ class ComputationEngine:
     def _compute_solar_export_hold_justified(
         self, data: CoordinatorData, before_dw: bool
     ) -> None:
-        """Compute whether solar export hold is justified."""
-        # Safe default: assume sun is down if entity unavailable
-        sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
-        sun_state = self.hass.states.get(sun_entity_id)
-        sun_up = sun_state is not None and sun_state.state == "above_horizon"
-        if sun_state is None:
-            _LOGGER.debug(
-                "Sun entity %s not found, assuming sun is down", sun_entity_id
-            )
+        """Compute whether solar export hold is justified.
 
-        deficit_kwh = data.solar_battery_forecast.get("deficit_kwh", 0)
-        net_solar_kwh = data.solar_battery_forecast.get("net_solar_kwh", 0)
-        current_fit = data.feed_in_price
-        avg_fit = data.solar_weighted_avg_fit
-        in_solar_export_hold = data.solar_export_hold
-        charging = data.force_charge_active
-
-        if (
-            not sun_up
-            or not before_dw
-            or data.demand_window_active
-            or deficit_kwh <= 0
-            or charging
-        ):
-            data.solar_export_hold_justified = False
-            data.surplus_ratio = 0.0
-        else:
-            surplus_ratio = net_solar_kwh / deficit_kwh if deficit_kwh > 0 else 0
-            data.surplus_ratio = round(surplus_ratio, 2)
-            threshold = (
-                SOLAR_EXPORT_SURPLUS_STAY
-                if in_solar_export_hold
-                else SOLAR_EXPORT_SURPLUS_ENTRY
-            )
-            data.solar_export_hold_justified = (
-                surplus_ratio >= threshold and current_fit > avg_fit and avg_fit > 0
-            )
+        NOTE: Hold mode has been removed. This method is kept for compatibility
+        but always sets solar_export_hold_justified to False.
+        """
+        # Hold mode removed - always False
+        data.solar_export_hold_justified = False
+        data.surplus_ratio = 0.0
 
     def _get_forecast_entry_for_now(
         self, data: CoordinatorData, now_dt: datetime
@@ -831,17 +746,13 @@ class ComputationEngine:
             data.active_mode = BatteryMode.SPIKE_DISCHARGE
         elif data.manual_override:
             data.active_mode = BatteryMode.MANUAL
-        elif data.solar_export_hold and data.hold_mode:
-            data.active_mode = BatteryMode.SOLAR_EXPORT_HOLD
-        elif data.hold_justified:
-            data.active_mode = BatteryMode.HOLD
-        elif data.forecast_spike_within_window:
-            # Don't hold for spikes overnight (10pm-6am) when there's no sun to benefit
-            overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6
-            if not (overnight_hours and not data.solar_can_reach_target):
-                data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
-            else:
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
+        # Hold mode removed - these conditions are no longer evaluated:
+        # elif data.solar_export_hold and data.hold_mode:
+        #     data.active_mode = BatteryMode.SOLAR_EXPORT_HOLD
+        # elif data.hold_justified:
+        #     data.active_mode = BatteryMode.HOLD
+        # elif data.forecast_spike_within_window:
+        #     data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
         else:
             data.active_mode = BatteryMode.SELF_CONSUMPTION
 

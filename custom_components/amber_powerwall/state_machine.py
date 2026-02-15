@@ -61,6 +61,8 @@ class StateMachine:
 
         Used at startup to sync commanded mode so we don't issue
         a redundant command on the first evaluation.
+
+        NOTE: Hold mode has been removed.
         """
         if data.force_discharge_active:
             return BatteryMode.SPIKE_DISCHARGE
@@ -68,10 +70,6 @@ class StateMachine:
             return BatteryMode.BOOST_CHARGING
         if data.force_charge_active:
             return BatteryMode.GRID_CHARGING
-        if data.hold_mode:
-            if data.solar_export_hold:
-                return BatteryMode.SOLAR_EXPORT_HOLD
-            return BatteryMode.HOLD
         return BatteryMode.SELF_CONSUMPTION
 
     def get_debounce_for_transition(
@@ -81,8 +79,9 @@ class StateMachine:
 
         Matches the YAML ``for: minutes: N`` patterns:
         - Spike / demand window / manual → immediate
-        - Solar export hold → 2 minutes (A17/A18)
         - All price-driven transitions → 5 minutes (A3/A4/A10/A11)
+
+        NOTE: Hold mode has been removed.
         """
         # Immediate: high-priority or safety transitions
         if to_mode in (
@@ -94,15 +93,6 @@ class StateMachine:
         # Immediate: leaving high-priority modes
         if from_mode in (BatteryMode.SPIKE_DISCHARGE, BatteryMode.DEMAND_BLOCK):
             return timedelta(0)
-        # Immediate: holding for spike (forecast-based, not price jitter)
-        if to_mode == BatteryMode.HOLDING_FOR_SPIKE:
-            return timedelta(0)
-        # Solar export hold: 2 minutes
-        if (
-            to_mode == BatteryMode.SOLAR_EXPORT_HOLD
-            or from_mode == BatteryMode.SOLAR_EXPORT_HOLD
-        ):
-            return timedelta(minutes=2)
         # All other (price-driven): 5 minutes
         return timedelta(minutes=5)
 
@@ -225,17 +215,10 @@ class StateMachine:
             self._commanded_mode = desired
             self._mode_desired_since.clear()
 
-            # Clear hold_mode flag when transitioning away from hold modes
-            # This prevents flag from persisting and causing unintended
-            # hold mode re-entry
-            if desired not in (
-                BatteryMode.HOLD,
-                BatteryMode.SOLAR_EXPORT_HOLD,
-                BatteryMode.HOLDING_FOR_SPIKE,
-            ):
-                data.hold_mode = False
+            # Hold mode removed - no need to clear hold_mode flag
 
             # Send notification
+
             await self._notification_service.send_transition_notification(
                 old_mode, desired, data
             )
@@ -278,35 +261,10 @@ class StateMachine:
                 else:
                     _LOGGER.error("Demand block mode transition FAILED")
 
-            elif target == BatteryMode.HOLD:
-                data.solar_export_hold = False
-                transition_success = await self._battery_controller.set_hold(
-                    data, dry_run
-                )
-                if transition_success:
-                    _LOGGER.info("Hold mode transition completed")
-                else:
-                    _LOGGER.error("Hold mode transition FAILED")
-
-            elif target == BatteryMode.SOLAR_EXPORT_HOLD:
-                data.solar_export_hold = True
-                transition_success = await self._battery_controller.set_hold(
-                    data, dry_run
-                )
-                if transition_success:
-                    _LOGGER.info("Solar export hold mode transition completed")
-                else:
-                    _LOGGER.error("Solar export hold mode transition FAILED")
-
-            elif target == BatteryMode.HOLDING_FOR_SPIKE:
-                data.solar_export_hold = False
-                transition_success = await self._battery_controller.set_hold(
-                    data, dry_run
-                )
-                if transition_success:
-                    _LOGGER.info("Holding for spike mode transition completed")
-                else:
-                    _LOGGER.error("Holding for spike mode transition FAILED")
+            # Hold mode removed - these branches no longer exist:
+            # elif target == BatteryMode.HOLD:
+            # elif target == BatteryMode.SOLAR_EXPORT_HOLD:
+            # elif target == BatteryMode.HOLDING_FOR_SPIKE:
 
             elif target == BatteryMode.GRID_CHARGING:
                 transition_success = await self._battery_controller.set_force_charge(
@@ -366,12 +324,9 @@ class StateMachine:
             return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.DEMAND_BLOCK:
             return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
-        elif mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
-            # For hold modes, we can't know exact reserve without data,
-            # so skip reserve check but verify operation and export
-            return ("self_consumption", -1, TESLEMETRY_EXPORT_PV_ONLY)
-        elif mode == BatteryMode.SOLAR_EXPORT_HOLD:
-            return ("self_consumption", -1, TESLEMETRY_EXPORT_PV_ONLY)
+        # Hold mode removed - these branches no longer exist:
+        # elif mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
+        # elif mode == BatteryMode.SOLAR_EXPORT_HOLD:
         elif mode == BatteryMode.GRID_CHARGING:
             return ("backup", 10, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.BOOST_CHARGING:

@@ -22,8 +22,6 @@ from .const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
-    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-    CONF_HOLD_MIN_SAVINGS_PERCENT,
     CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
@@ -47,8 +45,6 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
-    DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-    DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
@@ -195,11 +191,11 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_BATTERY_TARGET: DEFAULT_BATTERY_TARGET,
                 CONF_DEMAND_WINDOW_START: DEFAULT_DEMAND_WINDOW_START,
                 CONF_DEMAND_WINDOW_END: DEFAULT_DEMAND_WINDOW_END,
-                CONF_HOLD_MIN_SAVINGS_PERCENT: DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
-                CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD: DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
+                # Hold mode options removed
                 CONF_MANUAL_OVERRIDE_TIMEOUT: DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
                 CONF_LOAD_WEIGHT_RECENT: DEFAULT_LOAD_WEIGHT_RECENT,
             }
+
             return self.async_create_entry(
                 title="Amber Powerwall",
                 data=all_data,
@@ -361,36 +357,7 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
                             DEFAULT_DEMAND_WINDOW_END,
                         ),
                     ): selector.TimeSelector(),
-                    vol.Required(
-                        CONF_HOLD_MIN_SAVINGS_PERCENT,
-                        default=current.get(
-                            CONF_HOLD_MIN_SAVINGS_PERCENT,
-                            DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=50,
-                            step=1,
-                            unit_of_measurement="%",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-                        default=current.get(
-                            CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-                            DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0.00,
-                            max=0.50,
-                            step=0.01,
-                            unit_of_measurement="$/kWh",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
+                    # Hold mode options removed
                     vol.Required(
                         CONF_MANUAL_OVERRIDE_TIMEOUT,
                         default=current.get(

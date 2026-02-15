@@ -19,12 +19,9 @@ class BatteryMode(str, Enum):
     """Battery operating modes."""
 
     SELF_CONSUMPTION = "self_consumption"
-    HOLD = "hold"
-    SOLAR_EXPORT_HOLD = "solar_export_hold"
     GRID_CHARGING = "grid_charging"
     BOOST_CHARGING = "boost_charging"
     SPIKE_DISCHARGE = "spike_discharge"
-    HOLDING_FOR_SPIKE = "holding_for_spike"
     DEMAND_BLOCK = "demand_block"
     MANUAL = "manual"
 
@@ -113,8 +110,6 @@ CONF_PRECHARGE_BATTERY_THRESHOLD = "precharge_battery_threshold"
 CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
-CONF_HOLD_MIN_SAVINGS_PERCENT = "hold_min_savings_percent"
-CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD = "hold_absolute_cheap_threshold"
 CONF_LOAD_WEIGHT_RECENT = "load_weight_recent"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 
@@ -127,8 +122,6 @@ DEFAULT_PRECHARGE_BATTERY_THRESHOLD = 50  # %
 DEFAULT_BATTERY_TARGET = 100  # %
 DEFAULT_DEMAND_WINDOW_START = "15:00:00"
 DEFAULT_DEMAND_WINDOW_END = "21:00:00"
-DEFAULT_HOLD_MIN_SAVINGS_PERCENT = 20  # % price drop required
-DEFAULT_HOLD_ABSOLUTE_CHEAP_THRESHOLD = 0.10  # $/kWh
 DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4  # hours
 DEFAULT_LOAD_WEIGHT_RECENT = 0.67  # 2/3 weighting to recent usage
 DEFAULT_EXPORT_MIN_SPREAD = 0.10  # $/kWh minimum spread to export (buy - sell)
@@ -176,20 +169,6 @@ THRESHOLD_RANGES = {
         "step": 5,
         "unit": "%",
         "icon": "mdi:battery-check",
-    },
-    CONF_HOLD_MIN_SAVINGS_PERCENT: {
-        "min": 0,
-        "max": 50,
-        "step": 1,
-        "unit": "%",
-        "icon": "mdi:percent",
-    },
-    CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD: {
-        "min": 0.00,
-        "max": 0.50,
-        "step": 0.01,
-        "unit": "$/kWh",
-        "icon": "mdi:cash",
     },
     CONF_LOAD_WEIGHT_RECENT: {
         "min": 0.0,
@@ -243,7 +222,6 @@ SWITCH_NAMES = {
 
 BUTTON_FORCE_CHARGE = "force_charge"
 BUTTON_FORCE_DISCHARGE = "force_discharge"
-BUTTON_HOLD = "hold"
 BUTTON_BOOST_CHARGE = "boost_charge"
 BUTTON_SELF_CONSUMPTION = "self_consumption"
 BUTTON_UPDATE_FORECAST = "update_forecast"
@@ -251,7 +229,6 @@ BUTTON_UPDATE_FORECAST = "update_forecast"
 BUTTON_ICONS = {
     BUTTON_FORCE_CHARGE: "mdi:battery-charging",
     BUTTON_FORCE_DISCHARGE: "mdi:battery-arrow-down",
-    BUTTON_HOLD: "mdi:battery-lock",
     BUTTON_BOOST_CHARGE: "mdi:battery-charging-high",
     BUTTON_SELF_CONSUMPTION: "mdi:battery-sync",
     BUTTON_UPDATE_FORECAST: "mdi:refresh",
@@ -260,18 +237,10 @@ BUTTON_ICONS = {
 BUTTON_NAMES = {
     BUTTON_FORCE_CHARGE: "Force Charge",
     BUTTON_FORCE_DISCHARGE: "Force Discharge",
-    BUTTON_HOLD: "Hold Battery",
     BUTTON_BOOST_CHARGE: "Boost Charge (5kW)",
     BUTTON_SELF_CONSUMPTION: "Return to Self Consumption",
     BUTTON_UPDATE_FORECAST: "Update Forecast",
 }
-
-# -----------------------------------------------------------------------------
-# Solar Export Hold Thresholds
-# -----------------------------------------------------------------------------
-
-SOLAR_EXPORT_SURPLUS_ENTRY = 1.5  # Surplus ratio to enter solar export hold
-SOLAR_EXPORT_SURPLUS_STAY = 1.0  # Surplus ratio to stay in solar export hold
 
 # -----------------------------------------------------------------------------
 # Platforms

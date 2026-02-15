@@ -21,7 +21,6 @@ from .const import (
     BUTTON_BOOST_CHARGE,
     BUTTON_FORCE_CHARGE,
     BUTTON_FORCE_DISCHARGE,
-    BUTTON_HOLD,
     BUTTON_ICONS,
     BUTTON_NAMES,
     BUTTON_SELF_CONSUMPTION,
@@ -42,7 +41,7 @@ async def async_setup_entry(
     entities = [
         ForceChargeButton(coordinator, entry),
         ForceDischargeButton(coordinator, entry),
-        HoldButton(coordinator, entry),
+        # HoldButton removed - Hold mode no longer exists
         BoostChargeButton(coordinator, entry),
         SelfConsumptionButton(coordinator, entry),
         UpdateForecastButton(coordinator, entry),
@@ -114,24 +113,6 @@ class ForceDischargeButton(AmberPowerwallButtonBase):
             "Powerwall: Manual Force Discharge",
             f"Manual force discharge started. Battery at "
             f"{self.coordinator.data.soc:.0f}%.",
-        )
-
-
-class HoldButton(AmberPowerwallButtonBase):
-    """Manually hold the battery at current SOC."""
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, BUTTON_HOLD)
-
-    async def async_press(self) -> None:
-        """Handle button press."""
-        self.coordinator.data.manual_override = True
-        self.coordinator._manual_override_set_at = dt_util.now()
-        await self.coordinator.async_set_hold()
-        await self.coordinator.async_send_notification(
-            "Powerwall: Manual Hold",
-            f"Manual hold started at {self.coordinator.data.soc:.0f}%. "
-            "House draws from grid.",
         )
 
 
