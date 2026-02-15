@@ -171,6 +171,84 @@ class ForecastComputer:
         # Wait for cheaper price
         return False, False
 
+    def _should_proactive_export_at_slot(
+        self,
+        slot_start: datetime,
+        slot_hour: int,
+        solar_kwh: float,
+        slot_fit_price: float,
+        predicted_soc: float,
+        target_pct: float,
+        is_before_dw: bool,
+        in_demand_window: bool,
+        forecasted_excess_kwh: float,
+        remaining_export_budget_kwh: float,
+    ) -> tuple[bool, float]:
+        """Determine if proactive export should happen at this slot.
+
+        Proactive export exports excess battery energy BEFORE feed-in prices
+        go negative, avoiding paying to export on sunny days.
+
+        Args:
+            slot_start: Start time of the 15-minute slot
+            slot_hour: Hour of the slot
+            solar_kwh: Solar forecast for this slot
+            slot_fit_price: Feed-in price for this slot
+            predicted_soc: Predicted SOC at start of slot
+            target_pct: Target SOC percentage
+            is_before_dw: True if before demand window
+            in_demand_window: True if in demand window
+            forecasted_excess_kwh: Total excess solar forecasted before DW
+            remaining_export_budget_kwh: Exportable energy remaining in budget
+
+        Returns:
+            (should_export, export_amount_kwh)
+        """
+        # Never export during demand window
+        if in_demand_window:
+            return False, 0.0
+
+        # Never export after demand window (need charge for evening)
+        if not is_before_dw:
+            return False, 0.0
+
+        # Must have daylight (solar to recharge later)
+        is_daylight = solar_kwh > 0.05
+        if not is_daylight:
+            return False, 0.0
+
+        # Need buffer in battery (don't export below safe level)
+        min_soc_pct = target_pct - 10
+        if predicted_soc <= min_soc_pct:
+            return False, 0.0
+
+        # Only export if feed-in price is positive
+        if slot_fit_price <= 0:
+            return False, 0.0
+
+        # Only export if we have forecasted excess (not just current SOC)
+        # This prevents exporting when we might need the charge later
+        if forecasted_excess_kwh <= 0:
+            return False, 0.0
+
+        # Calculate exportable amount from battery (capped by SOC and max rate)
+        battery_exportable_kwh = (
+            (predicted_soc - min_soc_pct) / 100 * BATTERY_CAPACITY_KWH
+        )
+        max_export_rate_kwh = 3.3 / 4  # 0.825 kWh per 15 min slot
+
+        # Export amount = min(battery exportable, remaining budget, max rate)
+        export_amount = min(
+            battery_exportable_kwh,
+            remaining_export_budget_kwh,
+            max_export_rate_kwh,
+        )
+
+        if export_amount > 0:
+            return True, round(export_amount, 3)
+
+        return False, 0.0
+
     def compute_forecast(
         self,
         data: CoordinatorData,
@@ -239,7 +317,57 @@ class ForecastComputer:
         )
         target_hour = dw_start_time.hour
 
+        # ========================================================================
+        # CALCULATE FORECASTED EXCESS FOR PROACTIVE EXPORT
+        # ========================================================================
+        # Sum all solar - consumption before demand window
+        # This tells us if we'll have excess energy that should be exported
+        # before feed-in prices go negative
+        forecasted_excess_kwh = 0.0
+        current_kwh = current_soc / 100 * BATTERY_CAPACITY_KWH
+        space_to_target_kwh = max(target_kwh - current_kwh, 0)
+
+        for offset in range(96):
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+            slot_time = slot_start.time()
+
+            # Only sum before demand window
+            in_demand_window = dw_start_time <= slot_time < dw_end_time
+            if in_demand_window:
+                break
+
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                data.load_power_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Accumulate excess (positive net) beyond what we need for target
+            if net_kwh > 0:
+                if space_to_target_kwh > 0:
+                    # First fill target gap
+                    used_for_target = min(net_kwh, space_to_target_kwh)
+                    space_to_target_kwh -= used_for_target
+                    forecasted_excess_kwh += max(0, net_kwh - used_for_target)
+                else:
+                    # Target met, all excess is exportable
+                    forecasted_excess_kwh += net_kwh
+
+        # Export budget: total excess minus 10% buffer
+        export_budget_kwh = max(0, forecasted_excess_kwh * 0.90)
+        _LOGGER.info(
+            "Forecasted excess: %.2f kWh, export budget: %.2f kWh",
+            forecasted_excess_kwh,
+            export_budget_kwh,
+        )
+
         # Build rolling 24-hour forecast with 15-minute slots (96 total)
+        remaining_export_budget = export_budget_kwh
         for offset in range(96):
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
@@ -354,15 +482,51 @@ class ForecastComputer:
             else:
                 grid_import_kwh = 0.0
 
-            # Step 3: Calculate grid export (only if solar > battery capacity)
-            if net_kwh >= 0:
-                excess_after_battery = net_kwh - battery_delta_kwh
-                grid_export_kwh = max(excess_after_battery, 0)
+            # Step 3: Check for proactive export (before updating SOC)
+            # Get feed-in price for this slot
+            _slot_fit_price = get_price_for_slot(data.feed_in_forecast, slot_start)
+
+            # Determine if we should proactive export
+            should_proactive_export, proactive_export_amount = (
+                self._should_proactive_export_at_slot(
+                    slot_start=slot_start,
+                    slot_hour=slot_hour,
+                    solar_kwh=solar_kwh,
+                    slot_fit_price=_slot_fit_price,
+                    predicted_soc=predicted_soc,
+                    target_pct=target_pct,
+                    is_before_dw=is_before_dw,
+                    in_demand_window=in_demand_window,
+                    forecasted_excess_kwh=forecasted_excess_kwh,
+                    remaining_export_budget_kwh=remaining_export_budget,
+                )
+            )
+
+            # Apply proactive export if needed (discharge battery)
+            if should_proactive_export:
+                # Discharge battery to export (95% efficiency)
+                export_discharge_kwh = proactive_export_amount / 0.95
+                battery_delta_kwh -= export_discharge_kwh
+                grid_export_kwh = proactive_export_amount
+                remaining_export_budget -= proactive_export_amount
+
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d amount=%.3f kWh, remaining budget=%.3f kWh",
+                    slot_hour,
+                    slot_minute,
+                    proactive_export_amount,
+                    remaining_export_budget,
+                )
             else:
-                # Deficit: battery already handled in Step 1 (discharge)
-                # Grid import already handled in Step 2 (grid charging)
-                # Just calculate export (which is 0 in deficit)
-                grid_export_kwh = 0.0
+                # Step 3a: Calculate normal grid export (only if solar > battery capacity)
+                if net_kwh >= 0:
+                    excess_after_battery = net_kwh - battery_delta_kwh
+                    grid_export_kwh = max(excess_after_battery, 0)
+                else:
+                    # Deficit: battery already handled in Step 1 (discharge)
+                    # Grid import already handled in Step 2 (grid charging)
+                    # Just calculate export (which is 0 in deficit)
+                    grid_export_kwh = 0.0
 
             # Iterative SOC simulation with clamp each 15 minutes
             predicted_soc = predicted_soc + (
@@ -390,6 +554,12 @@ class ForecastComputer:
                     "grid_export_kwh": round(grid_export_kwh, 3),
                     "grid_charge": should_grid_charge,
                     "grid_charge_boost": should_boost,
+                    "proactive_export": should_proactive_export,
+                    "export_amount_kwh": (
+                        round(proactive_export_amount, 3)
+                        if should_proactive_export
+                        else 0.0
+                    ),
                 }
             )
 

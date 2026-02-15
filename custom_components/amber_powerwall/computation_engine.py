@@ -793,6 +793,17 @@ class ComputationEngine:
             )
             return
 
+        # FORECAST-DRIVED: Proactive export (before negative feed-in prices)
+        elif forecast_entry.get("proactive_export"):
+            data.active_mode = BatteryMode.SPIKE_DISCHARGE
+            export_amount = forecast_entry.get("export_amount_kwh", 0.0)
+            _LOGGER.info(
+                "Forecast-driven: PROACTIVE_EXPORT at %s, amount=%.2f kWh",
+                now_dt.strftime("%H:%M"),
+                export_amount,
+            )
+            return
+
         # ========================================================================
         # OTHER MODES (Non-Charging)
         # ========================================================================
