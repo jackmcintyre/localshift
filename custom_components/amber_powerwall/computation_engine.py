@@ -14,9 +14,6 @@ from .computation_engine_lib import (
     ForecastComputer,
     HistoryFetcher,
     build_hourly_forecast_summary,
-    get_price_for_slot,
-    get_solar_for_15min_slot,
-    get_solar_for_slot,
     max_forecast_price,
     parse_forecast_dt,
     percentile,
@@ -34,9 +31,7 @@ from .const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HOLD_ABSOLUTE_CHEAP_THRESHOLD,
     CONF_HOLD_MIN_SAVINGS_PERCENT,
-    CONF_LOAD_WEIGHT_RECENT,
     CONF_MAX_PRECHARGE_PRICE,
-    CONF_PRECHARGE_BATTERY_THRESHOLD,
     CONF_SUN_ENTITY,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -48,7 +43,6 @@ from .const import (
     DEFAULT_HOLD_MIN_SAVINGS_PERCENT,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
-    DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     DISCHARGE_EARLIEST_HOUR,
     SOLAR_EXPORT_SURPLUS_ENTRY,
     SOLAR_EXPORT_SURPLUS_STAY,
@@ -397,77 +391,6 @@ class ComputationEngine:
         # Also keep a compact 24-entry hourly view for the markdown table.
         data.daily_forecast_hourly = build_hourly_forecast_summary(data.daily_forecast)
 
-    def _get_price_for_slot(
-        self,
-        price_forecasts: list[dict[str, Any]],
-        slot_start: datetime,
-    ) -> float:
-        """Get price for a 15-minute slot from Amber forecast (delegates to utils)."""
-        return get_price_for_slot(price_forecasts, slot_start)
-
-    def _get_solar_for_15min_slot(
-        self,
-        solcast_forecasts: list[dict[str, Any]],
-        slot_start: datetime,
-    ) -> float:
-        """Get solar forecast (kWh) for 15-minute slot from Solcast 30-min periods (delegates to utils)."""
-        return get_solar_for_15min_slot(solcast_forecasts, slot_start)
-
-    def _estimate_hourly_consumption_kw(
-        self,
-        hourly_avg_kw: dict[int, float],
-        slot_hour: int,
-        current_load_kw: float,
-        recent_load_kw: float = 0.0,
-    ) -> tuple[float, str]:
-        """Estimate hourly household consumption with weighted blend.
-
-        Blends recent 1-hour average with historical hourly average for
-        more responsive forecasting.
-
-        Returns tuple of (kW, source_tag).
-        """
-        # Get the weighting configuration
-        recent_weight = float(
-            self.entry.options.get(CONF_LOAD_WEIGHT_RECENT, DEFAULT_LOAD_WEIGHT_RECENT)
-        )
-        historical_weight = 1.0 - recent_weight
-
-        # Store the weighting for diagnostics
-        self._last_weighting = recent_weight
-
-        historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
-        historical_kw = (
-            float(historical_raw) if isinstance(historical_raw, int | float) else 0.0
-        )
-        sample_count = self._historical_load_sample_counts.get(slot_hour, 0)
-
-        # Check if we have valid historical data
-        has_historical = historical_kw > 0 and sample_count >= 1
-
-        # If we have recent load data and weighting > 0, apply weighted blend
-        if recent_load_kw > 0 and recent_weight > 0 and has_historical:
-            weighted = (recent_weight * recent_load_kw) + (
-                historical_weight * historical_kw
-            )
-            return round(weighted, 3), "weighted_load"
-
-        # Fallback to historical if available
-        if has_historical:
-            return round(historical_kw, 3), "profile_hour"
-
-        # Fallback to current load
-        base_kw = current_load_kw if current_load_kw > 0 else 0.6
-        return round(base_kw, 3), "live_load_fallback"
-
-    def _get_solar_for_slot(
-        self,
-        solcast_forecasts: list[dict[str, Any]],
-        slot_start: datetime,
-    ) -> float:
-        """Get solar forecast (kWh) for one hourly slot from Solcast half-hour periods (delegates to utils)."""
-        return get_solar_for_slot(solcast_forecasts, slot_start)
-
     def _compute_effective_cheap_price(
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
     ) -> None:
@@ -693,6 +616,27 @@ class ComputationEngine:
                 surplus_ratio >= threshold and current_fit > avg_fit and avg_fit > 0
             )
 
+    def _get_forecast_entry_for_now(
+        self, data: CoordinatorData, now_dt: datetime
+    ) -> dict | None:
+        """Get forecast entry for current time slot.
+
+        Returns None if forecast unavailable or current time
+        not in forecast range.
+        """
+        if not data.daily_forecast:
+            return None
+
+        current_hour = now_dt.hour
+        current_minute = now_dt.minute
+
+        # Find matching entry
+        for entry in data.daily_forecast:
+            if entry["hour"] == current_hour and entry["minute"] == current_minute:
+                return entry
+
+        return None
+
     def _compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
         """Compute active battery mode."""
         automation_enabled = self._get_switch_state("automation_enabled")
@@ -702,40 +646,46 @@ class ComputationEngine:
         current_hour = now_dt.hour
         in_discharge_window = current_hour >= DISCHARGE_EARLIEST_HOUR
 
-        # Check sun status
-        sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
-        sun_state = self.hass.states.get(sun_entity_id)
-        sun_up = sun_state is not None and sun_state.state == "above_horizon"
+        # ========================================================================
+        # FORECAST-DRIVED CONTROL (Single Source of Truth)
+        # ========================================================================
 
-        # HIGH PRIORITY: SPOT PRICE OVERRIDE - If current price is cheap, charge NOW!
-        target_pct = float(
-            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
-        if data.general_price <= data.effective_cheap_price:
-            if data.soc < target_pct:
-                data.active_mode = BatteryMode.GRID_CHARGING
-                return
+        # Get forecast entry for current time
+        forecast_entry = self._get_forecast_entry_for_now(data, now_dt)
 
-        # Debug: Log state when considering HOLD mode
-        if data.hold_justified or data.forecast_spike_within_window:
-            _LOGGER.info(
-                "Hold mode consideration at %s: hold_justified=%s, "
-                "hold_mode=%s, solar_export_hold=%s, "
-                "forecast_spike=%s, solar_can_reach=%s, sun_up=%s, "
-                "soc=%.1f%%, backup_reserve=%.1f%%, "
-                "price=%.2f, stop_price=%.2f",
-                now_dt.strftime("%H:%M"),
-                data.hold_justified,
-                data.hold_mode,
-                data.solar_export_hold,
-                data.forecast_spike_within_window,
-                data.solar_can_reach_target,
-                sun_up,
-                data.soc,
-                data.backup_reserve,
-                data.general_price,
-                data.cheap_charge_stop_price,
+        # Fallback: Forecast unavailable (startup, data corruption, etc.)
+        if not forecast_entry:
+            _LOGGER.warning("Forecast unavailable, using price-based fallback")
+            target_pct = float(
+                self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
             )
+            # Simple logic: charge if cheap and below target
+            if (
+                data.general_price <= data.effective_cheap_price
+                and data.soc < target_pct
+            ):
+                data.active_mode = BatteryMode.GRID_CHARGING
+            else:
+                data.active_mode = BatteryMode.SELF_CONSUMPTION
+            return
+
+        # FORECAST-DRIVED: Grid charging (follow forecast plan)
+        if forecast_entry.get("grid_charge_boost"):
+            data.active_mode = BatteryMode.BOOST_CHARGING
+            _LOGGER.info(
+                "Forecast-driven: BOOST_CHARGING at %s", now_dt.strftime("%H:%M")
+            )
+            return
+        elif forecast_entry.get("grid_charge"):
+            data.active_mode = BatteryMode.GRID_CHARGING
+            _LOGGER.info(
+                "Forecast-driven: GRID_CHARGING at %s", now_dt.strftime("%H:%M")
+            )
+            return
+
+        # ========================================================================
+        # OTHER MODES (Non-Charging)
+        # ========================================================================
 
         if not automation_enabled:
             data.active_mode = BatteryMode.MANUAL
@@ -747,41 +697,8 @@ class ComputationEngine:
             data.active_mode = BatteryMode.MANUAL
         elif data.solar_export_hold and data.hold_mode:
             data.active_mode = BatteryMode.SOLAR_EXPORT_HOLD
-        elif data.general_price < data.effective_cheap_price:
-            # Price below threshold — consider charging
-            precharge_threshold = float(
-                self.entry.options.get(
-                    CONF_PRECHARGE_BATTERY_THRESHOLD,
-                    DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
-                )
-            )
-            battery_low = data.soc < precharge_threshold
-            expensive_coming = data.forecast_expensive_period_coming
-            solar_gap_flag = not data.solar_can_reach_target
-
-            if data.target_reached_today:
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
-            elif sun_up and (solar_gap_flag or expensive_coming):
-                if data.boost_charge_needed:
-                    data.active_mode = BatteryMode.BOOST_CHARGING
-                else:
-                    data.active_mode = BatteryMode.GRID_CHARGING
-            elif not sun_up and battery_low and expensive_coming:
-                data.active_mode = BatteryMode.GRID_CHARGING
-            else:
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
-        elif data.general_price <= data.cheap_charge_stop_price:
-            # Price in deadband or at stop price — maintain charge or hold
-            if data.force_charge_active:
-                if data.boost_charge_active:
-                    data.active_mode = BatteryMode.BOOST_CHARGING
-                else:
-                    data.active_mode = BatteryMode.GRID_CHARGING
-            else:
-                if data.hold_justified:
-                    data.active_mode = BatteryMode.HOLD
-                else:
-                    data.active_mode = BatteryMode.SELF_CONSUMPTION
+        elif data.hold_justified:
+            data.active_mode = BatteryMode.HOLD
         elif data.forecast_spike_within_window:
             # Don't hold for spikes overnight (10pm-6am) when there's no sun to benefit
             overnight_hours = now_dt.hour >= 22 or now_dt.hour < 6

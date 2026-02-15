@@ -103,6 +103,74 @@ class ForecastComputer:
         base_kw = current_load_kw if current_load_kw > 0 else 0.6
         return round(base_kw, 3), "live_load_fallback"
 
+    def _should_grid_charge_at_slot(
+        self,
+        slot_start: datetime,
+        solar_kwh: float,
+        slot_price: float,
+        predicted_soc: float,
+        target_pct: float,
+        effective_cheap_price: float,
+        is_before_dw: bool,
+        in_demand_window: bool,
+        gap_to_target: float,
+        is_daylight: bool,
+    ) -> tuple[bool, bool]:
+        """Determine if grid charging should happen at this slot.
+
+        Single source of truth for grid charging decisions.
+        Used by both forecast simulation and mode control.
+
+        Args:
+            slot_start: Start time of the 15-minute slot
+            solar_kwh: Solar forecast for this slot
+            slot_price: Buy price for this slot
+            predicted_soc: Predicted SOC at start of slot
+            target_pct: Target SOC percentage
+            effective_cheap_price: Cheap price threshold
+            is_before_dw: True if before demand window
+            in_demand_window: True if in demand window
+            gap_to_target: How many percent to target
+            is_daylight: True if solar_kwh > 0.05
+
+        Returns:
+            (should_charge, should_boost)
+        """
+        # Never charge during demand window
+        if in_demand_window:
+            return False, False
+
+        # Never charge after demand window
+        if not is_before_dw:
+            return False, False
+
+        # Must have solar (daylight) to charge
+        if not is_daylight:
+            return False, False
+
+        # Already at target - no charging needed
+        if gap_to_target <= 0:
+            return False, False
+
+        # Price-based decisions
+        price_is_cheap = slot_price <= effective_cheap_price
+        price_is_very_cheap = slot_price <= (effective_cheap_price * 0.8)
+
+        # Very cheap: boost charge (stock up!)
+        if price_is_very_cheap:
+            return True, True
+
+        # Cheap: normal charge
+        if price_is_cheap:
+            return True, False
+
+        # Far from target: charge anyway (urgency)
+        if gap_to_target > 10:
+            return True, False
+
+        # Wait for cheaper price
+        return False, False
+
     def compute_forecast(
         self,
         data: CoordinatorData,
@@ -205,17 +273,11 @@ class ForecastComputer:
             # Get slot price for logging/analysis
             _slot_price = get_price_for_slot(data.general_forecast, slot_start)
 
-            # Determine if we should grid charge
-            # Rules:
-            # 1. Never charge during demand window
-            # 2. Don't charge if already at target
-            # 3. Don't spend money if solar can reach target
-            # 4. Only charge if price is cheap (or very cheap for boost)
-
+            # Determine if we should grid charge using single source of truth
             gap_to_target = max(target_pct - predicted_soc, 0)
 
             # Handle wrap-around: if current time is past target hour,
-            # the next DW is tomorrow
+            # next DW is tomorrow
             if now_dt.hour >= target_hour:
                 is_before_dw = slot_hour >= now_dt.hour or slot_hour < target_hour
             else:
@@ -224,38 +286,23 @@ class ForecastComputer:
             # Explicit daylight check - must have solar to grid charge
             is_daylight = solar_kwh > 0.05
 
-            # Calculate price conditions
-            current_price = _slot_price  # Already calculated above
-            price_is_cheap = current_price <= data.effective_cheap_price
-            price_is_very_cheap = current_price <= (
-                data.effective_cheap_price * 0.8
-            )  # 20% cheaper
-
-            # Determine charging decisions
-            should_grid_charge = False
-            should_boost = False
-
-            # Only consider charging if:
-            # 1. Not in demand window
-            # 2. Before target time
-            # 3. It's daylight (have solar) - BLOCK overnight grid charging
-            # 4. Not yet at target - keep charging until we reach 95%
-            if not in_demand_window and is_before_dw and is_daylight:
-                if gap_to_target > 0:  # Not at target - keep charging!
-                    # Always grid charge during daylight until target is reached
-                    # (respect price: boost if very cheap, normal if cheap)
-                    if price_is_very_cheap:
-                        should_boost = True  # Stock up!
-                    elif price_is_cheap:
-                        should_grid_charge = True  # Normal charge
-                    # else: wait for cheaper price (but still charge if needed for target)
-                    # Actually: if we're far from target, charge anyway
-                    if gap_to_target > 10:
-                        should_grid_charge = True  # Need to reach target!
+            # Use single source of truth for grid charging decision
+            should_grid_charge, should_boost = self._should_grid_charge_at_slot(
+                slot_start=slot_start,
+                solar_kwh=solar_kwh,
+                slot_price=_slot_price,
+                predicted_soc=predicted_soc,
+                target_pct=target_pct,
+                effective_cheap_price=data.effective_cheap_price,
+                is_before_dw=is_before_dw,
+                in_demand_window=in_demand_window,
+                gap_to_target=gap_to_target,
+                is_daylight=is_daylight,
+            )
 
             # Debug logging for charging decision
             _LOGGER.debug(
-                "GRID_CHARGE: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d cheap=%s boost=%s -> charge=%s",
+                "GRID_CHARGE: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d -> charge=%s boost=%s",
                 slot_hour,
                 slot_minute,
                 in_demand_window,
@@ -263,9 +310,8 @@ class ForecastComputer:
                 predicted_soc,
                 target_pct,
                 gap_to_target,
-                price_is_cheap,
-                should_boost,
                 should_grid_charge,
+                should_boost,
             )
 
             # Apply realistic battery transfer limits and efficiency
@@ -342,6 +388,8 @@ class ForecastComputer:
                     "net_kwh": round(net_kwh, 3),
                     "grid_import_kwh": round(grid_import_kwh, 3),
                     "grid_export_kwh": round(grid_export_kwh, 3),
+                    "grid_charge": should_grid_charge,
+                    "grid_charge_boost": should_boost,
                 }
             )
 
