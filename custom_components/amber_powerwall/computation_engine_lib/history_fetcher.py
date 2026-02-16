@@ -323,7 +323,7 @@ class HistoryFetcher:
                 start_time,
                 end_time,
                 [resolved_entity_id],
-                period="hour",
+                period="5minute",
                 types={"mean"},
                 units=None,
             )

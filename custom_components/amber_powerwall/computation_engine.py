@@ -503,6 +503,11 @@ class ComputationEngine:
                     data.daily_forecast
                 )
 
+                # Propagate recent load diagnostic fields for dashboard debugging
+                data.recent_load_1hr_statistic_id = self._recent_load_1hr_statistic_id
+                data.recent_load_1hr_samples = self._recent_load_1hr_samples
+                data.recent_load_1hr_last_error = self._recent_load_1hr_last_error
+
             except Exception as e:
                 _LOGGER.error("Forecast computation failed: %s", e, exc_info=True)
                 # Keep existing forecast if it exists, otherwise set empty
