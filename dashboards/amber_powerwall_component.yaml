@@ -350,17 +350,11 @@ views:
           - type: heading
             heading: Decision Log
             heading_style: title
+          - type: logbook
+            target:
+              entity_id:
+                - sensor.amber_powerwall_active_mode
 
-          - type: markdown
-            content: >
-              {% set log = 'sensor.amber_powerwall_decision_log' %}
-              **{{ states(log) }}**
-
-              {{ state_attr(log, 'reason') }}
-
-              SOC: {{ state_attr(log, 'soc') }}%
-              Buy: ${{ state_attr(log, 'buy_price') }}/kWh
-              Sell: ${{ state_attr(log, 'sell_price') }}/kWh
 
   # =============================================================================
   # VIEW 2: CONTROLS
