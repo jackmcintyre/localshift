@@ -1123,10 +1123,31 @@ class ForecastComputer:
                         excess_after_battery = net_kwh - battery_delta_kwh
                         grid_export_kwh = max(excess_after_battery, 0)
                 else:
-                    # Deficit: battery already handled in Step 1 (discharge)
-                    # Grid import already handled in Step 2 (grid charging)
-                    # Just calculate export (which is 0 in deficit)
-                    grid_export_kwh = 0.0
+                    # DEFICIT PERIOD: Battery is discharging to cover load
+                    # Calculate if there's any excess battery capacity that can be exported
+                    # battery_delta_kwh is negative (discharge), so invert to get positive discharge amount
+                    battery_discharge_kwh = -battery_delta_kwh
+                    load_deficit_kwh = -net_kwh  # Positive value
+
+                    # If battery discharge exceeds load deficit, there's excess to export
+                    if battery_discharge_kwh > load_deficit_kwh:
+                        # Calculate exportable excess, capped by SOC limit (can't go below 0%)
+                        max_discharge_to_0pct = (
+                            soc_at_slot_start / 100 * BATTERY_CAPACITY_KWH
+                        )
+                        actual_discharge = min(
+                            battery_discharge_kwh, max_discharge_to_0pct
+                        )
+                        excess_discharge = actual_discharge - load_deficit_kwh
+
+                        if excess_discharge > 0:
+                            # Apply 95% efficiency for battery-to-grid
+                            grid_export_kwh = excess_discharge * 0.95
+                        else:
+                            grid_export_kwh = 0.0
+                    else:
+                        # Battery discharge just covers load, no export
+                        grid_export_kwh = 0.0
 
             # Iterative SOC simulation with clamp each 15 minutes
             predicted_soc = predicted_soc + (
