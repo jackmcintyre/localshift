@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC, DOMAIN
 from .coordinator import AmberPowerwallCoordinator
 
 
@@ -39,6 +39,7 @@ async def async_setup_entry(
         DecisionLogSensor(coordinator, entry),
         ForecastHistorySensor(coordinator, entry),
         DailyForecastSensor(coordinator, entry),
+        MinimumTargetSOCSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -355,3 +356,19 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
             ),
             "allow_export": self.coordinator.data.allow_export,
         }
+
+
+class MinimumTargetSOCSensor(AmberPowerwallSensorBase):
+    """Minimum target SOC for discharge modes (base reserve)."""
+
+    _attr_unique_id = "minimum_target_soc"
+    _attr_name = "Minimum Target SOC"
+    _attr_icon = "mdi:battery-charging-20"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Read minimum target SOC from config options."""
+        self._attr_native_value = float(
+            self._entry.options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )

@@ -49,6 +49,7 @@ from .const import (
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
+    DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     DOMAIN,
 )
@@ -705,6 +706,21 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
                             min=0.0,
                             max=1.0,
                             step=0.05,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_MINIMUM_TARGET_SOC,
+                        default=current.get(
+                            CONF_MINIMUM_TARGET_SOC,
+                            DEFAULT_MINIMUM_TARGET_SOC,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=5,
+                            max=30,
+                            step=1,
+                            unit_of_measurement="%",
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),

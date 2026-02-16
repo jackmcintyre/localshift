@@ -127,6 +127,7 @@ DEFAULT_DEMAND_WINDOW_END = "21:00:00"
 DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4  # hours
 DEFAULT_LOAD_WEIGHT_RECENT = 0.67  # 2/3 weighting to recent usage
 DEFAULT_EXPORT_MIN_SPREAD = 0.10  # $/kWh minimum spread to export (buy - sell)
+DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {

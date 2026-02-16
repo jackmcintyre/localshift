@@ -1,95 +1,93 @@
-# Configurable Grid Export Reserve via Minimum Target SOC Entity
+# Configurable Minimum Target SOC for Proactive Export
 
 **ID:** backlog-high-012  
 **Priority:** HIGH  
 **Status:** COMPLETED
 **Created:** 2026-02-16  
-**Updated:** 2026-02-16  
+**Updated:** 2026-02-17  
 
 ---
 
 ## Summary
 
-Use a dedicated "Minimum Target SOC" entity to control reserve % during export modes
+Add a configurable minimum target SOC threshold to control when proactive export is allowed
 
 ---
 
 ## Description
 
-Instead of trying to detect/cache the default backup reserve value (which is unreliable), use a dedicated entity that the user creates and controls. The user creates a Number entity in Home Assistant, and the system reads its value to determine the reserve percentage during export modes.
+The proactive export logic had a hard-coded 20% minimum SOC threshold that would block exports even when conditions were favorable (positive FIT, forecast showing 100% SOC before demand window). This adds a user-configurable threshold via the options flow, making the behavior more flexible.
 
-This is more reliable because:
-- User has full control over the value
-- No startup detection needed
-- Clear separation between "minimum target" and actual backup reserve
+### Why This Matters
+
+When SOC is exactly at the hard-coded threshold (e.g., 20%), proactive export would be blocked even if:
+- FIT price is positive and optimal
+- Forecast shows the battery will reach 100% SOC well before the demand window
+- The user wants to export more aggressively
+
+### Implementation Approach
+
+Uses a direct options flow configuration (slider) rather than requiring users to create a separate entity. This is simpler and more user-friendly.
 
 ### Behavior
 
-| Mode | Reserve Formula | Example (min_target=10%) |
-|------|-----------------|------------------------|
-| SPIKE_DISCHARGE | min_target | 10% |
-| PROACTIVE_EXPORT | min_target | 10% |
-| All others | Read from entity | User-defined |
+The minimum target SOC is used as a floor in the proactive export logic:
+- Proactive export is only allowed if `predicted_soc > minimum_target_soc`
+- Default value: 20%
+- Configurable range: 5% - 30%
 
 ---
 
 ## Affected Files
 
-- `custom_components/amber_powerwall/const.py` - Add config key for entity
-- `custom_components/amber_powerwall/config_flow.py` - Add entity selector
-- `custom_components/amber_powerwall/strings.json` - Add entity description
-- `custom_components/amber_powerwall/battery_controller.py` - Read entity value for reserve
+- `custom_components/amber_powerwall/const.py` - Add CONF_MINIMUM_TARGET_SOC and DEFAULT_MINIMUM_TARGET_SOC
+- `custom_components/amber_powerwall/config_flow.py` - Add NumberSelector to options flow
+- `custom_components/amber_powerwall/sensor.py` - Add MinimumTargetSOCSensor to expose value
+- `custom_components/amber_powerwall/computation_engine_lib/forecast_computer.py` - Use configured value instead of hard-coded 20%
 
 ---
 
-## Implementation
+## Implementation Details
 
-### 1. Add Config Entity (const.py)
+### 1. Configuration (const.py)
 
 ```python
-# New entity config key
 CONF_MINIMUM_TARGET_SOC = "minimum_target_soc"
-
-# Default entity ID
-DEFAULT_ENTITY_IDS = {
-    ...
-    CONF_MINIMUM_TARGET_SOC: "number.my_home_minimum_target_soc",
-}
+DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 ```
 
-### 2. Add to Config Flow (config_flow.py)
+### 2. Options Flow (config_flow.py)
 
-Add EntitySelector for the new number entity (required entity).
+Add NumberSelector with:
+- Range: 5% - 30%
+- Step: 1%
+- Default: 20%
 
-### 3. Battery Controller (battery_controller.py)
+### 3. Sensor (sensor.py)
 
-```python
-# Read the minimum target SOC entity value
-def _get_minimum_target_soc(self) -> float:
-    """Read the minimum target SOC from entity."""
-    entity_id = self._get_entity_id("minimum_target_soc")
-    return self._read_float(entity_id, default=10.0)
+New `MinimumTargetSOCSensor` entity:
+- Unique ID: `minimum_target_soc`
+- Name: "Minimum Target SOC"
+- Icon: `mdi:battery-charging-20`
+- Unit: `%`
 
-# In set_force_discharge() and set_proactive_export():
-minimum_target = self._get_minimum_target_soc()
-await self._set_backup_reserve(minimum_target)
+### 4. Forecast Computer (forecast_computer.py)
 
-# In set_self_consumption():
-# Restore to minimum target (or could read backup_reserve entity)
-await self._set_backup_reserve(self._get_minimum_target_soc())
-```
+- Remove hard-coded `export_min_soc_pct = 20.0`
+- Read value from config options
+- Pass to `_should_proactive_export_at_slot()`
 
 ---
 
-## User Setup
+## User Configuration
 
-1. User creates a generic "Number" helper in Home Assistant called "Minimum Target SOC"
-2. User sets their desired minimum (e.g., 10%, 15%, 20%)
-3. User selects this entity during integration setup
-4. System reads this value during export modes to set reserve
+1. Go to integration settings → Configure
+2. Adjust "Minimum Target SOC" slider (5-30%)
+3. Monitor the "Minimum Target SOC" sensor to verify the current value
 
 ---
 
 ## Related Items
 
 - backlog-high-008: Proactive Export Not Using Peak FIT Prices (related feature)
+- Issue investigation: Proactive export not activating at ~20% SOC with positive FIT

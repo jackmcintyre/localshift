@@ -16,10 +16,12 @@ from ..const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_LOAD_WEIGHT_RECENT,
+    CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_LOAD_WEIGHT_RECENT,
+    DEFAULT_MINIMUM_TARGET_SOC,
 )
 from ..coordinator_data import CoordinatorData
 from .solar_utils import (
@@ -610,6 +612,7 @@ class ForecastComputer:
         remaining_export_budget_kwh: float,
         feed_in_forecast: list[dict],
         min_soc_no_exports: float,
+        export_min_soc_pct: float,
     ) -> tuple[bool, float]:
         """Determine if proactive export should happen at this slot.
 
@@ -620,7 +623,7 @@ class ForecastComputer:
         1. Calculate 60th percentile FIT price over next 24 hours
         2. Only export when current FIT >= percentile (reasonable prices)
         3. Check ending SOC after export (not just starting SOC)
-        4. Only export if minimum SOC without exports >= 20%
+        4. Only export if minimum SOC without exports >= export_min_soc_pct
         5. Only export if we have forecasted excess (won't run short)
 
         Args:
@@ -634,6 +637,7 @@ class ForecastComputer:
             remaining_export_budget_kwh: Exportable energy remaining in budget
             feed_in_forecast: Full FIT price forecast
             min_soc_no_exports: Minimum SOC over 24h without proactive exports
+            export_min_soc_pct: Minimum SOC threshold for exports (from config)
 
         Returns:
             (should_export, export_amount_kwh)
@@ -658,8 +662,7 @@ class ForecastComputer:
         # protection by ensuring we keep enough SOC to cover remaining DW hours.
         # This allows profitable exports during price spikes while protecting coverage.
 
-        # Need buffer in battery (20% minimum reserve)
-        export_min_soc_pct = 20.0
+        # Need buffer in battery (minimum reserve from config)
         if predicted_soc <= export_min_soc_pct:
             return False, 0.0
 
@@ -1082,6 +1085,12 @@ class ForecastComputer:
             _slot_fit_price = get_price_for_slot(data.feed_in_forecast, slot_start)
 
             # Determine if we should proactive export
+            # Get minimum target SOC from config for export floor
+            export_min_soc_pct = float(
+                self.entry.options.get(
+                    CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
+                )
+            )
             should_proactive_export, proactive_export_amount = (
                 self._should_proactive_export_at_slot(
                     slot_start=slot_start,
@@ -1094,6 +1103,7 @@ class ForecastComputer:
                     remaining_export_budget_kwh=remaining_export_budget,
                     feed_in_forecast=data.feed_in_forecast,
                     min_soc_no_exports=min_soc_no_exports,
+                    export_min_soc_pct=export_min_soc_pct,
                 )
             )
 
