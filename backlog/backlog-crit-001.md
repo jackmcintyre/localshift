@@ -2,7 +2,7 @@
 
 **ID:** backlog-crit-001  
 **Priority:** CRIT  
-**Status:** PROPOSED  
+**Status:** COMPLETED  
 **Created:** 2026-02-16  
 **Updated:** 2026-02-16  
 
@@ -10,45 +10,35 @@
 
 ## Summary
 
-The force charge detection logic in coordinator.py uses incorrect OR operator, making it always true when in "backup" mode.
+Reviewed the force charge detection logic - code is actually CORRECT. No fix needed.
 
 ---
 
-## Description
+## Analysis
 
-The force charge detection logic is incorrect:
+After reviewing the code in `computation_engine.py` (lines ~171-179):
+
 ```python
-d.force_charge_active = d.operation_mode == "backup" or (
-    d.operation_mode == "autonomous" and d.backup_reserve > 99
+# force_charge_active = ANY charging state (backup OR boost)
+data.force_charge_active = data.operation_mode == "backup" or (
+    data.operation_mode == "autonomous" and data.backup_reserve > 99
 )
 ```
 
-The OR operator makes this always true when in "backup" mode. The logic is meant to detect:
-- "backup" mode (3.3kW force charge)
-- "autonomous" mode with reserve > 99 (5kW boost charge)
-
-However, the OR structure doesn't properly distinguish between these two states.
-
----
-
-## Affected Files
-
-- `custom_components/amber_powerwall/coordinator.py` (lines ~440-447)
-
----
-
-## Proposed Solution
-
-Change to:
+Due to Python operator precedence (`and` binds tighter than `or`), this is correctly evaluated as:
 ```python
-d.force_charge_active = (
-    d.operation_mode == "backup" or 
-    (d.operation_mode == "autonomous" and d.backup_reserve > 99)
-)
+data.force_charge_active = (data.operation_mode == "backup") or ((data.operation_mode == "autonomous") and (data.backup_reserve > 99))
 ```
 
+This correctly detects:
+- "backup" mode → True
+- "autonomous" mode with backup_reserve > 99 → True  
+- All other cases → False
+
+The bug description was INCORRECT - the code is logically sound.
+
 ---
 
-## Notes
+## Resolution
 
-This is a logic error that affects the core functionality of force charging the battery.
+**CLOSED - NOT A BUG**. The code works as intended. The backlog item was based on a misunderstanding of Python operator precedence.

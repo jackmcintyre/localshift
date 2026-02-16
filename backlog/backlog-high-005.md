@@ -2,7 +2,7 @@
 
 **ID:** backlog-high-005  
 **Priority:** HIGH  
-**Status:** PROPOSED  
+**Status:** COMPLETED  
 **Created:** 2026-02-16  
 **Updated:** 2026-02-16  
 
@@ -10,7 +10,7 @@
 
 ## Summary
 
-Hardcoded 5-second sleep delays between commands are arbitrary and not optimal.
+Removing hardcoded 5-second sleep delays - using validate_transition() for state verification instead.
 
 ---
 
@@ -23,20 +23,19 @@ Uses hardcoded `await asyncio.sleep(5)` between each command. This is arbitrary 
 
 ---
 
+## Resolution
+
+REMOVING ALL FIXED DELAYS - using validate_transition() for proper state verification.
+
+The validate_transition() method already polls for up to 20 seconds at the END of each mode transition, checking that the hardware state matches expectations. This makes fixed delays redundant.
+
+Benefits:
+- Faster mode transitions (~20s vs ~30s+)
+- More reliable - actually verifies state instead of arbitrary wait
+- Simpler code
+
+---
+
 ## Affected Files
 
-- `custom_components/amber_powerwall/coordinator.py` (async_set_self_consumption, async_set_hold, etc.)
-
----
-
-## Proposed Solution
-
-- Make delays configurable via options (default 5s)
-- OR implement proper state verification (wait for mode change confirmation via _read_state)
-- OR reduce to 2s and add retry logic if mode doesn't change
-
----
-
-## Notes
-
-This affects user experience during mode transitions.
+- `custom_components/amber_powerwall/battery_controller.py`

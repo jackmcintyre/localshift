@@ -127,21 +127,18 @@ class BatteryController:
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
             _LOGGER.error("Aborting self_consumption mode: Failed to set export mode")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_operation_mode("self_consumption"):
             _LOGGER.error(
                 "Aborting self_consumption mode: Failed to set operation mode"
             )
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_backup_reserve(10):
             _LOGGER.error(
                 "Aborting self_consumption mode: Failed to set backup reserve"
             )
             return False
-        await asyncio.sleep(5)
 
         # Validate transition completed successfully
         if not await self.validate_transition(
@@ -176,7 +173,6 @@ class BatteryController:
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
             _LOGGER.error("Aborting force charge mode: Failed to set export mode")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_operation_mode("backup"):
             _LOGGER.error("Aborting force charge mode: Failed to set operation mode")
@@ -215,12 +211,10 @@ class BatteryController:
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
             _LOGGER.error("Aborting boost charge mode: Failed to set export mode")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_backup_reserve(100):
             _LOGGER.error("Aborting boost charge mode: Failed to set backup reserve")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_operation_mode("autonomous"):
             _LOGGER.error("Aborting boost charge mode: Failed to set operation mode")
@@ -262,12 +256,10 @@ class BatteryController:
         if not await self._set_export_mode(TESLEMETRY_EXPORT_BATTERY_OK):
             _LOGGER.error("Aborting force discharge mode: Failed to set export mode")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_backup_reserve(10):
             _LOGGER.error("Aborting force discharge mode: Failed to set backup reserve")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_operation_mode("autonomous"):
             _LOGGER.error("Aborting force discharge mode: Failed to set operation mode")
@@ -314,7 +306,6 @@ class BatteryController:
         if not await self._set_export_mode(TESLEMETRY_EXPORT_BATTERY_OK):
             _LOGGER.error("Aborting proactive export: Failed to set export mode")
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_backup_reserve(reserve):
             _LOGGER.error(
@@ -322,7 +313,6 @@ class BatteryController:
                 reserve,
             )
             return False
-        await asyncio.sleep(5)
 
         if not await self._set_operation_mode("autonomous"):
             _LOGGER.error("Aborting proactive export: Failed to set operation mode")
