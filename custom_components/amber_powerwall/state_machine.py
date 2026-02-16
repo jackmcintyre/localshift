@@ -299,8 +299,8 @@ class StateMachine:
                     _LOGGER.error("Spike discharge mode transition FAILED")
 
             elif target == BatteryMode.PROACTIVE_EXPORT:
-                transition_success = await self._battery_controller.set_proactive_export(
-                    data, dry_run
+                transition_success = (
+                    await self._battery_controller.set_proactive_export(data, dry_run)
                 )
                 if transition_success:
                     _LOGGER.info("Proactive export mode transition completed")
