@@ -8,6 +8,88 @@ The Amber Powerwall integration optimizes battery charging/discharging based on:
 - Tesla Powerwall state (via Teslemetry)
 - Household consumption patterns
 
+## System Design Goals
+
+The architecture was designed to solve several problems from the original YAML-based automation:
+
+1. **Eliminate "stuck state" bugs** — The YAML automations had edge cases where the battery could get stuck in a state. A state machine evaluates on every change.
+
+2. **Single source of truth** — All mode decisions flow through one priority chain, not spread across 18 independent automations.
+
+3. **Testable** — Python code is far easier to test than YAML automations.
+
+4. **Configurable** — No more editing YAML for threshold changes. All options available via UI.
+
+5. **Observable** — Extensive sensors and logging for debugging.
+
+## High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        HOME ASSISTANT CORE                                   │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                    Amber Powerwall Integration                        │  │
+│  │                                                                       │  │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────┐  │  │
+│  │  │  Config    │    │   Entity   │    │   Coordinator            │  │  │
+│  │  │  Flow      │───▶│   Platform │───▶│   (AmberPowerwall       │  │  │
+│  │  │            │    │   (sensor, │    │    Coordinator)          │  │  │
+│  │  │            │    │    binary,  │    │                         │  │  │
+│  │  │            │    │    switch, │    │   - Subscribes to      │  │  │
+ │            │    │    number,│  │  │    │     external entities   │  │  │
+│  │  │            │    │    button) │    │   - 1-min periodic     │  │  │
+│  │  └─────────────┘    └─────────────┘    │   - Coordinates       │  │  │
+│  │                                          │     all modules        │  │  │
+│  │                                          └───────────┬───────────┘  │  │
+│  │                                                      │              │  │
+│  │          ┌───────────────────────────────────────────┼──────────────┤  │
+│  │          │                                           │              │  │
+│  │          ▼                                           ▼              │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐│  │
+│  │  │                      Internal Modules                          ││  │
+│  │  │                                                                 ││  │
+│  │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  ││  │
+│  │  │  │  State      │  │ Computation │  │    State Machine     │  ││  │
+│  │  │  │  Reader     │─▶│   Engine    │─▶│    (evaluates        │  ││  │
+│  │  │  │             │  │             │  │     desired mode)     │  ││  │
+│  │  │  │  Reads      │  │  Computes   │  │                      │  ││  │
+│  │  │  │  external   │  │  derived    │  │  ┌──────────────────┴┐ ││  │
+│  │  │  │  entities   │  │  values     │  │  │                   │ ││  │
+│  │  │  │             │  │             │  │  ▼                   │ ││  │
+│  │  │  └──────────────┘  └──────┬───────┘  │  Battery Controller │ ││  │
+│  │  │                            │          │  (executes commands)│ ││  │
+│  │  │                            │          └──────────────────────┘  ││  │
+│  │  │                            │                                   ││  │
+│  │  │                            ▼                                   ││  │
+│  │  │              ┌─────────────────────────┐                       ││  │
+│  │  │              │  Forecast Computer      │                       ││  │
+│  │  │              │  (15-min simulation)   │                       ││  │
+│  │  │              └─────────────────────────┘                       ││  │
+│  │  └─────────────────────────────────────────────────────────────────┘│  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  External Integrations (read):                                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                        │
+│  │  Teslemetry │  │   Amber     │  │   Solcast  │                        │
+│  │             │  │   Electric  │  │            │                        │
+│  │  Powerwall  │◀─│   Pricing  │◀─│   Solar    │                        │
+│  │   control   │  │   forecasts │  │  forecasts │                        │
+│  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘                        │
+│         │                 │                  │                               │
+│         ▼                 ▼                  ▼                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                     TESLA POWERWALL HARDWARE                        │    │
+│  │                                                                     │    │
+│  │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐    │    │
+│  │   │   Solar  │  │   Grid   │  │ Battery  │  │    Home      │    │    │
+│  │   │  Panels  │  │  Import/ │  │  (13.5  │  │   Load       │    │    │
+│  │   │          │  │  Export  │  │   kWh)   │  │              │    │    │
+│  │   └──────────┘  └──────────┘  └──────────┘  └───────────────┘    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Current Architecture
 
 ### Component Responsibilities
