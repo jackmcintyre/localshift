@@ -653,9 +653,10 @@ class ForecastComputer:
         if overnight and next_negative_start > (slot_start + timedelta(hours=2)):
             return False, 0.0
 
-        # Never export during demand window
-        if in_demand_window:
-            return False, 0.0
+        # During demand window: allow export but use dynamic floor protection.
+        # The existing checks below (min_soc, buffer, ending SOC) provide adequate
+        # protection by ensuring we keep enough SOC to cover remaining DW hours.
+        # This allows profitable exports during price spikes while protecting coverage.
 
         # Need buffer in battery (20% minimum reserve)
         export_min_soc_pct = 20.0
