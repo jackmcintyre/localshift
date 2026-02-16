@@ -130,7 +130,7 @@ class SolarWeightedAvgFITSensor(AmberPowerwallSensorBase):
     """Solar-production-weighted average feed-in tariff."""
 
     _attr_unique_id = "solar_weighted_avg_fit"
-    _attr_name = "Solar Weighted Average FIT"
+    _attr_name = "Solar Weighted Avg FIT"
     _attr_icon = "mdi:solar-power-variant"
     _attr_native_unit_of_measurement = "$/kWh"
     _attr_state_class = SensorStateClass.MEASUREMENT
