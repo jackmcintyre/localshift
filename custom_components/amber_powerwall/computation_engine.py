@@ -338,8 +338,20 @@ class ComputationEngine:
             sun_state = self.hass.states.get(sun_entity_id)
             sun_up = sun_state is not None and sun_state.state == "above_horizon"
 
-            # If sun is down and SOC not at target, can't reach target via solar
-            can_reach = data.soc >= target_pct or sun_up
+            # Use detailed forecast if available (includes grid charging)
+            # This aligns with the binary sensor solar_can_reach_target
+            dw_entry = self._get_forecast_at_demand_window(data, target_hour)
+            if dw_entry:
+                predicted_soc = dw_entry["predicted_soc"]
+                can_reach = predicted_soc >= target_pct
+            else:
+                # Fallback to current SOC
+                predicted_soc = data.soc
+                can_reach = data.soc >= target_pct or sun_up
+
+            # Boost_needed indicates if solar alone can reach target (for dashboard display)
+            # After DW, boost is not applicable
+            boost_needed = False
 
             # Mark target reached if SOC is there
             target_reached = data.soc >= target_pct
@@ -347,60 +359,99 @@ class ComputationEngine:
                 data.target_reached_today = True
 
             data.solar_battery_forecast = {
-                "predicted_soc": round(data.soc, 1),
+                "predicted_soc": round(predicted_soc, 1),
                 "solar_before_dw_kwh": 0.0,
                 "consumption_estimate_kwh": 0.0,
                 "net_solar_kwh": 0.0,
                 "deficit_kwh": 0.0,
                 "can_reach_target": can_reach,
-                "boost_needed": False,
+                "boost_needed": boost_needed,
                 "hours_to_target_time": 0.0,
                 "target_reached_today": target_reached,
             }
         else:
-            # Hours remaining until DW start
-            target_dt = now_dt.replace(
-                hour=target_hour, minute=0, second=0, microsecond=0
-            )
-            hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
+            # Before DW: use detailed 15-min forecast for consistency
+            # This ensures can_reach_target matches the binary sensor
+            # (both now include grid charging effects)
+            dw_entry = self._get_forecast_at_demand_window(data, target_hour)
 
-            # Deficit: kWh needed to reach target
-            deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
+            if dw_entry:
+                # Use detailed forecast - includes grid charging effects
+                predicted_soc = dw_entry["predicted_soc"]
+                can_reach = predicted_soc >= target_pct
 
-            # Solar forecast: pessimistic estimate between now and DW
-            solar_kwh = self._sum_solar_before_target(
-                data.solcast_today, now_dt, target_hour
-            )
+                # For boost_needed: calculate if solar ALONE can reach target
+                # (without grid charging) - this is the "solar gap" indicator
+                deficit_kwh = max(
+                    (target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0
+                )
 
-            # Consumption estimate: current load extrapolated
-            # Use historical average load if available, otherwise use current load
-            expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
-            consumption_kwh = expected_load_kw * hours_to_target
+                # Solar forecast: pessimistic estimate between now and DW
+                solar_kwh = self._sum_solar_before_target(
+                    data.solcast_today, now_dt, target_hour
+                )
 
-            # Net solar (after consumption)
-            net_solar = solar_kwh - consumption_kwh
+                # Hours remaining until DW start
+                target_dt = now_dt.replace(
+                    hour=target_hour, minute=0, second=0, microsecond=0
+                )
+                hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
 
-            # Predicted SOC at DW (clamped to 0-100%)
-            net_solar_pct = net_solar / BATTERY_CAPACITY_KWH * 100
-            predicted_soc = max(0.0, min(100.0, data.soc + net_solar_pct))
+                # Consumption estimate
+                expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
+                consumption_kwh = expected_load_kw * hours_to_target
 
-            # Can solar alone reach target?
-            can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
+                # Net solar (after consumption) - solar only, no grid charging
+                net_solar = solar_kwh - consumption_kwh
 
-            # Boost needed? Only if gentle charging can't reach target before DW
-            if data.soc >= target_pct:
-                boost_needed = False
+                # Boost needed if solar alone can't reach target
+                boost_needed = data.soc < target_pct and net_solar < deficit_kwh
             else:
-                remaining_deficit = max(deficit_kwh - max(net_solar, 0), 0)
-                time_needed_hours = (
-                    remaining_deficit / (CHARGE_RATE_BACKUP_KW * 0.9)
-                    if remaining_deficit > 0
-                    else 0
+                # Fallback if detailed forecast unavailable (shouldn't normally happen)
+                # Hours remaining until DW start
+                target_dt = now_dt.replace(
+                    hour=target_hour, minute=0, second=0, microsecond=0
                 )
-                boost_needed = (
-                    time_needed_hours > (hours_to_target - 0.5)
-                    and remaining_deficit > 0
+                hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
+
+                # Deficit: kWh needed to reach target
+                deficit_kwh = max(
+                    (target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0
                 )
+
+                # Solar forecast: pessimistic estimate between now and DW
+                solar_kwh = self._sum_solar_before_target(
+                    data.solcast_today, now_dt, target_hour
+                )
+
+                # Consumption estimate: current load extrapolated
+                expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
+                consumption_kwh = expected_load_kw * hours_to_target
+
+                # Net solar (after consumption)
+                net_solar = solar_kwh - consumption_kwh
+
+                # Predicted SOC at DW (clamped to 0-100%)
+                net_solar_pct = net_solar / BATTERY_CAPACITY_KWH * 100
+                predicted_soc = max(0.0, min(100.0, data.soc + net_solar_pct))
+
+                # Can solar alone reach target? (fallback calculation)
+                can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
+
+                # Boost needed? Only if gentle charging can't reach target before DW
+                if data.soc >= target_pct:
+                    boost_needed = False
+                else:
+                    remaining_deficit = max(deficit_kwh - max(net_solar, 0), 0)
+                    time_needed_hours = (
+                        remaining_deficit / (CHARGE_RATE_BACKUP_KW * 0.9)
+                        if remaining_deficit > 0
+                        else 0
+                    )
+                    boost_needed = (
+                        time_needed_hours > (hours_to_target - 0.5)
+                        and remaining_deficit > 0
+                    )
 
             # Mark target reached if SOC is there
             target_reached = data.soc >= target_pct

@@ -49,7 +49,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-015 | 🟠 HIGH | ✅ COMPLETED | Solar FIT Sensor Shows `unknown` State |
 | backlog-high-016 | 🟠 HIGH | ✅ COMPLETED | Forecast Consumption Not Blending Recent Load Data |
 | backlog-med-007 | 🟡 MED | ✅ COMPLETED | Recent Load Diagnostic Fields Not Propagated to CoordinatorData |
-| backlog-med-008 | 🟡 MED | 📋 PROPOSED | `can_reach_target` Inconsistency Between Legacy and Detailed Forecast |
+| backlog-med-008 | 🟡 MED | ✅ COMPLETED | `can_reach_target` Inconsistency Between Legacy and Detailed Forecast |
 | backlog-low-005 | ⚪ LOW | 📋 PROPOSED | Dashboard Template Shows `None` for Solar Remaining |
 
 ---
