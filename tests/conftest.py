@@ -1,13 +1,13 @@
 """Test fixtures and configuration for amber_powerwall tests."""
-import pytest
-from datetime import datetime, time, timedelta
+
+from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 # Import the real homeassistant modules
-from homeassistant import config_entries
 from custom_components.amber_powerwall.computation_engine import (
     ComputationEngine,
-    BatteryMode,
 )
 from custom_components.amber_powerwall.coordinator_data import CoordinatorData
 
@@ -42,6 +42,7 @@ def mock_entry():
 @pytest.fixture
 def mock_get_entity_id():
     """Mock function to get entity IDs."""
+
     def _get_entity_id(key):
         entity_map = {
             "teslemetry_soc": "sensor.tesla_powerwall_soc",
@@ -57,12 +58,14 @@ def mock_get_entity_id():
             "sun": "sun.sun",
         }
         return entity_map.get(key)
+
     return _get_entity_id
 
 
 @pytest.fixture
 def mock_get_switch_state():
     """Mock function to get switch states."""
+
     def _get_switch_state(key):
         switch_states = {
             "automation_enabled": True,
@@ -71,6 +74,7 @@ def mock_get_switch_state():
             "manual_override": False,
         }
         return switch_states.get(key, False)
+
     return _get_switch_state
 
 
@@ -96,7 +100,9 @@ def coordinator_data():
 
 
 @pytest.fixture
-def computation_engine(mock_hass, mock_entry, mock_get_entity_id, mock_get_switch_state):
+def computation_engine(
+    mock_hass, mock_entry, mock_get_entity_id, mock_get_switch_state
+):
     """Create a ComputationEngine instance."""
     engine = ComputationEngine(
         mock_hass,

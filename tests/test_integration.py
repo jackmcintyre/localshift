@@ -1,9 +1,6 @@
 """Integration tests for amber_powerwall component."""
-import pytest
-from datetime import datetime, time, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
 
-from .conftest import mock_hass, mock_entry
+from .conftest import mock_entry
 
 
 def test_config_flow_initialization():
@@ -17,7 +14,7 @@ def test_integration_entry_options():
     """Test integration entry options."""
     # Test entry options handling
     entry = mock_entry()
-    
+
     # Verify default options are set
     assert entry.options.get("battery_target") == 90
     assert entry.options.get("cheap_price_percentile") == 40
