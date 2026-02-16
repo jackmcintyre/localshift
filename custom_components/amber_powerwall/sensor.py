@@ -319,8 +319,8 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
                 )
 
         # Calculate totals for diagnostics
-        total_grid_import = sum(slot.get("grid_import_kwh", 0) for slot in debug_15min)
-        total_grid_export = sum(slot.get("grid_export_kwh", 0) for slot in debug_15min)
+        total_grid_import = sum(slot.get("grid_in", 0) or 0 for slot in debug_15min)
+        total_grid_export = sum(slot.get("grid_out", 0) or 0 for slot in debug_15min)
 
         return {
             # NOTE: We intentionally avoid exposing the full 96-slot 15-min forecast
