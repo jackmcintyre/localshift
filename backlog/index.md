@@ -33,6 +33,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-009 | 🟠 HIGH | 📋 PROPOSED | Solar Curtailment for Negative FIT |
 | backlog-high-010 | 🟠 HIGH | 📋 PROPOSED | Pyright Error: Missing _manual_override_set_at Attribute |
 | backlog-high-011 | 🟠 HIGH | 📋 PROPOSED | Template Error: None Values in Cost Sensor Attributes |
+| backlog-high-012 | 🟠 HIGH | 📋 PROPOSED | Configurable Grid Export Reserve Delta |
 | backlog-med-001 | 🟡 MED | ✅ COMPLETED | No Test Coverage |
 | backlog-med-002 | 🟡 MED | 📋 PROPOSED | Time Precision Inconsistency |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |

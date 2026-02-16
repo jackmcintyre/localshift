@@ -235,10 +235,19 @@ class BatteryController:
         )
         return True
 
+    def _get_minimum_target_soc(self) -> float:
+        """Read the minimum target SOC from the configured entity.
+
+        Returns:
+            Minimum target SOC percentage (default 10 if entity unavailable).
+        """
+        entity_id = self._get_entity_id("minimum_target_soc")
+        return self._read_float(entity_id, default=10.0)
+
     async def set_force_discharge(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
-        """Set battery to force discharge mode (autonomous, reserve=10).
+        """Set battery to force discharge mode (autonomous, reserve=minimum_target).
 
         Relies on the Tesla Energy Plan dummy tariff (high sell price
         6am-midnight) to incentivise the Powerwall to export to grid.
@@ -246,18 +255,23 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
+        # Get minimum target SOC for reserve
+        minimum_target = self._get_minimum_target_soc()
+
         if dry_run:
-            _LOGGER.info("DRY RUN: set_force_discharge")
+            _LOGGER.info("DRY RUN: set_force_discharge (reserve=%s)", minimum_target)
             return True
 
-        _LOGGER.info("Setting battery to force discharge mode")
+        _LOGGER.info(
+            "Setting battery to force discharge mode (reserve=%s)", minimum_target
+        )
 
         # Set allow_export to battery_ok first (allow battery to export to grid)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_BATTERY_OK):
             _LOGGER.error("Aborting force discharge mode: Failed to set export mode")
             return False
 
-        if not await self._set_backup_reserve(10):
+        if not await self._set_backup_reserve(minimum_target):
             _LOGGER.error("Aborting force discharge mode: Failed to set backup reserve")
             return False
 
@@ -268,7 +282,7 @@ class BatteryController:
         # Validate transition completed successfully
         if not await self.validate_transition(
             expected_operation_mode="autonomous",
-            expected_backup_reserve=10,
+            expected_backup_reserve=minimum_target,
             expected_export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
             timeout=20,
         ):
@@ -283,18 +297,15 @@ class BatteryController:
     async def set_proactive_export(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
-        """Set battery to proactive export mode (autonomous, reserve=max(4, SOC-5)).
+        """Set battery to proactive export mode (autonomous, reserve=minimum_target).
 
-        Uses a dynamic reserve based on current SOC to limit export rate.
-        Minimum reserve is 4%, but keeps a 5% buffer below current SOC.
+        Uses the minimum target SOC entity value for the reserve percentage.
 
         Returns:
             True if successful, False otherwise.
         """
-        # Calculate reserve: max(4, SOC - 5)
-        # This keeps minimum 4% but ensures we don't export below SOC-5%
-        reserve = max(4, data.soc - 5)
-        reserve = max(4, min(100, reserve))  # Clamp between 4-100
+        # Get minimum target SOC for reserve
+        reserve = self._get_minimum_target_soc()
 
         if dry_run:
             _LOGGER.info("DRY RUN: set_proactive_export (reserve=%s)", reserve)

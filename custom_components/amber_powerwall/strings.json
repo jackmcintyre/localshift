@@ -8,6 +8,7 @@
           "teslemetry_operation_mode": "Operation Mode (select entity)",
           "teslemetry_backup_reserve": "Backup Reserve (number entity)",
           "teslemetry_soc": "Battery SOC %",
+          "minimum_target_soc": "Minimum Target SOC (number entity)",
           "teslemetry_grid_power": "Grid Power (kW)",
           "teslemetry_battery_power": "Battery Power (kW)",
           "teslemetry_solar_power": "Solar Power (kW)",

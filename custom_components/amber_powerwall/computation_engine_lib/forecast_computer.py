@@ -690,18 +690,36 @@ class ForecastComputer:
         if forecasted_excess_kwh <= 0:
             return False, 0.0
 
-        # Calculate maximum FIT price over next 24 hours for optimal timing
-        # Only export when at or near peak FIT prices for maximum revenue
-        max_fit_price = self._calculate_max_fit_price(
-            feed_in_forecast, slot_start, hours=24
+        # Calculate maximum FIT price over next 6 hours (evening period only)
+        # This avoids including tomorrow's midday solar peak which inflates the threshold
+        max_fit_price_evening = self._calculate_max_fit_price(
+            feed_in_forecast, slot_start, hours=6
         )
 
         # Only export when at or near peak (e.g., within 20% of max)
         # This ensures we export at financially optimal times
-        export_threshold = max_fit_price * 0.8  # 80% of peak
+        export_threshold = max_fit_price_evening * 0.8  # 80% of peak
 
         # Never proactive-export into a non-positive FIT.
         if slot_fit_price <= 0:
+            return False, 0.0
+
+        # Check if better price is coming in next 3 hours
+        # If current price is significantly lower than what's coming, wait for better price
+        best_price_next_3h = self._calculate_max_fit_price(
+            feed_in_forecast, slot_start, hours=3
+        )
+
+        # If current price is more than 10% below the best price coming in next 3 hours,
+        # don't export - wait for the better price
+        if slot_fit_price < best_price_next_3h * 0.9:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - better price coming (current=$%.2f < next_3h=$%.2f)",
+                slot_hour,
+                slot_start.minute,
+                slot_fit_price,
+                best_price_next_3h,
+            )
             return False, 0.0
 
         # Only export if current FIT is at or near peak threshold

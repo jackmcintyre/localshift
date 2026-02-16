@@ -49,6 +49,7 @@ DISCHARGE_EARLIEST_HOUR = 6
 CONF_TESLEMETRY_OPERATION_MODE = "teslemetry_operation_mode"
 CONF_TESLEMETRY_BACKUP_RESERVE = "teslemetry_backup_reserve"
 CONF_TESLEMETRY_SOC = "teslemetry_soc"
+CONF_MINIMUM_TARGET_SOC = "minimum_target_soc"
 CONF_TESLEMETRY_GRID_POWER = "teslemetry_grid_power"
 CONF_TESLEMETRY_BATTERY_POWER = "teslemetry_battery_power"
 CONF_TESLEMETRY_SOLAR_POWER = "teslemetry_solar_power"
@@ -83,6 +84,7 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_OPERATION_MODE: "select.my_home_operation_mode",
     CONF_TESLEMETRY_BACKUP_RESERVE: "number.my_home_backup_reserve",
     CONF_TESLEMETRY_SOC: "sensor.my_home_percentage_charged",
+    CONF_MINIMUM_TARGET_SOC: "number.my_home_minimum_target_soc",
     CONF_TESLEMETRY_GRID_POWER: "sensor.my_home_grid_power",
     CONF_TESLEMETRY_BATTERY_POWER: "sensor.my_home_battery_power",
     CONF_TESLEMETRY_SOLAR_POWER: "sensor.my_home_solar_power",
