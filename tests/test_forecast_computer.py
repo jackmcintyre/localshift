@@ -7,12 +7,10 @@ from custom_components.amber_powerwall.computation_engine_lib.forecast_computer 
     ForecastComputer,
 )
 
-from .conftest import mock_entry, mock_get_entity_id
 
-
-def test_estimate_hourly_consumption_with_historical():
+def test_estimate_hourly_consumption_with_historical(mock_entry, mock_get_entity_id):
     """Test hourly consumption estimation with historical data."""
-    entry = mock_entry()
+    entry = mock_entry
     entry.options = {
         "load_weight_recent": 0.7,
     }
@@ -29,9 +27,9 @@ def test_estimate_hourly_consumption_with_historical():
     assert kw > 0
 
 
-def test_estimate_hourly_consumption_fallback():
+def test_estimate_hourly_consumption_fallback(mock_entry, mock_get_entity_id):
     """Test hourly consumption estimation with fallback."""
-    entry = mock_entry()
+    entry = mock_entry
     entry.options = {
         "load_weight_recent": 0.7,
     }
@@ -46,9 +44,9 @@ def test_estimate_hourly_consumption_fallback():
     assert source == "live_load_fallback"
 
 
-def test_find_negative_fit_windows_no_negatives():
+def test_find_negative_fit_windows_no_negatives(mock_entry, mock_get_entity_id):
     """Test negative FIT window detection with no negative prices."""
-    entry = mock_entry()
+    entry = mock_entry
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
     
     # All positive prices
@@ -64,9 +62,9 @@ def test_find_negative_fit_windows_no_negatives():
     assert len(windows) == 0
 
 
-def test_find_negative_fit_windows_with_negatives():
+def test_find_negative_fit_windows_with_negatives(mock_entry, mock_get_entity_id):
     """Test negative FIT window detection with negative prices."""
-    entry = mock_entry()
+    entry = mock_entry
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
     
     # Some negative prices
@@ -85,9 +83,9 @@ def test_find_negative_fit_windows_with_negatives():
     assert windows[0][2] == pytest.approx(-0.02)
 
 
-def test_calculate_percentile_fit_price():
+def test_calculate_percentile_fit_price(mock_entry, mock_get_entity_id):
     """Test percentile FIT price calculation."""
-    entry = mock_entry()
+    entry = mock_entry
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
     
     feed_in_forecast = [
@@ -101,9 +99,9 @@ def test_calculate_percentile_fit_price():
     assert percentile_price == pytest.approx(0.08)
 
 
-def test_calculate_max_fit_price():
+def test_calculate_max_fit_price(mock_entry, mock_get_entity_id):
     """Test maximum FIT price calculation."""
-    entry = mock_entry()
+    entry = mock_entry
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
     
     feed_in_forecast = [
@@ -117,9 +115,9 @@ def test_calculate_max_fit_price():
     assert max_price == pytest.approx(0.14)
 
 
-def test_parse_time_option():
+def test_parse_time_option(mock_entry, mock_get_entity_id):
     """Test time option parsing."""
-    entry = mock_entry()
+    entry = mock_entry
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
     
     t = computer._parse_time_option("demand_window_start", "18:00:00")
@@ -129,9 +127,9 @@ def test_parse_time_option():
     assert t.second == 0
 
 
-def test_parse_time_option_invalid():
+def test_parse_time_option_invalid(mock_entry, mock_get_entity_id):
     """Test time option parsing with invalid value."""
-    entry = mock_entry()
+    entry = mock_entry
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
     
     # Should fallback to default

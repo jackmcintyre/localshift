@@ -1,7 +1,5 @@
 """Integration tests for amber_powerwall component."""
 
-from .conftest import mock_entry
-
 
 def test_config_flow_initialization():
     """Test config flow initialization."""
@@ -10,10 +8,10 @@ def test_config_flow_initialization():
     assert True
 
 
-def test_integration_entry_options():
+def test_integration_entry_options(mock_entry):
     """Test integration entry options."""
     # Test entry options handling
-    entry = mock_entry()
+    entry = mock_entry
 
     # Verify default options are set
     assert entry.options.get("battery_target") == 90
