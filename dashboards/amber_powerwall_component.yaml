@@ -2,8 +2,10 @@
 # Amber Powerwall Custom Component Dashboard
 # =============================================================================
 #
-# Dashboard that ONLY uses entities from the amber_powerwall custom component.
-# Does not reference any entities from the YAML package.
+# Dashboard primarily uses entities from the amber_powerwall custom component.
+# Also references:
+#   - my_home_* entities from Tesla Powerwall integration
+#   - 100h_* entities from Amber Electric YAML package
 #
 # Add to configuration.yaml:
 #   lovelace:
@@ -19,15 +21,44 @@
 
 title: Powerwall
 views:
-  - title: Control
-    path: control
+  # =============================================================================
+  # VIEW 1: OVERVIEW (Main Dashboard)
+  # =============================================================================
+  - title: Overview
+    path: overview
     icon: mdi:battery-sync
     type: sections
     max_columns: 2
     sections:
-      # =================================================================
-      # LEFT COLUMN
-      # =================================================================
+      # --- Power Flow Card ---
+      - type: grid
+        cards:
+          - type: custom:power-flow-card-plus
+            entities:
+              battery:
+                entity: sensor.my_home_battery_power
+                state_of_charge: sensor.my_home_percentage_charged
+              grid:
+                entity: sensor.my_home_grid_power
+                secondary_info: {}
+              solar:
+                entity: sensor.my_home_solar_power
+                display_zero_state: true
+              home:
+                secondary_info: {}
+                entity: sensor.my_home_load_power
+            clickable_entities: true
+            display_zero_lines: true
+            use_new_flow_rate_model: true
+            w_decimals: 0
+            kw_decimals: 1
+            min_flow_rate: 0.75
+            max_flow_rate: 6
+            max_expected_power: 2000
+            min_expected_power: 0.01
+            watt_threshold: 1000
+            transparency_zero_lines: 0
+            sort_individual_devices: false
 
       # --- Status ---
       - type: grid
@@ -70,62 +101,6 @@ views:
             entity: binary_sensor.amber_powerwall_demand_window_active
             name: Demand Window
             color: orange
-
-      # --- Controls ---
-      - type: grid
-        cards:
-          - type: heading
-            heading: Controls
-            heading_style: title
-
-          - type: tile
-            entity: switch.amber_powerwall_automation_enabled
-            name: Automation
-            icon: mdi:power
-
-          - type: tile
-            entity: switch.amber_powerwall_dry_run
-            name: Dry Run
-            icon: mdi:test-tube
-            color: amber
-
-          - type: tile
-            entity: switch.amber_powerwall_spike_discharge_enabled
-            name: Spike Discharge
-
-          - type: tile
-            entity: switch.amber_powerwall_demand_window_block
-            name: Demand Block
-            color: orange
-
-          - type: tile
-            entity: number.amber_powerwall_cheap_price_percentile
-            name: Cheap %
-
-          - type: tile
-            entity: number.amber_powerwall_max_pre_charge_price
-            name: Max Pre-charge
-
-          - type: tile
-            entity: number.amber_powerwall_price_deadband
-            name: Deadband
-
-          - type: tile
-            entity: number.amber_powerwall_forecast_lookahead
-            name: Lookahead
-
-          - type: tile
-            entity: number.amber_powerwall_pre_charge_battery_threshold
-            name: Pre-charge SOC
-
-          - type: tile
-            entity: number.amber_powerwall_battery_target
-            name: Battery Target
-
-          - type: tile
-            entity: number.amber_powerwall_load_recent_weight
-            name: Load Weight
-            icon: mdi:scale-balance
 
       # --- Battery Mode ---
       - type: grid
@@ -223,10 +198,6 @@ views:
                 entity_id: button.amber_powerwall_update_forecast
             icon_height: 40px
 
-      # =================================================================
-      # RIGHT COLUMN
-      # =================================================================
-
       # --- Live System ---
       - type: grid
         cards:
@@ -274,16 +245,54 @@ views:
             entity: binary_sensor.amber_powerwall_forecast_spike_within_window
             name: Spike in Window
 
-          - type: tile
-            entity: binary_sensor.amber_powerwall_hold_justified
-            name: Hold Justified
-
           - type: entity
             entity: binary_sensor.amber_powerwall_forecast_spike_within_window
             attribute: max_forecast_price
             name: Max Price
             icon: mdi:arrow-up-bold
             suffix: "$/kWh"
+
+      # --- Forecast Chart ---
+      - type: grid
+        cards:
+          - type: custom:apexcharts-card
+            header:
+              title: SOC - Past 24h & Future 24h
+              show: true
+            chart_type: line
+            graph_span: 48h
+            span:
+              offset: "+24h"
+            series:
+              - entity: sensor.my_home_percentage_charged
+                name: Actual SOC
+                color: "#3B82F6"
+                stroke_width: 3
+                curve: smooth
+                type: line
+                extend_to: false
+              - entity: sensor.amber_powerwall_daily_forecast
+                name: Planned SOC
+                color: "#F59E0B"
+                stroke_width: 2
+                stroke_dash: 5
+                type: line
+                extend_to: false
+                data_generator: |
+                  return (entity.attributes.soc_series_15min || []).map(function(entry) {
+                    return [entry[0], entry[1]];
+                  });
+            yaxis:
+              - min: 0
+                max: 100
+                decimals: 0
+            hours_12: false
+            now:
+              show: true
+              label: Now
+              color: "#EF4444"
+            cache: true
+            update_interval: "60sec"
 
       # --- Solar Plan ---
       - type: grid
@@ -331,10 +340,6 @@ views:
             name: Boost Needed
 
           - type: tile
-            entity: binary_sensor.amber_powerwall_hold_justified
-            name: Hold Justified
-
-          - type: tile
             entity: binary_sensor.amber_powerwall_solar_export_hold_justified
             name: Export Hold
             color: amber
@@ -375,92 +380,108 @@ views:
               Buy: ${{ state_attr(log, 'buy_price') }}/kWh
               Sell: ${{ state_attr(log, 'sell_price') }}/kWh
 
-
-          # --- Daily Forecast ---
-          - type: markdown
-            content: |
-              **24-Hour SOC Forecast**
-
-              ```
-              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh) | Grid In | Grid Out | Buy ($/kWh) | Sell ($/kWh)
-              ------|---------|-------------|------------|-----------|---------|----------|--------------|-------------
-              {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
-              {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
-              {%- for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
-              {%- set hour = item.hour %}
-              {%- set buy_price = namespace(value='-') %}
-              {%- set sell_price = namespace(value='-') %}
-              {%- for f in general_forecast if (f.nem_date | as_datetime).hour == hour %}
-                {%- if buy_price.value == '-' %}
-                  {%- set buy_price.value = "%.2f"|format(f.per_kwh) %}
-                {%- endif %}
-              {%- endfor %}
-              {%- for f in feedin_forecast if (f.nem_date | as_datetime).hour == hour %}
-                {%- if sell_price.value == '-' %}
-                  {%- set sell_price.value = "%.2f"|format(f.per_kwh) %}
-                {%- endif %}
-              {%- endfor %}
-              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}       | {{ "%.2f"|format(item.grid_import_kwh) | default(0) }}     | {{ "%.2f"|format(item.grid_export_kwh) | default(0) }}       | {{ buy_price.value }}          | {{ sell_price.value }}
-              {%- endfor %}
-              ```
-
-      # --- Charging Performance ---
+  # =============================================================================
+  # VIEW 2: CONTROLS
+  # =============================================================================
+  - title: Controls
+    path: controls
+    icon: mdi:tune
+    type: sections
+    max_columns: 2
+    sections:
+      # --- Automation ---
       - type: grid
         cards:
           - type: heading
-            heading: Charging Performance
+            heading: Automation
             heading_style: title
 
-          - type: markdown
-            content: >
-              **Planned vs Actual SOC**
+          - type: tile
+            entity: switch.amber_powerwall_automation_enabled
+            name: Automation
+            icon: mdi:power
 
-              {% set forecast_sensor = 'sensor.amber_powerwall_forecast_history' %}
-              {% set forecast_count = states(forecast_sensor) | int(default=0) %}
+          - type: tile
+            entity: switch.amber_powerwall_dry_run
+            name: Dry Run
+            icon: mdi:test-tube
+            color: amber
 
-              Forecast history: **{{ forecast_count }}** entries
+      # --- Discharge Settings ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Discharge
+            heading_style: title
 
-              *Note: Requires apexcharts-card from HACS*
+          - type: tile
+            entity: switch.amber_powerwall_spike_discharge_enabled
+            name: Spike Discharge
 
-          - type: custom:apexcharts-card
-            header:
-              title: SOC - Past 24h & Future 24h
-              show: true
-            chart_type: line
-            graph_span: 48h
-            span:
-              offset: "+24h"
-            series:
-              - entity: sensor.my_home_percentage_charged
-                name: Actual SOC
-                color: "#3B82F6"
-                stroke_width: 3
-                curve: smooth
-                type: line
-                extend_to: false
-              - entity: sensor.amber_powerwall_daily_forecast
-                name: Planned SOC
-                color: "#F59E0B"
-                stroke_width: 2
-                stroke_dash: 5
-                type: line
-                extend_to: false
-                data_generator: |
-                  return (entity.attributes.soc_series_15min || []).map(function(entry) {
-                    return [entry[0], entry[1]];
-                  });
-            yaxis:
-              - min: 0
-                max: 100
-                decimals: 0
-            hours_12: false
-            now:
-              show: true
-              label: Now
-              color: "#EF4444"
-            cache: true
-            update_interval: "60sec"
+          - type: tile
+            entity: switch.amber_powerwall_demand_window_block
+            name: Demand Block
+            color: orange
 
+      # --- Price Thresholds ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Price Thresholds
+            heading_style: title
+
+          - type: tile
+            entity: number.amber_powerwall_cheap_price_percentile
+            name: Cheap %
+
+          - type: tile
+            entity: number.amber_powerwall_max_pre_charge_price
+            name: Max Pre-charge
+
+          - type: tile
+            entity: number.amber_powerwall_price_deadband
+            name: Deadband
+
+      # --- Forecast Settings ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Forecast
+            heading_style: title
+
+          - type: tile
+            entity: number.amber_powerwall_forecast_lookahead
+            name: Lookahead
+
+          - type: tile
+            entity: number.amber_powerwall_pre_charge_battery_threshold
+            name: Pre-charge SOC
+
+      # --- Battery Target ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: Battery
+            heading_style: title
+
+          - type: tile
+            entity: number.amber_powerwall_battery_target
+            name: Battery Target
+
+          - type: tile
+            entity: number.amber_powerwall_load_recent_weight
+            name: Load Weight
+            icon: mdi:scale-balance
+
+  # =============================================================================
+  # VIEW 3: DEBUG
+  # =============================================================================
+  - title: Debug
+    path: debug
+    icon: mdi:bug
+    type: sections
+    max_columns: 1
+    sections:
       # --- Debug State Summary ---
       - type: grid
         cards:
@@ -570,6 +591,38 @@ views:
               === END OF DEBUG SUMMARY ===
               ```
 
+      # --- Daily Forecast ---
+      - type: grid
+        cards:
+          - type: heading
+            heading: 24-Hour Forecast
+            heading_style: title
+
+          - type: markdown
+            content: |
+              ```
+              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh) | Grid In | Grid Out | Buy ($/kWh) | Sell ($/kWh)
+              ------|---------|-------------|------------|-----------|---------|----------|--------------|-------------
+              {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
+              {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
+              {%- for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
+              {%- set hour = item.hour %}
+              {%- set buy_price = namespace(value='-') %}
+              {%- set sell_price = namespace(value='-') %}
+              {%- for f in general_forecast if (f.nem_date | as_datetime).hour == hour %}
+                {%- if buy_price.value == '-' %}
+                  {%- set buy_price.value = "%.2f"|format(f.per_kwh) %}
+                {%- endif %}
+              {%- endfor %}
+              {%- for f in feedin_forecast if (f.nem_date | as_datetime).hour == hour %}
+                {%- if sell_price.value == '-' %}
+                  {%- set sell_price.value = "%.2f"|format(f.per_kwh) %}
+                {%- endif %}
+              {%- endfor %}
+              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}       | {{ "%.2f"|format(item.grid_import_kwh) | default(0) }}     | {{ "%.2f"|format(item.grid_export_kwh) | default(0) }}       | {{ buy_price.value }}          | {{ sell_price.value }}
+              {%- endfor %}
+              ```
+
       # --- Debug 15-min Slots ---
       - type: grid
         cards:
@@ -611,5 +664,4 @@ views:
               {%- set export_amt = slot.export_amt if slot.export_amt > 0 else '-' %}
               {{ loop.index }}    | {{ "%02d:%02d"|format(slot.hour, slot.minute) }}  | {{ "%.1f"|format(slot.soc) }}  | {{ "%.3f"|format(slot.solar) }} | {{ "%.3f"|format(slot.load) }} | {{ "%.3f"|format(slot.net) }} | {{ "%.3f"|format(slot.grid_in) | default(0) }}    | {{ "%.3f"|format(slot.grid_out) | default(0) }}     | {{ buy_price.value }}  | {{ sell_price.value }} | {{ proactive }}       | {{ export_amt }}
               {%- endfor %}
-              ```
               ```
