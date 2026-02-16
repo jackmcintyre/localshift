@@ -152,10 +152,6 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_TESLEMETRY_SOC],
                     "sensor",
                 ),
-                CONF_MINIMUM_TARGET_SOC: (
-                    user_input[CONF_MINIMUM_TARGET_SOC],
-                    "number",
-                ),
                 CONF_TESLEMETRY_GRID_POWER: (
                     user_input[CONF_TESLEMETRY_GRID_POWER],
                     "sensor",
@@ -201,12 +197,6 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                                 default=user_input[CONF_TESLEMETRY_SOC],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="sensor")
-                            ),
-                            vol.Required(
-                                CONF_MINIMUM_TARGET_SOC,
-                                default=user_input[CONF_MINIMUM_TARGET_SOC],
-                            ): selector.EntitySelector(
-                                selector.EntitySelectorConfig(domain="number")
                             ),
                             vol.Required(
                                 CONF_TESLEMETRY_GRID_POWER,
@@ -268,12 +258,6 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                         default=DEFAULT_ENTITY_IDS[CONF_TESLEMETRY_SOC],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Required(
-                        CONF_MINIMUM_TARGET_SOC,
-                        default=DEFAULT_ENTITY_IDS[CONF_MINIMUM_TARGET_SOC],
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="number")
                     ),
                     vol.Required(
                         CONF_TESLEMETRY_GRID_POWER,
@@ -508,6 +492,7 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 # Hold mode options removed
                 CONF_MANUAL_OVERRIDE_TIMEOUT: DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
                 CONF_LOAD_WEIGHT_RECENT: DEFAULT_LOAD_WEIGHT_RECENT,
+                CONF_MINIMUM_TARGET_SOC: DEFAULT_MINIMUM_TARGET_SOC,
             }
 
             return self.async_create_entry(

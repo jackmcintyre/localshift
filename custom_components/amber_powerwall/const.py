@@ -84,7 +84,6 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_OPERATION_MODE: "select.my_home_operation_mode",
     CONF_TESLEMETRY_BACKUP_RESERVE: "number.my_home_backup_reserve",
     CONF_TESLEMETRY_SOC: "sensor.my_home_percentage_charged",
-    CONF_MINIMUM_TARGET_SOC: "number.my_home_minimum_target_soc",
     CONF_TESLEMETRY_GRID_POWER: "sensor.my_home_grid_power",
     CONF_TESLEMETRY_BATTERY_POWER: "sensor.my_home_battery_power",
     CONF_TESLEMETRY_SOLAR_POWER: "sensor.my_home_solar_power",
