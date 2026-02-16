@@ -507,8 +507,8 @@ views:
               
               Effective Cheap Price: ${{ states('sensor.amber_powerwall_effective_cheap_price') }}/kWh
               Cheap Charge Stop Price: ${{ states('sensor.amber_powerwall_cheap_charge_stop_price') }}/kWh
-              Solar Weighted Avg FIT: ${{ states('sensor.amber_powerwall_solar_weighted_average_fit') }}/kWh
-              Solar Remaining: {{ state_attr('sensor.amber_powerwall_solar_weighted_average_fit', 'total_solar_remaining_kwh') | default(0) }} kWh
+              Solar Weighted Avg FIT: ${{ states('sensor.amber_powerwall_solar_weighted_avg_fit') }}/kWh
+              Solar Remaining: {{ state_attr('sensor.amber_powerwall_solar_weighted_avg_fit', 'total_solar_remaining_kwh') | default(0) }} kWh
               
               === FORECAST INFORMATION ===
               Solar Battery Forecast SOC: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'predicted_soc') | default(0) }}%
