@@ -58,11 +58,164 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    async def _validate_entities(
+        self, entities: dict[str, tuple[str, str]]
+    ) -> dict[str, str] | None:
+        """Validate entities exist, are available, and have correct domains.
+
+        Args:
+            entities: Dictionary of {config_key: (entity_id, expected_domain)}
+
+        Returns:
+            None if all valid, or dict of {config_key: error_message}
+        """
+        errors = {}
+        for config_key, (entity_id, expected_domain) in entities.items():
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                errors[config_key] = f"Entity '{entity_id}' does not exist"
+            elif state.state in ("unavailable", "unknown"):
+                errors[config_key] = f"Entity '{entity_id}' is {state.state}"
+            elif state.domain != expected_domain:
+                errors[config_key] = (
+                    f"Expected {expected_domain} entity, got {state.domain}"
+                )
+
+        return errors if errors else None
+
+    async def _validate_notify_service(self, notify_service: str) -> str | None:
+        """Validate that a notify service exists.
+
+        Args:
+            notify_service: Service string like "notify.mobile_app_xxx"
+
+        Returns:
+            None if valid, or error message string
+        """
+        if not notify_service:
+            return "Notify service is required"
+
+        if not notify_service.startswith("notify."):
+            return "Notify service must start with 'notify.'"
+
+        # Parse domain and service name
+        # Format: "notify.mobile_app_xxx" -> domain="notify", service="mobile_app_xxx"
+        parts = notify_service.split(".", 1)
+        if len(parts) != 2:
+            return "Invalid notify service format"
+
+        domain, service_name = parts
+
+        # Check if the notify service exists
+        services = self.hass.services.async_services()
+        if domain not in services:
+            return f"Notify domain '{domain}' not found"
+
+        if service_name not in services[domain]:
+            return f"Notify service '{service_name}' not found in {domain}"
+
+        return None
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the Teslemetry entity selection step."""
         if user_input is not None:
+            # Validate entities
+            entities_to_validate = {
+                CONF_TESLEMETRY_OPERATION_MODE: (
+                    user_input[CONF_TESLEMETRY_OPERATION_MODE],
+                    "select",
+                ),
+                CONF_TESLEMETRY_BACKUP_RESERVE: (
+                    user_input[CONF_TESLEMETRY_BACKUP_RESERVE],
+                    "number",
+                ),
+                CONF_TESLEMETRY_SOC: (
+                    user_input[CONF_TESLEMETRY_SOC],
+                    "sensor",
+                ),
+                CONF_TESLEMETRY_GRID_POWER: (
+                    user_input[CONF_TESLEMETRY_GRID_POWER],
+                    "sensor",
+                ),
+                CONF_TESLEMETRY_BATTERY_POWER: (
+                    user_input[CONF_TESLEMETRY_BATTERY_POWER],
+                    "sensor",
+                ),
+                CONF_TESLEMETRY_SOLAR_POWER: (
+                    user_input[CONF_TESLEMETRY_SOLAR_POWER],
+                    "sensor",
+                ),
+                CONF_TESLEMETRY_LOAD_POWER: (
+                    user_input[CONF_TESLEMETRY_LOAD_POWER],
+                    "sensor",
+                ),
+                CONF_TESLEMETRY_ALLOW_EXPORT: (
+                    user_input[CONF_TESLEMETRY_ALLOW_EXPORT],
+                    "select",
+                ),
+            }
+
+            errors = await self._validate_entities(entities_to_validate)
+            if errors:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_TESLEMETRY_OPERATION_MODE,
+                                default=user_input[CONF_TESLEMETRY_OPERATION_MODE],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="select")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_BACKUP_RESERVE,
+                                default=user_input[CONF_TESLEMETRY_BACKUP_RESERVE],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="number")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_SOC,
+                                default=user_input[CONF_TESLEMETRY_SOC],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_GRID_POWER,
+                                default=user_input[CONF_TESLEMETRY_GRID_POWER],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_BATTERY_POWER,
+                                default=user_input[CONF_TESLEMETRY_BATTERY_POWER],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_SOLAR_POWER,
+                                default=user_input[CONF_TESLEMETRY_SOLAR_POWER],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_LOAD_POWER,
+                                default=user_input[CONF_TESLEMETRY_LOAD_POWER],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_TESLEMETRY_ALLOW_EXPORT,
+                                default=user_input[CONF_TESLEMETRY_ALLOW_EXPORT],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="select")
+                            ),
+                        }
+                    ),
+                    errors=errors,
+                )
+
             # Store teslemetry config, move to amber step
             self._teslemetry_data = user_input
             return await self.async_step_amber()
@@ -128,6 +281,71 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the Amber Electric entity selection step."""
         if user_input is not None:
+            # Validate entities
+            entities_to_validate = {
+                CONF_AMBER_GENERAL_PRICE: (
+                    user_input[CONF_AMBER_GENERAL_PRICE],
+                    "sensor",
+                ),
+                CONF_AMBER_FEED_IN_PRICE: (
+                    user_input[CONF_AMBER_FEED_IN_PRICE],
+                    "sensor",
+                ),
+                CONF_AMBER_GENERAL_FORECAST: (
+                    user_input[CONF_AMBER_GENERAL_FORECAST],
+                    "sensor",
+                ),
+                CONF_AMBER_FEED_IN_FORECAST: (
+                    user_input[CONF_AMBER_FEED_IN_FORECAST],
+                    "sensor",
+                ),
+                CONF_AMBER_PRICE_SPIKE: (
+                    user_input[CONF_AMBER_PRICE_SPIKE],
+                    "binary_sensor",
+                ),
+            }
+
+            errors = await self._validate_entities(entities_to_validate)
+            if errors:
+                return self.async_show_form(
+                    step_id="amber",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_AMBER_GENERAL_PRICE,
+                                default=user_input[CONF_AMBER_GENERAL_PRICE],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_AMBER_FEED_IN_PRICE,
+                                default=user_input[CONF_AMBER_FEED_IN_PRICE],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_AMBER_GENERAL_FORECAST,
+                                default=user_input[CONF_AMBER_GENERAL_FORECAST],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_AMBER_FEED_IN_FORECAST,
+                                default=user_input[CONF_AMBER_FEED_IN_FORECAST],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_AMBER_PRICE_SPIKE,
+                                default=user_input[CONF_AMBER_PRICE_SPIKE],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="binary_sensor")
+                            ),
+                        }
+                    ),
+                    errors=errors,
+                )
+
             # Store amber config, move to solcast step
             self._amber_data = user_input
             return await self.async_step_solcast()
@@ -175,6 +393,61 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the Solcast + notification entity selection step."""
         if user_input is not None:
+            # Validate entities and notify service
+            entities_to_validate = {
+                CONF_SOLCAST_FORECAST_TODAY: (
+                    user_input[CONF_SOLCAST_FORECAST_TODAY],
+                    "sensor",
+                ),
+                CONF_SOLCAST_FORECAST_TOMORROW: (
+                    user_input[CONF_SOLCAST_FORECAST_TOMORROW],
+                    "sensor",
+                ),
+                CONF_SUN_ENTITY: (
+                    user_input[CONF_SUN_ENTITY],
+                    "sun",
+                ),
+            }
+
+            errors = await self._validate_entities(entities_to_validate) or {}
+
+            # Validate notify service
+            notify_error = await self._validate_notify_service(
+                user_input[CONF_NOTIFY_SERVICE]
+            )
+            if notify_error:
+                errors[CONF_NOTIFY_SERVICE] = notify_error
+
+            if errors:
+                return self.async_show_form(
+                    step_id="solcast",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_SOLCAST_FORECAST_TODAY,
+                                default=user_input[CONF_SOLCAST_FORECAST_TODAY],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_SOLCAST_FORECAST_TOMORROW,
+                                default=user_input[CONF_SOLCAST_FORECAST_TOMORROW],
+                            ): selector.EntitySelector(
+                                selector.EntitySelectorConfig(domain="sensor")
+                            ),
+                            vol.Required(
+                                CONF_NOTIFY_SERVICE,
+                                default=user_input[CONF_NOTIFY_SERVICE],
+                            ): selector.TextSelector(),
+                            vol.Required(
+                                CONF_SUN_ENTITY,
+                                default=user_input[CONF_SUN_ENTITY],
+                            ): selector.EntitySelector(),
+                        }
+                    ),
+                    errors=errors,
+                )
+
             # Combine all data and create entry
             all_data = {
                 **self._teslemetry_data,

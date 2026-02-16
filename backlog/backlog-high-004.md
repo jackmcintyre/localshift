@@ -2,7 +2,7 @@
 
 **ID:** backlog-high-004  
 **Priority:** HIGH  
-**Status:** PROPOSED  
+**Status:** COMPLETED  
 **Created:** 2026-02-16  
 **Updated:** 2026-02-16  
 
@@ -39,3 +39,11 @@ available_services = notify.async_get_services(hass)
 ## Notes
 
 Related to backlog-high-001 (Entity validation)
+
+## Implementation
+
+Completed as part of backlog-high-001. Added `_validate_notify_service()` method to `config_flow.py` that:
+- Validates notify service format (must start with "notify.")
+- Parses domain and service name
+- Verifies the service exists in Home Assistant's service registry
+- Returns descriptive error messages for invalid services

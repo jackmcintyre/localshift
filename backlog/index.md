@@ -22,15 +22,16 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | ID | Priority | Status | Title |
 |----|----------|--------|-------|
 | backlog-crit-001 | 🔴 CRIT | ✅ COMPLETED | Force Charge Detection Logic Bug |
-| backlog-high-001 | 🟠 HIGH | 📋 PROPOSED | Add Entity Validation on Config Flow |
+| backlog-high-001 | 🟠 HIGH | ✅ COMPLETED | Add Entity Validation on Config Flow |
 | backlog-high-002 | 🟠 HIGH | ✅ COMPLETED | Missing Tomorrow's Forecast Integration |
 | backlog-high-003 | 🟠 HIGH | ✅ COMPLETED | No Error Handling for Powerwall API Calls |
-| backlog-high-004 | 🟠 HIGH | 📋 PROPOSED | Notification Service Not Validated |
+| backlog-high-004 | 🟠 HIGH | ✅ COMPLETED | Notification Service Not Validated |
 | backlog-high-005 | 🟠 HIGH | ✅ COMPLETED | Arbitrary Sleep Delays Between Commands |
 | backlog-high-006 | 🟠 HIGH | 📋 PROPOSED | Demand Window Block Logic Priority Issue |
 | backlog-high-007 | 🟠 HIGH | 📋 PROPOSED | Inconsistent State Machine Priority Order |
 | backlog-high-008 | 🟠 HIGH | 📋 PROPOSED | Proactive Export Not Using Peak FIT Prices |
 | backlog-high-009 | 🟠 HIGH | 📋 PROPOSED | Solar Curtailment for Negative FIT |
+| backlog-high-010 | 🟠 HIGH | 📋 PROPOSED | Pyright Error: Missing _manual_override_set_at Attribute |
 | backlog-med-001 | 🟡 MED | 📋 PROPOSED | No Test Coverage |
 | backlog-med-002 | 🟡 MED | 📋 PROPOSED | Time Precision Inconsistency |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
