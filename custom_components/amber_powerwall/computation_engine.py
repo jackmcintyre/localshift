@@ -214,8 +214,8 @@ class ComputationEngine:
         data.boost_charge_active = (
             data.operation_mode == "autonomous" and data.backup_reserve > 99
         )
-        # hold_active uses internal flag (matches YAML: input_boolean.battery_hold_mode)
-        data.hold_active = data.hold_mode
+        # hold_active - Hold mode removed, always False
+        data.hold_active = False
 
         # ---- Step 3: demand_window_active ----
         dw_block_enabled = self._get_switch_state("demand_window_block")
@@ -273,19 +273,11 @@ class ComputationEngine:
             data.general_forecast, now_dt, cutoff
         )
 
-        # ---- Step 11: hold_justified ----
-        # Hold mode removed - always False
-        data.hold_justified = False
-
-        # ---- Step 12: solar_weighted_avg_fit ----
+        # ---- Step 11: solar_weighted_avg_fit ----
         self._compute_solar_weighted_avg_fit(data, now_dt, target_hour, after_dw)
 
-        # ---- Step 13: solar_export_hold_justified ----
-        # Hold mode removed - always False
-        data.solar_export_hold_justified = False
-        data.surplus_ratio = 0.0
+        # ---- Step 12: active_mode ----
 
-        # ---- Step 14: active_mode ----
         self._compute_active_mode(data, now_dt)
 
         # ---- Step 15: decision_log ----
@@ -587,17 +579,6 @@ class ComputationEngine:
             final = max(final, forecast_floor)
             data.effective_cheap_price = round(final, 2)
 
-    def _compute_hold_justified(
-        self, data: CoordinatorData, now_dt: datetime, cutoff: datetime
-    ) -> None:
-        """Compute whether holding battery is justified.
-
-        NOTE: Hold mode has been removed. This method is kept for compatibility
-        but always sets hold_justified to False.
-        """
-        # Hold mode removed - always False
-        data.hold_justified = False
-
     def _compute_solar_weighted_avg_fit(
         self, data: CoordinatorData, now_dt: datetime, target_hour: int, after_dw: bool
     ) -> None:
@@ -642,18 +623,6 @@ class ComputationEngine:
             else:
                 data.solar_weighted_avg_fit = 0.0
             data.solar_remaining_kwh = round(total_solar, 2)
-
-    def _compute_solar_export_hold_justified(
-        self, data: CoordinatorData, before_dw: bool
-    ) -> None:
-        """Compute whether solar export hold is justified.
-
-        NOTE: Hold mode has been removed. This method is kept for compatibility
-        but always sets solar_export_hold_justified to False.
-        """
-        # Hold mode removed - always False
-        data.solar_export_hold_justified = False
-        data.surplus_ratio = 0.0
 
     def _get_forecast_entry_for_now(
         self, data: CoordinatorData, now_dt: datetime

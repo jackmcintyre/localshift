@@ -55,8 +55,6 @@ class CoordinatorData:
     forecast_expensive_period_coming: bool = False
     solar_can_reach_target: bool = False
     boost_charge_needed: bool = False
-    hold_justified: bool = False
-    solar_export_hold_justified: bool = False
     demand_window_active: bool = False
 
     # Extra attributes for binary sensors
@@ -99,8 +97,6 @@ class CoordinatorData:
 
     # Internal state flags (managed by state machine / buttons)
     manual_override: bool = False
-    hold_mode: bool = False
-    solar_export_hold: bool = False
     target_reached_today: bool = False
 
     # Shared charging decisions (computed once, used by both forecast and active_mode)
