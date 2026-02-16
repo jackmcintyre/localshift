@@ -1150,9 +1150,14 @@ class ForecastComputer:
                         grid_export_kwh = 0.0
 
             # Iterative SOC simulation with clamp each 15 minutes
-            predicted_soc = predicted_soc + (
-                battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
-            )
+            # First slot: preserve current SOC (no time-based delta applied)
+            # Later slots: apply battery delta
+            if offset == 0:
+                predicted_soc = current_soc
+            else:
+                predicted_soc = predicted_soc + (
+                    battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
+                )
             predicted_soc = max(0.0, min(100.0, predicted_soc))
 
             # Store a light-weight SOC timeseries to avoid huge attributes
