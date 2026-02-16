@@ -31,8 +31,6 @@ async def async_setup_entry(
         ForecastExpensivePeriodSensor(coordinator, entry),
         SolarCanReachTargetSensor(coordinator, entry),
         BoostChargeNeededSensor(coordinator, entry),
-        HoldJustifiedSensor(coordinator, entry),
-        SolarExportHoldJustifiedSensor(coordinator, entry),
         DemandWindowActiveSensor(coordinator, entry),
     ]
 
@@ -186,39 +184,6 @@ class BoostChargeNeededSensor(AmberPowerwallBinarySensorBase):
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.boost_charge_needed
-
-
-class HoldJustifiedSensor(AmberPowerwallBinarySensorBase):
-    """Whether hold mode is justified (solar coming or cheap prices forecast)."""
-
-    _attr_unique_id = "hold_justified"
-    _attr_name = "Hold Justified"
-    _attr_icon = "mdi:shield-check"
-
-    def _update_from_coordinator(self) -> None:
-        self._attr_is_on = self.coordinator.data.hold_justified
-
-
-class SolarExportHoldJustifiedSensor(AmberPowerwallBinarySensorBase):
-    """Whether solar export hold conditions are met."""
-
-    _attr_unique_id = "solar_export_hold_justified"
-    _attr_name = "Solar Export Hold Justified"
-    _attr_icon = "mdi:solar-power-variant"
-
-    def _update_from_coordinator(self) -> None:
-        self._attr_is_on = self.coordinator.data.solar_export_hold_justified
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return diagnostic attributes."""
-        d = self.coordinator.data
-        return {
-            "solar_weighted_avg_fit": round(d.solar_weighted_avg_fit, 4),
-            "current_fit": round(d.feed_in_price, 4),
-            "solar_remaining_kwh": round(d.solar_remaining_kwh, 2),
-            "surplus_ratio": d.surplus_ratio,
-        }
 
 
 class DemandWindowActiveSensor(AmberPowerwallBinarySensorBase):

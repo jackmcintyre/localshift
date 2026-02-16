@@ -339,11 +339,6 @@ views:
             entity: binary_sensor.amber_powerwall_boost_charge_needed
             name: Boost Needed
 
-          - type: tile
-            entity: binary_sensor.amber_powerwall_solar_export_hold_justified
-            name: Export Hold
-            color: amber
-
       # --- Cost ---
       - type: grid
         cards:
@@ -521,8 +516,6 @@ views:
               Force Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_charge' }}
               Boost Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'boost_charging' }}
               Hold Active: {{ states('sensor.amber_powerwall_active_mode') in ['hold', 'holding_for_spike', 'demand_block'] }}
-              Hold Justified: {{ states('binary_sensor.amber_powerwall_hold_justified') }}
-              Solar Export Hold Justified: {{ states('binary_sensor.amber_powerwall_solar_export_hold_justified') }}
               Solar Can Reach Target: {{ states('binary_sensor.amber_powerwall_solar_can_reach_target') }}
               Boost Charge Needed: {{ states('binary_sensor.amber_powerwall_boost_charge_needed') }}
               
