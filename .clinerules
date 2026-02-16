@@ -39,3 +39,8 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 ## Before Starting Any Task
 - Check `backlog/index.md` to understand current priorities
 - Review related backlog items for context
+
+## Commit Workflow
+- After completing changes, run pre-commit hooks to verify code quality
+- AFTER pre-commit passes, ask the user to commit rather than auto-committing
+- Wait for user confirmation before running git commit
