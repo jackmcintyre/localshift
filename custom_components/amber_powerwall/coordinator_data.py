@@ -52,6 +52,7 @@ class CoordinatorData:
     force_charge_active: bool = False
     boost_charge_active: bool = False
     hold_active: bool = False
+    proactive_export_active: bool = False
     forecast_expensive_period_coming: bool = False
     solar_can_reach_target: bool = False
     boost_charge_needed: bool = False

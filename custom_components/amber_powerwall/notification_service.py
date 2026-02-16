@@ -56,6 +56,8 @@ class NotificationService:
         """Generate a human-readable reason for a mode transition."""
         if new_mode == BatteryMode.SPIKE_DISCHARGE:
             return f"Price spike detected (feed-in ${data.feed_in_price:.2f}/kWh)"
+        if new_mode == BatteryMode.PROACTIVE_EXPORT:
+            return f"Forecast predicts low/negative FIT (feed-in ${data.feed_in_price:.2f}/kWh)"
         if new_mode == BatteryMode.DEMAND_BLOCK:
             return "Demand window active -- protecting from grid imports"
         if new_mode == BatteryMode.GRID_CHARGING:
@@ -97,6 +99,8 @@ class NotificationService:
                 )
             if old_mode == BatteryMode.SPIKE_DISCHARGE:
                 return "Price spike cleared"
+            if old_mode == BatteryMode.PROACTIVE_EXPORT:
+                return "Proactive export ended - FIT improved"
             if old_mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
                 return (
                     f"Hold ended -- price ${data.general_price:.2f}/kWh, using battery"
@@ -120,6 +124,15 @@ class NotificationService:
                 f"Price spike detected. Feed-in: ${data.feed_in_price:.2f}/kWh. "
                 f"Battery at {data.soc:.0f}%. "
                 f"Switching to force discharge (export)."
+            )
+        elif new_mode == BatteryMode.PROACTIVE_EXPORT:
+            # Calculate the reserve that was set
+            reserve = max(4, data.soc - 5)
+            title = f"{prefix}Proactive Export"
+            message = (
+                f"Forecast predicts low/negative FIT. Feed-in: ${data.feed_in_price:.2f}/kWh. "
+                f"Battery at {data.soc:.0f}%. "
+                f"Exporting with {reserve:.0f}% reserve (buffer from SOC-5%)."
             )
         elif new_mode == BatteryMode.DEMAND_BLOCK:
             dw_start = self.entry.options.get(
@@ -196,6 +209,14 @@ class NotificationService:
             return (
                 f"{prefix}Spike Ended",
                 f"Price spike has cleared. Feed-in now: "
+                f"${data.feed_in_price:.2f}/kWh. "
+                f"Battery at {data.soc:.0f}%. "
+                f"Returning to self consumption.",
+            )
+        if old_mode == BatteryMode.PROACTIVE_EXPORT:
+            return (
+                f"{prefix}Proactive Export Ended",
+                f"FIT has improved. Feed-in now: "
                 f"${data.feed_in_price:.2f}/kWh. "
                 f"Battery at {data.soc:.0f}%. "
                 f"Returning to self consumption.",

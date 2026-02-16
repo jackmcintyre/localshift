@@ -86,12 +86,17 @@ class StateMachine:
         # Immediate: high-priority or safety transitions
         if to_mode in (
             BatteryMode.SPIKE_DISCHARGE,
+            BatteryMode.PROACTIVE_EXPORT,
             BatteryMode.DEMAND_BLOCK,
             BatteryMode.MANUAL,
         ):
             return timedelta(0)
         # Immediate: leaving high-priority modes
-        if from_mode in (BatteryMode.SPIKE_DISCHARGE, BatteryMode.DEMAND_BLOCK):
+        if from_mode in (
+            BatteryMode.SPIKE_DISCHARGE,
+            BatteryMode.PROACTIVE_EXPORT,
+            BatteryMode.DEMAND_BLOCK,
+        ):
             return timedelta(0)
         # All other (price-driven): 5 minutes
         return timedelta(minutes=5)
@@ -293,6 +298,15 @@ class StateMachine:
                 else:
                     _LOGGER.error("Spike discharge mode transition FAILED")
 
+            elif target == BatteryMode.PROACTIVE_EXPORT:
+                transition_success = await self._battery_controller.set_proactive_export(
+                    data, dry_run
+                )
+                if transition_success:
+                    _LOGGER.info("Proactive export mode transition completed")
+                else:
+                    _LOGGER.error("Proactive export mode transition FAILED")
+
             elif target == BatteryMode.MANUAL:
                 pass  # No command — user is controlling manually
                 _LOGGER.info("Manual mode transition completed (no commands)")
@@ -332,6 +346,10 @@ class StateMachine:
         elif mode == BatteryMode.BOOST_CHARGING:
             return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.SPIKE_DISCHARGE:
+            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK)
+        elif mode == BatteryMode.PROACTIVE_EXPORT:
+            # Reserve is dynamic (max(4, SOC-5)), so use 10 as expected for health check
+            # The actual reserve will be set based on current SOC
             return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK)
         else:  # MANUAL or unknown
             return ("", -1, "")

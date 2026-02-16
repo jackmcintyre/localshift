@@ -346,6 +346,65 @@ class BatteryController:
         )
         return True
 
+    async def set_proactive_export(
+        self, data: CoordinatorData, dry_run: bool = False
+    ) -> bool:
+        """Set battery to proactive export mode (autonomous, reserve=max(4, SOC-5)).
+
+        Uses a dynamic reserve based on current SOC to limit export rate.
+        Minimum reserve is 4%, but keeps a 5% buffer below current SOC.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        data.hold_mode = False
+        data.solar_export_hold = False
+
+        # Calculate reserve: max(4, SOC - 5)
+        # This keeps minimum 4% but ensures we don't export below SOC-5%
+        reserve = max(4, data.soc - 5)
+        reserve = max(4, min(100, reserve))  # Clamp between 4-100
+
+        if dry_run:
+            _LOGGER.info("DRY RUN: set_proactive_export (reserve=%s)", reserve)
+            return True
+
+        _LOGGER.info("Setting battery to proactive export mode (reserve=%s)", reserve)
+
+        # Set allow_export to battery_ok (allow battery to export to grid)
+        if not await self._set_export_mode(TESLEMETRY_EXPORT_BATTERY_OK):
+            _LOGGER.error("Aborting proactive export: Failed to set export mode")
+            return False
+        await asyncio.sleep(5)
+
+        if not await self._set_backup_reserve(reserve):
+            _LOGGER.error(
+                "Aborting proactive export: Failed to set backup reserve to %s",
+                reserve,
+            )
+            return False
+        await asyncio.sleep(5)
+
+        if not await self._set_operation_mode("autonomous"):
+            _LOGGER.error("Aborting proactive export: Failed to set operation mode")
+            return False
+
+        # Validate transition completed successfully
+        if not await self.validate_transition(
+            expected_operation_mode="autonomous",
+            expected_backup_reserve=reserve,
+            expected_export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+            timeout=20,
+        ):
+            _LOGGER.error("Proactive export mode validation failed")
+            return False
+
+        _LOGGER.info(
+            "Successfully completed proactive export mode transition with validation (reserve=%s)",
+            reserve,
+        )
+        return True
+
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
         """Read a float value from an entity's state."""
         state = self.hass.states.get(entity_id)

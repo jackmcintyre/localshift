@@ -651,6 +651,9 @@ class ComputationEngine:
         automation_enabled = self._get_switch_state("automation_enabled")
         spike_discharge_enabled = self._get_switch_state("spike_discharge_enabled")
 
+        # Reset flags at the start of each computation
+        data.proactive_export_active = False
+
         # Check if we're in valid discharge window (6am-midnight)
         current_hour = now_dt.hour
         in_discharge_window = current_hour >= DISCHARGE_EARLIEST_HOUR
@@ -694,7 +697,8 @@ class ComputationEngine:
 
         # FORECAST-DRIVED: Proactive export (before negative feed-in prices)
         elif forecast_entry.get("proactive_export"):
-            data.active_mode = BatteryMode.SPIKE_DISCHARGE
+            data.active_mode = BatteryMode.PROACTIVE_EXPORT
+            data.proactive_export_active = True
             export_amount = forecast_entry.get("export_amount_kwh", 0.0)
             _LOGGER.info(
                 "Forecast-driven: PROACTIVE_EXPORT at %s, amount=%.2f kWh",

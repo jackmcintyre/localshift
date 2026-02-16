@@ -22,6 +22,7 @@ class BatteryMode(str, Enum):
     GRID_CHARGING = "grid_charging"
     BOOST_CHARGING = "boost_charging"
     SPIKE_DISCHARGE = "spike_discharge"
+    PROACTIVE_EXPORT = "proactive_export"
     DEMAND_BLOCK = "demand_block"
     MANUAL = "manual"
 
