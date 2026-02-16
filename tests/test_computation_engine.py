@@ -1,7 +1,7 @@
 """Unit tests for ComputationEngine."""
 import pytest
 from datetime import datetime, time, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from custom_components.amber_powerwall.computation_engine import (
     ComputationEngine,
