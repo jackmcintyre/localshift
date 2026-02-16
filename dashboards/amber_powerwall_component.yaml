@@ -116,9 +116,7 @@ views:
               {%- elif mode == 'spike_discharge' %}🔴 **Spike Discharge** — exporting to grid
               {%- elif mode == 'boost_charging' %}🟡 **Boost Charge (5kW)** — fast charging from grid
               {%- elif mode == 'grid_charging' %}🟢 **Grid Charge (3.3kW)** — charging from grid
-              {%- elif mode == 'solar_export_hold' %}🟡 **Solar Export Hold** — exporting solar at high FIT
-              {%- elif mode == 'hold' %}🔵 **Hold** — battery idle, house on grid
-              {%- elif mode == 'holding_for_spike' %}🟠 **Holding for Spike**
+              {%- elif mode == 'proactive_export' %}🟢 **Proactive Export** — exporting before negative prices
               {%- elif mode == 'demand_block' %}🟠 **Demand Block**
               {%- else %}⚪ **Self Consumption** — normal operation
               {%- endif %}
@@ -127,8 +125,7 @@ views:
               {%- elif mode == 'demand_block' %}Protecting from grid imports
               {%- elif mode == 'spike_discharge' %}Price spike detected
               {%- elif mode in ['grid_charging', 'boost_charging'] %}Price below threshold
-              {%- elif mode == 'solar_export_hold' %}FIT above average
-              {%- elif mode in ['hold', 'holding_for_spike'] %}Preserving battery
+              {%- elif mode == 'proactive_export' %}Feed-in price going negative
               {%- endif %}
 
       # --- Actions ---
@@ -166,16 +163,6 @@ views:
               perform_action: button.press
               target:
                 entity_id: button.amber_powerwall_boost_charge_5kw
-            icon_height: 40px
-
-          - type: button
-            name: Hold
-            icon: mdi:battery-lock
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.amber_powerwall_hold_battery
             icon_height: 40px
 
           - type: button
@@ -505,8 +492,6 @@ views:
               
               === INTERNAL STATE FLAGS ===
               Manual Override: {{ states('switch.amber_powerwall_automation_enabled') == 'off' }}
-              Hold Mode: {{ states('sensor.amber_powerwall_active_mode') in ['hold', 'holding_for_spike'] }}
-              Solar Export Hold: {{ states('sensor.amber_powerwall_active_mode') == 'solar_export_hold' }}
               Target Reached Today: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'target_reached_today') }}
               
               Forecast Spike Within Window: {{ states('binary_sensor.amber_powerwall_forecast_spike_within_window') }}
@@ -515,7 +500,6 @@ views:
               Force Discharge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_discharge' }}
               Force Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_charge' }}
               Boost Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'boost_charging' }}
-              Hold Active: {{ states('sensor.amber_powerwall_active_mode') in ['hold', 'holding_for_spike', 'demand_block'] }}
               Solar Can Reach Target: {{ states('binary_sensor.amber_powerwall_solar_can_reach_target') }}
               Boost Charge Needed: {{ states('binary_sensor.amber_powerwall_boost_charge_needed') }}
               

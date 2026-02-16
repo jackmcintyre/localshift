@@ -214,8 +214,6 @@ class ComputationEngine:
         data.boost_charge_active = (
             data.operation_mode == "autonomous" and data.backup_reserve > 99
         )
-        # hold_active - Hold mode removed, always False
-        data.hold_active = False
 
         # ---- Step 3: demand_window_active ----
         dw_block_enabled = self._get_switch_state("demand_window_block")

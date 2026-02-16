@@ -50,9 +50,7 @@
                   "precharge_battery_threshold": "Pre-charge Battery Threshold",
                   "battery_target": "Battery Target",
                   "demand_window_start": "Demand Window Start",
-                  "demand_window_end": "Demand Window End",
-                  "hold_min_savings_percent": "Hold Min Savings Percent",
-                  "hold_absolute_cheap_threshold": "Hold Absolute Cheap Threshold"
+                  "demand_window_end": "Demand Window End"
                 }
               }
             }

@@ -72,23 +72,7 @@ class NotificationService:
                 f"price ${data.general_price:.2f}/kWh, "
                 f"SOC {data.soc:.0f}%"
             )
-        if new_mode == BatteryMode.HOLD:
-            return (
-                f"Price in deadband (${data.general_price:.2f}/kWh), "
-                "preserving battery for solar/cheap prices"
-            )
-        if new_mode == BatteryMode.HOLDING_FOR_SPIKE:
-            return "Spike forecast within lookahead -- holding battery for discharge"
-        if new_mode == BatteryMode.SOLAR_EXPORT_HOLD:
-            return (
-                f"Solar export hold -- FIT ${data.feed_in_price:.2f}/kWh "
-                f"(avg ${data.solar_weighted_avg_fit:.2f}/kWh)"
-            )
         if new_mode == BatteryMode.SELF_CONSUMPTION:
-            if old_mode == BatteryMode.SOLAR_EXPORT_HOLD:
-                return (
-                    "Solar export hold released -- FIT dropped or surplus insufficient"
-                )
             if old_mode in (
                 BatteryMode.GRID_CHARGING,
                 BatteryMode.BOOST_CHARGING,
@@ -101,10 +85,6 @@ class NotificationService:
                 return "Price spike cleared"
             if old_mode == BatteryMode.PROACTIVE_EXPORT:
                 return "Proactive export ended - FIT improved"
-            if old_mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
-                return (
-                    f"Hold ended -- price ${data.general_price:.2f}/kWh, using battery"
-                )
             if old_mode == BatteryMode.DEMAND_BLOCK:
                 return "Demand window ended"
             return "Normal operation -- no special conditions active"
@@ -166,28 +146,6 @@ class NotificationService:
                 f"Solar forecast insufficient — boost charging at ~5kW. "
                 f"Net solar: {net_solar}kWh before demand window."
             )
-        elif new_mode == BatteryMode.HOLD:
-            title = f"{prefix}Entering Hold"
-            message = (
-                f"Grid price at ${data.general_price:.2f}/kWh "
-                f"(in deadband zone). Holding battery — house draws from "
-                f"grid. Battery at {data.soc:.0f}%."
-            )
-        elif new_mode == BatteryMode.HOLDING_FOR_SPIKE:
-            title = f"{prefix}Holding for Spike"
-            message = (
-                f"Spike forecast within lookahead window. "
-                f"Holding battery for potential discharge. "
-                f"Battery at {data.soc:.0f}%."
-            )
-        elif new_mode == BatteryMode.SOLAR_EXPORT_HOLD:
-            title = f"{prefix}Solar Export Hold"
-            message = (
-                f"Holding battery to export solar at "
-                f"${data.feed_in_price:.2f}/kWh "
-                f"(above avg ${data.solar_weighted_avg_fit:.2f}/kWh). "
-                f"Battery at {data.soc:.0f}%."
-            )
         elif new_mode == BatteryMode.SELF_CONSUMPTION:
             title, message = self._self_consumption_notification(old_mode, data)
         elif new_mode == BatteryMode.MANUAL:
@@ -232,26 +190,6 @@ class NotificationService:
                 f"${data.cheap_charge_stop_price:.2f}/kWh). "
                 f"Battery at {data.soc:.0f}%. "
                 f"Returning to self consumption.",
-            )
-        if old_mode in (
-            BatteryMode.HOLD,
-            BatteryMode.HOLDING_FOR_SPIKE,
-        ):
-            return (
-                f"{prefix}Leaving Hold",
-                f"Grid price rose to ${data.general_price:.2f}/kWh "
-                f"(above stop threshold "
-                f"${data.cheap_charge_stop_price:.2f}/kWh). "
-                f"Battery at {data.soc:.0f}%. "
-                f"Returning to self consumption.",
-            )
-        if old_mode == BatteryMode.SOLAR_EXPORT_HOLD:
-            return (
-                f"{prefix}Solar Export Hold Released",
-                f"FIT now ${data.feed_in_price:.2f}/kWh "
-                f"(avg ${data.solar_weighted_avg_fit:.2f}/kWh). "
-                f"Resuming self consumption to charge battery. "
-                f"Battery at {data.soc:.0f}%.",
             )
         if old_mode == BatteryMode.DEMAND_BLOCK:
             return (

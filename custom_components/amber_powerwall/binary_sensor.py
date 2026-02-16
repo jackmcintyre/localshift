@@ -27,7 +27,6 @@ async def async_setup_entry(
         ForceDischargeActiveSensor(coordinator, entry),
         ForceChargeActiveSensor(coordinator, entry),
         BoostChargeActiveSensor(coordinator, entry),
-        HoldActiveSensor(coordinator, entry),
         ForecastExpensivePeriodSensor(coordinator, entry),
         SolarCanReachTargetSensor(coordinator, entry),
         BoostChargeNeededSensor(coordinator, entry),
@@ -140,17 +139,6 @@ class BoostChargeActiveSensor(AmberPowerwallBinarySensorBase):
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.boost_charge_active
-
-
-class HoldActiveSensor(AmberPowerwallBinarySensorBase):
-    """Whether battery is currently in hold mode."""
-
-    _attr_unique_id = "battery_hold_active"
-    _attr_name = "Hold Active"
-    _attr_icon = "mdi:battery-lock"
-
-    def _update_from_coordinator(self) -> None:
-        self._attr_is_on = self.coordinator.data.hold_active
 
 
 class ForecastExpensivePeriodSensor(AmberPowerwallBinarySensorBase):

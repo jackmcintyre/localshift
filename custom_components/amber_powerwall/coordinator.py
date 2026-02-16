@@ -431,11 +431,6 @@ class AmberPowerwallCoordinator:
         if self._battery_controller is not None:
             await self._battery_controller.set_force_discharge(self.data, False)
 
-    async def async_set_hold(self) -> None:
-        """Set battery to hold mode."""
-        if self._battery_controller is not None:
-            await self._battery_controller.set_hold(self.data, False)
-
     async def async_set_manual_override(self) -> None:
         """Set manual override mode."""
         self.data.manual_override = True

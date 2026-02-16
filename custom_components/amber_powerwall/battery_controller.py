@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from typing import TYPE_CHECKING
 
 from .const import (
@@ -117,8 +116,6 @@ class BatteryController:
             True if successful, False otherwise.
         """
         data.manual_override = False
-        data.hold_mode = False
-        data.solar_export_hold = False
 
         if dry_run:
             _LOGGER.info("DRY RUN: set_self_consumption")
@@ -161,52 +158,6 @@ class BatteryController:
         )
         return True
 
-    async def set_hold(self, data: CoordinatorData, dry_run: bool = False) -> bool:
-        """Set battery to hold mode (reserve=floor(SOC), self_consumption).
-
-        Returns:
-            True if successful, False otherwise.
-        """
-        data.hold_mode = True
-
-        # Re-read SOC just before setting reserve to ensure accuracy
-        current_soc = self._read_float(self._get_entity_id("teslemetry_soc"))
-        reserve = max(10, min(100, math.floor(current_soc)))
-
-        if dry_run:
-            _LOGGER.info("DRY RUN: set_hold (reserve=%s)", reserve)
-            return True
-
-        _LOGGER.info("Setting battery to hold mode (reserve=%s)", reserve)
-
-        # Set allow_export to pv_only first (don't allow battery to export)
-        if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
-            _LOGGER.error("Aborting hold mode: Failed to set export mode")
-            return False
-        await asyncio.sleep(5)
-
-        if not await self._set_backup_reserve(reserve):
-            _LOGGER.error("Aborting hold mode: Failed to set backup reserve")
-            return False
-        await asyncio.sleep(5)
-
-        if not await self._set_operation_mode("self_consumption"):
-            _LOGGER.error("Aborting hold mode: Failed to set operation mode")
-            return False
-
-        # Validate transition completed successfully
-        if not await self.validate_transition(
-            expected_operation_mode="self_consumption",
-            expected_backup_reserve=reserve,
-            expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
-            timeout=20,
-        ):
-            _LOGGER.error("Hold mode validation failed")
-            return False
-
-        _LOGGER.info("Successfully completed hold mode transition with validation")
-        return True
-
     async def set_force_charge(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
@@ -215,9 +166,6 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.hold_mode = False
-        data.solar_export_hold = False
-
         if dry_run:
             _LOGGER.info("DRY RUN: set_force_charge")
             return True
@@ -257,9 +205,6 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.hold_mode = False
-        data.solar_export_hold = False
-
         if dry_run:
             _LOGGER.info("DRY RUN: set_boost_charge")
             return True
@@ -307,9 +252,6 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.hold_mode = False
-        data.solar_export_hold = False
-
         if dry_run:
             _LOGGER.info("DRY RUN: set_force_discharge")
             return True
@@ -357,9 +299,6 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.hold_mode = False
-        data.solar_export_hold = False
-
         # Calculate reserve: max(4, SOC - 5)
         # This keeps minimum 4% but ensures we don't export below SOC-5%
         reserve = max(4, data.soc - 5)
