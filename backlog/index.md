@@ -33,7 +33,8 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-009 | 🟠 HIGH | 📋 PROPOSED | Solar Curtailment for Negative FIT |
 | backlog-high-010 | 🟠 HIGH | 📋 PROPOSED | Pyright Error: Missing _manual_override_set_at Attribute |
 | backlog-high-011 | 🟠 HIGH | 📋 PROPOSED | Template Error: None Values in Cost Sensor Attributes |
-| backlog-high-012 | 🟠 HIGH | 📋 PROPOSED | Configurable Grid Export Reserve Delta |
+| backlog-high-012 | 🟠 HIGH | ✅ COMPLETED | Configurable Grid Export Reserve Delta |
+| backlog-high-013 | 🟠 HIGH | 📋 PROPOSED | hours_to_dw Calculation Bug (Boost Charging) |
 | backlog-med-001 | 🟡 MED | ✅ COMPLETED | No Test Coverage |
 | backlog-med-002 | 🟡 MED | 📋 PROPOSED | Time Precision Inconsistency |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
@@ -41,7 +42,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
 | backlog-med-006 | 🟡 MED | 📋 PROPOSED | Test Suite Has 29 Failing Tests |
 | backlog-low-001 | ⚪ LOW | 📋 PROPOSED | Dashboard Setup Complexity |
-| backlog-low-002 | ⚪ LOW | 📋 PROPOSED | Hardcoded Personal Notification Service |
+| backlog-low-002 | ⚪ LOW | ✅ COMPLETED | Hardcoded Personal Notification Service |
 | backlog-low-003 | ⚪ LOW | 📋 PROPOSED | Version Inconsistency |
 | backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
 

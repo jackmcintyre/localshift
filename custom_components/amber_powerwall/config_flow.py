@@ -84,6 +84,21 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return errors if errors else None
 
+    async def _get_notify_services(self) -> list[str]:
+        """Get list of available notify services.
+
+        Returns:
+            List of notify service strings like ["notify.mobile_app"]
+        """
+        services = self.hass.services.async_services()
+        notify_services = []
+
+        if "notify" in services:
+            for service_name in services["notify"].keys():
+                notify_services.append(f"notify.{service_name}")
+
+        return sorted(notify_services)
+
     async def _validate_notify_service(self, notify_service: str) -> str | None:
         """Validate that a notify service exists.
 
@@ -409,6 +424,9 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the Solcast + notification entity selection step."""
+        # Get available notify services dynamically
+        notify_services = await self._get_notify_services()
+
         if user_input is not None:
             # Validate entities and notify service
             entities_to_validate = {
@@ -455,7 +473,12 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                             vol.Required(
                                 CONF_NOTIFY_SERVICE,
                                 default=user_input[CONF_NOTIFY_SERVICE],
-                            ): selector.TextSelector(),
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=notify_services,
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
                             vol.Required(
                                 CONF_SUN_ENTITY,
                                 default=user_input[CONF_SUN_ENTITY],
@@ -492,6 +515,9 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 options=options,
             )
 
+        # Determine default notify service (first available or empty)
+        default_notify = notify_services[0] if notify_services else ""
+
         return self.async_show_form(
             step_id="solcast",
             data_schema=vol.Schema(
@@ -510,8 +536,13 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Required(
                         CONF_NOTIFY_SERVICE,
-                        default=DEFAULT_ENTITY_IDS[CONF_NOTIFY_SERVICE],
-                    ): selector.TextSelector(),
+                        default=default_notify,
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=notify_services,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                     vol.Required(
                         CONF_SUN_ENTITY,
                         default=DEFAULT_ENTITY_IDS[CONF_SUN_ENTITY],

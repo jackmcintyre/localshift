@@ -97,7 +97,6 @@ DEFAULT_ENTITY_IDS = {
     CONF_AMBER_PRICE_SPIKE: "binary_sensor.100h_price_spike",
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
-    CONF_NOTIFY_SERVICE: "notify.mobile_app_jacks_iphone",
     CONF_SUN_ENTITY: "sun.sun",
 }
 
