@@ -1,3 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amber-powerwall"
+version = "0.0.1"
+description = "Amber Powerwall custom component for Home Assistant"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "homeassistant",
+]
+
+[tool.setuptools.packages.find]
+include = ["custom_components.amber_powerwall*"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
@@ -31,3 +51,10 @@ reportMissingImports = false
 reportMissingModuleSource = false
 reportGeneralTypeIssues = false
 reportCallIssue = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
