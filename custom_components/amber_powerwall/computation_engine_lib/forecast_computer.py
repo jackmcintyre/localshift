@@ -789,7 +789,27 @@ class ForecastComputer:
 
         current_soc = data.soc
         predicted_soc = current_soc
-        base_slot = now_dt.replace(minute=0, second=0, microsecond=0)
+
+        # Round UP to next 15-minute boundary instead of rounding down to hour
+        # This ensures forecast starts from next 15-min block rather than top of hour
+        minute = now_dt.minute
+        second = now_dt.second
+        microsecond = now_dt.microsecond
+
+        # If we're exactly on a 15-min boundary (and not past it), keep current time
+        if minute % 15 == 0 and second == 0 and microsecond == 0:
+            base_slot = now_dt.replace(second=0, microsecond=0)
+        else:
+            # Round up to next 15-minute boundary
+            remainder = minute % 15
+            if remainder == 0:
+                # Already on 15-min boundary but have seconds/microseconds, round up to next
+                add_minutes = 15
+            else:
+                add_minutes = 15 - remainder
+
+            base_slot = now_dt + timedelta(minutes=add_minutes)
+            base_slot = base_slot.replace(second=0, microsecond=0)
 
         # Get target SOC for grid charging decisions
         target_pct = float(
