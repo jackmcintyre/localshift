@@ -27,11 +27,12 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-003 | 🟠 HIGH | ✅ COMPLETED | No Error Handling for Powerwall API Calls |
 | backlog-high-004 | 🟠 HIGH | ✅ COMPLETED | Notification Service Not Validated |
 | backlog-high-005 | 🟠 HIGH | ✅ COMPLETED | Arbitrary Sleep Delays Between Commands |
-| backlog-high-006 | 🟠 HIGH | 📋 PROPOSED | Demand Window Block Logic Priority Issue |
-| backlog-high-007 | 🟠 HIGH | 📋 PROPOSED | Inconsistent State Machine Priority Order |
-| backlog-high-008 | 🟠 HIGH | 📋 PROPOSED | Proactive Export Not Using Peak FIT Prices |
+| backlog-high-006 | 🟠 HIGH | ✅ COMPLETED | Demand Window Block Logic Priority Issue |
+| backlog-high-007 | 🟠 HIGH | ✅ COMPLETED | Inconsistent State Machine Priority Order |
+| backlog-high-008 | 🟠 HIGH | ✅ COMPLETED | Proactive Export Not Using Peak FIT Prices |
 | backlog-high-009 | 🟠 HIGH | 📋 PROPOSED | Solar Curtailment for Negative FIT |
 | backlog-high-010 | 🟠 HIGH | 📋 PROPOSED | Pyright Error: Missing _manual_override_set_at Attribute |
+| backlog-high-011 | 🟠 HIGH | 📋 PROPOSED | Template Error: None Values in Cost Sensor Attributes |
 | backlog-med-001 | 🟡 MED | 📋 PROPOSED | No Test Coverage |
 | backlog-med-002 | 🟡 MED | 📋 PROPOSED | Time Precision Inconsistency |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |

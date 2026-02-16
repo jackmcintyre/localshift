@@ -678,6 +678,15 @@ class ComputationEngine:
         automation_enabled = self._get_switch_state("automation_enabled")
         spike_discharge_enabled = self._get_switch_state("spike_discharge_enabled")
 
+        # ========================================================================
+        # AUTOMATION DISABLED (Highest Priority - Bypass all logic)
+        # ========================================================================
+
+        # When automation is disabled, set to self-consumption and bypass all state changes
+        if not automation_enabled:
+            data.active_mode = BatteryMode.SELF_CONSUMPTION
+            return
+
         # Reset flags at the start of each computation
         data.proactive_export_active = False
 
@@ -738,12 +747,10 @@ class ComputationEngine:
         # OTHER MODES (Non-Charging)
         # ========================================================================
 
-        if not automation_enabled:
-            data.active_mode = BatteryMode.MANUAL
+        if data.price_spike and spike_discharge_enabled and in_discharge_window:
+            data.active_mode = BatteryMode.SPIKE_DISCHARGE
         elif data.demand_window_active:
             data.active_mode = BatteryMode.DEMAND_BLOCK
-        elif data.price_spike and spike_discharge_enabled and in_discharge_window:
-            data.active_mode = BatteryMode.SPIKE_DISCHARGE
         elif data.manual_override:
             data.active_mode = BatteryMode.MANUAL
         # Hold mode removed - these conditions are no longer evaluated:

@@ -501,6 +501,36 @@ class ForecastComputer:
         index = min(index, len(prices) - 1)
         return prices[index]
 
+    def _calculate_max_fit_price(
+        self,
+        feed_in_forecast: list[dict],
+        start_time: datetime,
+        hours: int = 24,
+    ) -> float:
+        """Calculate maximum FIT price over forecast window.
+
+        Args:
+            feed_in_forecast: Feed-in price forecast
+            start_time: Start time for calculation
+            hours: How many hours to include
+
+        Returns:
+            Maximum FIT price, or 0.0 if no data
+        """
+        prices = []
+        base_slot = start_time.replace(minute=0, second=0, microsecond=0)
+
+        for offset in range(hours * 12):  # 5-min intervals
+            slot_time = base_slot + timedelta(minutes=5 * offset)
+            price = get_price_for_slot(feed_in_forecast, slot_time)
+            if price is not None:
+                prices.append(price)
+
+        if not prices:
+            return 0.0
+
+        return max(prices)
+
     def _simulate_minimum_soc_without_exports(
         self,
         start_soc: float,
@@ -660,18 +690,22 @@ class ForecastComputer:
         if forecasted_excess_kwh <= 0:
             return False, 0.0
 
-        # Calculate 60th percentile FIT price over next 24 hours
-        # This excludes bottom 40% of prices (mostly zero/negative)
-        percentile_fit_price = self._calculate_percentile_fit_price(
-            feed_in_forecast, slot_start, percentile=60.0, hours=24
+        # Calculate maximum FIT price over next 24 hours for optimal timing
+        # Only export when at or near peak FIT prices for maximum revenue
+        max_fit_price = self._calculate_max_fit_price(
+            feed_in_forecast, slot_start, hours=24
         )
 
-        # Only export if current FIT is at or above percentile threshold
-        if slot_fit_price < percentile_fit_price:
-            return False, 0.0
+        # Only export when at or near peak (e.g., within 20% of max)
+        # This ensures we export at financially optimal times
+        export_threshold = max_fit_price * 0.8  # 80% of peak
 
         # Never proactive-export into a non-positive FIT.
         if slot_fit_price <= 0:
+            return False, 0.0
+
+        # Only export if current FIT is at or near peak threshold
+        if slot_fit_price < export_threshold:
             return False, 0.0
 
         # CRITICAL: Calculate total discharge (export + load) before deciding
@@ -726,11 +760,11 @@ class ForecastComputer:
 
         if export_amount > 0:
             _LOGGER.debug(
-                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f >= pct=$%.2f, amount=%.3f kWh, ending_soc=%.1f%%",
+                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f >= peak_threshold=$%.2f, amount=%.3f kWh, ending_soc=%.1f%%",
                 slot_hour,
                 slot_start.minute,
                 slot_fit_price,
-                percentile_fit_price,
+                export_threshold,
                 export_amount,
                 soc_after_discharge,
             )
