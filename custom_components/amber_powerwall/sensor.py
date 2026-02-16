@@ -223,10 +223,10 @@ class NetElectricityCostSensor(AmberPowerwallSensorBase):
         """Return cost breakdown."""
         d = self.coordinator.data
         return {
-            "grid_import_cost": round(d.grid_import_cost, 2),
-            "grid_export_revenue": round(d.grid_export_revenue, 2),
-            "battery_savings": round(d.battery_savings, 2),
-            "battery_charge_cost": round(d.battery_charge_cost, 2),
+            "grid_import_cost": round(d.grid_import_cost or 0.0, 2),
+            "grid_export_revenue": round(d.grid_export_revenue or 0.0, 2),
+            "battery_savings": round(d.battery_savings or 0.0, 2),
+            "battery_charge_cost": round(d.battery_charge_cost or 0.0, 2),
         }
 
 
