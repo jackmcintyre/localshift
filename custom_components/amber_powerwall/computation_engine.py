@@ -221,20 +221,30 @@ class ComputationEngine:
             dw_block_enabled and now_t >= dw_start_time and now_t < dw_end_time
         )
 
-        # ---- Step 4: solar_battery_forecast ----
-        self._compute_solar_battery_forecast(
-            data, now_dt, target_hour, before_dw, after_dw
+        # Get target percentage for later use
+        target_pct = float(
+            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
         )
 
-        # ---- Step 5: solar_can_reach_target (from forecast) ----
-        data.solar_can_reach_target = data.solar_battery_forecast.get(
-            "can_reach_target", True
-        )
+        # ---- Step 4/16: daily_forecast (detailed 15-min forecast) ----
+        # Compute detailed forecast FIRST - this is the single source of truth
+        # This must be computed before deriving simple values
+        self._compute_daily_15min_forecast(data, now_dt)
 
-        # ---- Step 6: boost_charge_needed (from forecast) ----
-        data.boost_charge_needed = data.solar_battery_forecast.get(
-            "boost_needed", False
-        )
+        # ---- Step 5: solar_can_reach_target (derived from detailed forecast) ----
+        # Derive from detailed forecast - single source of truth
+        dw_entry = self._get_forecast_at_demand_window(data, target_hour)
+        if dw_entry:
+            data.solar_can_reach_target = dw_entry["predicted_soc"] >= target_pct
+            data.boost_charge_needed = dw_entry.get("grid_charge_boost", False)
+        else:
+            # Fallback if forecast doesn't span to DW (e.g., late in day)
+            # Use current SOC as a conservative estimate
+            data.solar_can_reach_target = data.soc >= target_pct
+            data.boost_charge_needed = False
+
+        # ---- Step 6: boost_charge_needed ----
+        # (already set in Step 5 above)
 
         # ---- Step 7: effective_cheap_price ----
         self._compute_effective_cheap_price(data, now_dt, before_dw, target_hour)
@@ -247,10 +257,11 @@ class ComputationEngine:
         )
         data.cheap_charge_stop_price = round(data.effective_cheap_price + deadband, 2)
 
-        # ---- Step 16: daily_forecast (moved earlier) ----
-        # This must be computed before _compute_active_mode(), otherwise the active_mode
-        # selection will hit the startup fallback path and log "Forecast unavailable".
-        self._compute_daily_15min_forecast(data, now_dt)
+        # ---- Step 4: solar_battery_forecast (legacy - for backwards compatibility) ----
+        # Kept for API compatibility, but values derived from detailed forecast
+        self._compute_solar_battery_forecast(
+            data, now_dt, target_hour, before_dw, after_dw
+        )
 
         # ---- Step 9: forecast_spike_within_window ----
         lookahead = float(
@@ -640,6 +651,24 @@ class ComputationEngine:
         # Find matching entry
         for entry in data.daily_forecast:
             if entry["hour"] == current_hour and entry["minute"] == current_minute:
+                return entry
+
+        return None
+
+    def _get_forecast_at_demand_window(
+        self, data: CoordinatorData, target_hour: int
+    ) -> dict | None:
+        """Get forecast entry at demand window time (hour:00).
+
+        Returns None if forecast doesn't span that far.
+        Used to derive simple forecast values from detailed 15-min forecast.
+        """
+        if not data.daily_forecast:
+            return None
+
+        # Find entry at target hour, minute 0
+        for entry in data.daily_forecast:
+            if entry["hour"] == target_hour and entry["minute"] == 0:
                 return entry
 
         return None

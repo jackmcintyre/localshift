@@ -23,7 +23,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 |----|----------|--------|-------|
 | backlog-crit-001 | 🔴 CRIT | ✅ COMPLETED | Force Charge Detection Logic Bug |
 | backlog-high-001 | 🟠 HIGH | 📋 PROPOSED | Add Entity Validation on Config Flow |
-| backlog-high-002 | 🟠 HIGH | 📋 PROPOSED | Missing Tomorrow's Forecast Integration |
+| backlog-high-002 | 🟠 HIGH | ✅ COMPLETED | Missing Tomorrow's Forecast Integration |
 | backlog-high-003 | 🟠 HIGH | ✅ COMPLETED | No Error Handling for Powerwall API Calls |
 | backlog-high-004 | 🟠 HIGH | 📋 PROPOSED | Notification Service Not Validated |
 | backlog-high-005 | 🟠 HIGH | ✅ COMPLETED | Arbitrary Sleep Delays Between Commands |

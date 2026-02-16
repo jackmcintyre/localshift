@@ -2,7 +2,7 @@
 
 **ID:** backlog-high-002  
 **Priority:** HIGH  
-**Status:** PROPOSED  
+**Status:** COMPLETED  
 **Created:** 2026-02-16  
 **Updated:** 2026-02-16  
 
@@ -10,28 +10,43 @@
 
 ## Summary
 
-The solcast_tomorrow data is read but never used in solar_battery_forecast calculations.
+Consolidated forecast sources - derived simple values from detailed 15-min forecast which already includes tomorrow's data.
 
 ---
 
-## Description
+## Analysis
 
-The `solcast_tomorrow` data is read and stored but NEVER used in solar_battery_forecast calculations. Only today's forecast is considered, potentially missing important overnight solar contributions for early morning demand windows.
+The original backlog item noted that `solcast_tomorrow` was not used in the simple `solar_battery_forecast` calculation.
+
+However, during analysis we found:
+
+1. **Simple forecast** (`_compute_solar_battery_forecast`): Only used `solcast_today` - this is the issue the backlog item describes
+2. **Detailed 15-min forecast** (`forecast_computer.compute_forecast`): Already uses BOTH `solcast_today` and `solcast_tomorrow`:
+   ```python
+   all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+   ```
+
+---
+
+## Resolution
+
+Rather than fixing the simple forecast to include tomorrow's data, we consolidated to use the detailed 15-min forecast as the single source of truth.
+
+**Changes made:**
+
+1. Added `_get_forecast_at_demand_window()` helper method to find forecast entry at DW time
+2. Reordered computation steps so detailed forecast runs first (Step 4/16)
+3. Derived `solar_can_reach_target` and `boost_charge_needed` from detailed forecast (Step 5)
+4. Kept legacy `_compute_solar_battery_forecast()` for backwards compatibility (Step 4)
+
+**Benefits:**
+- Single source of truth for all forecast values
+- Tomorrow's solar data is now automatically included
+- Binary sensors continue to work identically
+- Better code maintainability (no duplicate logic)
 
 ---
 
 ## Affected Files
 
-- `custom_components/amber_powerwall/coordinator.py` - `_compute_derived_values` (Step 4: solar_battery_forecast)
-
----
-
-## Proposed Solution
-
-Modify `_sum_solar_before_target` to include tomorrow's forecast when target_hour is earlier than the current hour (e.g., target at 15:00, currently 20:00).
-
----
-
-## Notes
-
-This would improve early morning demand window predictions.
+- `custom_components/amber_powerwall/computation_engine.py` - consolidated forecast computation
