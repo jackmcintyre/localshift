@@ -14,8 +14,6 @@ def test_coordinator_initialization(mock_hass, mock_entry):
 
 def test_coordinator_get_entity_id(mock_hass, mock_entry, mock_get_entity_id):
     """Test entity ID retrieval."""
-    coordinator = AmberPowerwallCoordinator(mock_hass, mock_entry)
-
     entity_id = mock_get_entity_id("teslemetry_soc")
     assert entity_id == "sensor.tesla_powerwall_soc"
 
