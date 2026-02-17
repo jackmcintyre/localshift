@@ -51,7 +51,7 @@ async def async_evaluate_state_machine(self) -> None:
 ### In Home Assistant Environment
 
 1. **Reload the integration**
-   - Go to Settings → Devices & Services → Amber Powerwall
+   - Go to Settings → Devices & Services → LocalShift
    - Click "Reload" to apply the refactored code
 
 2. **Verify entities load**
@@ -62,7 +62,7 @@ async def async_evaluate_state_machine(self) -> None:
 
 3. **Check logs**
    - Look for any import errors in Home Assistant logs
-   - Verify "Amber Powerwall coordinator started" message appears
+   - Verify "LocalShift coordinator started" message appears
    - Verify "inferred mode: X" message appears
 
 4. **Test mode transitions**
@@ -154,7 +154,7 @@ async def async_evaluate_state_machine(self) -> None:
 
 If any issues arise during testing:
 1. Check Home Assistant logs for import errors
-2. Verify all new modules are present in custom_components/amber_powerwall/
+2. Verify all new modules are present in custom_components/localshift/
 3. Check that const.py has BATTERY_CAPACITY_KWH constant
 4. Verify coordinator.py has the CoordinatorData import at line 44
 

@@ -1,4 +1,4 @@
-"""Coordinator data structures for the Amber Powerwall integration."""
+"""Coordinator data structures for the LocalShift integration."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Config flow for the Amber Powerwall integration."""
+"""Config flow for the LocalShift integration."""
 
 from __future__ import annotations
 
@@ -12,11 +12,6 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
-    CONF_AMBER_FEED_IN_FORECAST,
-    CONF_AMBER_FEED_IN_PRICE,
-    CONF_AMBER_GENERAL_FORECAST,
-    CONF_AMBER_GENERAL_PRICE,
-    CONF_AMBER_PRICE_SPIKE,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
@@ -29,6 +24,11 @@ from .const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_PRECHARGE_BATTERY_THRESHOLD,
+    CONF_PRICING_FEED_IN_FORECAST,
+    CONF_PRICING_FEED_IN_PRICE,
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_SUN_ENTITY,
@@ -57,8 +57,8 @@ from .const import (
 )
 
 
-class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Amber Powerwall."""
+class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for LocalShift."""
 
     VERSION = 1
 
@@ -235,9 +235,9 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors=errors,
                 )
 
-            # Store teslemetry config, move to amber step
+            # Store teslemetry config, move to pricing step
             self._teslemetry_data = user_input
-            return await self.async_step_amber()
+            return await self.async_step_pricing()
 
         return self.async_show_form(
             step_id="user",
@@ -295,31 +295,31 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
         )
 
-    async def async_step_amber(
+    async def async_step_pricing(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the Amber Electric entity selection step."""
+        """Handle the pricing entity selection step."""
         if user_input is not None:
             # Validate entities
             entities_to_validate = {
-                CONF_AMBER_GENERAL_PRICE: (
-                    user_input[CONF_AMBER_GENERAL_PRICE],
+                CONF_PRICING_GENERAL_PRICE: (
+                    user_input[CONF_PRICING_GENERAL_PRICE],
                     "sensor",
                 ),
-                CONF_AMBER_FEED_IN_PRICE: (
-                    user_input[CONF_AMBER_FEED_IN_PRICE],
+                CONF_PRICING_FEED_IN_PRICE: (
+                    user_input[CONF_PRICING_FEED_IN_PRICE],
                     "sensor",
                 ),
-                CONF_AMBER_GENERAL_FORECAST: (
-                    user_input[CONF_AMBER_GENERAL_FORECAST],
+                CONF_PRICING_GENERAL_FORECAST: (
+                    user_input[CONF_PRICING_GENERAL_FORECAST],
                     "sensor",
                 ),
-                CONF_AMBER_FEED_IN_FORECAST: (
-                    user_input[CONF_AMBER_FEED_IN_FORECAST],
+                CONF_PRICING_FEED_IN_FORECAST: (
+                    user_input[CONF_PRICING_FEED_IN_FORECAST],
                     "sensor",
                 ),
-                CONF_AMBER_PRICE_SPIKE: (
-                    user_input[CONF_AMBER_PRICE_SPIKE],
+                CONF_PRICING_PRICE_SPIKE: (
+                    user_input[CONF_PRICING_PRICE_SPIKE],
                     "binary_sensor",
                 ),
             }
@@ -327,36 +327,36 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             errors = await self._validate_entities(entities_to_validate)
             if errors:
                 return self.async_show_form(
-                    step_id="amber",
+                    step_id="pricing",
                     data_schema=vol.Schema(
                         {
                             vol.Required(
-                                CONF_AMBER_GENERAL_PRICE,
-                                default=user_input[CONF_AMBER_GENERAL_PRICE],
+                                CONF_PRICING_GENERAL_PRICE,
+                                default=user_input[CONF_PRICING_GENERAL_PRICE],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="sensor")
                             ),
                             vol.Required(
-                                CONF_AMBER_FEED_IN_PRICE,
-                                default=user_input[CONF_AMBER_FEED_IN_PRICE],
+                                CONF_PRICING_FEED_IN_PRICE,
+                                default=user_input[CONF_PRICING_FEED_IN_PRICE],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="sensor")
                             ),
                             vol.Required(
-                                CONF_AMBER_GENERAL_FORECAST,
-                                default=user_input[CONF_AMBER_GENERAL_FORECAST],
+                                CONF_PRICING_GENERAL_FORECAST,
+                                default=user_input[CONF_PRICING_GENERAL_FORECAST],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="sensor")
                             ),
                             vol.Required(
-                                CONF_AMBER_FEED_IN_FORECAST,
-                                default=user_input[CONF_AMBER_FEED_IN_FORECAST],
+                                CONF_PRICING_FEED_IN_FORECAST,
+                                default=user_input[CONF_PRICING_FEED_IN_FORECAST],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="sensor")
                             ),
                             vol.Required(
-                                CONF_AMBER_PRICE_SPIKE,
-                                default=user_input[CONF_AMBER_PRICE_SPIKE],
+                                CONF_PRICING_PRICE_SPIKE,
+                                default=user_input[CONF_PRICING_PRICE_SPIKE],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="binary_sensor")
                             ),
@@ -365,41 +365,41 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors=errors,
                 )
 
-            # Store amber config, move to solcast step
-            self._amber_data = user_input
+            # Store pricing config, move to solcast step
+            self._pricing_data = user_input
             return await self.async_step_solcast()
 
         return self.async_show_form(
-            step_id="amber",
+            step_id="pricing",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_AMBER_GENERAL_PRICE,
-                        default=DEFAULT_ENTITY_IDS[CONF_AMBER_GENERAL_PRICE],
+                        CONF_PRICING_GENERAL_PRICE,
+                        default=DEFAULT_ENTITY_IDS[CONF_PRICING_GENERAL_PRICE],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Required(
-                        CONF_AMBER_FEED_IN_PRICE,
-                        default=DEFAULT_ENTITY_IDS[CONF_AMBER_FEED_IN_PRICE],
+                        CONF_PRICING_FEED_IN_PRICE,
+                        default=DEFAULT_ENTITY_IDS[CONF_PRICING_FEED_IN_PRICE],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Required(
-                        CONF_AMBER_GENERAL_FORECAST,
-                        default=DEFAULT_ENTITY_IDS[CONF_AMBER_GENERAL_FORECAST],
+                        CONF_PRICING_GENERAL_FORECAST,
+                        default=DEFAULT_ENTITY_IDS[CONF_PRICING_GENERAL_FORECAST],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Required(
-                        CONF_AMBER_FEED_IN_FORECAST,
-                        default=DEFAULT_ENTITY_IDS[CONF_AMBER_FEED_IN_FORECAST],
+                        CONF_PRICING_FEED_IN_FORECAST,
+                        default=DEFAULT_ENTITY_IDS[CONF_PRICING_FEED_IN_FORECAST],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Required(
-                        CONF_AMBER_PRICE_SPIKE,
-                        default=DEFAULT_ENTITY_IDS[CONF_AMBER_PRICE_SPIKE],
+                        CONF_PRICING_PRICE_SPIKE,
+                        default=DEFAULT_ENTITY_IDS[CONF_PRICING_PRICE_SPIKE],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="binary_sensor")
                     ),
@@ -478,7 +478,7 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             # Combine all data and create entry
             all_data = {
                 **self._teslemetry_data,
-                **self._amber_data,
+                **self._pricing_data,
                 **user_input,
             }
             # Set default options
@@ -498,7 +498,7 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             }
 
             return self.async_create_entry(
-                title="Amber Powerwall",
+                title="LocalShift",
                 data=all_data,
                 options=options,
             )
@@ -543,11 +543,11 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         """Get the options flow for this handler."""
-        return AmberPowerwallOptionsFlow()
+        return LocalShiftOptionsFlow()
 
 
-class AmberPowerwallOptionsFlow(OptionsFlow):
-    """Handle options flow for Amber Powerwall."""
+class LocalShiftOptionsFlow(OptionsFlow):
+    """Handle options flow for LocalShift."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

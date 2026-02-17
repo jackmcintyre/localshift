@@ -21,7 +21,7 @@ def get_price_for_slot(
     price_forecasts: list[dict[str, Any]],
     slot_start: datetime,
 ) -> float:
-    """Get price for a 15-minute slot from Amber forecast.
+    """Get price for a 15-minute slot from forecast.
 
     Returns the average price for the slot from 5-minute forecast data.
     """
@@ -50,7 +50,7 @@ def get_price_for_slot(
             continue
 
         start_local = dt_util.as_local(start_dt)
-        end_local = start_local + timedelta(minutes=5)  # Amber prices are 5-min
+        end_local = start_local + timedelta(minutes=5)  # Prices are 5-min
 
         # Check if this price period overlaps with our slot
         if start_local < slot_end and end_local > slot_start:
@@ -96,7 +96,7 @@ def get_price_for_slot_or_none(
             continue
 
         start_local = dt_util.as_local(start_dt)
-        end_local = start_local + timedelta(minutes=5)  # Amber prices are 5-min
+        end_local = start_local + timedelta(minutes=5)  # Prices are 5-min
 
         # Check if this price period overlaps with our slot
         if start_local < slot_end and end_local > slot_start:

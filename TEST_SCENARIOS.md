@@ -1,6 +1,6 @@
 # Test Scenarios
 
-Structured test cases for the Amber Powerwall automation package. Each scenario defines initial conditions, a trigger event, expected behaviour, and what to verify.
+Structured test cases for the LocalShift automation package. Each scenario defines initial conditions, a trigger event, expected behaviour, and what to verify.
 
 > **Format note**: Scenarios are grouped by feature area. Each has a unique ID for reference (e.g. S3.2). The `Verify` field describes what to check in HA Developer Tools or notifications. Future features (solar forecasts, weather sensors, etc.) will be added as new sections when implemented.
 

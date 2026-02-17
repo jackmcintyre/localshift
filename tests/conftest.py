@@ -1,4 +1,4 @@
-"""Test fixtures and configuration for amber_powerwall tests."""
+"""Test fixtures and configuration for localshift tests."""
 
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -6,10 +6,10 @@ from unittest.mock import MagicMock
 import pytest
 
 # Import the real homeassistant modules
-from custom_components.amber_powerwall.computation_engine import (
+from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
-from custom_components.amber_powerwall.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator_data import CoordinatorData
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def mock_entry():
         "battery_target": 90,
         "cheap_price_percentile": 40,
         "cheap_price_deadband": 0.02,
-        "max_precharge_price": 0.3,
+        "max_pre_charge_price": 0.3,
         "forecast_lookahead_hours": 8,
         "demand_window_start": "18:00:00",
         "demand_window_end": "22:00:00",

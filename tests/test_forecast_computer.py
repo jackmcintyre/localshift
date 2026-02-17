@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from custom_components.amber_powerwall.computation_engine_lib.forecast_computer import (
+from custom_components.localshift.computation_engine_lib.forecast_computer import (
     ForecastComputer,
 )
 

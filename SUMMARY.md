@@ -2,7 +2,7 @@
 
 ## Overview
 
-Successfully implemented 15-minute forecast granularity for the Amber Powerwall automation, improving forecast accuracy by 4x to capture meaningful price variations from Amber's 5-minute pricing data.
+Successfully implemented 15-minute forecast granularity for the LocalShift automation, improving forecast accuracy by 4x to capture meaningful price variations from Amber's 5-minute pricing data.
 
 ## Branch
 
@@ -125,7 +125,7 @@ Load the new code
 
 ### 2. Check forecast sensor
 ```yaml
-sensor.amber_powerwall_daily_forecast
+sensor.localshift_daily_forecast
 ```
 - Should show 96 entries (instead of 24)
 - Each entry has `minute` field (0, 15, 30, or 45)
@@ -150,7 +150,7 @@ sensor.amber_powerwall_daily_forecast
 
 **Impact:** Longer scroll, information overload
 
-**Fix:** Update `dashboards/amber_powerwall_component.yaml` to show hourly summary:
+**Fix:** Update `dashboards/localshift_component.yaml` to show hourly summary:
 ```yaml
 | selectattr('minute', 'equalto', 0)
 ```
@@ -159,7 +159,7 @@ sensor.amber_powerwall_daily_forecast
 
 ## Files Modified
 
-1. `custom_components/amber_powerwall/computation_engine.py` - Core implementation
+1. `custom_components/localshift/computation_engine.py` - Core implementation
 2. `15_MINUTE_FORECAST.md` - Comprehensive documentation
 3. `REGRESSION_ANALYSIS.md` - Regression analysis
 

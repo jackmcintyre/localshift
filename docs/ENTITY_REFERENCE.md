@@ -1,10 +1,10 @@
 # Entity Reference
 
-Complete reference for all Home Assistant entities provided by the Amber Powerwall integration.
+Complete reference for all Home Assistant entities provided by the LocalShift integration.
 
 ## Overview
 
-The integration creates **35 entities** grouped under a single "Amber Powerwall" device:
+The integration creates **35 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
@@ -18,7 +18,7 @@ The integration creates **35 entities** grouped under a single "Amber Powerwall"
 
 ## Sensors
 
-### 1. sensor.amber_powerwall_effective_cheap_price
+### 1. sensor.localshift_price_cheap_effective
 
 **Purpose:** Dynamic cheap price threshold that adjusts based on urgency.
 
@@ -46,7 +46,7 @@ effective_price = max(effective_price, min_forecast_price + 0.02)
 
 ---
 
-### 2. sensor.amber_powerwall_cheap_charge_stop_price
+### 2. sensor.localshift_price_cheap_charge_stop
 
 **Purpose:** Upper boundary of the deadband zone.
 
@@ -61,7 +61,7 @@ This creates a hysteresis zone:
 
 ---
 
-### 3. sensor.amber_powerwall_solar_weighted_avg_fit
+### 3. sensor.localshift_solar_weighted_avg_fit
 
 **Purpose:** Solar-production-weighted average feed-in tariff for remaining daylight hours.
 
@@ -83,7 +83,7 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 ---
 
-### 4. sensor.amber_powerwall_active_mode
+### 4. sensor.localshift_battery_mode
 
 **Purpose:** Current battery automation mode from the state machine.
 
@@ -103,7 +103,7 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 ---
 
-### 5. sensor.amber_powerwall_solar_battery_forecast
+### 5. sensor.localshift_forecast_battery
 
 **Purpose:** Predicted battery SOC at demand window start.
 
@@ -126,7 +126,7 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 ---
 
-### 6. sensor.amber_powerwall_grid_import_power
+### 6. sensor.localshift_power_grid_import
 
 **Purpose:** Current grid import power (always ≥ 0).
 
@@ -138,7 +138,7 @@ This is the directional version of the raw Teslemetry grid power sensor.
 
 ---
 
-### 7. sensor.amber_powerwall_grid_export_power
+### 7. sensor.localshift_power_grid_export
 
 **Purpose:** Current grid export power (always ≥ 0).
 
@@ -150,7 +150,7 @@ This is the directional version of the raw Teslemetry grid power sensor.
 
 ---
 
-### 8. sensor.amber_powerwall_net_electricity_cost_today
+### 8. sensor.localshift_cost_electricity_net
 
 **Purpose:** Net cost for the day (import cost - export revenue).
 
@@ -174,7 +174,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 9. sensor.amber_powerwall_decision_log
+### 9. sensor.localshift_decision_log
 
 **Purpose:** History of mode changes with human-readable reasons.
 
@@ -193,7 +193,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 10. sensor.amber_powerwall_forecast_history
+### 10. sensor.localshift_forecast_history
 
 **Purpose:** Historical forecast predictions for comparison with actuals.
 
@@ -207,7 +207,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 11. sensor.amber_powerwall_daily_forecast
+### 11. sensor.localshift_forecast_daily
 
 **Purpose:** Full 24-hour forecast with 15-minute granularity.
 
@@ -232,7 +232,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ## Binary Sensors
 
-### 1. binary_sensor.amber_powerwall_demand_window_active
+### 1. binary_sensor.localshift_binary_demand_window
 
 **Purpose:** Whether the demand window is currently active.
 
@@ -242,7 +242,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 2. binary_sensor.amber_powerwall_forecast_spike_within_window
+### 2. binary_sensor.localshift_binary_price_spike_coming
 
 **Purpose:** Whether a price spike is forecast within the lookahead window.
 
@@ -257,7 +257,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 3. binary_sensor.amber_powerwall_forecast_expensive_period_coming
+### 3. binary_sensor.localshift_binary_price_expensive_coming
 
 **Purpose:** Whether an expensive period is forecast within lookahead.
 
@@ -265,7 +265,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 4. binary_sensor.amber_powerwall_force_discharge_active
+### 4. binary_sensor.localshift_binary_discharge_forced
 
 **Purpose:** Whether battery is currently force discharging.
 
@@ -273,7 +273,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 5. binary_sensor.amber_powerwall_force_charge_active
+### 5. binary_sensor.localshift_binary_charge_forced
 
 **Purpose:** Whether battery is currently force charging (backup mode at 3.3kW).
 
@@ -281,7 +281,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 6. binary_sensor.amber_powerwall_boost_charge_active
+### 6. binary_sensor.localshift_binary_charge_boost
 
 **Purpose:** Whether battery is currently boost charging at 5kW.
 
@@ -289,7 +289,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 7. binary_sensor.amber_powerwall_hold_active
+### 7. binary_sensor.localshift_hold_active
 
 **Purpose:** Whether battery is currently in hold mode (preserving charge).
 
@@ -297,7 +297,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 8. binary_sensor.amber_powerwall_solar_can_reach_target
+### 8. binary_sensor.localshift_binary_solar_can_reach_target
 
 **Purpose:** Whether solar forecast can fill battery to target by demand window.
 
@@ -305,7 +305,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 9. binary_sensor.amber_powerwall_boost_charge_needed
+### 9. binary_sensor.localshift_binary_charge_boost_needed
 
 **Purpose:** Whether 5kW boost charging is needed (3.3kW insufficient).
 
@@ -313,7 +313,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 10. binary_sensor.amber_powerwall_hold_justified
+### 10. binary_sensor.localshift_hold_justified
 
 **Purpose:** Whether hold mode is justified (solar coming or cheap prices forecast).
 
@@ -323,7 +323,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 11. binary_sensor.amber_powerwall_solar_export_hold_justified
+### 11. binary_sensor.localshift_solar_export_hold_justified
 
 **Purpose:** Whether solar export hold conditions are met.
 
@@ -346,7 +346,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ## Switches
 
-### 1. switch.amber_powerwall_automation_enabled
+### 1. switch.localshift_automation_enabled
 
 **Purpose:** Master toggle for all automation.
 
@@ -358,7 +358,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 2. switch.amber_powerwall_spike_discharge_enabled
+### 2. switch.localshift_spike_discharge_enabled
 
 **Purpose:** Allow/disallow discharge during price spikes.
 
@@ -370,7 +370,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 3. switch.amber_powerwall_dry_run
+### 3. switch.localshift_dry_run
 
 **Purpose:** Log decisions without sending commands.
 
@@ -384,7 +384,7 @@ Use this to test automation behavior without affecting actual battery state.
 
 ---
 
-### 4. switch.amber_powerwall_demand_window_block
+### 4. switch.localshift_demand_window_block
 
 **Purpose:** Block grid charging during demand window.
 
@@ -398,7 +398,7 @@ Use this to test automation behavior without affecting actual battery state.
 
 ## Numbers (Configuration Thresholds)
 
-### 1. number.amber_powerwall_cheap_price_percentile
+### 1. number.localshift_cheap_price_percentile
 
 **Purpose:** Percentile of near-term forecast prices used as base cheap threshold.
 
@@ -412,7 +412,7 @@ Use this to test automation behavior without affecting actual battery state.
 
 ---
 
-### 2. number.amber_powerwall_max_precharge_price
+### 2. number.localshift_max_pre_charge_price
 
 **Purpose:** Maximum price willing to pay for grid charging when urgent.
 
@@ -426,7 +426,7 @@ Used as the ceiling for effective cheap price when approaching demand window wit
 
 ---
 
-### 3. number.amber_powerwall_cheap_price_deadband
+### 3. number.localshift_cheap_price_deadband
 
 **Purpose:** Hysteresis band to prevent rapid charge/stop cycling.
 
@@ -440,7 +440,7 @@ Used as the ceiling for effective cheap price when approaching demand window wit
 
 ---
 
-### 4. number.amber_powerwall_forecast_lookahead_hours
+### 4. number.localshift_forecast_lookahead_hours
 
 **Purpose:** How far ahead to scan for spikes and expensive periods.
 
@@ -452,7 +452,7 @@ Used as the ceiling for effective cheap price when approaching demand window wit
 
 ---
 
-### 5. number.amber_powerwall_precharge_battery_threshold
+### 5. number.localshift_pre_charge_battery_threshold
 
 **Purpose:** SOC below which grid charging is considered even when not urgent.
 
@@ -466,7 +466,7 @@ Used as the ceiling for effective cheap price when approaching demand window wit
 
 ---
 
-### 6. number.amber_powerwall_battery_target
+### 6. number.localshift_battery_target
 
 **Purpose:** Target SOC for demand window.
 
@@ -480,7 +480,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 7. number.amber_powerwall_load_weight_recent
+### 7. number.localshift_load_weight_recent
 
 **Purpose:** Weight given to recent vs historical consumption data.
 
@@ -496,7 +496,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ## Buttons (Manual Controls)
 
-### 1. button.amber_powerwall_force_charge
+### 1. button.localshift_force_charge
 
 **Action:** Start force charging at 3.3kW (backup mode).
 
@@ -506,7 +506,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 2. button.amber_powerwall_force_discharge
+### 2. button.localshift_force_discharge
 
 **Action:** Start force discharging to export to grid.
 
@@ -516,7 +516,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 3. button.amber_powerwall_hold_battery
+### 3. button.localshift_hold_battery
 
 **Action:** Hold battery at current SOC.
 
@@ -526,7 +526,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 4. button.amber_powerwall_boost_charge_5kw
+### 4. button.localshift_boost_charge
 
 **Action:** Start boost charging at 5kW.
 
@@ -536,7 +536,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 5. button.amber_powerwall_return_to_self_consumption
+### 5. button.localshift_self_consumption
 
 **Action:** Clear manual override, return to automation control.
 
@@ -575,7 +575,7 @@ Buttons trigger manual actions
 
 ## Debugging Tips
 
-1. **Start with `sensor.amber_powerwall_active_mode`** — This tells you what the automation thinks it should be doing.
+1. **Start with `sensor.localshift_battery_mode`** — This tells you what the automation thinks it should be doing.
 
 2. **Check binary sensors** — They show the conditions being evaluated:
    - `demand_window_active` — Are we in peak hours?
@@ -587,6 +587,6 @@ Buttons trigger manual actions
    - `net_electricity_cost_today` shows cost breakdown
    - `solar_battery_forecast` shows predicted SOC
 
-4. **Use decision log** — `sensor.amber_powerwall_decision_log` shows the last 10 mode changes with reasons.
+4. **Use decision log** — `sensor.localshift_decision_log` shows the last 10 mode changes with reasons.
 
-5. **Enable dry run** — Use `switch.amber_powerwall_dry_run` to test without affecting the battery.
+5. **Enable dry run** — Use `switch.localshift_dry_run` to test without affecting the battery.

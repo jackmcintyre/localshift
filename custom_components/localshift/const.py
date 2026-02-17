@@ -1,4 +1,4 @@
-"""Constants for the Amber Powerwall integration."""
+"""Constants for the LocalShift integration."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from enum import Enum
 # Domain
 # -----------------------------------------------------------------------------
 
-DOMAIN = "amber_powerwall"
+DOMAIN = "localshift"
 
 # -----------------------------------------------------------------------------
 # Battery Modes (state machine states)
@@ -56,12 +56,12 @@ CONF_TESLEMETRY_SOLAR_POWER = "teslemetry_solar_power"
 CONF_TESLEMETRY_LOAD_POWER = "teslemetry_load_power"
 CONF_TESLEMETRY_ALLOW_EXPORT = "teslemetry_allow_export"
 
-# Amber Electric entities
-CONF_AMBER_GENERAL_PRICE = "amber_general_price"
-CONF_AMBER_FEED_IN_PRICE = "amber_feed_in_price"
-CONF_AMBER_GENERAL_FORECAST = "amber_general_forecast"
-CONF_AMBER_FEED_IN_FORECAST = "amber_feed_in_forecast"
-CONF_AMBER_PRICE_SPIKE = "amber_price_spike"
+# Pricing entities
+CONF_PRICING_GENERAL_PRICE = "pricing_general_price"
+CONF_PRICING_FEED_IN_PRICE = "pricing_feed_in_price"
+CONF_PRICING_GENERAL_FORECAST = "pricing_general_forecast"
+CONF_PRICING_FEED_IN_FORECAST = "pricing_feed_in_forecast"
+CONF_PRICING_PRICE_SPIKE = "pricing_price_spike"
 
 # Solcast entities
 CONF_SOLCAST_FORECAST_TODAY = "solcast_forecast_today"
@@ -89,11 +89,11 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_SOLAR_POWER: "sensor.my_home_solar_power",
     CONF_TESLEMETRY_LOAD_POWER: "sensor.my_home_load_power",
     CONF_TESLEMETRY_ALLOW_EXPORT: "select.my_home_allow_export",
-    CONF_AMBER_GENERAL_PRICE: "sensor.100h_general_price",
-    CONF_AMBER_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-    CONF_AMBER_GENERAL_FORECAST: "sensor.100h_general_forecast",
-    CONF_AMBER_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
-    CONF_AMBER_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+    CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
+    CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
+    CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
+    CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+    CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
     CONF_SUN_ENTITY: "sun.sun",
@@ -104,10 +104,10 @@ DEFAULT_ENTITY_IDS = {
 # -----------------------------------------------------------------------------
 
 CONF_CHEAP_PRICE_PERCENTILE = "cheap_price_percentile"
-CONF_MAX_PRECHARGE_PRICE = "max_precharge_price"
+CONF_MAX_PRECHARGE_PRICE = "max_pre_charge_price"
 CONF_CHEAP_PRICE_DEADBAND = "cheap_price_deadband"
 CONF_FORECAST_LOOKAHEAD_HOURS = "forecast_lookahead_hours"
-CONF_PRECHARGE_BATTERY_THRESHOLD = "precharge_battery_threshold"
+CONF_PRECHARGE_BATTERY_THRESHOLD = "pre_charge_battery_threshold"
 CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
@@ -245,11 +245,11 @@ BUTTON_ICONS = {
 }
 
 BUTTON_NAMES = {
-    BUTTON_FORCE_CHARGE: "Force Charge",
-    BUTTON_FORCE_DISCHARGE: "Force Discharge",
-    BUTTON_BOOST_CHARGE: "Boost Charge (5kW)",
-    BUTTON_SELF_CONSUMPTION: "Return to Self Consumption",
-    BUTTON_UPDATE_FORECAST: "Update Forecast",
+    BUTTON_FORCE_CHARGE: "Button Force Charge",
+    BUTTON_FORCE_DISCHARGE: "Button Force Discharge",
+    BUTTON_BOOST_CHARGE: "Button Boost Charge",
+    BUTTON_SELF_CONSUMPTION: "Button Self Consumption",
+    BUTTON_UPDATE_FORECAST: "Button Update Forecast",
 }
 
 # -----------------------------------------------------------------------------

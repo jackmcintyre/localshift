@@ -1,8 +1,8 @@
-# Amber Powerwall Integration - System Architecture
+# LocalShift Integration - System Architecture
 
 ## Overview
 
-The Amber Powerwall integration optimizes battery charging/discharging based on:
+The LocalShift integration optimizes battery charging/discharging based on:
 - Amber Electric spot prices (5-minute intervals)
 - Solcast solar forecasts (30-minute intervals)
 - Tesla Powerwall state (via Teslemetry)
@@ -29,7 +29,7 @@ The architecture was designed to solve several problems from the original YAML-b
 │                        HOME ASSISTANT CORE                                   │
 │                                                                              │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                    Amber Powerwall Integration                        │  │
+│  │                    LocalShift Integration                        │  │
 │  │                                                                       │  │
 │  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────┐  │  │
 │  │  │  Config    │    │   Entity   │    │   Coordinator            │  │  │

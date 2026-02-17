@@ -2,7 +2,7 @@
 
 ## Objective
 
-Completely remove the Hold mode functionality (SOLAR_EXPORT_HOLD, HOLD, HOLDING_FOR_SPIKE) from the amber_powerwall Home Assistant component.
+Completely remove the Hold mode functionality (SOLAR_EXPORT_HOLD, HOLD, HOLDING_FOR_SPIKE) from the localshift Home Assistant component.
 
 ## Background / Rationale
 

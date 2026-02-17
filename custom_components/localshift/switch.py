@@ -1,4 +1,4 @@
-"""Switch platform for the Amber Powerwall integration.
+"""Switch platform for the LocalShift integration.
 
 Provides user-facing toggle switches for:
 - Automation Enabled (master toggle)
@@ -29,7 +29,7 @@ from .const import (
     SWITCH_NAMES,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
 )
-from .coordinator import AmberPowerwallCoordinator
+from .coordinator import LocalShiftCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,22 +50,22 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Amber Powerwall switch entities."""
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    """Set up LocalShift switch entities."""
+    coordinator: LocalShiftCoordinator = entry.runtime_data
 
-    entities = [AmberPowerwallSwitch(coordinator, entry, key) for key in SWITCH_KEYS]
+    entities = [LocalShiftSwitch(coordinator, entry, key) for key in SWITCH_KEYS]
 
     async_add_entities(entities)
 
 
-class AmberPowerwallSwitch(SwitchEntity):
+class LocalShiftSwitch(SwitchEntity):
     """A toggle switch for automation features."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: AmberPowerwallCoordinator,
+        coordinator: LocalShiftCoordinator,
         entry: ConfigEntry,
         key: str,
     ) -> None:
@@ -78,7 +78,7 @@ class AmberPowerwallSwitch(SwitchEntity):
         option_key = f"{SWITCH_STATE_PREFIX}{key}"
         self._is_on = self._entry.options.get(option_key, SWITCH_DEFAULTS[key])
 
-        self._attr_unique_id = f"amber_powerwall_{key}"
+        self._attr_unique_id = f"localshift_{key}"
         self._attr_name = SWITCH_NAMES[key]
         self._attr_icon = SWITCH_ICONS[key]
 
@@ -90,10 +90,10 @@ class AmberPowerwallSwitch(SwitchEntity):
         """Return device information to link all entities under one device."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
-            name="Amber Powerwall",
+            name="LocalShift",
             manufacturer="Custom",
             model="Solar Battery Automation",
-            sw_version="0.1.0",
+            sw_version="0.0.2",
         )
 
     @property
@@ -113,7 +113,7 @@ class AmberPowerwallSwitch(SwitchEntity):
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         if self._key == SWITCH_AUTOMATION_ENABLED:
-            _LOGGER.info("Amber Powerwall automation enabled")
+            _LOGGER.info("LocalShift automation enabled")
 
         # Re-evaluate derived values and trigger state machine
         self.coordinator._compute_derived_values()
@@ -133,7 +133,7 @@ class AmberPowerwallSwitch(SwitchEntity):
 
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info(
-                "Amber Powerwall automation disabled, returning to self consumption"
+                "LocalShift automation disabled, returning to self consumption"
             )
             await self.coordinator.async_set_self_consumption()
 

@@ -1,4 +1,4 @@
-# Amber Powerwall
+# LocalShift
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![HA](https://img.shields.io/badge/Home%20Assistant-2025.6+-blue.svg)](https://www.home-assistant.io/)
@@ -37,12 +37,12 @@ The following integrations must be installed and configured in Home Assistant:
 1. Open HACS in Home Assistant
 2. Click the three dots menu → **Custom repositories**
 3. Add `https://github.com/jackmcintyre/ha-solar-battery-automation` as an **Integration**
-4. Search for "Amber Powerwall" and install
+4. Search for "LocalShift" and install
 5. Restart Home Assistant
 
 ### Manual
 
-1. Copy the `custom_components/amber_powerwall/` folder to your Home Assistant `custom_components/` directory
+1. Copy the `custom_components/localshift/` folder to your Home Assistant `custom_components/` directory
 2. Restart Home Assistant
 
 ## Configuration
@@ -50,7 +50,7 @@ The following integrations must be installed and configured in Home Assistant:
 ### Initial Setup
 
 1. Go to **Settings → Devices & Services → Add Integration**
-2. Search for "Amber Powerwall"
+2. Search for "LocalShift"
 3. **Step 1 — Teslemetry:** Select your Powerwall entities (operation mode, backup reserve, SOC, grid/battery/solar/load power)
 4. **Step 2 — Amber Electric:** Select your Amber entities (general price, feed-in price, forecasts, price spike sensor)
 5. **Step 3 — Solcast:** Select your Solcast forecast entities and notification service
@@ -76,76 +76,76 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 ## Entities
 
-All entities are grouped under a single **Amber Powerwall** device in Settings → Devices & Services.
+All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
 ### Sensors (9)
 
 | Entity ID | Description |
 |---|---|
-| `sensor.amber_powerwall_effective_cheap_price` | Dynamic cheap price threshold (factors in urgency, SOC, solar) |
-| `sensor.amber_powerwall_cheap_charge_stop_price` | Effective cheap price + deadband |
-| `sensor.amber_powerwall_solar_weighted_avg_fit` | Solcast × Amber weighted average feed-in tariff |
-| `sensor.amber_powerwall_active_mode` | Current battery mode from the state machine |
-| `sensor.amber_powerwall_solar_battery_forecast` | SOC projection with detailed attributes |
-| `sensor.amber_powerwall_grid_import_power` | Current grid import (kW) |
-| `sensor.amber_powerwall_grid_export_power` | Current grid export (kW) |
-| `sensor.amber_powerwall_net_electricity_cost_today` | Net cost with import/export/savings/charge cost attributes |
-| `sensor.amber_powerwall_decision_log` | Mode change history with reasons |
+| `sensor.localshift_price_cheap_effective` | Dynamic cheap price threshold (factors in urgency, SOC, solar) |
+| `sensor.localshift_price_cheap_charge_stop` | Effective cheap price + deadband |
+| `sensor.localshift_solar_weighted_avg_fit` | Solcast × Amber weighted average feed-in tariff |
+| `sensor.localshift_battery_mode` | Current battery mode from the state machine |
+| `sensor.localshift_forecast_battery` | SOC projection with detailed attributes |
+| `sensor.localshift_power_grid_import` | Current grid import (kW) |
+| `sensor.localshift_power_grid_export` | Current grid export (kW) |
+| `sensor.localshift_cost_electricity_net` | Net cost with import/export/savings/charge cost attributes |
+| `sensor.localshift_decision_log` | Mode change history with reasons |
 
 ### Binary Sensors (11)
 
 | Entity ID | Description |
 |---|---|
-| `binary_sensor.amber_powerwall_demand_window_active` | Whether current time is within the demand window |
-| `binary_sensor.amber_powerwall_forecast_spike_within_window` | Price spike forecast within lookahead (with `max_forecast_price` attribute) |
-| `binary_sensor.amber_powerwall_forecast_expensive_period_coming` | Expensive period forecast within lookahead |
-| `binary_sensor.amber_powerwall_force_discharge_active` | Powerwall is currently force discharging |
-| `binary_sensor.amber_powerwall_force_charge_active` | Powerwall is currently force charging |
-| `binary_sensor.amber_powerwall_boost_charge_active` | Powerwall is currently boost charging (5kW) |
-| `binary_sensor.amber_powerwall_hold_active` | Powerwall is currently holding |
-| `binary_sensor.amber_powerwall_solar_can_reach_target` | Solar forecast can reach battery target before DW |
-| `binary_sensor.amber_powerwall_boost_charge_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
-| `binary_sensor.amber_powerwall_hold_justified` | Hold mode justified (solar coming or cheap prices forecast) |
-| `binary_sensor.amber_powerwall_solar_export_hold_justified` | Solar export hold justified (with `surplus_ratio` attribute) |
+| `binary_sensor.localshift_binary_demand_window` | Whether current time is within the demand window |
+| `binary_sensor.localshift_binary_price_spike_coming` | Price spike forecast within lookahead (with `max_forecast_price` attribute) |
+| `binary_sensor.localshift_binary_price_expensive_coming` | Expensive period forecast within lookahead |
+| `binary_sensor.localshift_binary_discharge_forced` | Powerwall is currently force discharging |
+| `binary_sensor.localshift_binary_charge_forced` | Powerwall is currently force charging |
+| `binary_sensor.localshift_binary_charge_boost` | Powerwall is currently boost charging (5kW) |
+| `binary_sensor.localshift_hold_active` | Powerwall is currently holding |
+| `binary_sensor.localshift_binary_solar_can_reach_target` | Solar forecast can reach battery target before DW |
+| `binary_sensor.localshift_binary_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
+| `binary_sensor.localshift_hold_justified` | Hold mode justified (solar coming or cheap prices forecast) |
+| `binary_sensor.localshift_solar_export_hold_justified` | Solar export hold justified (with `surplus_ratio` attribute) |
 
 ### Switches (4)
 
 | Entity ID | Default | Description |
 |---|---|---|
-| `switch.amber_powerwall_automation_enabled` | ON | Master toggle for all automation |
-| `switch.amber_powerwall_spike_discharge_enabled` | ON | Allow discharge during price spikes |
-| `switch.amber_powerwall_dry_run` | OFF | Log decisions without sending commands |
-| `switch.amber_powerwall_demand_window_block` | ON | Block grid charging during demand window |
+| `switch.localshift_automation_enabled` | ON | Master toggle for all automation |
+| `switch.localshift_spike_discharge_enabled` | ON | Allow discharge during price spikes |
+| `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
+| `switch.localshift_demand_window_block` | ON | Block grid charging during demand window |
 
 ### Numbers (6)
 
 | Entity ID | Description |
 |---|---|
-| `number.amber_powerwall_cheap_price_percentile` | Forecast price percentile used for cheap-charge baseline (%) |
-| `number.amber_powerwall_max_precharge_price` | Maximum pre-charge price ($/kWh) |
-| `number.amber_powerwall_cheap_price_deadband` | Price deadband ($/kWh) |
-| `number.amber_powerwall_forecast_lookahead_hours` | Forecast lookahead window (hours) |
-| `number.amber_powerwall_precharge_battery_threshold` | Pre-charge SOC threshold (%) |
-| `number.amber_powerwall_battery_target` | Battery target SOC (%) |
+| `number.localshift_cheap_price_percentile` | Forecast price percentile used for cheap-charge baseline (%) |
+| `number.localshift_max_pre_charge_price` | Maximum pre-charge price ($/kWh) |
+| `number.localshift_cheap_price_deadband` | Price deadband ($/kWh) |
+| `number.localshift_forecast_lookahead_hours` | Forecast lookahead window (hours) |
+| `number.localshift_pre_charge_battery_threshold` | Pre-charge SOC threshold (%) |
+| `number.localshift_battery_target` | Battery target SOC (%) |
 
 ### Buttons (5)
 
 | Entity ID | Description |
 |---|---|
-| `button.amber_powerwall_force_charge` | Manually force charge (backup mode, 3.3kW) |
-| `button.amber_powerwall_force_discharge` | Manually force discharge (autonomous, reserve=0) |
-| `button.amber_powerwall_hold_battery` | Manually hold at current SOC |
-| `button.amber_powerwall_boost_charge_5kw` | Manually boost charge at 5kW |
-| `button.amber_powerwall_return_to_self_consumption` | Clear manual override, return to automation |
+| `button.localshift_force_charge` | Manually force charge (backup mode, 3.3kW) |
+| `button.localshift_force_discharge` | Manually force discharge (autonomous, reserve=0) |
+| `button.localshift_hold_battery` | Manually hold at current SOC |
+| `button.localshift_boost_charge` | Manually boost charge at 5kW |
+| `button.localshift_self_consumption` | Clear manual override, return to automation |
 
 ## Dashboard
 
-A ready-to-use Lovelace dashboard is included at `dashboards/amber_powerwall.yaml`.
+A ready-to-use Lovelace dashboard is included at `dashboards/localshift.yaml`.
 
 To install:
 1. Go to **Settings → Dashboards → Add Dashboard**
 2. Choose "New dashboard from scratch" with YAML mode
-3. Paste the contents of `dashboards/amber_powerwall.yaml`
+3. Paste the contents of `dashboards/localshift.yaml`
 
 ### Required YAML helpers
 
@@ -154,14 +154,14 @@ The dashboard's energy tracking cards require Riemann sum integration sensors an
 ```yaml
 sensor:
   - platform: integration
-    source: sensor.amber_powerwall_grid_import_power
+    source: sensor.localshift_power_grid_import
     name: grid_import_energy
     unit_prefix: k
     round: 3
     method: trapezoidal
 
   - platform: integration
-    source: sensor.amber_powerwall_grid_export_power
+    source: sensor.localshift_power_grid_export
     name: grid_export_energy
     unit_prefix: k
     round: 3
@@ -209,11 +209,11 @@ Context-dependent debounce prevents rapid mode switching:
 
 ## Migration from YAML Package
 
-If you're migrating from the `amber_powerwall.yaml` package:
+If you're migrating from the `localshift.yaml` package:
 
 1. Install the custom component and configure it
 2. Run both side-by-side with the component's **Dry Run** switch ON
-3. Compare the component's `sensor.amber_powerwall_active_mode` against YAML automation actions in the logbook
+3. Compare the component's `sensor.localshift_battery_mode` against YAML automation actions in the logbook
 4. When satisfied, turn **Dry Run** OFF and disable YAML automations (`input_boolean.battery_automation_enabled` → OFF)
 5. Enable the component's automation switch
 6. Monitor for 24 hours

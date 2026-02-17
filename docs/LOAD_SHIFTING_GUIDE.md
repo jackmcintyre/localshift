@@ -1,10 +1,10 @@
 # Load Shifting Guide: Using Excess Solar Sensors
 
-This guide explains how to create Home Assistant automations that use the Amber Powerwall integration's excess solar sensors to optimize energy consumption.
+This guide explains how to create Home Assistant automations that use the LocalShift integration's excess solar sensors to optimize energy consumption.
 
 ## Overview
 
-The Amber Powerwall integration provides sensors that forecast excess solar production - energy that would otherwise be exported to the grid, potentially at negative feed-in tariff (FIT) prices. By consuming this excess energy with discretionary loads (AC, pool pumps, EV chargers, etc.), you can:
+The LocalShift integration provides sensors that forecast excess solar production - energy that would otherwise be exported to the grid, potentially at negative feed-in tariff (FIT) prices. By consuming this excess energy with discretionary loads (AC, pool pumps, EV chargers, etc.), you can:
 
 1. **Avoid paying to export** during negative FIT periods
 2. **Pre-condition your home** (cooling/heating) using free solar energy
@@ -15,7 +15,7 @@ The Amber Powerwall integration provides sensors that forecast excess solar prod
 
 ## Available Sensors
 
-### 1. `sensor.amber_powerwall_excess_solar_kwh`
+### 1. `sensor.localshift_excess_solar_kwh`
 
 **Purpose:** Forecasted excess solar energy available for discretionary loads.
 
@@ -33,7 +33,7 @@ The Amber Powerwall integration provides sensors that forecast excess solar prod
 | `safe_additional_load_kw` | float | Max kW that can be safely added |
 | `forecast_confidence` | string | low/medium/high |
 
-### 2. `sensor.amber_powerwall_load_shift_signal`
+### 2. `sensor.localshift_load_shift_signal`
 
 **Purpose:** Simple actionable signal for automations.
 
@@ -54,7 +54,7 @@ The Amber Powerwall integration provides sensors that forecast excess solar prod
 | `grid_charge_risk` | bool | Would adding load trigger grid charging? |
 | `time_until_signal_change_minutes` | int | When signal might change |
 
-### 3. `binary_sensor.amber_powerwall_excess_solar_available`
+### 3. `binary_sensor.localshift_excess_solar_available`
 
 **Purpose:** Simple ON/OFF trigger for basic automations.
 
@@ -81,7 +81,7 @@ Always check `can_add_load_now` before adding load:
 ```yaml
 condition:
   - condition: state
-    entity_id: sensor.amber_powerwall_excess_solar_kwh
+    entity_id: sensor.localshift_excess_solar_kwh
     attribute: can_add_load_now
     state: true
 ```
@@ -102,7 +102,7 @@ automation:
     description: "Start pre-cooling when excess solar available"
     trigger:
       - platform: state
-        entity_id: binary_sensor.amber_powerwall_excess_solar_available
+        entity_id: binary_sensor.localshift_excess_solar_available
         to: "on"
     condition:
       - condition: numeric_state
@@ -124,7 +124,7 @@ automation:
     description: "Stop pre-cooling when excess drops"
     trigger:
       - platform: state
-        entity_id: binary_sensor.amber_powerwall_excess_solar_available
+        entity_id: binary_sensor.localshift_excess_solar_available
         to: "off"
         for:
           minutes: 5  # Debounce
@@ -146,26 +146,26 @@ automation:
     description: "Use excess to pre-cool before negative FIT window"
     trigger:
       - platform: state
-        entity_id: sensor.amber_powerwall_load_shift_signal
+        entity_id: sensor.localshift_load_shift_signal
         to: "INCREASE_LOAD"
     condition:
       # Negative FIT coming within 4 hours
       - condition: template
         value_template: >
-          {{ state_attr('sensor.amber_powerwall_excess_solar_kwh', 'negative_fit_window_start') is not none }}
+          {{ state_attr('sensor.localshift_excess_solar_kwh', 'negative_fit_window_start') is not none }}
       # At least 5kWh excess available
       - condition: numeric_state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: excess_until_negative_fit_kwh
         above: 5
       # Safe to add load
       - condition: state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: can_add_load_now
         state: true
       # AC capacity check
       - condition: numeric_state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: safe_additional_load_kw
         above: 2.0
     action:
@@ -177,9 +177,9 @@ automation:
       - service: notify.mobile_app
         data:
           message: >
-            Pre-cooling started. {{ state_attr('sensor.amber_powerwall_excess_solar_kwh', 
+            Pre-cooling started. {{ state_attr('sensor.localshift_excess_solar_kwh', 
             'excess_until_negative_fit_kwh') | round(1) }}kWh excess before negative FIT at 
-            {{ state_attr('sensor.amber_powerwall_excess_solar_kwh', 'negative_fit_window_start') }}
+            {{ state_attr('sensor.localshift_excess_solar_kwh', 'negative_fit_window_start') }}
 ```
 
 ### Example 3: Dynamic Temperature Based on Excess
@@ -192,14 +192,14 @@ automation:
     description: "Adjust cooling based on excess solar amount"
     trigger:
       - platform: state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
     condition:
       - condition: state
-        entity_id: sensor.amber_powerwall_load_shift_signal
+        entity_id: sensor.localshift_load_shift_signal
         state: "INCREASE_LOAD"
     action:
       - variables:
-          excess: "{{ state_attr('sensor.amber_powerwall_excess_solar_kwh', 'excess_next_2h_kwh') | float }}"
+          excess: "{{ state_attr('sensor.localshift_excess_solar_kwh', 'excess_next_2h_kwh') | float }}"
           # More excess = more aggressive cooling
           target_temp: >
             {% if excess > 8 %}
@@ -227,7 +227,7 @@ automation:
   - alias: "Reduce AC on grid charge risk"
     trigger:
       - platform: state
-        entity_id: sensor.amber_powerwall_load_shift_signal
+        entity_id: sensor.localshift_load_shift_signal
         to: "REDUCE_LOAD"
     condition:
       - condition: state
@@ -244,7 +244,7 @@ automation:
         data:
           message: >
             AC setpoint raised to reduce load. 
-            Reason: {{ state_attr('sensor.amber_powerwall_load_shift_signal', 'signal_reason') }}
+            Reason: {{ state_attr('sensor.localshift_load_shift_signal', 'signal_reason') }}
 ```
 
 ---
@@ -258,17 +258,17 @@ automation:
   - alias: "Pool pump on excess solar"
     trigger:
       - platform: state
-        entity_id: sensor.amber_powerwall_load_shift_signal
+        entity_id: sensor.localshift_load_shift_signal
         to: "INCREASE_LOAD"
     condition:
       # Pool pump needs ~1.5kW
       - condition: numeric_state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: safe_additional_load_kw
         above: 1.5
       # At least 2 hours of excess (4kWh for 2h @ 2kW)
       - condition: numeric_state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: excess_next_4h_kwh
         above: 4
       # Hasn't run today
@@ -300,7 +300,7 @@ automation:
   - alias: "EV charge on excess solar"
     trigger:
       - platform: state
-        entity_id: binary_sensor.amber_powerwall_excess_solar_available
+        entity_id: binary_sensor.localshift_excess_solar_available
         to: "on"
     condition:
       - condition: state
@@ -311,7 +311,7 @@ automation:
         below: 80
       # EV charger needs at least 1.4kW (6A @ 240V)
       - condition: numeric_state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: safe_additional_load_kw
         above: 1.4
     action:
@@ -321,7 +321,7 @@ automation:
         data:
           # Set current based on available excess (240V assumption)
           value: >
-            {% set excess_kw = state_attr('sensor.amber_powerwall_excess_solar_kwh', 'safe_additional_load_kw') %}
+            {% set excess_kw = state_attr('sensor.localshift_excess_solar_kwh', 'safe_additional_load_kw') %}
             {% set max_amps = (excess_kw * 1000 / 240) | int %}
             {{ [max_amps, 32] | min }}
       - service: switch.turn_on
@@ -340,12 +340,12 @@ automation:
   - alias: "Heat water with excess solar"
     trigger:
       - platform: state
-        entity_id: sensor.amber_powerwall_load_shift_signal
+        entity_id: sensor.localshift_load_shift_signal
         to: "INCREASE_LOAD"
     condition:
       # Hot water heater is typically 3-4kW
       - condition: numeric_state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
         attribute: safe_additional_load_kw
         above: 3.5
       # Water isn't already hot
@@ -358,7 +358,7 @@ automation:
           entity_id: switch.hot_water_boost
       - wait_for_trigger:
           - platform: state
-            entity_id: sensor.amber_powerwall_load_shift_signal
+            entity_id: sensor.localshift_load_shift_signal
             to: "REDUCE_LOAD"
           - platform: numeric_state
             entity_id: sensor.hot_water_temperature
@@ -383,11 +383,11 @@ automation:
   - alias: "Manage discretionary loads by priority"
     trigger:
       - platform: state
-        entity_id: sensor.amber_powerwall_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar_kwh
     action:
       - variables:
-          safe_kw: "{{ state_attr('sensor.amber_powerwall_excess_solar_kwh', 'safe_additional_load_kw') | float }}"
-          signal: "{{ states('sensor.amber_powerwall_load_shift_signal') }}"
+          safe_kw: "{{ state_attr('sensor.localshift_excess_solar_kwh', 'safe_additional_load_kw') | float }}"
+          signal: "{{ states('sensor.localshift_load_shift_signal') }}"
       - choose:
           # Priority 1: Hot water (3.5kW) - if we have lots of excess
           - conditions:
@@ -451,7 +451,7 @@ Add debouncing with `for:` in triggers:
 ```yaml
 trigger:
   - platform: state
-    entity_id: sensor.amber_powerwall_load_shift_signal
+    entity_id: sensor.localshift_load_shift_signal
     to: "INCREASE_LOAD"
     for:
       minutes: 5
@@ -464,7 +464,7 @@ Use hysteresis in conditions:
 ```yaml
 condition:
   - condition: numeric_state
-    entity_id: sensor.amber_powerwall_excess_solar_kwh
+    entity_id: sensor.localshift_excess_solar_kwh
     attribute: excess_next_2h_kwh
     above: 4  # Higher threshold to start
 ```
@@ -474,7 +474,7 @@ And a lower threshold to stop:
 ```yaml
 trigger:
   - platform: numeric_state
-    entity_id: sensor.amber_powerwall_excess_solar_kwh
+    entity_id: sensor.localshift_excess_solar_kwh
     attribute: excess_next_2h_kwh
     below: 1  # Lower threshold to stop
 ```

@@ -1,7 +1,7 @@
-"""Coordinator for the Amber Powerwall integration.
+"""Coordinator for the LocalShift integration.
 
-Subscribes to external entity state changes (Teslemetry, Amber, Solcast),
-computes derived sensor values, and drives the battery state machine.
+Subscribes to external entity state changes (Teslemetry, pricing, Solcast),
+coordinates internal state updates, and triggers automation logic.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from homeassistant.helpers.event import (
 )
 
 from .const import (
-    CONF_AMBER_FEED_IN_FORECAST,
-    CONF_AMBER_FEED_IN_PRICE,
-    CONF_AMBER_GENERAL_FORECAST,
-    CONF_AMBER_GENERAL_PRICE,
-    CONF_AMBER_PRICE_SPIKE,
     CONF_DEMAND_WINDOW_END,
+    CONF_PRICING_FEED_IN_FORECAST,
+    CONF_PRICING_FEED_IN_PRICE,
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_TESLEMETRY_BACKUP_RESERVE,
@@ -54,7 +54,7 @@ _LOGGER = logging.getLogger(__name__)
 PERIODIC_INTERVAL = timedelta(minutes=1)
 
 
-class AmberPowerwallCoordinator:
+class LocalShiftCoordinator:
     """Central coordinator: reads external entities, computes state, drives battery.
 
     This is NOT a DataUpdateCoordinator (we don't poll an API). Instead we
@@ -169,11 +169,11 @@ class AmberPowerwallCoordinator:
             self._get_entity_id(CONF_TESLEMETRY_SOLAR_POWER),
             self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER),
             # NOT monitoring allow_export - changes programmatically
-            self._get_entity_id(CONF_AMBER_GENERAL_PRICE),
-            self._get_entity_id(CONF_AMBER_FEED_IN_PRICE),
-            self._get_entity_id(CONF_AMBER_GENERAL_FORECAST),
-            self._get_entity_id(CONF_AMBER_FEED_IN_FORECAST),
-            self._get_entity_id(CONF_AMBER_PRICE_SPIKE),
+            self._get_entity_id(CONF_PRICING_GENERAL_PRICE),
+            self._get_entity_id(CONF_PRICING_FEED_IN_PRICE),
+            self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
+            self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
+            self._get_entity_id(CONF_PRICING_PRICE_SPIKE),
             self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
             self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
         ]
@@ -225,8 +225,7 @@ class AmberPowerwallCoordinator:
         inferred_mode = self._state_machine.infer_current_hardware_mode(self.data)
 
         _LOGGER.info(
-            "Amber Powerwall coordinator started, monitoring %d entities, "
-            "inferred mode: %s",
+            "LocalShift coordinator started, monitoring %d entities, inferred mode: %s",
             len(monitored_entities),
             inferred_mode.value,
         )
@@ -245,7 +244,7 @@ class AmberPowerwallCoordinator:
         self._unsub_timer = None
         self._unsub_midnight = None
         self._unsub_daily_summary = None
-        _LOGGER.info("Amber Powerwall coordinator stopped")
+        _LOGGER.info("LocalShift coordinator stopped")
 
     # ------------------------------------------------------------------
     # Entity update subscription (for sensor/binary_sensor entities)
@@ -301,7 +300,7 @@ class AmberPowerwallCoordinator:
         self._compute_derived_values()
         self.hass.async_create_task(
             self._evaluate_state_machine(),
-            "amber_powerwall_evaluate_state_change",
+            "localshift_evaluate_state_change",
         )
         self._notify_listeners()
 
@@ -316,7 +315,7 @@ class AmberPowerwallCoordinator:
             load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
             self.hass.async_create_task(
                 self._computation_engine.async_get_recent_load_1hr(load_entity_id),
-                "amber_powerwall_fetch_recent_load",
+                "localshift_fetch_recent_load",
             )
             # Also refresh historical hourly averages (7-day profile)
             # This ensures the cache is always populated even after restarts
@@ -324,13 +323,13 @@ class AmberPowerwallCoordinator:
                 self._computation_engine.async_get_historical_hourly_averages(
                     load_entity_id
                 ),
-                "amber_powerwall_fetch_historical_load",
+                "localshift_fetch_historical_load",
             )
 
         self._compute_derived_values()
         self.hass.async_create_task(
             self._evaluate_state_machine(),
-            "amber_powerwall_evaluate_periodic",
+            "localshift_evaluate_periodic",
         )
         self._accumulate_costs()
         self._notify_listeners()
@@ -339,7 +338,7 @@ class AmberPowerwallCoordinator:
     def _handle_midnight_reset(self, now: datetime) -> None:
         """Reset daily cost accumulators and target flag at midnight.
 
-        Replaces YAML A12 (amber_reset_target_reached).
+        Replaces YAML A12 (localshift_reset_target_reached).
         """
         self.data.grid_import_cost = 0.0
         self.data.grid_export_revenue = 0.0
@@ -353,7 +352,7 @@ class AmberPowerwallCoordinator:
     def _handle_daily_summary(self, now: datetime) -> None:
         """Send daily summary notification at demand window end.
 
-        Replaces YAML A15 (amber_daily_summary).
+        Replaces YAML A15 (localshift_daily_summary).
         """
         from .const import SWITCH_AUTOMATION_ENABLED
 
@@ -362,7 +361,7 @@ class AmberPowerwallCoordinator:
 
         self.hass.async_create_task(
             self._send_daily_summary(),
-            "amber_powerwall_daily_summary",
+            "localshift_daily_summary",
         )
 
     # ------------------------------------------------------------------

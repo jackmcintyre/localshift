@@ -1,4 +1,4 @@
-"""Integration tests for amber_powerwall component."""
+"""Integration tests for localshift component."""
 
 
 def test_config_flow_initialization():

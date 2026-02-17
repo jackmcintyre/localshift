@@ -1,8 +1,8 @@
 # =============================================================================
-# Amber Powerwall Custom Component Dashboard
+# LocalShift Battery Automation Dashboard
 # =============================================================================
 #
-# Dashboard primarily uses entities from the amber_powerwall custom component.
+# Dashboard primarily uses entities from the localshift custom component.
 # Also references:
 #   - my_home_* entities from Tesla Powerwall integration
 #   - 100h_* entities from Amber Electric YAML package
@@ -13,7 +13,7 @@
 #     dashboards:
 #       amber-powerwall:
 #         mode: yaml
-#         filename: dashboards/amber_powerwall_component.yaml
+#         filename: dashboards/localshift.yaml
 #         title: Powerwall
 #         icon: mdi:battery-sync
 #
@@ -68,7 +68,7 @@ views:
             heading_style: title
 
           - type: tile
-            entity: sensor.amber_powerwall_active_mode
+            entity: sensor.localshift_battery_mode
             name: Mode
 
           - type: gauge
@@ -98,7 +98,7 @@ views:
             color: red
 
           - type: tile
-            entity: binary_sensor.amber_powerwall_demand_window_active
+            entity: binary_sensor.localshift_binary_demand_window
             name: Demand Window
             color: orange
 
@@ -111,7 +111,7 @@ views:
 
           - type: markdown
             content: >
-              {% set mode = states('sensor.amber_powerwall_active_mode') %}
+              {% set mode = states('sensor.localshift_battery_mode') %}
               {% if mode == 'manual' %}🟠 **MANUAL OVERRIDE**
               {%- elif mode == 'spike_discharge' %}🔴 **Spike Discharge** — exporting to grid
               {%- elif mode == 'boost_charging' %}🟡 **Boost Charge (5kW)** — fast charging from grid
@@ -142,7 +142,7 @@ views:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.amber_powerwall_return_to_self_consumption
+                entity_id: button.localshift_self_consumption
             icon_height: 40px
 
           - type: button
@@ -152,7 +152,7 @@ views:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.amber_powerwall_force_charge
+                entity_id: button.localshift_force_charge
             icon_height: 40px
 
           - type: button
@@ -162,7 +162,7 @@ views:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.amber_powerwall_boost_charge_5kw
+                entity_id: button.localshift_boost_charge
             icon_height: 40px
 
           - type: button
@@ -172,7 +172,7 @@ views:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.amber_powerwall_force_discharge
+                entity_id: button.localshift_force_discharge
             icon_height: 40px
 
           - type: button
@@ -182,7 +182,7 @@ views:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.amber_powerwall_update_forecast
+                entity_id: button.localshift_update_forecast
             icon_height: 40px
 
       # --- Live System ---
@@ -207,12 +207,12 @@ views:
             icon: mdi:battery-charging
 
           - type: tile
-            entity: sensor.amber_powerwall_grid_import_power
+            entity: sensor.localshift_power_grid_import
             name: Grid Import
             icon: mdi:transmission-tower-import
 
           - type: tile
-            entity: sensor.amber_powerwall_grid_export_power
+            entity: sensor.localshift_power_grid_export
             name: Grid Export
             icon: mdi:transmission-tower-export
 
@@ -229,11 +229,11 @@ views:
             heading_style: title
 
           - type: tile
-            entity: binary_sensor.amber_powerwall_forecast_spike_within_window
+            entity: binary_sensor.localshift_binary_price_spike_coming
             name: Spike in Window
 
           - type: entity
-            entity: binary_sensor.amber_powerwall_forecast_spike_within_window
+            entity: binary_sensor.localshift_binary_price_spike_coming
             attribute: max_forecast_price
             name: Max Price
             icon: mdi:arrow-up-bold
@@ -258,7 +258,7 @@ views:
                 curve: smooth
                 type: line
                 extend_to: false
-              - entity: sensor.amber_powerwall_daily_forecast
+              - entity: sensor.localshift_forecast_daily
                 name: Planned SOC
                 color: "#F59E0B"
                 stroke_width: 2
@@ -290,10 +290,10 @@ views:
 
           - type: markdown
             content: >
-              {% set forecast = 'sensor.amber_powerwall_solar_battery_forecast' %}
-              {% set target = states('number.amber_powerwall_battery_target') | round(0) | int %}
+              {% set forecast = 'sensor.localshift_forecast_battery' %}
+              {% set target = states('number.localshift_battery_target') | round(0) | int %}
               {% set soc = states('sensor.my_home_percentage_charged') | round(0) | int %}
-              {% set dw_active = is_state('binary_sensor.amber_powerwall_demand_window_active', 'on') %}
+              {% set dw_active = is_state('binary_sensor.localshift_binary_demand_window', 'on') %}
               {% if dw_active %}
               **Demand window active**
 
@@ -307,7 +307,7 @@ views:
 
               Hours to DW: {{ state_attr(forecast, 'hours_to_target_time') | default(0) }}h
 
-              Threshold: ${{ states('sensor.amber_powerwall_effective_cheap_price') }}/kWh
+              Threshold: ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
 
               {% if state_attr(forecast, 'can_reach_target') | bool(true) %}
               ✅ On track
@@ -319,11 +319,11 @@ views:
               {% endif %}
 
           - type: tile
-            entity: binary_sensor.amber_powerwall_solar_can_reach_target
+            entity: binary_sensor.localshift_binary_solar_can_reach_target
             name: Solar On Track
 
           - type: tile
-            entity: binary_sensor.amber_powerwall_boost_charge_needed
+            entity: binary_sensor.localshift_binary_charge_boost_needed
             name: Boost Needed
 
       # --- Cost ---
@@ -335,7 +335,7 @@ views:
 
           - type: markdown
             content: >
-              {% set cost = 'sensor.amber_powerwall_net_electricity_cost_today' %}
+              {% set cost = 'sensor.localshift_cost_electricity_net' %}
               **Net: ${{ states(cost) }}**
 
               Import: ${{ state_attr(cost, 'grid_import_cost') | default(0) | round(2) }}
@@ -353,7 +353,7 @@ views:
           - type: logbook
             target:
               entity_id:
-                - sensor.amber_powerwall_active_mode
+                - sensor.localshift_battery_mode
 
 
   # =============================================================================
@@ -373,12 +373,12 @@ views:
             heading_style: title
 
           - type: tile
-            entity: switch.amber_powerwall_automation_enabled
+            entity: switch.localshift_automation_enabled
             name: Automation
             icon: mdi:power
 
           - type: tile
-            entity: switch.amber_powerwall_dry_run
+            entity: switch.localshift_dry_run
             name: Dry Run
             icon: mdi:test-tube
             color: amber
@@ -391,16 +391,16 @@ views:
             heading_style: title
 
           - type: tile
-            entity: switch.amber_powerwall_spike_discharge_enabled
+            entity: switch.localshift_spike_discharge_enabled
             name: Spike Discharge
 
           - type: tile
-            entity: switch.amber_powerwall_demand_window_block
+            entity: switch.localshift_demand_window_block
             name: Demand Block
             color: orange
 
           - type: tile
-            entity: switch.amber_powerwall_allow_dw_entry_under_target
+            entity: switch.localshift_allow_dw_entry_under_target
             name: Allow DW Entry Under Target
             color: green
 
@@ -412,15 +412,15 @@ views:
             heading_style: title
 
           - type: tile
-            entity: number.amber_powerwall_cheap_price_percentile
+            entity: number.localshift_cheap_price_percentile
             name: Cheap %
 
           - type: tile
-            entity: number.amber_powerwall_max_pre_charge_price
+            entity: number.localshift_max_pre_charge_price
             name: Max Pre-charge
 
           - type: tile
-            entity: number.amber_powerwall_price_deadband
+            entity: number.localshift_price_deadband
             name: Deadband
 
       # --- Forecast Settings ---
@@ -431,11 +431,11 @@ views:
             heading_style: title
 
           - type: tile
-            entity: number.amber_powerwall_forecast_lookahead
+            entity: number.localshift_forecast_lookahead
             name: Lookahead
 
           - type: tile
-            entity: number.amber_powerwall_pre_charge_battery_threshold
+            entity: number.localshift_pre_charge_battery_threshold
             name: Pre-charge SOC
 
       # --- Battery Target ---
@@ -446,11 +446,11 @@ views:
             heading_style: title
 
           - type: tile
-            entity: number.amber_powerwall_battery_target
+            entity: number.localshift_battery_target
             name: Battery Target
 
           - type: tile
-            entity: number.amber_powerwall_load_weight_recent
+            entity: number.localshift_load_weight_recent
             name: Load Weight
             icon: mdi:scale-balance
 
@@ -477,87 +477,87 @@ views:
               Time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
               
               === CURRENT STATE ===
-              Mode: {{ states('sensor.amber_powerwall_active_mode') }}
+              Mode: {{ states('sensor.localshift_battery_mode') }}
               SOC: {{ states('sensor.my_home_percentage_charged') }}%
               Battery Power: {{ states('sensor.my_home_battery_power') }} kW
-              Grid Import: {{ states('sensor.amber_powerwall_grid_import_power') }} kW
-              Grid Export: {{ states('sensor.amber_powerwall_grid_export_power') }} kW
+              Grid Import: {{ states('sensor.localshift_power_grid_import') }} kW
+              Grid Export: {{ states('sensor.localshift_power_grid_export') }} kW
               Solar Power: {{ states('sensor.my_home_solar_power') }} kW
               
               Buy Price: ${{ states('sensor.100h_general_price') }}/kWh
               Sell Price: ${{ states('sensor.100h_feed_in_price') }}/kWh
               Price Spike: {{ states('binary_sensor.100h_price_spike') }}
-              Demand Window: {{ states('binary_sensor.amber_powerwall_demand_window_active') }}
+              Demand Window: {{ states('binary_sensor.localshift_binary_demand_window') }}
               
               === INTERNAL STATE FLAGS ===
-              Manual Override: {{ states('switch.amber_powerwall_automation_enabled') == 'off' }}
-              Target Reached Today: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'target_reached_today') }}
+              Manual Override: {{ states('switch.localshift_automation_enabled') == 'off' }}
+              Target Reached Today: {{ state_attr('sensor.localshift_forecast_battery', 'target_reached_today') }}
               
-              Forecast Spike Within Window: {{ states('binary_sensor.amber_powerwall_forecast_spike_within_window') }}
-              Max Forecast Price: ${{ state_attr('binary_sensor.amber_powerwall_forecast_spike_within_window', 'max_forecast_price') | default(0) }}/kWh
-              Max Buy Forecast Price: ${{ state_attr('binary_sensor.amber_powerwall_forecast_spike_within_window', 'max_buy_forecast_price') | default(0) }}/kWh
-              Force Discharge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_discharge' }}
-              Force Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'force_charge' }}
-              Boost Charge Active: {{ states('sensor.amber_powerwall_active_mode') == 'boost_charging' }}
-              Solar Can Reach Target: {{ states('binary_sensor.amber_powerwall_solar_can_reach_target') }}
-              Boost Charge Needed: {{ states('binary_sensor.amber_powerwall_boost_charge_needed') }}
+              Forecast Spike Within Window: {{ states('binary_sensor.localshift_binary_price_spike_coming') }}
+              Max Forecast Price: ${{ state_attr('binary_sensor.localshift_binary_price_spike_coming', 'max_forecast_price') | default(0) }}/kWh
+              Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_binary_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
+              Force Discharge Active: {{ states('sensor.localshift_battery_mode') == 'force_discharge' }}
+              Force Charge Active: {{ states('sensor.localshift_battery_mode') == 'force_charge' }}
+              Boost Charge Active: {{ states('sensor.localshift_battery_mode') == 'boost_charging' }}
+              Solar Can Reach Target: {{ states('binary_sensor.localshift_binary_solar_can_reach_target') }}
+              Boost Charge Needed: {{ states('binary_sensor.localshift_binary_charge_boost_needed') }}
               
               === CONFIGURATION & THRESHOLDS ===
-              Cheap Price Percentile: {{ states('number.amber_powerwall_cheap_price_percentile') }}%
-              Max Pre-charge Price: ${{ states('number.amber_powerwall_max_pre_charge_price') }}/kWh
-              Price Deadband: {{ states('number.amber_powerwall_price_deadband') }}
-              Forecast Lookahead: {{ states('number.amber_powerwall_forecast_lookahead') }}h
-              Pre-charge SOC Threshold: {{ states('number.amber_powerwall_pre_charge_battery_threshold') }}%
-              Battery Target: {{ states('number.amber_powerwall_battery_target') }}%
+              Cheap Price Percentile: {{ states('number.localshift_cheap_price_percentile') }}%
+              Max Pre-charge Price: ${{ states('number.localshift_max_pre_charge_price') }}/kWh
+              Price Deadband: {{ states('number.localshift_price_deadband') }}
+              Forecast Lookahead: {{ states('number.localshift_forecast_lookahead') }}h
+              Pre-charge SOC Threshold: {{ states('number.localshift_pre_charge_battery_threshold') }}%
+              Battery Target: {{ states('number.localshift_battery_target') }}%
               
-              Effective Cheap Price: ${{ states('sensor.amber_powerwall_effective_cheap_price') }}/kWh
-              Cheap Charge Stop Price: ${{ states('sensor.amber_powerwall_cheap_charge_stop_price') }}/kWh
-              Solar Weighted Avg FIT: ${{ states('sensor.amber_powerwall_solar_weighted_avg_fit') }}/kWh
-              Solar Remaining: {{ state_attr('sensor.amber_powerwall_solar_weighted_avg_fit', 'total_solar_remaining_kwh') | default(0) }} kWh
+              Effective Cheap Price: ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
+              Cheap Charge Stop Price: ${{ states('sensor.localshift_price_cheap_charge_stop') }}/kWh
+              Solar Weighted Avg FIT: ${{ states('sensor.localshift_solar_weighted_avg_fit') }}/kWh
+              Solar Remaining: {{ state_attr('sensor.localshift_solar_weighted_avg_fit', 'total_solar_remaining_kwh') | default(0) }} kWh
               
               === FORECAST INFORMATION ===
-              Solar Battery Forecast SOC: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'predicted_soc') | default(0) }}%
-              Forecast Deficit: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'deficit_kwh') | default(0) }} kWh
-              Solar Before DW: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'solar_before_dw_kwh') | default(0) }} kWh
-              Net Solar: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'net_solar_kwh') | default(0) }} kWh
-              Hours to DW: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'hours_to_target_time') | default(0) }}h
-              Can Reach Target: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'can_reach_target') | default(true) }}
-              Boost Needed: {{ state_attr('sensor.amber_powerwall_solar_battery_forecast', 'boost_needed') }}
+              Solar Battery Forecast SOC: {{ state_attr('sensor.localshift_forecast_battery', 'predicted_soc') | default(0) }}%
+              Forecast Deficit: {{ state_attr('sensor.localshift_forecast_battery', 'deficit_kwh') | default(0) }} kWh
+              Solar Before DW: {{ state_attr('sensor.localshift_forecast_battery', 'solar_before_dw_kwh') | default(0) }} kWh
+              Net Solar: {{ state_attr('sensor.localshift_forecast_battery', 'net_solar_kwh') | default(0) }} kWh
+              Hours to DW: {{ state_attr('sensor.localshift_forecast_battery', 'hours_to_target_time') | default(0) }}h
+              Can Reach Target: {{ state_attr('sensor.localshift_forecast_battery', 'can_reach_target') | default(true) }}
+              Boost Needed: {{ state_attr('sensor.localshift_forecast_battery', 'boost_needed') }}
               
-              Daily Forecast Entries: {{ states('sensor.amber_powerwall_daily_forecast') | int(default=0) }}
-              15-min Slots: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_15min_slots') | default(0) }}
-              Forecast Hourly Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) | length }}
-              Solcast Today Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'solcast_today_entries') | default(0) }}
-              Solcast Tomorrow Entries: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'solcast_tomorrow_entries') | default(0) }}
-              Current Load: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'current_load_kw') | default(0) }} kW
-              Recent 1hr Load: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_kw') | default(0) }} kW
-              Recent 1hr Statistic ID: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_statistic_id') | default('') }}
-              Recent 1hr Samples: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_samples') | default(0) }}
-              Recent 1hr Error: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'recent_load_1hr_last_error') | default('') }}
-              Consumption Weighting: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_weighting') | default(0) }}
-              Consumption Source: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_source') }}
-              Consumption Source Counts: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_consumption_source_counts') | default({}) }}
-              Consumption Profile Hours: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_profile_hours') | default(0) }}
-              Consumption Fallback Hours: {{ state_attr('sensor.amber_powerwall_daily_forecast', 'consumption_fallback_hours') | default(0) }}
+              Daily Forecast Entries: {{ states('sensor.localshift_forecast_daily') | int(default=0) }}
+              15-min Slots: {{ state_attr('sensor.localshift_forecast_daily', 'forecast_15min_slots') | default(0) }}
+              Forecast Hourly Entries: {{ state_attr('sensor.localshift_forecast_daily', 'forecast_hourly') | default([]) | length }}
+              Solcast Today Entries: {{ state_attr('sensor.localshift_forecast_daily', 'solcast_today_entries') | default(0) }}
+              Solcast Tomorrow Entries: {{ state_attr('sensor.localshift_forecast_daily', 'solcast_tomorrow_entries') | default(0) }}
+              Current Load: {{ state_attr('sensor.localshift_forecast_daily', 'current_load_kw') | default(0) }} kW
+              Recent 1hr Load: {{ state_attr('sensor.localshift_forecast_daily', 'recent_load_1hr_kw') | default(0) }} kW
+              Recent 1hr Statistic ID: {{ state_attr('sensor.localshift_forecast_daily', 'recent_load_1hr_statistic_id') | default('') }}
+              Recent 1hr Samples: {{ state_attr('sensor.localshift_forecast_daily', 'recent_load_1hr_samples') | default(0) }}
+              Recent 1hr Error: {{ state_attr('sensor.localshift_forecast_daily', 'recent_load_1hr_last_error') | default('') }}
+              Consumption Weighting: {{ state_attr('sensor.localshift_forecast_daily', 'consumption_weighting') | default(0) }}
+              Consumption Source: {{ state_attr('sensor.localshift_forecast_daily', 'consumption_source') }}
+              Consumption Source Counts: {{ state_attr('sensor.localshift_forecast_daily', 'forecast_consumption_source_counts') | default({}) }}
+              Consumption Profile Hours: {{ state_attr('sensor.localshift_forecast_daily', 'consumption_profile_hours') | default(0) }}
+              Consumption Fallback Hours: {{ state_attr('sensor.localshift_forecast_daily', 'consumption_fallback_hours') | default(0) }}
               
               === DECISION LOG ===
-              Latest Decision: {{ state_attr('sensor.amber_powerwall_decision_log', 'reason') | default('No decisions yet') }}
-              Latest SOC: {{ state_attr('sensor.amber_powerwall_decision_log', 'soc') }}%
-              Latest Buy Price: ${{ state_attr('sensor.amber_powerwall_decision_log', 'buy_price') }}/kWh
-              Latest Sell Price: ${{ state_attr('sensor.amber_powerwall_decision_log', 'sell_price') }}/kWh
-              Latest Timestamp: {{ state_attr('sensor.amber_powerwall_decision_log', 'timestamp') }}
+              Latest Decision: {{ state_attr('sensor.localshift_decision_log', 'reason') | default('No decisions yet') }}
+              Latest SOC: {{ state_attr('sensor.localshift_decision_log', 'soc') }}%
+              Latest Buy Price: ${{ state_attr('sensor.localshift_decision_log', 'buy_price') }}/kWh
+              Latest Sell Price: ${{ state_attr('sensor.localshift_decision_log', 'sell_price') }}/kWh
+              Latest Timestamp: {{ state_attr('sensor.localshift_decision_log', 'timestamp') }}
               
               Recent History:
-              {% for entry in state_attr('sensor.amber_powerwall_decision_log', 'history') | default([]) | slice(-5) %}
+              {% for entry in state_attr('sensor.localshift_decision_log', 'history') | default([]) | slice(-5) %}
                 - {{ entry.get('timestamp', '') }}: {{ entry.get('reason', '') }} (SOC: {{ entry.get('soc') }}%)
               {% endfor %}
               
               === COST TRACKING ===
-              Net Cost Today: ${{ states('sensor.amber_powerwall_net_electricity_cost_today') }}
-              Import Cost: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'grid_import_cost') | default(0) }}
-              Export Revenue: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'grid_export_revenue') | default(0) }}
-              Battery Savings: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'battery_savings') | default(0) }}
-              Battery Charge Cost: ${{ state_attr('sensor.amber_powerwall_net_electricity_cost_today', 'battery_charge_cost') | default(0) }}
+              Net Cost Today: ${{ states('sensor.localshift_cost_electricity_net') }}
+              Import Cost: ${{ state_attr('sensor.localshift_cost_electricity_net', 'grid_import_cost') | default(0) }}
+              Export Revenue: ${{ state_attr('sensor.localshift_cost_electricity_net', 'grid_export_revenue') | default(0) }}
+              Battery Savings: ${{ state_attr('sensor.localshift_cost_electricity_net', 'battery_savings') | default(0) }}
+              Battery Charge Cost: ${{ state_attr('sensor.localshift_cost_electricity_net', 'battery_charge_cost') | default(0) }}
               
               === SYSTEM INFO ===
               Operation Mode: {{ states('select.my_home_operation_mode') }}
@@ -581,7 +581,7 @@ views:
               ------|---------|-------------|------------|-----------|---------|----------|--------------|-------------
               {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
               {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
-              {%- for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast_hourly') | default([]) %}
+              {%- for item in state_attr('sensor.localshift_forecast_daily', 'forecast_hourly') | default([]) %}
               {%- set hour = item.hour %}
               {%- set buy_price = namespace(value='-') %}
               {%- set sell_price = namespace(value='-') %}
@@ -610,8 +610,8 @@ views:
             content: |
               **Debug: Grid Import/Export Forecast (first 24 slots + hourly)**
 
-              Total Grid Import: **{{ state_attr('sensor.amber_powerwall_daily_forecast', 'debug_total_grid_import_kwh') | default(0) }} kWh**
-              Total Grid Export: **{{ state_attr('sensor.amber_powerwall_daily_forecast', 'debug_total_grid_export_kwh') | default(0) }} kWh**
+              Total Grid Import: **{{ state_attr('sensor.localshift_forecast_daily', 'debug_total_grid_import_kwh') | default(0) }} kWh**
+              Total Grid Export: **{{ state_attr('sensor.localshift_forecast_daily', 'debug_total_grid_export_kwh') | default(0) }} kWh**
 
               First 24 x 15-min slots (next 6 hours):
 
@@ -620,7 +620,7 @@ views:
               -----|-------|------|-------|-------|-------|--------|---------|-------|------|-----------|--------
               {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
               {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
-              {%- for slot in state_attr('sensor.amber_powerwall_daily_forecast', 'debug_15min_slots') | default([]) %}
+              {%- for slot in state_attr('sensor.localshift_forecast_daily', 'debug_15min_slots') | default([]) %}
               {%- set slot_minute = (slot.hour * 60 + slot.minute) %}
               {%- set buy_price = namespace(value='-') %}
               {%- set sell_price = namespace(value='-') %}

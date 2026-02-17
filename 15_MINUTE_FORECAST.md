@@ -56,7 +56,7 @@ With Amber's 5-minute pricing, significant price variations can occur within a s
 
 ### Code Changes
 
-**File:** `custom_components/amber_powerwall/computation_engine.py`
+**File:** `custom_components/localshift/computation_engine.py`
 
 **New Method:** `_compute_daily_15min_forecast()`
 
@@ -216,7 +216,7 @@ for slot in data.daily_forecast:
 
 1. Check forecast sensor attributes:
 ```yaml
-sensor.amber_powerwall_daily_forecast
+sensor.localshift_daily_forecast
   # Should show 96 entries (not 24)
 ```
 

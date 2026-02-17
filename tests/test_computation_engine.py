@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.amber_powerwall.computation_engine import (
+from custom_components.localshift.computation_engine import (
     BatteryMode,
 )
 

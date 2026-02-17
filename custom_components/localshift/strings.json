@@ -16,15 +16,15 @@
           "teslemetry_allow_export": "Allow Export (select entity)"
         }
       },
-      "amber": {
-        "title": "Amber Electric Entities",
-        "description": "Select the Amber Electric entities for pricing data.",
+      "pricing": {
+        "title": "Pricing Entities",
+        "description": "Select the pricing entities (e.g., from Amber Electric or Octopus Energy).",
         "data": {
-          "amber_general_price": "General Price ($/kWh)",
-          "amber_feed_in_price": "Feed-in Price ($/kWh)",
-          "amber_general_forecast": "General Price Forecast",
-          "amber_feed_in_forecast": "Feed-in Price Forecast",
-          "amber_price_spike": "Price Spike Sensor"
+          "pricing_general_price": "General Price ($/kWh)",
+          "pricing_feed_in_price": "Feed-in Price ($/kWh)",
+          "pricing_general_forecast": "General Price Forecast",
+          "pricing_feed_in_forecast": "Feed-in Price Forecast",
+          "pricing_price_spike": "Price Spike Sensor"
         }
       },
       "solcast": {
@@ -41,7 +41,7 @@
   "options": {
             "step": {
               "init": {
-                "title": "Amber Powerwall Settings",
+                "title": "LocalShift Settings",
                 "description": "Adjust automation thresholds and demand window timing.",
                 "data": {
                   "cheap_price_percentile": "Cheap Price Percentile",

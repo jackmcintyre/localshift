@@ -9,11 +9,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_AMBER_FEED_IN_FORECAST,
-    CONF_AMBER_FEED_IN_PRICE,
-    CONF_AMBER_GENERAL_FORECAST,
-    CONF_AMBER_GENERAL_PRICE,
-    CONF_AMBER_PRICE_SPIKE,
+    CONF_PRICING_FEED_IN_FORECAST,
+    CONF_PRICING_FEED_IN_PRICE,
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_TESLEMETRY_ALLOW_EXPORT,
@@ -168,23 +168,25 @@ class StateReader:
             self._get_entity_id(CONF_TESLEMETRY_ALLOW_EXPORT)
         )
 
-        # Amber
+        # Pricing
         data.general_price = self._read_float(
-            self._get_entity_id(CONF_AMBER_GENERAL_PRICE)
+            self._get_entity_id(CONF_PRICING_GENERAL_PRICE)
         )
         data.feed_in_price = self._read_float(
-            self._get_entity_id(CONF_AMBER_FEED_IN_PRICE)
+            self._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
         )
-        data.price_spike = self._read_bool(self._get_entity_id(CONF_AMBER_PRICE_SPIKE))
+        data.price_spike = self._read_bool(
+            self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
+        )
         data.general_forecast = (
             self._read_attribute(
-                self._get_entity_id(CONF_AMBER_GENERAL_FORECAST), "forecasts", []
+                self._get_entity_id(CONF_PRICING_GENERAL_FORECAST), "forecasts", []
             )
             or []
         )
         data.feed_in_forecast = (
             self._read_attribute(
-                self._get_entity_id(CONF_AMBER_FEED_IN_FORECAST), "forecasts", []
+                self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST), "forecasts", []
             )
             or []
         )

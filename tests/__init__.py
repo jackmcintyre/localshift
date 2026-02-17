@@ -1,1 +1,1 @@
-"""Tests for amber_powerwall custom component."""
+"""Tests for localshift custom component."""

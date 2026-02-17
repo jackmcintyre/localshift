@@ -1,7 +1,7 @@
-"""The Amber Powerwall integration.
+"""The LocalShift integration.
 
-Automated Tesla Powerwall battery control based on Amber Electric spot pricing,
-Solcast solar forecasts, and configurable thresholds.
+Automated Tesla Powerwall battery control based on pricing data,
+solar forecasts, and demand window timing.
 """
 
 from __future__ import annotations
@@ -13,18 +13,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import PLATFORMS
-from .coordinator import AmberPowerwallCoordinator
+from .coordinator import LocalShiftCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-AmberPowerwallConfigEntry: TypeAlias = ConfigEntry[AmberPowerwallCoordinator]
+LocalShiftConfigEntry: TypeAlias = ConfigEntry[LocalShiftCoordinator]
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: AmberPowerwallConfigEntry
-) -> bool:
-    """Set up Amber Powerwall from a config entry."""
-    coordinator = AmberPowerwallCoordinator(hass, entry)
+async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -> bool:
+    """Set up LocalShift from a config entry."""
+    coordinator = LocalShiftCoordinator(hass, entry)
     entry.runtime_data = coordinator
 
     # Start listening to external entities
@@ -36,16 +34,14 @@ async def async_setup_entry(
     # Listen for options updates
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
-    _LOGGER.info("Amber Powerwall integration set up successfully")
+    _LOGGER.info("LocalShift integration set up successfully")
     return True
 
 
-async def async_unload_entry(
-    hass: HomeAssistant, entry: AmberPowerwallConfigEntry
-) -> bool:
-    """Unload an Amber Powerwall config entry."""
+async def async_unload_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -> bool:
+    """Unload a LocalShift config entry."""
     # Stop the coordinator
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    coordinator: LocalShiftCoordinator = entry.runtime_data
     await coordinator.async_stop()
 
     # Unload platforms
@@ -53,11 +49,11 @@ async def async_unload_entry(
 
 
 async def _async_options_updated(
-    hass: HomeAssistant, entry: AmberPowerwallConfigEntry
+    hass: HomeAssistant, entry: LocalShiftConfigEntry
 ) -> None:
     """Handle options update — trigger a re-evaluation with new thresholds."""
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    coordinator: LocalShiftCoordinator = entry.runtime_data
     coordinator._compute_derived_values()
     coordinator._notify_listeners()
     await coordinator.async_evaluate_state_machine()
-    _LOGGER.info("Amber Powerwall options updated, re-evaluating")
+    _LOGGER.info("LocalShift options updated, re-evaluating")

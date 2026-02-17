@@ -1,4 +1,4 @@
-"""Notification functionality for Amber Powerwall integration."""
+"""Notification functionality for LocalShift integration."""
 
 from __future__ import annotations
 
@@ -205,7 +205,7 @@ class NotificationService:
     async def send_daily_summary(self, data: CoordinatorData) -> None:
         """Send end-of-day summary notification with energy and cost stats.
 
-        Replaces YAML A15 (amber_daily_summary). Reads daily energy
+        Replaces YAML A15 (localshift_daily_summary). Reads daily energy
         from utility meter entities (still in YAML) and cost accumulators.
         """
         net = data.grid_import_cost - data.grid_export_revenue

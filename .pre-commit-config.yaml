@@ -10,7 +10,7 @@ repos:
     rev: v2.11
     hooks:
       - id: vulture
-        args: ["custom_components/amber_powerwall", "--min-confidence", "80"]
+        args: ["custom_components/localshift", "--min-confidence", "80"]
 
   - repo: https://github.com/RobertCraigie/pyright-python
     rev: v1.1.394

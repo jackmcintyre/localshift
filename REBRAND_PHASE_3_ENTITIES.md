@@ -729,4 +729,4 @@ class LocalShiftSwitch(SwitchEntity):
 
 ---
 
-**Phase Status:** ☐ NOT STARTED | ☐ IN PROGRESS | ☐ COMPLETED
+**Phase Status:** ✅ COMPLETED

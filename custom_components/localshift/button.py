@@ -1,4 +1,4 @@
-"""Button platform for the Amber Powerwall integration.
+"""Button platform for the LocalShift integration.
 
 Provides manual mode control buttons:
 - Force Charge
@@ -26,7 +26,7 @@ from .const import (
     BUTTON_UPDATE_FORECAST,
     DOMAIN,
 )
-from .coordinator import AmberPowerwallCoordinator
+from .coordinator import LocalShiftCoordinator
 
 
 async def async_setup_entry(
@@ -34,8 +34,8 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Amber Powerwall button entities."""
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    """Set up LocalShift button entities."""
+    coordinator: LocalShiftCoordinator = entry.runtime_data
 
     entities = [
         ForceChargeButton(coordinator, entry),
@@ -49,21 +49,21 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class AmberPowerwallButtonBase(ButtonEntity):
+class LocalShiftButtonBase(ButtonEntity):
     """Base class for manual mode buttons."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: AmberPowerwallCoordinator,
+        coordinator: LocalShiftCoordinator,
         entry: ConfigEntry,
         key: str,
     ) -> None:
         """Initialise the button."""
         self.coordinator = coordinator
         self._entry = entry
-        self._attr_unique_id = f"amber_powerwall_{key}"
+        self._attr_unique_id = f"localshift_{key}"
         self._attr_name = BUTTON_NAMES[key]
         self._attr_icon = BUTTON_ICONS[key]
 
@@ -72,14 +72,14 @@ class AmberPowerwallButtonBase(ButtonEntity):
         """Return device information to link all entities under one device."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
-            name="Amber Powerwall",
+            name="LocalShift",
             manufacturer="Custom",
             model="Solar Battery Automation",
-            sw_version="0.1.0",
+            sw_version="0.0.2",
         )
 
 
-class ForceChargeButton(AmberPowerwallButtonBase):
+class ForceChargeButton(LocalShiftButtonBase):
     """Manually force charge the battery."""
 
     def __init__(self, coordinator, entry):
@@ -98,7 +98,7 @@ class ForceChargeButton(AmberPowerwallButtonBase):
         )
 
 
-class ForceDischargeButton(AmberPowerwallButtonBase):
+class ForceDischargeButton(LocalShiftButtonBase):
     """Manually force discharge the battery."""
 
     def __init__(self, coordinator, entry):
@@ -117,7 +117,7 @@ class ForceDischargeButton(AmberPowerwallButtonBase):
         )
 
 
-class BoostChargeButton(AmberPowerwallButtonBase):
+class BoostChargeButton(LocalShiftButtonBase):
     """Manually boost charge the battery at 5kW."""
 
     def __init__(self, coordinator, entry):
@@ -136,7 +136,7 @@ class BoostChargeButton(AmberPowerwallButtonBase):
         )
 
 
-class SelfConsumptionButton(AmberPowerwallButtonBase):
+class SelfConsumptionButton(LocalShiftButtonBase):
     """Return to normal self consumption mode."""
 
     def __init__(self, coordinator, entry):
@@ -152,7 +152,7 @@ class SelfConsumptionButton(AmberPowerwallButtonBase):
         )
 
 
-class UpdateForecastButton(AmberPowerwallButtonBase):
+class UpdateForecastButton(LocalShiftButtonBase):
     """Force forecast update and clear historical load cache."""
 
     def __init__(self, coordinator, entry):

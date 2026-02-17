@@ -1,4 +1,4 @@
-"""Binary sensor platform for the Amber Powerwall integration."""
+"""Binary sensor platform for the LocalShift integration."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import AmberPowerwallCoordinator
+from .coordinator import LocalShiftCoordinator
 
 
 async def async_setup_entry(
@@ -19,8 +19,8 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Amber Powerwall binary sensor entities."""
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    """Set up LocalShift binary sensor entities."""
+    coordinator: LocalShiftCoordinator = entry.runtime_data
 
     entities: list[BinarySensorEntity] = [
         ForecastSpikeWithinWindowSensor(coordinator, entry),
@@ -36,17 +36,17 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class AmberPowerwallBinarySensorBase(BinarySensorEntity):
-    """Base class for Amber Powerwall binary sensors."""
+class LocalShiftBinarySensorBase(BinarySensorEntity):
+    """Base class for LocalShift binary sensors."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: AmberPowerwallCoordinator,
+        coordinator: LocalShiftCoordinator,
         entry: ConfigEntry,
     ) -> None:
-        """Initialise the binary sensor."""
+        """Initialise sensor."""
         self.coordinator = coordinator
         self._entry = entry
         self._unsub: Any = None
@@ -56,10 +56,10 @@ class AmberPowerwallBinarySensorBase(BinarySensorEntity):
         """Return device information to link all entities under one device."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
-            name="Amber Powerwall",
+            name="LocalShift",
             manufacturer="Custom",
             model="Solar Battery Automation",
-            sw_version="0.1.0",
+            sw_version="0.0.2",
         )
 
     async def async_added_to_hass(self) -> None:
@@ -89,11 +89,11 @@ class AmberPowerwallBinarySensorBase(BinarySensorEntity):
 # ---------------------------------------------------------------------------
 
 
-class ForecastSpikeWithinWindowSensor(AmberPowerwallBinarySensorBase):
+class ForecastSpikeWithinWindowSensor(LocalShiftBinarySensorBase):
     """Whether a price spike is forecast within the lookahead window."""
 
-    _attr_unique_id = "forecast_spike_within_window"
-    _attr_name = "Forecast Spike Within Window"
+    _attr_unique_id = "localshift_binary_price_spike_coming"
+    _attr_name = "Binary Price Spike Coming"
     _attr_icon = "mdi:flash-alert-outline"
 
     def _update_from_coordinator(self) -> None:
@@ -108,77 +108,77 @@ class ForecastSpikeWithinWindowSensor(AmberPowerwallBinarySensorBase):
         }
 
 
-class ForceDischargeActiveSensor(AmberPowerwallBinarySensorBase):
+class ForceDischargeActiveSensor(LocalShiftBinarySensorBase):
     """Whether battery is currently force discharging."""
 
-    _attr_unique_id = "battery_force_discharge_active"
-    _attr_name = "Force Discharge Active"
+    _attr_unique_id = "localshift_binary_discharge_forced"
+    _attr_name = "Binary Discharge Forced"
     _attr_icon = "mdi:battery-arrow-down"
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.force_discharge_active
 
 
-class ForceChargeActiveSensor(AmberPowerwallBinarySensorBase):
+class ForceChargeActiveSensor(LocalShiftBinarySensorBase):
     """Whether battery is currently force charging (backup mode)."""
 
-    _attr_unique_id = "battery_force_charge_active"
-    _attr_name = "Force Charge Active"
+    _attr_unique_id = "localshift_binary_charge_forced"
+    _attr_name = "Binary Charge Forced"
     _attr_icon = "mdi:battery-charging"
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.force_charge_active
 
 
-class BoostChargeActiveSensor(AmberPowerwallBinarySensorBase):
+class BoostChargeActiveSensor(LocalShiftBinarySensorBase):
     """Whether battery is currently boost charging (5kW)."""
 
-    _attr_unique_id = "battery_boost_charge_active"
-    _attr_name = "Boost Charge Active"
+    _attr_unique_id = "localshift_binary_charge_boost"
+    _attr_name = "Binary Charge Boost"
     _attr_icon = "mdi:battery-charging-high"
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.boost_charge_active
 
 
-class ForecastExpensivePeriodSensor(AmberPowerwallBinarySensorBase):
+class ForecastExpensivePeriodSensor(LocalShiftBinarySensorBase):
     """Whether an expensive period is forecast within lookahead."""
 
-    _attr_unique_id = "forecast_expensive_period_coming"
-    _attr_name = "Expensive Period Coming"
+    _attr_unique_id = "localshift_binary_price_expensive_coming"
+    _attr_name = "Binary Price Expensive Coming"
     _attr_icon = "mdi:currency-usd"
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.forecast_expensive_period_coming
 
 
-class SolarCanReachTargetSensor(AmberPowerwallBinarySensorBase):
+class SolarCanReachTargetSensor(LocalShiftBinarySensorBase):
     """Whether solar forecast can fill battery to target by demand window."""
 
-    _attr_unique_id = "solar_can_reach_target"
-    _attr_name = "Solar Can Reach Target"
+    _attr_unique_id = "localshift_binary_solar_can_reach_target"
+    _attr_name = "Binary Solar Can Reach Target"
     _attr_icon = "mdi:white-balance-sunny"
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.solar_can_reach_target
 
 
-class BoostChargeNeededSensor(AmberPowerwallBinarySensorBase):
+class BoostChargeNeededSensor(LocalShiftBinarySensorBase):
     """Whether 3.3kW charge rate is insufficient (need 5kW boost)."""
 
-    _attr_unique_id = "boost_charge_needed"
-    _attr_name = "Boost Charge Needed"
+    _attr_unique_id = "localshift_binary_charge_boost_needed"
+    _attr_name = "Binary Charge Boost Needed"
     _attr_icon = "mdi:speedometer"
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.boost_charge_needed
 
 
-class DemandWindowActiveSensor(AmberPowerwallBinarySensorBase):
+class DemandWindowActiveSensor(LocalShiftBinarySensorBase):
     """Whether the demand window is currently active."""
 
-    _attr_unique_id = "demand_window_active"
-    _attr_name = "Demand Window Active"
+    _attr_unique_id = "localshift_binary_demand_window"
+    _attr_name = "Binary Demand Window"
 
     @property
     def icon(self) -> str:

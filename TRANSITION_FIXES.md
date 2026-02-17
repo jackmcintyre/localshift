@@ -2,7 +2,7 @@
 
 ## Problem Summary
 
-State changes were unreliable, for example from `hold` to `grid_charging`, or `charging` to `consumption`. The user observed that `sensor.amber_powerwall_active_mode` changed as expected, but the Teslemetry entities (the actual hardware state) did not always update correctly.
+State changes were unreliable, for example from `hold` to `grid_charging`, or `charging` to `consumption`. The user observed that `sensor.localshift_active_mode` changed as expected, but the Teslemetry entities (the actual hardware state) did not always update correctly.
 
 ## Root Cause Analysis
 
@@ -364,13 +364,13 @@ Teslemetry entities also show "grid_charging" mode! ✓
 
 ## Files Modified
 
-1. **custom_components/amber_powerwall/battery_controller.py**
+1. **custom_components/localshift/battery_controller.py**
    - Added error handling to all service call methods
    - Added `validate_transition()` method
    - Updated all mode-setting methods with error checking and validation
    - Added helper methods `_read_float()` and `_read_str()`
 
-2. **custom_components/amber_powerwall/state_machine.py**
+2. **custom_components/localshift/state_machine.py**
    - Improved error handling in `_execute_mode_transition()`
    - Added comprehensive logging for transition lifecycle
    - Ensured re-entrancy flag is always cleared in `finally` block

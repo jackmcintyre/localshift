@@ -845,7 +845,7 @@ class ForecastComputer:
         """Compute full 24-hour forecast with 15-minute breakdown.
 
         Provides 4x granularity over hourly forecast, capturing meaningful
-        price variations from Amber's 5-minute pricing data.
+        price variations from 5-minute pricing data.
 
         Returns:
             tuple of (daily_forecast, daily_forecast_soc_15min, consumption_source_counts)

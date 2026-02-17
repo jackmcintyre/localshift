@@ -36,7 +36,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-013 | 🟠 HIGH | ✅ COMPLETED | hours_to_dw Calculation Bug (Boost Charging) |
 | backlog-high-014 | 🟠 HIGH | ✅ COMPLETED | Grid Import/Export Totals Always Zero in Debug Forecast |
 | backlog-med-001 | 🟡 MED | ✅ COMPLETED | No Test Coverage |
-| backlog-med-002 | 🟡 MED | 📋 PROPOSED | Time Precision Inconsistency |
+| backlog-med-002 | 🟡 MED | ✅ COMPLETED | Time Precision Inconsistency |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
 | backlog-med-004 | 🟡 MED | 📋 PROPOSED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
@@ -53,7 +53,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-009 | 🟡 MED | ✅ COMPLETED | Automated Documentation Generation via Cline |
 | backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Allow DW Entry Under Target with Solar Forecast |
 | backlog-low-005 | ⚪ LOW | 📋 PROPOSED | Dashboard Template Shows `None` for Solar Remaining |
-| backlog-med-010 | 🟡 MED | 📋 PROPOSED | Category-Based Entity Naming Conventions |
+| backlog-med-010 | 🟡 MED | 🔄 IN_PROGRESS | Category-Based Entity Naming Conventions |
 | backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Spot Price vs Forecast Price Mismatch for Proactive Export |
 
 ---

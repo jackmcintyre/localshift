@@ -1,6 +1,6 @@
 # Future Features
 
-Backlog of planned enhancements for the Amber Powerwall automation package. The core system (spike discharge, cheap charging, demand window block, dry run) should be stable before tackling these.
+Backlog of planned enhancements for the LocalShift automation package. The core system (spike discharge, cheap charging, demand window block, dry run) should be stable before tackling these.
 
 ---
 
@@ -237,6 +237,6 @@ Additionally, all `async_set_*` methods were missing the 5-second delays between
 
 ### B14: mode changing not updating Teslemetry select.my_home_operation_mode
 
-**Problem** When the sensor.amber_powerwall_active_mode changes, it should trigger changes to the teslemetry sensor to change the mode. While the former moved to self-consumption, teslemetry stayed in backup, so the battery kept charging.
+**Problem** When the sensor.localshift_active_mode changes, it should trigger changes to the teslemetry sensor to change the mode. While the former moved to self-consumption, teslemetry stayed in backup, so the battery kept charging.
 
 ### B15: when in hold, the backup % should round down rather than round

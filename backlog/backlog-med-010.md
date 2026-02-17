@@ -2,7 +2,7 @@
 
 **ID:** backlog-med-010  
 **Priority:** MED  
-**Status:** PROPOSED  
+**Status:** IN_PROGRESS
 **Created:** 2026-02-17  
 **Updated:** 2026-02-17  
 

@@ -20,7 +20,7 @@ class CostTracker:
     def accumulate_costs(self, data: CoordinatorData) -> None:
         """Accumulate per-minute energy costs from current power and price.
 
-        Replaces YAML A16 (amber_cost_accumulator).
+        Replaces YAML A16 (localshift_cost_accumulator).
         Formula: power_kW × price_$/kWh / 60 = $/min
         """
         # Grid import cost: positive grid power × buy price
@@ -42,7 +42,7 @@ class CostTracker:
     def reset_daily_accumulators(self, data: CoordinatorData) -> None:
         """Reset daily cost accumulators and target flag.
 
-        Replaces YAML A12 (amber_reset_target_reached).
+        Replaces YAML A12 (localshift_reset_target_reached).
         """
         data.grid_import_cost = 0.0
         data.grid_export_revenue = 0.0

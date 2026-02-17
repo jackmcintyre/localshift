@@ -8,7 +8,7 @@ Reviewed codebase for potential regressions after implementing 15-minute forecas
 
 ### Issue
 
-**Location:** `dashboards/amber_powerwall_component.yaml`
+**Location:** `dashboards/localshift_component.yaml`
 
 **Problem:** The 24-Hour SOC Forecast markdown table now displays **96 rows** instead of 24.
 
@@ -54,7 +54,7 @@ Update the Jinja2 filter to show only hourly summary (every 4th slot where `minu
     ```
     Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh)
     ------|---------|-------------|------------|-----------
-    {% for item in state_attr('sensor.amber_powerwall_daily_forecast', 'forecast') | default([]) | selectattr('minute', 'equalto', 0) %}
+    {% for item in state_attr('sensor.localshift_daily_forecast', 'forecast') | default([]) | selectattr('minute', 'equalto', 0) %}
     {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}
     {% endfor %}
     ```

@@ -1,4 +1,4 @@
-"""Sensor platform for Amber Powerwall integration."""
+"""Sensor platform for LocalShift integration."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC, DOMAIN
-from .coordinator import AmberPowerwallCoordinator
+from .coordinator import LocalShiftCoordinator
 
 
 async def async_setup_entry(
@@ -24,8 +24,8 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Amber Powerwall sensor entities."""
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    """Set up LocalShift sensor entities."""
+    coordinator: LocalShiftCoordinator = entry.runtime_data
 
     entities: list[SensorEntity] = [
         EffectiveCheapPriceSensor(coordinator, entry),
@@ -45,14 +45,14 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class AmberPowerwallSensorBase(SensorEntity):
-    """Base class for Amber Powerwall sensors."""
+class LocalShiftSensorBase(SensorEntity):
+    """Base class for LocalShift sensors."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: AmberPowerwallCoordinator,
+        coordinator: LocalShiftCoordinator,
         entry: ConfigEntry,
     ) -> None:
         """Initialise sensor."""
@@ -65,10 +65,10 @@ class AmberPowerwallSensorBase(SensorEntity):
         """Return device information to link all entities under one device."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
-            name="Amber Powerwall",
+            name="LocalShift",
             manufacturer="Custom",
             model="Solar Battery Automation",
-            sw_version="0.1.0",
+            sw_version="0.0.2",
         )
 
     async def async_added_to_hass(self) -> None:
@@ -99,11 +99,11 @@ class AmberPowerwallSensorBase(SensorEntity):
 # ---------------------------------------------------------------------------
 
 
-class EffectiveCheapPriceSensor(AmberPowerwallSensorBase):
+class EffectiveCheapPriceSensor(LocalShiftSensorBase):
     """Dynamic cheap price threshold (urgency-adjusted)."""
 
-    _attr_unique_id = "effective_cheap_price"
-    _attr_name = "Effective Cheap Price"
+    _attr_unique_id = "localshift_price_cheap_effective"
+    _attr_name = "Price Cheap Effective"
     _attr_icon = "mdi:tag-outline"
     _attr_native_unit_of_measurement = "$/kWh"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -112,11 +112,11 @@ class EffectiveCheapPriceSensor(AmberPowerwallSensorBase):
         self._attr_native_value = round(self.coordinator.data.effective_cheap_price, 4)
 
 
-class CheapChargeStopPriceSensor(AmberPowerwallSensorBase):
+class CheapChargeStopPriceSensor(LocalShiftSensorBase):
     """Effective threshold + deadband."""
 
-    _attr_unique_id = "cheap_charge_stop_price"
-    _attr_name = "Cheap Charge Stop Price"
+    _attr_unique_id = "localshift_price_cheap_charge_stop"
+    _attr_name = "Price Cheap Charge Stop"
     _attr_icon = "mdi:tag-arrow-up-outline"
     _attr_native_unit_of_measurement = "$/kWh"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -127,10 +127,10 @@ class CheapChargeStopPriceSensor(AmberPowerwallSensorBase):
         )
 
 
-class SolarWeightedAvgFITSensor(AmberPowerwallSensorBase):
+class SolarWeightedAvgFITSensor(LocalShiftSensorBase):
     """Solar-production-weighted average feed-in tariff."""
 
-    _attr_unique_id = "solar_weighted_avg_fit"
+    _attr_unique_id = "localshift_solar_weighted_avg_fit"
     _attr_name = "Solar Weighted Avg FIT"
     _attr_icon = "mdi:solar-power-variant"
     _attr_native_unit_of_measurement = "$/kWh"
@@ -149,22 +149,22 @@ class SolarWeightedAvgFITSensor(AmberPowerwallSensorBase):
         }
 
 
-class ActiveModeSensor(AmberPowerwallSensorBase):
+class ActiveModeSensor(LocalShiftSensorBase):
     """Current battery automation mode."""
 
-    _attr_unique_id = "battery_automation_active_mode"
-    _attr_name = "Active Mode"
+    _attr_unique_id = "localshift_battery_mode"
+    _attr_name = "Battery Mode"
     _attr_icon = "mdi:battery-sync"
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = self.coordinator.data.active_mode.value
 
 
-class SolarBatteryForecastSensor(AmberPowerwallSensorBase):
+class SolarBatteryForecastSensor(LocalShiftSensorBase):
     """Solar battery SOC forecast with detailed attributes."""
 
-    _attr_unique_id = "solar_battery_forecast"
-    _attr_name = "Solar Battery Forecast"
+    _attr_unique_id = "localshift_forecast_battery"
+    _attr_name = "Forecast Battery"
     _attr_icon = "mdi:chart-line"
     _attr_native_unit_of_measurement = "%"
 
@@ -178,11 +178,11 @@ class SolarBatteryForecastSensor(AmberPowerwallSensorBase):
         return self.coordinator.data.solar_battery_forecast
 
 
-class GridImportPowerSensor(AmberPowerwallSensorBase):
+class GridImportPowerSensor(LocalShiftSensorBase):
     """Grid import power (always >= 0)."""
 
-    _attr_unique_id = "grid_import_power"
-    _attr_name = "Grid Import Power"
+    _attr_unique_id = "localshift_power_grid_import"
+    _attr_name = "Power Grid Import"
     _attr_icon = "mdi:transmission-tower-import"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -192,11 +192,11 @@ class GridImportPowerSensor(AmberPowerwallSensorBase):
         self._attr_native_value = round(self.coordinator.data.grid_import_power_kw, 3)
 
 
-class GridExportPowerSensor(AmberPowerwallSensorBase):
+class GridExportPowerSensor(LocalShiftSensorBase):
     """Grid export power (always >= 0)."""
 
-    _attr_unique_id = "grid_export_power"
-    _attr_name = "Grid Export Power"
+    _attr_unique_id = "localshift_power_grid_export"
+    _attr_name = "Power Grid Export"
     _attr_icon = "mdi:transmission-tower-export"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -206,11 +206,11 @@ class GridExportPowerSensor(AmberPowerwallSensorBase):
         self._attr_native_value = round(self.coordinator.data.grid_export_power_kw, 3)
 
 
-class NetElectricityCostSensor(AmberPowerwallSensorBase):
+class NetElectricityCostSensor(LocalShiftSensorBase):
     """Net electricity cost today (import cost - export revenue)."""
 
-    _attr_unique_id = "net_electricity_cost_today"
-    _attr_name = "Net Electricity Cost Today"
+    _attr_unique_id = "localshift_cost_electricity_net"
+    _attr_name = "Cost Electricity Net"
     _attr_icon = "mdi:cash-register"
     _attr_native_unit_of_measurement = "$"
     _attr_state_class = SensorStateClass.TOTAL
@@ -231,10 +231,10 @@ class NetElectricityCostSensor(AmberPowerwallSensorBase):
         }
 
 
-class DecisionLogSensor(AmberPowerwallSensorBase):
+class DecisionLogSensor(LocalShiftSensorBase):
     """Battery mode change decision log."""
 
-    _attr_unique_id = "battery_automation_decision_log"
+    _attr_unique_id = "localshift_decision_log"
     _attr_name = "Decision Log"
     _attr_icon = "mdi:history"
 
@@ -260,10 +260,10 @@ class DecisionLogSensor(AmberPowerwallSensorBase):
         return attrs
 
 
-class ForecastHistorySensor(AmberPowerwallSensorBase):
+class ForecastHistorySensor(LocalShiftSensorBase):
     """Historical forecast predictions for planned vs actual comparison."""
 
-    _attr_unique_id = "forecast_history"
+    _attr_unique_id = "localshift_forecast_history"
     _attr_name = "Forecast History"
     _attr_icon = "mdi:chart-line-variant"
 
@@ -277,11 +277,11 @@ class ForecastHistorySensor(AmberPowerwallSensorBase):
         return {"history": self.coordinator.data.forecast_history}
 
 
-class DailyForecastSensor(AmberPowerwallSensorBase):
+class DailyForecastSensor(LocalShiftSensorBase):
     """Full 24-hour forecast with hourly breakdown."""
 
-    _attr_unique_id = "daily_forecast"
-    _attr_name = "Daily Forecast"
+    _attr_unique_id = "localshift_forecast_daily"
+    _attr_name = "Forecast Daily"
     _attr_icon = "mdi:chart-bar"
 
     def _update_from_coordinator(self) -> None:
@@ -358,11 +358,11 @@ class DailyForecastSensor(AmberPowerwallSensorBase):
         }
 
 
-class MinimumTargetSOCSensor(AmberPowerwallSensorBase):
+class MinimumTargetSOCSensor(LocalShiftSensorBase):
     """Minimum target SOC for discharge modes (base reserve)."""
 
-    _attr_unique_id = "minimum_target_soc"
-    _attr_name = "Minimum Target SOC"
+    _attr_unique_id = "localshift_target_soc_minimum"
+    _attr_name = "Target SOC Minimum"
     _attr_icon = "mdi:battery-charging-20"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT

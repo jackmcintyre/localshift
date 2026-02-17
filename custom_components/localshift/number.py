@@ -1,4 +1,4 @@
-"""Number platform for the Amber Powerwall integration.
+"""Number platform for the LocalShift integration.
 
 Provides user-configurable thresholds as NumberEntity instances.
 These replace the YAML input_number entities and are backed by
@@ -31,7 +31,7 @@ from .const import (
     DOMAIN,
     THRESHOLD_RANGES,
 )
-from .coordinator import AmberPowerwallCoordinator
+from .coordinator import LocalShiftCoordinator
 
 # Map of (config_key, name, default) for each number entity
 NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
@@ -67,25 +67,25 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Amber Powerwall number entities."""
-    coordinator: AmberPowerwallCoordinator = entry.runtime_data
+    """Set up LocalShift number entities."""
+    coordinator: LocalShiftCoordinator = entry.runtime_data
 
     entities = [
-        AmberPowerwallNumber(coordinator, entry, conf_key, name, default)
+        LocalShiftNumber(coordinator, entry, conf_key, name, default)
         for conf_key, name, default in NUMBER_DEFINITIONS
     ]
 
     async_add_entities(entities)
 
 
-class AmberPowerwallNumber(NumberEntity):
+class LocalShiftNumber(NumberEntity):
     """A user-configurable threshold backed by config entry options."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: AmberPowerwallCoordinator,
+        coordinator: LocalShiftCoordinator,
         entry: ConfigEntry,
         conf_key: str,
         name: str,
@@ -98,7 +98,7 @@ class AmberPowerwallNumber(NumberEntity):
         self._default = default
 
         spec = THRESHOLD_RANGES[conf_key]
-        self._attr_unique_id = f"amber_powerwall_{conf_key}"
+        self._attr_unique_id = f"localshift_{conf_key}"
         self._attr_name = name
         self._attr_icon = spec["icon"]
         self._attr_native_min_value = spec["min"]
@@ -112,10 +112,10 @@ class AmberPowerwallNumber(NumberEntity):
         """Return device information to link all entities under one device."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
-            name="Amber Powerwall",
+            name="LocalShift",
             manufacturer="Custom",
             model="Solar Battery Automation",
-            sw_version="0.1.0",
+            sw_version="0.0.2",
         )
 
     @property

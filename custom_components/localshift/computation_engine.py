@@ -195,7 +195,7 @@ class ComputationEngine:
             CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
         )
         target_hour = dw_start_time.hour
-        now_t = now_dt.time()
+        now_t = now_dt.replace(microsecond=0).time()
         before_dw = now_t < dw_start_time
         after_dw = now_t >= dw_start_time
 
@@ -561,7 +561,7 @@ class ComputationEngine:
         """Compute full 24-hour forecast with 15-minute breakdown (delegates to ForecastComputer).
 
         Provides 4x granularity over hourly forecast, capturing meaningful
-        price variations from Amber's 5-minute pricing data.
+        price variations from 5-minute pricing data.
 
         Uses change detection to skip unnecessary recomputations.
         """

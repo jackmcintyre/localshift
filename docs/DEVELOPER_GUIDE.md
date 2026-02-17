@@ -1,11 +1,11 @@
 # Developer Guide
 
-This guide covers the technical architecture of the Amber Powerwall integration for developers who want to understand, extend, or contribute to the codebase.
+This guide covers the technical architecture of the LocalShift integration for developers who want to understand, extend, or contribute to the codebase.
 
 ## Project Structure
 
 ```
-custom_components/amber_powerwall/
+custom_components/localshift/
 ├── __init__.py              # Integration entry point
 ├── coordinator.py            # Main coordinator, ties all modules together
 ├── coordinator_data.py      # Data structures (CoordinatorData, ChargingDecision)
@@ -84,10 +84,10 @@ The state machine uses debounce timers to prevent rapid mode switching:
 
 ### Coordinator (`coordinator.py`)
 
-The `AmberPowerwallCoordinator` is the central hub:
+The `LocalShiftCoordinator` is the central hub:
 
 ```python
-class AmberPowerwallCoordinator:
+class LocalShiftCoordinator:
     """Main coordinator that ties all modules together."""
 
     def __init__(self, hass, entry):
@@ -431,9 +431,9 @@ def _get_expected_state_for_mode(self, mode):
 
 ### Manual Testing
 
-1. **Dry Run Mode**: Enable `switch.amber_powerwall_dry_run` to test without affecting the battery.
+1. **Dry Run Mode**: Enable `switch.localshift_dry_run` to test without affecting the battery.
 
-2. **Check Logs**: Filter logs by `amber_powerwall` to see state machine decisions.
+2. **Check Logs**: Filter logs by `localshift` to see state machine decisions.
 
 3. **Developer Tools**: Use Developer Tools → States to verify entity values.
 
@@ -451,14 +451,14 @@ See `TEST_SCENARIOS.md` for comprehensive test cases covering:
 ### Common Issues
 
 **Battery not charging:**
-- Check `sensor.amber_powerwall_active_mode` — should be `grid_charging` or `boost_charging`
-- Check `binary_sensor.amber_powerwall_demand_window_active` — charging blocked during DW
+- Check `sensor.localshift_battery_mode` — should be `grid_charging` or `boost_charging`
+- Check `binary_sensor.localshift_binary_demand_window` — charging blocked during DW
 - Check price — must be below `effective_cheap_price`
 
 **Spike discharge not working:**
-- Check `switch.amber_powerwall_spike_discharge_enabled` is ON
+- Check `switch.localshift_spike_discharge_enabled` is ON
 - Check time — spike discharge only allowed 6am-midnight
-- Check `binary_sensor.amber_powerwall_forecast_spike_within_window`
+- Check `binary_sensor.localshift_binary_price_spike_coming`
 
 **Battery not exporting:**
 - Check Powerwall 3 requires `allow_export` set to `battery_ok`
@@ -502,7 +502,7 @@ The project follows these conventions:
 git clone https://github.com/jackmcintyre/ha-solar-battery-automation.git
 
 # Copy to HA custom_components
-cp -r custom_components/amber_powerwall ~/.config/homeassistant/custom_components/
+cp -r custom_components/localshift ~/.config/homeassistant/custom_components/
 
 # Restart HA to load changes
 ```
