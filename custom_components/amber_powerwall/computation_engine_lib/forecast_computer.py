@@ -327,16 +327,22 @@ class ForecastComputer:
         current_load_kw: float,
         recent_load_kw: float,
         dw_start_time: time,
+        general_price_current: float,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
         Smart grid charging with very cheap price as safety net.
         Uses forecast simulation to avoid unnecessary grid charging.
 
+        Strategy:
+        1. PREFER SPOT: Use current spot price as primary decision signal
+        2. Only charge when spot price is cheap (<= effective_cheap_price)
+        3. Fall back to forecast-based logic when spot is unavailable
+
         Args:
             slot_start: Start time of the 15-minute slot
             solar_kwh: Solar forecast for this slot
-            slot_price: Buy price for this slot
+            slot_price: Buy price for this slot (from forecast)
             predicted_soc: Predicted SOC at start of slot
             target_pct: Target SOC percentage
             effective_cheap_price: Cheap price threshold
@@ -349,6 +355,7 @@ class ForecastComputer:
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
+            general_price_current: Current spot buy price
 
         Returns:
             (should_charge, should_boost)
@@ -366,9 +373,21 @@ class ForecastComputer:
         if gap_to_target <= 0:
             return False, False
 
+        # PREFER SPOT PRICE: Use current spot price as primary signal
+        if general_price_current > 0:
+            use_price = general_price_current
+            _LOGGER.debug(
+                "GRID_CHARGE: Using spot price $%.2f (forecast: $%.2f)",
+                general_price_current,
+                slot_price,
+            )
+        else:
+            # Fall back to forecast when spot unavailable
+            use_price = slot_price
+
         # Price-based thresholds
-        price_is_cheap = slot_price <= effective_cheap_price
-        price_is_very_cheap = slot_price <= (effective_cheap_price * 0.8)
+        price_is_cheap = use_price <= effective_cheap_price
+        price_is_very_cheap = use_price <= (effective_cheap_price * 0.8)
 
         # SMART FORECAST: Simulate forward with solar only
         # Model: can we reach target *before the next demand window starts* using solar only?
@@ -616,6 +635,7 @@ class ForecastComputer:
         feed_in_forecast: list[dict],
         min_soc_no_exports: float,
         export_min_soc_pct: float,
+        feed_in_price_current: float,
     ) -> tuple[bool, float]:
         """Determine if proactive export should happen at this slot.
 
@@ -623,17 +643,18 @@ class ForecastComputer:
         FIT price windows to maximize revenue.
 
         Strategy:
-        1. Calculate 60th percentile FIT price over next 24 hours
-        2. Only export when current FIT >= percentile (reasonable prices)
-        3. Check ending SOC after export (not just starting SOC)
-        4. Only export if minimum SOC without exports >= export_min_soc_pct
-        5. Only export if we have forecasted excess (won't run short)
+        1. PREFER SPOT: Use current spot price as primary decision signal
+        2. Only export when current spot FIT > 0
+        3. Fall back to forecast-based logic when spot is unavailable
+        4. Check ending SOC after export (not just starting SOC)
+        5. Only export if minimum SOC without exports >= export_min_soc_pct
+        6. Only export if we have forecasted excess (won't run short)
 
         Args:
             slot_start: Start time of 15-minute slot
             slot_hour: Hour of slot
             solar_kwh: Solar forecast for this slot
-            slot_fit_price: Feed-in price for this slot
+            slot_fit_price: Feed-in price for this slot (from forecast)
             predicted_soc: Predicted SOC at start of slot
             in_demand_window: True if in demand window
             forecasted_excess_kwh: Total excess solar forecasted
@@ -641,24 +662,37 @@ class ForecastComputer:
             feed_in_forecast: Full FIT price forecast
             min_soc_no_exports: Minimum SOC over 24h without proactive exports
             export_min_soc_pct: Minimum SOC threshold for exports (from config)
+            feed_in_price_current: Current spot feed-in price
 
         Returns:
             (should_export, export_amount_kwh)
         """
-        # Only proactive-export if we're genuinely trying to avoid an upcoming
-        # negative/zero feed-in window (i.e. "make space" has an actual purpose).
-        negative_windows = self._find_negative_fit_windows(
-            feed_in_forecast, start_time=slot_start, max_hours=24
-        )
-        if not negative_windows:
-            return False, 0.0
+        # PREFER SPOT PRICE: Use current spot price as primary signal
+        # Only proactive-export if spot price is positive
+        using_spot_price = False
+        if feed_in_price_current > 0:
+            # Spot price is positive - use it as primary signal
+            use_price = feed_in_price_current
+            using_spot_price = True
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: Using spot price $%.2f (forecast: $%.2f)",
+                feed_in_price_current,
+                slot_fit_price,
+            )
+        else:
+            # Fall back to forecast-based logic when spot unavailable
+            negative_windows = self._find_negative_fit_windows(
+                feed_in_forecast, start_time=slot_start, max_hours=24
+            )
+            if not negative_windows:
+                return False, 0.0
+            use_price = slot_fit_price
+            next_negative_start = min(w[0] for w in negative_windows)
 
-        next_negative_start = min(w[0] for w in negative_windows)
-
-        # Avoid exporting overnight; if we need to make space, do it closer to the event.
-        overnight = slot_start.hour >= 22 or slot_start.hour < 6
-        if overnight and next_negative_start > (slot_start + timedelta(hours=2)):
-            return False, 0.0
+            # Avoid exporting overnight; if we need to make space, do it closer to the event.
+            overnight = slot_start.hour >= 22 or slot_start.hour < 6
+            if overnight and next_negative_start > (slot_start + timedelta(hours=2)):
+                return False, 0.0
 
         # During demand window: allow export but use dynamic floor protection.
         # The existing checks below (min_soc, buffer, ending SOC) provide adequate
@@ -669,7 +703,7 @@ class ForecastComputer:
         if predicted_soc <= export_min_soc_pct:
             return False, 0.0
 
-        # Critical: Don't export if battery will already drop below 20% without exports
+        # Critical: Don't export if battery will already drop below threshold without exports
         # This prevents draining of battery too low
         if min_soc_no_exports < export_min_soc_pct:
             _LOGGER.debug(
@@ -708,29 +742,31 @@ class ForecastComputer:
         export_threshold = max_fit_price_evening * 0.8  # 80% of peak
 
         # Never proactive-export into a non-positive FIT.
-        if slot_fit_price <= 0:
+        if use_price <= 0:
             return False, 0.0
 
-        # Check if better price is coming in next 3 hours
-        # If current price is significantly lower than what's coming, wait for better price
-        best_price_next_3h = self._calculate_max_fit_price(
-            feed_in_forecast, slot_start, hours=3
-        )
-
-        # If current price is more than 10% below the best price coming in next 3 hours,
-        # don't export - wait for the better price
-        if slot_fit_price < best_price_next_3h * 0.9:
-            _LOGGER.debug(
-                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - better price coming (current=$%.2f < next_3h=$%.2f)",
-                slot_hour,
-                slot_start.minute,
-                slot_fit_price,
-                best_price_next_3h,
+        # When using spot price, we use it directly for threshold check
+        # When using forecast, we check if better price is coming
+        if not using_spot_price:
+            # Check if better price is coming in next 3 hours (forecast mode only)
+            best_price_next_3h = self._calculate_max_fit_price(
+                feed_in_forecast, slot_start, hours=3
             )
-            return False, 0.0
+
+            # If current price is more than 10% below the best price coming in next 3 hours,
+            # don't export - wait for the better price
+            if use_price < best_price_next_3h * 0.9:
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - better price coming (current=$%.2f < next_3h=$%.2f)",
+                    slot_hour,
+                    slot_start.minute,
+                    use_price,
+                    best_price_next_3h,
+                )
+                return False, 0.0
 
         # Only export if current FIT is at or near peak threshold
-        if slot_fit_price < export_threshold:
+        if use_price < export_threshold:
             return False, 0.0
 
         # CRITICAL: Calculate total discharge (export + load) before deciding
@@ -788,7 +824,7 @@ class ForecastComputer:
                 "PROACTIVE_EXPORT: %02d:%02d price=$%.2f >= peak_threshold=$%.2f, amount=%.3f kWh, ending_soc=%.1f%%",
                 slot_hour,
                 slot_start.minute,
-                slot_fit_price,
+                use_price,
                 export_threshold,
                 export_amount,
                 soc_after_discharge,
@@ -1022,6 +1058,7 @@ class ForecastComputer:
                 current_load_kw=data.load_power_kw,
                 recent_load_kw=recent_load_kw,
                 dw_start_time=dw_start_time,
+                general_price_current=data.general_price,
             )
 
             # Debug logging for charging decision
@@ -1107,6 +1144,7 @@ class ForecastComputer:
                     feed_in_forecast=data.feed_in_forecast,
                     min_soc_no_exports=min_soc_no_exports,
                     export_min_soc_pct=export_min_soc_pct,
+                    feed_in_price_current=data.feed_in_price,
                 )
             )
 

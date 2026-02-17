@@ -30,7 +30,6 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-006 | 🟠 HIGH | ✅ COMPLETED | Demand Window Block Logic Priority Issue |
 | backlog-high-007 | 🟠 HIGH | ✅ COMPLETED | Inconsistent State Machine Priority Order |
 | backlog-high-008 | 🟠 HIGH | ✅ COMPLETED | Proactive Export Not Using Peak FIT Prices |
-| backlog-high-009 | 🟠 HIGH | 📋 PROPOSED | Solar Curtailment for Negative FIT |
 | backlog-high-010 | 🟠 HIGH | ✅ COMPLETED | Pyright Error: Missing _manual_override_set_at Attribute |
 | backlog-high-011 | 🟠 HIGH | ✅ COMPLETED | Template Error: None Values in Cost Sensor Attributes |
 | backlog-high-012 | 🟠 HIGH | ✅ COMPLETED | Configurable Grid Export Reserve Delta |

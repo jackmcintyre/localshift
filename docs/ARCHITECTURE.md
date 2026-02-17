@@ -200,6 +200,16 @@ Control follows forecast plan
 3. **Single Decision Point**: Only one place makes charging/exporting decisions
 4. **Change Detection**: Only recompute forecast when inputs change significantly
 5. **Extensibility**: New features follow the same pattern
+6. **Spot Price Priority**: Current spot prices preferred over forecasts for decisions
+
+### Price Decision Logic
+
+Both grid charging (buy) and proactive export (sell) decisions use a **spot price first** approach:
+
+- **Grid Charging** (`_should_grid_charge_at_slot()`): Uses current spot buy price (`general_price`) as primary signal, falls back to forecast price when spot unavailable
+- **Proactive Export** (`_should_proactive_export_at_slot()`): Uses current spot feed-in price (`feed_in_price`) as primary signal, falls back to forecast when spot unavailable
+
+This ensures the system captures real-time price opportunities rather than relying solely on forecasts which may be outdated or inaccurate.
 
 ### Benefits
 
