@@ -43,7 +43,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-006 | 🟡 MED | ✅ COMPLETED | Test Suite Has 29 Failing Tests |
 | backlog-low-001 | ⚪ LOW | 📋 PROPOSED | Dashboard Setup Complexity |
 | backlog-low-002 | ⚪ LOW | ✅ COMPLETED | Hardcoded Personal Notification Service |
-| backlog-low-003 | ⚪ LOW | 📋 PROPOSED | Version Inconsistency |
+| backlog-low-003 | ⚪ LOW | ✅ COMPLETED | Version Inconsistency |
 | backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
 | backlog-high-015 | 🟠 HIGH | ✅ COMPLETED | Solar FIT Sensor Shows `unknown` State |
 | backlog-high-016 | 🟠 HIGH | ✅ COMPLETED | Forecast Consumption Not Blending Recent Load Data |
@@ -52,8 +52,8 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-008 | 🟡 MED | ✅ COMPLETED | `can_reach_target` Inconsistency Between Legacy and Detailed Forecast |
 | backlog-med-009 | 🟡 MED | ✅ COMPLETED | Automated Documentation Generation via Cline |
 | backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Allow DW Entry Under Target with Solar Forecast |
-| backlog-low-005 | ⚪ LOW | 📋 PROPOSED | Dashboard Template Shows `None` for Solar Remaining |
-| backlog-med-010 | 🟡 MED | 🔄 IN_PROGRESS | Category-Based Entity Naming Conventions |
+| backlog-low-005 | ⚪ LOW | ✅ COMPLETED | Dashboard Template Shows `None` for Solar Remaining |
+| backlog-med-010 | 🟡 MED | ✅ COMPLETED | Category-Based Entity Naming Conventions |
 | backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Spot Price vs Forecast Price Mismatch for Proactive Export |
 
 ---
