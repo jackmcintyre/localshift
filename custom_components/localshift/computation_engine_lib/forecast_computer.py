@@ -709,6 +709,106 @@ class ForecastComputer:
 
         return min_soc, soc, solar_found
 
+    def _find_battery_fill_point(
+        self,
+        start_soc: float,
+        start_slot: datetime,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+    ) -> int | None:
+        """Find the slot offset when battery first reaches 100% from solar charging.
+
+        Args:
+            start_soc: Starting SOC percentage
+            start_slot: Starting slot time
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+
+        Returns:
+            Slot offset (0-95) when battery reaches 100%, or None if it never fills
+        """
+        soc = start_soc
+        base_slot = start_slot.replace(second=0, microsecond=0)
+
+        for offset in range(96):
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply battery charging (no grid charging, no exports)
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            if net_kwh >= 0:
+                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            soc += delta / BATTERY_CAPACITY_KWH * 100
+            soc = min(100.0, soc)  # Cap at 100%
+
+            if soc >= 100.0:
+                return offset
+
+        return None  # Never fills
+
+    def _calculate_solar_energy_between_slots(
+        self,
+        start_offset: int,
+        end_offset: int,
+        base_slot: datetime,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+    ) -> float:
+        """Calculate net solar energy (solar - load) between two slot offsets.
+
+        Args:
+            start_offset: Starting slot offset
+            end_offset: Ending slot offset (exclusive)
+            base_slot: Base datetime for offset calculation
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+
+        Returns:
+            Net solar energy in kWh (positive = excess)
+        """
+        net_energy = 0.0
+
+        for offset in range(start_offset, min(end_offset, 96)):
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            if net_kwh > 0:
+                # Apply charging efficiency for excess
+                net_energy += net_kwh * 0.92
+
+        return net_energy
+
     def _should_proactive_export_at_slot(
         self,
         slot_start: datetime,
@@ -728,6 +828,8 @@ class ForecastComputer:
         current_load_kw: float = 0.0,
         recent_load_kw: float = 0.0,
         is_current_slot: bool = False,
+        current_offset: int = 0,
+        fill_point_offset: int | None = None,
     ) -> tuple[bool, float]:
         """Determine if proactive export should happen at this slot.
 
@@ -819,8 +921,59 @@ class ForecastComputer:
         if forecasted_excess_kwh <= 0:
             return False, 0.0
 
-        # Calculate maximum FIT price over next 6 hours (evening period only)
-        # This avoids including tomorrow's midday solar peak which inflates the threshold
+        # FILL-POINT BASED EXPORT STRATEGY:
+        # Only export BEFORE the battery would naturally fill from solar
+        # This ensures we have room to capture incoming solar after export
+
+        # CONSTRAINT 1: Only export if battery will fill at some point
+        if fill_point_offset is None:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - battery never fills from solar",
+                slot_hour,
+                slot_start.minute,
+            )
+            return False, 0.0
+
+        # CONSTRAINT 2: Only export BEFORE the fill point
+        # After the battery fills, there's no room for more solar
+        if current_offset >= fill_point_offset:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - slot %d >= fill point %d",
+                slot_hour,
+                slot_start.minute,
+                current_offset,
+                fill_point_offset,
+            )
+            return False, 0.0
+
+        # CONSTRAINT 3: Verify enough solar AFTER export to reach fill point
+        # Calculate solar energy available between now and fill point
+        if all_solcast is not None and historical_avg_kw is not None:
+            solar_until_fill = self._calculate_solar_energy_between_slots(
+                start_offset=current_offset,
+                end_offset=fill_point_offset,
+                base_slot=slot_start - timedelta(minutes=15 * current_offset),
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=current_load_kw,
+                recent_load_kw=recent_load_kw,
+            )
+
+            # Need enough solar to recharge what we export
+            # If we export X kWh, we need X kWh of solar to get back to fill point
+            # Note: solar_until_fill already accounts for charging efficiency
+            max_export_allowed = solar_until_fill * 0.9  # 10% safety margin
+
+            if max_export_allowed <= 0:
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - no solar to recharge before fill",
+                    slot_hour,
+                    slot_start.minute,
+                )
+                return False, 0.0
+
+        # Find the maximum FIT price in the window before battery fills
+        # This maximizes revenue while ensuring solar isn't wasted
         max_fit_price_evening = self._calculate_max_fit_price(
             feed_in_forecast, slot_start, hours=6
         )
@@ -1140,6 +1293,25 @@ class ForecastComputer:
             final_soc_no_exports,
         )
 
+        # FILL-POINT: Find when battery will first reach 100% from solar
+        fill_point_offset = self._find_battery_fill_point(
+            start_soc=current_soc,
+            start_slot=base_slot,
+            all_solcast=all_solcast,
+            historical_avg_kw=historical_avg_kw,
+            current_load_kw=data.load_power_kw,
+            recent_load_kw=recent_load_kw,
+        )
+        if fill_point_offset is not None:
+            fill_time = base_slot + timedelta(minutes=15 * fill_point_offset)
+            _LOGGER.info(
+                "Battery will fill at slot %d (%s) from solar charging",
+                fill_point_offset,
+                fill_time.strftime("%H:%M"),
+            )
+        else:
+            _LOGGER.info("Battery will not reach 100% from solar in next 24 hours")
+
         # Build rolling 24-hour forecast with 15-minute slots (96 total)
         remaining_export_budget = export_budget_kwh
         for offset in range(96):
@@ -1298,6 +1470,8 @@ class ForecastComputer:
                     current_load_kw=data.load_power_kw,
                     recent_load_kw=recent_load_kw,
                     is_current_slot=(offset == 0),  # Only first slot uses spot price
+                    current_offset=offset,
+                    fill_point_offset=fill_point_offset,
                 )
             )
 
