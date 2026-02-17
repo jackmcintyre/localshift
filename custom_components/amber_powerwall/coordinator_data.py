@@ -54,6 +54,7 @@ class CoordinatorData:
     proactive_export_active: bool = False
     forecast_expensive_period_coming: bool = False
     solar_can_reach_target: bool = False
+    solar_can_reach_target_in_dw: bool = False
     boost_charge_needed: bool = False
     demand_window_active: bool = False
 

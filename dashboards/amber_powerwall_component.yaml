@@ -399,6 +399,11 @@ views:
             name: Demand Block
             color: orange
 
+          - type: tile
+            entity: switch.amber_powerwall_allow_dw_entry_under_target
+            name: Allow DW Entry Under Target
+            color: green
+
       # --- Price Thresholds ---
       - type: grid
         cards:

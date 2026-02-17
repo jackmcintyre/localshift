@@ -246,6 +246,57 @@ class ComputationEngine:
         # ---- Step 6: boost_charge_needed ----
         # (already set in Step 5 above)
 
+        # ---- Step 6b: solar_can_reach_target_in_dw ----
+        # Only compute if switch is enabled
+        allow_dw_under_target = self._get_switch_state("allow_dw_entry_under_target")
+
+        if allow_dw_under_target and before_dw:
+            # Simulate solar-only charging through entire DW period
+            dw_end_time = self._parse_time_option(
+                CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+            )
+            sim_end = now_dt.replace(
+                hour=dw_end_time.hour,
+                minute=dw_end_time.minute,
+                second=0,
+                microsecond=0,
+            )
+
+            # Get historical averages and recent load for simulation
+            load_entity_id = self._get_entity_id("teslemetry_load_power")
+            hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+            recent_load_kw = self._recent_load_1hr_kw
+
+            # Get all Solcast forecasts
+            all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+
+            # Simulate solar-only charging through DW period
+            soc_at_end, max_soc, can_reach = (
+                self._forecast_computer._simulate_future_soc_with_solar_only(
+                    actual_current_soc=data.soc,
+                    start_slot=now_dt,
+                    target_pct=target_pct,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=hourly_avg_kw,
+                    current_load_kw=data.load_power_kw,
+                    recent_load_kw=recent_load_kw,
+                    dw_start_time=dw_start_time,
+                    end_time=sim_end,
+                )
+            )
+            data.solar_can_reach_target_in_dw = can_reach
+
+            _LOGGER.info(
+                "DW entry check: current SOC=%.1f%%, target=%d%%, "
+                "DW end=%s, solar can reach=%s",
+                data.soc,
+                target_pct,
+                dw_end_time.strftime("%H:%M"),
+                can_reach,
+            )
+        else:
+            data.solar_can_reach_target_in_dw = False
+
         # ---- Step 7: effective_cheap_price ----
         self._compute_effective_cheap_price(data, now_dt, before_dw, target_hour)
 
@@ -806,7 +857,15 @@ class ComputationEngine:
         if data.price_spike and spike_discharge_enabled and in_discharge_window:
             data.active_mode = BatteryMode.SPIKE_DISCHARGE
         elif data.demand_window_active:
-            data.active_mode = BatteryMode.DEMAND_BLOCK
+            # Allow DW entry if at target OR (config enabled AND solar can reach target within DW)
+            target_pct = float(
+                self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+            )
+            if data.soc >= target_pct or data.solar_can_reach_target_in_dw:
+                data.active_mode = BatteryMode.DEMAND_BLOCK
+            else:
+                # Not at target and solar can't help - stay in current mode
+                data.active_mode = BatteryMode.SELF_CONSUMPTION
         elif data.manual_override:
             data.active_mode = BatteryMode.MANUAL
         # Hold mode removed - these conditions are no longer evaluated:

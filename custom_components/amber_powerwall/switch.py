@@ -5,6 +5,7 @@ Provides user-facing toggle switches for:
 - Spike Discharge Enabled
 - Dry Run
 - Demand Window Block
+- Allow DW Entry Under Target
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
     SWITCH_AUTOMATION_ENABLED,
     SWITCH_DEFAULTS,
     SWITCH_DEMAND_WINDOW_BLOCK,
@@ -39,6 +41,7 @@ SWITCH_KEYS = [
     SWITCH_SPIKE_DISCHARGE_ENABLED,
     SWITCH_DRY_RUN,
     SWITCH_DEMAND_WINDOW_BLOCK,
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 ]
 
 

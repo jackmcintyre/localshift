@@ -11,6 +11,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_AMBER_FEED_IN_FORECAST,
     CONF_AMBER_FEED_IN_PRICE,
     CONF_AMBER_GENERAL_FORECAST,
@@ -39,6 +40,7 @@ from .const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -123,7 +125,7 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
 
         domain, service_name = parts
 
-        # Check if the notify service exists
+        # Check if notify service exists
         services = self.hass.services.async_services()
         if domain not in services:
             return f"Notify domain '{domain}' not found"
@@ -489,10 +491,10 @@ class AmberPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_BATTERY_TARGET: DEFAULT_BATTERY_TARGET,
                 CONF_DEMAND_WINDOW_START: DEFAULT_DEMAND_WINDOW_START,
                 CONF_DEMAND_WINDOW_END: DEFAULT_DEMAND_WINDOW_END,
-                # Hold mode options removed
                 CONF_MANUAL_OVERRIDE_TIMEOUT: DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
                 CONF_LOAD_WEIGHT_RECENT: DEFAULT_LOAD_WEIGHT_RECENT,
                 CONF_MINIMUM_TARGET_SOC: DEFAULT_MINIMUM_TARGET_SOC,
+                CONF_ALLOW_DW_ENTRY_UNDER_TARGET: DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
             }
 
             return self.async_create_entry(
@@ -664,7 +666,6 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
                             DEFAULT_DEMAND_WINDOW_END,
                         ),
                     ): selector.TimeSelector(),
-                    # Hold mode options removed
                     vol.Required(
                         CONF_MANUAL_OVERRIDE_TIMEOUT,
                         default=current.get(
@@ -709,6 +710,13 @@ class AmberPowerwallOptionsFlow(OptionsFlow):
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),
+                    vol.Required(
+                        CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+                        default=current.get(
+                            CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+                            DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
+                        ),
+                    ): selector.BooleanSelector(),
                 }
             ),
         )

@@ -124,6 +124,9 @@ class ForecastComputer:
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
+        When end_time == dw_start_time, simulation stops at DW start (existing behavior).
+        When end_time > dw_start_time, simulation continues through DW period.
+
         This helps determine if grid charging is necessary.
 
         Args:

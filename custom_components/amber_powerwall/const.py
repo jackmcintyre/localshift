@@ -113,6 +113,7 @@ CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_LOAD_WEIGHT_RECENT = "load_weight_recent"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
+CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 
 # Default values (matching YAML package)
 DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
@@ -127,6 +128,9 @@ DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4  # hours
 DEFAULT_LOAD_WEIGHT_RECENT = 0.67  # 2/3 weighting to recent usage
 DEFAULT_EXPORT_MIN_SPREAD = 0.10  # $/kWh minimum spread to export (buy - sell)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
+DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
+    False  # Allow DW entry under target when solar can reach target
+)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -196,12 +200,14 @@ SWITCH_AUTOMATION_ENABLED = "automation_enabled"
 SWITCH_SPIKE_DISCHARGE_ENABLED = "spike_discharge_enabled"
 SWITCH_DRY_RUN = "dry_run"
 SWITCH_DEMAND_WINDOW_BLOCK = "demand_window_block"
+SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 
 SWITCH_DEFAULTS = {
     SWITCH_AUTOMATION_ENABLED: True,
     SWITCH_SPIKE_DISCHARGE_ENABLED: True,
     SWITCH_DRY_RUN: False,
     SWITCH_DEMAND_WINDOW_BLOCK: True,
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
 }
 
 SWITCH_ICONS = {
@@ -209,6 +215,7 @@ SWITCH_ICONS = {
     SWITCH_SPIKE_DISCHARGE_ENABLED: "mdi:flash-alert",
     SWITCH_DRY_RUN: "mdi:test-tube",
     SWITCH_DEMAND_WINDOW_BLOCK: "mdi:clock-alert-outline",
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:battery-arrow-up",
 }
 
 SWITCH_NAMES = {
@@ -216,6 +223,7 @@ SWITCH_NAMES = {
     SWITCH_SPIKE_DISCHARGE_ENABLED: "Spike Discharge Enabled",
     SWITCH_DRY_RUN: "Dry Run",
     SWITCH_DEMAND_WINDOW_BLOCK: "Demand Window Block",
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
 }
 
 # -----------------------------------------------------------------------------

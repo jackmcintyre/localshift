@@ -52,7 +52,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-007 | 🟡 MED | ✅ COMPLETED | Recent Load Diagnostic Fields Not Propagated to CoordinatorData |
 | backlog-med-008 | 🟡 MED | ✅ COMPLETED | `can_reach_target` Inconsistency Between Legacy and Detailed Forecast |
 | backlog-med-009 | 🟡 MED | ✅ COMPLETED | Automated Documentation Generation via Cline |
-| backlog-high-019 | 🟠 HIGH | 📋 PROPOSED | Allow DW Entry Under Target with Solar Forecast |
+| backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Allow DW Entry Under Target with Solar Forecast |
 | backlog-low-005 | ⚪ LOW | 📋 PROPOSED | Dashboard Template Shows `None` for Solar Remaining |
 
 ---
