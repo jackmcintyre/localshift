@@ -727,6 +727,7 @@ class ForecastComputer:
         historical_avg_kw: dict[int, float] | None = None,
         current_load_kw: float = 0.0,
         recent_load_kw: float = 0.0,
+        is_current_slot: bool = False,
     ) -> tuple[bool, float]:
         """Determine if proactive export should happen at this slot.
 
@@ -734,9 +735,9 @@ class ForecastComputer:
         FIT price windows to maximize revenue.
 
         Strategy:
-        1. PREFER SPOT: Use current spot price as primary decision signal
-        2. Only export when current spot FIT > 0
-        3. Fall back to forecast-based logic when spot is unavailable
+        1. PREFER SPOT: Use current spot price ONLY for current slot (real-time decision)
+        2. For future slots, use forecast price and check if better price is coming
+        3. Only export when FIT > 0
         4. Check ending SOC after export (not just starting SOC)
         5. Only export if minimum SOC without exports >= export_min_soc_pct
         6. Only export if we have forecasted excess (won't run short)
@@ -755,41 +756,31 @@ class ForecastComputer:
             feed_in_forecast: Full FIT price forecast
             min_soc_no_exports: Minimum SOC over 24h without proactive exports
             export_min_soc_pct: Minimum SOC threshold for exports (from config)
-            feed_in_price_current: Current spot feed-in price
+            feed_in_price_current: Current spot feed-in price (only for current slot)
             all_solcast: Full Solcast forecast (for overnight simulation)
             historical_avg_kw: Historical hourly load profile (for overnight simulation)
             current_load_kw: Current load power (for overnight simulation)
             recent_load_kw: Recent 1-hour average load (for overnight simulation)
+            is_current_slot: True if this is the current time slot (use spot price)
 
         Returns:
             (should_export, export_amount_kwh)
         """
-        # PREFER SPOT PRICE: Use current spot price as primary signal
-        # Only proactive-export if spot price is positive
+        # SPOT PRICE: Only use for current slot (real-time decision)
+        # For future slots, always use forecast price
         using_spot_price = False
-        if feed_in_price_current > 0:
-            # Spot price is positive - use it as primary signal
+        if is_current_slot and feed_in_price_current > 0:
+            # Current slot with positive spot price - use it for real-time decision
             use_price = feed_in_price_current
             using_spot_price = True
             _LOGGER.debug(
-                "PROACTIVE_EXPORT: Using spot price $%.2f (forecast: $%.2f)",
+                "PROACTIVE_EXPORT: Using spot price $%.2f for current slot (forecast: $%.2f)",
                 feed_in_price_current,
                 slot_fit_price,
             )
         else:
-            # Fall back to forecast-based logic when spot unavailable
-            negative_windows = self._find_negative_fit_windows(
-                feed_in_forecast, start_time=slot_start, max_hours=24
-            )
-            if not negative_windows:
-                return False, 0.0
+            # Future slot or spot unavailable - use forecast-based logic
             use_price = slot_fit_price
-            next_negative_start = min(w[0] for w in negative_windows)
-
-            # Avoid exporting overnight; if we need to make space, do it closer to the event.
-            overnight = slot_start.hour >= 22 or slot_start.hour < 6
-            if overnight and next_negative_start > (slot_start + timedelta(hours=2)):
-                return False, 0.0
 
         # During demand window: allow export but use dynamic floor protection.
         # The existing checks below (min_soc, buffer, ending SOC) provide adequate
@@ -960,13 +951,19 @@ class ForecastComputer:
         # THROTTLING: Apply dynamic reserve (SOC - 5%) to limit export amount
         # This matches the actual throttling that will happen in battery_controller.py
         # The system will set reserve = max(4, SOC - 5), limiting each export session
-        throttled_reserve_buffer = 5.0  # 5% buffer above whatever we set as reserve
-        throttled_exportable_kwh = max(
+        # to ~5% of battery capacity (~0.675 kWh per session)
+        #
+        # Per-session limit: 5% of battery capacity
+        per_session_limit_kwh = 5.0 / 100 * BATTERY_CAPACITY_KWH  # ~0.675 kWh
+
+        # Also respect minimum SOC floor
+        available_above_min_kwh = max(
             0,
-            (predicted_soc - throttled_reserve_buffer - export_min_soc_pct)
-            / 100
-            * BATTERY_CAPACITY_KWH,
+            (predicted_soc - export_min_soc_pct) / 100 * BATTERY_CAPACITY_KWH,
         )
+
+        # Throttled export = min(session limit, available above min)
+        throttled_exportable_kwh = min(per_session_limit_kwh, available_above_min_kwh)
 
         # Re-apply the export limit with throttling
         export_amount = min(
@@ -1300,6 +1297,7 @@ class ForecastComputer:
                     historical_avg_kw=historical_avg_kw,
                     current_load_kw=data.load_power_kw,
                     recent_load_kw=recent_load_kw,
+                    is_current_slot=(offset == 0),  # Only first slot uses spot price
                 )
             )
 
