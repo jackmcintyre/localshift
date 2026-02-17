@@ -9,7 +9,7 @@ The integration creates **34 entities** grouped under a single "LocalShift" devi
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 11 | `sensor` |
-| Binary Sensors | 11 | `binary_sensor` |
+| Binary Sensors | 8 | `binary_sensor` |
 | Switches | 4 | `switch` |
 | Numbers | 6 | `number` |
 | Buttons | 5 | `button` |
@@ -289,15 +289,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 7. binary_sensor.localshift_hold_active
-
-**Purpose:** Whether battery is currently in hold mode (preserving charge).
-
-**State:** `on` when `operation_mode == self_consumption` AND `backup_reserve > 10`
-
----
-
-### 8. binary_sensor.localshift_binary_solar_can_reach_target
+### 7. binary_sensor.localshift_binary_solar_can_reach_target
 
 **Purpose:** Whether solar forecast can fill battery to target by demand window.
 
@@ -305,42 +297,11 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 9. binary_sensor.localshift_binary_charge_boost_needed
+### 8. binary_sensor.localshift_binary_charge_boost_needed
 
 **Purpose:** Whether 5kW boost charging is needed (3.3kW insufficient).
 
 **State:** `on` if time remaining before DW is insufficient to reach target at 3.3kW
-
----
-
-### 10. binary_sensor.localshift_hold_justified
-
-**Purpose:** Whether hold mode is justified (solar coming or cheap prices forecast).
-
-**State:** `on` when either:
-- Meaningful solar forecast (≥0.5 kWh pessimistic) before next expensive period
-- Cheaper prices coming in forecast
-
----
-
-### 11. binary_sensor.localshift_solar_export_hold_justified
-
-**Purpose:** Whether solar export hold conditions are met.
-
-**State:** `on` when all conditions met:
-- Sun is up (before sunset)
-- Before demand window
-- Current FIT > solar-weighted average FIT
-- Surplus ratio ≥ 1.5 (entering) or ≥ 1.0 (staying)
-
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `solar_weighted_avg_fit` | float | Weighted avg FIT for remaining solar |
-| `current_fit` | float | Current feed-in price |
-| `solar_remaining_kwh` | float | Remaining solar production estimate |
-| `surplus_ratio` | float | Surplus ratio for hysteresis |
 
 ---
 
