@@ -622,6 +622,93 @@ class ForecastComputer:
 
         return min_soc, soc
 
+    def _simulate_overnight_drain_after_export(
+        self,
+        start_soc: float,
+        start_slot: datetime,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+        export_min_soc_pct: float,
+    ) -> tuple[float, float, bool]:
+        """Simulate overnight drain after export to find minimum SOC.
+
+        This simulates from the export slot until solar production starts
+        (typically 06:00-07:00) to ensure the battery won't drop below
+        minimum SOC during the night.
+
+        Args:
+            start_soc: Starting SOC percentage (after export)
+            start_slot: Starting slot time (after export slot)
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            export_min_soc_pct: Minimum SOC threshold
+
+        Returns:
+            (minimum_soc_pct, soc_at_solar_start, solar_found_in_forecast)
+        """
+        soc = start_soc
+        min_soc = soc
+        base_slot = start_slot.replace(minute=0, second=0, microsecond=0)
+
+        # Find when solar production starts (first slot with >0.1 kWh solar)
+        solar_start_slot = None
+        for offset in range(24 * 4):  # Check up to 24 hours
+            check_slot = base_slot + timedelta(minutes=15 * offset)
+            solar_kwh = get_solar_for_15min_slot(all_solcast, check_slot)
+            if solar_kwh > 0.1:  # Meaningful solar production
+                solar_start_slot = check_slot
+                break
+
+        # Track whether we found solar in the forecast
+        solar_found = solar_start_slot is not None
+
+        # If no solar found, simulate 8 hours (typical overnight period)
+        if solar_start_slot is None:
+            solar_start_slot = base_slot + timedelta(hours=8)
+
+        # Simulate until solar starts
+        total_slots = int((solar_start_slot - base_slot).total_seconds() // (15 * 60))
+        total_slots = max(total_slots, 1)  # At least 1 slot
+
+        for offset in range(total_slots):
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+
+            # Get solar (should be ~0 overnight) and load
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply battery discharge (negative net = discharge)
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            if net_kwh >= 0:
+                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            # Update SOC
+            soc += delta / BATTERY_CAPACITY_KWH * 100
+            soc = max(0.0, min(100.0, soc))
+
+            # Track minimum SOC
+            min_soc = min(min_soc, soc)
+
+            # Early exit if we've already dropped below minimum
+            if min_soc < export_min_soc_pct:
+                break
+
+        return min_soc, soc, solar_found
+
     def _should_proactive_export_at_slot(
         self,
         slot_start: datetime,
@@ -636,6 +723,10 @@ class ForecastComputer:
         min_soc_no_exports: float,
         export_min_soc_pct: float,
         feed_in_price_current: float,
+        all_solcast: list[dict] | None = None,
+        historical_avg_kw: dict[int, float] | None = None,
+        current_load_kw: float = 0.0,
+        recent_load_kw: float = 0.0,
     ) -> tuple[bool, float]:
         """Determine if proactive export should happen at this slot.
 
@@ -649,6 +740,8 @@ class ForecastComputer:
         4. Check ending SOC after export (not just starting SOC)
         5. Only export if minimum SOC without exports >= export_min_soc_pct
         6. Only export if we have forecasted excess (won't run short)
+        7. CRITICAL: Simulate overnight drain to ensure battery won't drop
+           below minimum before solar production starts
 
         Args:
             slot_start: Start time of 15-minute slot
@@ -663,6 +756,10 @@ class ForecastComputer:
             min_soc_no_exports: Minimum SOC over 24h without proactive exports
             export_min_soc_pct: Minimum SOC threshold for exports (from config)
             feed_in_price_current: Current spot feed-in price
+            all_solcast: Full Solcast forecast (for overnight simulation)
+            historical_avg_kw: Historical hourly load profile (for overnight simulation)
+            current_load_kw: Current load power (for overnight simulation)
+            recent_load_kw: Recent 1-hour average load (for overnight simulation)
 
         Returns:
             (should_export, export_amount_kwh)
@@ -818,6 +915,64 @@ class ForecastComputer:
                 export_discharge_kwh,
             )
             return False, 0.0
+
+        # CRITICAL: Simulate overnight drain after this export
+        # This ensures battery won't drop below minimum before solar starts
+        if (
+            all_solcast is not None
+            and historical_avg_kw is not None
+            and solar_kwh < 0.001
+        ):  # Only for overnight slots (no solar)
+            # Simulate from next slot until solar starts
+            next_slot = slot_start + timedelta(minutes=15)
+            min_overnight_soc, _, solar_found = (
+                self._simulate_overnight_drain_after_export(
+                    start_soc=soc_after_discharge,
+                    start_slot=next_slot,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=historical_avg_kw,
+                    current_load_kw=current_load_kw,
+                    recent_load_kw=recent_load_kw,
+                    export_min_soc_pct=export_min_soc_pct,
+                )
+            )
+
+            # Block exports if we can't see solar in the forecast
+            # This happens in late forecast slots (e.g., last 6-8 hours of 24h window)
+            if not solar_found:
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - no solar visibility in forecast for overnight simulation",
+                    slot_hour,
+                    slot_start.minute,
+                )
+                return False, 0.0
+
+            if min_overnight_soc < export_min_soc_pct:
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - overnight min SOC %.1f%% < %.1f%% after export",
+                    slot_hour,
+                    slot_start.minute,
+                    min_overnight_soc,
+                    export_min_soc_pct,
+                )
+                return False, 0.0
+
+        # THROTTLING: Apply dynamic reserve (SOC - 5%) to limit export amount
+        # This matches the actual throttling that will happen in battery_controller.py
+        # The system will set reserve = max(4, SOC - 5), limiting each export session
+        throttled_reserve_buffer = 5.0  # 5% buffer above whatever we set as reserve
+        throttled_exportable_kwh = max(
+            0,
+            (predicted_soc - throttled_reserve_buffer - export_min_soc_pct)
+            / 100
+            * BATTERY_CAPACITY_KWH,
+        )
+
+        # Re-apply the export limit with throttling
+        export_amount = min(
+            export_amount,
+            throttled_exportable_kwh,
+        )
 
         if export_amount > 0:
             _LOGGER.debug(
@@ -1141,6 +1296,10 @@ class ForecastComputer:
                     min_soc_no_exports=min_soc_no_exports,
                     export_min_soc_pct=export_min_soc_pct,
                     feed_in_price_current=data.feed_in_price,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=historical_avg_kw,
+                    current_load_kw=data.load_power_kw,
+                    recent_load_kw=recent_load_kw,
                 )
             )
 

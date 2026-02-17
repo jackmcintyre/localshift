@@ -297,21 +297,32 @@ class BatteryController:
     async def set_proactive_export(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
-        """Set battery to proactive export mode (autonomous, reserve=minimum_target).
+        """Set battery to proactive export mode with dynamic throttling.
 
-        Uses the minimum target SOC entity value for the reserve percentage.
+        Uses dynamic reserve = max(4, SOC-5) to throttle discharge rate.
+        This limits export to ~5% of battery capacity per session,
+        creating a "trickle export" rather than massive dump at 8kW.
 
         Returns:
             True if successful, False otherwise.
         """
-        # Get minimum target SOC for reserve
-        reserve = self._get_minimum_target_soc()
+        # Dynamic reserve for throttling: SOC - 5%, minimum 4%
+        current_soc = data.soc
+        reserve = max(4.0, current_soc - 5.0)
 
         if dry_run:
-            _LOGGER.info("DRY RUN: set_proactive_export (reserve=%s)", reserve)
+            _LOGGER.info(
+                "DRY RUN: set_proactive_export (reserve=%s, SOC=%s)",
+                reserve,
+                current_soc,
+            )
             return True
 
-        _LOGGER.info("Setting battery to proactive export mode (reserve=%s)", reserve)
+        _LOGGER.info(
+            "Setting battery to proactive export mode (reserve=%s, SOC=%s) - throttled export",
+            reserve,
+            current_soc,
+        )
 
         # Set allow_export to battery_ok (allow battery to export to grid)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_BATTERY_OK):

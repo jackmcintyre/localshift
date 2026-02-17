@@ -303,7 +303,10 @@ class StateMachine:
                     await self._battery_controller.set_proactive_export(data, dry_run)
                 )
                 if transition_success:
-                    _LOGGER.info("Proactive export mode transition completed")
+                    _LOGGER.info(
+                        "Proactive export mode transition completed (throttled reserve=%s)",
+                        max(4.0, data.soc - 5.0),
+                    )
                 else:
                     _LOGGER.error("Proactive export mode transition FAILED")
 

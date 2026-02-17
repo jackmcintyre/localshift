@@ -240,12 +240,29 @@ This ensures the system captures real-time price opportunities rather than relyi
 3. Update computation flow with caching
 4. Test: forecast regeneration is efficient
 
-### Phase 3: Proactive Export
-1. Add `_should_proactive_export_at_slot()` decision logic
-2. Add `proactive_export` and `export_amount_kwh` to forecast
-3. Implement forecast-driven export switching
-4. Use SPIKE_DISCHARGE mode with controlled `backup_reserve`
-5. Test: exports before negative prices
+### Phase 3: Proactive Export ✅ IMPLEMENTED
+1. ✅ Add `_should_proactive_export_at_slot()` decision logic
+2. ✅ Add `proactive_export` and `export_amount_kwh` to forecast
+3. ✅ Implement forecast-driven export switching
+4. ✅ Use PROACTIVE_EXPORT mode with **dynamic throttling reserve**
+5. ✅ Test: exports before negative prices
+
+#### Proactive Export Safety Features
+
+**Overnight Drain Simulation:**
+- `_simulate_overnight_drain_after_export()` simulates battery drain from export slot until solar production starts
+- Blocks exports that would cause overnight minimum SOC to drop below `export_min_soc_pct`
+- Returns `solar_found_in_forecast` flag to detect late forecast slots without solar visibility
+
+**Late Forecast Slot Protection:**
+- Exports blocked when solar cannot be found in remaining forecast data
+- This prevents exports in last 6-8 hours of 24h forecast window where overnight simulation is unreliable
+
+**Dynamic Throttling:**
+- Reserve set to `max(4, SOC - 5)` instead of fixed minimum
+- Limits each export session to ~5% of battery capacity (~0.675 kWh)
+- Creates "trickle export" behavior instead of full 8kW discharge
+- Forecast incorporates throttling to show realistic export amounts
 
 ## Component Details
 
