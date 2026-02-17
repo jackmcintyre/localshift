@@ -51,6 +51,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-018 | 🟠 HIGH | ✅ COMPLETED | Dashboard Entity ID Mismatch - Load Weight & Solar FIT |
 | backlog-med-007 | 🟡 MED | ✅ COMPLETED | Recent Load Diagnostic Fields Not Propagated to CoordinatorData |
 | backlog-med-008 | 🟡 MED | ✅ COMPLETED | `can_reach_target` Inconsistency Between Legacy and Detailed Forecast |
+| backlog-high-019 | 🟠 HIGH | 📋 PROPOSED | Allow DW Entry Under Target with Solar Forecast |
 | backlog-low-005 | ⚪ LOW | 📋 PROPOSED | Dashboard Template Shows `None` for Solar Remaining |
 
 ---
