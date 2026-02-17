@@ -44,3 +44,33 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 - After completing changes, run pre-commit hooks to verify code quality
 - AFTER pre-commit passes, ask the user to commit rather than auto-committing
 - Wait for user confirmation before running git commit
+
+# Documentation Automation Rules
+
+## Inline Documentation
+- When editing any Python file in `custom_components/amber_powerwall/`, check for:
+  - Missing docstrings on classes and public methods
+  - Methods >20 lines without inline comments for complex logic
+- Add Google-style docstrings following existing codebase patterns
+
+## /docs/ Directory Maintenance
+- After modifying sensor implementations → Prompt to update `docs/ENTITY_REFERENCE.md`
+- After modifying core computation logic (computation_engine, state_machine, battery_controller) → Prompt to update `docs/ARCHITECTURE.md`
+- After architectural changes → Prompt to add entry to `docs/CHANGE_DETECTION.md`
+- After modifying config flow → Prompt to update `docs/DEVELOPER_GUIDE.md`
+
+## Documentation Responsibilities Matrix
+| File Category | Inline Docs | /docs/ Updates |
+|---------------|--------------|----------------|
+| Sensors (`sensor.py`, `binary_sensor.py`) | ✅ | Update `ENTITY_REFERENCE.md` |
+| Core Engine (`computation_engine.py`) | ✅ | Update `ARCHITECTURE.md` |
+| State Management (`state_machine.py`) | ✅ | Update `ARCHITECTURE.md` |
+| Battery Control (`battery_controller.py`) | ✅ | Update `ARCHITECTURE.md` |
+| Config Flow (`config_flow.py`) | ✅ | Update `DEVELOPER_GUIDE.md` |
+| Coordinator (`coordinator.py`) | ✅ | Update `ARCHITECTURE.md` |
+
+## Documentation Prompts
+When completing an edit that affects documentation:
+1. Add/update inline docstrings as needed
+2. Prompt user to include /docs/ updates
+3. Include summary of documentation changes in completion message
