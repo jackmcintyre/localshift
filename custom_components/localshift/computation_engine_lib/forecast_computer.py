@@ -901,10 +901,10 @@ class ForecastComputer:
             )
             return False, 0.0
 
-        # Additional safety: Need sufficient buffer for overnight drain
-        # If we export now, the ending SOC must be significantly higher than minimum
-        # to account for continued overnight discharge
-        required_buffer_pct = 15.0  # 15% extra buffer above minimum
+        # Additional safety: Need some buffer above minimum
+        # This provides a small safety margin for forecast uncertainty
+        # Note: Overnight drain is separately simulated, so this is just a quick check
+        required_buffer_pct = 5.0  # 5% extra buffer above minimum
         if predicted_soc < (export_min_soc_pct + required_buffer_pct):
             _LOGGER.debug(
                 "PROACTIVE_EXPORT: BLOCKED - SOC %.1f%% < buffer (%.1f%% + %.1f%%)",
