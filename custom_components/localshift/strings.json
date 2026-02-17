@@ -48,7 +48,6 @@
                   "max_precharge_price": "Max Pre-charge Price",
                   "cheap_price_deadband": "Price Deadband",
                   "forecast_lookahead_hours": "Forecast Lookahead",
-                  "precharge_battery_threshold": "Pre-charge Battery Threshold",
                   "battery_target": "Battery Target",
                   "demand_window_start": "Demand Window Start",
                   "demand_window_end": "Demand Window End"

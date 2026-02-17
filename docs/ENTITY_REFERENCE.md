@@ -4,14 +4,14 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **35 entities** grouped under a single "LocalShift" device:
+The integration creates **34 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 11 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 4 | `switch` |
-| Numbers | 7 | `number` |
+| Numbers | 6 | `number` |
 | Buttons | 5 | `button` |
 
 ---
@@ -452,21 +452,7 @@ Used as the ceiling for effective cheap price when approaching demand window wit
 
 ---
 
-### 5. number.localshift_pre_charge_battery_threshold
-
-**Purpose:** SOC below which grid charging is considered even when not urgent.
-
-| Property | Value |
-|----------|-------|
-| Range | 0-100% |
-| Default | 50% |
-| Unit | % |
-
-**Note:** This is primarily for overnight charging. Daytime logic now uses solar gap detection instead.
-
----
-
-### 6. number.localshift_battery_target
+### 5. number.localshift_battery_target
 
 **Purpose:** Target SOC for demand window.
 
@@ -480,7 +466,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 7. number.localshift_load_weight_recent
+### 6. number.localshift_load_weight_recent
 
 **Purpose:** Weight given to recent vs historical consumption data.
 

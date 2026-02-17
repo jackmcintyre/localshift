@@ -23,7 +23,6 @@ from .const import (
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
-    CONF_PRECHARGE_BATTERY_THRESHOLD,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -52,7 +51,6 @@ from .const import (
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
-    DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
     DOMAIN,
 )
 
@@ -487,7 +485,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_MAX_PRECHARGE_PRICE: DEFAULT_MAX_PRECHARGE_PRICE,
                 CONF_CHEAP_PRICE_DEADBAND: DEFAULT_CHEAP_PRICE_DEADBAND,
                 CONF_FORECAST_LOOKAHEAD_HOURS: DEFAULT_FORECAST_LOOKAHEAD_HOURS,
-                CONF_PRECHARGE_BATTERY_THRESHOLD: DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
                 CONF_BATTERY_TARGET: DEFAULT_BATTERY_TARGET,
                 CONF_DEMAND_WINDOW_START: DEFAULT_DEMAND_WINDOW_START,
                 CONF_DEMAND_WINDOW_END: DEFAULT_DEMAND_WINDOW_END,
@@ -619,21 +616,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                             max=8.0,
                             step=0.5,
                             unit_of_measurement="hours",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_PRECHARGE_BATTERY_THRESHOLD,
-                        default=current.get(
-                            CONF_PRECHARGE_BATTERY_THRESHOLD,
-                            DEFAULT_PRECHARGE_BATTERY_THRESHOLD,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=100,
-                            step=5,
-                            unit_of_measurement="%",
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),

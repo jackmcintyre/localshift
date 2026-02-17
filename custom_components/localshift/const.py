@@ -107,7 +107,6 @@ CONF_CHEAP_PRICE_PERCENTILE = "cheap_price_percentile"
 CONF_MAX_PRECHARGE_PRICE = "max_pre_charge_price"
 CONF_CHEAP_PRICE_DEADBAND = "cheap_price_deadband"
 CONF_FORECAST_LOOKAHEAD_HOURS = "forecast_lookahead_hours"
-CONF_PRECHARGE_BATTERY_THRESHOLD = "pre_charge_battery_threshold"
 CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
@@ -120,7 +119,6 @@ DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
 DEFAULT_MAX_PRECHARGE_PRICE = 0.20  # $/kWh
 DEFAULT_CHEAP_PRICE_DEADBAND = 0.03  # $/kWh
 DEFAULT_FORECAST_LOOKAHEAD_HOURS = 2.0  # hours
-DEFAULT_PRECHARGE_BATTERY_THRESHOLD = 50  # %
 DEFAULT_BATTERY_TARGET = 100  # %
 DEFAULT_DEMAND_WINDOW_START = "15:00:00"
 DEFAULT_DEMAND_WINDOW_END = "21:00:00"
@@ -161,13 +159,6 @@ THRESHOLD_RANGES = {
         "step": 0.5,
         "unit": "hours",
         "icon": "mdi:clock-fast",
-    },
-    CONF_PRECHARGE_BATTERY_THRESHOLD: {
-        "min": 0,
-        "max": 100,
-        "step": 5,
-        "unit": "%",
-        "icon": "mdi:battery-charging-40",
     },
     CONF_BATTERY_TARGET: {
         "min": 50,
