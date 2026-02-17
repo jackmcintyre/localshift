@@ -33,7 +33,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-010 | 🟠 HIGH | ✅ COMPLETED | Pyright Error: Missing _manual_override_set_at Attribute |
 | backlog-high-011 | 🟠 HIGH | ✅ COMPLETED | Template Error: None Values in Cost Sensor Attributes |
 | backlog-high-012 | 🟠 HIGH | ✅ COMPLETED | Configurable Grid Export Reserve Delta |
-| backlog-high-013 | 🟠 HIGH | 📋 PROPOSED | hours_to_dw Calculation Bug (Boost Charging) |
+| backlog-high-013 | 🟠 HIGH | ✅ COMPLETED | hours_to_dw Calculation Bug (Boost Charging) |
 | backlog-high-014 | 🟠 HIGH | ✅ COMPLETED | Grid Import/Export Totals Always Zero in Debug Forecast |
 | backlog-med-001 | 🟡 MED | ✅ COMPLETED | No Test Coverage |
 | backlog-med-002 | 🟡 MED | 📋 PROPOSED | Time Precision Inconsistency |
@@ -54,7 +54,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Allow DW Entry Under Target with Solar Forecast |
 | backlog-low-005 | ⚪ LOW | 📋 PROPOSED | Dashboard Template Shows `None` for Solar Remaining |
 | backlog-med-010 | 🟡 MED | 📋 PROPOSED | Category-Based Entity Naming Conventions |
-| backlog-high-020 | 🟠 HIGH | 📋 PROPOSED | Spot Price vs Forecast Price Mismatch for Proactive Export |
+| backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Spot Price vs Forecast Price Mismatch for Proactive Export |
 
 ---
 

@@ -1081,13 +1081,9 @@ class ForecastComputer:
 
             # Determine if we should use boost charging (5kW) based on urgency
             # If very close to DW and far from target, use boost
-            hours_to_dw = max(
-                (
-                    slot_start.replace(hour=target_hour, minute=0) - slot_start
-                ).total_seconds()
-                / 3600,
-                0,
-            )
+            # Use _next_demand_window_start_dt to handle day wrap-around correctly
+            next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
+            hours_to_dw = (next_dw_start - slot_start).total_seconds() / 3600
             if should_boost:
                 max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
             elif should_grid_charge and hours_to_dw < 2:
