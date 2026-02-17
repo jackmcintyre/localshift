@@ -870,11 +870,9 @@ class ForecastComputer:
         """
         # SPOT PRICE: Only use for current slot (real-time decision)
         # For future slots, always use forecast price
-        using_spot_price = False
         if is_current_slot and feed_in_price_current > 0:
             # Current slot with positive spot price - use it for real-time decision
             use_price = feed_in_price_current
-            using_spot_price = True
             _LOGGER.debug(
                 "PROACTIVE_EXPORT: Using spot price $%.2f for current slot (forecast: $%.2f)",
                 feed_in_price_current,
@@ -972,42 +970,40 @@ class ForecastComputer:
                 )
                 return False, 0.0
 
-        # Find the maximum FIT price in the window before battery fills
+        # Find the maximum FIT price in the window BEFORE fill point
         # This maximizes revenue while ensuring solar isn't wasted
-        max_fit_price_evening = self._calculate_max_fit_price(
-            feed_in_forecast, slot_start, hours=6
+        # Calculate hours until fill point (for price window calculation)
+        hours_until_fill = (
+            (fill_point_offset - current_offset) * 15 / 60
+            if fill_point_offset is not None
+            else 6
+        )
+        hours_for_price_lookup = min(max(int(hours_until_fill), 1), 24)
+
+        max_fit_price_before_fill = self._calculate_max_fit_price(
+            feed_in_forecast, slot_start, hours=hours_for_price_lookup
         )
 
         # Only export when at or near peak (e.g., within 20% of max)
         # This ensures we export at financially optimal times
-        export_threshold = max_fit_price_evening * 0.8  # 80% of peak
+        export_threshold = max_fit_price_before_fill * 0.8  # 80% of peak
 
         # Never proactive-export into a non-positive FIT.
         if use_price <= 0:
             return False, 0.0
 
-        # When using spot price, we use it directly for threshold check
-        # When using forecast, we check if better price is coming
-        if not using_spot_price:
-            # Check if better price is coming in next 3 hours (forecast mode only)
-            best_price_next_3h = self._calculate_max_fit_price(
-                feed_in_forecast, slot_start, hours=3
-            )
-
-            # If current price is more than 10% below the best price coming in next 3 hours,
-            # don't export - wait for the better price
-            if use_price < best_price_next_3h * 0.9:
-                _LOGGER.debug(
-                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - better price coming (current=$%.2f < next_3h=$%.2f)",
-                    slot_hour,
-                    slot_start.minute,
-                    use_price,
-                    best_price_next_3h,
-                )
-                return False, 0.0
-
         # Only export if current FIT is at or near peak threshold
+        # This is the key constraint - export at good prices, not just any price
         if use_price < export_threshold:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f < threshold=$%.2f (max_before_fill=$%.2f, hours_until_fill=%.1f)",
+                slot_hour,
+                slot_start.minute,
+                use_price,
+                export_threshold,
+                max_fit_price_before_fill,
+                hours_until_fill,
+            )
             return False, 0.0
 
         # CRITICAL: Calculate total discharge (export + load) before deciding
