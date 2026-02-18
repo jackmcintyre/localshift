@@ -55,6 +55,8 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-low-005 | ⚪ LOW | ✅ COMPLETED | Dashboard Template Shows `None` for Solar Remaining |
 | backlog-med-010 | 🟡 MED | ✅ COMPLETED | Category-Based Entity Naming Conventions |
 | backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Spot Price vs Forecast Price Mismatch for Proactive Export |
+| backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
+| backlog-med-012 | 🟡 MED | 📋 PROPOSED | Binary Sensors Include Redundant "binary" in Names |
 
 ---
 

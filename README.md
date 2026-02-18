@@ -92,7 +92,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_cost_electricity_net` | Net cost with import/export/savings/charge cost attributes |
 | `sensor.localshift_decision_log` | Mode change history with reasons |
 
-### Binary Sensors (11)
+### Binary Sensors (8)
 
 | Entity ID | Description |
 |---|---|
@@ -102,13 +102,10 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `binary_sensor.localshift_binary_discharge_forced` | Powerwall is currently force discharging |
 | `binary_sensor.localshift_binary_charge_forced` | Powerwall is currently force charging |
 | `binary_sensor.localshift_binary_charge_boost` | Powerwall is currently boost charging (5kW) |
-| `binary_sensor.localshift_hold_active` | Powerwall is currently holding |
 | `binary_sensor.localshift_binary_solar_can_reach_target` | Solar forecast can reach battery target before DW |
 | `binary_sensor.localshift_binary_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
-| `binary_sensor.localshift_hold_justified` | Hold mode justified (solar coming or cheap prices forecast) |
-| `binary_sensor.localshift_solar_export_hold_justified` | Solar export hold justified (with `surplus_ratio` attribute) |
 
-### Switches (4)
+### Switches (5)
 
 | Entity ID | Default | Description |
 |---|---|---|
@@ -116,6 +113,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `switch.localshift_spike_discharge_enabled` | ON | Allow discharge during price spikes |
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
 | `switch.localshift_demand_window_block` | ON | Block grid charging during demand window |
+| `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
 
 ### Numbers (6)
 
@@ -134,9 +132,9 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 |---|---|
 | `button.localshift_force_charge` | Manually force charge (backup mode, 3.3kW) |
 | `button.localshift_force_discharge` | Manually force discharge (autonomous, reserve=0) |
-| `button.localshift_hold_battery` | Manually hold at current SOC |
 | `button.localshift_boost_charge` | Manually boost charge at 5kW |
 | `button.localshift_self_consumption` | Clear manual override, return to automation |
+| `button.localshift_update_forecast` | Force forecast update and clear historical load cache |
 
 ## Dashboard
 
@@ -207,9 +205,38 @@ Context-dependent debounce prevents rapid mode switching:
 - **2 minutes**: Solar export hold entry/exit
 - **5 minutes**: Price-driven transitions (grid charging, hold, self consumption)
 
+## Migration from amber_powerwall (Rebranding)
+
+**If you previously had the `amber_powerwall` integration installed:**
+
+The integration has been rebranded from `amber_powerwall` to `localshift`. You need to manually migrate:
+
+1. **Remove the old integration:**
+   - Go to **Settings → Devices & Services**
+   - Find the old "Amber Powerwall" integration
+   - Click the three dots → **Delete** (this removes the config entry and all old entities)
+
+2. **Clean up stale entities (if any remain):**
+   - Go to **Developer Tools → States**
+   - Search for `amber_powerwall` - if any entities remain, note them down
+   - Go to **Settings → Devices & Services → Entities**
+   - Find and delete any orphaned `amber_powerwall_*` entities
+
+3. **Restart Home Assistant** (important for clean entity registration)
+
+4. **Set up the new integration:**
+   - Go to **Settings → Devices & Services → Add Integration**
+   - Search for "LocalShift"
+   - Configure as described in the Configuration section above
+
+5. **Update your dashboard:**
+   - The dashboard at `dashboards/localshift.yaml` already uses the new entity IDs
+   - If you have a custom dashboard, update entity references:
+     - `amber_powerwall_*` → `localshift_*`
+
 ## Migration from YAML Package
 
-If you're migrating from the `localshift.yaml` package:
+If you're migrating from the `amber_powerwall.yaml` or `localshift.yaml` package:
 
 1. Install the custom component and configure it
 2. Run both side-by-side with the component's **Dry Run** switch ON
@@ -218,6 +245,30 @@ If you're migrating from the `localshift.yaml` package:
 5. Enable the component's automation switch
 6. Monitor for 24 hours
 7. Remove the YAML package from `packages/`
+
+## Troubleshooting
+
+### Buttons not working / Entities missing
+
+If button entities show as "missing or not currently available":
+
+1. **Check if the integration is loaded:**
+   - Go to **Settings → Devices & Services**
+   - Look for the LocalShift integration - it should show as "Loaded"
+   - If it shows an error, click **Reload**
+
+2. **Check for old domain conflicts:**
+   - If you previously had `amber_powerwall` installed, follow the migration steps above
+   - Old entity registry entries can prevent new entities from registering
+
+3. **Check the logs:**
+   - Go to **Settings → System → Logs**
+   - Filter for "localshift" - look for any error messages
+   - On startup, you should see "LocalShift integration set up successfully"
+
+4. **Full restart:**
+   - Sometimes Home Assistant needs a full restart to register new entities
+   - Restart Home Assistant and check again
 
 ## License
 

@@ -4,13 +4,13 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **34 entities** grouped under a single "LocalShift" device:
+The integration creates **31 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 11 | `sensor` |
 | Binary Sensors | 8 | `binary_sensor` |
-| Switches | 4 | `switch` |
+| Switches | 5 | `switch` |
 | Numbers | 6 | `number` |
 | Buttons | 5 | `button` |
 
@@ -357,6 +357,18 @@ Use this to test automation behavior without affecting actual battery state.
 
 ---
 
+### 5. switch.localshift_allow_dw_entry_under_target
+
+**Purpose:** Allow demand window entry when SOC is under target but solar can reach it.
+
+**Default:** OFF
+
+**Behavior:**
+- ON: Enter demand window mode even if SOC < target, if solar forecast shows target can be reached
+- OFF: Only enter demand window mode when SOC >= target
+
+---
+
 ## Numbers (Configuration Thresholds)
 
 ### 1. number.localshift_cheap_price_percentile
@@ -463,17 +475,7 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 3. button.localshift_hold_battery
-
-**Action:** Hold battery at current SOC.
-
-**Effect:** Sets Powerwall to `self_consumption` with reserve=100%
-
-**Use Case:** Preserve battery for later (e.g., waiting for spike).
-
----
-
-### 4. button.localshift_boost_charge
+### 3. button.localshift_boost_charge
 
 **Action:** Start boost charging at 5kW.
 
@@ -483,13 +485,23 @@ The battery aims to reach this SOC by the demand window start time.
 
 ---
 
-### 5. button.localshift_self_consumption
+### 4. button.localshift_self_consumption
 
 **Action:** Clear manual override, return to automation control.
 
 **Effect:** Clears manual override flag, resumes state machine evaluation
 
 **Use Case:** Exit manual control mode after using any of the above buttons.
+
+---
+
+### 5. button.localshift_update_forecast
+
+**Action:** Force forecast update and clear historical load cache.
+
+**Effect:** Clears the historical load cache and triggers a forecast regeneration
+
+**Use Case:** Manually refresh forecast data after external changes or for debugging.
 
 ---
 
