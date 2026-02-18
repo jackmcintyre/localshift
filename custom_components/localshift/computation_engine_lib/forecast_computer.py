@@ -229,6 +229,91 @@ class ForecastComputer:
             candidate += timedelta(days=1)
         return candidate
 
+    def _find_solar_start_time(
+        self,
+        start_slot: datetime,
+        all_solcast: list[dict],
+        max_hours: int = 12,
+    ) -> datetime | None:
+        """Find when solar production starts (first slot with >0.1 kWh).
+
+        Args:
+            start_slot: Starting slot time
+            all_solcast: Full Solcast forecast
+            max_hours: Maximum hours to search ahead
+
+        Returns:
+            Datetime of first slot with meaningful solar, or None if not found
+        """
+        base_slot = start_slot.replace(second=0, microsecond=0)
+
+        for offset in range(max_hours * 4):  # 4 slots per hour
+            check_slot = base_slot + timedelta(minutes=15 * offset)
+            solar_kwh = get_solar_for_15min_slot(all_solcast, check_slot)
+            if solar_kwh > 0.1:  # Meaningful solar production
+                return check_slot
+
+        return None
+
+    def _simulate_overnight_drain_to_solar(
+        self,
+        start_soc: float,
+        start_slot: datetime,
+        solar_start: datetime,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+        min_soc_pct: float = 0.0,
+    ) -> float:
+        """Simulate overnight drain from current slot until solar starts.
+
+        Args:
+            start_soc: Starting SOC percentage
+            start_slot: Starting slot time
+            solar_start: When solar production starts
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            min_soc_pct: Minimum SOC floor
+
+        Returns:
+            SOC percentage at solar start time
+        """
+        soc = start_soc
+        base_slot = start_slot.replace(second=0, microsecond=0)
+
+        total_slots = int((solar_start - base_slot).total_seconds() // (15 * 60))
+        total_slots = max(total_slots, 0)
+
+        for offset in range(total_slots):
+            slot_start = base_slot + timedelta(minutes=15 * offset)
+            slot_hour = slot_start.hour
+
+            # Get solar (should be ~0 overnight) and load
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw / 4
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply battery discharge
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            if net_kwh >= 0:
+                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            soc += delta / BATTERY_CAPACITY_KWH * 100
+            soc = max(min_soc_pct, min(100.0, soc))
+
+        return soc
+
     def _find_negative_fit_windows(
         self, feed_in_forecast: list[dict], start_time: datetime, max_hours: int = 24
     ) -> list[tuple[datetime, datetime, float]]:
@@ -360,29 +445,113 @@ class ForecastComputer:
         sim_start = slot_start
         sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
 
-        soc_at_end, max_soc, can_reach_with_solar_only = (
-            self._simulate_future_soc_with_solar_only(
-                actual_current_soc=predicted_soc,
-                start_slot=sim_start,
-                target_pct=target_pct,
-                all_solcast=all_solcast,
-                historical_avg_kw=historical_avg_kw,
-                current_load_kw=current_load_kw,
-                recent_load_kw=recent_load_kw,
-                dw_start_time=dw_start_time,
-                end_time=sim_end,
-                min_soc_pct=min_soc_pct,
-            )
-        )
+        # OVERNIGHT EFFICIENCY CHECK:
+        # For overnight slots (no solar), we need to check differently.
+        # Grid charging overnight at $0.15/kWh when tomorrow's solar is "free" is
+        # economically wrong. Only grid charge overnight if solar truly can't reach target.
+        is_overnight_slot = solar_kwh < 0.01  # No meaningful solar
 
-        # Solar forecast says we'll reach target: NO grid charging
-        if can_reach_with_solar_only:
-            _LOGGER.info(
-                "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
-                max_soc,
-                target_pct,
+        if is_overnight_slot:
+            # Find when solar production starts
+            solar_start = self._find_solar_start_time(slot_start, all_solcast)
+
+            if solar_start is not None:
+                # Simulate overnight drain to get SOC at solar start
+                soc_at_solar_start = self._simulate_overnight_drain_to_solar(
+                    start_soc=predicted_soc,
+                    start_slot=slot_start,
+                    solar_start=solar_start,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=historical_avg_kw,
+                    current_load_kw=current_load_kw,
+                    recent_load_kw=recent_load_kw,
+                    min_soc_pct=min_soc_pct,
+                )
+
+                # Now simulate from solar start to next DW
+                soc_at_end, max_soc, can_reach_with_solar_only = (
+                    self._simulate_future_soc_with_solar_only(
+                        actual_current_soc=soc_at_solar_start,
+                        start_slot=solar_start,  # Start from solar, not from now
+                        target_pct=target_pct,
+                        all_solcast=all_solcast,
+                        historical_avg_kw=historical_avg_kw,
+                        current_load_kw=current_load_kw,
+                        recent_load_kw=recent_load_kw,
+                        dw_start_time=dw_start_time,
+                        end_time=sim_end,
+                        min_soc_pct=min_soc_pct,
+                    )
+                )
+
+                _LOGGER.debug(
+                    "OVERNIGHT_CHECK: %02d:%02d SOC %.1f%% -> %.1f%% at solar start %s, max_soc=%.1f%%",
+                    slot_start.hour,
+                    slot_start.minute,
+                    predicted_soc,
+                    soc_at_solar_start,
+                    solar_start.strftime("%H:%M"),
+                    max_soc,
+                )
+
+                # Solar from dawn can reach target: NO overnight grid charging
+                if can_reach_with_solar_only:
+                    _LOGGER.info(
+                        "Grid charge SKIPPED overnight: solar from %s reaches target (SOC at dawn: %.1f%% -> max %.1f%%)",
+                        solar_start.strftime("%H:%M"),
+                        soc_at_solar_start,
+                        max_soc,
+                    )
+                    return False, False
+            else:
+                # No solar found in forecast - proceed with normal simulation
+                soc_at_end, max_soc, can_reach_with_solar_only = (
+                    self._simulate_future_soc_with_solar_only(
+                        actual_current_soc=predicted_soc,
+                        start_slot=sim_start,
+                        target_pct=target_pct,
+                        all_solcast=all_solcast,
+                        historical_avg_kw=historical_avg_kw,
+                        current_load_kw=current_load_kw,
+                        recent_load_kw=recent_load_kw,
+                        dw_start_time=dw_start_time,
+                        end_time=sim_end,
+                        min_soc_pct=min_soc_pct,
+                    )
+                )
+
+                if can_reach_with_solar_only:
+                    _LOGGER.info(
+                        "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
+                        max_soc,
+                        target_pct,
+                    )
+                    return False, False
+        else:
+            # Daylight slot - use original simulation logic
+            soc_at_end, max_soc, can_reach_with_solar_only = (
+                self._simulate_future_soc_with_solar_only(
+                    actual_current_soc=predicted_soc,
+                    start_slot=sim_start,
+                    target_pct=target_pct,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=historical_avg_kw,
+                    current_load_kw=current_load_kw,
+                    recent_load_kw=recent_load_kw,
+                    dw_start_time=dw_start_time,
+                    end_time=sim_end,
+                    min_soc_pct=min_soc_pct,
+                )
             )
-            return False, False
+
+            # Solar forecast says we'll reach target: NO grid charging
+            if can_reach_with_solar_only:
+                _LOGGER.info(
+                    "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
+                    max_soc,
+                    target_pct,
+                )
+                return False, False
 
         # SAFETY NET: Charge if very cheap (forecast could be wrong)
         # IMPORTANT: only applies when solar *cannot* meet the target before DW.
