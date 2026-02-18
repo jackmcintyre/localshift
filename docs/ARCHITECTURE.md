@@ -272,6 +272,55 @@ This ensures the system captures real-time price opportunities rather than relyi
 
 The `daily_forecast` list contains 112 entries: 24 × 5-minute near-term slots followed by 88 × 15-minute long-term slots. The `slot_interval_minutes` field identifies the granularity of each entry.
 
+### Hybrid Timescale Architecture
+
+The forecast system uses a **hybrid timescale** approach that balances accuracy and efficiency:
+
+**Design Rationale:**
+- **Near-term (0-2h):** 24 × 5-minute slots for high-accuracy decisions
+  - Matches Amber 5-minute pricing granularity
+  - Ensures "now" is always covered in forecast
+  - Critical for grid charging and export decisions
+- **Long-term (2-24h):** 88 × 15-minute slots for efficient planning
+  - Sufficient granularity for forward planning
+  - Reduces computational complexity
+  - Matches original 15-minute design for consistency
+
+**Total Coverage:** 24×5min + 88×15min = 120min + 1320min = 1440min = 24 hours (112 slots)
+
+**Critical Bug Fix:**
+Prior to this implementation, helper functions (`_find_battery_fill_point`, `_calculate_solar_energy_between_slots`) assumed uniform 15-minute slots throughout the entire 24-hour forecast. This caused SOC accumulation to be calculated **3× too fast** in the near-term window (0-2h), leading to:
+- Battery fill point predicted 2-3 hours too early
+- Grid charging decisions incorrectly delayed
+- System predicting rapid charging while battery actually draining
+
+**Solution Implemented:**
+All helper functions now use the same hybrid timescale as the main forecast loop:
+- `_find_battery_fill_point()` - Returns elapsed minutes using hybrid loops
+- `_calculate_solar_energy_between_slots()` - Uses elapsed minutes parameters
+- `_should_proactive_export_at_slot()` - Accepts `current_elapsed_minutes` and `fill_point_elapsed_minutes`
+
+**Solar Retrieval:**
+- Near-term (5-min): `get_solar_for_5min_slot()` returns 1/6 of 30-min Solcast period
+- Long-term (15-min): `get_solar_for_15min_slot()` returns 1/2 of 30-min Solcast period
+
+**Time-Based Comparisons:**
+Helper functions return elapsed minutes rather than slot offsets, enabling clean time-based comparisons that are agnostic to slot duration:
+
+```python
+# Fill point calculation returns minutes
+fill_point_elapsed_minutes = self._find_battery_fill_point(...)
+
+# Main loop calculates elapsed time
+elapsed_minutes = (slot_start - base_slot).total_seconds() / 60
+
+# Comparison is duration-based, not slot-based
+if elapsed_minutes >= fill_point_elapsed_minutes:
+    # Block export - battery would fill before we can use more solar
+```
+
+This architecture ensures accurate near-term decisions while maintaining computational efficiency for long-term planning.
+
 ```python
 daily_forecast = [
     # Near-term entry (5-min slot, first 2 h)

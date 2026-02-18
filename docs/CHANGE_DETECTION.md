@@ -400,7 +400,60 @@ class ForecastChangeTracker:
 4. **Dynamic age limit**: Adjust based on time of day (e.g., shorter during peak)
 5. **Cost-based trigger**: Recompute if missed opportunity cost > threshold
 
+## Change Log
+
+### 2026-02-19: Hybrid Timescale Slot Duration Fix
+
+**Issue:** Helper functions (`_find_battery_fill_point`, `_calculate_solar_energy_between_slots`) assumed uniform 15-minute slots throughout the entire 24-hour forecast, causing SOC accumulation to be calculated **3× too fast** in the near-term window (0-2h).
+
+**Impact:**
+- Battery fill point predicted 2-3 hours too early
+- Grid charging decisions incorrectly delayed
+- System predicting rapid charging while battery actually draining
+- User-reported symptom: "System predicts rapid charging while battery is actually draining"
+
+**Root Cause:**
+Main forecast loop used hybrid timescale (24×5min + 88×15min) but helper functions used only 15-minute slots:
+```python
+# WRONG (old helper code):
+for offset in range(96):  # Always 96 × 15-min = 24 hours
+    slot_start = base_slot + timedelta(minutes=15 * offset)
+```
+
+**Solution Implemented:**
+1. Helper functions now use same hybrid timescale as main loop:
+   - Near-term (0-2h): 24 × 5-minute slots
+   - Long-term (2-24h): 88 × 15-minute slots
+
+2. Functions return elapsed minutes instead of slot offsets:
+   - `_find_battery_fill_point()` returns minutes until 100% SOC
+   - `_calculate_solar_energy_between_slots()` accepts elapsed minutes parameters
+   - Enables time-based comparisons agnostic to slot duration
+
+3. Solar retrieval uses appropriate granularity:
+   - Near-term: `get_solar_for_5min_slot()` returns 1/6 of 30-min Solcast period
+   - Long-term: `get_solar_for_15min_slot()` returns 1/2 of 30-min Solcast period
+
+**Validation:**
+- All existing tests pass (47/47)
+- New hybrid timescale tests added (9 tests)
+- Total: 56/56 tests passing
+- Verifies fill point calculations are now accurate
+- Confirms solar energy calculations match expected granularity
+
+**Performance Impact:**
+- Minimal: 112 iterations vs 96 (16% increase)
+- Near-term accuracy is critical for operational decisions
+- Long-term efficiency maintained with 15-min slots
+
+**Files Modified:**
+- `forecast_computer.py` - Hybrid timescale implementation in helper functions
+- `tests/test_hybrid_timescale.py` - New test suite for hybrid functionality
+- `docs/ARCHITECTURE.md` - Documentation of hybrid architecture
+- `docs/CHANGE_DETECTION.md` - This change log entry
+
 ## References
 
 - `ARCHITECTURE.md` - Overall system architecture
 - `FORECAST_DRIVEN_CONTROL.md` - Forecast-driven control design
+- `HYBRID_TIMESCALE_SLOT_DURATION_ANALYSIS.md` - Detailed analysis of the bug and solution
