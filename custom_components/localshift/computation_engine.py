@@ -226,9 +226,17 @@ class ComputationEngine:
             self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
         )
 
+        # ---- Step 7a: effective_cheap_price (BEFORE forecast to break circular dependency) ----
+        # Compute effective_cheap_price BEFORE forecast using preliminary solar estimate
+        # This breaks the circular dependency where forecast depends on effective_cheap_price
+        # which depends on solar_can_reach_target which depends on forecast
+        self._compute_effective_cheap_price_preliminary(
+            data, now_dt, before_dw, target_hour, target_pct
+        )
+
         # ---- Step 4/16: daily_forecast (detailed 15-min forecast) ----
-        # Compute detailed forecast FIRST - this is the single source of truth
-        # This must be computed before deriving simple values
+        # Compute detailed forecast AFTER effective_cheap_price is set
+        # This is the single source of truth
         self._compute_daily_15min_forecast(data, now_dt)
 
         # ---- Step 5: solar_can_reach_target (derived from detailed forecast) ----
@@ -297,7 +305,8 @@ class ComputationEngine:
         else:
             data.solar_can_reach_target_in_dw = False
 
-        # ---- Step 7: effective_cheap_price ----
+        # ---- Step 7: effective_cheap_price (final update) ----
+        # Update effective_cheap_price with actual solar_can_reach_target from forecast
         self._compute_effective_cheap_price(data, now_dt, before_dw, target_hour)
 
         # ---- Step 8: cheap_charge_stop_price ----
@@ -633,10 +642,119 @@ class ComputationEngine:
         else:
             _LOGGER.debug("Forecast unchanged, skipping recompute")
 
+    def _compute_effective_cheap_price_preliminary(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        before_dw: bool,
+        target_hour: int,
+        target_pct: float,
+    ) -> None:
+        """Compute preliminary effective cheap price threshold using solar estimate.
+
+        This breaks the circular dependency by using a quick solar estimate instead
+        of the actual solar_can_reach_target from the forecast.
+        """
+        # Calculate base from percentile of forecast prices
+        lookahead = float(
+            self.entry.options.get(
+                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
+            )
+        )
+        cutoff = now_dt + timedelta(hours=lookahead)
+
+        # Collect forecast prices within lookahead window
+        forecast_prices = []
+        for f in data.general_forecast:
+            if not isinstance(f, dict):
+                continue
+            start = self._parse_forecast_dt(f.get("start_time"))
+            if start is None:
+                continue
+            start_local = dt_util.as_local(start)
+            if start_local >= now_dt and start_local <= cutoff:
+                forecast_prices.append(float(f.get("per_kwh", 0)))
+
+        # Calculate percentile-based cheap price
+        percentile = float(
+            self.entry.options.get(
+                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
+            )
+        )
+        if forecast_prices:
+            base = round(self._percentile(forecast_prices, percentile), 2)
+        else:
+            # Fallback to max_precharge_price if no forecast data
+            base = float(
+                self.entry.options.get(
+                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                )
+            )
+
+        max_price = float(
+            self.entry.options.get(
+                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+            )
+        )
+
+        # PRELIMINARY SOLAR ESTIMATE: Use simple solar forecast + load estimate
+        # This avoids the circular dependency with the detailed forecast
+        try:
+            solar_kwh = self._sum_solar_before_target(
+                data.solcast_today, now_dt, target_hour
+            )
+        except (AttributeError, TypeError):
+            # Handle missing or malformed Solcast data gracefully
+            solar_kwh = 0.0
+        deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
+
+        # Estimate consumption using historical averages
+        target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
+        expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
+        consumption_kwh = expected_load_kw * hours_to_target
+
+        # Preliminary solar gap assessment
+        net_solar = solar_kwh - consumption_kwh
+        preliminary_solar_can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
+        solar_gap = not preliminary_solar_can_reach
+
+        if not solar_gap or not before_dw or data.target_reached_today:
+            data.effective_cheap_price = base
+        else:
+            target_dt = now_dt.replace(
+                hour=target_hour, minute=0, second=0, microsecond=0
+            )
+            hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
+            total_window = 8.0
+            urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
+            urgency_price = base + (max_price - base) * urgency
+
+            # Find minimum forecast price before DW
+            min_forecast = max_price
+            for f in data.general_forecast:
+                start = self._parse_forecast_dt(f.get("start_time"))
+                if start is None:
+                    continue
+                start_local = dt_util.as_local(start)
+                if start_local >= now_dt and start_local.hour < target_hour:
+                    price = float(f.get("per_kwh", max_price))
+                    if price < min_forecast:
+                        min_forecast = price
+
+            forecast_floor = max(min_forecast + 0.02, base)
+            final = min(urgency_price, max_price)
+            final = max(final, forecast_floor)
+            data.effective_cheap_price = round(final, 2)
+
     def _compute_effective_cheap_price(
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
     ) -> None:
-        """Compute the effective cheap price threshold."""
+        """Compute the final effective cheap price threshold using actual forecast results.
+
+        This is called after the forecast is computed, allowing it to use the actual
+        solar_can_reach_target from the detailed forecast simulation.
+        """
         # Calculate base from percentile of forecast prices
         lookahead = float(
             self.entry.options.get(
