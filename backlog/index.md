@@ -1,6 +1,6 @@
 # Backlog Index
 
-**Last Updated:** 2026-02-16
+**Last Updated:** 2026-02-18
 
 This is the master index for all backlog items. Each feature has its own dedicated `.md` file in this directory.
 
@@ -21,46 +21,14 @@ This is the master index for all backlog items. Each feature has its own dedicat
 
 | ID | Priority | Status | Title |
 |----|----------|--------|-------|
-| backlog-crit-001 | 🔴 CRIT | ✅ COMPLETED | Force Charge Detection Logic Bug |
-| backlog-high-001 | 🟠 HIGH | ✅ COMPLETED | Add Entity Validation on Config Flow |
-| backlog-high-002 | 🟠 HIGH | ✅ COMPLETED | Missing Tomorrow's Forecast Integration |
-| backlog-high-003 | 🟠 HIGH | ✅ COMPLETED | No Error Handling for Powerwall API Calls |
-| backlog-high-004 | 🟠 HIGH | ✅ COMPLETED | Notification Service Not Validated |
-| backlog-high-005 | 🟠 HIGH | ✅ COMPLETED | Arbitrary Sleep Delays Between Commands |
-| backlog-high-006 | 🟠 HIGH | ✅ COMPLETED | Demand Window Block Logic Priority Issue |
-| backlog-high-007 | 🟠 HIGH | ✅ COMPLETED | Inconsistent State Machine Priority Order |
-| backlog-high-008 | 🟠 HIGH | ✅ COMPLETED | Proactive Export Not Using Peak FIT Prices |
-| backlog-high-010 | 🟠 HIGH | ✅ COMPLETED | Pyright Error: Missing _manual_override_set_at Attribute |
-| backlog-high-011 | 🟠 HIGH | ✅ COMPLETED | Template Error: None Values in Cost Sensor Attributes |
-| backlog-high-012 | 🟠 HIGH | ✅ COMPLETED | Configurable Grid Export Reserve Delta |
-| backlog-high-013 | 🟠 HIGH | ✅ COMPLETED | hours_to_dw Calculation Bug (Boost Charging) |
-| backlog-high-014 | 🟠 HIGH | ✅ COMPLETED | Grid Import/Export Totals Always Zero in Debug Forecast |
-| backlog-med-001 | 🟡 MED | ✅ COMPLETED | No Test Coverage |
-| backlog-med-002 | 🟡 MED | ✅ COMPLETED | Time Precision Inconsistency |
+| backlog-high-017 | 🟠 HIGH | 📋 PROPOSED | Excess Solar Load Shifting Sensors |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
 | backlog-med-004 | 🟡 MED | 📋 PROPOSED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
-| backlog-med-006 | 🟡 MED | ✅ COMPLETED | Test Suite Has 29 Failing Tests |
-| backlog-low-001 | ⚪ LOW | 📋 PROPOSED | Dashboard Setup Complexity |
-| backlog-low-002 | ⚪ LOW | ✅ COMPLETED | Hardcoded Personal Notification Service |
-| backlog-low-003 | ⚪ LOW | ✅ COMPLETED | Version Inconsistency |
-| backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
-| backlog-high-015 | 🟠 HIGH | ✅ COMPLETED | Solar FIT Sensor Shows `unknown` State |
-| backlog-high-016 | 🟠 HIGH | ✅ COMPLETED | Forecast Consumption Not Blending Recent Load Data |
-| backlog-high-018 | 🟠 HIGH | ✅ COMPLETED | Dashboard Entity ID Mismatch - Load Weight & Solar FIT |
-| backlog-med-007 | 🟡 MED | ✅ COMPLETED | Recent Load Diagnostic Fields Not Propagated to CoordinatorData |
-| backlog-med-008 | 🟡 MED | ✅ COMPLETED | `can_reach_target` Inconsistency Between Legacy and Detailed Forecast |
-| backlog-med-009 | 🟡 MED | ✅ COMPLETED | Automated Documentation Generation via Cline |
-| backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Allow DW Entry Under Target with Solar Forecast |
-| backlog-low-005 | ⚪ LOW | ✅ COMPLETED | Dashboard Template Shows `None` for Solar Remaining |
-| backlog-med-010 | 🟡 MED | ✅ COMPLETED | Category-Based Entity Naming Conventions |
-| backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Spot Price vs Forecast Price Mismatch for Proactive Export |
 | backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
 | backlog-med-012 | 🟡 MED | 📋 PROPOSED | Binary Sensors Include Redundant "binary" in Names |
-| backlog-high-021 | 🟠 HIGH | ✅ COMPLETED | Hybrid 5-min/15-min Forecast + Lookup Fix (Issues 3 & 4) |
-| backlog-high-022 | 🟠 HIGH | ✅ COMPLETED | compute_derived_values Outside Evaluate Lock (Issue 5) |
-| backlog-high-023 | 🟠 HIGH | ✅ COMPLETED | Manual Override Double Computation + Proactive Export Guard + Health Check Cooldown + Validation Timeout (Issues 6–9) |
-| backlog-med-013 | 🟡 MED | ✅ COMPLETED | _get_forecast_at_demand_window Stale Entry Post-DW + SELF_CONSUMPTION Fallthrough Log (Issues 14 & 17) |
+| backlog-low-001 | ⚪ LOW | 📋 PROPOSED | Dashboard Setup Complexity |
+| backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
 
 ---
 
