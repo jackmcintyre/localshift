@@ -765,12 +765,14 @@ class ForecastComputer:
         solar_kwh: float,
         slot_fit_price: float,
         predicted_soc: float,
+        target_pct: float,
         in_demand_window: bool,
         forecasted_excess_kwh: float,
         remaining_export_budget_kwh: float,
         feed_in_forecast: list[dict],
         min_soc_no_exports: float,
         export_min_soc_pct: float,
+        effective_cheap_price: float,
         feed_in_price_current: float,
         all_solcast: list[dict] | None = None,
         historical_avg_kw: dict[int, float] | None = None,
@@ -788,11 +790,12 @@ class ForecastComputer:
         Strategy:
         1. PREFER SPOT: Use current spot price ONLY for current slot (real-time decision)
         2. For future slots, use forecast price and check if better price is coming
-        3. Only export when FIT > 0
-        4. Check ending SOC after export (not just starting SOC)
-        5. Only export if minimum SOC without exports >= export_min_soc_pct
-        6. Only export if we have forecasted excess (won't run short)
-        7. CRITICAL: Simulate overnight drain to ensure battery won't drop
+        3. Only export when FIT > effective_cheap_price (profitability floor)
+        4. Only export when battery is AT OR ABOVE target SOC (no deficit exporting)
+        5. Check ending SOC after export (not just starting SOC)
+        6. Only export if minimum SOC without exports >= export_min_soc_pct
+        7. Only export if we have forecasted excess (won't run short)
+        8. CRITICAL: Simulate overnight drain to ensure battery won't drop
            below minimum before solar production starts
 
         Args:
@@ -801,12 +804,16 @@ class ForecastComputer:
             solar_kwh: Solar forecast for this slot
             slot_fit_price: Feed-in price for this slot (from forecast)
             predicted_soc: Predicted SOC at start of slot
+            target_pct: Target SOC percentage (battery target)
             in_demand_window: True if in demand window
             forecasted_excess_kwh: Total excess solar forecasted
             remaining_export_budget_kwh: Exportable energy remaining in budget
             feed_in_forecast: Full FIT price forecast
             min_soc_no_exports: Minimum SOC over 24h without proactive exports
             export_min_soc_pct: Minimum SOC threshold for exports (from config)
+            effective_cheap_price: The effective cheap price threshold used for grid
+                charging decisions. Exports below this price are unprofitable when
+                the battery holds grid-charged energy.
             feed_in_price_current: Current spot feed-in price (only for current slot)
             all_solcast: Full Solcast forecast (for overnight simulation)
             historical_avg_kw: Historical hourly load profile (for overnight simulation)
@@ -830,6 +837,34 @@ class ForecastComputer:
         else:
             # Future slot or spot unavailable - use forecast-based logic
             use_price = slot_fit_price
+
+        # PROFITABILITY FLOOR: Never export below the effective cheap price.
+        # This prevents selling grid-charged energy at a loss. If the sell price is
+        # below what we would pay to charge (effective_cheap_price), export is
+        # unprofitable regardless of other conditions.
+        if use_price <= effective_cheap_price:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - sell $%.3f <= cheap_price floor $%.3f (unprofitable)",
+                slot_hour,
+                slot_start.minute,
+                use_price,
+                effective_cheap_price,
+            )
+            return False, 0.0
+
+        # ABOVE-TARGET GATE: Only export when battery is at or above the target SOC.
+        # Exporting from a battery below target worsens the deficit and forces solar
+        # to spend time refilling exported energy instead of reaching the target.
+        # Allow a small 2% hysteresis to avoid blocking exports right at the boundary.
+        if predicted_soc < (target_pct - 2.0):
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - SOC %.1f%% < target %.1f%% (below target, not exporting)",
+                slot_hour,
+                slot_start.minute,
+                predicted_soc,
+                target_pct,
+            )
+            return False, 0.0
 
         # During demand window: allow export but use dynamic floor protection.
         # The existing checks below (min_soc, buffer, ending SOC) provide adequate
@@ -1411,12 +1446,14 @@ class ForecastComputer:
                     solar_kwh=solar_kwh,
                     slot_fit_price=_slot_fit_price,
                     predicted_soc=predicted_soc,
+                    target_pct=target_pct,
                     in_demand_window=in_demand_window,
                     forecasted_excess_kwh=forecasted_excess_kwh,
                     remaining_export_budget_kwh=remaining_export_budget,
                     feed_in_forecast=data.feed_in_forecast,
                     min_soc_no_exports=min_soc_no_exports,
                     export_min_soc_pct=export_min_soc_pct,
+                    effective_cheap_price=data.effective_cheap_price,
                     feed_in_price_current=data.feed_in_price,
                     all_solcast=all_solcast,
                     historical_avg_kw=historical_avg_kw,

@@ -21,6 +21,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 
 | ID | Priority | Status | Title |
 |----|----------|--------|-------|
+| backlog-crit-001 | 🔴 CRIT | ✅ COMPLETED | Proactive Export Fires Below Cost — Unprofitable Overnight Discharge |
 | backlog-high-017 | 🟠 HIGH | 📋 PROPOSED | Excess Solar Load Shifting Sensors |
 | backlog-high-018 | 🟠 HIGH | ✅ COMPLETED | Forecast SOC Simulation Does Not Respect Minimum SOC |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
