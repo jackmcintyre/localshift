@@ -10,6 +10,8 @@ Provides manual mode control buttons:
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -28,6 +30,8 @@ from .const import (
 )
 from .coordinator import LocalShiftCoordinator
 
+_LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -45,6 +49,10 @@ async def async_setup_entry(
         SelfConsumptionButton(coordinator, entry),
         UpdateForecastButton(coordinator, entry),
     ]
+
+    _LOGGER.info("Setting up %d LocalShift button entities", len(entities))
+    for entity in entities:
+        _LOGGER.debug("Registering button entity: %s", entity.unique_id)
 
     async_add_entities(entities)
 

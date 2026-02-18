@@ -120,13 +120,6 @@ def get_solar_for_15min_slot(
     if not solcast_forecasts:
         return 0.0
 
-    # Debug: Log function entry
-    _LOGGER.debug(
-        "SOLAR_15MIN_LOOKUP: slot=%s, num_entries=%d",
-        slot_start.strftime("%Y-%m-%d %H:%M:%S"),
-        len(solcast_forecasts),
-    )
-
     # Ensure slot boundaries are timezone-aware local datetimes
     if slot_start.tzinfo is None:
         slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
@@ -136,15 +129,7 @@ def get_solar_for_15min_slot(
     slot_end = slot_start + timedelta(minutes=15)
     period_duration = timedelta(minutes=30)
 
-    # Debug: Log search window
-    _LOGGER.debug(
-        "SOLAR_15MIN_LOOKUP: slot=%s -> %s, searching %d entries",
-        slot_start.strftime("%Y-%m-%d %H:%M"),
-        slot_end.strftime("%Y-%m-%d %H:%M"),
-        len(solcast_forecasts),
-    )
-
-    for entry_idx, entry in enumerate(solcast_forecasts):
+    for entry in solcast_forecasts:
         if not isinstance(entry, dict):
             continue
 
@@ -166,38 +151,13 @@ def get_solar_for_15min_slot(
             or 0.0
         )
 
-        # Debug: Log each period check
-        _LOGGER.debug(
-            "SOLAR_15MIN_LOOKUP: [%d] period=%s -> %s, slot=%s -> %s, kwh=%.3f",
-            entry_idx,
-            start_local.strftime("%Y-%m-%d %H:%M"),
-            end_local.strftime("%Y-%m-%d %H:%M"),
-            slot_start.strftime("%Y-%m-%d %H:%M"),
-            slot_end.strftime("%Y-%m-%d %H:%M"),
-            period_kwh,
-        )
-
         # Check if slot is within this 30-minute period
         # Containment check: slot must be fully inside the period
         if slot_start >= start_local and slot_end <= end_local:
             # Slot is within this 30-minute period
             # Return half the period kWh (15 min = 50% of 30 min)
-            _LOGGER.debug(
-                "SOLAR_15MIN_LOOKUP: MATCHED slot=%s -> %s to period=%s -> %s, returning %.3f kWh",
-                slot_start.strftime("%Y-%m-%d %H:%M"),
-                slot_end.strftime("%Y-%m-%d %H:%M"),
-                start_local.strftime("%Y-%m-%d %H:%M"),
-                end_local.strftime("%Y-%m-%d %H:%M"),
-                period_kwh * 0.5,
-            )
             return period_kwh * 0.5
 
-    _LOGGER.debug(
-        "SOLAR_15MIN_LOOKUP: NO MATCH slot=%s -> %s, checked %d periods",
-        slot_start.strftime("%Y-%m-%d %H:%M"),
-        slot_end.strftime("%Y-%m-%d %H:%M"),
-        len(solcast_forecasts),
-    )
     return 0.0
 
 
