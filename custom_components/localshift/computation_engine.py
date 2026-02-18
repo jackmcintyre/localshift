@@ -324,8 +324,13 @@ class ComputationEngine:
         data.forecast_spike_within_window = self._scan_forecast_for_spike(
             data.feed_in_forecast, now_dt, cutoff
         )
+        # max_forecast_price tracks the max SELL price (feed-in) for spike detection.
         data.max_forecast_price = self._max_forecast_price(
             data.feed_in_forecast, now_dt, cutoff
+        )
+        # max_buy_forecast_price tracks the max BUY price for pre-charge decisions. (Fix #3)
+        data.max_buy_forecast_price = self._max_forecast_price(
+            data.general_forecast, now_dt, cutoff
         )
 
         # ---- Step 10: forecast_expensive_period_coming ----
@@ -409,6 +414,14 @@ class ComputationEngine:
             if target_reached:
                 data.target_reached_today = True
 
+            # Calculate hours until next demand window (with day rollover for after_dw case)
+            next_dw_dt = now_dt.replace(
+                hour=target_hour, minute=0, second=0, microsecond=0
+            )
+            if next_dw_dt <= now_dt:
+                next_dw_dt += timedelta(days=1)
+            hours_to_next_dw = (next_dw_dt - now_dt).total_seconds() / 3600
+
             data.solar_battery_forecast = {
                 "predicted_soc": round(predicted_soc, 1),
                 "solar_before_dw_kwh": 0.0,
@@ -417,7 +430,7 @@ class ComputationEngine:
                 "deficit_kwh": 0.0,
                 "can_reach_target": can_reach,
                 "boost_needed": boost_needed,
-                "hours_to_target_time": 0.0,
+                "hours_to_target_time": round(hours_to_next_dw, 1),
                 "target_reached_today": target_reached,
             }
         else:

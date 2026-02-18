@@ -123,6 +123,7 @@ class ForecastComputer:
         recent_load_kw: float,
         dw_start_time: time,
         end_time: datetime,
+        min_soc_pct: float = 0.0,
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
@@ -202,7 +203,7 @@ class ForecastComputer:
                 delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
 
             soc += delta / BATTERY_CAPACITY_KWH * 100
-            soc = max(0.0, min(100.0, soc))
+            soc = max(min_soc_pct, min(100.0, soc))
 
             max_soc = max(max_soc, soc)
 
@@ -294,6 +295,7 @@ class ForecastComputer:
         recent_load_kw: float,
         dw_start_time: time,
         general_price_current: float,
+        min_soc_pct: float = 0.0,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
@@ -333,8 +335,9 @@ class ForecastComputer:
         if not is_before_dw:
             return False, False
 
-        if not is_daylight:
-            return False, False
+        # Grid charging decisions are independent of daylight/solar.
+        # The daylight check has been removed to allow overnight grid charging
+        # when prices are cheap and solar alone cannot reach the target. (Fix #1)
 
         if gap_to_target <= 0:
             return False, False
@@ -368,6 +371,7 @@ class ForecastComputer:
                 recent_load_kw=recent_load_kw,
                 dw_start_time=dw_start_time,
                 end_time=sim_end,
+                min_soc_pct=min_soc_pct,
             )
         )
 
@@ -1259,6 +1263,10 @@ class ForecastComputer:
         for i in range(LONG_TERM_COUNT):
             slots.append((near_term_end + timedelta(minutes=15 * i), 15))
 
+        # Read minimum SOC once before the loop (used for SOC floor and grid charging simulation)
+        export_min_soc_pct = float(
+            self.entry.options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
         remaining_export_budget = export_budget_kwh
         for slot_idx, (slot_start, slot_minutes) in enumerate(slots):
             is_first_slot = slot_idx == 0
@@ -1313,7 +1321,8 @@ class ForecastComputer:
             # (Fixes is_before_dw wrap-around bug — Issue 4 in MODE_SWITCHING_DELAY_ANALYSIS.md)
             is_before_dw = slot_hour < target_hour
 
-            # Explicit daylight check - must have solar to grid charge
+            # is_daylight is kept for the method signature but no longer used as a gate.
+            # Grid charging decisions are independent of solar availability.
             is_daylight = solar_kwh > 0.05
 
             # Scale charge-rate caps to this slot's duration
@@ -1338,6 +1347,7 @@ class ForecastComputer:
                 recent_load_kw=recent_load_kw,
                 dw_start_time=dw_start_time,
                 general_price_current=data.general_price,
+                min_soc_pct=export_min_soc_pct,
             )
 
             # Debug logging for charging decision
@@ -1394,11 +1404,6 @@ class ForecastComputer:
             )
 
             _slot_fit_price = get_price_for_slot(data.feed_in_forecast, slot_start)
-            export_min_soc_pct = float(
-                self.entry.options.get(
-                    CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
-                )
-            )
             should_proactive_export, proactive_export_amount = (
                 self._should_proactive_export_at_slot(
                     slot_start=slot_start,
@@ -1458,12 +1463,25 @@ class ForecastComputer:
             # Update rolling SOC prediction.
             # First slot: preserve current SOC (no time-based delta applied).
             if is_first_slot:
-                predicted_soc = current_soc
+                new_predicted_soc = current_soc
             else:
-                predicted_soc = predicted_soc + (
+                new_predicted_soc = predicted_soc + (
                     battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
                 )
-            predicted_soc = max(0.0, min(100.0, predicted_soc))
+
+            # Minimum SOC floor: if battery would discharge below configured minimum,
+            # the inverter stops discharging and load must come from the grid instead.
+            if (
+                not is_first_slot
+                and not should_grid_charge
+                and new_predicted_soc < export_min_soc_pct
+            ):
+                shortfall_pct = export_min_soc_pct - new_predicted_soc
+                passive_grid_import_kwh = shortfall_pct / 100 * BATTERY_CAPACITY_KWH
+                grid_import_kwh += passive_grid_import_kwh
+                new_predicted_soc = export_min_soc_pct
+
+            predicted_soc = max(0.0, min(100.0, new_predicted_soc))
 
             daily_forecast_soc_15min.append(
                 [slot_start.isoformat(), round(predicted_soc, 1)]
