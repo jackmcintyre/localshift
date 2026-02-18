@@ -55,6 +55,8 @@ class StateMachine:
         self._evaluate_lock = asyncio.Lock()
         self._in_mode_transition: bool = False
         self._manual_override_set_at: datetime | None = None
+        # Track dynamic reserve for PROACTIVE_EXPORT mode
+        self._proactive_export_reserve: float | None = None
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
@@ -213,12 +215,17 @@ class StateMachine:
                     old_mode.value,
                     desired.value,
                 )
-                # Clear the debounce timer so it will retry on next evaluation
-                self._mode_desired_since.clear()
+                # Clear only the failed mode's timer so it will retry on next evaluation
+                # Keep other mode timers intact - they may be needed if forecast flips back
+                self._mode_desired_since.pop(desired, None)
                 return
 
             self._commanded_mode = desired
             self._mode_desired_since.clear()
+
+            # Clear proactive export reserve when leaving that mode
+            if desired != BatteryMode.PROACTIVE_EXPORT:
+                self._proactive_export_reserve = None
 
             # Hold mode removed - no need to clear hold_mode flag
 
@@ -303,12 +310,15 @@ class StateMachine:
                     await self._battery_controller.set_proactive_export(data, dry_run)
                 )
                 if transition_success:
+                    # Track the dynamic reserve for health checks
+                    self._proactive_export_reserve = max(4.0, data.soc - 5.0)
                     _LOGGER.info(
                         "Proactive export mode transition completed (throttled reserve=%s)",
-                        max(4.0, data.soc - 5.0),
+                        self._proactive_export_reserve,
                     )
                 else:
                     _LOGGER.error("Proactive export mode transition FAILED")
+                    self._proactive_export_reserve = None
 
             elif target == BatteryMode.MANUAL:
                 pass  # No command — user is controlling manually
@@ -373,6 +383,13 @@ class StateMachine:
         # Skip if we don't have expected values
         if not expected_op:
             return
+
+        # For PROACTIVE_EXPORT, use the tracked dynamic reserve
+        if (
+            self._commanded_mode == BatteryMode.PROACTIVE_EXPORT
+            and self._proactive_export_reserve is not None
+        ):
+            expected_reserve = int(self._proactive_export_reserve)
 
         # Use quick verification from battery controller
         is_valid = await self._battery_controller.verify_current_state(

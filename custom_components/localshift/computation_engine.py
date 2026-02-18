@@ -882,36 +882,39 @@ class ComputationEngine:
 
         # FORECAST-DRIVED: Grid charging (follow forecast plan)
         # Safety: Only activate if there's actual grid import planned
+        # Use small threshold (0.01 kWh) to handle floating point edge cases
         grid_import_kwh = forecast_entry.get("grid_import_kwh", 0)
+        GRID_IMPORT_THRESHOLD = 0.01  # Minimum kWh to consider grid charging active
 
         if forecast_entry.get("grid_charge_boost"):
-            if grid_import_kwh > 0:
+            if grid_import_kwh > GRID_IMPORT_THRESHOLD:
                 data.active_mode = BatteryMode.BOOST_CHARGING
                 _LOGGER.info(
                     "Forecast-driven: BOOST_CHARGING at %s, import=%.3f kWh",
                     now_dt.strftime("%H:%M"),
                     grid_import_kwh,
                 )
+                return
             else:
-                _LOGGER.info(
-                    "grid_charge_boost=True but grid_import_kwh=0, staying in self-consumption"
+                # Boost flag set but no import - fall through to check grid_charge
+                _LOGGER.debug(
+                    "grid_charge_boost=True but grid_import_kwh=0, checking grid_charge"
                 )
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
-            return
-        elif forecast_entry.get("grid_charge"):
-            if grid_import_kwh > 0:
+
+        if forecast_entry.get("grid_charge"):
+            if grid_import_kwh > GRID_IMPORT_THRESHOLD:
                 data.active_mode = BatteryMode.GRID_CHARGING
                 _LOGGER.info(
                     "Forecast-driven: GRID_CHARGING at %s, import=%.3f kWh",
                     now_dt.strftime("%H:%M"),
                     grid_import_kwh,
                 )
+                return
             else:
-                _LOGGER.info(
-                    "grid_charge=True but grid_import_kwh=0, staying in self-consumption"
+                _LOGGER.debug(
+                    "grid_charge=True but grid_import_kwh=%.3f, staying in self-consumption",
+                    grid_import_kwh,
                 )
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
-            return
 
         # FORECAST-DRIVED: Proactive export (before negative feed-in prices)
         elif forecast_entry.get("proactive_export"):

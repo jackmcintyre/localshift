@@ -314,6 +314,8 @@ class DailyForecastSensor(LocalShiftSensorBase):
                         "net": slot.get("net_kwh"),
                         "grid_in": slot.get("grid_import_kwh"),
                         "grid_out": slot.get("grid_export_kwh"),
+                        "grid_charge": slot.get("grid_charge", False),
+                        "grid_charge_boost": slot.get("grid_charge_boost", False),
                         "proactive_export": slot.get("proactive_export", False),
                         "export_amt": slot.get("export_amount_kwh", 0.0),
                     }

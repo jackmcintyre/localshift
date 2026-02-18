@@ -163,6 +163,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
+        data.manual_override = False
+
         if dry_run:
             _LOGGER.info("DRY RUN: set_force_charge")
             return True
@@ -172,6 +174,11 @@ class BatteryController:
         # Set allow_export to pv_only first (don't allow battery to export)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
             _LOGGER.error("Aborting force charge mode: Failed to set export mode")
+            return False
+
+        # Set backup reserve to 10% (ensures consistent state for health checks)
+        if not await self._set_backup_reserve(10):
+            _LOGGER.error("Aborting force charge mode: Failed to set backup reserve")
             return False
 
         if not await self._set_operation_mode("backup"):
@@ -201,6 +208,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
+        data.manual_override = False
+
         if dry_run:
             _LOGGER.info("DRY RUN: set_boost_charge")
             return True
@@ -255,6 +264,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
+        data.manual_override = False
+
         # Get minimum target SOC for reserve
         minimum_target = self._get_minimum_target_soc()
 
@@ -306,6 +317,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
+        data.manual_override = False
+
         # Dynamic reserve for throttling: SOC - 5%, minimum 4%
         current_soc = data.soc
         reserve = max(4.0, current_soc - 5.0)
