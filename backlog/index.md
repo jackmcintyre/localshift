@@ -22,6 +22,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | ID | Priority | Status | Title |
 |----|----------|--------|-------|
 | backlog-high-017 | 🟠 HIGH | 📋 PROPOSED | Excess Solar Load Shifting Sensors |
+| backlog-high-018 | 🟠 HIGH | 📋 PROPOSED | Forecast SOC Simulation Does Not Respect Minimum SOC |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
 | backlog-med-004 | 🟡 MED | 📋 PROPOSED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
