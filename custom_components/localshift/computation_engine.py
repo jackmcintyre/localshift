@@ -1104,15 +1104,23 @@ class ComputationEngine:
         # solar returns the next morning.  A time-of-day guard would incorrectly block
         # legitimate overnight export at high feed-in prices.
         if forecast_entry.get("proactive_export"):
-            data.active_mode = BatteryMode.PROACTIVE_EXPORT
-            data.proactive_export_active = True
             export_amount = forecast_entry.get("export_amount_kwh", 0.0)
-            _LOGGER.info(
-                "Forecast-driven: PROACTIVE_EXPORT at %s, amount=%.2f kWh",
-                now_dt.strftime("%H:%M"),
-                export_amount,
-            )
-            return
+            EXPORT_THRESHOLD = 0.01  # Minimum kWh to consider export active
+
+            if export_amount > EXPORT_THRESHOLD:
+                data.active_mode = BatteryMode.PROACTIVE_EXPORT
+                data.proactive_export_active = True
+                _LOGGER.info(
+                    "Forecast-driven: PROACTIVE_EXPORT at %s, amount=%.2f kWh",
+                    now_dt.strftime("%H:%M"),
+                    export_amount,
+                )
+                return
+            else:
+                _LOGGER.debug(
+                    "proactive_export=True but export_amount_kwh=%.3f, staying in self-consumption",
+                    export_amount,
+                )
 
         # ========================================================================
         # OTHER MODES (Non-Charging)
