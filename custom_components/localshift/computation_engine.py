@@ -747,9 +747,27 @@ class ComputationEngine:
 
         Returns None if forecast unavailable or current time
         not in forecast range.
+
+        Handles edge case where current time falls before the first forecast slot
+        (e.g., current time 10:25, first forecast slot 10:30) by returning the
+        first available slot.
+
+        Also populates debug fields on data for dashboard troubleshooting.
         """
+        # Initialize debug fields
+        data.debug_forecast_slot_found = False
+        data.debug_forecast_slot_time = ""
+        data.debug_first_forecast_slot_time = ""
+        data.debug_time_gap_seconds = 0.0
+
         if not data.daily_forecast:
             return None
+
+        # Record first forecast slot time for debugging
+        first_entry = data.daily_forecast[0]
+        first_slot_dt = datetime.fromisoformat(first_entry.get("timestamp", ""))
+        first_slot_local = dt_util.as_local(first_slot_dt)
+        data.debug_first_forecast_slot_time = first_slot_local.strftime("%H:%M")
 
         current_hour = now_dt.hour
         # Round down to nearest 15-minute slot (0, 15, 30, 45)
@@ -758,7 +776,33 @@ class ComputationEngine:
         # Find matching entry
         for entry in data.daily_forecast:
             if entry["hour"] == current_hour and entry["minute"] == current_minute:
+                # Found exact match
+                data.debug_forecast_slot_found = True
+                data.debug_forecast_slot_time = (
+                    f"{current_hour:02d}:{current_minute:02d}"
+                )
+                data.debug_time_gap_seconds = 0.0
                 return entry
+
+        # Edge case: current time falls before first forecast slot
+        # This happens when forecast rounds UP to next 15-min boundary
+        # (e.g., at 10:25, forecast starts at 10:30, no entry for 10:15)
+        # Return the first available slot which covers the immediate future
+        time_diff = (first_slot_local - now_dt).total_seconds()
+        data.debug_time_gap_seconds = time_diff
+
+        # Only use first slot if we're within 15 minutes of it
+        # (i.e., current time is in the gap before first slot)
+        if 0 <= time_diff < 15 * 60:  # Within 15 minutes
+            _LOGGER.debug(
+                "Using first forecast slot %s for current time %s (time gap: %.0fs)",
+                first_slot_local.strftime("%H:%M"),
+                now_dt.strftime("%H:%M"),
+                time_diff,
+            )
+            data.debug_forecast_slot_found = True
+            data.debug_forecast_slot_time = first_slot_local.strftime("%H:%M")
+            return first_entry
 
         return None
 
@@ -808,34 +852,65 @@ class ComputationEngine:
         # Get forecast entry for current time
         forecast_entry = self._get_forecast_entry_for_now(data, now_dt)
 
-        # Fallback: Forecast unavailable (startup, data corruption, etc.)
+        # Fallback: Forecast unavailable - default to self-consumption
+        # If we don't have forecast data, we can't make intelligent decisions,
+        # so stay in safe mode (self-consumption)
         if not forecast_entry:
-            _LOGGER.warning("Forecast unavailable, using price-based fallback")
-            target_pct = float(
-                self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+            data.debug_mode_source = "no_forecast"
+            _LOGGER.warning(
+                "Forecast unavailable, defaulting to self-consumption (no fallback logic)"
             )
-            # Simple logic: charge if cheap and below target
-            if (
-                data.general_price <= data.effective_cheap_price
-                and data.soc < target_pct
-            ):
-                data.active_mode = BatteryMode.GRID_CHARGING
-            else:
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
+            data.active_mode = BatteryMode.SELF_CONSUMPTION
             return
 
+        # Forecast-driven path
+        data.debug_mode_source = "forecast"
+
+        # Log forecast entry for debugging
+        _LOGGER.info(
+            "Mode decision at %s: slot_time=%s, grid_charge=%s, grid_charge_boost=%s, grid_import_kwh=%.3f, proactive_export=%s, soc=%.1f%%",
+            now_dt.strftime("%H:%M"),
+            forecast_entry.get("timestamp", "unknown")[
+                -14:-9
+            ],  # Extract HH:MM from ISO
+            forecast_entry.get("grid_charge", False),
+            forecast_entry.get("grid_charge_boost", False),
+            forecast_entry.get("grid_import_kwh", 0),
+            forecast_entry.get("proactive_export", False),
+            data.soc,
+        )
+
         # FORECAST-DRIVED: Grid charging (follow forecast plan)
+        # Safety: Only activate if there's actual grid import planned
+        grid_import_kwh = forecast_entry.get("grid_import_kwh", 0)
+
         if forecast_entry.get("grid_charge_boost"):
-            data.active_mode = BatteryMode.BOOST_CHARGING
-            _LOGGER.info(
-                "Forecast-driven: BOOST_CHARGING at %s", now_dt.strftime("%H:%M")
-            )
+            if grid_import_kwh > 0:
+                data.active_mode = BatteryMode.BOOST_CHARGING
+                _LOGGER.info(
+                    "Forecast-driven: BOOST_CHARGING at %s, import=%.3f kWh",
+                    now_dt.strftime("%H:%M"),
+                    grid_import_kwh,
+                )
+            else:
+                _LOGGER.info(
+                    "grid_charge_boost=True but grid_import_kwh=0, staying in self-consumption"
+                )
+                data.active_mode = BatteryMode.SELF_CONSUMPTION
             return
         elif forecast_entry.get("grid_charge"):
-            data.active_mode = BatteryMode.GRID_CHARGING
-            _LOGGER.info(
-                "Forecast-driven: GRID_CHARGING at %s", now_dt.strftime("%H:%M")
-            )
+            if grid_import_kwh > 0:
+                data.active_mode = BatteryMode.GRID_CHARGING
+                _LOGGER.info(
+                    "Forecast-driven: GRID_CHARGING at %s, import=%.3f kWh",
+                    now_dt.strftime("%H:%M"),
+                    grid_import_kwh,
+                )
+            else:
+                _LOGGER.info(
+                    "grid_charge=True but grid_import_kwh=0, staying in self-consumption"
+                )
+                data.active_mode = BatteryMode.SELF_CONSUMPTION
             return
 
         # FORECAST-DRIVED: Proactive export (before negative feed-in prices)

@@ -172,7 +172,7 @@ class StateMachine:
 
             if desired not in self._mode_desired_since:
                 # First time this mode is desired — start the timer
-                self._mode_desired_since.clear()
+                # NOTE: Don't clear other mode timers - they may be needed if forecast flips back
                 self._mode_desired_since[desired] = now
                 if debounce > timedelta(0):
                     _LOGGER.debug(

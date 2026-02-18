@@ -12,6 +12,7 @@ from ..const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_BACKUP_KW,
     CHARGE_RATE_BOOST_KW,
+    CHARGE_RATE_SOLAR_KW,
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
@@ -176,15 +177,6 @@ class ForecastComputer:
 
         max_soc = soc
 
-        _LOGGER.debug(
-            "GRID_SIM_DEBUG: Starting simulation from ACTUAL current SOC=%.1f%% at %s, target=%d%%, sim_end=%s, slots=%d",
-            soc,
-            start_slot.strftime("%Y-%m-%d %H:%M"),
-            target_pct,
-            sim_end.strftime("%Y-%m-%d %H:%M"),
-            total_slots,
-        )
-
         for offset in range(total_slots):  # 4 slots per hour
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
@@ -200,19 +192,9 @@ class ForecastComputer:
             consumption_kwh = load_kw / 4
             net_kwh = solar_kwh - consumption_kwh
 
-            # Debug: Log each slot
-            _LOGGER.debug(
-                "GRID_SIM_DEBUG: slot=%s-%d solar=%.3f load=%.3f net=%.3f soc_before=%.1f%%",
-                slot_hour,
-                slot_start.minute,
-                solar_kwh,
-                consumption_kwh,
-                net_kwh,
-                soc,
-            )
-
             # Apply battery delta (no grid charging)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            # Use solar charge rate (5kW) as max, not backup rate (3.3kW)
+            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW / 4
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -226,23 +208,6 @@ class ForecastComputer:
             # Fast-path: if we've already reached target, we can stop.
             if max_soc >= target_pct:
                 return soc, max_soc, True
-
-            # Debug: Log after delta
-            _LOGGER.debug(
-                "GRID_SIM_DEBUG: slot=%s-%d delta=%.3f soc_after=%.1f%%",
-                slot_hour,
-                slot_start.minute,
-                delta / BATTERY_CAPACITY_KWH * 100,
-                soc,
-            )
-
-        _LOGGER.debug(
-            "GRID_SIM_DEBUG: Final result: soc_at_end=%.1f%% max_soc=%.1f%% can_reach=%s target=%d%%",
-            soc,
-            max_soc,
-            max_soc >= target_pct,
-            target_pct,
-        )
 
         return soc, max_soc, max_soc >= target_pct
 
@@ -376,11 +341,6 @@ class ForecastComputer:
         # PREFER SPOT PRICE: Use current spot price as primary signal
         if general_price_current > 0:
             use_price = general_price_current
-            _LOGGER.debug(
-                "GRID_CHARGE: Using spot price $%.2f (forecast: $%.2f)",
-                general_price_current,
-                slot_price,
-            )
         else:
             # Fall back to forecast when spot unavailable
             use_price = slot_price
@@ -396,15 +356,6 @@ class ForecastComputer:
         sim_start = slot_start
         sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
 
-        _LOGGER.debug(
-            "GRID_CHARGE_DEBUG: slot=%s start_soc=%.1f%% target=%d%% simulating %s -> %s...",
-            slot_start.strftime("%Y-%m-%d %H:%M"),
-            predicted_soc,
-            target_pct,
-            sim_start.strftime("%Y-%m-%d %H:%M"),
-            sim_end.strftime("%Y-%m-%d %H:%M"),
-        )
-
         soc_at_end, max_soc, can_reach_with_solar_only = (
             self._simulate_future_soc_with_solar_only(
                 actual_current_soc=predicted_soc,
@@ -417,14 +368,6 @@ class ForecastComputer:
                 dw_start_time=dw_start_time,
                 end_time=sim_end,
             )
-        )
-
-        _LOGGER.debug(
-            "GRID_CHARGE_DEBUG: sim_result soc_end=%.1f%% max_soc=%.1f%% can_reach=%s target=%d%%",
-            soc_at_end,
-            max_soc,
-            can_reach_with_solar_only,
-            target_pct,
         )
 
         # Solar forecast says we'll reach target: NO grid charging
@@ -749,7 +692,8 @@ class ForecastComputer:
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery charging (no grid charging, no exports)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            # Use solar charge rate (5kW) as max, not backup rate (3.3kW)
+            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW / 4
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -1396,8 +1340,10 @@ class ForecastComputer:
             )
 
             # Apply realistic battery transfer limits and efficiency
-            # Max transfer: 3.3 kW = 0.825 kWh per 15 minutes (backup mode)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            # Solar charging rate: 5 kW (inverter limit for solar-to-battery)
+            # Grid charging rate: 3.3 kW (backup mode) or 5 kW (boost mode)
+            max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW / 4  # 5kW for solar
+            max_grid_charge_kwh = CHARGE_RATE_BACKUP_KW / 4  # 3.3kW for grid
 
             # Determine if we should use boost charging (5kW) based on urgency
             # If very close to DW and far from target, use boost
@@ -1405,9 +1351,9 @@ class ForecastComputer:
             next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
             hours_to_dw = (next_dw_start - slot_start).total_seconds() / 3600
             if should_boost:
-                max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
+                max_grid_charge_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
             elif should_grid_charge and hours_to_dw < 2:
-                max_slot_transfer_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
+                max_grid_charge_kwh = CHARGE_RATE_BOOST_KW / 4  # 5kW boost
 
             # Check if battery will be at or above 100% after solar charging
             battery_at_or_above_cap = (
@@ -1415,12 +1361,13 @@ class ForecastComputer:
             ) >= 100.0
 
             # Step 1: Calculate base battery delta from solar/load
+            # Use SOLAR charge rate (5kW) for solar charging, not backup rate
             if net_kwh >= 0:
-                # Solar excess: charge battery with what we can
-                battery_delta_kwh = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                # Solar excess: charge battery with what we can (up to 5kW inverter limit)
+                battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
             else:
                 # Deficit: battery discharges to cover what it can
-                battery_delta_kwh = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
 
             # Step 2: Add grid charging if needed (INDEPENDENT of solar!)
             # If we need to reach target → charge
@@ -1429,7 +1376,7 @@ class ForecastComputer:
                 current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
                 space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
                 grid_charge_amount = min(
-                    max_slot_transfer_kwh * 0.92, space_remaining_kwh
+                    max_grid_charge_kwh * 0.92, space_remaining_kwh
                 )
                 battery_delta_kwh += grid_charge_amount
                 grid_import_kwh = grid_charge_amount / 0.92

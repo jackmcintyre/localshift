@@ -330,6 +330,14 @@ class DailyForecastSensor(LocalShiftSensorBase):
             "debug_15min_slots": debug_15min,
             "debug_total_grid_import_kwh": round(total_grid_import, 3),
             "debug_total_grid_export_kwh": round(total_grid_export, 3),
+            # New debug fields for troubleshooting mode decisions
+            "debug_forecast_slot_found": self.coordinator.data.debug_forecast_slot_found,
+            "debug_forecast_slot_time": self.coordinator.data.debug_forecast_slot_time,
+            "debug_first_forecast_slot_time": self.coordinator.data.debug_first_forecast_slot_time,
+            "debug_time_gap_seconds": round(
+                self.coordinator.data.debug_time_gap_seconds, 1
+            ),
+            "debug_mode_source": self.coordinator.data.debug_mode_source,
             "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
             "soc_series_15min": self.coordinator.data.daily_forecast_soc_15min,
             "forecast_15min_slots": len(self.coordinator.data.daily_forecast),

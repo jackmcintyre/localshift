@@ -105,3 +105,16 @@ class CoordinatorData:
     charging_needed_before_dw: float = 0.0  # Total kWh needed before DW
     optimal_charge_start: datetime | None = None  # Earliest optimal charging slot
     optimal_charge_end: datetime | None = None  # Latest optimal charging slot
+
+    # Debug/diagnostic fields for dashboard troubleshooting
+    debug_forecast_slot_found: bool = (
+        False  # True if current time slot found in forecast
+    )
+    debug_forecast_slot_time: str = ""  # Time of matched forecast slot (HH:MM)
+    debug_first_forecast_slot_time: str = ""  # Time of first forecast slot (HH:MM)
+    debug_time_gap_seconds: float = 0.0  # Seconds between now and first forecast slot
+    debug_mode_source: str = "unknown"  # "forecast" or "fallback"
+    debug_dry_run: bool = False  # Dry run mode active
+    debug_commanded_mode: str = ""  # State machine's commanded mode
+    debug_pending_transition: str = ""  # Pending mode transition (if any)
+    debug_debounce_wait_seconds: float = 0.0  # Seconds remaining in debounce
