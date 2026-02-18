@@ -57,6 +57,10 @@ class StateMachine:
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
+        # Cooldown for health-check corrections (prevents command spam when
+        # Teslemetry cloud lags in reflecting a legitimate transition)
+        self._last_health_correction: datetime | None = None
+        self._MIN_CORRECTION_INTERVAL = timedelta(minutes=5)
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
@@ -107,133 +111,177 @@ class StateMachine:
         self,
         data: CoordinatorData,
         computation_engine: ComputationEngine,
+        read_state_func: callable | None = None,
+        notify_func: callable | None = None,
     ) -> None:
         """Compare desired mode with commanded mode and execute transitions.
 
-        Called after compute_derived_values() on every state change and
-        periodic tick. Handles debounce, command issuance, flag management,
-        and notifications.
+        Handles debounce, command issuance, flag management, and notifications.
+
+        ``read_state_func`` and ``notify_func`` are called inside the lock so
+        that queued evaluations always operate on fresh post-transition state
+        rather than a stale snapshot captured before the previous transition
+        completed.  This eliminates the race condition where a second
+        evaluation could immediately revert a transition because it was working
+        from pre-transition hardware state.
         """
         async with self._evaluate_lock:
-            now = dt_util.now()
-            desired = data.active_mode
+            # Re-read external state and recompute derived values while holding
+            # the lock.  If multiple evaluations were queued, each one now
+            # operates on hardware state that reflects any transitions made by
+            # the previous evaluation — preventing stale-state reversions.
+            if read_state_func is not None:
+                read_state_func()
+            computation_engine.compute_derived_values(data)
 
-            # --- Startup grace period (30 s) ---
-            if self._startup_grace_until is not None:
-                if now < self._startup_grace_until:
-                    _LOGGER.debug("State machine in startup grace period, skipping")
-                    return
-                self._startup_grace_until = None
-                self._commanded_mode = self.infer_current_hardware_mode(data)
-                _LOGGER.info(
-                    "Startup grace ended, inferred mode: %s",
-                    self._commanded_mode.value,
-                )
+            # Notify listeners with fresh computed data regardless of which
+            # code path is taken below (transition, debounce, no-change, etc.).
+            # The try/finally guarantees notify_func() is always called after
+            # compute_derived_values(), even on early returns.
+            try:
+                now = dt_util.now()
+                desired = data.active_mode
 
-            # --- Automation disabled ---
-            if not self._get_switch_state("automation_enabled"):
-                self._commanded_mode = BatteryMode.MANUAL
-                self._mode_desired_since.clear()
-                return
-
-            # --- Auto-clear manual override after timeout ---
-            if data.manual_override and self._manual_override_set_at is not None:
-                timeout_hours = float(
-                    self._get_option(
-                        CONF_MANUAL_OVERRIDE_TIMEOUT,
-                        DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+                # --- Startup grace period (30 s) ---
+                if self._startup_grace_until is not None:
+                    if now < self._startup_grace_until:
+                        _LOGGER.debug("State machine in startup grace period, skipping")
+                        return
+                    self._startup_grace_until = None
+                    self._commanded_mode = self.infer_current_hardware_mode(data)
+                    _LOGGER.info(
+                        "Startup grace ended, inferred mode: %s",
+                        self._commanded_mode.value,
                     )
-                )
-                if timeout_hours > 0:
-                    elapsed = now - self._manual_override_set_at
-                    if elapsed >= timedelta(hours=timeout_hours):
-                        _LOGGER.info(
-                            "Manual override timeout (%.1f hours) elapsed, clearing",
-                            timeout_hours,
+
+                # --- Automation disabled ---
+                if not self._get_switch_state("automation_enabled"):
+                    self._commanded_mode = BatteryMode.MANUAL
+                    self._mode_desired_since.clear()
+                    return
+
+                # --- Auto-clear manual override after timeout ---
+                if data.manual_override and self._manual_override_set_at is not None:
+                    timeout_hours = float(
+                        self._get_option(
+                            CONF_MANUAL_OVERRIDE_TIMEOUT,
+                            DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
                         )
-                        data.manual_override = False
-                        self._manual_override_set_at = None
-                        # Re-evaluate now that override is cleared
-                        computation_engine.compute_derived_values(data)
-                        desired = data.active_mode
+                    )
+                    if timeout_hours > 0:
+                        elapsed = now - self._manual_override_set_at
+                        if elapsed >= timedelta(hours=timeout_hours):
+                            _LOGGER.info(
+                                "Manual override timeout (%.1f hours) elapsed, clearing",
+                                timeout_hours,
+                            )
+                            data.manual_override = False
+                            self._manual_override_set_at = None
+                            # Do NOT call compute_derived_values() again here.
+                            # A full recompute already ran at the top of this lock
+                            # (Item 5 fix).  A second nested compute would double-fire
+                            # the forecast tracker age-check and potentially append a
+                            # duplicate decision log entry.
+                            # Instead, flag the forecast tracker to force a recompute
+                            # on the next evaluation cycle so that active_mode is
+                            # re-derived without the manual_override flag set.
+                            computation_engine._forecast_change_tracker._last_forecast_time = None  # noqa: SLF001
+                            # desired remains MANUAL this cycle; the next periodic tick
+                            # (at most 1 minute away) will recompute the correct mode.
 
-            # --- No change needed ---
-            if desired == self._commanded_mode:
-                self._mode_desired_since.clear()
+                # --- No change needed ---
+                if desired == self._commanded_mode:
+                    self._mode_desired_since.clear()
 
-                # --- Periodic health check (every minute) ---
-                # Verify hardware state matches commanded state
-                # This catches drift from manual changes, power outages, etc.
-                if not self._get_switch_state("dry_run"):
-                    await self._perform_health_check(data)
+                    # --- Periodic health check (every minute) ---
+                    # Verify hardware state matches commanded state
+                    # This catches drift from manual changes, power outages, etc.
+                    if not self._get_switch_state("dry_run"):
+                        await self._perform_health_check(data)
 
-                return
+                    return
 
-            # --- Debounce tracking ---
-            debounce = self.get_debounce_for_transition(self._commanded_mode, desired)
+                # --- Debounce tracking ---
+                debounce = self.get_debounce_for_transition(
+                    self._commanded_mode, desired
+                )
 
-            if desired not in self._mode_desired_since:
-                # First time this mode is desired — start the timer
-                # NOTE: Don't clear other mode timers - they may be needed if forecast flips back
-                self._mode_desired_since[desired] = now
-                if debounce > timedelta(0):
+                # Clear timers for modes no longer desired.
+                # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
+                # desired at t=0, flipped away at t=2min, then desired again at t=3min,
+                # the old t=0 timer would make the debounce appear nearly satisfied.
+                # Clearing stale timers ensures the full debounce is always served from
+                # a continuous period of desire.
+                for mode in list(self._mode_desired_since.keys()):
+                    if mode != desired:
+                        self._mode_desired_since.pop(mode, None)
+
+                if desired not in self._mode_desired_since:
+                    # First time this mode is (continuously) desired — start the timer
+                    self._mode_desired_since[desired] = now
+                    if debounce > timedelta(0):
+                        _LOGGER.debug(
+                            "Mode %s desired, debounce %s starts now",
+                            desired.value,
+                            debounce,
+                        )
+                        return
+
+                desired_since = self._mode_desired_since[desired]
+                elapsed = now - desired_since
+
+                if elapsed < debounce:
                     _LOGGER.debug(
-                        "Mode %s desired, debounce %s starts now",
+                        "Mode %s desired for %s, need %s — waiting",
                         desired.value,
+                        elapsed,
                         debounce,
                     )
                     return
 
-            desired_since = self._mode_desired_since[desired]
-            elapsed = now - desired_since
-
-            if elapsed < debounce:
-                _LOGGER.debug(
-                    "Mode %s desired for %s, need %s — waiting",
-                    desired.value,
-                    elapsed,
-                    debounce,
-                )
-                return
-
-            # --- Debounce satisfied — execute transition ---
-            old_mode = self._commanded_mode
-            _LOGGER.info(
-                "State machine transition: %s → %s (desired for %s)",
-                old_mode.value,
-                desired.value,
-                elapsed,
-            )
-
-            # Execute the transition and check if it succeeded
-            transition_success = await self._execute_mode_transition(data, desired)
-
-            # Only update commanded_mode if transition was successful
-            if not transition_success:
-                _LOGGER.warning(
-                    "Mode transition from %s to %s failed - keeping previous commanded mode",
+                # --- Debounce satisfied — execute transition ---
+                old_mode = self._commanded_mode
+                _LOGGER.info(
+                    "State machine transition: %s → %s (desired for %s)",
                     old_mode.value,
                     desired.value,
+                    elapsed,
                 )
-                # Clear only the failed mode's timer so it will retry on next evaluation
-                # Keep other mode timers intact - they may be needed if forecast flips back
-                self._mode_desired_since.pop(desired, None)
-                return
 
-            self._commanded_mode = desired
-            self._mode_desired_since.clear()
+                # Execute the transition and check if it succeeded
+                transition_success = await self._execute_mode_transition(data, desired)
 
-            # Clear proactive export reserve when leaving that mode
-            if desired != BatteryMode.PROACTIVE_EXPORT:
-                self._proactive_export_reserve = None
+                # Only update commanded_mode if transition was successful
+                if not transition_success:
+                    _LOGGER.warning(
+                        "Mode transition from %s to %s failed - keeping previous commanded mode",
+                        old_mode.value,
+                        desired.value,
+                    )
+                    # Clear only the failed mode's timer so it will retry on next evaluation
+                    # Keep other mode timers intact - they may be needed if forecast flips back
+                    self._mode_desired_since.pop(desired, None)
+                    return
 
-            # Hold mode removed - no need to clear hold_mode flag
+                self._commanded_mode = desired
+                self._mode_desired_since.clear()
 
-            # Send notification
+                # Clear proactive export reserve when leaving that mode
+                if desired != BatteryMode.PROACTIVE_EXPORT:
+                    self._proactive_export_reserve = None
 
-            await self._notification_service.send_transition_notification(
-                old_mode, desired, data
-            )
+                # Hold mode removed - no need to clear hold_mode flag
+
+                # Send notification
+                await self._notification_service.send_transition_notification(
+                    old_mode, desired, data
+                )
+
+            finally:
+                # Always notify listeners after compute_derived_values(), so
+                # sensors reflect fresh computed state on every code path.
+                if notify_func is not None:
+                    notify_func()
 
     async def _execute_mode_transition(
         self, data: CoordinatorData, target: BatteryMode
@@ -399,13 +447,31 @@ class StateMachine:
         )
 
         if not is_valid:
-            _LOGGER.warning(
-                "Health check failed: hardware state doesn't match commanded mode %s. "
-                "Attempting to correct...",
-                self._commanded_mode.value,
-            )
-            # Attempt to correct the drift
-            await self._execute_mode_transition(data, self._commanded_mode)
+            now = dt_util.now()
+            if (
+                self._last_health_correction is None
+                or now - self._last_health_correction >= self._MIN_CORRECTION_INTERVAL
+            ):
+                _LOGGER.warning(
+                    "Health check failed: hardware state doesn't match commanded mode %s. "
+                    "Attempting to correct (last correction: %s)...",
+                    self._commanded_mode.value,
+                    self._last_health_correction.strftime("%H:%M:%S")
+                    if self._last_health_correction
+                    else "never",
+                )
+                await self._execute_mode_transition(data, self._commanded_mode)
+                self._last_health_correction = now
+            else:
+                remaining = (
+                    self._MIN_CORRECTION_INTERVAL - (now - self._last_health_correction)
+                ).total_seconds()
+                _LOGGER.debug(
+                    "Health check failed for mode %s but correction cooldown active "
+                    "(%.0fs remaining) — skipping re-send",
+                    self._commanded_mode.value,
+                    remaining,
+                )
 
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
         """Set startup grace period to wait for entities to populate."""

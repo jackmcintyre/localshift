@@ -76,28 +76,33 @@ def max_forecast_price(
 def build_hourly_forecast_summary(
     forecast_15min: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Summarise 96x 15-min slots into 24 hourly records.
+    """Summarise 112 slots (5-min + 15-min) into hourly records with date.
 
-    Keeps attributes smaller while still providing an hour-by-hour view.
+    Uses (date, hour) as the key so slots from different calendar days
+    are not merged. This ensures the full rolling 24-hour forecast is
+    preserved (e.g., today's 17:00-23:00 AND tomorrow's 00:00-14:00).
     """
-    hourly: dict[int, dict[str, Any]] = {}
+    hourly: dict[str, dict[str, Any]] = {}
 
     for row in forecast_15min:
         if not isinstance(row, dict):
             continue
 
-        hour_raw = row.get("hour")
-        if hour_raw is None:
+        # Get timestamp to derive both date and hour
+        ts_raw = row.get("timestamp")
+        if ts_raw is None:
             continue
         try:
-            hour = int(hour_raw)
-        except (TypeError, ValueError):
+            slot_dt = datetime.fromisoformat(str(ts_raw))
+        except (ValueError, TypeError):
             continue
 
-        if hour < 0 or hour > 23:
-            continue
+        # Use ISO date (YYYY-MM-DD) + hour as key to separate days
+        slot_date = slot_dt.date().isoformat()
+        hour = slot_dt.hour
+        key = f"{slot_date}_{hour:02d}"
 
-        bucket = hourly.get(hour)
+        bucket = hourly.get(key)
         if bucket is None:
             predicted_soc_raw = row.get("predicted_soc")
             predicted_soc = (
@@ -106,6 +111,7 @@ def build_hourly_forecast_summary(
                 else 0.0
             )
             bucket = {
+                "date": slot_date,
                 "hour": hour,
                 "predicted_soc": predicted_soc,
                 "solar_kwh": 0.0,
@@ -114,13 +120,13 @@ def build_hourly_forecast_summary(
                 "grid_import_kwh": 0.0,
                 "grid_export_kwh": 0.0,
             }
-            hourly[hour] = bucket
+            hourly[key] = bucket
 
         predicted_soc_raw = row.get("predicted_soc")
         if isinstance(predicted_soc_raw, int | float):
             bucket["predicted_soc"] = float(predicted_soc_raw)
 
-        for key in (
+        for key_name in (
             "solar_kwh",
             "consumption_kwh",
             "net_kwh",
@@ -128,17 +134,18 @@ def build_hourly_forecast_summary(
             "grid_export_kwh",
         ):
             try:
-                bucket[key] += float(row.get(key) or 0.0)
+                bucket[key_name] += float(row.get(key_name) or 0.0)
             except (TypeError, ValueError):
                 continue
 
-    # Return in hour order
+    # Return in chronological order (by date, then hour)
     result: list[dict[str, Any]] = []
-    for hour in sorted(hourly.keys()):
-        bucket = hourly[hour]
+    for key in sorted(hourly.keys()):
+        bucket = hourly[key]
         result.append(
             {
-                "hour": hour,
+                "date": bucket["date"],
+                "hour": bucket["hour"],
                 "predicted_soc": round(float(bucket["predicted_soc"]), 1),
                 "solar_kwh": round(float(bucket["solar_kwh"]), 3),
                 "consumption_kwh": round(float(bucket["consumption_kwh"]), 3),

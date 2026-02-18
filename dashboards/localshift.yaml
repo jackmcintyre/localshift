@@ -267,7 +267,8 @@ views:
                 extend_to: false
                 data_generator: |
                   return (entity.attributes.soc_series_15min || []).map(function(entry) {
-                    return [entry[0], entry[1]];
+                    // Convert ISO timestamp to epoch milliseconds for ApexCharts
+                    return [new Date(entry[0]).getTime(), entry[1]];
                   });
             yaxis:
               - min: 0
@@ -647,31 +648,16 @@ views:
       - type: grid
         cards:
           - type: heading
-            heading: 24-Hour Forecast
+            heading: 24-Hour Forecast (all slots)
             heading_style: title
 
           - type: markdown
             content: |
               ```
-              Hour  | SOC (%) | Solar (kWh) | Load (kWh) | Net (kWh) | Grid In | Grid Out | Buy ($/kWh) | Sell ($/kWh)
-              ------|---------|-------------|------------|-----------|---------|----------|--------------|-------------
-              {%- set general_forecast = state_attr('sensor.100h_general_forecast', 'forecasts') | default([]) %}
-              {%- set feedin_forecast = state_attr('sensor.100h_feed_in_forecast', 'forecasts') | default([]) %}
-              {%- for item in state_attr('sensor.localshift_forecast_daily', 'forecast_hourly') | default([]) %}
-              {%- set hour = item.hour %}
-              {%- set buy_price = namespace(value='-') %}
-              {%- set sell_price = namespace(value='-') %}
-              {%- for f in general_forecast if (f.nem_date | as_datetime).hour == hour %}
-                {%- if buy_price.value == '-' %}
-                  {%- set buy_price.value = "%.2f"|format(f.per_kwh) %}
-                {%- endif %}
-              {%- endfor %}
-              {%- for f in feedin_forecast if (f.nem_date | as_datetime).hour == hour %}
-                {%- if sell_price.value == '-' %}
-                  {%- set sell_price.value = "%.2f"|format(f.per_kwh) %}
-                {%- endif %}
-              {%- endfor %}
-              {{ "%02d"|format(item.hour) }}    | {{ "%.1f"|format(item.predicted_soc) }}     | {{ "%.2f"|format(item.solar_kwh) }}       | {{ "%.2f"|format(item.consumption_kwh) }}     | {{ "%.2f"|format(item.net_kwh) }}       | {{ "%.2f"|format(item.grid_import_kwh) | default(0) }}     | {{ "%.2f"|format(item.grid_export_kwh) | default(0) }}       | {{ buy_price.value }}          | {{ sell_price.value }}
+              Time  | SOC (%) | Solar  | Load   | Net    | Grid In | Grid Out | GC | PE | Buy $  | Sell $
+              ------|---------|--------|--------|--------|---------|----------|----|----|---------|---------
+              {%- for item in state_attr('sensor.localshift_forecast_daily', 'forecast_slots') | default([]) %}
+              {{ item.time }} | {{ "%.1f"|format(item.soc | float) }}     | {{ "%.3f"|format(item.sol | float) }} | {{ "%.3f"|format(item.ld | float) }} | {{ "%.3f"|format(item.net | float) }} | {{ "%.4f"|format(item.gi | float) }}     | {{ "%.4f"|format(item.go | float) }}     | {{ 'Y' if item.gc else '-' }}  | {{ 'Y' if item.pe else '-' }} | {{ "%.3f"|format(item.bp | float(0)) }} | {{ "%.3f"|format(item.sp | float(0)) }}
               {%- endfor %}
               ```
 

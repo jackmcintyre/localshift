@@ -112,10 +112,14 @@ def get_solar_for_15min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
 ) -> float:
-    """Get solar forecast (kWh) for 15-minute slot from Solcast 30-min periods.
+    """Get solar forecast (kWh) for a 15-minute slot from Solcast 30-min periods.
 
-    Uses containment check: returns half period kWh if slot is within 30-min period.
-    More robust than exact timestamp matching, handles day boundaries and microsecond differences.
+    Uses overlap-weighted accumulation: sums contributions from all Solcast periods
+    that overlap the slot, weighted by the overlap fraction.
+
+    This correctly handles 15-min slots that straddle two Solcast 30-min periods
+    (e.g. a slot starting at :20 ends at :35, overlapping both :00-:30 and :30-:60).
+    The previous full-containment check returned 0 for such slots.
     """
     if not solcast_forecasts:
         return 0.0
@@ -127,6 +131,68 @@ def get_solar_for_15min_slot(
         slot_start = dt_util.as_local(slot_start)
 
     slot_end = slot_start + timedelta(minutes=15)
+    period_duration = timedelta(minutes=30)
+    total_solar = 0.0
+
+    for entry in solcast_forecasts:
+        if not isinstance(entry, dict):
+            continue
+
+        period_start_raw = entry.get("period_start") or entry.get("start")
+        if period_start_raw is None:
+            continue
+
+        start_dt = dt_util.parse_datetime(str(period_start_raw))
+        if not start_dt:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + period_duration
+
+        overlap_start = max(start_local, slot_start)
+        overlap_end = min(end_local, slot_end)
+        overlap_seconds = (overlap_end - overlap_start).total_seconds()
+
+        if overlap_seconds > 0:
+            period_kwh = float(
+                entry.get("pv_estimate10")
+                or entry.get("estimate10")
+                or entry.get("pv_estimate")
+                or entry.get("estimate")
+                or 0.0
+            )
+            overlap_fraction = overlap_seconds / period_duration.total_seconds()
+            total_solar += period_kwh * overlap_fraction
+
+    return total_solar
+
+
+def get_solar_for_5min_slot(
+    solcast_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+) -> float:
+    """Get solar forecast (kWh) for a 5-minute slot from Solcast 30-min periods.
+
+    Uses containment check: returns 1/6 of the period kWh because a 5-minute
+    slot is exactly 5/30 = 1/6 of the 30-minute Solcast period.
+
+    Args:
+        solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
+        slot_start: Start of the 5-minute slot (timezone-aware or naive local).
+
+    Returns:
+        Solar energy in kWh for the 5-minute slot, or 0.0 if no data found.
+    """
+    if not solcast_forecasts:
+        return 0.0
+
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
+    slot_end = slot_start + timedelta(minutes=5)
     period_duration = timedelta(minutes=30)
 
     for entry in solcast_forecasts:
@@ -151,12 +217,10 @@ def get_solar_for_15min_slot(
             or 0.0
         )
 
-        # Check if slot is within this 30-minute period
-        # Containment check: slot must be fully inside the period
+        # Containment check: the 5-min slot must be fully inside the 30-min period
         if slot_start >= start_local and slot_end <= end_local:
-            # Slot is within this 30-minute period
-            # Return half the period kWh (15 min = 50% of 30 min)
-            return period_kwh * 0.5
+            # 5 min = 1/6 of 30 min
+            return period_kwh / 6.0
 
     return 0.0
 

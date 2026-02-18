@@ -296,17 +296,23 @@ class LocalShiftCoordinator:
             _LOGGER.debug("Skipping re-evaluation during mode transition")
             return
 
+        # Read raw entity values immediately so sensors reflect the new state.
+        # Derived-value computation (_compute_derived_values) is intentionally
+        # NOT called here — it happens inside the evaluate lock in
+        # _evaluate_state_machine() so that queued evaluations always use
+        # fresh post-transition state rather than a stale snapshot.
         self._read_all_external_state()
-        self._compute_derived_values()
+        self._notify_listeners()
+
         self.hass.async_create_task(
             self._evaluate_state_machine(),
             "localshift_evaluate_state_change",
         )
-        self._notify_listeners()
 
     @callback
     def _handle_periodic_tick(self, now: datetime) -> None:
         """Handle the 1-minute periodic re-evaluation."""
+        # Read raw entity values now — needed for cost accumulation below.
         self._read_all_external_state()
 
         # Refresh load data periodically (every ~5 minutes)
@@ -326,13 +332,16 @@ class LocalShiftCoordinator:
                 "localshift_fetch_historical_load",
             )
 
-        self._compute_derived_values()
+        # Cost accumulation uses the raw state we just read (sync, no lock needed)
+        self._accumulate_costs()
+
+        # Derived-value computation and listener notification happen inside the
+        # evaluate lock so that back-to-back periodic ticks don't concurrently
+        # mutate shared data or operate on stale post-transition state.
         self.hass.async_create_task(
             self._evaluate_state_machine(),
             "localshift_evaluate_periodic",
         )
-        self._accumulate_costs()
-        self._notify_listeners()
 
     @callback
     def _handle_midnight_reset(self, now: datetime) -> None:
@@ -403,7 +412,10 @@ class LocalShiftCoordinator:
         """Compare desired mode with commanded mode and execute transitions."""
         if self._state_machine is not None and self._computation_engine is not None:
             await self._state_machine.evaluate_state_machine(
-                self.data, self._computation_engine
+                self.data,
+                self._computation_engine,
+                read_state_func=self._read_all_external_state,
+                notify_func=self._notify_listeners,
             )
 
     # ------------------------------------------------------------------

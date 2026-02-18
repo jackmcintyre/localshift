@@ -4,6 +4,7 @@ from .forecast_computer import ForecastComputer
 from .history_fetcher import HistoryFetcher
 from .solar_utils import (
     get_price_for_slot,
+    get_solar_for_5min_slot,
     get_solar_for_15min_slot,
     get_solar_for_slot,
     sum_solar_before_target,
@@ -22,6 +23,7 @@ __all__ = [
     "build_hourly_forecast_summary",
     "get_price_for_slot",
     "get_solar_for_15min_slot",
+    "get_solar_for_5min_slot",
     "get_solar_for_slot",
     "max_forecast_price",
     "parse_forecast_dt",

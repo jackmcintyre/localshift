@@ -57,6 +57,10 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Spot Price vs Forecast Price Mismatch for Proactive Export |
 | backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
 | backlog-med-012 | 🟡 MED | 📋 PROPOSED | Binary Sensors Include Redundant "binary" in Names |
+| backlog-high-021 | 🟠 HIGH | ✅ COMPLETED | Hybrid 5-min/15-min Forecast + Lookup Fix (Issues 3 & 4) |
+| backlog-high-022 | 🟠 HIGH | ✅ COMPLETED | compute_derived_values Outside Evaluate Lock (Issue 5) |
+| backlog-high-023 | 🟠 HIGH | ✅ COMPLETED | Manual Override Double Computation + Proactive Export Guard + Health Check Cooldown + Validation Timeout (Issues 6–9) |
+| backlog-med-013 | 🟡 MED | ✅ COMPLETED | _get_forecast_at_demand_window Stale Entry Post-DW + SELF_CONSUMPTION Fallthrough Log (Issues 14 & 17) |
 
 ---
 

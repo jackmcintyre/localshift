@@ -52,6 +52,27 @@ These are independent and can diverge, causing:
 3. **Single Decision Point**: Only one place makes charging/exporting decisions
 4. **No Divergence**: Impossible for forecast and control to disagree
 
+### Forecast Granularity
+
+The forecast uses **hybrid slot sizes** to balance accuracy and complexity:
+
+| Window | Slot size | Count | Coverage |
+|--------|-----------|-------|----------|
+| Near-term | 5 minutes | 24 | 2 hours |
+| Long-term | 15 minutes | 88 | 22 hours |
+| **Total** | | **112** | **24 hours** |
+
+Near-term 5-minute slots match Amber's pricing data granularity, ensuring the
+lookup in `_get_forecast_entry_for_now()` always finds an entry that covers the
+current moment regardless of when the coordinator fires within a 5-minute window.
+This eliminates the rounding mismatch (Issue 3) that previously caused the system
+to default to SELF_CONSUMPTION for up to ~14 minutes per cycle.
+
+All energy values scale with `slot_fraction = slot_minutes / 60`:
+- Solar: `get_solar_for_5min_slot()` → `period_kwh / 6` for near-term; `get_solar_for_15min_slot()` → `period_kwh / 2` for long-term
+- Consumption: `load_kw × slot_fraction`
+- Charge / export caps: `CHARGE_RATE_kW × slot_fraction`
+
 ## Implementation: Phase 1 - Grid Charging
 
 ### Step 1.1: Extract Decision Logic
@@ -163,61 +184,53 @@ daily_forecast.append({
 })
 ```
 
-### Step 1.4: Implement Forecast-Driven Control
+### Step 1.4: Implement Forecast-Driven Control ✅ IMPLEMENTED
 
 **Location**: `computation_engine.py`
 
-**New helper method**:
+**Lookup helper** — granularity-agnostic scan (replaces old exact-match):
 ```python
 def _get_forecast_entry_for_now(
     self, data: CoordinatorData, now_dt: datetime
 ) -> dict | None:
-    """Get forecast entry for current time slot.
-    
-    Returns None if forecast unavailable or current time
-    not in forecast range.
+    """Find the most-recent forecast entry whose timestamp ≤ now.
+
+    Because compute_forecast() starts from the rounded-down 5-minute boundary
+    there is always an entry whose start time ≤ now — no fallback gap logic
+    is required.  Works for 5-min near-term and 15-min long-term slots alike.
     """
     if not data.daily_forecast:
         return None
-    
-    current_hour = now_dt.hour
-    current_minute = now_dt.minute
-    
-    # Find matching entry
+
+    now_local = dt_util.as_local(now_dt)
+    best_entry = None
     for entry in data.daily_forecast:
-        if entry["hour"] == current_hour and entry["minute"] == current_minute:
-            return entry
-    
-    return None
+        slot_local = dt_util.as_local(datetime.fromisoformat(entry["timestamp"]))
+        if slot_local <= now_local:
+            best_entry = entry
+        else:
+            break  # list is chronological
+    return best_entry
 ```
 
-**Modify `_compute_active_mode()`**:
-
-Add at the START of the method (after spot price override):
+**`_compute_active_mode()` — forecast-driven section (as implemented)**:
 ```python
-# HIGH PRIORITY: FORECAST-DRIVED CONTROL
-# Check forecast for planned actions at current time
-forecast_entry = self._get_forecast_entry_for_now(data, now_dt)
+# Grid charging (boost takes priority)
+if forecast_entry.get("grid_charge_boost") and grid_import_kwh > threshold:
+    data.active_mode = BatteryMode.BOOST_CHARGING
+    return
 
-if forecast_entry:
-    # Grid charging (follow forecast plan)
-    if forecast_entry.get("grid_charge_boost"):
-        data.active_mode = BatteryMode.BOOST_CHARGING
-        _LOGGER.info(
-            "Forecast-driven: BOOST_CHARGING at %s",
-            now_dt.strftime("%H:%M")
-        )
-        return
-    elif forecast_entry.get("grid_charge"):
-        data.active_mode = BatteryMode.GRID_CHARGING
-        _LOGGER.info(
-            "Forecast-driven: GRID_CHARGING at %s",
-            now_dt.strftime("%H:%M")
-        )
-        return
+if forecast_entry.get("grid_charge") and grid_import_kwh > threshold:
+    data.active_mode = BatteryMode.GRID_CHARGING
+    return
+
+# Proactive export — `if`, NOT `elif`.
+# Independent of grid_charge so that a slot with grid_charge=True but
+# zero import (battery full) still triggers export if marked for it.
+if forecast_entry.get("proactive_export"):
+    data.active_mode = BatteryMode.PROACTIVE_EXPORT
+    return
 ```
-
-**Keep fallback logic**: If forecast unavailable or no planned action, use existing price-based decisions.
 
 ### Step 1.5: Test and Validate
 

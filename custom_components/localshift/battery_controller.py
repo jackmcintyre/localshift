@@ -145,7 +145,7 @@ class BatteryController:
             expected_operation_mode="self_consumption",
             expected_backup_reserve=10,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
-            timeout=20,
+            timeout=10,
         ):
             _LOGGER.error("Self consumption mode validation failed")
             return False
@@ -190,7 +190,7 @@ class BatteryController:
             expected_operation_mode="backup",
             expected_backup_reserve=10,  # Default reserve for backup mode
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
-            timeout=20,
+            timeout=10,
         ):
             _LOGGER.error("Force charge mode validation failed")
             return False
@@ -234,7 +234,7 @@ class BatteryController:
             expected_operation_mode="autonomous",
             expected_backup_reserve=100,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
-            timeout=20,
+            timeout=10,
         ):
             _LOGGER.error("Boost charge mode validation failed")
             return False
@@ -295,7 +295,7 @@ class BatteryController:
             expected_operation_mode="autonomous",
             expected_backup_reserve=minimum_target,
             expected_export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
-            timeout=20,
+            timeout=10,
         ):
             _LOGGER.error("Force discharge mode validation failed")
             return False
@@ -358,7 +358,7 @@ class BatteryController:
             expected_operation_mode="autonomous",
             expected_backup_reserve=reserve,
             expected_export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
-            timeout=20,
+            timeout=10,
         ):
             _LOGGER.error("Proactive export mode validation failed")
             return False
@@ -391,7 +391,7 @@ class BatteryController:
         expected_operation_mode: str,
         expected_backup_reserve: float | int,
         expected_export_mode: str | None = None,
-        timeout: int = 20,
+        timeout: int = 10,
     ) -> bool:
         """Validate that hardware state matches expected values after transition.
 
@@ -399,7 +399,7 @@ class BatteryController:
             expected_operation_mode: Expected Teslemetry operation mode
             expected_backup_reserve: Expected backup reserve percentage
             expected_export_mode: Optional expected allow_export mode
-            timeout: Maximum seconds to wait for validation (default: 20)
+            timeout: Maximum seconds to wait for validation (default: 10)
 
         Returns:
             True if validation passes, False otherwise.

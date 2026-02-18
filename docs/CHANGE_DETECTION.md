@@ -242,9 +242,9 @@ async def async_force_forecast_recompute(self) -> None:
 ### Computation Cost
 
 Each forecast recompute:
-- 96 iterations (15-min slots × 24 hours)
-- Solar lookup per slot
-- Consumption estimate per slot
+- 112 iterations (24 × 5-min near-term + 88 × 15-min long-term)
+- Solar lookup per slot (`get_solar_for_5min_slot` for near-term, `get_solar_for_15min_slot` for long-term)
+- Consumption estimate per slot (scaled by `slot_fraction = slot_minutes / 60`)
 - Grid charging decision per slot
 - Proactive export decision per slot
 - Estimated time: ~5-10ms

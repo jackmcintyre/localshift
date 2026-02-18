@@ -139,9 +139,11 @@ The architecture was designed to solve several problems from the original YAML-b
    - Validates transitions completed successfully
 
 5. **Forecast Computer** (`forecast_computer.py`)
-   - Simulates 24-hour battery behavior with 15-minute granularity
-   - Models solar, consumption, grid charging, and exports
-   - Provides `daily_forecast` with 96 entries (one per 15-min slot)
+   - Simulates 24-hour battery behavior with hybrid granularity
+   - Near-term (2 h): 24 × 5-minute slots for accurate current-period decisions
+   - Long-term (22 h): 88 × 15-minute slots for planning further ahead
+   - Models solar, consumption, grid charging, and proactive exports
+   - Provides `daily_forecast` with 112 entries; each entry carries `slot_interval_minutes`
 
 ## Current Architecture Issues
 
@@ -268,28 +270,46 @@ This ensures the system captures real-time price opportunities rather than relyi
 
 ### Forecast Data Structure
 
+The `daily_forecast` list contains 112 entries: 24 × 5-minute near-term slots followed by 88 × 15-minute long-term slots. The `slot_interval_minutes` field identifies the granularity of each entry.
+
 ```python
 daily_forecast = [
+    # Near-term entry (5-min slot, first 2 h)
     {
         "hour": 10,
         "minute": 0,
         "timestamp": "2026-02-16T10:00:00+11:00",
+        "slot_interval_minutes": 5,          # 5 for near-term, 15 for long-term
         "predicted_soc": 85.5,
-        "solar_kwh": 0.750,
-        "consumption_kwh": 0.125,
-        "net_kwh": 0.625,
+        "solar_kwh": 0.125,                  # 1/6 of 30-min Solcast period
+        "consumption_kwh": 0.042,            # load_kw × (5/60)
+        "net_kwh": 0.083,
         "grid_import_kwh": 0.000,
         "grid_export_kwh": 0.000,
-        
-        # NEW: Grid charging flags
         "grid_charge": True,
         "grid_charge_boost": False,
-        
-        # NEW: Proactive export flags
         "proactive_export": False,
         "export_amount_kwh": 0.0,
     },
-    # ... 95 more entries
+    # ... 23 more 5-min entries ...
+    # Long-term entry (15-min slot, remaining 22 h)
+    {
+        "hour": 12,
+        "minute": 0,
+        "timestamp": "2026-02-16T12:00:00+11:00",
+        "slot_interval_minutes": 15,
+        "predicted_soc": 92.0,
+        "solar_kwh": 0.750,                  # 1/2 of 30-min Solcast period
+        "consumption_kwh": 0.125,            # load_kw × (15/60)
+        "net_kwh": 0.625,
+        "grid_import_kwh": 0.000,
+        "grid_export_kwh": 0.000,
+        "grid_charge": False,
+        "grid_charge_boost": False,
+        "proactive_export": False,
+        "export_amount_kwh": 0.0,
+    },
+    # ... 87 more 15-min entries
 ]
 ```
 
@@ -298,27 +318,26 @@ daily_forecast = [
 ```python
 # In computation_engine.py _compute_active_mode()
 
-# 1. Check forecast for planned actions at current time
+# 1. Find the most-recent forecast entry whose timestamp ≤ now.
+#    Granularity-agnostic: works for 5-min and 15-min slots alike.
 forecast_entry = _get_forecast_entry_for_now(data, now_dt)
 
 if forecast_entry:
-    # Grid charging
-    if forecast_entry.get("grid_charge_boost"):
+    # Grid charging (boost takes priority over normal)
+    if forecast_entry.get("grid_charge_boost") and grid_import_kwh > threshold:
         active_mode = BatteryMode.BOOST_CHARGING
         return
-    elif forecast_entry.get("grid_charge"):
+    if forecast_entry.get("grid_charge") and grid_import_kwh > threshold:
         active_mode = BatteryMode.GRID_CHARGING
         return
-    
-    # Proactive export
+
+    # Proactive export (note: `if`, not `elif` — evaluated independently
+    # even when grid_charge=True but no import is available)
     if forecast_entry.get("proactive_export"):
-        active_mode = BatteryMode.SPIKE_DISCHARGE
-        # Use controlled backup_reserve for rate limiting
-        export_amount = forecast_entry.get("export_amount_kwh")
+        active_mode = BatteryMode.PROACTIVE_EXPORT
         return
 
-# 2. Fallback: Use existing logic if forecast unavailable
-# (current price-based decisions, etc.)
+# 2. Fallback to spike discharge, demand block, or self-consumption
 ```
 
 ### Change Detection Flow
@@ -351,6 +370,51 @@ class ForecastChangeTracker:
         
         return False, "no_change"
 ```
+
+## Coordinator Event Loop
+
+### State Change Handling
+
+On every external entity state change, the coordinator:
+
+1. Reads raw entity state immediately (`_read_all_external_state`) so sensor entities reflect the new value without waiting for the async task.
+2. Notifies HA listeners synchronously for fast UI updates.
+3. Queues an async evaluate task — does NOT compute derived values here.
+
+Inside the async evaluate task (`evaluate_state_machine`), while holding the `_evaluate_lock`:
+
+4. Re-reads raw state to get the latest post-transition hardware values.
+5. Runs `compute_derived_values()` (including forecast recompute if needed).
+6. Notifies HA listeners again with fully-derived values.
+7. Applies debounce + executes transition if needed.
+8. `try/finally` ensures listener notification always fires regardless of which code path returns.
+
+This design eliminates the race condition where a queued evaluation used pre-transition stale state and could immediately revert a transition.
+
+### Periodic Tick Handling
+
+Every minute:
+1. Reads raw state.
+2. Runs cost accumulation synchronously (needs raw state, no lock needed).
+3. Queues an async evaluate task (same lock-protected flow as above).
+
+## State Machine Reliability
+
+### Debounce Timer Behaviour
+
+Debounce timers for price-driven modes are reset whenever the desired mode changes away from a mode. This prevents oscillating prices from accumulating time toward the debounce without the mode being continuously desired:
+
+- Timer for `GRID_CHARGING` starts when it first becomes desired.
+- If the mode flip-flops to `SELF_CONSUMPTION` and back, the timer resets.
+- Full 5-minute debounce is always served from a continuous period of stable desire.
+
+### Health Check Cooldown
+
+The health check runs every minute to detect hardware state drift. If a mismatch is found, correction commands are only re-issued if at least 5 minutes have elapsed since the last correction (`_MIN_CORRECTION_INTERVAL`). This prevents command spam during the 15–30 second window when Teslemetry's cloud state lags behind a legitimate transition.
+
+### Validation Timeout
+
+After issuing transition commands, the system polls for hardware confirmation for up to **10 seconds** (reduced from 20 seconds). The "operation_mode matches → success" early-exit logic ensures fast confirmation when Teslemetry responds promptly. The reduction lowers the maximum worst-case `in_mode_transition` lock time from ~40 s to ~25 s per transition.
 
 ## Risks and Mitigations
 

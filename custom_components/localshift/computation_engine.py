@@ -743,18 +743,20 @@ class ComputationEngine:
     def _get_forecast_entry_for_now(
         self, data: CoordinatorData, now_dt: datetime
     ) -> dict | None:
-        """Get forecast entry for current time slot.
+        """Get the forecast entry whose slot covers the current moment.
 
-        Returns None if forecast unavailable or current time
-        not in forecast range.
+        Strategy: find the most-recent entry whose timestamp ≤ now.  Because
+        ``compute_forecast`` now starts from the rounded-down 5-minute boundary
+        there is always an entry whose start time ≤ now, so no fallback gap
+        logic is required.
 
-        Handles edge case where current time falls before the first forecast slot
-        (e.g., current time 10:25, first forecast slot 10:30) by returning the
-        first available slot.
+        This is granularity-agnostic: it works correctly whether the forecast
+        contains 5-minute near-term slots, 15-minute long-term slots, or any
+        future mix thereof.
 
-        Also populates debug fields on data for dashboard troubleshooting.
+        Also populates debug fields on ``data`` for dashboard troubleshooting.
         """
-        # Initialize debug fields
+        # Initialise debug fields
         data.debug_forecast_slot_found = False
         data.debug_forecast_slot_time = ""
         data.debug_first_forecast_slot_time = ""
@@ -767,61 +769,108 @@ class ComputationEngine:
         first_entry = data.daily_forecast[0]
         first_slot_dt = datetime.fromisoformat(first_entry.get("timestamp", ""))
         first_slot_local = dt_util.as_local(first_slot_dt)
-        data.debug_first_forecast_slot_time = first_slot_local.strftime("%H:%M")
+        data.debug_first_forecast_slot_time = first_slot_local.strftime("%H:%M:%S")
 
-        current_hour = now_dt.hour
-        # Round down to nearest 15-minute slot (0, 15, 30, 45)
-        current_minute = (now_dt.minute // 15) * 15
+        # Ensure now_dt is timezone-aware for comparison with tz-aware slot timestamps.
+        if now_dt.tzinfo is None:
+            now_local = dt_util.as_local(dt_util.as_utc(now_dt))
+        else:
+            now_local = dt_util.as_local(now_dt)
 
-        # Find matching entry
+        # Walk the forecast list and keep track of the most-recent entry whose
+        # start time is at or before now.  The list is chronological so we can
+        # stop as soon as we pass now.
+        best_entry: dict | None = None
+        best_slot_local: datetime | None = None
+
         for entry in data.daily_forecast:
-            if entry["hour"] == current_hour and entry["minute"] == current_minute:
-                # Found exact match
-                data.debug_forecast_slot_found = True
-                data.debug_forecast_slot_time = (
-                    f"{current_hour:02d}:{current_minute:02d}"
-                )
-                data.debug_time_gap_seconds = 0.0
-                return entry
+            ts = entry.get("timestamp", "")
+            if not ts:
+                continue
+            slot_dt = datetime.fromisoformat(ts)
+            slot_local = dt_util.as_local(slot_dt)
 
-        # Edge case: current time falls before first forecast slot
-        # This happens when forecast rounds UP to next 15-min boundary
-        # (e.g., at 10:25, forecast starts at 10:30, no entry for 10:15)
-        # Return the first available slot which covers the immediate future
-        time_diff = (first_slot_local - now_dt).total_seconds()
-        data.debug_time_gap_seconds = time_diff
+            if slot_local <= now_local:
+                best_entry = entry
+                best_slot_local = slot_local
+            else:
+                # List is sorted chronologically; once we're past now we're done.
+                break
 
-        # Only use first slot if we're within 15 minutes of it
-        # (i.e., current time is in the gap before first slot)
-        if 0 <= time_diff < 15 * 60:  # Within 15 minutes
-            _LOGGER.debug(
-                "Using first forecast slot %s for current time %s (time gap: %.0fs)",
-                first_slot_local.strftime("%H:%M"),
-                now_dt.strftime("%H:%M"),
-                time_diff,
-            )
+        if best_entry is not None and best_slot_local is not None:
             data.debug_forecast_slot_found = True
-            data.debug_forecast_slot_time = first_slot_local.strftime("%H:%M")
-            return first_entry
+            data.debug_forecast_slot_time = best_slot_local.strftime("%H:%M:%S")
+            data.debug_time_gap_seconds = (now_local - best_slot_local).total_seconds()
+            _LOGGER.debug(
+                "Forecast lookup: now=%s → slot=%s (age=%.0fs, interval=%dmin)",
+                now_local.strftime("%H:%M:%S"),
+                best_slot_local.strftime("%H:%M:%S"),
+                data.debug_time_gap_seconds,
+                best_entry.get("slot_interval_minutes", 15),
+            )
+            return best_entry
 
+        # Forecast hasn't started yet (now_dt is before all slots) — this is
+        # theoretically impossible with round-down base_slot but guard anyway.
+        time_diff = (first_slot_local - now_local).total_seconds()
+        data.debug_time_gap_seconds = time_diff
+        _LOGGER.warning(
+            "Forecast lookup: now=%s is before first slot %s (gap=%.0fs) — returning None",
+            now_local.strftime("%H:%M:%S"),
+            first_slot_local.strftime("%H:%M:%S"),
+            time_diff,
+        )
         return None
 
     def _get_forecast_at_demand_window(
         self, data: CoordinatorData, target_hour: int
     ) -> dict | None:
-        """Get forecast entry at demand window time (hour:00).
+        """Get the *upcoming* forecast entry at the demand window start time.
 
-        Returns None if forecast doesn't span that far.
-        Used to derive simple forecast values from detailed 15-min forecast.
+        Walks the forecast list chronologically and returns the first entry
+        matching ``hour == target_hour, minute == 0`` whose timestamp is at
+        or after ``now``.
+
+        This correctly handles the post-DW period: if it is currently 17:00
+        and the DW started at 15:00, today's 15:00 entry is in the past and
+        is skipped.  The next qualifying entry is tomorrow's 15:00 slot.
+        If the forecast doesn't span far enough to include a future DW entry,
+        ``None`` is returned and callers fall back to the current SOC.
+
+        Replaces the previous "first match" logic which always returned today's
+        (potentially stale, already-elapsed) DW slot.
         """
         if not data.daily_forecast:
             return None
 
-        # Find entry at target hour, minute 0
+        # Normalise now to tz-aware local time (test mocks may return naive datetimes).
+        now_raw = dt_util.now()
+        if now_raw.tzinfo is None:
+            now_local = dt_util.as_local(dt_util.as_utc(now_raw))
+        else:
+            now_local = dt_util.as_local(now_raw)
+
         for entry in data.daily_forecast:
-            if entry["hour"] == target_hour and entry["minute"] == 0:
+            if entry.get("hour") != target_hour or entry.get("minute") != 0:
+                continue
+            # Only accept this slot if it is in the future.
+            ts = entry.get("timestamp", "")
+            if not ts:
+                # No timestamp — fall back to accepting the first match
+                return entry
+            try:
+                slot_dt = datetime.fromisoformat(ts)
+            except ValueError:
+                return entry  # Malformed timestamp — accept anyway
+            # Normalise slot to tz-aware local time.
+            if slot_dt.tzinfo is None:
+                slot_local = dt_util.as_local(dt_util.as_utc(slot_dt))
+            else:
+                slot_local = dt_util.as_local(slot_dt)
+            if slot_local >= now_local:
                 return entry
 
+        # No future DW slot found in the current forecast window
         return None
 
     def _compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
@@ -917,7 +966,13 @@ class ComputationEngine:
                 )
 
         # FORECAST-DRIVED: Proactive export (before negative feed-in prices)
-        elif forecast_entry.get("proactive_export"):
+        # No discharge-window guard here — unlike SPIKE_DISCHARGE (which is reactive),
+        # proactive export is forecast-driven and the forecast computer already tracks
+        # predicted SOC across all slots.  It will only mark a slot for export if the
+        # battery SOC remaining after export is sufficient to cover overnight load until
+        # solar returns the next morning.  A time-of-day guard would incorrectly block
+        # legitimate overnight export at high feed-in prices.
+        if forecast_entry.get("proactive_export"):
             data.active_mode = BatteryMode.PROACTIVE_EXPORT
             data.proactive_export_active = True
             export_amount = forecast_entry.get("export_amount_kwh", 0.0)
@@ -954,6 +1009,18 @@ class ComputationEngine:
         # elif data.forecast_spike_within_window:
         #     data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
         else:
+            _LOGGER.debug(
+                "Mode fallthrough to SELF_CONSUMPTION at %s: "
+                "grid_charge=%s grid_boost=%s proactive=%s "
+                "spike=%s dw=%s manual=%s",
+                now_dt.strftime("%H:%M"),
+                forecast_entry.get("grid_charge"),
+                forecast_entry.get("grid_charge_boost"),
+                forecast_entry.get("proactive_export"),
+                data.price_spike,
+                data.demand_window_active,
+                data.manual_override,
+            )
             data.active_mode = BatteryMode.SELF_CONSUMPTION
 
     def _add_to_decision_log(

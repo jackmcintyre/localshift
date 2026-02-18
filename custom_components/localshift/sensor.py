@@ -325,10 +325,33 @@ class DailyForecastSensor(LocalShiftSensorBase):
         total_grid_import = sum(slot.get("grid_in", 0) or 0 for slot in debug_15min)
         total_grid_export = sum(slot.get("grid_out", 0) or 0 for slot in debug_15min)
 
+        # Build compact full-resolution slot list for the dashboard table.
+        # Short key names keep the total attribute size under the 16 KB HA recorder limit.
+        # Format: h=hour, m=minute, soc=predicted_soc%, sol/ld/net in kWh, gi/go=grid in/out kWh
+        forecast_slots = []
+        for slot in self.coordinator.data.daily_forecast:
+            ts = slot.get("timestamp", "")
+            forecast_slots.append(
+                {
+                    "time": ts[11:16] if len(ts) >= 16 else "",  # "HH:MM"
+                    "h": slot.get("hour", 0),
+                    "m": slot.get("minute", 0),
+                    "soc": slot.get("predicted_soc"),
+                    "sol": slot.get("solar_kwh"),
+                    "ld": slot.get("consumption_kwh"),
+                    "net": slot.get("net_kwh"),
+                    "gi": slot.get("grid_import_kwh"),
+                    "go": slot.get("grid_export_kwh"),
+                    "gc": slot.get("grid_charge", False),
+                    "pe": slot.get("proactive_export", False),
+                    "bp": slot.get("buy_price"),
+                    "sp": slot.get("sell_price"),
+                }
+            )
+
         return {
-            # NOTE: We intentionally avoid exposing the full 96-slot 15-min forecast
-            # here because it can exceed the recorder 16KB attribute limit.
-            # Instead we expose a compact hourly summary + a light-weight SOC series.
+            # All forecast slots in compact form (short keys keep attribute under 16 KB limit).
+            "forecast_slots": forecast_slots,
             "debug_15min_slots": debug_15min,
             "debug_total_grid_import_kwh": round(total_grid_import, 3),
             "debug_total_grid_export_kwh": round(total_grid_export, 3),
