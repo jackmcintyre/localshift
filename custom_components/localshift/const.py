@@ -237,11 +237,11 @@ BUTTON_ICONS = {
 }
 
 BUTTON_NAMES = {
-    BUTTON_FORCE_CHARGE: "Button Force Charge",
-    BUTTON_FORCE_DISCHARGE: "Button Force Discharge",
-    BUTTON_BOOST_CHARGE: "Button Boost Charge",
-    BUTTON_SELF_CONSUMPTION: "Button Self Consumption",
-    BUTTON_UPDATE_FORECAST: "Button Update Forecast",
+    BUTTON_FORCE_CHARGE: "Force Charge",
+    BUTTON_FORCE_DISCHARGE: "Force Discharge",
+    BUTTON_BOOST_CHARGE: "Boost Charge",
+    BUTTON_SELF_CONSUMPTION: "Self Consumption",
+    BUTTON_UPDATE_FORECAST: "Update Forecast",
 }
 
 # -----------------------------------------------------------------------------
