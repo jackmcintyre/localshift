@@ -61,6 +61,8 @@ class StateMachine:
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
         self._MIN_CORRECTION_INTERVAL = timedelta(minutes=5)
+        # Flag to skip debounce on first transition after startup grace
+        self._skip_next_debounce: bool = False
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
@@ -83,35 +85,18 @@ class StateMachine:
     ) -> timedelta:
         """Return the required debounce duration for a mode transition.
 
-        Matches the YAML ``for: minutes: N`` patterns:
-        - Spike / demand window / manual → immediate
-        - Proactive export → 2 minutes (backlog-high-021: prevent rapid cycling)
-        - All price-driven transitions → 5 minutes (A3/A4/A10/A11)
+        All transitions are immediate except PROACTIVE_EXPORT (2-min debounce).
+        Hysteresis in computation_engine prevents oscillation.
 
         NOTE: Hold mode has been removed.
         """
-        # Immediate: high-priority or safety transitions
-        if to_mode in (
-            BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.DEMAND_BLOCK,
-            BatteryMode.MANUAL,
-        ):
-            return timedelta(0)
-        # Immediate: leaving high-priority modes
-        if from_mode in (
-            BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.DEMAND_BLOCK,
-        ):
-            return timedelta(0)
         # (backlog-high-021) PROACTIVE_EXPORT needs debounce to prevent rapid cycling
         # when forecast oscillates near the export threshold
         if to_mode == BatteryMode.PROACTIVE_EXPORT:
             return timedelta(minutes=2)
-        # Immediate when leaving PROACTIVE_EXPORT (return to normal operation)
-        if from_mode == BatteryMode.PROACTIVE_EXPORT:
-            return timedelta(0)
-        # All other (price-driven): 5 minutes
-        return timedelta(minutes=5)
+        
+        # All other transitions: immediate (hysteresis prevents oscillation)
+        return timedelta(0)
 
     async def evaluate_state_machine(
         self,
@@ -132,6 +117,13 @@ class StateMachine:
         from pre-transition hardware state.
         """
         async with self._evaluate_lock:
+            # DIAGNOSTIC: Log current state machine state at INFO level
+            _LOGGER.info(
+                "State machine evaluate: desired=%s, commanded=%s, hardware_op=%s",
+                data.active_mode.value if hasattr(data, 'active_mode') else 'unknown',
+                self._commanded_mode.value,
+                data.operation_mode,
+            )
             # Re-read external state and recompute derived values while holding
             # the lock.  If multiple evaluations were queued, each one now
             # operates on hardware state that reflects any transitions made by
@@ -155,8 +147,11 @@ class StateMachine:
                         return
                     self._startup_grace_until = None
                     self._commanded_mode = self.infer_current_hardware_mode(data)
+                    # Skip debounce on first transition after startup to quickly
+                    # correct any mismatch between hardware state and desired mode
+                    self._skip_next_debounce = True
                     _LOGGER.info(
-                        "Startup grace ended, inferred mode: %s",
+                        "Startup grace ended, inferred mode: %s (skip_next_debounce=True)",
                         self._commanded_mode.value,
                     )
 
@@ -208,9 +203,15 @@ class StateMachine:
                     return
 
                 # --- Debounce tracking ---
-                debounce = self.get_debounce_for_transition(
-                    self._commanded_mode, desired
-                )
+                # Skip debounce if flag is set (first transition after startup grace)
+                if self._skip_next_debounce:
+                    debounce = timedelta(0)
+                    self._skip_next_debounce = False
+                    _LOGGER.info("Skipping debounce (first transition after startup)")
+                else:
+                    debounce = self.get_debounce_for_transition(
+                        self._commanded_mode, desired
+                    )
 
                 # Clear timers for modes no longer desired.
                 # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
@@ -226,7 +227,7 @@ class StateMachine:
                     # First time this mode is (continuously) desired — start the timer
                     self._mode_desired_since[desired] = now
                     if debounce > timedelta(0):
-                        _LOGGER.debug(
+                        _LOGGER.info(
                             "Mode %s desired, debounce %s starts now",
                             desired.value,
                             debounce,
@@ -237,7 +238,7 @@ class StateMachine:
                 elapsed = now - desired_since
 
                 if elapsed < debounce:
-                    _LOGGER.debug(
+                    _LOGGER.info(
                         "Mode %s desired for %s, need %s — waiting",
                         desired.value,
                         elapsed,

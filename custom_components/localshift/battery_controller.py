@@ -543,13 +543,19 @@ class BatteryController:
             else True
         )
 
+        # DIAGNOSTIC: Always log at INFO level for visibility
+        _LOGGER.info(
+            "Health check verify: expected=(op=%s, reserve=%s, export=%s), actual=(op=%s, reserve=%s, export=%s), match=%s",
+            expected_operation_mode,
+            expected_backup_reserve,
+            expected_export_mode,
+            current_operation_mode,
+            current_backup_reserve,
+            current_export_mode,
+            matches_operation and matches_reserve and matches_export,
+        )
+
         if matches_operation and matches_reserve and matches_export:
-            _LOGGER.debug(
-                "State verification OK: operation_mode=%s, backup_reserve=%s, export_mode=%s",
-                current_operation_mode,
-                current_backup_reserve,
-                current_export_mode,
-            )
             return True
 
         # State mismatch detected
