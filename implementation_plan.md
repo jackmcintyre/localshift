@@ -1,0 +1,216 @@
+# Implementation Plan - Holistic Backlog Execution
+
+[Overview]
+This implementation plan provides a structured, phased approach to work through all backlog items, prioritizing by risk, effort, and dependencies.
+
+The plan is organized into 4 execution phases:
+- **Phase 1: Quick Wins** - Low effort, high impact fixes
+- **Phase 2: Core Reliability** - Critical safety and testing improvements  
+- **Phase 3: Code Quality** - Maintainability and cleanup
+- **Phase 4: Future Planning** - Features and polish
+
+Each phase can be executed independently, with items within a phase ordered by priority and dependencies.
+
+[Backlog Summary]
+| Priority | Count | Items |
+|----------|-------|-------|
+| 🔴 CRIT | 1 | State Machine Tests (backlog-crit-002) |
+| 🟠 HIGH | 5 | Day Boundary (019), Health Check (020), Debounce (021), Solar SOC (022), Excess Solar (017) |
+| 🟡 MED | 7 | Decision Log (003), Cache (004), Config (005), Sensors (011), Naming (012), Async Sleep (014), Private Methods (016), Test Mocks (018) |
+| ⚪ LOW | 2 | Dashboard (001), Type Hints (004) |
+
+[Phase 1: Quick Wins - Build Momentum]
+These are low-effort, high-impact fixes that can be completed quickly to build momentum.
+
+**1.1 backlog-high-019: Day Boundary Bug in Overnight Grid Charging**
+- **Effort**: Low (1-line fix)
+- **Risk**: Medium (affects charging timing)
+- **Files**: `forecast_computer.py` line ~1611
+- **Fix**: Replace `slot_hour < target_hour` with `_next_demand_window_start_dt()` comparison
+- **Tests**: Add `test_evening_slots_before_demand_window`
+
+**1.2 backlog-high-022: Forecast SOC Stays Flat at Minimum**
+- **Effort**: Low (small logic addition)
+- **Risk**: Medium (affects charging decisions)
+- **Files**: `forecast_computer.py` lines 1763-1770
+- **Fix**: After clamping SOC to minimum, apply solar charging if excess exists
+- **Tests**: Add `test_solar_charging_at_minimum_soc`
+
+**1.3 backlog-med-004: Missing Cleanup for Historical Load Cache**
+- **Effort**: Very Low (1-line fix)
+- **Risk**: Low (cleanup only)
+- **Files**: `coordinator.py` async_stop method
+- **Fix**: Add `self._historical_load_cache.clear()` to shutdown
+
+[Phase 2: Core Reliability - Reduce Risk]
+These items address critical safety, testing, and health check gaps.
+
+**2.1 backlog-crit-002: Missing Unit Tests for State Machine**
+- **Effort**: High (create comprehensive tests)
+- **Risk**: Critical (battery damage potential)
+- **Files**: New `tests/test_state_machine.py`
+- **Tests to create**:
+  - State transition logic and debounce timers
+  - Health check validation for all modes
+  - Mode transition failure handling
+  - Startup grace period logic
+  - Re-entrant call prevention
+
+**2.2 backlog-high-020: Health Check Missing export_mode Verification**
+- **Effort**: Medium (extend health check)
+- **Risk**: High (battery state inconsistency)
+- **Files**: `state_machine.py` - `_get_expected_state_for_mode()`
+- **Fix**: Add export_mode validation to health checks
+- **Export Mode Logic**:
+  - SELF_CONSUMPTION: pv_only
+  - GRID_CHARGING: battery_ok
+  - BOOST_CHARGING: battery_ok
+  - SPIKE_DISCHARGE: battery_ok
+  - PROACTIVE_EXPORT: battery_ok
+  - DEMAND_BLOCK: pv_only
+  - MANUAL: skip validation
+
+**2.3 backlog-high-021: PROACTIVE_EXPORT Has 0 Debounce Risk**
+- **Effort**: Medium (adjust debounce strategy)
+- **Risk**: High (rapid mode cycling)
+- **Files**: `state_machine.py` - `get_debounce_for_transition()`
+- **Fix**: Add debounce to PROACTIVE_EXPORT transitions (e.g., 2-5 minutes)
+
+[Phase 3: Code Quality - Maintainability]
+These items improve code quality and remove technical debt.
+
+**3.1 backlog-med-003: Decision Log Limited to 50 Entries**
+- **Effort**: Low (config change)
+- **Files**: `coordinator.py`
+- **Fix Options**:
+  - A) Increase limit to 100-200 entries
+  - B) Implement time-based retention (24 hours)
+  - C) Make configurable via options
+
+**3.2 backlog-med-005: Unused Config Option - ALLOW_EXPORT**
+- **Effort**: Low (cleanup)
+- **Files**: `config_flow.py`
+- **Fix Options**:
+  - A) Remove from config flow (integration manages it)
+  - B) Add as optional re-configurable entity
+
+**3.3 backlog-med-011: Remove Redundant Grid Import/Export Sensors**
+- **Effort**: Medium (evaluation + potential removal)
+- **Files**: `sensor.py`, `coordinator_data.py`, `computation_engine.py`, `dashboards/localshift.yaml`
+- **Steps**:
+  1. Check if Teslemetry has separate import/export entities
+  2. Search for references in dashboards
+  3. Decide: remove, keep, or document
+
+**3.4 backlog-med-012: Binary Sensors Include Redundant "binary" in Names**
+- **Effort**: Medium (rename + migration)
+- **Files**: `binary_sensor.py`, `docs/ENTITY_REFERENCE.md`
+- **Fix**: Remove "binary_" prefix from unique_ids and "Binary " from names
+- **Breaking Change**: New entity IDs created
+
+**3.5 backlog-med-014: Synchronous Sleep in Async Context**
+- **Effort**: Medium (refactor)
+- **Files**: `battery_controller.py` - validation loop
+- **Fix Options**:
+  - A) Reduce timeout from 10 to 3-5 seconds
+  - B) Use asyncio.wait_for() with proper cancellation
+  - C) Move validation to background task
+
+**3.6 backlog-med-016: Private Method Access Breaking Encapsulation**
+- **Effort**: Medium (refactor)
+- **Files**: `switch.py`, `number.py`, `coordinator.py`
+- **Fix**: Add public API method in coordinator:
+  ```python
+  async def async_recompute_and_evaluate(self) -> None:
+      self._compute_derived_values()
+      self._notify_listeners()
+      await self.async_evaluate_state_machine()
+  ```
+
+**3.7 backlog-med-018: Tests Pass with Mocks but Fail in Real HA**
+- **Effort**: Medium (improve fixtures)
+- **Files**: `tests/conftest.py`
+- **Fix**: Add realistic HA entity state simulation in fixtures
+
+[Phase 4: Future Planning]
+Items that are features or nice-to-have improvements.
+
+**4.1 backlog-high-017: Excess Solar Load Shifting Sensors**
+- **Priority**: Feature request
+- **Scope**: New sensors for external automations
+- **Files**: `coordinator_data.py`, `computation_engine.py`, `forecast_computer.py`, `sensor.py`, `binary_sensor.py`
+
+**4.2 backlog-low-001: Dashboard Setup Complexity**
+- **Priority**: UX improvement
+- **Scope**: Document or auto-create helper sensors
+
+**4.3 backlog-low-004: Missing Type Hints**
+- **Priority**: Code quality
+- **Scope**: Add type annotations to internal methods
+
+[Dependencies]
+No external dependencies required. All fixes use existing imports and infrastructure.
+
+Internal dependencies:
+- backlog-high-020 (Health Check) depends on backlog-crit-002 (Tests) for validation
+- backlog-high-021 (Debounce) depends on backlog-crit-002 (Tests) for verification
+
+[Implementation Order]
+
+**Week 1-2: Quick Wins (Phase 1)**
+1. Fix day boundary bug (backlog-high-019)
+2. Fix solar SOC flatline (backlog-high-022)  
+3. Add cache cleanup (backlog-med-004)
+4. Add test cases for fixes
+
+**Week 3-4: Core Reliability (Phase 2)**
+5. Create state machine tests (backlog-crit-002)
+6. Add export_mode health check (backlog-high-020)
+7. Fix PROACTIVE_EXPORT debounce (backlog-high-021)
+
+**Week 5-6: Code Quality (Phase 3)**
+8. Expand decision log limit (backlog-med-003)
+9. Clean up config option (backlog-med-005)
+10. Evaluate grid sensors (backlog-med-011)
+11. Fix binary sensor naming (backlog-med-012)
+12. Fix async sleep (backlog-med-014)
+13. Fix private method access (backlog-med-016)
+14. Improve test mocks (backlog-med-018)
+
+**Week 7+: Future Planning (Phase 4)**
+15. Implement excess solar sensors (backlog-high-017)
+16. Address dashboard complexity (backlog-low-001)
+17. Add type hints (backlog-low-004)
+
+[Testing]
+Each fix requires appropriate test coverage:
+
+**Phase 1 Tests**:
+- `test_evening_slots_before_demand_window` - Day boundary fix
+- `test_solar_charging_at_minimum_soc` - SOC flatline fix
+
+**Phase 2 Tests**:
+- `test_state_machine_transitions` - All mode transitions
+- `test_state_machine_debounce` - Timer behavior
+- `test_health_check_export_mode` - Health check completeness
+
+**Phase 3 Tests**:
+- Update existing tests if entity names/numbers change
+
+[Files Summary]
+**Modified Files:**
+- `forecast_computer.py` - Fixes #1, #2
+- `coordinator.py` - Cache cleanup
+- `state_machine.py` - Health check, debounce
+- `config_flow.py` - Config option cleanup
+- `sensor.py` - Potential sensor removal
+- `binary_sensor.py` - Naming fix
+- `switch.py`, `number.py` - Private method fix
+- `dashboards/localshift.yaml` - Entity reference updates
+- `battery_controller.py` - Async sleep fix
+
+**New Files:**
+- `tests/test_state_machine.py` - State machine tests
+
+**Documentation Updates:**
+- `docs/ENTITY_REFERENCE.md` - After sensor/naming changes

@@ -1,6 +1,6 @@
 # Backlog Index
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-02-19
 
 This is the master index for all backlog items. Each feature has its own dedicated `.md` file in this directory.
 
@@ -27,6 +27,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-019 | 🟠 HIGH | 📋 PROPOSED | Day Boundary Bug in Overnight Grid Charging Decision |
 | backlog-high-020 | 🟠 HIGH | 📋 PROPOSED | Health Check Missing export_mode Verification |
 | backlog-high-021 | 🟠 HIGH | 📋 PROPOSED | PROACTIVE_EXPORT Has 0 Debounce Risk |
+| backlog-high-022 | 🟠 HIGH | 📋 PROPOSED | Forecast SOC Stays Flat at Minimum Despite Solar Excess |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
 | backlog-med-004 | 🟡 MED | 📋 PROPOSED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
