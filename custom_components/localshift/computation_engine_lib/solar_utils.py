@@ -161,7 +161,10 @@ def get_solar_for_15min_slot(
 
     This correctly handles 15-min slots that straddle two Solcast 30-min periods
     (e.g. a slot starting at :20 ends at :35, overlapping both :00-:30 and :30-:60).
-    The previous full-containment check returned 0 for such slots.
+
+    IMPORTANT: Solcast's pv_estimate values represent average power (kWh per hour),
+    NOT energy per period. So we divide overlap_seconds by 3600 (seconds per hour),
+    not by the period duration.
     """
     if not solcast_forecasts:
         return 0.0
@@ -230,7 +233,9 @@ def get_solar_for_15min_slot(
             period_kwh = float(
                 pv_estimate or estimate or pv_estimate10 or estimate10 or 0.0
             )
-            overlap_fraction = overlap_seconds / period_duration.total_seconds()
+            # pv_estimate is kWh per HOUR, so divide by 3600 seconds
+            # NOT by period duration (would give 2x error for 30-min periods)
+            overlap_fraction = overlap_seconds / 3600.0
             contribution = period_kwh * overlap_fraction
             total_solar += contribution
 
@@ -330,7 +335,8 @@ def get_solar_for_15min_slot_or_none(
                 or entry.get("estimate10")
                 or 0.0
             )
-            overlap_fraction = overlap_seconds / period_duration.total_seconds()
+            # pv_estimate is kWh per HOUR, so divide by 3600 seconds
+            overlap_fraction = overlap_seconds / 3600.0
             total_solar += period_kwh * overlap_fraction
 
     # Return None if no matching period was found (forecast doesn't cover this slot)
@@ -393,8 +399,8 @@ def get_solar_for_5min_slot(
 
         # Containment check: the 5-min slot must be fully inside the 30-min period
         if slot_start >= start_local and slot_end <= end_local:
-            # 5 min = 1/6 of 30 min
-            return period_kwh / 6.0
+            # pv_estimate is kWh per HOUR, so 5 min = 5/60 = 1/12 of an hour
+            return period_kwh * (5.0 / 60.0)
 
     return 0.0
 
@@ -451,7 +457,8 @@ def get_solar_for_slot(
                     or entry.get("estimate10")
                     or 0.0
                 )
-                overlap_fraction = overlap_seconds / period_duration.total_seconds()
+                # pv_estimate is kWh per HOUR, so divide by 3600 seconds
+                overlap_fraction = overlap_seconds / 3600.0
                 total_solar += period_kwh * overlap_fraction
                 overlap_hits += 1
         except (ValueError, TypeError):
@@ -465,7 +472,11 @@ def sum_solar_before_target(
     now_dt: datetime,
     target_hour: int,
 ) -> float:
-    """Sum pessimistic solar kWh (pv_estimate10) from now until target_hour."""
+    """Sum pessimistic solar kWh (pv_estimate10) from now until target_hour.
+
+    NOTE: pv_estimate10 values represent average power (kWh per hour),
+    NOT energy per period. We need to multiply by the time fraction.
+    """
     target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
     period_duration = timedelta(minutes=30)
     total = 0.0
@@ -475,19 +486,22 @@ def sum_solar_before_target(
             continue
         ps_local = dt_util.as_local(period_start)
         period_end = ps_local + period_duration
-        kwh = float(period.get("pv_estimate10", 0))
+        # pv_estimate10 is kWh per HOUR (average power)
+        kwh_per_hour = float(period.get("pv_estimate10", 0))
 
         if ps_local >= target_dt:
             # Period starts at or after target — skip
             continue
 
         if ps_local >= now_dt:
-            # Fully future period before target — include all of it
-            total += kwh
+            # Fully future period before target
+            # 30 min = 0.5 hour, so multiply by 0.5
+            total += kwh_per_hour * 0.5
         elif period_end > now_dt:
             # In-progress period — prorate remaining fraction
-            remaining = (period_end - now_dt).total_seconds()
-            fraction = remaining / period_duration.total_seconds()
-            total += kwh * fraction
+            remaining_seconds = (period_end - now_dt).total_seconds()
+            # Divide by 3600 to convert to hours (pv_estimate is per hour)
+            fraction_of_hour = remaining_seconds / 3600.0
+            total += kwh_per_hour * fraction_of_hour
 
     return total

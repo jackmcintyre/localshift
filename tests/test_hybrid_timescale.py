@@ -43,29 +43,37 @@ class TestFifteenMinSlots:
 
     @pytest.fixture
     def mock_solcast(self):
-        """Create mock Solcast forecast data."""
+        """Create mock Solcast forecast data.
+
+        IMPORTANT: pv_estimate values represent average power (kWh per HOUR),
+        NOT energy per 30-min period. This matches real Solcast data format.
+
+        For example, pv_estimate=3.0 means 3 kW average power over that period.
+        A 30-min period at 3 kW = 3 * 0.5 = 1.5 kWh energy.
+        """
         # Create 48 periods of 30-minute forecasts (24 hours total)
         solcast = []
         base_time = datetime(2024, 6, 15, 8, 0, 0)
 
         for i in range(48):
             period_start = base_time + timedelta(minutes=30 * i)
-            # Morning solar ramp-up: 0.1 kWh at 08:00, increasing to 1.5 kWh by 10:00
+            # Morning solar ramp-up: 0.5 kW at 08:00, increasing to 4.5 kW by 10:00
             if i < 4:  # 08:00-10:00
-                kwh = 0.1 + (i * 0.35)  # 0.1, 0.45, 0.8, 1.15
-            # Peak solar: 1.5 kWh per 30-min period
+                kw = 0.5 + (i * 1.0)  # 0.5, 1.5, 2.5, 3.5 kW
+            # Peak solar: 4.5 kW average power
             elif i < 16:  # 10:00-16:00
-                kwh = 1.5
-            # Afternoon decline: decreasing from 1.5 kWh to 0.1 kWh
+                kw = 4.5
+            # Afternoon decline: decreasing from 4.5 kW to 0.5 kW
             elif i < 20:  # 16:00-18:00
-                kwh = 1.5 - ((i - 15) * 0.35)  # 1.5, 1.15, 0.8, 0.45
+                kw = 4.5 - ((i - 15) * 1.0)  # 4.5, 3.5, 2.5, 1.5
             else:  # 18:00+ (evening/night)
-                kwh = 0.1
+                kw = 0.5
 
+            # pv_estimate is kWh per HOUR (average power in kW)
             solcast.append(
                 {
                     "period_start": period_start.isoformat(),
-                    "pv_estimate": kwh,
+                    "pv_estimate": kw,  # This is kW (kWh per hour)
                 }
             )
 
@@ -95,9 +103,10 @@ class TestFifteenMinSlots:
             recent_load_kw=0.8,
         )
 
-        # Should take 200-400 minutes (3.3-6.7 hours) with good solar
+        # Should take 150-400 minutes (2.5-6.7 hours) with good solar
+        # With 4.5 kW peak solar, battery fills faster
         assert fill_minutes is not None
-        assert 200 <= fill_minutes <= 400, (
+        assert 150 <= fill_minutes <= 400, (
             f"Fill point {fill_minutes} min outside expected range"
         )
 
