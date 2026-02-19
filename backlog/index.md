@@ -21,7 +21,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 
 | ID | Priority | Status | Title |
 |----|----------|--------|-------|
-| backlog-crit-002 | 🔴 CRIT | 📋 PROPOSED | Missing Unit Tests for State Machine |
+| backlog-crit-002 | 🔴 CRIT | ✅ COMPLETED | Missing Unit Tests for State Machine |
 | backlog-crit-003 | 🔴 CRIT | 📋 PROPOSED | Silent 0.0 Returns Hide Missing Forecast Data |
 | backlog-high-017 | 🟠 HIGH | 📋 PROPOSED | Excess Solar Load Shifting Sensors |
 | backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Day Boundary Bug in Overnight Grid Charging Decision |
@@ -33,6 +33,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
 | backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
 | backlog-med-012 | 🟡 MED | 📋 PROPOSED | Binary Sensors Include Redundant "binary" in Names |
+| backlog-med-023 | 🟡 MED | 📋 PROPOSED | Scenario-Based Simulation Framework |
 | backlog-low-001 | ⚪ LOW | 📋 PROPOSED | Dashboard Setup Complexity |
 | backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
 

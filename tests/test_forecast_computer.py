@@ -18,7 +18,11 @@ def dt_aware(year, month, day, hour, minute=0, second=0):
 
 
 def test_estimate_hourly_consumption_with_historical(mock_entry, mock_get_entity_id):
-    """Test hourly consumption estimation with historical data."""
+    """Test hourly consumption estimation with historical data.
+
+    Tests time-distance weighting: only hours within 3 of current_hour
+    should get weighted blend, distant hours get historical only.
+    """
     entry = mock_entry
     entry.options = {
         "load_weight_recent": 0.7,
@@ -28,10 +32,28 @@ def test_estimate_hourly_consumption_with_historical(mock_entry, mock_get_entity
 
     # With historical data
     hourly_avg = {16: 0.5, 17: 0.6, 18: 0.7}
-    kw, source = computer._estimate_hourly_consumption_kw(hourly_avg, 17, 0.4, 0.5)
 
+    # CASE 1: Slot hour 17, current hour 17 (distance 0) -> weighted blend
+    kw, source = computer._estimate_hourly_consumption_kw(hourly_avg, 17, 17, 0.4, 0.5)
     assert source == "weighted_load"
     assert kw > 0
+    # Verify blend: 0.7 * 0.5 + 0.3 * 0.6 = 0.35 + 0.18 = 0.53
+    assert abs(kw - 0.53) < 0.01
+
+    # CASE 2: Slot hour 16, current hour 17 (distance 1) -> weighted blend
+    kw2, source2 = computer._estimate_hourly_consumption_kw(
+        hourly_avg, 16, 17, 0.4, 0.5
+    )
+    assert source2 == "weighted_load"
+
+    # CASE 3: Slot hour 2, current hour 17 (distance 15, wraps to 9) -> historical only
+    # This is the key fix: overnight hours should NOT use daytime recent load
+    hourly_avg_with_overnight = {2: 0.3, 16: 0.5, 17: 0.6, 18: 0.7}
+    kw3, source3 = computer._estimate_hourly_consumption_kw(
+        hourly_avg_with_overnight, 2, 17, 0.4, 0.5
+    )
+    assert source3 == "profile_hour"
+    assert kw3 == 0.3  # Pure historical, no blend
 
 
 def test_estimate_hourly_consumption_fallback(mock_entry, mock_get_entity_id):
@@ -43,8 +65,8 @@ def test_estimate_hourly_consumption_fallback(mock_entry, mock_get_entity_id):
 
     computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
 
-    # No historical data, use current
-    kw, source = computer._estimate_hourly_consumption_kw({}, 17, 0.4, 0.5)
+    # No historical data, use current load as fallback
+    kw, source = computer._estimate_hourly_consumption_kw({}, 17, 17, 0.4, 0.5)
 
     assert source == "live_load_fallback"
 

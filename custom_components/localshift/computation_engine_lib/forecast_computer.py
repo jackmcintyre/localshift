@@ -79,13 +79,17 @@ class ForecastComputer:
         self,
         hourly_avg_kw: dict[int, float],
         slot_hour: int,
+        current_hour: int | None,
         current_load_kw: float,
         recent_load_kw: float = 0.0,
     ) -> tuple[float, str]:
-        """Estimate hourly household consumption with weighted blend.
+        """Estimate hourly household consumption with time-distance-weighted blend.
 
-        Blends recent 1-hour average with historical hourly average for
-        more responsive forecasting.
+        Blends recent 1-hour average with historical hourly average ONLY for
+        hours close to current time, when recent load is predictive.
+
+        For distant hours (e.g., overnight when forecasting from midday),
+        uses historical profile only to avoid overestimating load.
 
         Returns tuple of (kW, source_tag).
         """
@@ -103,14 +107,29 @@ class ForecastComputer:
         # Check if we have valid historical data
         has_historical = historical_kw > 0
 
-        # If we have recent load data and weighting > 0, apply weighted blend
-        if recent_load_kw > 0 and recent_weight > 0 and has_historical:
-            weighted = (recent_weight * recent_load_kw) + (
-                historical_weight * historical_kw
-            )
-            return round(weighted, 3), "weighted_load"
+        # TIME-DISTANCE WEIGHTING: Only blend recent load for hours close to now
+        # When current_hour is None (simulations without time context), skip blending
+        if current_hour is not None:
+            # Calculate distance from current hour (handles midnight wrap)
+            hour_distance = abs(slot_hour - current_hour)
+            hour_distance = min(hour_distance, 24 - hour_distance)
 
-        # Fallback to historical if available
+            # Only apply weighted blend for hours within 3 hours of current time
+            # Beyond that, recent load is NOT predictive (e.g., daytime load ≠ overnight load)
+            max_blend_distance = 3
+
+            if (
+                hour_distance <= max_blend_distance
+                and recent_load_kw > 0
+                and recent_weight > 0
+                and has_historical
+            ):
+                weighted = (recent_weight * recent_load_kw) + (
+                    historical_weight * historical_kw
+                )
+                return round(weighted, 3), "weighted_load"
+
+        # Fallback to historical if available (primary path for distant hours)
         if has_historical:
             return round(historical_kw, 3), "profile_hour"
 
@@ -130,6 +149,7 @@ class ForecastComputer:
         dw_start_time: time,
         end_time: datetime,
         min_soc_pct: float = 0.0,
+        current_hour: int | None = None,
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
@@ -194,6 +214,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                current_hour,
                 current_load_kw,
                 recent_load_kw,
             )
@@ -302,6 +323,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                None,  # current_hour - not available in this simulation
                 current_load_kw,
                 recent_load_kw,
             )
@@ -387,6 +409,7 @@ class ForecastComputer:
         dw_start_time: time,
         general_price_current: float,
         min_soc_pct: float = 0.0,
+        current_hour: int | None = None,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
@@ -722,6 +745,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                None,  # current_hour - not available in this simulation
                 current_load_kw,
                 recent_load_kw,
             )
@@ -806,6 +830,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                None,  # current_hour - not available in this simulation
                 current_load_kw,
                 recent_load_kw,
             )
@@ -840,6 +865,7 @@ class ForecastComputer:
         historical_avg_kw: dict[int, float],
         current_load_kw: float,
         recent_load_kw: float,
+        current_hour: int | None = None,
     ) -> int | None:
         """Find elapsed minutes when battery first reaches 100% from solar charging.
 
@@ -874,6 +900,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                current_hour,
                 current_load_kw,
                 recent_load_kw,
             )
@@ -907,6 +934,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                current_hour,
                 current_load_kw,
                 recent_load_kw,
             )
@@ -941,6 +969,7 @@ class ForecastComputer:
         historical_avg_kw: dict[int, float],
         current_load_kw: float,
         recent_load_kw: float,
+        current_hour: int | None = None,
     ) -> float:
         """Calculate net solar energy (solar - load) between two time points using hybrid timescale.
 
@@ -976,6 +1005,7 @@ class ForecastComputer:
                 load_kw, _ = self._estimate_hourly_consumption_kw(
                     historical_avg_kw,
                     slot_hour,
+                    current_hour,
                     current_load_kw,
                     recent_load_kw,
                 )
@@ -1000,6 +1030,7 @@ class ForecastComputer:
                 load_kw, _ = self._estimate_hourly_consumption_kw(
                     historical_avg_kw,
                     slot_hour,
+                    current_hour,
                     current_load_kw,
                     recent_load_kw,
                 )
@@ -1433,6 +1464,10 @@ class ForecastComputer:
         current_5min = (now_dt.minute // 5) * 5
         base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
 
+        # Current hour for time-distance weighted load estimation
+        # (only blend recent load for hours close to current hour)
+        current_hour = base_slot.hour
+
         # Get target SOC for grid charging decisions
         target_pct = float(
             self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
@@ -1467,6 +1502,7 @@ class ForecastComputer:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                current_hour,
                 data.load_power_kw,
                 recent_load_kw,
             )
@@ -1582,6 +1618,7 @@ class ForecastComputer:
             load_kw, load_source = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
+                current_hour,
                 data.load_power_kw,
                 recent_load_kw,
             )
