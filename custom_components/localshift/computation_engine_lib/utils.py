@@ -6,7 +6,7 @@ instance state or modification of CoordinatorData.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -155,3 +155,81 @@ def build_hourly_forecast_summary(
             }
         )
     return result
+
+
+def analyze_spike_window(
+    forecasts: list[dict[str, Any]],
+    now_dt: datetime,
+    max_lookahead_hours: float = 8.0,
+) -> tuple[datetime | None, float, list[float]]:
+    """Analyze feed-in forecast for spike window details.
+
+    Scans the forecast to find the current/ongoing spike window and extracts
+    key information for conservative spike discharge decisions.
+
+    Args:
+        forecasts: Feed-in price forecast list
+        now_dt: Current datetime
+        max_lookahead_hours: Maximum hours to look ahead for spike analysis
+
+    Returns:
+        Tuple of (spike_end_time, max_price, all_spike_prices)
+        - spike_end_time: When the spike is predicted to end (None if no spike)
+        - max_price: Maximum price within the spike window
+        - all_spike_prices: List of all prices during spike window
+    """
+    cutoff = now_dt + timedelta(hours=max_lookahead_hours)
+
+    spike_start: datetime | None = None
+    spike_end: datetime | None = None
+    max_price = 0.0
+    all_spike_prices: list[float] = []
+
+    for f in forecasts:
+        start = parse_forecast_dt(f.get("start_time"))
+        if start is None:
+            continue
+
+        start_local = dt_util.as_local(start)
+
+        # Only consider slots within our lookahead window
+        if start_local < now_dt or start_local > cutoff:
+            continue
+
+        # Check if this is a spike slot
+        if f.get("spike_status") == "spike":
+            price = float(f.get("per_kwh", 0))
+
+            if spike_start is None:
+                spike_start = start_local
+
+            spike_end = start_local
+            max_price = max(max_price, price)
+            all_spike_prices.append(price)
+
+    if not all_spike_prices:
+        return None, 0.0, []
+
+    return spike_end, round(max_price, 2), all_spike_prices
+
+
+def calculate_spike_price_threshold(
+    spike_prices: list[float],
+    percentile: float,
+) -> float:
+    """Calculate price threshold for top X% of spike prices.
+
+    For example, with percentile=75, returns the price at the 75th percentile
+    of spike prices, meaning only prices in the top 25% will trigger exports.
+
+    Args:
+        spike_prices: List of prices during spike window
+        percentile: Percentile threshold (50-95). Higher = more conservative.
+
+    Returns:
+        Price threshold - only export when FIT >= this price
+    """
+    if not spike_prices:
+        return 0.0
+
+    return percentile(spike_prices, percentile)

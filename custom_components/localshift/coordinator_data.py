@@ -118,3 +118,11 @@ class CoordinatorData:
     debug_commanded_mode: str = ""  # State machine's commanded mode
     debug_pending_transition: str = ""  # Pending mode transition (if any)
     debug_debounce_wait_seconds: float = 0.0  # Seconds remaining in debounce
+
+    # Spike analysis fields for conservative spike discharge
+    spike_end_time: datetime | None = None  # Estimated end of current spike
+    spike_max_price: float = 0.0  # Maximum price within spike window
+    spike_price_threshold: float = 0.0  # Price threshold for top X% percentile
+    spike_reserve_soc: float = 0.0  # Calculated reserve SOC for spike survival
+    spike_hours_remaining: float = 0.0  # Hours until spike ends
+    spike_in_conservative_mode: bool = False  # Whether conservative mode is active

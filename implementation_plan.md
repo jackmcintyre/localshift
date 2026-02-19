@@ -1,124 +1,182 @@
 # Implementation Plan
 
 [Overview]
-Simplify forecast system by removing hybrid timescale complexity and using 15-minute slots throughout, while preserving 5-minute real-time price reactivity for current decisions.
+Add a "Conservative Spike Discharge" mode that intelligently manages battery exports during price spikes to maximise revenue while ensuring sufficient reserve to avoid grid imports during the spike and any overlapping demand window.
 
-The current hybrid timescale implementation (24×5-min near-term + 88×15-min long-term) has introduced multiple bugs due to misaligned boundaries between the main forecast loop and simulation functions. This plan removes the hybrid complexity while maintaining the ability to react to 5-minute price changes for real-time decisions. The forecast table will use 15-minute slots exclusively (96 slots = 24 hours), which always aligns with Solcast 30-minute periods. Real-time price decisions (grid charging, exports) will use the actual 5-minute spot price for the current slot only, with forecast prices for future slots.
+This feature addresses the unique characteristics of price spikes: prices can reach $20/kWh (100x normal), the goal is to export as much as possible at peak prices, but we must avoid the severe penalty of importing during a spike (especially during a demand window). The system will calculate a dynamic reserve based on consumption forecasts using existing load estimation methodology, and only export at a configurable top percentage of spike prices.
+
+Key design decisions from requirements:
+- Percentage-based price threshold (configurable, default top 25% of spike prices)
+- Simple consumption estimation using existing load forecast methodology
+- Reserve for FULL demand window duration if spike overlaps DW (extreme penalty for DW imports)
+- New switch to enable/disable conservative mode (off by default, opt-in)
 
 [Types]
-No new types required; constants will be simplified.
+New constants and configuration types for spike discharge behavior.
 
-Constants to modify:
-- Remove: `NEAR_TERM_COUNT = 24` 
-- Remove: `LONG_TERM_COUNT = 88`
-- Add: `TOTAL_SLOTS = 96` (24 hours × 4 slots/hour)
+```python
+# New switch key for conservative spike mode
+SWITCH_SPIKE_DISCHARGE_CONSERVATIVE = "spike_discharge_conservative"
+
+# New config option for price percentile threshold
+CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
+DEFAULT_SPIKE_PRICE_PERCENTILE = 75  # Only export at top 25% of spike prices
+```
+
+New data fields in CoordinatorData:
+```python
+spike_end_time: datetime | None = None  # Estimated end of current spike
+spike_max_price: float = 0.0  # Maximum price within spike window
+spike_price_threshold: float = 0.0  # Price threshold for top X% percentile
+spike_reserve_soc: float = 0.0  # Calculated reserve SOC for spike survival
+spike_hours_remaining: float = 0.0  # Hours until spike ends
+spike_in_conservative_mode: bool = False  # Whether conservative mode is active
+```
 
 [Files]
-Two files require modification:
+Modifications to existing files:
 
-1. **`custom_components/localshift/computation_engine_lib/forecast_computer.py`**
-   - Remove `_align_to_15min_boundary()` function (no longer needed)
-   - Remove `_get_hybrid_slots_for_simulation()` function (no longer needed)
-   - Simplify `compute_forecast()` to use 15-min slots only
-   - Simplify `_simulate_future_soc_with_solar_only()` to use 15-min slots
-   - Simplify `_simulate_overnight_drain_to_solar()` to use 15-min slots
-   - Simplify `_simulate_minimum_soc_without_exports()` to use 15-min slots
-   - Simplify `_simulate_overnight_drain_after_export()` to use 15-min slots
-   - Simplify `_find_battery_fill_point()` to use 15-min slots
-   - Simplify `_calculate_solar_energy_between_slots()` to use 15-min slots
-   - Fix `_should_grid_charge_at_slot()` to only use spot price for current slot
+1. **`custom_components/localshift/const.py`**
+   - Add `SWITCH_SPIKE_DISCHARGE_CONSERVATIVE` constant
+   - Add `CONF_SPIKE_PRICE_PERCENTILE` constant with default (75)
+   - Add to `SWITCH_DEFAULTS` dict (default: False)
+   - Add to `SWITCH_ICONS` dict (icon: "mdi:shield-check")
+   - Add to `SWITCH_NAMES` dict
+   - Add entry to `THRESHOLD_RANGES` for configurable percentile (min: 50, max: 95, step: 5)
 
-2. **`tests/test_hybrid_timescale.py`**
-   - Update tests to reflect 15-min only approach
-   - Rename to `tests/test_forecast_timescale.py` or keep name but update content
+2. **`custom_components/localshift/coordinator_data.py`**
+   - Add spike analysis fields to `CoordinatorData` dataclass
+
+3. **`custom_components/localshift/computation_engine_lib/utils.py`**
+   - Add `analyze_spike_window()` function to extract spike window details
+   - Add `calculate_spike_price_threshold()` function for percentile calculation
+
+4. **`custom_components/localshift/computation_engine.py`**
+   - Add `_calculate_spike_reserve_soc()` method for reserve calculation
+   - Add `_analyze_spike()` method to orchestrate spike analysis
+   - Modify `compute_derived_values()` to call spike analysis
+   - Modify `_compute_active_mode()` to check conservative mode and price threshold
+
+5. **`custom_components/localshift/battery_controller.py`**
+   - Modify `set_force_discharge()` to accept optional `reserve_soc` parameter
+   - Or add new `set_conservative_spike_discharge()` method
+
+6. **`custom_components/localshift/switch.py`**
+   - Add new switch entity for `spike_discharge_conservative`
+
+7. **`custom_components/localshift/number.py`**
+   - Add new number entity for `spike_price_percentile` configuration
+
+8. **`custom_components/localshift/strings.json`**
+   - Add string definitions for new switch and number entity
+
+9. **`custom_components/localshift/translations/en.json`**
+   - Add translation strings for new UI elements
 
 [Functions]
-Multiple functions require simplification:
+New functions to implement:
 
-1. **`compute_forecast()`** (forecast_computer.py)
-   - Current: Uses hybrid timescale with complex boundary alignment
-   - Change: Simple loop `for i in range(TOTAL_SLOTS)` with `base_slot + timedelta(minutes=15*i)`
-   - Purpose: Generate 96 × 15-min slots aligned to :00, :15, :30, :45
+1. **`analyze_spike_window()`** in `utils.py`
+   - Purpose: Analyze feed-in forecast for spike window details
+   - Signature: `def analyze_spike_window(forecasts: list[dict], now_dt: datetime, max_lookahead_hours: float = 8.0) -> tuple[datetime | None, float, list[float]]`
+   - Returns: (spike_end_time, max_price, all_spike_prices)
 
-2. **`_simulate_future_soc_with_solar_only()`** (forecast_computer.py)
-   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
-   - Change: Simple loop with 15-min slots via `get_solar_for_15min_slot()`
-   - Purpose: Consistent SOC simulation matching main forecast
+2. **`calculate_spike_price_threshold()`** in `utils.py`
+   - Purpose: Calculate price threshold for top X% of spike prices
+   - Signature: `def calculate_spike_price_threshold(spike_prices: list[float], percentile: float) -> float`
+   - Returns: Price threshold
 
-3. **`_simulate_overnight_drain_to_solar()`** (forecast_computer.py)
-   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
-   - Change: Simple loop with 15-min slots
-   - Purpose: Consistent overnight drain simulation
+3. **`_calculate_spike_reserve_soc()`** in `computation_engine.py`
+   - Purpose: Calculate reserve SOC needed to survive spike + DW
+   - Uses existing `_get_expected_load_kw()` methodology
+   - Handles DW overlap case (reserve for full DW duration)
 
-4. **`_simulate_minimum_soc_without_exports()`** (forecast_computer.py)
-   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
-   - Change: Simple loop with 15-min slots
-   - Purpose: Consistent minimum SOC calculation
+4. **`_analyze_spike()`** in `computation_engine.py`
+   - Purpose: Orchestrate spike analysis and set data fields
 
-5. **`_simulate_overnight_drain_after_export()`** (forecast_computer.py)
-   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
-   - Change: Simple loop with 15-min slots
-   - Purpose: Consistent post-export drain simulation
+Modified functions:
 
-6. **`_find_battery_fill_point()`** (forecast_computer.py)
-   - Current: Uses hybrid timescale (NEAR_TERM_COUNT + LONG_TERM_COUNT)
-   - Change: Simple loop with `for i in range(TOTAL_SLOTS)`
-   - Purpose: Find when battery reaches 100% from solar
+1. **`_compute_active_mode()`** in `computation_engine.py`
+   - Add logic to check conservative mode switch
+   - Add logic to check current FIT price against threshold
+   - Route to appropriate discharge method based on mode
 
-7. **`_calculate_solar_energy_between_slots()`** (forecast_computer.py)
-   - Current: Uses hybrid timescale
-   - Change: Simple 15-min slot loop
-   - Purpose: Calculate solar energy between time points
-
-8. **`_should_grid_charge_at_slot()`** (forecast_computer.py)
-   - Current: Uses `general_price_current` for ALL slots
-   - Change: Only use `general_price_current` if `is_current_slot=True`, otherwise use `slot_price`
-   - Purpose: Fix price bug - use forecast price for future slots
-
-9. **REMOVE: `_align_to_15min_boundary()`** (forecast_computer.py)
-   - Reason: No longer needed with 15-min only approach
-
-10. **REMOVE: `_get_hybrid_slots_for_simulation()`** (forecast_computer.py)
-    - Reason: No longer needed with 15-min only approach
+2. **`set_force_discharge()`** or new method in `battery_controller.py`
+   - Accept optional `reserve_soc` parameter for conservative mode
 
 [Classes]
-No class modifications required; all changes are within `ForecastComputer` class methods.
+No new classes required. Modifications to existing classes:
+
+1. **`CoordinatorData`** - Add new data fields
+2. **`ComputationEngine`** - Add new methods
+3. **`BatteryController`** - Modify existing method signature
+4. **`LocalShiftSwitch`** - Add new switch entity (already exists)
+5. **`LocalShiftNumber`** - Add new number entity (already exists)
 
 [Dependencies]
-No new dependencies required.
+No new dependencies required. Uses existing:
+- Existing load estimation methodology
+- Existing forecast data structures
+- Existing percentile calculation utilities
 
 [Testing]
 Test requirements:
 
-1. **Update `tests/test_hybrid_timescale.py`**:
-   - Update constants test to expect `TOTAL_SLOTS = 96`
-   - Remove NEAR_TERM_COUNT and LONG_TERM_COUNT tests
-   - Update slot generation tests for 15-min only
-
-2. **Add boundary alignment tests**:
-   - Test coordinator runs at :00, :05, :10, :15, etc.
-   - Verify all produce identical slot times (aligned to :00, :15, :30, :45)
-
-3. **Add price decision tests**:
-   - Test that current slot uses spot price
-   - Test that future slots use forecast price
-
-4. **Run full test suite** after changes
+1. Add unit tests for `analyze_spike_window()` in `tests/test_computation_engine.py`
+2. Add unit tests for `calculate_spike_price_threshold()`
+3. Add unit tests for `_calculate_spike_reserve_soc()`
+4. Add integration tests for spike discharge behavior
+5. Run full test suite after changes
 
 [Implementation Order]
-Sequential steps to minimize conflicts:
+Sequential steps to implement:
 
-1. Update constants: Remove `NEAR_TERM_COUNT` and `LONG_TERM_COUNT`, add `TOTAL_SLOTS = 96`
-2. Remove `_align_to_15min_boundary()` function
-3. Remove `_get_hybrid_slots_for_simulation()` function
-4. Simplify `compute_forecast()` to use 15-min slots only
-5. Simplify `_find_battery_fill_point()` to use 15-min slots only
-6. Simplify `_calculate_solar_energy_between_slots()` to use 15-min slots only
-7. Simplify `_simulate_future_soc_with_solar_only()` to use 15-min slots only
-8. Simplify `_simulate_overnight_drain_to_solar()` to use 15-min slots only
-9. Simplify `_simulate_minimum_soc_without_exports()` to use 15-min slots only
-10. Simplify `_simulate_overnight_drain_after_export()` to use 15-min slots only
-11. Fix `_should_grid_charge_at_slot()` to only use spot price for current slot
-12. Update `tests/test_hybrid_timescale.py` for new 15-min only approach
-13. Run full test suite and verify all tests pass
-14. Manual verification with real forecast data
+1. Add constants to `const.py`
+2. Add data fields to `coordinator_data.py`
+3. Add utility functions to `utils.py`
+4. Add spike reserve calculation to `computation_engine.py`
+5. Modify `_compute_active_mode()` for price threshold check
+6. Modify battery controller for dynamic reserve
+7. Add switch entity in `switch.py`
+8. Add number entity in `number.py`
+9. Update `strings.json` and `translations/en.json`
+10. Add unit tests
+11. Run full test suite and verify
+
+---
+
+## Algorithm Flow
+
+```
+1. When price_spike == True:
+   │
+   ├─► Analyze feed_in_forecast for spike window
+   │   ├─ Find spike_end_time (last slot with spike_status)
+   │   ├─ Collect all prices within spike window
+   │   └─ Calculate max_price and price_threshold
+   │
+   ├─► Calculate spike_reserve_soc
+   │   ├─ If DW overlaps spike:
+   │   │   └─ reserve = consumption_for_full_DW + buffer
+   │   └─ Else:
+   │       └─ reserve = consumption_until_spike_end + buffer
+   │
+   ├─► Check current FIT price against threshold
+   │   ├─ If FIT >= threshold (top X%):
+   │   │   └─ Export with reserve = spike_reserve_soc
+   │   └─ Else:
+   │       └─ Stay in self-consumption (wait for better price)
+   │
+   └─► Set battery mode with calculated reserve
+```
+
+---
+
+## Configuration Options
+
+| Option | Default | Range | Description |
+|--------|---------|-------|-------------|
+| `spike_discharge_conservative` | False | on/off | Enable conservative mode |
+| `spike_price_percentile` | 75 | 50-95 | Only export at prices above this percentile |
+</parameter>
+</write_to_file>

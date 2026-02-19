@@ -351,11 +351,18 @@ class StateMachine:
                     _LOGGER.error("Boost charging mode transition FAILED")
 
             elif target == BatteryMode.SPIKE_DISCHARGE:
+                # Check if conservative mode is enabled and use spike_reserve_soc if available
+                reserve_soc = (
+                    data.spike_reserve_soc if data.spike_in_conservative_mode else None
+                )
                 transition_success = await self._battery_controller.set_force_discharge(
-                    data, dry_run
+                    data, dry_run, reserve_soc=reserve_soc
                 )
                 if transition_success:
-                    _LOGGER.info("Spike discharge mode transition completed")
+                    _LOGGER.info(
+                        "Spike discharge mode transition completed (reserve=%s)",
+                        reserve_soc,
+                    )
                 else:
                     _LOGGER.error("Spike discharge mode transition FAILED")
 

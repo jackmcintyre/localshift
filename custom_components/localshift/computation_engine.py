@@ -13,7 +13,9 @@ from homeassistant.util import dt as dt_util
 from .computation_engine_lib import (
     ForecastComputer,
     HistoryFetcher,
+    analyze_spike_window,
     build_hourly_forecast_summary,
+    calculate_spike_price_threshold,
     max_forecast_price,
     parse_forecast_dt,
     percentile,
@@ -30,6 +32,7 @@ from .const import (
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_MAX_PRECHARGE_PRICE,
+    CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -39,7 +42,9 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
+    DEFAULT_SPIKE_PRICE_PERCENTILE,
     DISCHARGE_EARLIEST_HOUR,
+    SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
     BatteryMode,
 )
 from .coordinator_data import CoordinatorData
@@ -346,6 +351,9 @@ class ComputationEngine:
         data.forecast_expensive_period_coming = self._scan_forecast_for_spike(
             data.general_forecast, now_dt, cutoff
         )
+
+        # ---- Step 10b: spike analysis (conservative mode) ----
+        self._analyze_spike(data, now_dt)
 
         # ---- Step 11: solar_weighted_avg_fit ----
         self._compute_solar_weighted_avg_fit(data, now_dt, target_hour, after_dw)
@@ -1350,3 +1358,147 @@ class ComputationEngine:
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
         self._history_fetcher.clear_historical_cache()
+
+    # ========================================================================
+    # SPIKE ANALYSIS (Conservative Spike Discharge)
+    # ========================================================================
+
+    def _analyze_spike(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+    ) -> None:
+        """Analyze feed-in forecast for spike window details (conservative mode).
+
+        Called during compute_derived_values to populate spike analysis fields.
+        These fields are used by _compute_active_mode for conservative decisions.
+        """
+        # Get configuration
+        conservative_enabled = self._get_switch_state(
+            SWITCH_SPIKE_DISCHARGE_CONSERVATIVE
+        )
+        spike_percentile = float(
+            self.entry.options.get(
+                CONF_SPIKE_PRICE_PERCENTILE, DEFAULT_SPIKE_PRICE_PERCENTILE
+            )
+        )
+
+        # Default values
+        data.spike_end_time = None
+        data.spike_max_price = 0.0
+        data.spike_price_threshold = 0.0
+        data.spike_reserve_soc = 0.0
+        data.spike_hours_remaining = 0.0
+        data.spike_in_conservative_mode = False
+
+        # Skip analysis if conservative mode not enabled
+        if not conservative_enabled:
+            return
+
+        # Analyze spike window
+        lookahead = float(
+            self.entry.options.get(
+                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
+            )
+        )
+
+        spike_end, max_price, spike_prices = analyze_spike_window(
+            data.feed_in_forecast, now_dt, lookahead
+        )
+
+        if spike_end is None or not spike_prices:
+            # No spike detected
+            return
+
+        # Populate spike analysis fields
+        data.spike_end_time = spike_end
+        data.spike_max_price = max_price
+        data.spike_hours_remaining = (spike_end - now_dt).total_seconds() / 3600
+
+        # Calculate price threshold for top X% of spike prices
+        data.spike_price_threshold = calculate_spike_price_threshold(
+            spike_prices, spike_percentile
+        )
+
+        # Calculate reserve SOC needed to survive spike + demand window if overlapping
+        data.spike_reserve_soc = self._calculate_spike_reserve_soc(
+            data, now_dt, spike_end, spike_percentile
+        )
+
+        data.spike_in_conservative_mode = True
+
+        _LOGGER.info(
+            "Spike analysis: max_price=%.2f, threshold=%.2f, reserve=%.1f%%, hours_remaining=%.1f",
+            data.spike_max_price,
+            data.spike_price_threshold,
+            data.spike_reserve_soc,
+            data.spike_hours_remaining,
+        )
+
+    def _calculate_spike_reserve_soc(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        spike_end: datetime,
+        spike_percentile: float,
+    ) -> float:
+        """Calculate reserve SOC needed to survive spike period.
+
+        Reserve = max(spike_duration_hours, demand_window_hours) * avg_load_kWh
+        divided by battery_capacity_kWh * 100%
+
+        If demand window overlaps with or starts during spike, include full DW duration.
+        """
+        # Get demand window times
+        dw_start_time = self._parse_time_option(
+            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        )
+        dw_end_time = self._parse_time_option(
+            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+        )
+
+        # Calculate spike duration
+        spike_duration_hours = max((spike_end - now_dt).total_seconds() / 3600, 0)
+
+        # Calculate demand window duration
+        dw_duration_hours = (
+            datetime.combine(now_dt.date(), dw_end_time)
+            - datetime.combine(now_dt.date(), dw_start_time)
+        ).total_seconds() / 3600
+        if dw_duration_hours < 0:
+            dw_duration_hours += 24  # Handle overnight DW
+
+        # Determine if DW overlaps with or starts during spike
+        dw_start_dt = now_dt.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        # If DW starts after now but before spike ends, include it
+        dw_overlaps = dw_start_dt > now_dt and dw_start_dt < spike_end
+
+        # Use the longer of spike duration or DW duration (if overlapping)
+        if dw_overlaps:
+            # Include full demand window - battery must survive spike + DW
+            required_hours = max(spike_duration_hours, dw_duration_hours)
+            _LOGGER.debug(
+                "DW overlaps spike: spike=%.1fh, dw=%.1fh, using=%.1fh",
+                spike_duration_hours,
+                dw_duration_hours,
+                required_hours,
+            )
+        else:
+            required_hours = spike_duration_hours
+
+        # Get expected load (use current load as estimate)
+        expected_load_kw = data.load_power_kw if data.load_power_kw > 0 else 0.5
+
+        # Calculate reserve kWh needed
+        reserve_kwh = expected_load_kw * required_hours
+
+        # Convert to SOC percentage
+        reserve_soc = (reserve_kwh / BATTERY_CAPACITY_KWH) * 100
+
+        # Cap at reasonable maximum (can't reserve more than 100%)
+        return min(reserve_soc, 100.0)

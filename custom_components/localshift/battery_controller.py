@@ -254,20 +254,30 @@ class BatteryController:
         return self._read_float(entity_id, default=10.0)
 
     async def set_force_discharge(
-        self, data: CoordinatorData, dry_run: bool = False
+        self,
+        data: CoordinatorData,
+        dry_run: bool = False,
+        reserve_soc: float | None = None,
     ) -> bool:
         """Set battery to force discharge mode (autonomous, reserve=minimum_target).
 
         Relies on the Tesla Energy Plan dummy tariff (high sell price
         6am-midnight) to incentivise the Powerwall to export to grid.
 
+        Args:
+            data: Coordinator data
+            dry_run: If True, log action without executing
+            reserve_soc: Optional override for reserve SOC. If None, uses minimum_target_soc.
+
         Returns:
             True if successful, False otherwise.
         """
         data.manual_override = False
 
-        # Get minimum target SOC for reserve
-        minimum_target = self._get_minimum_target_soc()
+        # Get minimum target SOC for reserve, or use override if provided
+        minimum_target = (
+            reserve_soc if reserve_soc is not None else self._get_minimum_target_soc()
+        )
 
         if dry_run:
             _LOGGER.info("DRY RUN: set_force_discharge (reserve=%s)", minimum_target)
