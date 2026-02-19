@@ -13,6 +13,16 @@
           "teslemetry_solar_power": "Solar Power (kW)",
           "teslemetry_load_power": "Load Power (kW)",
           "teslemetry_allow_export": "Allow Export (select entity)"
+        },
+        "data_description": {
+          "teslemetry_operation_mode": "Select entity that controls Powerwall mode (self_consumption, backup, etc.)",
+          "teslemetry_backup_reserve": "Select entity that sets backup reserve percentage",
+          "teslemetry_soc": "Sensor showing current battery state of charge",
+          "teslemetry_grid_power": "Sensor showing grid power flow (positive=import, negative=export)",
+          "teslemetry_battery_power": "Sensor showing battery power flow",
+          "teslemetry_solar_power": "Sensor showing solar power output",
+          "teslemetry_load_power": "Sensor showing home load power",
+          "teslemetry_allow_export": "Select entity controlling export mode (pv_only or battery_ok)"
         }
       },
       "pricing": {
@@ -24,6 +34,13 @@
           "pricing_general_forecast": "General Price Forecast",
           "pricing_feed_in_forecast": "Feed-in Price Forecast",
           "pricing_price_spike": "Price Spike Sensor"
+        },
+        "data_description": {
+          "pricing_general_price": "Current buy price per kWh",
+          "pricing_feed_in_price": "Current sell (feed-in) price per kWh",
+          "pricing_general_forecast": "Forecast sensor with upcoming buy prices",
+          "pricing_feed_in_forecast": "Forecast sensor with upcoming sell prices",
+          "pricing_price_spike": "Binary sensor indicating price spike events"
         }
       },
       "solcast": {
@@ -32,7 +49,14 @@
         "data": {
           "solcast_forecast_today": "Solar Forecast Today",
           "solcast_forecast_tomorrow": "Solar Forecast Tomorrow",
-          "notify_service": "Notification Service (e.g. notify.mobile_app_name)"
+          "notify_service": "Notification Service",
+          "sun_entity": "Sun Entity"
+        },
+        "data_description": {
+          "solcast_forecast_today": "Solcast forecast for today's solar production",
+          "solcast_forecast_tomorrow": "Solcast forecast for tomorrow's solar production",
+          "notify_service": "Notification service for alerts (e.g., notify.mobile_app)",
+          "sun_entity": "Sun entity for sunrise/sunset times (usually sun.sun)"
         }
       }
     }
@@ -41,16 +65,79 @@
     "step": {
       "init": {
         "title": "LocalShift Settings",
-        "description": "Adjust automation thresholds and demand window timing.",
+        "description": "Adjust demand window timing and manual override timeout. All other settings are available as device entities on your dashboard.",
         "data": {
-          "cheap_price_percentile": "Cheap Price Percentile",
-          "max_precharge_price": "Max Pre-charge Price",
-          "cheap_price_deadband": "Price Deadband",
-          "forecast_lookahead_hours": "Forecast Lookahead",
-          "battery_target": "Battery Target",
           "demand_window_start": "Demand Window Start",
-          "demand_window_end": "Demand Window End"
+          "demand_window_end": "Demand Window End",
+          "manual_override_timeout": "Manual Override Timeout"
+        },
+        "data_description": {
+          "demand_window_start": "Time when demand window begins (battery held for evening peak)",
+          "demand_window_end": "Time when demand window ends (normal operation resumes)",
+          "manual_override_timeout": "Hours before manual mode automatically returns to self-consumption (0 = never)"
         }
+      }
+    }
+  },
+  "entity": {
+    "number": {
+      "cheap_price_percentile": {
+        "name": "Cheap Price Percentile",
+        "description": "Price percentile threshold for grid charging (e.g., 25 = charge when price is in bottom 25%)"
+      },
+      "max_pre_charge_price": {
+        "name": "Max Pre-charge Price",
+        "description": "Maximum price ($/kWh) to pay for pre-charging battery"
+      },
+      "cheap_price_deadband": {
+        "name": "Price Deadband",
+        "description": "Minimum price difference ($/kWh) to start/stop charging (prevents rapid cycling)"
+      },
+      "forecast_lookahead_hours": {
+        "name": "Forecast Lookahead",
+        "description": "Hours ahead to scan for price spikes and cheap periods"
+      },
+      "battery_target": {
+        "name": "Battery Target",
+        "description": "Target SOC % for demand window (battery reserved for evening peak)"
+      },
+      "load_weight_recent": {
+        "name": "Recent Load Weight",
+        "description": "Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical)"
+      },
+      "spike_price_percentile": {
+        "name": "Spike Price Percentile",
+        "description": "Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices)"
+      },
+      "minimum_target_soc": {
+        "name": "Minimum Target SOC",
+        "description": "Minimum SOC % maintained during discharge modes (spike, proactive export)"
+      }
+    },
+    "switch": {
+      "automation_enabled": {
+        "name": "Automation Enabled",
+        "description": "Master toggle for all LocalShift automation"
+      },
+      "spike_discharge_enabled": {
+        "name": "Spike Discharge Enabled",
+        "description": "Allow battery discharge during price spike events"
+      },
+      "spike_discharge_conservative": {
+        "name": "Conservative Spike Discharge",
+        "description": "Reserve extra SOC during spike discharge for demand window"
+      },
+      "dry_run": {
+        "name": "Dry Run",
+        "description": "Simulate mode changes without actually controlling Powerwall"
+      },
+      "demand_window_block": {
+        "name": "Demand Window Block",
+        "description": "Block grid imports during evening demand window (hold battery for peak)"
+      },
+      "allow_dw_entry_under_target": {
+        "name": "Allow Early DW Entry",
+        "description": "Allow entering demand window below target if solar forecast can reach target during window"
       }
     }
   }

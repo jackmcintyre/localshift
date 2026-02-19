@@ -20,6 +20,7 @@ from .const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_LOAD_WEIGHT_RECENT,
     CONF_MAX_PRECHARGE_PRICE,
+    CONF_MINIMUM_TARGET_SOC,
     CONF_SPIKE_PRICE_PERCENTILE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -27,6 +28,7 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
+    DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DOMAIN,
     THRESHOLD_RANGES,
@@ -48,7 +50,6 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     ),
     (CONF_BATTERY_TARGET, "Battery Target", DEFAULT_BATTERY_TARGET),
-    # Hold mode options removed
     (
         CONF_LOAD_WEIGHT_RECENT,
         "Load Weight Recent",
@@ -58,6 +59,11 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         CONF_SPIKE_PRICE_PERCENTILE,
         "Spike Price Percentile",
         DEFAULT_SPIKE_PRICE_PERCENTILE,
+    ),
+    (
+        CONF_MINIMUM_TARGET_SOC,
+        "Minimum Target SOC",
+        DEFAULT_MINIMUM_TARGET_SOC,
     ),
 ]
 

@@ -25,7 +25,6 @@ from .computation_engine_lib import (
 from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_BACKUP_KW,
-    CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
@@ -35,7 +34,6 @@ from .const import (
     CONF_MAX_PRECHARGE_PRICE,
     CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
-    DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -46,6 +44,7 @@ from .const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DISCHARGE_EARLIEST_HOUR,
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
     BatteryMode,
 )
@@ -262,9 +261,9 @@ class ComputationEngine:
         # (already set in Step 5 above)
 
         # ---- Step 6b: solar_can_reach_target_in_dw ----
-        # Read from options (set via Settings screen, not dashboard switch)
-        allow_dw_under_target = self.entry.options.get(
-            CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
+        # Read from switch state (device-level toggle)
+        allow_dw_under_target = self._get_switch_state(
+            SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
         )
 
         if allow_dw_under_target and before_dw:

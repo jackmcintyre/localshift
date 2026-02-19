@@ -560,81 +560,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_CHEAP_PRICE_PERCENTILE,
-                        default=current.get(
-                            CONF_CHEAP_PRICE_PERCENTILE,
-                            DEFAULT_CHEAP_PRICE_PERCENTILE,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=5,
-                            max=50,
-                            step=1,
-                            unit_of_measurement="%",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_MAX_PRECHARGE_PRICE,
-                        default=current.get(
-                            CONF_MAX_PRECHARGE_PRICE,
-                            DEFAULT_MAX_PRECHARGE_PRICE,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0.00,
-                            max=0.50,
-                            step=0.01,
-                            unit_of_measurement="$/kWh",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_CHEAP_PRICE_DEADBAND,
-                        default=current.get(
-                            CONF_CHEAP_PRICE_DEADBAND,
-                            DEFAULT_CHEAP_PRICE_DEADBAND,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0.00,
-                            max=0.10,
-                            step=0.01,
-                            unit_of_measurement="$/kWh",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_FORECAST_LOOKAHEAD_HOURS,
-                        default=current.get(
-                            CONF_FORECAST_LOOKAHEAD_HOURS,
-                            DEFAULT_FORECAST_LOOKAHEAD_HOURS,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=1.0,
-                            max=8.0,
-                            step=0.5,
-                            unit_of_measurement="hours",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_BATTERY_TARGET,
-                        default=current.get(
-                            CONF_BATTERY_TARGET,
-                            DEFAULT_BATTERY_TARGET,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=50,
-                            max=100,
-                            step=5,
-                            unit_of_measurement="%",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
                         CONF_DEMAND_WINDOW_START,
                         default=current.get(
                             CONF_DEMAND_WINDOW_START,
@@ -663,42 +588,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),
-                    vol.Required(
-                        CONF_LOAD_WEIGHT_RECENT,
-                        default=current.get(
-                            CONF_LOAD_WEIGHT_RECENT,
-                            DEFAULT_LOAD_WEIGHT_RECENT,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0.0,
-                            max=1.0,
-                            step=0.05,
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_MINIMUM_TARGET_SOC,
-                        default=current.get(
-                            CONF_MINIMUM_TARGET_SOC,
-                            DEFAULT_MINIMUM_TARGET_SOC,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=5,
-                            max=30,
-                            step=1,
-                            unit_of_measurement="%",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
-                        default=current.get(
-                            CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
-                            DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
-                        ),
-                    ): selector.BooleanSelector(),
                 }
             ),
         )
