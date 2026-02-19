@@ -28,6 +28,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Health Check Missing export_mode Verification |
 | backlog-high-021 | 🟠 HIGH | ✅ COMPLETED | PROACTIVE_EXPORT Has 0 Debounce Risk |
 | backlog-high-022 | 🟠 HIGH | ✅ COMPLETED | Forecast SOC Stays Flat at Minimum Despite Solar Excess |
+| backlog-high-023 | 🟠 HIGH | ✅ COMPLETED | Demand Window Premature Exit Bug |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
 | backlog-med-004 | 🟡 MED | ✅ COMPLETED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |

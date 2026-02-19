@@ -1129,15 +1129,10 @@ class ComputationEngine:
         if data.price_spike and spike_discharge_enabled and in_discharge_window:
             data.active_mode = BatteryMode.SPIKE_DISCHARGE
         elif data.demand_window_active:
-            # Allow DW entry if at target OR (config enabled AND solar can reach target within DW)
-            target_pct = float(
-                self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-            )
-            if data.soc >= target_pct or data.solar_can_reach_target_in_dw:
-                data.active_mode = BatteryMode.DEMAND_BLOCK
-            else:
-                # Not at target and solar can't help - stay in current mode
-                data.active_mode = BatteryMode.SELF_CONSUMPTION
+            # Once in demand window, STAY in DEMAND_BLOCK regardless of SOC.
+            # The solar_can_reach_target_in_dw check is only for ENTRY decision (before DW starts).
+            # This prevents premature exit from demand block when SOC drops below target during DW.
+            data.active_mode = BatteryMode.DEMAND_BLOCK
         elif data.manual_override:
             data.active_mode = BatteryMode.MANUAL
         # Hold mode removed - these conditions are no longer evaluated:
