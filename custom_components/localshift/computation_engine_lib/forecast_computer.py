@@ -29,6 +29,7 @@ from .solar_utils import (
     get_price_for_slot,
     get_price_for_slot_or_none,
     get_solar_for_15min_slot,
+    get_solar_for_15min_slot_or_none,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1408,11 +1409,17 @@ class ForecastComputer:
         )
 
         if not all_solcast:
-            _LOGGER.debug("15-min forecast: no Solcast entries available")
+            _LOGGER.warning(
+                "15-min forecast: no Solcast entries available - solar forecast data is missing. "
+                "Check Solcast integration status."
+            )
         if not historical_avg_kw:
             _LOGGER.debug(
                 "15-min forecast: no historical hourly load profile available; using live load fallback"
             )
+
+        # Track missing solar data for diagnostics
+        missing_solar_slots: list[str] = []
 
         current_soc = data.soc
         predicted_soc = current_soc
@@ -1567,9 +1574,21 @@ class ForecastComputer:
                 or (slot_minute == 0 and slot_hour % 6 == 0)
                 or (14 <= slot_hour <= 18)
             )
-            solar_kwh = get_solar_for_15min_slot(
-                all_solcast, slot_start, debug_log=debug_this_slot
+
+            # Use _or_none variant to detect missing forecast data vs genuine zero
+            solar_kwh_or_none = get_solar_for_15min_slot_or_none(
+                all_solcast, slot_start
             )
+            if solar_kwh_or_none is None:
+                # No forecast data for this slot - track for diagnostics
+                missing_solar_slots.append(slot_start.strftime("%H:%M"))
+                solar_kwh = 0.0  # Graceful degradation
+            else:
+                solar_kwh = solar_kwh_or_none
+
+            # Debug logging for solar data
+            if debug_this_slot:
+                get_solar_for_15min_slot(all_solcast, slot_start, debug_log=True)
 
             # Get expected consumption scaled to this slot's duration.
             load_kw, load_source = self._estimate_hourly_consumption_kw(
@@ -1803,6 +1822,16 @@ class ForecastComputer:
                     "buy_price": round(_slot_price, 4),
                     "sell_price": round(_slot_fit_price, 4),
                 }
+            )
+
+        # Log warning if any solar forecast data was missing
+        if missing_solar_slots:
+            _LOGGER.warning(
+                "Solar forecast data missing for %d slot(s): %s. "
+                "These slots will use 0.0 kWh solar. Check Solcast integration.",
+                len(missing_solar_slots),
+                ", ".join(missing_solar_slots[:10])
+                + ("..." if len(missing_solar_slots) > 10 else ""),
             )
 
         return daily_forecast, daily_forecast_soc_15min, consumption_source_counts

@@ -268,6 +268,78 @@ def get_solar_for_15min_slot(
     return total_solar
 
 
+def get_solar_for_15min_slot_or_none(
+    solcast_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+) -> float | None:
+    """Get solar forecast (kWh), returning None when forecast data is missing.
+
+    Unlike get_solar_for_15min_slot(), this returns None (not 0.0) when:
+    - The forecast list is empty
+    - No period in the forecast overlaps the requested slot
+
+    This allows callers to distinguish "missing forecast data" from
+    "genuinely zero solar production" (e.g., nighttime).
+
+    Returns:
+        Solar energy in kWh for the 15-min slot, or None if no forecast data.
+    """
+    if not solcast_forecasts:
+        return None
+
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
+    slot_end = slot_start + timedelta(minutes=15)
+    period_duration = timedelta(minutes=30)
+    total_solar = 0.0
+
+    # Track if we found any matching period for this slot
+    found_match = False
+
+    for entry in solcast_forecasts:
+        if not isinstance(entry, dict):
+            continue
+
+        period_start_raw = entry.get("period_start") or entry.get("start")
+        if period_start_raw is None:
+            continue
+
+        start_dt = dt_util.parse_datetime(str(period_start_raw))
+        if not start_dt:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + period_duration
+
+        overlap_start = max(start_local, slot_start)
+        overlap_end = min(end_local, slot_end)
+        overlap_seconds = (overlap_end - overlap_start).total_seconds()
+
+        if overlap_seconds > 0:
+            found_match = True
+
+            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+            period_kwh = float(
+                entry.get("pv_estimate")
+                or entry.get("estimate")
+                or entry.get("pv_estimate10")
+                or entry.get("estimate10")
+                or 0.0
+            )
+            overlap_fraction = overlap_seconds / period_duration.total_seconds()
+            total_solar += period_kwh * overlap_fraction
+
+    # Return None if no matching period was found (forecast doesn't cover this slot)
+    if not found_match:
+        return None
+
+    return total_solar
+
+
 def get_solar_for_5min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
