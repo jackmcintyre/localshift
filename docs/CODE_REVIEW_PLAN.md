@@ -151,23 +151,71 @@ def get_debounce_for_transition(self, from_mode, to_mode):
 #### 3.1 Coordinator Data (`coordinator_data.py`)
 
 **Review Areas:**
-- [ ] Data class field completeness
-- [ ] Type annotations accuracy
-- [ ] Default value appropriateness
+
+##### 3.1.1 Dataclass Design (70+ fields)
+- [ ] Review single responsibility principle violation
+- [ ] Check if fields can be grouped into logical classes
+- [ ] Validate type annotations completeness
+
+**Potential Issue:** Massive dataclass makes testing difficult - any change affects all tests.
+
+##### 3.1.2 Field Usage
+- [ ] Verify `ChargingDecision` class is actually used
+- [ ] Check if `forecast_charging_decisions` field is populated
+- [ ] Review debug fields necessity vs performance impact
+
+**Potential Issue:** Unused or unclear fields add maintenance burden.
+
+##### 3.1.3 Default Values
+- [ ] Review appropriateness of default values (0.0, False, empty lists)
+- [ ] Check if None vs empty collections are used consistently
+- [ ] Validate field initialization order
 
 #### 3.2 History Fetcher (`history_fetcher.py`)
 
 **Review Areas:**
-- [ ] Database query error handling
-- [ ] Cache invalidation logic
-- [ ] Thread pool usage safety
+
+##### 3.2.1 Database API Resilience (lines 70-100)
+- [ ] Review `getattr` usage for recorder function access
+- [ ] Check error handling for API changes
+- [ ] Validate thread pool executor usage
+
+**Potential Issue:** Recorder API changes could break historical data fetching silently.
+
+##### 3.2.2 Cache Management
+- [ ] Review cache invalidation at midnight logic
+- [ ] Check for race conditions in cache updates
+- [ ] Validate cache key generation (date-based)
+
+**Potential Issue:** Multiple HA restarts in one day could cause cache issues.
+
+##### 3.2.3 Statistic ID Resolution
+- [ ] Check complex logic for finding correct statistic_id
+- [ ] Verify fallback when entity_id doesn't match statistic_id
+- [ ] Review error handling for missing statistics
 
 #### 3.3 Solar Utils (`solar_utils.py`)
 
 **Review Areas:**
-- [ ] Price lookup edge cases
-- [ ] Solar forecast overlap calculations
-- [ ] Timezone handling consistency
+
+##### 3.3.1 Price Lookup Edge Cases (lines 50-80)
+- [ ] Review `get_price_for_slot` returning 0.0 for missing data
+- [ ] Check if this hides forecast unavailability
+- [ ] Validate fallback logic for overlapping periods
+
+**Potential Issue:** Silent 0.0 returns could cause battery to charge at "free" price when forecast is missing.
+
+##### 3.3.2 Solar Calculation Accuracy
+- [ ] Review overlap fraction calculations for straddling periods
+- [ ] Check boundary conditions (exact overlaps)
+- [ ] Validate timezone handling consistency
+
+**Potential Issue:** Complex overlap logic may have edge cases not covered by tests.
+
+##### 3.3.3 Data Type Handling
+- [ ] Check attribute name fallbacks for different Solcast versions
+- [ ] Verify numeric conversion error handling
+- [ ] Review None vs 0.0 return value consistency
 
 ### Phase 4: Entity Platforms
 **Files:** `sensor.py`, `binary_sensor.py`, `switch.py`, `button.py`, `number.py`
@@ -196,40 +244,141 @@ def get_debounce_for_transition(self, from_mode, to_mode):
 #### 5.1 Config Flow (`config_flow.py`)
 
 **Review Areas:**
-- [ ] Multi-step flow validation
-- [ ] Entity existence checks
-- [ ] Error message clarity
+
+##### 5.1.1 Entity Validation (lines 30-60)
+- [ ] Review entity existence and domain validation
+- [ ] Check "unavailable"/"unknown" state handling
+- [ ] Verify validation timing vs entity availability
+
+**Potential Issue:** Entity could become unavailable after validation passes.
+
+##### 5.1.2 Notify Service Validation (lines 80-110)
+- [ ] Review notify service existence checks
+- [ ] Check default service selection logic
+- [ ] Verify behavior when no notify services exist
+
+**Potential Issue:** What if no notify services exist? Flow blocks?
+
+##### 5.1.3 Multi-step Flow State (lines 150-300)
+- [ ] Review `self._teslemetry_data` and `self._pricing_data` usage
+- [ ] Check for stale data when user navigates back
+- [ ] Verify data consistency across flow steps
+
+**Potential Issue:** If user navigates back, stored data may contain stale values.
+
+##### 5.1.4 Error Message Clarity
+- [ ] Review error message specificity
+- [ ] Check user-friendly error descriptions
+- [ ] Verify error recovery guidance
 
 #### 5.2 Constants (`const.py`)
 
 **Review Areas:**
-- [ ] Configuration option ranges
-- [ ] Default value appropriateness
-- [ ] Enum completeness
+
+##### 5.2.1 Threshold Ranges
+- [ ] Review `CONF_CHEAP_PRICE_PERCENTILE`: 5-50%
+- [ ] Check `CONF_BATTERY_TARGET`: 50-100%
+- [ ] Verify `CONF_MINIMUM_TARGET_SOC`: 5-30%
+- [ ] Validate range appropriateness
+
+**Observation:** Ranges look reasonable, defaults appropriate.
+
+##### 5.2.2 Enum Completeness
+- [ ] Review `BatteryMode` enum (7 modes)
+- [ ] Verify all modes used in state machine
+- [ ] Check for unused enum values
+
+**Observation:** Complete coverage, all modes used.
+
+##### 5.2.3 Default Values
+- [ ] Review default value appropriateness
+- [ ] Check consistency with documentation
+- [ ] Verify safe defaults for production use
 
 ### Phase 6: Test Coverage
 **Files:** `tests/*.py`
 **Estimated Time:** 20 minutes
 **Status:** 🔲 Not Started
 
-#### 6.1 Test Structure
+#### 6.1 Test Gaps Identified
 
 **Review Areas:**
-- [ ] Unit test coverage gaps
-- [ ] Mock fixture completeness
-- [ ] Edge case testing
+
+##### 6.1.1 Missing Test Files
+- [ ] No `test_state_machine.py`
+- [ ] No `test_battery_controller.py`
+- [ ] No `test_state_reader.py`
+- [ ] No `test_forecast_computer.py` (only basic tests exist)
+
+**Critical Gap:** Core state machine logic has no unit tests.
+
+##### 6.1.2 Test Coverage Gaps in test_computation_engine.py
+- [ ] `test_active_mode_forecast_driven` sets `grid_import_kwh=0` to prevent mode activation
+- [ ] No tests for grid charging activation conditions
+- [ ] No tests for proactive export activation conditions
+- [ ] No tests for spike discharge with actual spike conditions
+
+**Potential Issue:** Forecast-driven modes may have untested activation paths.
+
+##### 6.1.3 Mock Fixture Issues (conftest.py)
+- [ ] Mocks don't simulate real HA entity states
+- [ ] `coordinator_data` fixture uses minimal data
+- [ ] No fixtures for forecast data
+- [ ] No fixtures for complex state scenarios
+
+**Potential Issue:** Tests may pass with mocks but fail in real HA environment.
+
+##### 6.1.4 Integration Test Gaps
+- [ ] No tests for entity platform interactions
+- [ ] No tests for config flow edge cases
+- [ ] No tests for coordinator lifecycle
+
+**Observation:** Heavy reliance on unit tests, limited integration coverage.
 
 ### Phase 7: Documentation & Maintenance
 **Files:** `docs/*.md`, inline documentation
 **Estimated Time:** 10 minutes
 **Status:** 🔲 Not Started
 
-#### 7.1 Documentation
+#### 7.1 Documentation Files
 
 **Review Areas:**
-- [ ] Architecture diagram accuracy
-- [ ] Code comment currency
-- [ ] API documentation completeness
+
+##### 7.1.1 ARCHITECTURE.md Verification
+- [ ] Does it reflect current state after rebrand to LocalShift?
+- [ ] Does it document the hybrid timescale forecast?
+- [ ] Verify all components are documented
+
+##### 7.1.2 ENTITY_REFERENCE.md Verification
+- [ ] Does it list all 12 sensors + 8 binary sensors + 5 switches + 5 buttons + 6 numbers?
+- [ ] Check entity descriptions accuracy
+- [ ] Verify attribute documentation completeness
+
+##### 7.1.3 CHANGE_DETECTION.md Verification
+- [ ] Documents all places where state changes are detected
+- [ ] Explains the forecast change detection mechanism
+- [ ] Covers all change detection patterns
+
+##### 7.1.4 Other Documentation Files
+- [ ] DEVELOPER_GUIDE.md - config flow and setup instructions
+- [ ] FORECAST_DRIVEN_CONTROL.md - forecast logic explanation
+- [ ] LOAD_SHIFTING_GUIDE.md - user guide completeness
+
+#### 7.2 Inline Documentation
+
+**Review Areas:**
+
+##### 7.2.1 Code Comments
+- [ ] Review docstring completeness in core files
+- [ ] Check complex method documentation
+- [ ] Verify parameter and return value documentation
+
+##### 7.2.2 TODO/FIXME Comments
+- [ ] Search for outstanding TODO items
+- [ ] Review FIXME comments for resolution status
+- [ ] Check for deprecated code markers
+
+**Observation:** Following .clinerules for inline documentation requirements.
 
 ---
 

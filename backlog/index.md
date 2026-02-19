@@ -24,6 +24,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-crit-001 | 🔴 CRIT | ✅ COMPLETED | Proactive Export Fires Below Cost — Unprofitable Overnight Discharge |
 | backlog-high-017 | 🟠 HIGH | 📋 PROPOSED | Excess Solar Load Shifting Sensors |
 | backlog-high-018 | 🟠 HIGH | ✅ COMPLETED | Forecast SOC Simulation Does Not Respect Minimum SOC |
+| backlog-high-019 | 🟠 HIGH | 📋 PROPOSED | Day Boundary Bug in Overnight Grid Charging Decision |
 | backlog-med-003 | 🟡 MED | 📋 PROPOSED | Decision Log Limited to 50 Entries |
 | backlog-med-004 | 🟡 MED | 📋 PROPOSED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
