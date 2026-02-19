@@ -35,6 +35,8 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
 | backlog-med-012 | 🟡 MED | 📋 PROPOSED | Binary Sensors Include Redundant "binary" in Names |
 | backlog-med-023 | 🟡 MED | 📋 PROPOSED | Scenario-Based Simulation Framework |
+| backlog-med-024 | 🟡 MED | 📋 PROPOSED | Improve Settings Usability with Friendly Names and Help Text |
+| backlog-med-025 | 🟡 MED | 📋 PROPOSED | Notification System Improvements |
 | backlog-low-001 | ⚪ LOW | 📋 PROPOSED | Dashboard Setup Complexity |
 | backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
 
