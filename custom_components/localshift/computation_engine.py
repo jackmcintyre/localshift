@@ -240,6 +240,14 @@ class ComputationEngine:
             data, now_dt, before_dw, target_hour, target_pct
         )
 
+        # Set allow_dw_entry_under_target flag on data for forecast_computer
+        # This allows grid charging decision to simulate to DW END instead of DW START
+        # when solar can reach target within the DW period
+        allow_dw_under_target = self._get_switch_state(
+            SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
+        )
+        data.allow_dw_entry_under_target = allow_dw_under_target and before_dw
+
         # ---- Step 4/16: daily_forecast (detailed 15-min forecast) ----
         # Compute detailed forecast AFTER effective_cheap_price is set
         # This is the single source of truth
@@ -967,20 +975,18 @@ class ComputationEngine:
     def _get_forecast_at_demand_window(
         self, data: CoordinatorData, target_hour: int
     ) -> dict | None:
-        """Get the *upcoming* forecast entry at the demand window start time.
+        """Get the forecast entry at or just after the demand window start time.
 
-        Walks the forecast list chronologically and returns the first entry
-        matching ``hour == target_hour, minute == 0`` whose timestamp is at
-        or after ``now``.
+        Finds the first forecast slot whose timestamp is at or after the DW start
+        (target_hour:00:00). This handles the case where 15-minute forecast slots
+        don't align exactly with the hour boundary (e.g., slots at 14:55, 15:10
+        when forecast starts at 09:55).
 
         This correctly handles the post-DW period: if it is currently 17:00
-        and the DW started at 15:00, today's 15:00 entry is in the past and
-        is skipped.  The next qualifying entry is tomorrow's 15:00 slot.
+        and the DW started at 15:00, today's 15:xx entry is in the past and
+        is skipped. The next qualifying entry is tomorrow's 15:xx slot.
         If the forecast doesn't span far enough to include a future DW entry,
         ``None`` is returned and callers fall back to the current SOC.
-
-        Replaces the previous "first match" logic which always returned today's
-        (potentially stale, already-elapsed) DW slot.
         """
         if not data.daily_forecast:
             return None
@@ -992,24 +998,33 @@ class ComputationEngine:
         else:
             now_local = dt_util.as_local(now_raw)
 
+        # Calculate the DW start datetime for comparison
+        # DW start is at target_hour:00:00
+        dw_start_dt = now_local.replace(
+            hour=target_hour, minute=0, second=0, microsecond=0
+        )
+        # If DW start is in the past, look for tomorrow's DW
+        if dw_start_dt <= now_local:
+            dw_start_dt += timedelta(days=1)
+
+        # Find the first slot at or after the DW start time
+        # This handles non-aligned forecast slots (e.g., 15:10 instead of 15:00)
         for entry in data.daily_forecast:
-            if entry.get("hour") != target_hour or entry.get("minute") != 0:
-                continue
-            # Only accept this slot if it is in the future.
             ts = entry.get("timestamp", "")
             if not ts:
-                # No timestamp — fall back to accepting the first match
-                return entry
+                continue
             try:
                 slot_dt = datetime.fromisoformat(ts)
             except ValueError:
-                return entry  # Malformed timestamp — accept anyway
+                continue  # Malformed timestamp — skip
             # Normalise slot to tz-aware local time.
             if slot_dt.tzinfo is None:
                 slot_local = dt_util.as_local(dt_util.as_utc(slot_dt))
             else:
                 slot_local = dt_util.as_local(slot_dt)
-            if slot_local >= now_local:
+
+            # Find first slot at or after DW start
+            if slot_local >= dw_start_dt:
                 return entry
 
         # No future DW slot found in the current forecast window

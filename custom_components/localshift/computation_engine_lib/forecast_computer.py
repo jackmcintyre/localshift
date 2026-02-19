@@ -412,6 +412,8 @@ class ForecastComputer:
         current_load_kw: float,
         recent_load_kw: float,
         dw_start_time: time,
+        dw_end_time: time,
+        allow_dw_entry_under_target: bool,
         general_price_current: float,
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
@@ -427,6 +429,8 @@ class ForecastComputer:
         2. For future slots, use forecast price
         3. Only charge when price is cheap (<= effective_cheap_price)
         4. Fall back to forecast-based logic when spot is unavailable
+        5. When allow_dw_entry_under_target is True, simulate to DW END instead of DW START
+           (allows solar to charge during DW period)
 
         Args:
             slot_start: Start time of the 15-minute slot
@@ -444,6 +448,8 @@ class ForecastComputer:
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
+            dw_end_time: Demand window end time
+            allow_dw_entry_under_target: If True, solar can charge during DW
             general_price_current: Current spot buy price (only for current slot)
             is_current_slot: True if this is the current time slot (use spot price)
 
@@ -482,11 +488,33 @@ class ForecastComputer:
         price_is_very_cheap = use_price <= (effective_cheap_price * 0.8)
 
         # SMART FORECAST: Simulate forward with solar only
-        # Model: can we reach target *before the next demand window starts* using solar only?
-        # If yes, do NOT grid charge in the morning.
-
+        # Model: can we reach target using solar only?
+        # If yes, do NOT grid charge.
+        #
+        # KEY: When allow_dw_entry_under_target is True, simulate to DW END
+        # instead of DW START. This allows solar to continue charging during
+        # the DW period and reach target within the DW window.
         sim_start = slot_start
-        sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
+        
+        if allow_dw_entry_under_target:
+            # Simulate through entire DW period to DW end
+            # This allows solar to charge during DW hours
+            sim_end = slot_start.replace(
+                hour=dw_end_time.hour,
+                minute=dw_end_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            # If DW end is earlier than now, it's tomorrow
+            if sim_end <= slot_start:
+                sim_end += timedelta(days=1)
+            _LOGGER.debug(
+                "GRID_CHARGE: Simulating to DW END %s (allow_dw_entry_under_target=True)",
+                sim_end.strftime("%H:%M"),
+            )
+        else:
+            # Standard behavior: simulate to next DW start
+            sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
 
         # OVERNIGHT EFFICIENCY CHECK:
         # For overnight slots (no solar), we need to check differently.
@@ -1631,6 +1659,9 @@ class ForecastComputer:
             max_grid_charge_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
 
             # Use single source of truth for grid charging decision
+            # Get allow_dw_entry_under_target from data (set by computation_engine)
+            allow_dw_entry_under_target = getattr(data, 'allow_dw_entry_under_target', False)
+            
             should_grid_charge, should_boost = self._should_grid_charge_at_slot(
                 slot_start=slot_start,
                 solar_kwh=solar_kwh,
@@ -1647,6 +1678,8 @@ class ForecastComputer:
                 current_load_kw=data.load_power_kw,
                 recent_load_kw=recent_load_kw,
                 dw_start_time=dw_start_time,
+                dw_end_time=dw_end_time,
+                allow_dw_entry_under_target=allow_dw_entry_under_target,
                 general_price_current=data.general_price,
                 min_soc_pct=export_min_soc_pct,
                 is_current_slot=is_first_slot,
