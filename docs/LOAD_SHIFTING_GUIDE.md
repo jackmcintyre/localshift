@@ -42,7 +42,6 @@ The LocalShift integration provides sensors that forecast excess solar productio
 | `INCREASE_LOAD` | Excess solar available | Turn on discretionary loads |
 | `MAINTAIN_LOAD` | Current balance is good | No changes needed |
 | `REDUCE_LOAD` | Risk of grid charging | Turn off discretionary loads |
-| `HOLD` | Demand window or uncertain | Don't change anything |
 
 | Attribute | Type | Description |
 |-----------|------|-------------|

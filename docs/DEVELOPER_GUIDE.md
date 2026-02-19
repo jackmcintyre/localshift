@@ -60,11 +60,9 @@ The state machine evaluates conditions in priority order (highest first):
 2. Demand window?      → DEMAND_BLOCK (enforce self-consumption)
 3. Price spike?        → SPIKE_DISCHARGE (export if enabled)
 4. Manual button?      → Execute button action
-5. Solar export hold?  → HOLD (preserve for export at high FIT)
-6. Proactive export?  → PROACTIVE_EXPORT (export before negative)
-7. Cheap price?       → GRID_CHARGING or BOOST_CHARGING
-8. Hold justified?    → HOLD (price in deadband + justification)
-9. Default             → SELF_CONSUMPTION
+5. Proactive export?  → PROACTIVE_EXPORT (export before negative)
+6. Cheap price?       → GRID_CHARGING or BOOST_CHARGING
+7. Default            → SELF_CONSUMPTION
 ```
 
 ### Debounce Timers
@@ -78,7 +76,6 @@ The state machine uses debounce timers to prevent rapid mode switching:
 | Manual override | 0 seconds (immediate) |
 | Grid charging | 5 minutes |
 | Self consumption | 5 minutes |
-| Hold | 5 minutes |
 
 ## Core Classes
 
