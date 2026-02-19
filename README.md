@@ -96,14 +96,14 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 
 | Entity ID | Description |
 |---|---|
-| `binary_sensor.localshift_binary_demand_window` | Whether current time is within the demand window |
-| `binary_sensor.localshift_binary_price_spike_coming` | Price spike forecast within lookahead (with `max_forecast_price` attribute) |
-| `binary_sensor.localshift_binary_price_expensive_coming` | Expensive period forecast within lookahead |
-| `binary_sensor.localshift_binary_discharge_forced` | Powerwall is currently force discharging |
-| `binary_sensor.localshift_binary_charge_forced` | Powerwall is currently force charging |
-| `binary_sensor.localshift_binary_charge_boost` | Powerwall is currently boost charging (5kW) |
-| `binary_sensor.localshift_binary_solar_can_reach_target` | Solar forecast can reach battery target before DW |
-| `binary_sensor.localshift_binary_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
+| `binary_sensor.localshift_demand_window` | Whether current time is within the demand window |
+| `binary_sensor.localshift_price_spike_coming` | Price spike forecast within lookahead (with `max_forecast_price` attribute) |
+| `binary_sensor.localshift_price_expensive_coming` | Expensive period forecast within lookahead |
+| `binary_sensor.localshift_discharge_forced` | Powerwall is currently force discharging |
+| `binary_sensor.localshift_charge_forced` | Powerwall is currently force charging |
+| `binary_sensor.localshift_charge_boost` | Powerwall is currently boost charging (5kW) |
+| `binary_sensor.localshift_solar_can_reach_target` | Solar forecast can reach battery target before DW |
+| `binary_sensor.localshift_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
 
 ### Switches (5)
 

@@ -33,7 +33,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-004 | 🟡 MED | ✅ COMPLETED | Missing Cleanup for Historical Load Cache |
 | backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
 | backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
-| backlog-med-012 | 🟡 MED | 📋 PROPOSED | Binary Sensors Include Redundant "binary" in Names |
+| backlog-med-012 | 🟡 MED | ✅ COMPLETED | Binary Sensors Include Redundant "binary" in Names |
 | backlog-med-023 | 🟡 MED | 📋 PROPOSED | Scenario-Based Simulation Framework |
 | backlog-med-024 | 🟡 MED | ✅ COMPLETED | Improve Settings Usability with Friendly Names and Help Text |
 | backlog-med-025 | 🟡 MED | 📋 PROPOSED | Notification System Improvements |

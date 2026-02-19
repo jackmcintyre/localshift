@@ -218,11 +218,11 @@ views:
           - type: conditional
             conditions:
               - condition: state
-                entity: binary_sensor.localshift_binary_demand_window
+                entity: binary_sensor.localshift_demand_window
                 state: "on"
             card:
               type: tile
-              entity: binary_sensor.localshift_binary_demand_window
+              entity: binary_sensor.localshift_demand_window
               name: Demand Window
               color: orange
 
@@ -238,8 +238,8 @@ views:
               {% set forecast = 'sensor.localshift_forecast_battery' %}
               {% set target = states('number.localshift_battery_target') | int(100) %}
               {% set soc = states('sensor.my_home_percentage_charged') | int(0) %}
-              {% set can_reach = is_state('binary_sensor.localshift_binary_solar_can_reach_target', 'on') %}
-              {% set boost_needed = is_state('binary_sensor.localshift_binary_charge_boost_needed', 'on') %}
+              {% set can_reach = is_state('binary_sensor.localshift_solar_can_reach_target', 'on') %}
+              {% set boost_needed = is_state('binary_sensor.localshift_charge_boost_needed', 'on') %}
               {% set deficit = state_attr(forecast, 'deficit_kwh') | float(0) %}
               {% set solar = state_attr(forecast, 'solar_before_dw_kwh') | float(0) %}
               {% set hours = state_attr(forecast, 'hours_to_target_time') | float(0) %}
@@ -537,7 +537,7 @@ views:
 
               Price Spike: {{ states('binary_sensor.100h_price_spike') }}
 
-              Demand Window: {{ states('binary_sensor.localshift_binary_demand_window') }}
+              Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
 
               === INTERNAL STATE FLAGS ===
 
@@ -545,11 +545,11 @@ views:
 
               Target Reached Today: {{ state_attr('sensor.localshift_forecast_battery', 'target_reached_today') }}
 
-              Forecast Spike Within Window: {{ states('binary_sensor.localshift_binary_price_spike_coming') }}
+              Forecast Spike Within Window: {{ states('binary_sensor.localshift_price_spike_coming') }}
 
-              Max Forecast Price: ${{ state_attr('binary_sensor.localshift_binary_price_spike_coming', 'max_forecast_price') | default(0) }}/kWh
+              Max Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_forecast_price') | default(0) }}/kWh
 
-              Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_binary_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
+              Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
 
               Force Discharge Active: {{ states('sensor.localshift_battery_mode') == 'force_discharge' }}
 
@@ -557,9 +557,9 @@ views:
 
               Boost Charge Active: {{ states('sensor.localshift_battery_mode') == 'boost_charging' }}
 
-              Solar Can Reach Target: {{ states('binary_sensor.localshift_binary_solar_can_reach_target') }}
+              Solar Can Reach Target: {{ states('binary_sensor.localshift_solar_can_reach_target') }}
 
-              Boost Charge Needed: {{ states('binary_sensor.localshift_binary_charge_boost_needed') }}
+              Boost Charge Needed: {{ states('binary_sensor.localshift_charge_boost_needed') }}
 
               === DEBUG: MODE DECISION ===
 

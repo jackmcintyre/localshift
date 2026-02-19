@@ -232,7 +232,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ## Binary Sensors
 
-### 1. binary_sensor.localshift_binary_demand_window
+### 1. binary_sensor.localshift_demand_window
 
 **Purpose:** Whether the demand window is currently active.
 
@@ -242,7 +242,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 2. binary_sensor.localshift_binary_price_spike_coming
+### 2. binary_sensor.localshift_price_spike_coming
 
 **Purpose:** Whether a price spike is forecast within the lookahead window.
 
@@ -257,7 +257,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 3. binary_sensor.localshift_binary_price_expensive_coming
+### 3. binary_sensor.localshift_price_expensive_coming
 
 **Purpose:** Whether an expensive period is forecast within lookahead.
 
@@ -265,7 +265,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 4. binary_sensor.localshift_binary_discharge_forced
+### 4. binary_sensor.localshift_discharge_forced
 
 **Purpose:** Whether battery is currently force discharging.
 
@@ -273,7 +273,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 5. binary_sensor.localshift_binary_charge_forced
+### 5. binary_sensor.localshift_charge_forced
 
 **Purpose:** Whether battery is currently force charging (backup mode at 3.3kW).
 
@@ -281,7 +281,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 6. binary_sensor.localshift_binary_charge_boost
+### 6. binary_sensor.localshift_charge_boost
 
 **Purpose:** Whether battery is currently boost charging at 5kW.
 
@@ -289,7 +289,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 7. binary_sensor.localshift_binary_solar_can_reach_target
+### 7. binary_sensor.localshift_solar_can_reach_target
 
 **Purpose:** Whether solar forecast can fill battery to target by demand window.
 
@@ -297,7 +297,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 8. binary_sensor.localshift_binary_charge_boost_needed
+### 8. binary_sensor.localshift_charge_boost_needed
 
 **Purpose:** Whether 5kW boost charging is needed (3.3kW insufficient).
 

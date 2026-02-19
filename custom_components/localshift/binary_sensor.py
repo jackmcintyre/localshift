@@ -92,8 +92,8 @@ class LocalShiftBinarySensorBase(BinarySensorEntity):
 class ForecastSpikeWithinWindowSensor(LocalShiftBinarySensorBase):
     """Whether a price spike is forecast within the lookahead window."""
 
-    _attr_unique_id = "localshift_binary_price_spike_coming"
-    _attr_name = "Binary Price Spike Coming"
+    _attr_unique_id = "localshift_price_spike_coming"
+    _attr_name = "Price Spike Coming"
     _attr_icon = "mdi:flash-alert-outline"
 
     def _update_from_coordinator(self) -> None:
@@ -111,8 +111,8 @@ class ForecastSpikeWithinWindowSensor(LocalShiftBinarySensorBase):
 class ForceDischargeActiveSensor(LocalShiftBinarySensorBase):
     """Whether battery is currently force discharging."""
 
-    _attr_unique_id = "localshift_binary_discharge_forced"
-    _attr_name = "Binary Discharge Forced"
+    _attr_unique_id = "localshift_discharge_forced"
+    _attr_name = "Discharge Forced"
     _attr_icon = "mdi:battery-arrow-down"
 
     def _update_from_coordinator(self) -> None:
@@ -122,8 +122,8 @@ class ForceDischargeActiveSensor(LocalShiftBinarySensorBase):
 class ForceChargeActiveSensor(LocalShiftBinarySensorBase):
     """Whether battery is currently force charging (backup mode)."""
 
-    _attr_unique_id = "localshift_binary_charge_forced"
-    _attr_name = "Binary Charge Forced"
+    _attr_unique_id = "localshift_charge_forced"
+    _attr_name = "Charge Forced"
     _attr_icon = "mdi:battery-charging"
 
     def _update_from_coordinator(self) -> None:
@@ -133,8 +133,8 @@ class ForceChargeActiveSensor(LocalShiftBinarySensorBase):
 class BoostChargeActiveSensor(LocalShiftBinarySensorBase):
     """Whether battery is currently boost charging (5kW)."""
 
-    _attr_unique_id = "localshift_binary_charge_boost"
-    _attr_name = "Binary Charge Boost"
+    _attr_unique_id = "localshift_charge_boost"
+    _attr_name = "Charge Boost"
     _attr_icon = "mdi:battery-charging-high"
 
     def _update_from_coordinator(self) -> None:
@@ -144,8 +144,8 @@ class BoostChargeActiveSensor(LocalShiftBinarySensorBase):
 class ForecastExpensivePeriodSensor(LocalShiftBinarySensorBase):
     """Whether an expensive period is forecast within lookahead."""
 
-    _attr_unique_id = "localshift_binary_price_expensive_coming"
-    _attr_name = "Binary Price Expensive Coming"
+    _attr_unique_id = "localshift_price_expensive_coming"
+    _attr_name = "Price Expensive Coming"
     _attr_icon = "mdi:currency-usd"
 
     def _update_from_coordinator(self) -> None:
@@ -155,8 +155,8 @@ class ForecastExpensivePeriodSensor(LocalShiftBinarySensorBase):
 class SolarCanReachTargetSensor(LocalShiftBinarySensorBase):
     """Whether solar forecast can fill battery to target by demand window."""
 
-    _attr_unique_id = "localshift_binary_solar_can_reach_target"
-    _attr_name = "Binary Solar Can Reach Target"
+    _attr_unique_id = "localshift_solar_can_reach_target"
+    _attr_name = "Solar Can Reach Target"
     _attr_icon = "mdi:white-balance-sunny"
 
     def _update_from_coordinator(self) -> None:
@@ -166,8 +166,8 @@ class SolarCanReachTargetSensor(LocalShiftBinarySensorBase):
 class BoostChargeNeededSensor(LocalShiftBinarySensorBase):
     """Whether 3.3kW charge rate is insufficient (need 5kW boost)."""
 
-    _attr_unique_id = "localshift_binary_charge_boost_needed"
-    _attr_name = "Binary Charge Boost Needed"
+    _attr_unique_id = "localshift_charge_boost_needed"
+    _attr_name = "Charge Boost Needed"
     _attr_icon = "mdi:speedometer"
 
     def _update_from_coordinator(self) -> None:
@@ -177,8 +177,8 @@ class BoostChargeNeededSensor(LocalShiftBinarySensorBase):
 class DemandWindowActiveSensor(LocalShiftBinarySensorBase):
     """Whether the demand window is currently active."""
 
-    _attr_unique_id = "localshift_binary_demand_window"
-    _attr_name = "Binary Demand Window"
+    _attr_unique_id = "localshift_demand_window"
+    _attr_name = "Demand Window"
 
     @property
     def icon(self) -> str:

@@ -452,13 +452,13 @@ See `TEST_SCENARIOS.md` for comprehensive test cases covering:
 
 **Battery not charging:**
 - Check `sensor.localshift_battery_mode` — should be `grid_charging` or `boost_charging`
-- Check `binary_sensor.localshift_binary_demand_window` — charging blocked during DW
+- Check `binary_sensor.localshift_demand_window` — charging blocked during DW
 - Check price — must be below `effective_cheap_price`
 
 **Spike discharge not working:**
 - Check `switch.localshift_spike_discharge_enabled` is ON
 - Check time — spike discharge only allowed 6am-midnight
-- Check `binary_sensor.localshift_binary_price_spike_coming`
+- Check `binary_sensor.localshift_price_spike_coming`
 
 **Battery not exporting:**
 - Check Powerwall 3 requires `allow_export` set to `battery_ok`
