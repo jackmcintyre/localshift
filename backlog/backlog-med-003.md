@@ -27,7 +27,7 @@ For debugging issues that occurred hours ago, this may be insufficient. Users ca
 
 ## Affected Files
 
-- `custom_components/amber_powerwall/coordinator.py` (line ~975)
+- `custom_components/localshift/computation_engine.py` (line ~975)
 
 ---
 

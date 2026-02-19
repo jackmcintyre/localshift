@@ -169,18 +169,16 @@ views:
             content: >
               {% set cost = 'sensor.localshift_cost_electricity_net' %}
               {% set net = states(cost) | float(0) %}
-              {% if net < 0 %}
-              # 💰 +${{ (net * -1) | round(2) }}
+              {% if net >= 0 %}
+              # 💸 ${{ net | round(2) }}
               {% else %}
-              # 💸 -${{ net | round(2) }}
+              # 💰 ${{ (net * -1) | round(2) }}
               {% endif %}
               
               ---
               
               **Import:** ${{ state_attr(cost, 'grid_import_cost') | round(2) }}  
-              **Export:** ${{ state_attr(cost, 'grid_export_revenue') | round(2) }}  
-              **Savings:** ${{ state_attr(cost, 'battery_savings') | round(2) }}  
-              **Charge:** ${{ state_attr(cost, 'battery_charge_cost') | round(2) }}
+              **Export:** ${{ state_attr(cost, 'grid_export_revenue') | round(2) }}
 
       # Prices & Alerts
       - type: grid

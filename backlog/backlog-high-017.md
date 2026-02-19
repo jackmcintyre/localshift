@@ -33,11 +33,11 @@ Instead of wasting this energy or paying to export it, we want to signal externa
 
 ## Affected Files
 
-- `custom_components/amber_powerwall/coordinator_data.py` - Add excess solar fields
-- `custom_components/amber_powerwall/computation_engine.py` - Calculate excess solar availability
-- `custom_components/amber_powerwall/computation_engine_lib/forecast_computer.py` - Extend excess calculations
-- `custom_components/amber_powerwall/sensor.py` - Add new sensors
-- `custom_components/amber_powerwall/binary_sensor.py` - Add excess_solar_available binary sensor
+- `custom_components/localshift/coordinator_data.py` - Add excess solar fields
+- `custom_components/localshift/computation_engine.py` - Calculate excess solar availability
+- `custom_components/localshift/computation_engine_lib/forecast_computer.py` - Extend excess calculations
+- `custom_components/localshift/sensor.py` - Add new sensors
+- `custom_components/localshift/binary_sensor.py` - Add excess_solar_available binary sensor
 - `docs/LOAD_SHIFTING_GUIDE.md` - Documentation for external automations
 
 ---

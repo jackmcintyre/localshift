@@ -69,8 +69,6 @@ class StateMachine:
 
         Used at startup to sync commanded mode so we don't issue
         a redundant command on the first evaluation.
-
-        NOTE: Hold mode has been removed.
         """
         if data.force_discharge_active:
             return BatteryMode.SPIKE_DISCHARGE
@@ -81,20 +79,18 @@ class StateMachine:
         return BatteryMode.SELF_CONSUMPTION
 
     def get_debounce_for_transition(
-        self, from_mode: BatteryMode, to_mode: BatteryMode
+        self, _from_mode: BatteryMode, to_mode: BatteryMode
     ) -> timedelta:
         """Return the required debounce duration for a mode transition.
 
         All transitions are immediate except PROACTIVE_EXPORT (2-min debounce).
         Hysteresis in computation_engine prevents oscillation.
-
-        NOTE: Hold mode has been removed.
         """
         # (backlog-high-021) PROACTIVE_EXPORT needs debounce to prevent rapid cycling
         # when forecast oscillates near the export threshold
         if to_mode == BatteryMode.PROACTIVE_EXPORT:
             return timedelta(minutes=2)
-        
+
         # All other transitions: immediate (hysteresis prevents oscillation)
         return timedelta(0)
 
@@ -120,7 +116,7 @@ class StateMachine:
             # DIAGNOSTIC: Log current state machine state at INFO level
             _LOGGER.info(
                 "State machine evaluate: desired=%s, commanded=%s, hardware_op=%s",
-                data.active_mode.value if hasattr(data, 'active_mode') else 'unknown',
+                data.active_mode.value if hasattr(data, "active_mode") else "unknown",
                 self._commanded_mode.value,
                 data.operation_mode,
             )
@@ -277,8 +273,6 @@ class StateMachine:
                 if desired != BatteryMode.PROACTIVE_EXPORT:
                     self._proactive_export_reserve = None
 
-                # Hold mode removed - no need to clear hold_mode flag
-
                 # Send notification
                 await self._notification_service.send_transition_notification(
                     old_mode, desired, data
@@ -327,11 +321,6 @@ class StateMachine:
                     _LOGGER.info("Demand block mode transition completed")
                 else:
                     _LOGGER.error("Demand block mode transition FAILED")
-
-            # Hold mode removed - these branches no longer exist:
-            # elif target == BatteryMode.HOLD:
-            # elif target == BatteryMode.SOLAR_EXPORT_HOLD:
-            # elif target == BatteryMode.HOLDING_FOR_SPIKE:
 
             elif target == BatteryMode.GRID_CHARGING:
                 transition_success = await self._battery_controller.set_force_charge(
@@ -413,9 +402,6 @@ class StateMachine:
             return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.DEMAND_BLOCK:
             return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
-        # Hold mode removed - these branches no longer exist:
-        # elif mode in (BatteryMode.HOLD, BatteryMode.HOLDING_FOR_SPIKE):
-        # elif mode == BatteryMode.SOLAR_EXPORT_HOLD:
         elif mode == BatteryMode.GRID_CHARGING:
             return ("backup", 10, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.BOOST_CHARGING:

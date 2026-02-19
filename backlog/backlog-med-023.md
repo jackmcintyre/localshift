@@ -257,17 +257,18 @@ Commit blocked. Fix code or update expected values if behavior changed.
 ## Affected Files
 
 New files to create:
-- `simulations/__init__.py`
-- `simulations/conftest.py`
 - `simulations/scenario.py`
 - `simulations/runner.py`
 - `simulations/comparator.py`
 - `simulations/capture_from_ha.py`
 - `simulations/scenarios/_template.yaml`
+- `simulations/conftest.py`
 - `simulations/tests/test_scenarios.py`
+- `simulations/__init__.py`
 
 Files to modify:
 - `.pre-commit-config.yaml` (add simulation hook)
+- `custom_components/localshift/coordinator.py` (add test hook entry point)
 
 ---
 

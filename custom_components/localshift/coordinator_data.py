@@ -99,6 +99,9 @@ class CoordinatorData:
     # Internal state flags (managed by state machine / buttons)
     manual_override: bool = False
     target_reached_today: bool = False
+    allow_dw_entry_under_target: bool = (
+        False  # Allow DW entry when solar can reach target
+    )
 
     # Shared charging decisions (computed once, used by both forecast and active_mode)
     forecast_charging_decisions: list[ChargingDecision] = field(default_factory=list)

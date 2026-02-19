@@ -495,7 +495,7 @@ class ForecastComputer:
         # instead of DW START. This allows solar to continue charging during
         # the DW period and reach target within the DW window.
         sim_start = slot_start
-        
+
         if allow_dw_entry_under_target:
             # Simulate through entire DW period to DW end
             # This allows solar to charge during DW hours
@@ -1660,8 +1660,10 @@ class ForecastComputer:
 
             # Use single source of truth for grid charging decision
             # Get allow_dw_entry_under_target from data (set by computation_engine)
-            allow_dw_entry_under_target = getattr(data, 'allow_dw_entry_under_target', False)
-            
+            allow_dw_entry_under_target = getattr(
+                data, "allow_dw_entry_under_target", False
+            )
+
             should_grid_charge, should_boost = self._should_grid_charge_at_slot(
                 slot_start=slot_start,
                 solar_kwh=solar_kwh,

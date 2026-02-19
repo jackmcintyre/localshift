@@ -31,7 +31,9 @@ Examples:
 
 ## Affected Files
 
-- `custom_components/amber_powerwall/coordinator.py`
+- `custom_components/localshift/coordinator.py`
+- `custom_components/localshift/computation_engine.py`
+- `custom_components/localshift/computation_engine_lib/forecast_computer.py`
 
 ---
 

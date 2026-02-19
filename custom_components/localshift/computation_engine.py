@@ -1161,13 +1161,6 @@ class ComputationEngine:
             data.active_mode = BatteryMode.DEMAND_BLOCK
         elif data.manual_override:
             data.active_mode = BatteryMode.MANUAL
-        # Hold mode removed - these conditions are no longer evaluated:
-        # elif data.solar_export_hold and data.hold_mode:
-        #     data.active_mode = BatteryMode.SOLAR_EXPORT_HOLD
-        # elif data.hold_justified:
-        #     data.active_mode = BatteryMode.HOLD
-        # elif data.forecast_spike_within_window:
-        #     data.active_mode = BatteryMode.HOLDING_FOR_SPIKE
         else:
             _LOGGER.debug(
                 "Mode fallthrough to SELF_CONSUMPTION at %s: "

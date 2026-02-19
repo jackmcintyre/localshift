@@ -25,7 +25,7 @@ CONF_TESLEMETRY_ALLOW_EXPORT is collected but cannot be reconfigured after setup
 
 ## Affected Files
 
-- `custom_components/amber_powerwall/config_flow.py` (async_step_user)
+- `custom_components/localshift/config_flow.py` (async_step_user)
 
 ---
 

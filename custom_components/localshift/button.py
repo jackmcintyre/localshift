@@ -3,9 +3,9 @@
 Provides manual mode control buttons:
 - Force Charge
 - Force Discharge
-- Hold Battery
 - Boost Charge (5kW)
 - Return to Self Consumption
+- Update Forecast
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ async def async_setup_entry(
     entities = [
         ForceChargeButton(coordinator, entry),
         ForceDischargeButton(coordinator, entry),
-        # HoldButton removed - Hold mode no longer exists
         BoostChargeButton(coordinator, entry),
         SelfConsumptionButton(coordinator, entry),
         UpdateForecastButton(coordinator, entry),
