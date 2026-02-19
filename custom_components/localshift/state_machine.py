@@ -85,6 +85,7 @@ class StateMachine:
 
         Matches the YAML ``for: minutes: N`` patterns:
         - Spike / demand window / manual → immediate
+        - Proactive export → 2 minutes (backlog-high-021: prevent rapid cycling)
         - All price-driven transitions → 5 minutes (A3/A4/A10/A11)
 
         NOTE: Hold mode has been removed.
@@ -92,7 +93,6 @@ class StateMachine:
         # Immediate: high-priority or safety transitions
         if to_mode in (
             BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.PROACTIVE_EXPORT,
             BatteryMode.DEMAND_BLOCK,
             BatteryMode.MANUAL,
         ):
@@ -100,9 +100,15 @@ class StateMachine:
         # Immediate: leaving high-priority modes
         if from_mode in (
             BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.PROACTIVE_EXPORT,
             BatteryMode.DEMAND_BLOCK,
         ):
+            return timedelta(0)
+        # (backlog-high-021) PROACTIVE_EXPORT needs debounce to prevent rapid cycling
+        # when forecast oscillates near the export threshold
+        if to_mode == BatteryMode.PROACTIVE_EXPORT:
+            return timedelta(minutes=2)
+        # Immediate when leaving PROACTIVE_EXPORT (return to normal operation)
+        if from_mode == BatteryMode.PROACTIVE_EXPORT:
             return timedelta(0)
         # All other (price-driven): 5 minutes
         return timedelta(minutes=5)

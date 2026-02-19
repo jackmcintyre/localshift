@@ -1,0 +1,56 @@
+# PROACTIVE_EXPORT Has 0 Debounce Risk
+
+**ID:** backlog-high-021
+**Priority:** HIGH
+**Status:** COMPLETED
+**Created:** 2026-02-19
+**Updated:** 2026-02-19
+
+---
+
+## Summary
+
+PROACTIVE_EXPORT mode has 0 debounce, creating risk of rapid mode cycling when forecast oscillates near export threshold.
+
+---
+
+## Description
+
+The `get_debounce_for_transition()` method returned `timedelta(0)` for PROACTIVE_EXPORT transitions, meaning the mode would switch immediately without any debounce protection.
+
+When the forecast oscillates near the proactive export threshold (e.g., price spikes up and down), this could cause:
+- Rapid mode cycling (multiple transitions per minute)
+- Unnecessary battery wear from frequent mode changes
+- Confusing user notifications
+
+---
+
+## Affected Files
+
+- `custom_components/localshift/state_machine.py` - `get_debounce_for_transition()`
+
+---
+
+## Proposed Solution
+
+Add 2-minute debounce for PROACTIVE_EXPORT transitions:
+
+```python
+if to_mode == BatteryMode.PROACTIVE_EXPORT:
+    return timedelta(minutes=2)
+```
+
+This is shorter than other price-driven transitions (5 minutes) because proactive export is still time-sensitive for capturing peak prices, but long enough to prevent rapid oscillation.
+
+---
+
+## Notes
+
+- Immediate exit from PROACTIVE_EXPORT is still allowed (return to normal operation)
+- Other high-priority modes (SPIKE_DISCHARGE, DEMAND_BLOCK, MANUAL) retain 0 debounce
+
+---
+
+## Related Items
+
+- backlog-crit-002 - State Machine Tests (would catch this)
