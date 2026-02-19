@@ -244,6 +244,11 @@ class LocalShiftCoordinator:
         self._unsub_timer = None
         self._unsub_midnight = None
         self._unsub_daily_summary = None
+
+        # (backlog-med-004) Clean up historical load cache on shutdown
+        if self._computation_engine is not None:
+            self._computation_engine.clear_historical_cache()
+
         _LOGGER.info("LocalShift coordinator stopped")
 
     # ------------------------------------------------------------------

@@ -1446,7 +1446,6 @@ class ForecastComputer:
         dw_end_time = self._parse_time_option(
             CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
         )
-        target_hour = dw_start_time.hour
 
         # ========================================================================
         # CALCULATE FORECASTED EXCESS AND MINIMUM SOC FOR PROACTIVE EXPORT
@@ -1603,12 +1602,12 @@ class ForecastComputer:
             gap_to_target = max(target_pct - soc_at_slot_start, 0)
 
             # A slot is eligible for pre-DW grid charging only if it falls before
-            # the daily demand-window start hour.  Because the forecast runs
-            # chronologically, slot_hour < target_hour correctly partitions both
-            # today's post-DW afternoon slots AND tomorrow's pre-DW morning slots
-            # without needing to reference the date.
+            # the daily demand-window start hour. Use proper datetime comparison
+            # via _next_demand_window_start_dt() which correctly handles day boundaries.
             # (Fixes is_before_dw wrap-around bug — Issue 4 in MODE_SWITCHING_DELAY_ANALYSIS.md)
-            is_before_dw = slot_hour < target_hour
+            # (backlog-high-019: Previous `slot_hour < target_hour` failed for evening slots)
+            next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
+            is_before_dw = slot_start < next_dw_start
 
             # is_daylight is kept for the method signature but no longer used as a gate.
             # Grid charging decisions are independent of solar availability.
@@ -1768,6 +1767,17 @@ class ForecastComputer:
                 passive_grid_import_kwh = shortfall_pct / 100 * BATTERY_CAPACITY_KWH
                 grid_import_kwh += passive_grid_import_kwh
                 new_predicted_soc = export_min_soc_pct
+
+                # (backlog-high-022) Apply solar charging at minimum SOC:
+                # If there's solar excess after load, charge the battery above minimum.
+                # This prevents SOC from staying flat at minimum when solar > load.
+                if net_kwh > 0 and not in_demand_window:
+                    # Solar exceeds load - charge battery with excess
+                    excess_kwh = net_kwh
+                    charge_delta = min(excess_kwh, max_solar_charge_kwh) * 0.92
+                    new_predicted_soc += charge_delta / BATTERY_CAPACITY_KWH * 100
+                    # Reduce grid import since solar is covering load
+                    grid_import_kwh = max(0, grid_import_kwh - consumption_kwh / 0.92)
 
             predicted_soc = max(0.0, min(100.0, new_predicted_soc))
 
