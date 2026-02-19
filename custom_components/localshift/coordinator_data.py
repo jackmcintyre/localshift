@@ -96,6 +96,13 @@ class CoordinatorData:
     battery_savings: float = 0.0
     battery_charge_cost: float = 0.0
 
+    # Forecast cost accumulators (rest of today)
+    forecast_import_cost: float = 0.0  # Expected grid import cost
+    forecast_export_revenue: float = 0.0  # Expected grid export revenue
+    forecast_net_cost: float = 0.0  # Expected net cost (import - export)
+    forecast_grid_charge_cost: float = 0.0  # Expected cost for grid charging
+    forecast_proactive_export_revenue: float = 0.0  # Revenue from proactive exports
+
     # Internal state flags (managed by state machine / buttons)
     manual_override: bool = False
     target_reached_today: bool = False

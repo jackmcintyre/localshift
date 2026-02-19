@@ -1869,4 +1869,69 @@ class ForecastComputer:
                 + ("..." if len(missing_solar_slots) > 10 else ""),
             )
 
+        # ========================================================================
+        # CALCULATE FORECAST COSTS (rest of today)
+        # ========================================================================
+        # Calculate expected costs for the remainder of today (until midnight)
+        # This includes: grid import cost, grid export revenue, and breakdown by type
+
+        # Find end of today (midnight)
+        end_of_today = now_dt.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        forecast_import_cost = 0.0
+        forecast_export_revenue = 0.0
+        forecast_grid_charge_cost = 0.0
+        forecast_proactive_export_revenue = 0.0
+
+        for slot in daily_forecast:
+            slot_ts = slot.get("timestamp", "")
+            if not slot_ts:
+                continue
+
+            try:
+                slot_dt = datetime.fromisoformat(slot_ts)
+            except ValueError:
+                continue
+
+            # Only include slots from now until end of today
+            if slot_dt > end_of_today:
+                break
+
+            grid_import_kwh = slot.get("grid_import_kwh", 0) or 0
+            grid_export_kwh = slot.get("grid_export_kwh", 0) or 0
+            buy_price = slot.get("buy_price", 0) or 0
+            sell_price = slot.get("sell_price", 0) or 0
+            is_grid_charge = slot.get("grid_charge", False)
+            is_proactive_export = slot.get("proactive_export", False)
+
+            # Accumulate costs
+            forecast_import_cost += grid_import_kwh * buy_price
+            forecast_export_revenue += grid_export_kwh * sell_price
+
+            # Track grid charge cost separately (energy used to charge battery from grid)
+            if is_grid_charge:
+                forecast_grid_charge_cost += grid_import_kwh * buy_price
+
+            # Track proactive export revenue separately
+            if is_proactive_export:
+                forecast_proactive_export_revenue += grid_export_kwh * sell_price
+
+        # Store forecast cost totals in data object
+        data.forecast_import_cost = round(forecast_import_cost, 2)
+        data.forecast_export_revenue = round(forecast_export_revenue, 2)
+        data.forecast_net_cost = round(
+            forecast_import_cost - forecast_export_revenue, 2
+        )
+        data.forecast_grid_charge_cost = round(forecast_grid_charge_cost, 2)
+        data.forecast_proactive_export_revenue = round(
+            forecast_proactive_export_revenue, 2
+        )
+
+        _LOGGER.info(
+            "Forecast costs (rest of today): import=%.2f, export=%.2f, net=%.2f",
+            data.forecast_import_cost,
+            data.forecast_export_revenue,
+            data.forecast_net_cost,
+        )
+
         return daily_forecast, daily_forecast_soc_15min, consumption_source_counts

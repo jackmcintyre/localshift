@@ -388,6 +388,22 @@ class DailyForecastSensor(LocalShiftSensorBase):
                 self.coordinator.data.consumption_weighting, 2
             ),
             "allow_export": self.coordinator.data.allow_export,
+            # Forecast cost totals (rest of today)
+            "forecast_import_cost": round(
+                self.coordinator.data.forecast_import_cost or 0.0, 2
+            ),
+            "forecast_export_revenue": round(
+                self.coordinator.data.forecast_export_revenue or 0.0, 2
+            ),
+            "forecast_net_cost": round(
+                self.coordinator.data.forecast_net_cost or 0.0, 2
+            ),
+            "forecast_grid_charge_cost": round(
+                self.coordinator.data.forecast_grid_charge_cost or 0.0, 2
+            ),
+            "forecast_proactive_export_revenue": round(
+                self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
+            ),
         }
 
 
