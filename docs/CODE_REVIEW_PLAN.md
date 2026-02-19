@@ -88,7 +88,7 @@ def get_debounce_for_transition(self, from_mode, to_mode):
 
 ##### 1.2.4 Decision Logging
 - [ ] Verify decision log captures mode changes and periodic updates
-- [ ] Check log rotation (50 entries max)
+- [ ] Check log rotation (50 entries max) - **backlog-med-003**
 - [ ] Validate timestamp formatting
 
 #### 1.3 Forecast Computer (`forecast_computer.py`)
@@ -235,6 +235,7 @@ def get_debounce_for_transition(self, from_mode, to_mode):
 - [ ] Button press throttling
 - [ ] Switch state persistence
 - [ ] Number entity validation
+- [ ] **backlog-med-012**: Remove "binary" from binary sensor names
 
 ### Phase 5: Configuration & Initialization
 **Files:** `config_flow.py`, `__init__.py`, `const.py`
@@ -260,7 +261,7 @@ def get_debounce_for_transition(self, from_mode, to_mode):
 **Potential Issue:** What if no notify services exist? Flow blocks?
 
 ##### 5.1.3 Multi-step Flow State (lines 150-300)
-- [ ] Review `self._teslemetry_data` and `self._pricing_data` usage
+- [ ] Review `self._teslemetry_data` and `self._pricing_data` usage - **backlog-med-005**
 - [ ] Check for stale data when user navigates back
 - [ ] Verify data consistency across flow steps
 
