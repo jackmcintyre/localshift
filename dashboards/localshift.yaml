@@ -267,8 +267,8 @@ views:
             name: Self Consumption
             icon: mdi:battery-sync
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_self_consumption
             icon_height: 40px
@@ -277,8 +277,8 @@ views:
             name: Force Charge
             icon: mdi:battery-charging
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_force_charge
             icon_height: 40px
@@ -287,8 +287,8 @@ views:
             name: Boost Charge
             icon: mdi:battery-charging-high
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_boost_charge
             icon_height: 40px
@@ -297,8 +297,8 @@ views:
             name: Force Discharge
             icon: mdi:flash-alert
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_force_discharge
             icon_height: 40px
@@ -344,8 +344,8 @@ views:
             name: Self Consumption
             icon: mdi:battery-sync
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_self_consumption
             icon_height: 40px
@@ -354,8 +354,8 @@ views:
             name: Force Charge
             icon: mdi:battery-charging
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_force_charge
             icon_height: 40px
@@ -364,8 +364,8 @@ views:
             name: Boost Charge
             icon: mdi:battery-charging-high
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_boost_charge
             icon_height: 40px
@@ -374,8 +374,8 @@ views:
             name: Force Discharge
             icon: mdi:flash-alert
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_force_discharge
             icon_height: 40px
@@ -384,8 +384,8 @@ views:
             name: Update Forecast
             icon: mdi:refresh
             tap_action:
-              action: perform-action
-              perform_action: button.press
+              action: call-service
+              service: button.press
               target:
                 entity_id: button.localshift_update_forecast
             icon_height: 40px
