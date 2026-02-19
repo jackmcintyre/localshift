@@ -1,216 +1,124 @@
-# Implementation Plan - Holistic Backlog Execution
+# Implementation Plan
 
 [Overview]
-This implementation plan provides a structured, phased approach to work through all backlog items, prioritizing by risk, effort, and dependencies.
+Simplify forecast system by removing hybrid timescale complexity and using 15-minute slots throughout, while preserving 5-minute real-time price reactivity for current decisions.
 
-The plan is organized into 4 execution phases:
-- **Phase 1: Quick Wins** - Low effort, high impact fixes
-- **Phase 2: Core Reliability** - Critical safety and testing improvements  
-- **Phase 3: Code Quality** - Maintainability and cleanup
-- **Phase 4: Future Planning** - Features and polish
+The current hybrid timescale implementation (24×5-min near-term + 88×15-min long-term) has introduced multiple bugs due to misaligned boundaries between the main forecast loop and simulation functions. This plan removes the hybrid complexity while maintaining the ability to react to 5-minute price changes for real-time decisions. The forecast table will use 15-minute slots exclusively (96 slots = 24 hours), which always aligns with Solcast 30-minute periods. Real-time price decisions (grid charging, exports) will use the actual 5-minute spot price for the current slot only, with forecast prices for future slots.
 
-Each phase can be executed independently, with items within a phase ordered by priority and dependencies.
+[Types]
+No new types required; constants will be simplified.
 
-[Backlog Summary]
-| Priority | Count | Items |
-|----------|-------|-------|
-| 🔴 CRIT | 1 | State Machine Tests (backlog-crit-002) |
-| 🟠 HIGH | 5 | Day Boundary (019), Health Check (020), Debounce (021), Solar SOC (022), Excess Solar (017) |
-| 🟡 MED | 7 | Decision Log (003), Cache (004), Config (005), Sensors (011), Naming (012), Async Sleep (014), Private Methods (016), Test Mocks (018) |
-| ⚪ LOW | 2 | Dashboard (001), Type Hints (004) |
+Constants to modify:
+- Remove: `NEAR_TERM_COUNT = 24` 
+- Remove: `LONG_TERM_COUNT = 88`
+- Add: `TOTAL_SLOTS = 96` (24 hours × 4 slots/hour)
 
-[Phase 1: Quick Wins - Build Momentum]
-These are low-effort, high-impact fixes that can be completed quickly to build momentum.
+[Files]
+Two files require modification:
 
-**1.1 backlog-high-019: Day Boundary Bug in Overnight Grid Charging**
-- **Effort**: Low (1-line fix)
-- **Risk**: Medium (affects charging timing)
-- **Files**: `forecast_computer.py` line ~1611
-- **Fix**: Replace `slot_hour < target_hour` with `_next_demand_window_start_dt()` comparison
-- **Tests**: Add `test_evening_slots_before_demand_window`
+1. **`custom_components/localshift/computation_engine_lib/forecast_computer.py`**
+   - Remove `_align_to_15min_boundary()` function (no longer needed)
+   - Remove `_get_hybrid_slots_for_simulation()` function (no longer needed)
+   - Simplify `compute_forecast()` to use 15-min slots only
+   - Simplify `_simulate_future_soc_with_solar_only()` to use 15-min slots
+   - Simplify `_simulate_overnight_drain_to_solar()` to use 15-min slots
+   - Simplify `_simulate_minimum_soc_without_exports()` to use 15-min slots
+   - Simplify `_simulate_overnight_drain_after_export()` to use 15-min slots
+   - Simplify `_find_battery_fill_point()` to use 15-min slots
+   - Simplify `_calculate_solar_energy_between_slots()` to use 15-min slots
+   - Fix `_should_grid_charge_at_slot()` to only use spot price for current slot
 
-**1.2 backlog-high-022: Forecast SOC Stays Flat at Minimum**
-- **Effort**: Low (small logic addition)
-- **Risk**: Medium (affects charging decisions)
-- **Files**: `forecast_computer.py` lines 1763-1770
-- **Fix**: After clamping SOC to minimum, apply solar charging if excess exists
-- **Tests**: Add `test_solar_charging_at_minimum_soc`
+2. **`tests/test_hybrid_timescale.py`**
+   - Update tests to reflect 15-min only approach
+   - Rename to `tests/test_forecast_timescale.py` or keep name but update content
 
-**1.3 backlog-med-004: Missing Cleanup for Historical Load Cache**
-- **Effort**: Very Low (1-line fix)
-- **Risk**: Low (cleanup only)
-- **Files**: `coordinator.py` async_stop method
-- **Fix**: Add `self._historical_load_cache.clear()` to shutdown
+[Functions]
+Multiple functions require simplification:
 
-[Phase 2: Core Reliability - Reduce Risk]
-These items address critical safety, testing, and health check gaps.
+1. **`compute_forecast()`** (forecast_computer.py)
+   - Current: Uses hybrid timescale with complex boundary alignment
+   - Change: Simple loop `for i in range(TOTAL_SLOTS)` with `base_slot + timedelta(minutes=15*i)`
+   - Purpose: Generate 96 × 15-min slots aligned to :00, :15, :30, :45
 
-**2.1 backlog-crit-002: Missing Unit Tests for State Machine**
-- **Effort**: High (create comprehensive tests)
-- **Risk**: Critical (battery damage potential)
-- **Files**: New `tests/test_state_machine.py`
-- **Tests to create**:
-  - State transition logic and debounce timers
-  - Health check validation for all modes
-  - Mode transition failure handling
-  - Startup grace period logic
-  - Re-entrant call prevention
+2. **`_simulate_future_soc_with_solar_only()`** (forecast_computer.py)
+   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
+   - Change: Simple loop with 15-min slots via `get_solar_for_15min_slot()`
+   - Purpose: Consistent SOC simulation matching main forecast
 
-**2.2 backlog-high-020: Health Check Missing export_mode Verification**
-- **Effort**: Medium (extend health check)
-- **Risk**: High (battery state inconsistency)
-- **Files**: `state_machine.py` - `_get_expected_state_for_mode()`
-- **Fix**: Add export_mode validation to health checks
-- **Export Mode Logic**:
-  - SELF_CONSUMPTION: pv_only
-  - GRID_CHARGING: battery_ok
-  - BOOST_CHARGING: battery_ok
-  - SPIKE_DISCHARGE: battery_ok
-  - PROACTIVE_EXPORT: battery_ok
-  - DEMAND_BLOCK: pv_only
-  - MANUAL: skip validation
+3. **`_simulate_overnight_drain_to_solar()`** (forecast_computer.py)
+   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
+   - Change: Simple loop with 15-min slots
+   - Purpose: Consistent overnight drain simulation
 
-**2.3 backlog-high-021: PROACTIVE_EXPORT Has 0 Debounce Risk**
-- **Effort**: Medium (adjust debounce strategy)
-- **Risk**: High (rapid mode cycling)
-- **Files**: `state_machine.py` - `get_debounce_for_transition()`
-- **Fix**: Add debounce to PROACTIVE_EXPORT transitions (e.g., 2-5 minutes)
+4. **`_simulate_minimum_soc_without_exports()`** (forecast_computer.py)
+   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
+   - Change: Simple loop with 15-min slots
+   - Purpose: Consistent minimum SOC calculation
 
-[Phase 3: Code Quality - Maintainability]
-These items improve code quality and remove technical debt.
+5. **`_simulate_overnight_drain_after_export()`** (forecast_computer.py)
+   - Current: Uses `_get_hybrid_slots_for_simulation()` helper
+   - Change: Simple loop with 15-min slots
+   - Purpose: Consistent post-export drain simulation
 
-**3.1 backlog-med-003: Decision Log Limited to 50 Entries**
-- **Effort**: Low (config change)
-- **Files**: `coordinator.py`
-- **Fix Options**:
-  - A) Increase limit to 100-200 entries
-  - B) Implement time-based retention (24 hours)
-  - C) Make configurable via options
+6. **`_find_battery_fill_point()`** (forecast_computer.py)
+   - Current: Uses hybrid timescale (NEAR_TERM_COUNT + LONG_TERM_COUNT)
+   - Change: Simple loop with `for i in range(TOTAL_SLOTS)`
+   - Purpose: Find when battery reaches 100% from solar
 
-**3.2 backlog-med-005: Unused Config Option - ALLOW_EXPORT**
-- **Effort**: Low (cleanup)
-- **Files**: `config_flow.py`
-- **Fix Options**:
-  - A) Remove from config flow (integration manages it)
-  - B) Add as optional re-configurable entity
+7. **`_calculate_solar_energy_between_slots()`** (forecast_computer.py)
+   - Current: Uses hybrid timescale
+   - Change: Simple 15-min slot loop
+   - Purpose: Calculate solar energy between time points
 
-**3.3 backlog-med-011: Remove Redundant Grid Import/Export Sensors**
-- **Effort**: Medium (evaluation + potential removal)
-- **Files**: `sensor.py`, `coordinator_data.py`, `computation_engine.py`, `dashboards/localshift.yaml`
-- **Steps**:
-  1. Check if Teslemetry has separate import/export entities
-  2. Search for references in dashboards
-  3. Decide: remove, keep, or document
+8. **`_should_grid_charge_at_slot()`** (forecast_computer.py)
+   - Current: Uses `general_price_current` for ALL slots
+   - Change: Only use `general_price_current` if `is_current_slot=True`, otherwise use `slot_price`
+   - Purpose: Fix price bug - use forecast price for future slots
 
-**3.4 backlog-med-012: Binary Sensors Include Redundant "binary" in Names**
-- **Effort**: Medium (rename + migration)
-- **Files**: `binary_sensor.py`, `docs/ENTITY_REFERENCE.md`
-- **Fix**: Remove "binary_" prefix from unique_ids and "Binary " from names
-- **Breaking Change**: New entity IDs created
+9. **REMOVE: `_align_to_15min_boundary()`** (forecast_computer.py)
+   - Reason: No longer needed with 15-min only approach
 
-**3.5 backlog-med-014: Synchronous Sleep in Async Context**
-- **Effort**: Medium (refactor)
-- **Files**: `battery_controller.py` - validation loop
-- **Fix Options**:
-  - A) Reduce timeout from 10 to 3-5 seconds
-  - B) Use asyncio.wait_for() with proper cancellation
-  - C) Move validation to background task
+10. **REMOVE: `_get_hybrid_slots_for_simulation()`** (forecast_computer.py)
+    - Reason: No longer needed with 15-min only approach
 
-**3.6 backlog-med-016: Private Method Access Breaking Encapsulation**
-- **Effort**: Medium (refactor)
-- **Files**: `switch.py`, `number.py`, `coordinator.py`
-- **Fix**: Add public API method in coordinator:
-  ```python
-  async def async_recompute_and_evaluate(self) -> None:
-      self._compute_derived_values()
-      self._notify_listeners()
-      await self.async_evaluate_state_machine()
-  ```
-
-**3.7 backlog-med-018: Tests Pass with Mocks but Fail in Real HA**
-- **Effort**: Medium (improve fixtures)
-- **Files**: `tests/conftest.py`
-- **Fix**: Add realistic HA entity state simulation in fixtures
-
-[Phase 4: Future Planning]
-Items that are features or nice-to-have improvements.
-
-**4.1 backlog-high-017: Excess Solar Load Shifting Sensors**
-- **Priority**: Feature request
-- **Scope**: New sensors for external automations
-- **Files**: `coordinator_data.py`, `computation_engine.py`, `forecast_computer.py`, `sensor.py`, `binary_sensor.py`
-
-**4.2 backlog-low-001: Dashboard Setup Complexity**
-- **Priority**: UX improvement
-- **Scope**: Document or auto-create helper sensors
-
-**4.3 backlog-low-004: Missing Type Hints**
-- **Priority**: Code quality
-- **Scope**: Add type annotations to internal methods
+[Classes]
+No class modifications required; all changes are within `ForecastComputer` class methods.
 
 [Dependencies]
-No external dependencies required. All fixes use existing imports and infrastructure.
-
-Internal dependencies:
-- backlog-high-020 (Health Check) depends on backlog-crit-002 (Tests) for validation
-- backlog-high-021 (Debounce) depends on backlog-crit-002 (Tests) for verification
-
-[Implementation Order]
-
-**Week 1-2: Quick Wins (Phase 1)**
-1. Fix day boundary bug (backlog-high-019)
-2. Fix solar SOC flatline (backlog-high-022)  
-3. Add cache cleanup (backlog-med-004)
-4. Add test cases for fixes
-
-**Week 3-4: Core Reliability (Phase 2)**
-5. Create state machine tests (backlog-crit-002)
-6. Add export_mode health check (backlog-high-020)
-7. Fix PROACTIVE_EXPORT debounce (backlog-high-021)
-
-**Week 5-6: Code Quality (Phase 3)**
-8. Expand decision log limit (backlog-med-003)
-9. Clean up config option (backlog-med-005)
-10. Evaluate grid sensors (backlog-med-011)
-11. Fix binary sensor naming (backlog-med-012)
-12. Fix async sleep (backlog-med-014)
-13. Fix private method access (backlog-med-016)
-14. Improve test mocks (backlog-med-018)
-
-**Week 7+: Future Planning (Phase 4)**
-15. Implement excess solar sensors (backlog-high-017)
-16. Address dashboard complexity (backlog-low-001)
-17. Add type hints (backlog-low-004)
+No new dependencies required.
 
 [Testing]
-Each fix requires appropriate test coverage:
+Test requirements:
 
-**Phase 1 Tests**:
-- `test_evening_slots_before_demand_window` - Day boundary fix
-- `test_solar_charging_at_minimum_soc` - SOC flatline fix
+1. **Update `tests/test_hybrid_timescale.py`**:
+   - Update constants test to expect `TOTAL_SLOTS = 96`
+   - Remove NEAR_TERM_COUNT and LONG_TERM_COUNT tests
+   - Update slot generation tests for 15-min only
 
-**Phase 2 Tests**:
-- `test_state_machine_transitions` - All mode transitions
-- `test_state_machine_debounce` - Timer behavior
-- `test_health_check_export_mode` - Health check completeness
+2. **Add boundary alignment tests**:
+   - Test coordinator runs at :00, :05, :10, :15, etc.
+   - Verify all produce identical slot times (aligned to :00, :15, :30, :45)
 
-**Phase 3 Tests**:
-- Update existing tests if entity names/numbers change
+3. **Add price decision tests**:
+   - Test that current slot uses spot price
+   - Test that future slots use forecast price
 
-[Files Summary]
-**Modified Files:**
-- `forecast_computer.py` - Fixes #1, #2
-- `coordinator.py` - Cache cleanup
-- `state_machine.py` - Health check, debounce
-- `config_flow.py` - Config option cleanup
-- `sensor.py` - Potential sensor removal
-- `binary_sensor.py` - Naming fix
-- `switch.py`, `number.py` - Private method fix
-- `dashboards/localshift.yaml` - Entity reference updates
-- `battery_controller.py` - Async sleep fix
+4. **Run full test suite** after changes
 
-**New Files:**
-- `tests/test_state_machine.py` - State machine tests
+[Implementation Order]
+Sequential steps to minimize conflicts:
 
-**Documentation Updates:**
-- `docs/ENTITY_REFERENCE.md` - After sensor/naming changes
+1. Update constants: Remove `NEAR_TERM_COUNT` and `LONG_TERM_COUNT`, add `TOTAL_SLOTS = 96`
+2. Remove `_align_to_15min_boundary()` function
+3. Remove `_get_hybrid_slots_for_simulation()` function
+4. Simplify `compute_forecast()` to use 15-min slots only
+5. Simplify `_find_battery_fill_point()` to use 15-min slots only
+6. Simplify `_calculate_solar_energy_between_slots()` to use 15-min slots only
+7. Simplify `_simulate_future_soc_with_solar_only()` to use 15-min slots only
+8. Simplify `_simulate_overnight_drain_to_solar()` to use 15-min slots only
+9. Simplify `_simulate_minimum_soc_without_exports()` to use 15-min slots only
+10. Simplify `_simulate_overnight_drain_after_export()` to use 15-min slots only
+11. Fix `_should_grid_charge_at_slot()` to only use spot price for current slot
+12. Update `tests/test_hybrid_timescale.py` for new 15-min only approach
+13. Run full test suite and verify all tests pass
+14. Manual verification with real forecast data

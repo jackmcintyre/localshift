@@ -102,6 +102,30 @@ class StateReader:
         for attr_name in ("detailedForecast", "detailedHourly", "forecast"):
             value = state.attributes.get(attr_name)
             if isinstance(value, list) and value:
+                # Debug: log the data structure for first few entries
+                _LOGGER.debug(
+                    "SOLAR_DEBUG: %s using attribute '%s' with %d entries",
+                    entity_id,
+                    attr_name,
+                    len(value),
+                )
+                if value:
+                    _LOGGER.debug(
+                        "SOLAR_DEBUG: %s first entry keys: %s",
+                        entity_id,
+                        list(value[0].keys())
+                        if isinstance(value[0], dict)
+                        else type(value[0]),
+                    )
+                    # Log sample values from first entry
+                    if isinstance(value[0], dict):
+                        _LOGGER.debug(
+                            "SOLAR_DEBUG: %s first entry sample: period_start=%s, pv_estimate=%s, pv_estimate10=%s",
+                            entity_id,
+                            value[0].get("period_start") or value[0].get("start"),
+                            value[0].get("pv_estimate"),
+                            value[0].get("pv_estimate10"),
+                        )
                 return value
 
         _LOGGER.debug(

@@ -28,17 +28,14 @@ from ..coordinator_data import CoordinatorData
 from .solar_utils import (
     get_price_for_slot,
     get_price_for_slot_or_none,
-    get_solar_for_5min_slot,
     get_solar_for_15min_slot,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# Hybrid timescale constants for forecast granularity
-# Near-term: 5-min slots for accurate near-term decisions (matches Amber pricing)
-# Long-term: 15-min slots for efficient long-term planning
-NEAR_TERM_COUNT = 24  # 24 × 5 min  = 120 min = 2 h
-LONG_TERM_COUNT = 88  # 88 × 15 min = 1320 min = 22 h   (24 h total)
+# Forecast slot constants
+# 15-min slots throughout for consistent alignment with Solcast 30-minute periods
+TOTAL_SLOTS = 96  # 24 hours × 4 slots/hour
 
 
 class ForecastComputer:
@@ -153,6 +150,8 @@ class ForecastComputer:
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
+        Uses 15-min slots throughout for consistency with main forecast loop.
+
         When end_time == dw_start_time, simulation stops at DW start (existing behavior).
         When end_time > dw_start_time, simulation continues through DW period.
 
@@ -199,18 +198,18 @@ class ForecastComputer:
         if sim_end <= base_slot:
             return soc, soc, soc >= target_pct
 
-        total_slots = int((sim_end - base_slot).total_seconds() // (15 * 60))
-        if (sim_end - base_slot).total_seconds() % (15 * 60) != 0:
-            total_slots += 1
-
+        # Use 15-min slots throughout for consistency
         max_soc = soc
+        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        for offset in range(total_slots):  # 4 slots per hour
-            slot_start = base_slot + timedelta(minutes=15 * offset)
-            slot_hour = slot_start.hour
+        slot_time = base_slot
+        while slot_time < sim_end:
+            slot_time += timedelta(minutes=15)
+            slot_hour = slot_time.hour
 
-            # Get solar and load for this slot
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            # Get solar and load for this 15-min slot
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
@@ -218,12 +217,12 @@ class ForecastComputer:
                 current_load_kw,
                 recent_load_kw,
             )
-            consumption_kwh = load_kw / 4
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery delta (no grid charging)
-            # Use solar charge rate (5kW) as max, not backup rate (3.3kW)
-            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW / 4
+            # Use solar charge rate (5kW) as max
+            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -295,6 +294,8 @@ class ForecastComputer:
     ) -> float:
         """Simulate overnight drain from current slot until solar starts.
 
+        Uses 15-min slots throughout for consistency with main forecast loop.
+
         Args:
             start_soc: Starting SOC percentage
             start_slot: Starting slot time
@@ -311,15 +312,16 @@ class ForecastComputer:
         soc = start_soc
         base_slot = start_slot.replace(second=0, microsecond=0)
 
-        total_slots = int((solar_start - base_slot).total_seconds() // (15 * 60))
-        total_slots = max(total_slots, 0)
+        # Use 15-min slots throughout for consistency
+        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        for offset in range(total_slots):
-            slot_start = base_slot + timedelta(minutes=15 * offset)
-            slot_hour = slot_start.hour
+        slot_time = base_slot
+        while slot_time < solar_start:
+            slot_hour = slot_time.hour
 
             # Get solar (should be ~0 overnight) and load
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
@@ -327,11 +329,11 @@ class ForecastComputer:
                 current_load_kw,
                 recent_load_kw,
             )
-            consumption_kwh = load_kw / 4
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery discharge
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -339,6 +341,8 @@ class ForecastComputer:
 
             soc += delta / BATTERY_CAPACITY_KWH * 100
             soc = max(min_soc_pct, min(100.0, soc))
+
+            slot_time += timedelta(minutes=15)
 
         return soc
 
@@ -410,6 +414,7 @@ class ForecastComputer:
         general_price_current: float,
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
+        is_current_slot: bool = False,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
@@ -417,9 +422,10 @@ class ForecastComputer:
         Uses forecast simulation to avoid unnecessary grid charging.
 
         Strategy:
-        1. PREFER SPOT: Use current spot price as primary decision signal
-        2. Only charge when spot price is cheap (<= effective_cheap_price)
-        3. Fall back to forecast-based logic when spot is unavailable
+        1. PREFER SPOT: Use current spot price ONLY for current slot (real-time decision)
+        2. For future slots, use forecast price
+        3. Only charge when price is cheap (<= effective_cheap_price)
+        4. Fall back to forecast-based logic when spot is unavailable
 
         Args:
             slot_start: Start time of the 15-minute slot
@@ -437,7 +443,8 @@ class ForecastComputer:
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
-            general_price_current: Current spot buy price
+            general_price_current: Current spot buy price (only for current slot)
+            is_current_slot: True if this is the current time slot (use spot price)
 
         Returns:
             (should_charge, should_boost)
@@ -456,11 +463,17 @@ class ForecastComputer:
         if gap_to_target <= 0:
             return False, False
 
-        # PREFER SPOT PRICE: Use current spot price as primary signal
-        if general_price_current > 0:
+        # SPOT PRICE: Only use for current slot (real-time decision)
+        # For future slots, always use forecast price
+        if is_current_slot and general_price_current > 0:
             use_price = general_price_current
+            _LOGGER.debug(
+                "GRID_CHARGE: Using spot price $%.2f for current slot (forecast: $%.2f)",
+                general_price_current,
+                slot_price,
+            )
         else:
-            # Fall back to forecast when spot unavailable
+            # Future slot or spot unavailable - use forecast price
             use_price = slot_price
 
         # Price-based thresholds
@@ -715,6 +728,8 @@ class ForecastComputer:
     ) -> tuple[float, float]:
         """Simulate 24-hour forecast WITHOUT proactive exports to find minimum SOC.
 
+        Uses 15-min slots throughout for consistency with main forecast loop.
+
         This helps determine how much we can safely export without dropping
         below minimum SOC threshold.
 
@@ -734,14 +749,21 @@ class ForecastComputer:
         """
         soc = start_soc
         min_soc = soc
-        base_slot = start_slot.replace(minute=0, second=0, microsecond=0)
+        base_slot = start_slot.replace(second=0, microsecond=0)
 
-        for offset in range(max_hours * 4):  # 4 slots per hour
-            slot_start = base_slot + timedelta(minutes=15 * offset)
-            slot_hour = slot_start.hour
+        # Use 15-min slots throughout for consistency
+        slot_fraction = 15 / 60.0  # 0.25 hours
 
-            # Get solar and load for this slot
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+        # Calculate total slots to simulate
+        total_slots = max_hours * 4  # 4 slots per hour
+
+        for i in range(total_slots):
+            slot_time = base_slot + timedelta(minutes=15 * i)
+            slot_hour = slot_time.hour
+
+            # Get solar and load for this 15-min slot
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
@@ -749,11 +771,11 @@ class ForecastComputer:
                 current_load_kw,
                 recent_load_kw,
             )
-            consumption_kwh = load_kw / 4
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply realistic battery limits (no grid charging in this simulation)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
 
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
@@ -781,6 +803,8 @@ class ForecastComputer:
     ) -> tuple[float, float, bool]:
         """Simulate overnight drain after export to find minimum SOC.
 
+        Uses 15-min slots throughout for consistency with main forecast loop.
+
         This simulates from the export slot until solar production starts
         (typically 06:00-07:00) to ensure the battery won't drop below
         minimum SOC during the night.
@@ -799,11 +823,11 @@ class ForecastComputer:
         """
         soc = start_soc
         min_soc = soc
-        base_slot = start_slot.replace(minute=0, second=0, microsecond=0)
+        base_slot = start_slot.replace(second=0, microsecond=0)
 
         # Find when solar production starts (first slot with >0.1 kWh solar)
         solar_start_slot = None
-        for offset in range(24 * 4):  # Check up to 24 hours
+        for offset in range(24 * 4):  # Check up to 24 hours (96 slots)
             check_slot = base_slot + timedelta(minutes=15 * offset)
             solar_kwh = get_solar_for_15min_slot(all_solcast, check_slot)
             if solar_kwh > 0.1:  # Meaningful solar production
@@ -817,16 +841,16 @@ class ForecastComputer:
         if solar_start_slot is None:
             solar_start_slot = base_slot + timedelta(hours=8)
 
-        # Simulate until solar starts
-        total_slots = int((solar_start_slot - base_slot).total_seconds() // (15 * 60))
-        total_slots = max(total_slots, 1)  # At least 1 slot
+        # Use 15-min slots throughout for consistency
+        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        for offset in range(total_slots):
-            slot_start = base_slot + timedelta(minutes=15 * offset)
-            slot_hour = slot_start.hour
+        slot_time = base_slot
+        while slot_time < solar_start_slot:
+            slot_hour = slot_time.hour
 
             # Get solar (should be ~0 overnight) and load
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
@@ -834,11 +858,11 @@ class ForecastComputer:
                 current_load_kw,
                 recent_load_kw,
             )
-            consumption_kwh = load_kw / 4
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery discharge (negative net = discharge)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW / 4
+            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -855,6 +879,8 @@ class ForecastComputer:
             if min_soc < export_min_soc_pct:
                 break
 
+            slot_time += timedelta(minutes=15)
+
         return min_soc, soc, solar_found
 
     def _find_battery_fill_point(
@@ -869,8 +895,7 @@ class ForecastComputer:
     ) -> int | None:
         """Find elapsed minutes when battery first reaches 100% from solar charging.
 
-        Uses hybrid timescale (24×5min + 88×15min) to match main forecast loop.
-        This ensures accurate SOC calculations in the near-term window (0-2h).
+        Uses 15-min slots throughout for consistency with main forecast loop.
 
         Args:
             start_soc: Starting SOC percentage
@@ -886,47 +911,11 @@ class ForecastComputer:
         soc = start_soc
         base_slot = start_slot.replace(second=0, microsecond=0)
         elapsed_minutes = 0
+        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        # Calculate near-term boundary
-        near_term_end = base_slot + timedelta(minutes=5 * NEAR_TERM_COUNT)
-
-        # NEAR-TERM LOOP: 24 × 5-min slots (0-2h)
-        for i in range(NEAR_TERM_COUNT):
-            slot_start = base_slot + timedelta(minutes=5 * i)
-            slot_hour = slot_start.hour
-
-            # Use 5-min solar function
-            solar_kwh = get_solar_for_5min_slot(all_solcast, slot_start)
-            load_kw, _ = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
-                slot_hour,
-                current_hour,
-                current_load_kw,
-                recent_load_kw,
-            )
-            # Scale consumption to 5-min slot
-            consumption_kwh = load_kw * (5 / 60.0)
-            net_kwh = solar_kwh - consumption_kwh
-
-            # Apply battery charging (no grid charging, no exports)
-            # Use solar charge rate (5kW) as max, scale to 5-min slot
-            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * (5 / 60.0)
-            if net_kwh >= 0:
-                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
-            else:
-                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
-
-            soc += delta / BATTERY_CAPACITY_KWH * 100
-            soc = min(100.0, soc)  # Cap at 100%
-
-            if soc >= 100.0:
-                return elapsed_minutes
-
-            elapsed_minutes += 5
-
-        # LONG-TERM LOOP: 88 × 15-min slots (2-24h)
-        for i in range(LONG_TERM_COUNT):
-            slot_start = near_term_end + timedelta(minutes=15 * i)
+        # Use 15-min slots throughout for consistency
+        for i in range(TOTAL_SLOTS):
+            slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
 
             # Use 15-min solar function
@@ -939,12 +928,12 @@ class ForecastComputer:
                 recent_load_kw,
             )
             # Scale consumption to 15-min slot
-            consumption_kwh = load_kw * (15 / 60.0)
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery charging (no grid charging, no exports)
             # Use solar charge rate (5kW) as max, scale to 15-min slot
-            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * (15 / 60.0)
+            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -971,9 +960,9 @@ class ForecastComputer:
         recent_load_kw: float,
         current_hour: int | None = None,
     ) -> float:
-        """Calculate net solar energy (solar - load) between two time points using hybrid timescale.
+        """Calculate net solar energy (solar - load) between two time points.
 
-        Uses hybrid timescale (24×5min + 88×15min) to match main forecast loop.
+        Uses 15-min slots throughout for consistency with main forecast loop.
 
         Args:
             start_elapsed_minutes: Starting time in minutes from base_slot
@@ -988,60 +977,31 @@ class ForecastComputer:
             Net solar energy in kWh (positive = excess)
         """
         net_energy = 0.0
-        elapsed_minutes = 0
+        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        # Calculate near-term boundary
-        near_term_end = base_slot + timedelta(minutes=5 * NEAR_TERM_COUNT)
+        # Calculate start and end slot indices
+        start_slot_idx = max(0, int(start_elapsed_minutes // 15))
+        end_slot_idx = int(end_elapsed_minutes // 15) + 1
 
-        # NEAR-TERM LOOP: 24 × 5-min slots (0-2h)
-        for i in range(NEAR_TERM_COUNT):
-            if elapsed_minutes >= end_elapsed_minutes:
-                break
-            if elapsed_minutes >= start_elapsed_minutes:
-                slot_start = base_slot + timedelta(minutes=5 * i)
-                slot_hour = slot_start.hour
+        # Iterate through 15-min slots
+        for i in range(start_slot_idx, end_slot_idx):
+            slot_start = base_slot + timedelta(minutes=15 * i)
+            slot_hour = slot_start.hour
 
-                solar_kwh = get_solar_for_5min_slot(all_solcast, slot_start)
-                load_kw, _ = self._estimate_hourly_consumption_kw(
-                    historical_avg_kw,
-                    slot_hour,
-                    current_hour,
-                    current_load_kw,
-                    recent_load_kw,
-                )
-                consumption_kwh = load_kw * (5 / 60.0)
-                net_kwh = solar_kwh - consumption_kwh
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw * slot_fraction
+            net_kwh = solar_kwh - consumption_kwh
 
-                if net_kwh > 0:
-                    # Apply charging efficiency for excess
-                    net_energy += net_kwh * 0.92
-
-            elapsed_minutes += 5
-
-        # LONG-TERM LOOP: 88 × 15-min slots (2-24h)
-        for i in range(LONG_TERM_COUNT):
-            if elapsed_minutes >= end_elapsed_minutes:
-                break
-            if elapsed_minutes >= start_elapsed_minutes:
-                slot_start = near_term_end + timedelta(minutes=15 * i)
-                slot_hour = slot_start.hour
-
-                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
-                load_kw, _ = self._estimate_hourly_consumption_kw(
-                    historical_avg_kw,
-                    slot_hour,
-                    current_hour,
-                    current_load_kw,
-                    recent_load_kw,
-                )
-                consumption_kwh = load_kw * (15 / 60.0)
-                net_kwh = solar_kwh - consumption_kwh
-
-                if net_kwh > 0:
-                    # Apply charging efficiency for excess
-                    net_energy += net_kwh * 0.92
-
-            elapsed_minutes += 15
+            if net_kwh > 0:
+                # Apply charging efficiency for excess
+                net_energy += net_kwh * 0.92
 
         return net_energy
 
@@ -1570,32 +1530,24 @@ class ForecastComputer:
             _LOGGER.info("Battery will not reach 100% from solar in next 24 hours")
 
         # ========================================================================
-        # HYBRID FORECAST: 24 × 5-min near-term (2 h) + 88 × 15-min long-term (22 h)
+        # 15-MIN FORECAST: 96 × 15-min slots for full 24-hour coverage
         #
-        # Near-term window uses 5-min granularity to match Amber pricing data and
-        # ensures _get_forecast_entry_for_now() always finds a slot covering "right
-        # now" regardless of when the coordinator fires within a 5-min window.
-        # Long-term slots keep 15-min granularity (lower complexity, sufficient for
-        # planning further ahead).  Total coverage: 24 h.
+        # Uses uniform 15-min slots throughout for consistent alignment with
+        # Solcast 30-minute periods. This eliminates the complexity of hybrid
+        # timescales and ensures all SOC predictions are consistent across
+        # the main loop and simulation functions.
         # ========================================================================
-        near_term_end = base_slot + timedelta(minutes=5 * NEAR_TERM_COUNT)
-
-        # Build a flat list of (slot_start, slot_interval_minutes) to drive one loop.
-        slots: list[tuple[datetime, int]] = []
-        for i in range(NEAR_TERM_COUNT):
-            slots.append((base_slot + timedelta(minutes=5 * i), 5))
-        for i in range(LONG_TERM_COUNT):
-            slots.append((near_term_end + timedelta(minutes=15 * i), 15))
 
         # Read minimum SOC once before the loop (used for SOC floor and grid charging simulation)
         export_min_soc_pct = float(
             self.entry.options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
         )
         remaining_export_budget = export_budget_kwh
-        for slot_idx, (slot_start, slot_minutes) in enumerate(slots):
+        slot_fraction = 15 / 60.0  # 0.25 hours
+
+        for slot_idx in range(TOTAL_SLOTS):
+            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
             is_first_slot = slot_idx == 0
-            # Fraction of an hour this slot represents (used to scale kW → kWh).
-            slot_fraction = slot_minutes / 60.0
 
             slot_hour = slot_start.hour
             slot_minute = slot_start.minute
@@ -1608,11 +1560,16 @@ class ForecastComputer:
             # Check if we're in demand window (zero grid import constraint)
             in_demand_window = dw_start_time <= slot_time < dw_end_time
 
-            # Get solar forecast scaled to this slot's duration.
-            if slot_minutes == 5:
-                solar_kwh = get_solar_for_5min_slot(all_solcast, slot_start)
-            else:
-                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            # Get solar forecast scaled to this 15-min slot's duration.
+            # Enable debug logging for: first slot, 6-hour marks, and afternoon slots (14-18)
+            debug_this_slot = (
+                is_first_slot
+                or (slot_minute == 0 and slot_hour % 6 == 0)
+                or (14 <= slot_hour <= 18)
+            )
+            solar_kwh = get_solar_for_15min_slot(
+                all_solcast, slot_start, debug_log=debug_this_slot
+            )
 
             # Get expected consumption scaled to this slot's duration.
             load_kw, load_source = self._estimate_hourly_consumption_kw(
@@ -1673,12 +1630,12 @@ class ForecastComputer:
                 dw_start_time=dw_start_time,
                 general_price_current=data.general_price,
                 min_soc_pct=export_min_soc_pct,
+                is_current_slot=is_first_slot,
             )
 
             # Debug logging for charging decision
             _LOGGER.debug(
-                "GRID_CHARGE[%dmin]: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d -> charge=%s boost=%s",
-                slot_minutes,
+                "GRID_CHARGE[15min]: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d -> charge=%s boost=%s",
                 slot_hour,
                 slot_minute,
                 in_demand_window,
@@ -1827,7 +1784,7 @@ class ForecastComputer:
                     "hour": slot_hour,
                     "minute": slot_minute,
                     "timestamp": slot_start.isoformat(),
-                    "slot_interval_minutes": slot_minutes,
+                    "slot_interval_minutes": 15,
                     "predicted_soc": round(predicted_soc, 1),
                     "solar_kwh": round(solar_kwh, 4),
                     "consumption_kwh": round(consumption_kwh, 4),
