@@ -3,7 +3,7 @@
   "name": "LocalShift",
   "codeowners": ["@jackmcintyre"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["solcast_solar"],
   "documentation": "https://github.com/jackmcintyre/ha-solar-battery-automation",
   "integration_type": "device",
   "iot_class": "calculated",
