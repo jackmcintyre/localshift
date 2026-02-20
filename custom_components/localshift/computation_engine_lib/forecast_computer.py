@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, time, timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -45,8 +46,8 @@ class ForecastComputer:
     def __init__(
         self,
         entry: ConfigEntry,
-        get_entity_id_func: callable,
-        get_historical_func: callable,
+        get_entity_id_func: Callable[[str], str],
+        get_historical_func: Callable[[str], dict[int, float]],
     ) -> None:
         """Initialize forecast computer.
 
