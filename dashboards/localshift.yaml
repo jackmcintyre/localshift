@@ -734,6 +734,28 @@ views:
 
               Battery Charge Cost: ${{ state_attr('sensor.localshift_cost_electricity_net', 'battery_charge_cost') | default(0) }}
 
+              === WEATHER CORRELATION ===
+
+              Weather Entity: {{ state_attr('sensor.localshift_forecast_daily', 'weather_entity_id') | default('not configured') }}
+
+              Current Temperature: {{ state_attr('sensor.localshift_forecast_daily', 'weather_temperature_current') | default('N/A') }}°C
+
+              Weather Condition: {{ state_attr('sensor.localshift_forecast_daily', 'weather_condition') | default('unknown') }}
+
+              Learning Enabled: {{ state_attr('sensor.localshift_forecast_daily', 'weather_learning_enabled') }}
+
+              Confidence: {{ state_attr('sensor.localshift_forecast_daily', 'weather_correlation_confidence') | default('low') }}
+
+              Total Samples: {{ state_attr('sensor.localshift_forecast_daily', 'weather_sample_count') | default(0) }}
+
+              Cooling Coefficient: {{ state_attr('sensor.localshift_forecast_daily', 'weather_cooling_coefficient') | default(0) }} kW/°C
+
+              Heating Coefficient: {{ state_attr('sensor.localshift_forecast_daily', 'weather_heating_coefficient') | default(0) }} kW/°C
+
+              Adjustment Applied: {{ state_attr('sensor.localshift_forecast_daily', 'weather_adjustment_applied') | default(false) }}
+
+              Temperature Forecast: {{ state_attr('sensor.localshift_forecast_daily', 'weather_temperature_forecast') | default({}) }}
+
               === SYSTEM INFO ===
 
               Operation Mode: {{ states('select.my_home_operation_mode') }}
