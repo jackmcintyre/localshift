@@ -1721,38 +1721,54 @@ class ForecastComputer:
                 )
                 return False, 0.0
 
-        # Find the maximum FIT price in the window BEFORE fill point
-        # This maximizes revenue while ensuring solar isn't wasted
         # Calculate hours until fill point (for price window calculation)
         hours_until_fill = (
             (fill_point_elapsed_minutes - current_elapsed_minutes) / 60
             if fill_point_elapsed_minutes is not None
             else 6
         )
-        hours_for_price_lookup = min(max(int(hours_until_fill), 1), 24)
-
-        max_fit_price_before_fill = self._calculate_max_fit_price(
-            feed_in_forecast, slot_start, hours=hours_for_price_lookup
-        )
-
-        # Only export when at or near peak (e.g., within 20% of max)
-        # This ensures we export at financially optimal times
-        export_threshold = max_fit_price_before_fill * 0.8  # 80% of peak
 
         # Never proactive-export into a non-positive FIT.
         if use_price <= 0:
             return False, 0.0
 
-        # Only export if current FIT is at or near peak threshold
-        # This is the key constraint - export at good prices, not just any price
-        if use_price < export_threshold:
+        # KEY INSIGHT: Once the battery fills, surplus solar is exported automatically.
+        # So the question is: "Should I export NOW at current price, or wait and export
+        # the surplus at fill-time price?"
+        #
+        # Get the FIT price AT the fill point - this is what we'd get if we wait.
+        # If current price < fill-time price: DON'T export (you'll get more at fill time)
+        # If current price > fill-time price: Export now (better than waiting)
+        fill_time = slot_start + timedelta(
+            minutes=fill_point_elapsed_minutes - current_elapsed_minutes
+        )
+        fill_time_price = get_price_for_slot(feed_in_forecast, fill_time)
+
+        # If we can't get fill-time price, fall back to max in window
+        if fill_time_price is None or fill_time_price <= 0:
+            hours_for_price_lookup = min(max(int(hours_until_fill), 1), 24)
+            max_fit_price_before_fill = self._calculate_max_fit_price(
+                feed_in_forecast, slot_start, hours=hours_for_price_lookup
+            )
+            fill_time_price = max_fit_price_before_fill
             _LOGGER.debug(
-                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f < threshold=$%.2f (max_before_fill=$%.2f, hours_until_fill=%.1f)",
+                "PROACTIVE_EXPORT: %02d:%02d fill-time price unavailable, using max=$%.2f",
+                slot_hour,
+                slot_start.minute,
+                fill_time_price,
+            )
+
+        # Only export if current price >= fill-time price
+        # (because surplus will export at fill time anyway, so we should only
+        # export now if we get a better price than waiting)
+        if use_price < fill_time_price:
+            _LOGGER.debug(
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - current $%.2f < fill-time $%.2f (fill at %s, hours_until_fill=%.1f)",
                 slot_hour,
                 slot_start.minute,
                 use_price,
-                export_threshold,
-                max_fit_price_before_fill,
+                fill_time_price,
+                fill_time.strftime("%H:%M"),
                 hours_until_fill,
             )
             return False, 0.0
@@ -1873,11 +1889,11 @@ class ForecastComputer:
 
         if export_amount > 0:
             _LOGGER.debug(
-                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f >= peak_threshold=$%.2f, amount=%.3f kWh, ending_soc=%.1f%%",
+                "PROACTIVE_EXPORT: %02d:%02d price=$%.2f >= fill-time $%.2f, amount=%.3f kWh, ending_soc=%.1f%%",
                 slot_hour,
                 slot_start.minute,
                 use_price,
-                export_threshold,
+                fill_time_price,
                 export_amount,
                 soc_after_discharge,
             )
