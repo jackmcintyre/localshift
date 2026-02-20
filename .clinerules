@@ -6,7 +6,7 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 
 1. **FIRST ACTION:** Run `git worktree list` to check current worktree status
 2. **If output shows only the main repo (no worktree path matches current directory):**
-   - For backlog items: `git worktree add /Users/jackmcintyre/worktrees/backlog-{priority}-{NNN} -b backlog/{priority}-{NNN}`
+   - For GitHub issues: `git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}`
    - For ad-hoc tasks: `git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}`
 3. **Change directory to the worktree before making ANY file changes**
 4. **Only then proceed with the actual task**
@@ -24,23 +24,42 @@ Each Cline task should operate in its own git worktree. This provides:
 
 ## Worktree Directory Structure
 - All worktrees are stored in `/Users/jackmcintyre/worktrees/`
-- Naming convention: `{type}-{id}` (e.g., `backlog-med-023`, `feature-solar-forecast`)
+- Naming convention: `issue-{NNN}` (e.g., `issue-1`, `issue-42`)
 
 ## Starting a New Task
-1. **Create worktree for backlog item:**
+1. **Pull latest changes first:**
    ```bash
-   git worktree add /Users/jackmcintyre/worktrees/backlog-{priority}-{NNN} -b backlog/{priority}-{NNN}
+   git pull origin main
    ```
-2. **Or create worktree for ad-hoc task:**
+   This ensures you're branching from the latest state and prevents divergence.
+2. **Create worktree for GitHub issue:**
+   ```bash
+   git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
+   ```
+3. **Or create worktree for ad-hoc task:**
    ```bash
    git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
    ```
-3. **Change directory to the worktree before making changes**
+4. **Change directory to the worktree before making changes**
 
 ## During Task Execution
 - All file operations should target the worktree directory
 - The worktree shares the same git history but has its own working directory
 - Run tests and pre-commit hooks within the worktree
+
+## ⚠️ CRITICAL RULES
+
+### Never Commit Directly on Main
+- **Main branch is protected** - All changes must come via PR merges from worktree branches
+- If you find yourself on `main` with uncommitted changes, create a worktree immediately
+- Direct commits on `main` cause divergence when PRs are merged on GitHub
+
+### Git Configuration (Recommended)
+Set these globally to prevent ambiguous pull behavior:
+```bash
+git config --global pull.ff only
+```
+This makes `git pull` fail if branches have diverged, forcing an explicit choice of rebase or merge.
 
 ## Completing a Task
 1. Run pre-commit hooks in the worktree
@@ -58,55 +77,66 @@ Check with: `git worktree list`
 - `_reserve/*` branches are temporary worktrees for Cline session isolation
 - These can be cleaned up between sessions if not in use
 
-# Backlog Management Rules
+# GitHub Issues Workflow
 
-## Directory Structure
-- All backlog items are stored in `backlog/` directory
-- `backlog/index.md` is the master index - always check this first
-- Individual items are in `backlog/backlog-{priority}-{NNN}.md`
+## Overview
+GitHub Issues is the primary system for tracking backlog items, bugs, and feature requests. All work should be tracked via issues.
 
-## Priority Levels
-- CRIT: Critical (affects core functionality)
-- HIGH: High priority (reliability & robustness)
-- MED: Medium priority (code quality & maintainability)
-- LOW: Low priority (cosmetic & nice-to-have)
+## Priority Labels
+- `priority: critical` - Critical (affects core functionality)
+- `priority: high` - High priority (reliability & robustness)
+- `priority: medium` - Medium priority (code quality & maintainability)
+- `priority: low` - Low priority (cosmetic & nice-to-have)
 
-## Status Values
-- PROPOSED: New item, not yet started
-- IN_PROGRESS: Currently being worked on
-- COMPLETED: Finished and merged
+## Status Labels
+- `status: proposed` - New item, not yet started
+- `status: in-progress` - Currently being worked on
+- `status: blocked` - Blocked by dependency or external factor
 
-## Adding New Backlog Items
-1. Check `backlog/index.md` for the next available ID number
-2. Create new file: `backlog/backlog-{priority}-{NNN}.md`
-3. Use `backlog/TEMPLATE.md` as the template
-4. Add entry to the index table in `backlog/index.md`
+## Creating New Issues
+```bash
+gh issue create --title "Title" --body "Description" --label "priority: medium,status: proposed"
+```
 
-## File Naming Convention
-- Critical: `backlog-crit-XXX.md` (e.g., backlog-crit-001.md)
-- High: `backlog-high-XXX.md` (e.g., backlog-high-001.md)
-- Medium: `backlog-med-XXX.md` (e.g., backlog-med-001.md)
-- Low: `backlog-low-XXX.md` (e.g., backlog-low-001.md)
+## Starting Work on an Issue
+1. Update issue status:
+   ```bash
+   gh issue edit {NNN} --add-label "status: in-progress"
+   ```
+2. Create worktree:
+   ```bash
+   git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
+   ```
 
-## Working on Backlog Items
-1. Always reference backlog/index.md to understand priorities
-2. Update item status to IN_PROGRESS when starting work
-3. Include backlog item ID in commit messages
-4. Update item status to COMPLETED when merged
+## Completing an Issue
+1. Run pre-commit hooks to verify code quality
+2. Ask user to commit changes
+3. Close the issue with resolution:
+   ```bash
+   gh issue close {NNN} --comment "Completed in #{PR_NUMBER}"
+   ```
+
+## Viewing Issues
+```bash
+gh issue list --state open                    # Open issues
+gh issue list --state all --limit 20          # All recent issues
+gh issue view {NNN}                           # View specific issue
+```
 
 ## Before Starting Any Task
-- Check `backlog/index.md` to understand current priorities
-- Review related backlog items for context
+- Check open issues with `gh issue list --state open`
+- Review priorities (critical > high > medium > low)
 
 ## Commit Workflow
 - After completing changes, run pre-commit hooks to verify code quality
 - AFTER pre-commit passes, ask the user to commit rather than auto-committing
 - Wait for user confirmation before running git commit
+- Reference the issue number in commit messages: `Fixes #NNN` or `Closes #NNN`
 
 # Documentation Automation Rules
 
 ## Inline Documentation
-- When editing any Python file in `custom_components/amber_powerwall/`, check for:
+- When editing any Python file in `custom_components/localshift/`, check for:
   - Missing docstrings on classes and public methods
   - Methods >20 lines without inline comments for complex logic
 - Add Google-style docstrings following existing codebase patterns

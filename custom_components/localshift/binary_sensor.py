@@ -31,6 +31,8 @@ async def async_setup_entry(
         SolarCanReachTargetSensor(coordinator, entry),
         BoostChargeNeededSensor(coordinator, entry),
         DemandWindowActiveSensor(coordinator, entry),
+        # Excess solar load shifting sensor (backlog-high-017)
+        ExcessSolarAvailableSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -187,3 +189,39 @@ class DemandWindowActiveSensor(LocalShiftBinarySensorBase):
 
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.demand_window_active
+
+
+# ---------------------------------------------------------------------------
+# Excess Solar Load Shifting Binary Sensor (backlog-high-017)
+# ---------------------------------------------------------------------------
+
+
+class ExcessSolarAvailableSensor(LocalShiftBinarySensorBase):
+    """Simple ON/OFF trigger for basic automations - excess solar available."""
+
+    _attr_unique_id = "localshift_excess_solar_available"
+    _attr_name = "Excess Solar Available"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on state."""
+        return (
+            "mdi:solar-power-variant"
+            if self._attr_is_on
+            else "mdi:solar-power-variant-outline"
+        )
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_is_on = self.coordinator.data.excess_solar_available
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return current excess details."""
+        d = self.coordinator.data
+        return {
+            "current_excess_kw": round(d.current_excess_rate_kw, 2),
+            "battery_soc": round(d.soc, 1),
+            "battery_charging": d.battery_power_kw < -0.1,
+            "can_add_load_now": d.can_add_load_now,
+            "safe_additional_load_kw": round(d.safe_additional_load_kw, 1),
+        }
