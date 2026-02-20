@@ -542,6 +542,34 @@ class LocalShiftCoordinator:
         self._notify_listeners()
         await self.async_evaluate_state_machine()
 
+    def reschedule_daily_summary_timer(self) -> None:
+        """Reschedule the daily summary timer with current demand_window_end.
+
+        Called when options are updated to pick up new notification time
+        without requiring a restart.
+        """
+        # Unsubscribe existing timer if present
+        if self._unsub_daily_summary is not None:
+            self._unsub_daily_summary()
+            self._unsub_daily_summary = None
+
+        # Schedule new timer with updated time
+        dw_end = self._parse_time_option(
+            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+        )
+        self._unsub_daily_summary = async_track_time_change(
+            self.hass,
+            self._handle_daily_summary,
+            hour=dw_end.hour,
+            minute=dw_end.minute,
+            second=0,
+        )
+        _LOGGER.info(
+            "Daily summary timer rescheduled for %02d:%02d",
+            dw_end.hour,
+            dw_end.minute,
+        )
+
     async def _evaluate_state_machine(self) -> None:
         """Compare desired mode with commanded mode and execute transitions."""
         if self._state_machine is not None and self._computation_engine is not None:
