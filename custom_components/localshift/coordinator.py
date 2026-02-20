@@ -54,6 +54,10 @@ _LOGGER = logging.getLogger(__name__)
 # How often the coordinator re-evaluates (matches A16/A9 cadence)
 PERIODIC_INTERVAL = timedelta(minutes=1)
 
+# Solcast startup retry configuration
+SOLCAST_STARTUP_RETRY_DELAY = timedelta(seconds=30)
+SOLCAST_MAX_STARTUP_RETRIES = 3
+
 
 class LocalShiftCoordinator:
     """Central coordinator: reads external entities, computes state, drives battery.
@@ -84,6 +88,10 @@ class LocalShiftCoordinator:
         self._notification_service: NotificationService | None = None
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
+
+        # Solcast startup retry tracking
+        self._solcast_retry_count: int = 0
+        self._solcast_ready: bool = False
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -228,7 +236,9 @@ class LocalShiftCoordinator:
         # Also fetch recent 1-hour load average for weighted forecasting
         await self._computation_engine.async_get_recent_load_1hr(load_entity_id)
 
-        self._compute_derived_values()
+        # Wait for Solcast data to be ready before computing forecasts
+        # This prevents errors when Solcast hasn't initialized yet
+        await self._wait_for_solcast_and_compute()
 
         # Startup grace: wait 30 s for entities to populate before acting
         self._state_machine.set_startup_grace(30)
@@ -295,6 +305,93 @@ class LocalShiftCoordinator:
         if self._state_reader is None:
             return
         self._state_reader.read_all_external_state(self.data)
+
+    def _check_solcast_ready(self) -> bool:
+        """Check if Solcast forecast data is available and valid.
+
+        Returns True if Solcast data is ready, False otherwise.
+        """
+        # Check if today's forecast has valid data
+        today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)
+        today_state = self.hass.states.get(today_entity)
+
+        if today_state is None:
+            _LOGGER.debug("Solcast today entity not found: %s", today_entity)
+            return False
+
+        if today_state.state in ("unknown", "unavailable", None, ""):
+            _LOGGER.debug(
+                "Solcast today entity state is %s, waiting for data",
+                today_state.state,
+            )
+            return False
+
+        # Check if the forecast attribute has actual forecast data
+        forecast_data = today_state.attributes.get("detailedForecast")
+        if not forecast_data or not isinstance(forecast_data, list):
+            _LOGGER.debug("Solcast today forecast attribute is empty or invalid")
+            return False
+
+        # Check if we have at least some forecast entries
+        if len(forecast_data) == 0:
+            _LOGGER.debug("Solcast today forecast has no entries")
+            return False
+
+        _LOGGER.info(
+            "Solcast forecast data is ready (%d entries for today)",
+            len(forecast_data),
+        )
+        return True
+
+    async def _wait_for_solcast_and_compute(self) -> None:
+        """Wait for Solcast data to be ready, then compute derived values.
+
+        This is called at startup and retries if Solcast data is not immediately available.
+        """
+        if self._check_solcast_ready():
+            self._solcast_ready = True
+            _LOGGER.info("Solcast data available, proceeding with forecast computation")
+            self._compute_derived_values()
+            self._notify_listeners()
+            return
+
+        # Solcast not ready - check if we can retry
+        if self._solcast_retry_count >= SOLCAST_MAX_STARTUP_RETRIES:
+            _LOGGER.warning(
+                "Solcast data not available after %d retries. "
+                "Forecast will use 0 kWh solar until Solcast provides data. "
+                "Check Solcast integration status.",
+                SOLCAST_MAX_STARTUP_RETRIES,
+            )
+            # Still compute with whatever data we have
+            self._compute_derived_values()
+            self._notify_listeners()
+            return
+
+        self._solcast_retry_count += 1
+        _LOGGER.info(
+            "Solcast data not ready yet (attempt %d/%d), retrying in %d seconds",
+            self._solcast_retry_count,
+            SOLCAST_MAX_STARTUP_RETRIES,
+            SOLCAST_STARTUP_RETRY_DELAY.total_seconds(),
+        )
+
+        # Schedule a retry
+        self.hass.async_create_task(
+            self._retry_solcast_check(),
+            "localshift_solcast_retry",
+        )
+
+    async def _retry_solcast_check(self) -> None:
+        """Retry checking Solcast data after a delay."""
+        import asyncio
+
+        await asyncio.sleep(SOLCAST_STARTUP_RETRY_DELAY.total_seconds())
+
+        # Re-read state before checking
+        self._read_all_external_state()
+
+        await self._wait_for_solcast_and_compute()
 
     # ------------------------------------------------------------------
     # Event handlers
