@@ -1828,8 +1828,13 @@ class ForecastComputer:
         #
         # If solar will recharge the battery for FREE -> Allow export
         # If grid import needed to replace -> Only allow if FIT >= replacement_price + margin
+        #
+        # NOTE: This check only applies to OVERNIGHT exports (no solar in current slot).
+        # During the day, the fill-point-based solar check (CONSTRAINT 3 above) already
+        # ensures there's enough solar to recharge the exported amount.
         if (
-            all_solcast is not None
+            solar_kwh < 0.01  # Only for overnight slots (no solar in current slot)
+            and all_solcast is not None
             and historical_avg_kw is not None
             and general_forecast is not None
         ):
