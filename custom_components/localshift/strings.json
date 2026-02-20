@@ -11,8 +11,7 @@
           "teslemetry_grid_power": "Grid Power (kW)",
           "teslemetry_battery_power": "Battery Power (kW)",
           "teslemetry_solar_power": "Solar Power (kW)",
-          "teslemetry_load_power": "Load Power (kW)",
-          "teslemetry_allow_export": "Allow Export (select entity)"
+          "teslemetry_load_power": "Load Power (kW)"
         },
         "data_description": {
           "teslemetry_operation_mode": "Select entity that controls Powerwall mode (self_consumption, backup, etc.)",
@@ -21,8 +20,7 @@
           "teslemetry_grid_power": "Sensor showing grid power flow (positive=import, negative=export)",
           "teslemetry_battery_power": "Sensor showing battery power flow",
           "teslemetry_solar_power": "Sensor showing solar power output",
-          "teslemetry_load_power": "Sensor showing home load power",
-          "teslemetry_allow_export": "Select entity controlling export mode (pv_only or battery_ok)"
+          "teslemetry_load_power": "Sensor showing home load power"
         }
       },
       "pricing": {

@@ -31,7 +31,6 @@ from .const import (
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_SUN_ENTITY,
-    CONF_TESLEMETRY_ALLOW_EXPORT,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -168,10 +167,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_TESLEMETRY_LOAD_POWER],
                     "sensor",
                 ),
-                CONF_TESLEMETRY_ALLOW_EXPORT: (
-                    user_input[CONF_TESLEMETRY_ALLOW_EXPORT],
-                    "select",
-                ),
             }
 
             errors = await self._validate_entities(entities_to_validate)
@@ -221,12 +216,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                                 default=user_input[CONF_TESLEMETRY_LOAD_POWER],
                             ): selector.EntitySelector(
                                 selector.EntitySelectorConfig(domain="sensor")
-                            ),
-                            vol.Required(
-                                CONF_TESLEMETRY_ALLOW_EXPORT,
-                                default=user_input[CONF_TESLEMETRY_ALLOW_EXPORT],
-                            ): selector.EntitySelector(
-                                selector.EntitySelectorConfig(domain="select")
                             ),
                         }
                     ),
@@ -282,12 +271,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                         default=DEFAULT_ENTITY_IDS[CONF_TESLEMETRY_LOAD_POWER],
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="sensor")
-                    ),
-                    vol.Required(
-                        CONF_TESLEMETRY_ALLOW_EXPORT,
-                        default=DEFAULT_ENTITY_IDS[CONF_TESLEMETRY_ALLOW_EXPORT],
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="select")
                     ),
                 }
             ),
