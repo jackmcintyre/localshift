@@ -39,6 +39,9 @@ _LOGGER = logging.getLogger(__name__)
 # 15-min slots throughout for consistent alignment with Solcast 30-minute periods
 TOTAL_SLOTS = 96  # 24 hours × 4 slots/hour
 
+# Proactive export constraints
+PROACTIVE_EXPORT_SOC_BUFFER_PCT = 5.0  # Minimum buffer above min SOC for exports
+
 
 class ForecastComputer:
     """Computes 24-hour battery forecast with 15-minute breakdown."""
@@ -1640,7 +1643,8 @@ class ForecastComputer:
         fill_point_elapsed_minutes: int | None = None,
         negative_fit_headroom_kwh: float = 0.0,
         in_negative_fit_window: bool = False,
-    ) -> tuple[bool, float]:
+        first_negative_fit_start: datetime | None = None,
+    ) -> tuple[bool, float, float]:
         """Determine if proactive export should happen at this slot.
 
         Proactive export has TWO modes:
@@ -1712,6 +1716,20 @@ class ForecastComputer:
         # This is the primary strategy for high-solar days.
 
         if negative_fit_headroom_kwh > 0 and not in_negative_fit_window:
+            # TIMING CHECK: Only export BEFORE the negative FIT window starts
+            # This prevents exports during or after the negative FIT window
+            if (
+                first_negative_fit_start is not None
+                and slot_start >= first_negative_fit_start
+            ):
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - slot is at/after negative FIT window start %s",
+                    slot_hour,
+                    slot_start.minute,
+                    first_negative_fit_start.strftime("%H:%M"),
+                )
+                return False, 0.0, negative_fit_headroom_kwh
+
             # FIT must be strictly positive to export (preserve battery cycles)
             if use_price <= 0:
                 _LOGGER.debug(
@@ -1720,20 +1738,24 @@ class ForecastComputer:
                     slot_start.minute,
                     use_price,
                 )
-                return False, 0.0
+                return False, 0.0, negative_fit_headroom_kwh
 
-            # Must have SOC above minimum to export
-            if predicted_soc <= export_min_soc_pct:
+            # SOC BUFFER CHECK: Require minimum buffer above export_min_soc_pct
+            # This prevents exports when SOC is too close to the minimum
+            required_soc_for_export = (
+                export_min_soc_pct + PROACTIVE_EXPORT_SOC_BUFFER_PCT
+            )
+            if predicted_soc < required_soc_for_export:
                 _LOGGER.debug(
-                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - SOC %.1f%% <= min %.1f%% (negative FIT avoidance)",
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - SOC %.1f%% < min+buffer %.1f%% (negative FIT avoidance)",
                     slot_hour,
                     slot_start.minute,
                     predicted_soc,
-                    export_min_soc_pct,
+                    required_soc_for_export,
                 )
-                return False, 0.0
+                return False, 0.0, negative_fit_headroom_kwh
 
-            # Calculate how much we can export (above minimum SOC)
+            # Calculate how much we can export (above minimum SOC + buffer)
             available_above_min_kwh = (
                 (predicted_soc - export_min_soc_pct) / 100 * BATTERY_CAPACITY_KWH
             )
@@ -1747,18 +1769,21 @@ class ForecastComputer:
             )
 
             if export_amount > 0:
+                # Decrement headroom after export
+                updated_headroom = negative_fit_headroom_kwh - export_amount
                 _LOGGER.info(
-                    "PROACTIVE_EXPORT: %02d:%02d NEGATIVE_FIT_AVOIDANCE - FIT=$%.3f, headroom=%.2f kWh, exporting=%.3f kWh, SOC=%.1f%%",
+                    "PROACTIVE_EXPORT: %02d:%02d NEGATIVE_FIT_AVOIDANCE - FIT=$%.3f, headroom=%.2f->%.2f kWh, exporting=%.3f kWh, SOC=%.1f%%",
                     slot_hour,
                     slot_start.minute,
                     use_price,
                     negative_fit_headroom_kwh,
+                    updated_headroom,
                     export_amount,
                     predicted_soc,
                 )
-                return True, round(export_amount, 3)
+                return True, round(export_amount, 3), updated_headroom
 
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # ========================================================================
         # MODE 2: PRICE ARBITRAGE (Fallback - when no negative FIT window)
@@ -1768,7 +1793,7 @@ class ForecastComputer:
 
         # If we're already in a negative FIT window, don't do price arbitrage
         if in_negative_fit_window:
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # ABOVE-TARGET GATE: Only export when battery is at or above the target SOC.
         # Exporting from a battery below target worsens the deficit and forces solar
@@ -1782,7 +1807,7 @@ class ForecastComputer:
                 predicted_soc,
                 target_pct,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # During demand window: allow export but use dynamic floor protection.
         # The existing checks below (min_soc, buffer, ending SOC) provide adequate
@@ -1791,7 +1816,7 @@ class ForecastComputer:
 
         # Need buffer in battery (minimum reserve from config)
         if predicted_soc <= export_min_soc_pct:
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # Critical: Don't export if battery will already drop below threshold without exports
         # This prevents draining of battery too low
@@ -1801,7 +1826,7 @@ class ForecastComputer:
                 min_soc_no_exports,
                 export_min_soc_pct,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # Additional safety: Need some buffer above minimum
         # This provides a small safety margin for forecast uncertainty
@@ -1814,12 +1839,12 @@ class ForecastComputer:
                 export_min_soc_pct,
                 required_buffer_pct,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # Only export if we have forecasted excess (not just current SOC)
         # This prevents exporting when we might need to charge later
         if forecasted_excess_kwh <= 0:
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # FILL-POINT BASED EXPORT STRATEGY:
         # Only export BEFORE the battery would naturally fill from solar
@@ -1832,7 +1857,7 @@ class ForecastComputer:
                 slot_hour,
                 slot_start.minute,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # CONSTRAINT 2: Only export BEFORE the fill point
         # After the battery fills, there's no room for more solar
@@ -1844,7 +1869,7 @@ class ForecastComputer:
                 current_elapsed_minutes,
                 fill_point_elapsed_minutes,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # CONSTRAINT 3: Verify enough solar AFTER export to reach fill point
         # Calculate solar energy available between now and fill point
@@ -1870,7 +1895,7 @@ class ForecastComputer:
                     slot_hour,
                     slot_start.minute,
                 )
-                return False, 0.0
+                return False, 0.0, negative_fit_headroom_kwh
 
         # Calculate hours until fill point (for price window calculation)
         hours_until_fill = (
@@ -1881,7 +1906,7 @@ class ForecastComputer:
 
         # Never proactive-export into a non-positive FIT.
         if use_price <= 0:
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # KEY INSIGHT: Once the battery fills, surplus solar is exported automatically.
         # So the question is: "Should I export NOW at current price, or wait and export
@@ -1922,7 +1947,7 @@ class ForecastComputer:
                 fill_time.strftime("%H:%M"),
                 hours_until_fill,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # CRITICAL: Calculate total discharge (export + load) before deciding
         # If solar_kwh < consumption, battery is already discharging for load
@@ -1972,7 +1997,7 @@ class ForecastComputer:
                 net_discharge_kwh,
                 export_discharge_kwh,
             )
-            return False, 0.0
+            return False, 0.0, negative_fit_headroom_kwh
 
         # CRITICAL: Simulate overnight drain after this export
         # This ensures battery won't drop below minimum before solar starts
@@ -2003,7 +2028,7 @@ class ForecastComputer:
                     slot_hour,
                     slot_start.minute,
                 )
-                return False, 0.0
+                return False, 0.0, negative_fit_headroom_kwh
 
             if min_overnight_soc < export_min_soc_pct:
                 _LOGGER.debug(
@@ -2013,7 +2038,7 @@ class ForecastComputer:
                     min_overnight_soc,
                     export_min_soc_pct,
                 )
-                return False, 0.0
+                return False, 0.0, negative_fit_headroom_kwh
 
         # THROTTLING: Apply dynamic reserve (SOC - 5%) to limit export amount
         # This matches the actual throttling that will happen in battery_controller.py
@@ -2048,9 +2073,9 @@ class ForecastComputer:
                 export_amount,
                 soc_after_discharge,
             )
-            return True, round(export_amount, 3)
+            return True, round(export_amount, 3), negative_fit_headroom_kwh
 
-        return False, 0.0
+        return False, 0.0, negative_fit_headroom_kwh
 
     def compute_forecast(
         self,
@@ -2457,32 +2482,40 @@ class ForecastComputer:
                     in_negative_fit_window = True
                     break
 
-            should_proactive_export, proactive_export_amount = (
-                self._should_proactive_export_at_slot(
-                    slot_start=slot_start,
-                    slot_hour=slot_hour,
-                    solar_kwh=solar_kwh,
-                    slot_fit_price=_slot_fit_price,
-                    predicted_soc=predicted_soc,
-                    target_pct=target_pct,
-                    in_demand_window=in_demand_window,
-                    forecasted_excess_kwh=forecasted_excess_kwh,
-                    remaining_export_budget_kwh=remaining_export_budget,
-                    feed_in_forecast=data.feed_in_forecast,
-                    min_soc_no_exports=min_soc_no_exports,
-                    export_min_soc_pct=export_min_soc_pct,
-                    effective_cheap_price=data.effective_cheap_price,
-                    feed_in_price_current=data.feed_in_price,
-                    all_solcast=all_solcast,
-                    historical_avg_kw=historical_avg_kw,
-                    current_load_kw=data.load_power_kw,
-                    recent_load_kw=recent_load_kw,
-                    is_current_slot=is_first_slot,
-                    current_elapsed_minutes=elapsed_minutes,
-                    fill_point_elapsed_minutes=fill_point_elapsed_minutes,
-                    negative_fit_headroom_kwh=negative_fit_headroom_kwh,
-                    in_negative_fit_window=in_negative_fit_window,
-                )
+            # Get the first negative FIT window start for timing check
+            first_negative_fit_start = (
+                negative_fit_windows[0][0] if negative_fit_windows else None
+            )
+
+            (
+                should_proactive_export,
+                proactive_export_amount,
+                negative_fit_headroom_kwh,
+            ) = self._should_proactive_export_at_slot(
+                slot_start=slot_start,
+                slot_hour=slot_hour,
+                solar_kwh=solar_kwh,
+                slot_fit_price=_slot_fit_price,
+                predicted_soc=predicted_soc,
+                target_pct=target_pct,
+                in_demand_window=in_demand_window,
+                forecasted_excess_kwh=forecasted_excess_kwh,
+                remaining_export_budget_kwh=remaining_export_budget,
+                feed_in_forecast=data.feed_in_forecast,
+                min_soc_no_exports=min_soc_no_exports,
+                export_min_soc_pct=export_min_soc_pct,
+                effective_cheap_price=data.effective_cheap_price,
+                feed_in_price_current=data.feed_in_price,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
+                is_current_slot=is_first_slot,
+                current_elapsed_minutes=elapsed_minutes,
+                fill_point_elapsed_minutes=fill_point_elapsed_minutes,
+                negative_fit_headroom_kwh=negative_fit_headroom_kwh,
+                in_negative_fit_window=in_negative_fit_window,
+                first_negative_fit_start=first_negative_fit_start,
             )
 
             # Apply proactive export if needed (discharge battery)

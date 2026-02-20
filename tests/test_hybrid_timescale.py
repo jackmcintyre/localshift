@@ -205,7 +205,8 @@ class TestFifteenMinSlots:
         base_time = datetime(2024, 6, 15, 8, 0, 0)
 
         # Test with a slot in the forecast
-        should_export, amount = computer._should_proactive_export_at_slot(
+        # Returns: (should_export: bool, amount: float, negative_fit_headroom_kwh)
+        should_export, amount, headroom = computer._should_proactive_export_at_slot(
             slot_start=base_time + timedelta(minutes=30),
             slot_hour=8,
             solar_kwh=0.5,
@@ -227,11 +228,13 @@ class TestFifteenMinSlots:
             is_current_slot=True,
             current_elapsed_minutes=30.0,
             fill_point_elapsed_minutes=360,
+            negative_fit_headroom_kwh=0.0,
         )
 
         # Should return valid results
         assert isinstance(should_export, bool)
         assert isinstance(amount, int | float)
+        assert isinstance(headroom, float)
         assert amount >= 0
 
     def test_edge_case_no_fill_point(
