@@ -32,6 +32,7 @@ from .const import (
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_MAX_PRECHARGE_PRICE,
+    CONF_MINIMUM_TARGET_SOC,
     CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
     DEFAULT_BATTERY_TARGET,
@@ -42,6 +43,7 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
+    DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DISCHARGE_EARLIEST_HOUR,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -397,6 +399,9 @@ class ComputationEngine:
 
         # ---- Step 16: daily_forecast ----
         # (computed earlier; left intentionally blank)
+
+        # ---- Step 17: excess_solar_signals (backlog-high-017) ----
+        self._compute_excess_solar_signals(data, now_dt)
 
     # ========================================================================
     # SOLAR & BATTERY FORECASTING
@@ -1513,3 +1518,188 @@ class ComputationEngine:
 
         # Cap at reasonable maximum (can't reserve more than 100%)
         return min(reserve_soc, 100.0)
+
+    # ========================================================================
+    # EXCESS SOLAR LOAD SHIFTING (backlog-high-017)
+    # ========================================================================
+
+    def _compute_excess_solar_signals(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+    ) -> None:
+        """Compute excess solar load shifting signals.
+
+        This method calculates:
+        1. Excess solar available in different time windows
+        2. Safe additional load that won't trigger grid charging
+        3. Load shift signal (INCREASE/MAINTAIN/REDUCE/HOLD)
+        4. Binary sensor state for simple automations
+
+        Args:
+            data: CoordinatorData to populate with excess solar fields
+            now_dt: Current datetime
+        """
+        # Get configuration
+        target_pct = float(
+            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+        min_soc_pct = float(
+            self.entry.options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        dw_start_time = self._parse_time_option(
+            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        )
+
+        # Get all Solcast forecasts
+        all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+
+        # Get historical load data
+        load_entity_id = self._get_entity_id("teslemetry_load_power")
+        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        recent_load_kw = self._recent_load_1hr_kw
+
+        # Calculate current excess rate (real-time)
+        current_excess_kw = max(0.0, data.solar_power_kw - data.load_power_kw)
+        data.current_excess_rate_kw = round(current_excess_kw, 2)
+
+        # Base slot for calculations
+        current_5min = (now_dt.minute // 5) * 5
+        base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
+        current_hour = base_slot.hour
+
+        # Calculate excess by time windows
+        excess_by_windows = self._forecast_computer._calculate_excess_by_windows(
+            base_slot=base_slot,
+            all_solcast=all_solcast,
+            historical_avg_kw=hourly_avg_kw,
+            current_load_kw=data.load_power_kw,
+            recent_load_kw=recent_load_kw,
+            current_soc=data.soc,
+            target_pct=target_pct,
+            current_hour=current_hour,
+        )
+
+        # Store windowed excess values
+        data.excess_solar_current_hour_kwh = excess_by_windows.get(
+            "excess_current_hour_kwh", 0.0
+        )
+        data.excess_solar_next_2h_kwh = excess_by_windows.get("excess_next_2h_kwh", 0.0)
+        data.excess_solar_next_4h_kwh = excess_by_windows.get("excess_next_4h_kwh", 0.0)
+        data.excess_until_battery_full_kwh = excess_by_windows.get(
+            "excess_until_battery_full_kwh", 0.0
+        )
+
+        # Find negative FIT window
+        negative_fit_start, negative_fit_duration = (
+            self._forecast_computer._find_nearest_negative_fit_window(
+                data.feed_in_forecast, now_dt
+            )
+        )
+        data.negative_fit_window_start = negative_fit_start
+        data.negative_fit_window_duration_minutes = negative_fit_duration
+
+        # Calculate excess until negative FIT
+        data.excess_until_negative_fit_kwh = (
+            self._forecast_computer._calculate_excess_until_negative_fit(
+                base_slot=base_slot,
+                negative_fit_start=negative_fit_start,
+                all_solcast=all_solcast,
+                historical_avg_kw=hourly_avg_kw,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
+                current_soc=data.soc,
+                target_pct=target_pct,
+                current_hour=current_hour,
+            )
+        )
+
+        # Calculate time until battery full
+        fill_point_minutes = self._forecast_computer._find_battery_fill_point(
+            start_soc=data.soc,
+            start_slot=base_slot,
+            all_solcast=all_solcast,
+            historical_avg_kw=hourly_avg_kw,
+            current_load_kw=data.load_power_kw,
+            recent_load_kw=recent_load_kw,
+            current_hour=current_hour,
+        )
+        data.time_until_battery_full_minutes = fill_point_minutes or 0
+
+        # Calculate safe additional load
+        safe_additional_load, grid_charge_risk = (
+            self._forecast_computer._calculate_safe_additional_load(
+                base_slot=base_slot,
+                all_solcast=all_solcast,
+                historical_avg_kw=hourly_avg_kw,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
+                current_soc=data.soc,
+                target_pct=target_pct,
+                dw_start_time=dw_start_time,
+                effective_cheap_price=data.effective_cheap_price,
+                general_forecast=data.general_forecast,
+                min_soc_pct=min_soc_pct,
+                current_hour=current_hour,
+            )
+        )
+        data.safe_additional_load_kw = round(safe_additional_load, 1)
+        data.grid_charge_risk = grid_charge_risk
+
+        # Compute load shift signal
+        signal, recommended_kw, duration, reason, confidence = (
+            self._forecast_computer._compute_load_shift_signal(
+                data=data,
+                excess_by_windows=excess_by_windows,
+                negative_fit_start=negative_fit_start,
+                safe_additional_load=safe_additional_load,
+                grid_charge_risk=grid_charge_risk,
+                fill_point_minutes=fill_point_minutes,
+            )
+        )
+        data.load_shift_signal = signal
+        data.load_shift_recommended_kw = round(recommended_kw, 1)
+        data.load_shift_recommended_duration_minutes = duration
+        data.load_shift_reason = reason
+        data.load_shift_confidence = confidence
+
+        # Determine can_add_load_now (critical safety flag)
+        # Only true if:
+        # 1. There's actual excess available
+        # 2. Safe additional load > 0
+        # 3. No grid charge risk
+        # 4. Not in demand window
+        # 5. Not in manual override
+        data.can_add_load_now = (
+            data.excess_solar_next_2h_kwh > 0.5
+            and safe_additional_load > 0.5
+            and not grid_charge_risk
+            and not data.demand_window_active
+            and not data.manual_override
+        )
+
+        # Determine binary sensor state
+        # ON when:
+        # 1. Solar production > household load + battery charge rate
+        # 2. Battery SOC > 80% OR battery charging at max rate
+        # 3. Not in demand window
+        # 4. can_add_load_now is true
+        battery_charging = data.battery_power_kw < -0.1  # Negative = charging
+        battery_near_full = data.soc > 80
+        solar_exceeds_load = data.solar_power_kw > data.load_power_kw + 0.5
+
+        data.excess_solar_available = (
+            solar_exceeds_load
+            and (battery_near_full or battery_charging)
+            and not data.demand_window_active
+            and data.can_add_load_now
+        )
+
+        _LOGGER.info(
+            "Excess solar: available=%s, can_add_load=%s, signal=%s, safe_kw=%.1f, next_2h=%.1fkWh",
+            data.excess_solar_available,
+            data.can_add_load_now,
+            data.load_shift_signal,
+            data.safe_additional_load_kw,
+            data.excess_solar_next_2h_kwh,
+        )

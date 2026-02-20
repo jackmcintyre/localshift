@@ -136,3 +136,24 @@ class CoordinatorData:
     spike_reserve_soc: float = 0.0  # Calculated reserve SOC for spike survival
     spike_hours_remaining: float = 0.0  # Hours until spike ends
     spike_in_conservative_mode: bool = False  # Whether conservative mode is active
+
+    # Excess solar load shifting sensors (backlog-high-017)
+    excess_solar_available: bool = False  # Simple ON/OFF for basic automations
+    excess_solar_current_kw: float = 0.0  # Current excess generation rate
+    excess_solar_current_hour_kwh: float = 0.0  # Excess available in current hour
+    excess_solar_next_2h_kwh: float = 0.0  # Excess available in next 2 hours
+    excess_solar_next_4h_kwh: float = 0.0  # Excess available in next 4 hours
+    excess_until_battery_full_kwh: float = 0.0  # Excess until battery reaches 100%
+    excess_until_negative_fit_kwh: float = 0.0  # Excess before negative FIT window
+    time_until_battery_full_minutes: int = 0  # Minutes until battery full from solar
+    negative_fit_window_start: datetime | None = None  # When negative FIT begins
+    negative_fit_window_duration_minutes: int = 0  # Duration of negative FIT period
+    can_add_load_now: bool = False  # Critical: safe to add discretionary load
+    safe_additional_load_kw: float = 0.0  # Max kW that can be added safely
+    load_shift_signal: str = "HOLD"  # INCREASE_LOAD, MAINTAIN_LOAD, REDUCE_LOAD, HOLD
+    load_shift_recommended_kw: float = 0.0  # Suggested load change (+ or -)
+    load_shift_recommended_duration_minutes: int = 0  # How long to maintain change
+    load_shift_reason: str = ""  # Human-readable explanation
+    load_shift_confidence: str = "low"  # low/medium/high
+    grid_charge_risk: bool = False  # Would adding load trigger grid charging?
+    current_excess_rate_kw: float = 0.0  # Current excess generation rate (real-time)
