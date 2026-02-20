@@ -30,6 +30,7 @@ from .const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
@@ -50,7 +51,9 @@ from .const import (
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
+    DEFAULT_SPIKE_PRICE_PERCENTILE,
     DOMAIN,
+    THRESHOLD_RANGES,
 )
 
 
@@ -645,6 +648,34 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         CONF_MANUAL_OVERRIDE_TIMEOUT,
                         DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
                     ),
+                    CONF_CHEAP_PRICE_PERCENTILE: current.get(
+                        CONF_CHEAP_PRICE_PERCENTILE,
+                        DEFAULT_CHEAP_PRICE_PERCENTILE,
+                    ),
+                    CONF_MAX_PRECHARGE_PRICE: current.get(
+                        CONF_MAX_PRECHARGE_PRICE,
+                        DEFAULT_MAX_PRECHARGE_PRICE,
+                    ),
+                    CONF_CHEAP_PRICE_DEADBAND: current.get(
+                        CONF_CHEAP_PRICE_DEADBAND,
+                        DEFAULT_CHEAP_PRICE_DEADBAND,
+                    ),
+                    CONF_BATTERY_TARGET: current.get(
+                        CONF_BATTERY_TARGET,
+                        DEFAULT_BATTERY_TARGET,
+                    ),
+                    CONF_LOAD_WEIGHT_RECENT: current.get(
+                        CONF_LOAD_WEIGHT_RECENT,
+                        DEFAULT_LOAD_WEIGHT_RECENT,
+                    ),
+                    CONF_SPIKE_PRICE_PERCENTILE: current.get(
+                        CONF_SPIKE_PRICE_PERCENTILE,
+                        DEFAULT_SPIKE_PRICE_PERCENTILE,
+                    ),
+                    CONF_MINIMUM_TARGET_SOC: current.get(
+                        CONF_MINIMUM_TARGET_SOC,
+                        DEFAULT_MINIMUM_TARGET_SOC,
+                    ),
                 },
                 notify_services,
             ),
@@ -664,6 +695,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
         """
         return vol.Schema(
             {
+                # Notification settings
                 vol.Required(
                     CONF_NOTIFY_SERVICE,
                     default=values.get(CONF_NOTIFY_SERVICE, ""),
@@ -673,6 +705,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                # Demand window timing
                 vol.Required(
                     CONF_DEMAND_WINDOW_START,
                     default=values.get(
@@ -699,6 +732,128 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         max=24,
                         step=1,
                         unit_of_measurement="hours",
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                # Price thresholds
+                vol.Required(
+                    CONF_CHEAP_PRICE_PERCENTILE,
+                    default=values.get(
+                        CONF_CHEAP_PRICE_PERCENTILE,
+                        DEFAULT_CHEAP_PRICE_PERCENTILE,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE]["min"],
+                        max=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE]["max"],
+                        step=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[
+                            CONF_CHEAP_PRICE_PERCENTILE
+                        ]["unit"],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Required(
+                    CONF_MAX_PRECHARGE_PRICE,
+                    default=values.get(
+                        CONF_MAX_PRECHARGE_PRICE,
+                        DEFAULT_MAX_PRECHARGE_PRICE,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE]["min"],
+                        max=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE]["max"],
+                        step=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(
+                    CONF_CHEAP_PRICE_DEADBAND,
+                    default=values.get(
+                        CONF_CHEAP_PRICE_DEADBAND,
+                        DEFAULT_CHEAP_PRICE_DEADBAND,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND]["min"],
+                        max=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND]["max"],
+                        step=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(
+                    CONF_SPIKE_PRICE_PERCENTILE,
+                    default=values.get(
+                        CONF_SPIKE_PRICE_PERCENTILE,
+                        DEFAULT_SPIKE_PRICE_PERCENTILE,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE]["min"],
+                        max=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE]["max"],
+                        step=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[
+                            CONF_SPIKE_PRICE_PERCENTILE
+                        ]["unit"],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                # Battery settings
+                vol.Required(
+                    CONF_BATTERY_TARGET,
+                    default=values.get(
+                        CONF_BATTERY_TARGET,
+                        DEFAULT_BATTERY_TARGET,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["min"],
+                        max=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["max"],
+                        step=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_BATTERY_TARGET][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Required(
+                    CONF_MINIMUM_TARGET_SOC,
+                    default=values.get(
+                        CONF_MINIMUM_TARGET_SOC,
+                        DEFAULT_MINIMUM_TARGET_SOC,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["min"],
+                        max=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["max"],
+                        step=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                # Advanced settings
+                vol.Required(
+                    CONF_LOAD_WEIGHT_RECENT,
+                    default=values.get(
+                        CONF_LOAD_WEIGHT_RECENT,
+                        DEFAULT_LOAD_WEIGHT_RECENT,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["min"],
+                        max=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["max"],
+                        step=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT][
+                            "unit"
+                        ],
                         mode=selector.NumberSelectorMode.SLIDER,
                     )
                 ),
