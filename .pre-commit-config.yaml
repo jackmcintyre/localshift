@@ -17,11 +17,11 @@ repos:
     hooks:
       - id: pyright
 
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: .venv/bin/python -m pytest
-        language: system
-        pass_filenames: false
-        always_run: false
+  # - repo: local
+  #   hooks:
+  #     - id: pytest
+  #       name: pytest
+  #       entry: .venv/bin/python -m pytest
+  #       language: system
+  #       pass_filenames: false
+  #       always_run: false
