@@ -53,5 +53,7 @@ async def _async_options_updated(
 ) -> None:
     """Handle options update — trigger a re-evaluation with new thresholds."""
     coordinator: LocalShiftCoordinator = entry.runtime_data
+    # Reschedule daily summary timer in case demand_window_end changed
+    coordinator.reschedule_daily_summary_timer()
     await coordinator.async_recompute_and_evaluate()
     _LOGGER.info("LocalShift options updated, re-evaluating")
