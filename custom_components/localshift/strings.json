@@ -128,6 +128,10 @@
       "minimum_target_soc": {
         "name": "Minimum Target SOC",
         "description": "Minimum SOC % maintained during discharge modes (spike, proactive export)"
+      },
+      "export_price_margin": {
+        "name": "Export Price Margin",
+        "description": "Minimum profit margin ($/kWh) for battery export when grid import needed to replace (default: $0.10)"
       }
     },
     "switch": {
