@@ -208,10 +208,6 @@ class ComputationEngine:
         before_dw = now_t < dw_start_time
         after_dw = now_t >= dw_start_time
 
-        # ---- Step 1: Directional power (always positive) ----
-        data.grid_import_power_kw = max(data.grid_power_kw, 0.0)
-        data.grid_export_power_kw = max(-data.grid_power_kw, 0.0)
-
         # ---- Step 2: Mode detection from Teslemetry state ----
         data.force_discharge_active = (
             data.operation_mode == "autonomous" and data.backup_reserve < 11

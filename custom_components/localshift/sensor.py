@@ -5,12 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import (
-    SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,8 +31,6 @@ async def async_setup_entry(
         SolarWeightedAvgFITSensor(coordinator, entry),
         ActiveModeSensor(coordinator, entry),
         SolarBatteryForecastSensor(coordinator, entry),
-        GridImportPowerSensor(coordinator, entry),
-        GridExportPowerSensor(coordinator, entry),
         NetElectricityCostSensor(coordinator, entry),
         DecisionLogSensor(coordinator, entry),
         ForecastHistorySensor(coordinator, entry),
@@ -179,34 +175,6 @@ class SolarBatteryForecastSensor(LocalShiftSensorBase):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return full forecast as attributes."""
         return self.coordinator.data.solar_battery_forecast
-
-
-class GridImportPowerSensor(LocalShiftSensorBase):
-    """Grid import power (always >= 0)."""
-
-    _attr_unique_id = "localshift_power_grid_import"
-    _attr_name = "Power Grid Import"
-    _attr_icon = "mdi:transmission-tower-import"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def _update_from_coordinator(self) -> None:
-        self._attr_native_value = round(self.coordinator.data.grid_import_power_kw, 3)
-
-
-class GridExportPowerSensor(LocalShiftSensorBase):
-    """Grid export power (always >= 0)."""
-
-    _attr_unique_id = "localshift_power_grid_export"
-    _attr_name = "Power Grid Export"
-    _attr_icon = "mdi:transmission-tower-export"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def _update_from_coordinator(self) -> None:
-        self._attr_native_value = round(self.coordinator.data.grid_export_power_kw, 3)
 
 
 class NetElectricityCostSensor(LocalShiftSensorBase):

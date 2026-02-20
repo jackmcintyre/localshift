@@ -69,8 +69,6 @@ class CoordinatorData:
     solar_weighted_avg_fit: float = 0.0
     solar_remaining_kwh: float = 0.0
     active_mode: BatteryMode = BatteryMode.SELF_CONSUMPTION
-    grid_import_power_kw: float = 0.0
-    grid_export_power_kw: float = 0.0
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
