@@ -13,6 +13,20 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 
 This ensures isolation between tasks and prevents changes to the main repo.
 
+# ⚠️ MANDATORY: DEEP THINKING MODE
+
+**When entering deep thinking mode, implementation_plan.md may be created. This must be done in a worktree.**
+
+1. **BEFORE creating `implementation_plan.md`:** Ensure you are in a worktree (follow the worktree workflow above)
+2. **Why this matters:** Multiple agents may work on different tasks simultaneously. If `implementation_plan.md` is created on main, it will be overwritten by other agents
+3. **The file is gitignored:** `implementation_plan.md` is ignored by git to prevent conflicts, but it still needs worktree isolation for agent coordination
+
+### Deep Thinking Mode Workflow
+1. Check worktree status with `git worktree list`
+2. If not in a worktree, create one before proceeding
+3. Create/modify `implementation_plan.md` in the worktree
+4. The plan stays local to that worktree and won't interfere with other agents
+
 # Worktree Workflow
 
 ## Overview
