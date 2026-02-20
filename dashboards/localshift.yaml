@@ -273,6 +273,60 @@ views:
               ⚠️ **Solar gap** — {{ deficit | round(1) }} kWh deficit
               {% endif %}
 
+      # Forecast Logic
+      - type: grid
+        cards:
+          - type: heading
+            heading: Forecast Logic
+            heading_style: title
+
+          - type: markdown
+            content: >
+              {% set forecast = 'sensor.localshift_forecast_daily' %}
+              {% set profile_type = state_attr(forecast, 'consumption_profile_type') %}
+              {% set profile_selected = state_attr(forecast, 'forecast_profile_selected') %}
+              {% set weekday_counts = state_attr(forecast, 'weekday_sample_counts') | default({}) %}
+              {% set weekend_counts = state_attr(forecast, 'weekend_sample_counts') | default({}) %}
+              {% set weather_enabled = state_attr(forecast, 'weather_learning_enabled') %}
+              {% set weather_entity = state_attr(forecast, 'weather_entity_id') %}
+              {% set weather_temp = state_attr(forecast, 'weather_temperature_current') %}
+              {% set weather_confidence = state_attr(forecast, 'weather_correlation_confidence') %}
+              {% set weather_samples = state_attr(forecast, 'weather_sample_count') %}
+              {% set recent_load = state_attr(forecast, 'recent_load_1hr_kw') %}
+              {% set weighting = state_attr(forecast, 'consumption_weighting') %}
+              
+              **📊 Consumption Profile**
+              
+              {% if profile_type == 'weekday_weekend' %}
+              ✅ Separate weekday/weekend profiles
+              {% else %}
+              ⚠️ Combined profile (need more data)
+              {% endif %}
+              
+              • Today's profile: **{{ profile_selected }}**
+              • Weekday samples: {{ weekday_counts.values() | sum | default(0) }}
+              • Weekend samples: {{ weekend_counts.values() | sum | default(0) }}
+              
+              ---
+              
+              **🌤️ Weather Correlation**
+              
+              {% if weather_entity %}
+              • Entity: `{{ weather_entity }}`
+              • Current temp: {{ weather_temp }}°C
+              • Confidence: {{ weather_confidence }}
+              • Samples: {{ weather_samples }}
+              {% else %}
+              ⚠️ No weather entity configured
+              {% endif %}
+              
+              ---
+              
+              **⚡ Recent Load Blending**
+              
+              • 1-hour avg: {{ recent_load | round(2) }} kW
+              • Weight: {{ (weighting * 100) | round(0) }}% recent / {{ ((1 - weighting) * 100) | round(0) }}% historical
+
       # Quick Actions
       - type: grid
         cards:
