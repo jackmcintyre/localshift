@@ -568,7 +568,7 @@ class ForecastComputer:
 
                 # Solar from dawn can reach target: NO overnight grid charging
                 if can_reach_with_solar_only:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "Grid charge SKIPPED overnight: solar from %s reaches target (SOC at dawn: %.1f%% -> max %.1f%%)",
                         solar_start.strftime("%H:%M"),
                         soc_at_solar_start,
@@ -593,7 +593,7 @@ class ForecastComputer:
                 )
 
                 if can_reach_with_solar_only:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
                         max_soc,
                         target_pct,
@@ -618,7 +618,7 @@ class ForecastComputer:
 
             # Solar forecast says we'll reach target: NO grid charging
             if can_reach_with_solar_only:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
                     max_soc,
                     target_pct,
@@ -2331,6 +2331,19 @@ class ForecastComputer:
                 ", ".join(missing_solar_slots[:10])
                 + ("..." if len(missing_solar_slots) > 10 else ""),
             )
+
+        # ========================================================================
+        # SUMMARY LOGGING: Grid charging decisions across all 96 slots
+        # ========================================================================
+        grid_charge_slots = sum(
+            1 for slot in daily_forecast if slot.get("grid_charge", False)
+        )
+        skipped_slots = TOTAL_SLOTS - grid_charge_slots
+        _LOGGER.info(
+            "Grid charging forecast: %d slot(s) with grid charging, %d slot(s) skipped (solar sufficient or price not cheap)",
+            grid_charge_slots,
+            skipped_slots,
+        )
 
         # ========================================================================
         # CALCULATE FORECAST COSTS (rest of today)
