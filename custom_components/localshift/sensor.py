@@ -401,6 +401,26 @@ class DailyForecastSensor(LocalShiftSensorBase):
             "forecast_proactive_export_revenue": round(
                 self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
             ),
+            # Weather correlation visibility (Issue #61)
+            "weather_entity_id": self.coordinator.data.weather_entity_id,
+            "weather_temperature_current": self.coordinator.data.weather_temperature_current,
+            "weather_temperature_forecast": {
+                str(hour): temp
+                for hour, temp in sorted(
+                    self.coordinator.data.weather_temperature_forecast.items()
+                )
+            },
+            "weather_condition": self.coordinator.data.weather_condition,
+            "weather_correlation_confidence": self.coordinator.data.weather_correlation_confidence,
+            "weather_adjustment_applied": self.coordinator.data.weather_adjustment_applied,
+            "weather_learning_enabled": self.coordinator.data.weather_learning_enabled,
+            "weather_cooling_coefficient": round(
+                self.coordinator.data.weather_cooling_coefficient, 4
+            ),
+            "weather_heating_coefficient": round(
+                self.coordinator.data.weather_heating_coefficient, 4
+            ),
+            "weather_sample_count": self.coordinator.data.weather_sample_count,
         }
 
 

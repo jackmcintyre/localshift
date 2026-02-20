@@ -415,6 +415,9 @@ class ComputationEngine:
         # ---- Step 17: excess_solar_signals (backlog-high-017) ----
         self._compute_excess_solar_signals(data, now_dt)
 
+        # ---- Step 18: weather correlation diagnostics (Issue #61) ----
+        self._populate_weather_diagnostics(data)
+
     # ========================================================================
     # SOLAR & BATTERY FORECASTING
     # ========================================================================
@@ -1843,4 +1846,68 @@ class ComputationEngine:
             data.load_shift_signal,
             data.safe_additional_load_kw,
             data.excess_solar_next_2h_kwh,
+        )
+
+    # ========================================================================
+    # WEATHER DIAGNOSTICS (Issue #61)
+    # ========================================================================
+
+    def _populate_weather_diagnostics(self, data: CoordinatorData) -> None:
+        """Populate weather correlation diagnostic fields.
+
+        Exposes learned coefficients, confidence levels, and sample counts
+        for dashboard visibility into weather-based load prediction.
+
+        Args:
+            data: CoordinatorData to populate with weather diagnostics
+        """
+        # Check if weather learning is enabled
+        weather_learning_enabled = self.entry.options.get(
+            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
+        )
+        data.weather_learning_enabled = weather_learning_enabled
+
+        if not weather_learning_enabled or self._weather_correlation is None:
+            # Clear diagnostics if disabled
+            data.weather_correlation_confidence = "low"
+            data.weather_adjustment_applied = False
+            data.weather_cooling_coefficient = 0.0
+            data.weather_heating_coefficient = 0.0
+            data.weather_sample_count = 0
+            return
+
+        # Get diagnostics from weather correlation
+        diagnostics = self._weather_correlation.get_diagnostics()
+
+        # Populate data fields
+        data.weather_correlation_confidence = "low"  # Will be updated per-hour
+        data.weather_sample_count = diagnostics.get("total_samples", 0)
+        data.weather_cooling_coefficient = diagnostics.get(
+            "average_cooling_coefficient", 0.0
+        )
+        data.weather_heating_coefficient = diagnostics.get(
+            "average_heating_coefficient", 0.0
+        )
+
+        # Check if any hourly coefficients have high confidence
+        hourly_coefs = diagnostics.get("hourly_coefficients", {})
+        has_medium_confidence = any(
+            coef.get("confidence") in ("medium", "high")
+            for coef in hourly_coefs.values()
+        )
+        if has_medium_confidence:
+            data.weather_correlation_confidence = "medium"
+
+        # Track if weather adjustment was applied in the current forecast
+        # This is set to True if any slot used weather-adjusted load
+        data.weather_adjustment_applied = (
+            False  # Will be set during forecast computation
+        )
+
+        _LOGGER.debug(
+            "Weather diagnostics: samples=%d, cooling=%.4f, heating=%.4f, confidence=%s",
+            data.weather_sample_count,
+            data.weather_cooling_coefficient,
+            data.weather_heating_coefficient,
+            data.weather_correlation_confidence,
         )
