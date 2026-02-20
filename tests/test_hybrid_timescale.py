@@ -38,7 +38,7 @@ class TestFifteenMinSlots:
         return ForecastComputer(
             entry=mock_entry,
             get_entity_id_func=lambda x: f"sensor.{x}",
-            get_historical_func=lambda: {},
+            get_historical_func=lambda entity_id: {},
         )
 
     @pytest.fixture

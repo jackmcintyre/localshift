@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -150,8 +151,8 @@ class ComputationEngine:
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        get_entity_id_func: callable,
-        get_switch_state_func: callable,
+        get_entity_id_func: Callable[[str], str],
+        get_switch_state_func: Callable[[str], bool],
     ) -> None:
         """Initialize computation engine.
 
