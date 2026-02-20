@@ -1,5 +1,18 @@
 Do not use sed, awk, or direct shell commands to edit files. Only use the provided write_to_file or apply_diff tools for modifying code.
 
+# ⚠️ MANDATORY: BEFORE ANY TASK
+
+**This applies to ALL tasks, no matter how simple. Failure to follow this is a process violation.**
+
+1. **FIRST ACTION:** Run `git worktree list` to check current worktree status
+2. **If output shows only the main repo (no worktree path matches current directory):**
+   - For backlog items: `git worktree add /Users/jackmcintyre/worktrees/backlog-{priority}-{NNN} -b backlog/{priority}-{NNN}`
+   - For ad-hoc tasks: `git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}`
+3. **Change directory to the worktree before making ANY file changes**
+4. **Only then proceed with the actual task**
+
+This ensures isolation between tasks and prevents changes to the main repo.
+
 # Worktree Workflow
 
 ## Overview
