@@ -1,4 +1,13 @@
-"""Test fixtures and configuration for localshift tests."""
+"""Test fixtures and configuration for localshift tests.
+
+This module provides both simple mocks for basic unit tests and realistic
+HA state simulations for tests that need to verify behavior with real-world
+entity states.
+
+For tests that need realistic HA behavior, use:
+- mock_hass_with_states: A hass instance with MockStates
+- realistic_entity_states: Default entity states for LocalShift
+"""
 
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -11,10 +20,32 @@ from custom_components.localshift.computation_engine import (
 )
 from custom_components.localshift.coordinator_data import CoordinatorData
 
+# Import realistic HA state simulation
+from tests.fixtures.ha_entities import (
+    MockState,
+    MockStates,
+    create_amber_price_forecast_state,
+    create_default_entity_states,
+    create_sample_amber_price_forecast,
+    create_sample_solcast_forecast,
+    create_solcast_forecast_state,
+    create_unavailable_entity_states,
+    create_unknown_entity_states,
+)
+
+# =============================================================================
+# SIMPLE MOCKS (for basic unit tests)
+# =============================================================================
+
 
 @pytest.fixture
 def mock_hass():
-    """Create a mock Home Assistant instance."""
+    """Create a mock Home Assistant instance.
+
+    This is a simple mock suitable for tests that don't need realistic
+    entity state behavior. For realistic HA state simulation, use
+    mock_hass_with_states instead.
+    """
     hass = MagicMock()
     hass.states = {}
     hass.data = {}
@@ -117,3 +148,429 @@ def computation_engine(
 def now():
     """Return a fixed datetime for testing."""
     return datetime(2026, 2, 16, 16, 0, 0)
+
+
+# =============================================================================
+# REALISTIC HA STATE SIMULATION FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def realistic_entity_states():
+    """Create realistic entity states for LocalShift testing.
+
+    This fixture provides a complete set of entity states that simulate
+    real Home Assistant entity behavior. Use with mock_hass_with_states.
+
+    Returns:
+        Dictionary mapping entity IDs to MockState objects
+    """
+    return create_default_entity_states(
+        soc=50.0,
+        operation_mode="autonomous",
+        backup_reserve=20.0,
+        grid_power_kw=0.0,
+        load_power_kw=0.5,
+        solar_power_kw=3.0,
+        battery_power_kw=-2.5,
+        general_price=0.25,
+        feed_in_price=0.08,
+        price_spike=False,
+    )
+
+
+@pytest.fixture
+def realistic_entity_states_with_forecasts(realistic_entity_states):
+    """Create realistic entity states including forecast data.
+
+    Extends realistic_entity_states with Solcast and Amber forecast data.
+
+    Returns:
+        Dictionary mapping entity IDs to MockState objects with forecasts
+    """
+    states = realistic_entity_states.copy()
+
+    # Add Solcast forecasts (using DEFAULT_ENTITY_IDS naming)
+    solcast_today = create_sample_solcast_forecast(num_periods=24, peak_kw=5.0)
+    solcast_tomorrow = create_sample_solcast_forecast(num_periods=24, peak_kw=4.5)
+
+    states["sensor.solcast_pv_forecast_forecast_today"] = create_solcast_forecast_state(
+        solcast_today,
+        entity_id="sensor.solcast_pv_forecast_forecast_today",
+    )
+    states["sensor.solcast_pv_forecast_forecast_tomorrow"] = (
+        create_solcast_forecast_state(
+            solcast_tomorrow,
+            entity_id="sensor.solcast_pv_forecast_forecast_tomorrow",
+        )
+    )
+
+    # Add Amber price forecasts (using DEFAULT_ENTITY_IDS naming)
+    general_forecast = create_sample_amber_price_forecast(
+        num_periods=48,
+        base_price=0.25,
+    )
+    feed_in_forecast = create_sample_amber_price_forecast(
+        num_periods=48,
+        base_price=0.08,
+    )
+
+    states["sensor.100h_general_forecast"] = create_amber_price_forecast_state(
+        general_forecast,
+        entity_id="sensor.100h_general_forecast",
+        friendly_name="General Price Forecast",
+    )
+    states["sensor.100h_feed_in_forecast"] = create_amber_price_forecast_state(
+        feed_in_forecast,
+        entity_id="sensor.100h_feed_in_forecast",
+        friendly_name="Feed-in Price Forecast",
+    )
+
+    return states
+
+
+@pytest.fixture
+def mock_hass_with_states(realistic_entity_states):
+    """Create a mock Home Assistant instance with realistic states.
+
+    This fixture provides a hass instance that simulates real HA behavior:
+    - hass.states.get() returns MockState objects or None
+    - States have .state and .attributes properties
+    - Entity availability is properly simulated
+
+    Use this for tests that need to verify behavior with realistic entity states.
+
+    Args:
+        realistic_entity_states: Default entity states from fixture
+
+    Returns:
+        MagicMock with realistic states.get() behavior
+    """
+    hass = MagicMock()
+    mock_states = MockStates(realistic_entity_states)
+
+    # Make hass.states.get() use MockStates.get()
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+
+    # Allow tests to modify states
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_with_forecasts(realistic_entity_states_with_forecasts):
+    """Create a mock Home Assistant instance with forecast data.
+
+    Same as mock_hass_with_states but includes Solcast and Amber forecasts.
+
+    Args:
+        realistic_entity_states_with_forecasts: Entity states with forecast data
+
+    Returns:
+        MagicMock with realistic states including forecasts
+    """
+    hass = MagicMock()
+    mock_states = MockStates(realistic_entity_states_with_forecasts)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+# =============================================================================
+# EDGE CASE FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def mock_hass_unavailable_entities(realistic_entity_states):
+    """Create a mock HA instance where all entities are unavailable.
+
+    Use this to test that the integration handles unavailable entities gracefully.
+
+    Returns:
+        MagicMock where all entities return state="unavailable"
+    """
+    entity_ids = list(realistic_entity_states.keys())
+    unavailable_states = create_unavailable_entity_states(entity_ids)
+
+    hass = MagicMock()
+    mock_states = MockStates(unavailable_states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_unknown_entities(realistic_entity_states):
+    """Create a mock HA instance where all entities are unknown.
+
+    Use this to test that the integration handles unknown entity states.
+
+    Returns:
+        MagicMock where all entities return state="unknown"
+    """
+    entity_ids = list(realistic_entity_states.keys())
+    unknown_states = create_unknown_entity_states(entity_ids)
+
+    hass = MagicMock()
+    mock_states = MockStates(unknown_states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_missing_entities():
+    """Create a mock HA instance where entities don't exist.
+
+    Use this to test that the integration handles missing entities gracefully.
+    hass.states.get() will return None for all entity IDs.
+
+    Returns:
+        MagicMock where states.get() returns None
+    """
+    hass = MagicMock()
+    mock_states = MockStates({})  # Empty states
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_partial_availability(realistic_entity_states):
+    """Create a mock HA instance with mixed entity availability.
+
+    Some entities are available, some are unavailable, some are missing.
+    Use this to test partial failure scenarios.
+
+    Returns:
+        MagicMock with mixed entity availability
+    """
+    states = realistic_entity_states.copy()
+
+    # Make some entities unavailable (using DEFAULT_ENTITY_IDS naming)
+    states["sensor.my_home_percentage_charged"] = MockState(
+        "sensor.my_home_percentage_charged", "unavailable", {}
+    )
+    states["sensor.100h_general_price"] = MockState(
+        "sensor.100h_general_price", "unavailable", {}
+    )
+
+    # Remove some entities entirely (simulating missing entities)
+    del states["sensor.my_home_solar_power"]
+    del states["binary_sensor.100h_price_spike"]
+
+    hass = MagicMock()
+    mock_states = MockStates(states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_price_spike(realistic_entity_states):
+    """Create a mock HA instance with price spike active.
+
+    Returns:
+        MagicMock with price_spike binary sensor set to 'on'
+    """
+    states = realistic_entity_states.copy()
+    states["binary_sensor.100h_price_spike"] = MockState(
+        "binary_sensor.100h_price_spike", "on", {}
+    )
+    states["sensor.100h_general_price"] = MockState(
+        "sensor.100h_general_price",
+        "2.50",
+        {"unit_of_measurement": "$/kWh", "friendly_name": "General Price"},
+    )
+
+    hass = MagicMock()
+    mock_states = MockStates(states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_low_battery(realistic_entity_states):
+    """Create a mock HA instance with low battery SOC.
+
+    Returns:
+        MagicMock with SOC at 10%
+    """
+    states = realistic_entity_states.copy()
+    states["sensor.my_home_percentage_charged"] = MockState(
+        "sensor.my_home_percentage_charged",
+        "10.0",
+        {"unit_of_measurement": "%", "device_class": "battery"},
+    )
+
+    hass = MagicMock()
+    mock_states = MockStates(states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_full_battery(realistic_entity_states):
+    """Create a mock HA instance with full battery SOC.
+
+    Returns:
+        MagicMock with SOC at 100%
+    """
+    states = realistic_entity_states.copy()
+    states["sensor.my_home_percentage_charged"] = MockState(
+        "sensor.my_home_percentage_charged",
+        "100.0",
+        {"unit_of_measurement": "%", "device_class": "battery"},
+    )
+
+    hass = MagicMock()
+    mock_states = MockStates(states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+@pytest.fixture
+def mock_hass_negative_prices(realistic_entity_states):
+    """Create a mock HA instance with negative electricity prices.
+
+    Returns:
+        MagicMock with negative general price
+    """
+    states = realistic_entity_states.copy()
+    states["sensor.100h_general_price"] = MockState(
+        "sensor.100h_general_price",
+        "-0.05",
+        {"unit_of_measurement": "$/kWh", "friendly_name": "General Price"},
+    )
+
+    hass = MagicMock()
+    mock_states = MockStates(states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
+
+
+# =============================================================================
+# STATE READER FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def state_reader(mock_hass_with_states, mock_entry):
+    """Create a StateReader instance with realistic HA states.
+
+    Use this for testing state reading functionality with realistic entity states.
+    """
+    from custom_components.localshift.state_reader import StateReader
+
+    return StateReader(mock_hass_with_states, mock_entry)
+
+
+@pytest.fixture
+def state_reader_unavailable(mock_hass_unavailable_entities, mock_entry):
+    """Create a StateReader with all entities unavailable."""
+    from custom_components.localshift.state_reader import StateReader
+
+    return StateReader(mock_hass_unavailable_entities, mock_entry)
+
+
+@pytest.fixture
+def state_reader_missing(mock_hass_missing_entities, mock_entry):
+    """Create a StateReader with missing entities."""
+    from custom_components.localshift.state_reader import StateReader
+
+    return StateReader(mock_hass_missing_entities, mock_entry)
+
+
+# =============================================================================
+# PARAMETRIZED FIXTURES FOR COMPREHENSIVE TESTING
+# =============================================================================
+
+
+@pytest.fixture(
+    params=[
+        "available",
+        "unavailable",
+        "unknown",
+        "missing",
+    ]
+)
+def mock_hass_various_states(request, realistic_entity_states):
+    """Parametrized fixture for testing various entity states.
+
+    Use this to run the same test against multiple availability scenarios:
+    - available: All entities have valid states
+    - unavailable: All entities have state="unavailable"
+    - unknown: All entities have state="unknown"
+    - missing: All entities return None from states.get()
+
+    Example:
+        def test_something(mock_hass_various_states):
+            # Test runs 4 times with different states
+            pass
+    """
+    availability = request.param
+
+    if availability == "available":
+        states = realistic_entity_states
+    elif availability == "unavailable":
+        entity_ids = list(realistic_entity_states.keys())
+        states = create_unavailable_entity_states(entity_ids)
+    elif availability == "unknown":
+        entity_ids = list(realistic_entity_states.keys())
+        states = create_unknown_entity_states(entity_ids)
+    else:  # missing
+        states = {}
+
+    hass = MagicMock()
+    mock_states = MockStates(states)
+
+    hass.states.get = mock_states.get
+    hass.states.async_all = mock_states.async_all
+    hass._mock_states = mock_states
+
+    hass.data = {}
+    return hass
