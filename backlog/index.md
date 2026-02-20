@@ -23,7 +23,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 |----|----------|--------|-------|
 | backlog-crit-002 | 🔴 CRIT | ✅ COMPLETED | Missing Unit Tests for State Machine |
 | backlog-crit-003 | 🔴 CRIT | ✅ COMPLETED | Silent 0.0 Returns Hide Missing Forecast Data |
-| backlog-high-017 | 🟠 HIGH | 📋 PROPOSED | Excess Solar Load Shifting Sensors |
+| backlog-high-017 | 🟠 HIGH | ✅ COMPLETED | Excess Solar Load Shifting Sensors |
 | backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Day Boundary Bug in Overnight Grid Charging Decision |
 | backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Health Check Missing export_mode Verification |
 | backlog-high-021 | 🟠 HIGH | ✅ COMPLETED | PROACTIVE_EXPORT Has 0 Debounce Risk |
