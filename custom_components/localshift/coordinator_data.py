@@ -82,7 +82,12 @@ class CoordinatorData:
     consumption_hourly_sample_counts: dict[int, int] = field(default_factory=dict)
     consumption_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
     # Day-of-week aware consumption profiles (issue-60)
-    consumption_profile_type: str = "combined"  # "weekday", "weekend", or "combined"
+    consumption_profile_type: str = (
+        "combined"  # "weekday_weekend" or "combined" (system capability)
+    )
+    forecast_profile_selected: str = (
+        "unknown"  # "weekday", "weekend", or "combined" for current forecast
+    )
     weekday_sample_counts: dict[int, int] = field(default_factory=dict)
     weekend_sample_counts: dict[int, int] = field(default_factory=dict)
     weekday_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
