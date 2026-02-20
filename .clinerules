@@ -135,6 +135,38 @@ gh issue view {NNN}                           # View specific issue
 
 # Pull Request Workflow
 
+## ⚠️ MANDATORY: Open PR Before Task Completion
+
+**A task is NOT complete until a PR has been opened.** This is a hard requirement.
+
+### Task Completion Checklist
+1. Make all code changes in the worktree
+2. Run pre-commit hooks to verify code quality
+3. Commit changes with appropriate message
+4. **Open a PR using `gh pr create`**
+5. Only then consider the task complete
+
+### Why This Matters
+- Ensures all changes go through code review
+- Maintains a clean git history on main
+- Provides visibility into what's being merged
+- Allows CI/CD checks to run before merge
+
+### PR Creation Command
+```bash
+gh pr create --title "feat: description" --body "## Summary
+Brief description
+
+## Changes Made
+- Change 1
+- Change 2
+
+## Testing
+- Test details
+
+Closes #NNN"
+```
+
 ## ⚠️ CRITICAL: PR-Issue Linking
 
 **Every PR MUST link to its related issue using GitHub's keywords.** This ensures issues automatically close when PRs are merged.
