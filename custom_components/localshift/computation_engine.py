@@ -36,6 +36,7 @@ from .const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
+    CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -46,12 +47,14 @@ from .const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
+    DEFAULT_WEATHER_LEARNING_ENABLED,
     DISCHARGE_EARLIEST_HOUR,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
     BatteryMode,
 )
 from .coordinator_data import CoordinatorData
+from .weather_correlation import WeatherCorrelation
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -177,6 +180,9 @@ class ComputationEngine:
 
         # Change tracker for forecast regeneration
         self._forecast_change_tracker = ForecastChangeTracker()
+
+        # Weather correlation for temperature-based consumption prediction
+        self._weather_correlation: WeatherCorrelation | None = None
 
         # Local cache properties (delegated to history_fetcher for storage)
         self._last_weighting: float = DEFAULT_LOAD_WEIGHT_RECENT
@@ -1376,6 +1382,106 @@ class ComputationEngine:
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
         self._history_fetcher.clear_historical_cache()
+
+    # ========================================================================
+    # WEATHER CORRELATION (Issue #61)
+    # ========================================================================
+
+    async def async_initialize_weather_correlation(self) -> None:
+        """Initialize weather correlation system.
+
+        Should be called during coordinator startup.
+        """
+        weather_learning_enabled = self.entry.options.get(
+            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
+        )
+
+        if not weather_learning_enabled:
+            _LOGGER.debug("Weather learning disabled, skipping initialization")
+            return
+
+        try:
+            self._weather_correlation = WeatherCorrelation(self.hass, self.entry)
+            await self._weather_correlation.async_initialize()
+            _LOGGER.info("Weather correlation initialized successfully")
+        except Exception as e:
+            _LOGGER.error("Failed to initialize weather correlation: %s", e)
+            self._weather_correlation = None
+
+    async def async_learn_weather_sample(self, data: CoordinatorData) -> None:
+        """Learn from current temperature/load observation.
+
+        Called periodically to update the learning model with actual
+        temperature and load data.
+
+        Args:
+            data: CoordinatorData with current weather and load values
+        """
+        if self._weather_correlation is None:
+            return
+
+        weather_learning_enabled = self.entry.options.get(
+            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
+        )
+
+        if not weather_learning_enabled:
+            return
+
+        # Only learn if we have valid temperature and load data
+        current_temp = data.weather_temperature_current
+        if current_temp <= 0:  # Invalid temperature
+            return
+
+        current_load = data.load_power_kw
+        if current_load <= 0:
+            return
+
+        now_dt = dt_util.now()
+        current_hour = now_dt.hour
+
+        # Learn from this sample
+        self._weather_correlation.learn_from_sample(
+            hour=current_hour,
+            temperature=current_temp,
+            actual_load_kw=current_load,
+        )
+
+        # Save periodically (every hour)
+        if current_hour != getattr(self, "_last_weather_save_hour", -1):
+            await self._weather_correlation.async_save()
+            self._last_weather_save_hour = current_hour
+
+    def get_weather_adjusted_load(
+        self, hour: int, base_load_kw: float
+    ) -> tuple[float, str]:
+        """Get weather-adjusted load prediction for a given hour.
+
+        Args:
+            hour: Hour of day (0-23)
+            base_load_kw: Base load estimate from historical profile
+
+        Returns:
+            Tuple of (adjusted_load_kw, adjustment_source)
+        """
+        if self._weather_correlation is None:
+            return base_load_kw, "no_weather_correlation"
+
+        weather_learning_enabled = self.entry.options.get(
+            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
+        )
+
+        if not weather_learning_enabled:
+            return base_load_kw, "weather_learning_disabled"
+
+        # Get temperature forecast for this hour
+        # This would need to be passed from the caller or fetched from weather entity
+        # For now, return base load - integration will be completed in forecast_computer
+        return base_load_kw, "weather_integration_pending"
+
+    @property
+    def weather_correlation(self) -> WeatherCorrelation | None:
+        """Get the weather correlation instance for external access."""
+        return self._weather_correlation
 
     # ========================================================================
     # SPIKE ANALYSIS (Conservative Spike Discharge)
