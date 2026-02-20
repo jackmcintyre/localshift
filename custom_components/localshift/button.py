@@ -98,11 +98,12 @@ class ForceChargeButton(LocalShiftButtonBase):
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
         await self.coordinator.async_set_force_charge()
-        await self.coordinator.async_send_notification(
-            "Powerwall: Manual Force Charge",
-            f"Manual force charge started. Battery at "
-            f"{self.coordinator.data.soc:.0f}%.",
-        )
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Manual Force Charge", self.coordinator.data
+                )
+            )
 
 
 class ForceDischargeButton(LocalShiftButtonBase):
@@ -117,11 +118,12 @@ class ForceDischargeButton(LocalShiftButtonBase):
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
         await self.coordinator.async_set_force_discharge()
-        await self.coordinator.async_send_notification(
-            "Powerwall: Manual Force Discharge",
-            f"Manual force discharge started. Battery at "
-            f"{self.coordinator.data.soc:.0f}%.",
-        )
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Manual Force Discharge", self.coordinator.data
+                )
+            )
 
 
 class BoostChargeButton(LocalShiftButtonBase):
@@ -136,11 +138,12 @@ class BoostChargeButton(LocalShiftButtonBase):
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
         await self.coordinator.async_set_boost_charge()
-        await self.coordinator.async_send_notification(
-            "Powerwall: Manual Boost Charge",
-            f"Manual boost charge (5kW) started. Battery at "
-            f"{self.coordinator.data.soc:.0f}%.",
-        )
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Manual Boost Charge", self.coordinator.data
+                )
+            )
 
 
 class SelfConsumptionButton(LocalShiftButtonBase):
@@ -152,11 +155,12 @@ class SelfConsumptionButton(LocalShiftButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         await self.coordinator.async_set_self_consumption()
-        await self.coordinator.async_send_notification(
-            "Powerwall: Manual Self Consumption",
-            f"Returned to self consumption. Battery at "
-            f"{self.coordinator.data.soc:.0f}%.",
-        )
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Manual Self Consumption", self.coordinator.data
+                )
+            )
 
 
 class UpdateForecastButton(LocalShiftButtonBase):
@@ -173,7 +177,9 @@ class UpdateForecastButton(LocalShiftButtonBase):
         # Trigger coordinator refresh to regenerate forecast
         await self.coordinator.async_evaluate_state_machine()
 
-        await self.coordinator.async_send_notification(
-            "Powerwall: Forecast Update",
-            "Historical load cache cleared. Forecast will regenerate.",
-        )
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Forecast Update", self.coordinator.data
+                )
+            )
