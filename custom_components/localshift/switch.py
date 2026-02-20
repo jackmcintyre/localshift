@@ -125,9 +125,7 @@ class LocalShiftSwitch(SwitchEntity):
             _LOGGER.info("LocalShift automation enabled")
 
         # Re-evaluate derived values and trigger state machine
-        self.coordinator._compute_derived_values()
-        self.coordinator._notify_listeners()
-        await self.coordinator.async_evaluate_state_machine()
+        await self.coordinator.async_recompute_and_evaluate()
 
     async def async_turn_off(self, **_kwargs) -> None:
         """Turn the switch off."""
@@ -152,6 +150,4 @@ class LocalShiftSwitch(SwitchEntity):
                 )
 
         # Re-evaluate derived values and trigger state machine
-        self.coordinator._compute_derived_values()
-        self.coordinator._notify_listeners()
-        await self.coordinator.async_evaluate_state_machine()
+        await self.coordinator.async_recompute_and_evaluate()
