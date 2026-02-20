@@ -26,6 +26,10 @@ from .const import (
     SWITCH_DRY_RUN,
     SWITCH_ICONS,
     SWITCH_NAMES,
+    SWITCH_NOTIFY_ALERTS,
+    SWITCH_NOTIFY_DAILY_SUMMARY,
+    SWITCH_NOTIFY_MANUAL_ACTIONS,
+    SWITCH_NOTIFY_TRANSITIONS,
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
 )
@@ -43,6 +47,10 @@ SWITCH_KEYS = [
     SWITCH_DRY_RUN,
     SWITCH_DEMAND_WINDOW_BLOCK,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_NOTIFY_TRANSITIONS,
+    SWITCH_NOTIFY_DAILY_SUMMARY,
+    SWITCH_NOTIFY_MANUAL_ACTIONS,
+    SWITCH_NOTIFY_ALERTS,
 ]
 
 
@@ -137,6 +145,11 @@ class LocalShiftSwitch(SwitchEntity):
                 "LocalShift automation disabled, returning to self consumption"
             )
             await self.coordinator.async_set_self_consumption()
+            # Send notification about automation being disabled
+            if self.coordinator._notification_service is not None:
+                await self.coordinator._notification_service.send_automation_disabled_notification(
+                    self.coordinator.data
+                )
 
         # Re-evaluate derived values and trigger state machine
         self.coordinator._compute_derived_values()

@@ -43,6 +43,10 @@ def mock_notification_service():
     """Create a mock NotificationService."""
     service = MagicMock()
     service.send_transition_notification = AsyncMock()
+    service.send_transition_failed_notification = AsyncMock()
+    service.send_health_correction_notification = AsyncMock()
+    service.send_manual_override_timeout_notification = AsyncMock()
+    service.send_automation_disabled_notification = AsyncMock()
     return service
 
 
@@ -174,19 +178,19 @@ class TestDebounceTimers:
         )
         assert debounce == timedelta(0)
 
-    def test_grid_charging_has_5_minute_debounce(self, state_machine):
-        """Price-driven transitions should have 5-minute debounce."""
+    def test_grid_charging_has_immediate_debounce(self, state_machine):
+        """Grid charging should have immediate debounce (hysteresis prevents oscillation)."""
         debounce = state_machine.get_debounce_for_transition(
             BatteryMode.SELF_CONSUMPTION, BatteryMode.GRID_CHARGING
         )
-        assert debounce == timedelta(minutes=5)
+        assert debounce == timedelta(0)
 
-    def test_boost_charging_has_5_minute_debounce(self, state_machine):
-        """Price-driven transitions should have 5-minute debounce."""
+    def test_boost_charging_has_immediate_debounce(self, state_machine):
+        """Boost charging should have immediate debounce (hysteresis prevents oscillation)."""
         debounce = state_machine.get_debounce_for_transition(
             BatteryMode.SELF_CONSUMPTION, BatteryMode.BOOST_CHARGING
         )
-        assert debounce == timedelta(minutes=5)
+        assert debounce == timedelta(0)
 
 
 # =============================================================================
@@ -489,24 +493,30 @@ class TestModeTransitions:
 class TestDebounceBehavior:
     """Tests for debounce timer behavior during evaluation."""
 
-    def test_debounce_waits_full_period(
+    def test_debounce_waits_full_period_for_proactive_export(
         self, state_machine, coordinator_data, mock_battery_controller
     ):
-        """Should wait full debounce period before transitioning."""
+        """Should wait full debounce period before transitioning to PROACTIVE_EXPORT."""
         state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
-        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+        coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
 
         mock_engine = MagicMock()
         mock_engine.compute_derived_values = MagicMock()
 
-        # First evaluation should start debounce timer
-        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+        # First evaluation should start debounce timer (but not transition yet)
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 16, 16, 0, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
 
-        # Should NOT have transitioned yet (5 minute debounce)
-        mock_battery_controller.set_force_charge.assert_not_called()
+        # Should NOT have transitioned yet (2 minute debounce, only 0 minutes elapsed)
+        mock_battery_controller.set_proactive_export.assert_not_called()
 
-        # Should have recorded when GRID_CHARGING was first desired
-        assert BatteryMode.GRID_CHARGING in state_machine._mode_desired_since
+        # Should have recorded when PROACTIVE_EXPORT was first desired
+        assert BatteryMode.PROACTIVE_EXPORT in state_machine._mode_desired_since
 
     def test_debounce_clears_stale_timers(
         self, state_machine, coordinator_data, mock_battery_controller
@@ -519,17 +529,24 @@ class TestDebounceBehavior:
             2020, 1, 1, 0, 0, 0
         )
 
-        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+        # Use PROACTIVE_EXPORT which has debounce, so timer tracking happens
+        coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
 
         mock_engine = MagicMock()
         mock_engine.compute_derived_values = MagicMock()
 
-        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 16, 16, 0, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
 
         # Stale timer should be cleared
         assert BatteryMode.BOOST_CHARGING not in state_machine._mode_desired_since
         # New timer for desired mode should be started
-        assert BatteryMode.GRID_CHARGING in state_machine._mode_desired_since
+        assert BatteryMode.PROACTIVE_EXPORT in state_machine._mode_desired_since
 
 
 # =============================================================================

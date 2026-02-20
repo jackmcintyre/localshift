@@ -36,7 +36,7 @@ This is the master index for all backlog items. Each feature has its own dedicat
 | backlog-med-012 | 🟡 MED | ✅ COMPLETED | Binary Sensors Include Redundant "binary" in Names |
 | backlog-med-023 | 🟡 MED | 📋 PROPOSED | Scenario-Based Simulation Framework |
 | backlog-med-024 | 🟡 MED | ✅ COMPLETED | Improve Settings Usability with Friendly Names and Help Text |
-| backlog-med-025 | 🟡 MED | 📋 PROPOSED | Notification System Improvements |
+| backlog-med-025 | 🟡 MED | ✅ COMPLETED | Notification System Improvements |
 | backlog-low-001 | ⚪ LOW | ✅ COMPLETED | Dashboard Setup Complexity |
 | backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
 

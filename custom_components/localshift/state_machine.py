@@ -174,6 +174,10 @@ class StateMachine:
                             )
                             data.manual_override = False
                             self._manual_override_set_at = None
+                            # Send notification about manual override timeout
+                            await self._notification_service.send_manual_override_timeout_notification(
+                                data, timeout_hours
+                            )
                             # Do NOT call compute_derived_values() again here.
                             # A full recompute already ran at the top of this lock
                             # (Item 5 fix).  A second nested compute would double-fire
@@ -260,6 +264,12 @@ class StateMachine:
                         "Mode transition from %s to %s failed - keeping previous commanded mode",
                         old_mode.value,
                         desired.value,
+                    )
+                    # Send notification about failed transition
+                    await (
+                        self._notification_service.send_transition_failed_notification(
+                            desired, data
+                        )
                     )
                     # Clear only the failed mode's timer so it will retry on next evaluation
                     # Keep other mode timers intact - they may be needed if forecast flips back
@@ -462,6 +472,10 @@ class StateMachine:
                 )
                 await self._execute_mode_transition(data, self._commanded_mode)
                 self._last_health_correction = now
+                # Send notification about health check correction
+                await self._notification_service.send_health_correction_notification(
+                    self._commanded_mode, data
+                )
             else:
                 remaining = (
                     self._MIN_CORRECTION_INTERVAL - (now - self._last_health_correction)
