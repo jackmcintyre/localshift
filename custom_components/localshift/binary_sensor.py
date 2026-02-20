@@ -33,6 +33,8 @@ async def async_setup_entry(
         DemandWindowActiveSensor(coordinator, entry),
         # Excess solar load shifting sensor (backlog-high-017)
         ExcessSolarAvailableSensor(coordinator, entry),
+        # Tesla Override Detection sensor
+        TeslaOverrideActiveSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -224,4 +226,48 @@ class ExcessSolarAvailableSensor(LocalShiftBinarySensorBase):
             "battery_charging": d.battery_power_kw < -0.1,
             "can_add_load_now": d.can_add_load_now,
             "safe_additional_load_kw": round(d.safe_additional_load_kw, 1),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Tesla Override Detection Binary Sensor
+# ---------------------------------------------------------------------------
+
+
+class TeslaOverrideActiveSensor(LocalShiftBinarySensorBase):
+    """Whether Tesla has taken control of the Powerwall (Storm Watch, Grid Event, VPP).
+
+    When Tesla activates Storm Watch, Grid Events, or VPP events, they set
+    backup_reserve to 80% and operation_mode to self_consumption, ignoring
+    external API commands until the event ends. This sensor provides visibility
+    into when Tesla has control.
+    """
+
+    _attr_unique_id = "localshift_tesla_override_active"
+    _attr_name = "Tesla Override Active"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on state."""
+        return "mdi:shield-alert" if self._attr_is_on else "mdi:shield-check"
+
+    def _update_from_coordinator(self) -> None:
+        """Update state from state machine's Tesla override detection."""
+        if self.coordinator._state_machine is not None:
+            self._attr_is_on = (
+                self.coordinator._state_machine.is_tesla_override_active()
+            )
+        else:
+            self._attr_is_on = False
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return Tesla override details."""
+        d = self.coordinator.data
+        return {
+            "operation_mode": d.operation_mode,
+            "backup_reserve": d.backup_reserve,
+            "description": "Tesla has taken control (Storm Watch, Grid Event, or VPP active)"
+            if self._attr_is_on
+            else "Tesla is not overriding control",
         }
