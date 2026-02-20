@@ -236,6 +236,9 @@ class LocalShiftCoordinator:
         # Also fetch recent 1-hour load average for weighted forecasting
         await self._computation_engine.async_get_recent_load_1hr(load_entity_id)
 
+        # Initialize weather correlation for temperature-based load prediction
+        await self._computation_engine.async_initialize_weather_correlation()
+
         # Wait for Solcast data to be ready before computing forecasts
         # This prevents errors when Solcast hasn't initialized yet
         await self._wait_for_solcast_and_compute()
@@ -447,6 +450,14 @@ class LocalShiftCoordinator:
 
         # Cost accumulation uses the raw state we just read (sync, no lock needed)
         self._accumulate_costs()
+
+        # Learn from current temperature/load for weather correlation
+        # This runs asynchronously and won't block the periodic tick
+        if self._computation_engine is not None:
+            self.hass.async_create_task(
+                self._computation_engine.async_learn_weather_sample(self.data),
+                "localshift_weather_learning",
+            )
 
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently
