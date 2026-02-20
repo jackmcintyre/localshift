@@ -1,57 +1,69 @@
 # Backlog Index
 
-**Last Updated:** 2026-02-19
+**Last Updated:** 2026-02-20
 
-This is the master index for all backlog items. Each feature has its own dedicated `.md` file in this directory.
+## ⚠️ Migration Notice
 
-## Priority Legend
-- 🔴 **CRIT** - Critical (affects core functionality)
-- 🟠 **HIGH** - High priority (reliability & robustness)
-- 🟡 **MED** - Medium priority (code quality & maintainability)
-- ⚪ **LOW** - Low priority (cosmetic & nice-to-have)
+**This backlog has been migrated to GitHub Issues.**
 
-## Status Legend
-- 📋 **PROPOSED** - New item, not yet started
-- 🔄 **IN_PROGRESS** - Currently being worked on
-- ✅ **COMPLETED** - Finished and merged
+All backlog items are now tracked at: https://github.com/jackmcintyre/localshift/issues
 
----
+### Issue Mapping
 
-## Backlog Items
-
-| ID | Priority | Status | Title |
-|----|----------|--------|-------|
-| backlog-crit-002 | 🔴 CRIT | ✅ COMPLETED | Missing Unit Tests for State Machine |
-| backlog-crit-003 | 🔴 CRIT | ✅ COMPLETED | Silent 0.0 Returns Hide Missing Forecast Data |
-| backlog-high-017 | 🟠 HIGH | ✅ COMPLETED | Excess Solar Load Shifting Sensors |
-| backlog-high-019 | 🟠 HIGH | ✅ COMPLETED | Day Boundary Bug in Overnight Grid Charging Decision |
-| backlog-high-020 | 🟠 HIGH | ✅ COMPLETED | Health Check Missing export_mode Verification |
-| backlog-high-021 | 🟠 HIGH | ✅ COMPLETED | PROACTIVE_EXPORT Has 0 Debounce Risk |
-| backlog-high-022 | 🟠 HIGH | ✅ COMPLETED | Forecast SOC Stays Flat at Minimum Despite Solar Excess |
-| backlog-high-023 | 🟠 HIGH | ✅ COMPLETED | Demand Window Premature Exit Bug |
-| backlog-med-004 | 🟡 MED | ✅ COMPLETED | Missing Cleanup for Historical Load Cache |
-| backlog-med-005 | 🟡 MED | 📋 PROPOSED | Unused Config Option - ALLOW_EXPORT |
-| backlog-med-011 | 🟡 MED | 📋 PROPOSED | Remove Redundant Grid Import/Export Sensors |
-| backlog-med-012 | 🟡 MED | ✅ COMPLETED | Binary Sensors Include Redundant "binary" in Names |
-| backlog-med-023 | 🟡 MED | 📋 PROPOSED | Scenario-Based Simulation Framework |
-| backlog-med-024 | 🟡 MED | ✅ COMPLETED | Improve Settings Usability with Friendly Names and Help Text |
-| backlog-med-025 | 🟡 MED | ✅ COMPLETED | Notification System Improvements |
-| backlog-low-001 | ⚪ LOW | ✅ COMPLETED | Dashboard Setup Complexity |
-| backlog-low-004 | ⚪ LOW | 📋 PROPOSED | Missing Type Hints for Internal Methods |
-| backlog-med-026 | 🟡 MED | 📋 PROPOSED | Comprehensive Test Suite Improvements |
+| Old Backlog ID | GitHub Issue | Status |
+|----------------|--------------|--------|
+| backlog-crit-002 | #11 | ✅ CLOSED |
+| backlog-crit-003 | #12 | ✅ CLOSED |
+| backlog-high-017 | #1 | 📋 OPEN |
+| backlog-high-019 | #13 | ✅ CLOSED |
+| backlog-high-020 | #14 | ✅ CLOSED |
+| backlog-high-022 | #15 | ✅ CLOSED |
+| backlog-high-023 | #16 | ✅ CLOSED |
+| backlog-med-004 | #17 | ✅ CLOSED |
+| backlog-med-005 | #2 | 📋 OPEN |
+| backlog-med-011 | #3 | 📋 OPEN |
+| backlog-med-012 | #18 | ✅ CLOSED |
+| backlog-med-014 | #7 | 📋 OPEN |
+| backlog-med-016 | #8 | 📋 OPEN |
+| backlog-med-018 | #9 | 📋 OPEN |
+| backlog-med-023 | #4 | 📋 OPEN |
+| backlog-med-024 | #19 | ✅ CLOSED |
+| backlog-med-025 | #20 | ✅ CLOSED |
+| backlog-med-026 | #6 | 📋 OPEN |
+| backlog-low-001 | #10 | 📋 OPEN |
+| backlog-low-004 | #5 | 📋 OPEN |
 
 ---
 
-## Adding New Items
+## New Workflow
 
-1. Create new file: `backlog/backlog-{priority}-{NNN}.md`
-2. Add entry to this index table
-3. Use the template from `backlog/TEMPLATE.md`
+### Creating New Backlog Items
+```bash
+gh issue create --title "Title" --body "Description" --label "priority: medium,status: proposed"
+```
 
-## File Naming Convention
-- Critical: `backlog-crit-XXX.md`
-- High: `backlog-high-XXX.md`
-- Medium: `backlog-med-XXX.md`
-- Low: `backlog-low-XXX.md`
+### Starting Work on an Issue
+```bash
+gh issue edit {NNN} --add-label "status: in-progress"
+git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
+```
 
-Where XXX is a sequential number starting from 001.
+### Completing an Issue
+```bash
+gh issue close {NNN} --comment "Completed in #{PR_NUMBER}"
+```
+
+---
+
+## Priority Labels (GitHub)
+
+- `priority: critical` - Critical (affects core functionality)
+- `priority: high` - High priority (reliability & robustness)
+- `priority: medium` - Medium priority (code quality & maintainability)
+- `priority: low` - Low priority (cosmetic & nice-to-have)
+
+## Status Labels (GitHub)
+
+- `status: proposed` - New item, not yet started
+- `status: in-progress` - Currently being worked on
+- `status: blocked` - Blocked by dependency or external factor
