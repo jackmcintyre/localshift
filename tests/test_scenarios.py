@@ -197,6 +197,34 @@ def assert_expected_values(data: CoordinatorData, expected: dict, scenario_name:
         scenario_name: Name of scenario (for error messages)
     """
     for key, expected_value in expected.items():
+        # Handle special computed keys
+        if key == "daily_forecast_min_soc":
+            if not data.daily_forecast:
+                pytest.fail(f"[{scenario_name}] daily_forecast is empty")
+            actual_value = min(
+                slot.get("predicted_soc", 100) for slot in data.daily_forecast
+            )
+            assert actual_value == pytest.approx(expected_value, rel=0.01), (
+                f"[{scenario_name}] {key}: expected {expected_value}, got {actual_value}"
+            )
+            continue
+
+        if key == "demand_window_end_soc":
+            if not data.daily_forecast:
+                pytest.fail(f"[{scenario_name}] daily_forecast is empty")
+            # Find the slot at or just after demand window end (22:00)
+            dw_end_soc = None
+            for slot in data.daily_forecast:
+                if slot.get("hour") == 22 and slot.get("minute") == 0:
+                    dw_end_soc = slot.get("predicted_soc")
+                    break
+            if dw_end_soc is None:
+                pytest.fail(f"[{scenario_name}] No forecast slot at demand window end")
+            assert dw_end_soc >= expected_value, (
+                f"[{scenario_name}] {key}: expected >= {expected_value}, got {dw_end_soc}"
+            )
+            continue
+
         actual_value = getattr(data, key, None)
 
         if actual_value is None:
@@ -255,13 +283,15 @@ def test_scenario(scenario_path, request):
     engine = ComputationEngine(hass, entry, get_entity_id, get_switch_state)
 
     # Mock time and history fetcher
+    # Use scenario's load_power_kw for recent load (for realistic forecast)
+    recent_load = scenario.input.get("load_power_kw", 0.5)
     with (
         patch("homeassistant.util.dt.now", return_value=test_time),
         patch.object(engine, "_get_historical_hourly_averages", return_value={}),
         patch.object(engine._history_fetcher, "_historical_load_cache", {}),
         patch.object(engine._history_fetcher, "_historical_load_sample_counts", {}),
         patch.object(engine._history_fetcher, "_historical_load_source", "none"),
-        patch.object(engine._history_fetcher, "_recent_load_1hr_kw", 0.5),
+        patch.object(engine._history_fetcher, "_recent_load_1hr_kw", recent_load),
         patch.object(
             engine._forecast_computer,
             "_get_historical_hourly_averages",
