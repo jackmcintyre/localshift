@@ -43,6 +43,16 @@ BATTERY_CAPACITY_KWH = 13.5
 DISCHARGE_EARLIEST_HOUR = 6
 
 # -----------------------------------------------------------------------------
+# Consumption Prediction Settings
+# -----------------------------------------------------------------------------
+
+# History window for consumption profile calculation (4 weeks for better statistics)
+HISTORY_WINDOW_DAYS = 28
+
+# Minimum samples per hour before using profile-specific data
+MIN_SAMPLES_PER_HOUR = 3
+
+# -----------------------------------------------------------------------------
 # Config Flow Keys — Entity Selection (Step 1)
 # -----------------------------------------------------------------------------
 

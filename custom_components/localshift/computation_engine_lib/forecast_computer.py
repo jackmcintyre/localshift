@@ -48,17 +48,23 @@ class ForecastComputer:
         entry: ConfigEntry,
         get_entity_id_func: Callable[[str], str],
         get_historical_func: Callable[[str], dict[int, float]],
+        get_profile_for_day_func: Callable[
+            [datetime], tuple[dict[int, float], dict[int, int], str]
+        ]
+        | None = None,
     ) -> None:
         """Initialize forecast computer.
 
         Args:
             entry: Config entry
             get_entity_id_func: Function to get entity IDs by config key
-            get_historical_func: Function to get historical hourly averages
+            get_historical_func: Function to get historical hourly averages (combined profile)
+            get_profile_for_day_func: Optional function to get day-aware profile (issue-60)
         """
         self.entry = entry
         self._get_entity_id = get_entity_id_func
         self._get_historical_hourly_averages = get_historical_func
+        self._get_profile_for_day = get_profile_for_day_func
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""

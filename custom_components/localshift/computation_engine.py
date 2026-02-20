@@ -171,8 +171,12 @@ class ComputationEngine:
         self._history_fetcher = HistoryFetcher(hass, entry)
 
         # Forecast computer for 15-minute battery SOC forecasting
+        # Pass day-aware profile function for issue-60
         self._forecast_computer = ForecastComputer(
-            entry, get_entity_id_func, self._get_historical_hourly_averages
+            entry,
+            get_entity_id_func,
+            self._get_historical_hourly_averages,
+            self._get_profile_for_day,
         )
 
         # Change tracker for forecast regeneration
@@ -657,6 +661,21 @@ class ComputationEngine:
                 data.recent_load_1hr_statistic_id = self._recent_load_1hr_statistic_id
                 data.recent_load_1hr_samples = self._recent_load_1hr_samples
                 data.recent_load_1hr_last_error = self._recent_load_1hr_last_error
+
+                # Propagate day-of-week profile diagnostics (issue-60)
+                weekday_avg, weekday_counts = (
+                    self._history_fetcher.get_weekday_profile()
+                )
+                weekend_avg, weekend_counts = (
+                    self._history_fetcher.get_weekend_profile()
+                )
+                data.consumption_profile_type = (
+                    self._history_fetcher.get_profile_source()
+                )
+                data.weekday_sample_counts = weekday_counts
+                data.weekend_sample_counts = weekend_counts
+                data.weekday_hourly_profile_kw = weekday_avg
+                data.weekend_hourly_profile_kw = weekend_avg
 
             except Exception as e:
                 _LOGGER.error("Forecast computation failed: %s", e, exc_info=True)
@@ -1318,6 +1337,20 @@ class ComputationEngine:
         Returns cached data - actual fetching happens in async_get_historical_hourly_averages.
         """
         return self._history_fetcher.get_cached_hourly_averages()
+
+    def _get_profile_for_day(
+        self, target_date: datetime
+    ) -> tuple[dict[int, float], dict[int, int], str]:
+        """Get day-aware consumption profile based on target day's day-of-week.
+
+        Args:
+            target_date: The date to get the profile for
+
+        Returns:
+            Tuple of (hourly_avg_kw, sample_counts, source) where source is
+            "weekday", "weekend", or "combined" (fallback).
+        """
+        return self._history_fetcher.get_profile_for_day(target_date)
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""

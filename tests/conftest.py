@@ -587,9 +587,36 @@ def mock_recorder():
 
     This fixture patches recorder.get_instance to return a mock that
     properly supports async_add_executor_job as an AsyncMock.
+
+    Returns a dict with the expected structure for historical load data:
+    - combined_avg: Combined hourly averages
+    - combined_counts: Combined sample counts
+    - weekday_avg: Weekday hourly averages
+    - weekend_avg: Weekend hourly averages
+    - weekday_counts: Weekday sample counts
+    - weekend_counts: Weekend sample counts
+    - profile_source: "weekday_weekend" or "combined_fallback"
     """
+    # Create sample hourly data for testing
+    combined_avg = {h: 0.5 for h in range(24)}  # 0.5 kW average for each hour
+    combined_counts = {h: 7 for h in range(24)}  # 7 samples per hour
+    weekday_avg = {h: 0.6 for h in range(24)}  # Higher weekday usage
+    weekend_avg = {h: 0.4 for h in range(24)}  # Lower weekend usage
+    weekday_counts = {h: 5 for h in range(24)}
+    weekend_counts = {h: 2 for h in range(24)}
+
+    mock_result = {
+        "combined_avg": combined_avg,
+        "combined_counts": combined_counts,
+        "weekday_avg": weekday_avg,
+        "weekend_avg": weekend_avg,
+        "weekday_counts": weekday_counts,
+        "weekend_counts": weekend_counts,
+        "profile_source": "weekday_weekend",
+    }
+
     mock_instance = MagicMock()
-    mock_instance.async_add_executor_job = AsyncMock(return_value=({}, {}))
+    mock_instance.async_add_executor_job = AsyncMock(return_value=mock_result)
 
     with patch(
         "homeassistant.components.recorder.get_instance",
