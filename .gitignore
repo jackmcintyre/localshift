@@ -33,3 +33,6 @@ htmlcov/
 
 # Pre-commit
 .pre-commit-config.yaml.cache
+
+# Cline deep thinking mode
+implementation_plan.md
