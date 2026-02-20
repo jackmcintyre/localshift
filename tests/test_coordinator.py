@@ -104,7 +104,7 @@ class TestAsyncStart:
     """Tests for async_start method."""
 
     @pytest.mark.asyncio
-    async def test_async_start_initializes_modules(self, coordinator):
+    async def test_async_start_initializes_modules(self, coordinator, mock_recorder):
         """Test that async_start initializes all helper modules."""
         with (
             patch(
@@ -131,7 +131,7 @@ class TestAsyncStart:
             assert coordinator._notification_service is not None
 
     @pytest.mark.asyncio
-    async def test_async_start_subscribes_to_events(self, coordinator):
+    async def test_async_start_subscribes_to_events(self, coordinator, mock_recorder):
         """Test that async_start subscribes to state changes and timers."""
         with (
             patch(
@@ -158,7 +158,7 @@ class TestAsyncStart:
             assert mock_track_time_change.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_async_start_sets_startup_grace(self, coordinator):
+    async def test_async_start_sets_startup_grace(self, coordinator, mock_recorder):
         """Test that async_start sets startup grace period."""
         with (
             patch(

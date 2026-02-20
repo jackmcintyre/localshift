@@ -10,7 +10,7 @@ For tests that need realistic HA behavior, use:
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -574,3 +574,25 @@ def mock_hass_various_states(request, realistic_entity_states):
 
     hass.data = {}
     return hass
+
+
+# =============================================================================
+# RECORDER MOCK FIXTURE
+# =============================================================================
+
+
+@pytest.fixture
+def mock_recorder():
+    """Mock the recorder instance for async executor job.
+
+    This fixture patches recorder.get_instance to return a mock that
+    properly supports async_add_executor_job as an AsyncMock.
+    """
+    mock_instance = MagicMock()
+    mock_instance.async_add_executor_job = AsyncMock(return_value=({}, {}))
+
+    with patch(
+        "homeassistant.components.recorder.get_instance",
+        return_value=mock_instance,
+    ):
+        yield mock_instance
