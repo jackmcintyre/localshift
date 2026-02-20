@@ -1722,6 +1722,36 @@ class ForecastComputer:
                 )
                 return False, 0.0
 
+            # CRITICAL FIX (Issue #75): Only export when there's solar surplus in this slot.
+            # This prevents draining the battery at night when there's no solar to cover
+            # the export. We only export surplus solar, not battery energy.
+            # Calculate net energy for this slot using historical_avg_kw if available.
+            slot_fraction = 15 / 60.0  # 0.25 hours
+            if historical_avg_kw is not None:
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    None,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                consumption_kwh = load_kw * slot_fraction
+            else:
+                consumption_kwh = 0.3 * slot_fraction  # Fallback estimate
+
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Only export if there's solar surplus (solar > consumption)
+            if net_kwh <= 0:
+                _LOGGER.debug(
+                    "PROACTIVE_EXPORT: %02d:%02d BLOCKED - no solar surplus (solar=%.3f kWh, consumption=%.3f kWh)",
+                    slot_hour,
+                    slot_start.minute,
+                    solar_kwh,
+                    consumption_kwh,
+                )
+                return False, 0.0
+
             # Must have SOC above minimum to export
             if predicted_soc <= export_min_soc_pct:
                 _LOGGER.debug(
@@ -1733,25 +1763,22 @@ class ForecastComputer:
                 )
                 return False, 0.0
 
-            # Calculate how much we can export (above minimum SOC)
-            available_above_min_kwh = (
-                (predicted_soc - export_min_soc_pct) / 100 * BATTERY_CAPACITY_KWH
-            )
-
-            # Export amount = min(headroom needed, available above min, max rate)
+            # Export amount = min(solar surplus, headroom needed, max rate)
+            # We only export the solar surplus, not battery energy
             max_export_rate_kwh = 8.7 / 4  # 2.175 kWh per 15 min slot
             export_amount = min(
+                net_kwh,  # Only export what solar provides
                 negative_fit_headroom_kwh,
-                available_above_min_kwh,
                 max_export_rate_kwh,
             )
 
             if export_amount > 0:
                 _LOGGER.info(
-                    "PROACTIVE_EXPORT: %02d:%02d NEGATIVE_FIT_AVOIDANCE - FIT=$%.3f, headroom=%.2f kWh, exporting=%.3f kWh, SOC=%.1f%%",
+                    "PROACTIVE_EXPORT: %02d:%02d NEGATIVE_FIT_AVOIDANCE - FIT=$%.3f, solar_surplus=%.3f kWh, headroom=%.2f kWh, exporting=%.3f kWh, SOC=%.1f%%",
                     slot_hour,
                     slot_start.minute,
                     use_price,
+                    net_kwh,
                     negative_fit_headroom_kwh,
                     export_amount,
                     predicted_soc,
