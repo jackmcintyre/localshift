@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .const import (
@@ -18,6 +19,18 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# Transition timeouts per mode (seconds)
+# Boost charging needs longer due to Tesla API behavior with autonomous mode
+TRANSITION_TIMEOUTS = {
+    "autonomous": 15,  # autonomous mode takes longer to propagate
+    "backup": 10,
+    "self_consumption": 10,
+}
+
+# Maximum retries for failed transitions
+MAX_TRANSITION_RETRIES = 2
+RETRY_DELAY_SECONDS = 2
 
 
 class BatteryController:
@@ -44,7 +57,8 @@ class BatteryController:
             True if successful, False otherwise.
         """
         entity_id = self._get_entity_id("teslemetry_allow_export")
-        _LOGGER.info("Setting export mode: %s → %s", entity_id, mode)
+        start_time = time.monotonic()
+        _LOGGER.info("[TRANSITION] Setting export mode: %s → %s", entity_id, mode)
 
         try:
             await self.hass.services.async_call(
@@ -53,10 +67,18 @@ class BatteryController:
                 {"entity_id": entity_id, "option": mode},
                 blocking=True,
             )
-            _LOGGER.info("Successfully set export mode to %s", mode)
+            elapsed = time.monotonic() - start_time
+            _LOGGER.info("[TRANSITION] Export mode set to %s in %.2fs", mode, elapsed)
             return True
         except Exception as e:
-            _LOGGER.error("Failed to set export mode to %s: %s", mode, e, exc_info=True)
+            elapsed = time.monotonic() - start_time
+            _LOGGER.error(
+                "[TRANSITION] Failed to set export mode to %s after %.2fs: %s",
+                mode,
+                elapsed,
+                e,
+                exc_info=True,
+            )
             return False
 
     async def _set_operation_mode(self, mode: str) -> bool:
@@ -66,7 +88,8 @@ class BatteryController:
             True if successful, False otherwise.
         """
         entity_id = self._get_entity_id("teslemetry_operation_mode")
-        _LOGGER.info("Setting operation mode: %s → %s", entity_id, mode)
+        start_time = time.monotonic()
+        _LOGGER.info("[TRANSITION] Setting operation mode: %s → %s", entity_id, mode)
 
         try:
             await self.hass.services.async_call(
@@ -75,11 +98,19 @@ class BatteryController:
                 {"entity_id": entity_id, "option": mode},
                 blocking=True,
             )
-            _LOGGER.info("Successfully set operation mode to %s", mode)
+            elapsed = time.monotonic() - start_time
+            _LOGGER.info(
+                "[TRANSITION] Operation mode set to %s in %.2fs", mode, elapsed
+            )
             return True
         except Exception as e:
+            elapsed = time.monotonic() - start_time
             _LOGGER.error(
-                "Failed to set operation mode to %s: %s", mode, e, exc_info=True
+                "[TRANSITION] Failed to set operation mode to %s after %.2fs: %s",
+                mode,
+                elapsed,
+                e,
+                exc_info=True,
             )
             return False
 
@@ -90,7 +121,8 @@ class BatteryController:
             True if successful, False otherwise.
         """
         entity_id = self._get_entity_id("teslemetry_backup_reserve")
-        _LOGGER.info("Setting backup reserve: %s → %s", entity_id, value)
+        start_time = time.monotonic()
+        _LOGGER.info("[TRANSITION] Setting backup reserve: %s → %s", entity_id, value)
 
         try:
             await self.hass.services.async_call(
@@ -99,11 +131,19 @@ class BatteryController:
                 {"entity_id": entity_id, "value": value},
                 blocking=True,
             )
-            _LOGGER.info("Successfully set backup reserve to %s", value)
+            elapsed = time.monotonic() - start_time
+            _LOGGER.info(
+                "[TRANSITION] Backup reserve set to %s in %.2fs", value, elapsed
+            )
             return True
         except Exception as e:
+            elapsed = time.monotonic() - start_time
             _LOGGER.error(
-                "Failed to set backup reserve to %s: %s", value, e, exc_info=True
+                "[TRANSITION] Failed to set backup reserve to %s after %.2fs: %s",
+                value,
+                elapsed,
+                e,
+                exc_info=True,
             )
             return False
 
@@ -202,6 +242,22 @@ class BatteryController:
         )
         return True
 
+    def _get_hardware_state_snapshot(self) -> dict:
+        """Capture current hardware state for diagnostic logging.
+
+        Returns:
+            Dict with operation_mode, backup_reserve, and export_mode.
+        """
+        operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
+        backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
+        export_mode_entity = self._get_entity_id("teslemetry_allow_export")
+
+        return {
+            "operation_mode": self._read_str(operation_mode_entity),
+            "backup_reserve": self._read_float(backup_reserve_entity, -1),
+            "export_mode": self._read_str(export_mode_entity),
+        }
+
     async def set_boost_charge(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
@@ -217,7 +273,15 @@ class BatteryController:
             _LOGGER.info("DRY RUN: set_boost_charge")
             return True
 
-        _LOGGER.info("Setting battery to boost charge mode")
+        # Capture initial state for diagnostics
+        initial_state = self._get_hardware_state_snapshot()
+        transition_start = time.monotonic()
+        _LOGGER.info(
+            "[TRANSITION] Starting boost charge mode | Initial state: op=%s, reserve=%s, export=%s",
+            initial_state["operation_mode"],
+            initial_state["backup_reserve"],
+            initial_state["export_mode"],
+        )
 
         # Set allow_export to pv_only first (don't allow battery to export)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
@@ -232,19 +296,30 @@ class BatteryController:
             _LOGGER.error("Aborting boost charge mode: Failed to set operation mode")
             return False
 
+        # Use extended timeout for autonomous mode (15s instead of 10s)
+        # Tesla API takes longer to propagate autonomous mode changes
+        timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
+
         # Validate transition completed successfully
         if not await self.validate_transition(
             expected_operation_mode="autonomous",
             expected_backup_reserve=100,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
-            timeout=10,
+            timeout=timeout,
         ):
-            _LOGGER.error("Boost charge mode validation failed")
+            final_state = self._get_hardware_state_snapshot()
+            elapsed = time.monotonic() - transition_start
+            _LOGGER.error(
+                "[TRANSITION] Boost charge FAILED after %.2fs | Final state: op=%s, reserve=%s, export=%s",
+                elapsed,
+                final_state["operation_mode"],
+                final_state["backup_reserve"],
+                final_state["export_mode"],
+            )
             return False
 
-        _LOGGER.info(
-            "Successfully completed boost charge mode transition with validation"
-        )
+        elapsed = time.monotonic() - transition_start
+        _LOGGER.info("[TRANSITION] Boost charge SUCCESS in %.2fs", elapsed)
         return True
 
     def _get_minimum_target_soc(self) -> float:
@@ -287,8 +362,15 @@ class BatteryController:
             _LOGGER.info("DRY RUN: set_force_discharge (reserve=%s)", minimum_target)
             return True
 
+        # Capture initial state for diagnostics
+        initial_state = self._get_hardware_state_snapshot()
+        transition_start = time.monotonic()
         _LOGGER.info(
-            "Setting battery to force discharge mode (reserve=%s)", minimum_target
+            "[TRANSITION] Starting force discharge mode (reserve=%s) | Initial state: op=%s, reserve=%s, export=%s",
+            minimum_target,
+            initial_state["operation_mode"],
+            initial_state["backup_reserve"],
+            initial_state["export_mode"],
         )
 
         # Set allow_export to battery_ok first (allow battery to export to grid)
@@ -304,19 +386,29 @@ class BatteryController:
             _LOGGER.error("Aborting force discharge mode: Failed to set operation mode")
             return False
 
+        # Use extended timeout for autonomous mode (15s instead of 10s)
+        timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
+
         # Validate transition completed successfully
         if not await self.validate_transition(
             expected_operation_mode="autonomous",
             expected_backup_reserve=minimum_target,
             expected_export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
-            timeout=10,
+            timeout=timeout,
         ):
-            _LOGGER.error("Force discharge mode validation failed")
+            final_state = self._get_hardware_state_snapshot()
+            elapsed = time.monotonic() - transition_start
+            _LOGGER.error(
+                "[TRANSITION] Force discharge FAILED after %.2fs | Final state: op=%s, reserve=%s, export=%s",
+                elapsed,
+                final_state["operation_mode"],
+                final_state["backup_reserve"],
+                final_state["export_mode"],
+            )
             return False
 
-        _LOGGER.info(
-            "Successfully completed force discharge mode transition with validation"
-        )
+        elapsed = time.monotonic() - transition_start
+        _LOGGER.info("[TRANSITION] Force discharge SUCCESS in %.2fs", elapsed)
         return True
 
     async def set_proactive_export(
@@ -346,10 +438,16 @@ class BatteryController:
             )
             return True
 
+        # Capture initial state for diagnostics
+        initial_state = self._get_hardware_state_snapshot()
+        transition_start = time.monotonic()
         _LOGGER.info(
-            "Setting battery to proactive export mode (reserve=%s, SOC=%s) - throttled export",
+            "[TRANSITION] Starting proactive export mode (reserve=%s, SOC=%s) | Initial state: op=%s, reserve=%s, export=%s",
             reserve,
             current_soc,
+            initial_state["operation_mode"],
+            initial_state["backup_reserve"],
+            initial_state["export_mode"],
         )
 
         # Set allow_export to battery_ok (allow battery to export to grid)
@@ -368,18 +466,31 @@ class BatteryController:
             _LOGGER.error("Aborting proactive export: Failed to set operation mode")
             return False
 
+        # Use extended timeout for autonomous mode (15s instead of 10s)
+        timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
+
         # Validate transition completed successfully
         if not await self.validate_transition(
             expected_operation_mode="autonomous",
             expected_backup_reserve=reserve,
             expected_export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
-            timeout=10,
+            timeout=timeout,
         ):
-            _LOGGER.error("Proactive export mode validation failed")
+            final_state = self._get_hardware_state_snapshot()
+            elapsed = time.monotonic() - transition_start
+            _LOGGER.error(
+                "[TRANSITION] Proactive export FAILED after %.2fs | Final state: op=%s, reserve=%s, export=%s",
+                elapsed,
+                final_state["operation_mode"],
+                final_state["backup_reserve"],
+                final_state["export_mode"],
+            )
             return False
 
+        elapsed = time.monotonic() - transition_start
         _LOGGER.info(
-            "Successfully completed proactive export mode transition with validation (reserve=%s)",
+            "[TRANSITION] Proactive export SUCCESS in %.2fs (reserve=%s)",
+            elapsed,
             reserve,
         )
         return True
@@ -419,11 +530,13 @@ class BatteryController:
         Returns:
             True if validation passes, False otherwise.
         """
+        validation_start = time.monotonic()
         _LOGGER.info(
-            "Validating transition: operation_mode=%s, backup_reserve=%s, export_mode=%s",
+            "[VALIDATION] Starting validation: op=%s, reserve=%s, export=%s, timeout=%ds",
             expected_operation_mode,
             expected_backup_reserve,
             expected_export_mode,
+            timeout,
         )
 
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
@@ -431,6 +544,7 @@ class BatteryController:
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
 
         first_failure_logged = False
+        last_operation_mode = None
 
         for attempt in range(timeout):
             await asyncio.sleep(1)
@@ -441,6 +555,17 @@ class BatteryController:
             current_export_mode = (
                 self._read_str(export_mode_entity) if expected_export_mode else None
             )
+
+            # Track operation mode changes for diagnostics
+            if current_operation_mode != last_operation_mode:
+                elapsed = time.monotonic() - validation_start
+                _LOGGER.info(
+                    "[VALIDATION] t=%.1fs: operation_mode changed %s → %s",
+                    elapsed,
+                    last_operation_mode,
+                    current_operation_mode,
+                )
+                last_operation_mode = current_operation_mode
 
             _LOGGER.debug(
                 "Validation attempt %d/%d: operation_mode=%s, backup_reserve=%s, export_mode=%s",
@@ -461,17 +586,22 @@ class BatteryController:
             )
 
             if matches_operation and matches_reserve and matches_export:
+                elapsed = time.monotonic() - validation_start
                 _LOGGER.info(
-                    "Transition validation successful after %d seconds", attempt + 1
+                    "[VALIDATION] SUCCESS after %.1fs (attempt %d/%d)",
+                    elapsed,
+                    attempt + 1,
+                    timeout,
                 )
                 return True
 
             # Log failure only once (first failure) to avoid log flooding
             if not first_failure_logged:
                 _LOGGER.warning(
-                    "Transition validation - state mismatch: "
-                    "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s), "
-                    "actual (operation_mode=%s, backup_reserve=%s, export_mode=%s)",
+                    "[VALIDATION] State mismatch at attempt %d: "
+                    "expected (op=%s, reserve=%s, export=%s), "
+                    "actual (op=%s, reserve=%s, export=%s)",
+                    attempt + 1,
                     expected_operation_mode,
                     expected_backup_reserve,
                     expected_export_mode,
@@ -491,17 +621,19 @@ class BatteryController:
         # Final check: if operation mode is correct, consider it a success
         # Tesla may lag in updating reserve, but the mode command went through
         final_operation_mode = self._read_str(operation_mode_entity)
+        elapsed = time.monotonic() - validation_start
         if final_operation_mode == expected_operation_mode:
             _LOGGER.info(
-                "Transition validated by operation_mode=%s (reserve/export may lag)",
-                final_operation_mode,
+                "[VALIDATION] ACCEPTED via operation_mode match after %.1fs (reserve/export may lag)",
+                elapsed,
             )
             return True
 
         _LOGGER.error(
-            "Transition validation failed after %d seconds: "
-            "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s), "
-            "actual (operation_mode=%s)",
+            "[VALIDATION] FAILED after %.1fs (%d attempts): "
+            "expected (op=%s, reserve=%s, export=%s), "
+            "actual (op=%s)",
+            elapsed,
             timeout,
             expected_operation_mode,
             expected_backup_reserve,

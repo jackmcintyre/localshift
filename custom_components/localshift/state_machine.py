@@ -63,6 +63,10 @@ class StateMachine:
         self._MIN_CORRECTION_INTERVAL = timedelta(minutes=5)
         # Flag to skip debounce on first transition after startup grace
         self._skip_next_debounce: bool = False
+        # Track last successful transition for health check intelligence
+        self._last_successful_transition: datetime | None = None
+        # Grace period after successful transition before health checks trigger corrections
+        self._TRANSITION_GRACE_PERIOD = timedelta(seconds=30)
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
@@ -400,6 +404,16 @@ class StateMachine:
             _LOGGER.debug("Mode transition flag cleared, allowing re-evaluation")
             self._in_mode_transition = False
 
+        # Track successful transition time for health check grace period
+        if transition_success and not dry_run:
+            transition_time = dt_util.now()
+            self._last_successful_transition = transition_time
+            _LOGGER.debug(
+                "Recorded successful transition to %s at %s",
+                target.value,
+                transition_time.strftime("%H:%M:%S"),
+            )
+
         return transition_success
 
     def _get_expected_state_for_mode(self, mode: BatteryMode) -> tuple[str, int, str]:
@@ -434,6 +448,21 @@ class StateMachine:
 
         If drift is detected, we attempt to correct it.
         """
+        now = dt_util.now()
+
+        # Skip health check during transition grace period
+        # This prevents false positives when Tesla API is still propagating
+        if self._last_successful_transition is not None:
+            time_since_transition = now - self._last_successful_transition
+            if time_since_transition < self._TRANSITION_GRACE_PERIOD:
+                _LOGGER.debug(
+                    "[HEALTH CHECK] Skipping - in transition grace period (%.0fs remaining)",
+                    (
+                        self._TRANSITION_GRACE_PERIOD - time_since_transition
+                    ).total_seconds(),
+                )
+                return
+
         expected_op, expected_reserve, expected_export = (
             self._get_expected_state_for_mode(self._commanded_mode)
         )
@@ -457,35 +486,60 @@ class StateMachine:
         )
 
         if not is_valid:
-            now = dt_util.now()
+            # Check if we're in cooldown period
             if (
-                self._last_health_correction is None
-                or now - self._last_health_correction >= self._MIN_CORRECTION_INTERVAL
+                self._last_health_correction is not None
+                and now - self._last_health_correction < self._MIN_CORRECTION_INTERVAL
             ):
-                _LOGGER.warning(
-                    "Health check failed: hardware state doesn't match commanded mode %s. "
-                    "Attempting to correct (last correction: %s)...",
-                    self._commanded_mode.value,
-                    self._last_health_correction.strftime("%H:%M:%S")
-                    if self._last_health_correction
-                    else "never",
-                )
-                await self._execute_mode_transition(data, self._commanded_mode)
-                self._last_health_correction = now
-                # Send notification about health check correction
-                await self._notification_service.send_health_correction_notification(
-                    self._commanded_mode, data
-                )
-            else:
                 remaining = (
                     self._MIN_CORRECTION_INTERVAL - (now - self._last_health_correction)
                 ).total_seconds()
                 _LOGGER.debug(
-                    "Health check failed for mode %s but correction cooldown active "
-                    "(%.0fs remaining) — skipping re-send",
-                    self._commanded_mode.value,
+                    "[HEALTH CHECK] Mismatch detected but correction cooldown active (%.0fs remaining)",
                     remaining,
                 )
+                return
+
+            # Log the mismatch with detailed diagnostics
+            last_transition_str = (
+                self._last_successful_transition.strftime("%H:%M:%S")
+                if self._last_successful_transition
+                else "never"
+            )
+            last_correction_str = (
+                self._last_health_correction.strftime("%H:%M:%S")
+                if self._last_health_correction
+                else "never"
+            )
+            _LOGGER.warning(
+                "[HEALTH CHECK] State mismatch detected for commanded mode %s. "
+                "Last successful transition: %s, last correction: %s. Attempting correction...",
+                self._commanded_mode.value,
+                last_transition_str,
+                last_correction_str,
+            )
+
+            # Attempt to correct the state
+            correction_success = await self._execute_mode_transition(
+                data, self._commanded_mode
+            )
+            self._last_health_correction = now
+
+            if correction_success:
+                _LOGGER.info(
+                    "[HEALTH CHECK] Correction successful for mode %s",
+                    self._commanded_mode.value,
+                )
+            else:
+                _LOGGER.error(
+                    "[HEALTH CHECK] Correction FAILED for mode %s - will retry after cooldown",
+                    self._commanded_mode.value,
+                )
+
+            # Send notification about health check correction
+            await self._notification_service.send_health_correction_notification(
+                self._commanded_mode, data
+            )
 
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
         """Set startup grace period to wait for entities to populate."""
