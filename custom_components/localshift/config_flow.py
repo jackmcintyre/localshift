@@ -18,6 +18,7 @@ from .const import (
     CONF_COOLING_THRESHOLD,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
+    CONF_EXPORT_PRICE_MARGIN,
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HEATING_THRESHOLD,
     CONF_LOAD_WEIGHT_RECENT,
@@ -51,6 +52,7 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
+    DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HEATING_THRESHOLD,
     DEFAULT_LOAD_WEIGHT_RECENT,
@@ -754,6 +756,11 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         CONF_HEATING_THRESHOLD,
                         DEFAULT_HEATING_THRESHOLD,
                     ),
+                    # Export price margin
+                    CONF_EXPORT_PRICE_MARGIN: current.get(
+                        CONF_EXPORT_PRICE_MARGIN,
+                        DEFAULT_EXPORT_PRICE_MARGIN,
+                    ),
                 },
                 notify_services,
                 weather_entities,
@@ -994,6 +1001,24 @@ class LocalShiftOptionsFlow(OptionsFlow):
                             "unit"
                         ],
                         mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                # Export price margin for arbitrage
+                vol.Optional(
+                    CONF_EXPORT_PRICE_MARGIN,
+                    default=values.get(
+                        CONF_EXPORT_PRICE_MARGIN,
+                        DEFAULT_EXPORT_PRICE_MARGIN,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN]["min"],
+                        max=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN]["max"],
+                        step=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
             }

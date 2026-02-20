@@ -17,11 +17,13 @@ from ..const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
+    CONF_EXPORT_PRICE_MARGIN,
     CONF_LOAD_WEIGHT_RECENT,
     CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
+    DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MINIMUM_TARGET_SOC,
 )
@@ -1531,6 +1533,97 @@ class ForecastComputer:
             "medium",
         )
 
+    def _calculate_solar_energy_until_solar_start(
+        self,
+        start_slot: datetime,
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_load_kw: float,
+        recent_load_kw: float,
+        max_hours: int = 12,
+    ) -> float:
+        """Calculate net solar energy (solar - load) until solar production starts.
+
+        This determines how much "free" energy will be available to replace
+        exported battery energy before grid charging would be needed.
+
+        Args:
+            start_slot: Starting slot time
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            max_hours: Maximum hours to search ahead
+
+        Returns:
+            Net solar energy in kWh (positive = excess available)
+        """
+        # Find when solar production starts
+        solar_start = self._find_solar_start_time(start_slot, all_solcast, max_hours)
+        if solar_start is None:
+            return 0.0
+
+        net_energy = 0.0
+        base_slot = start_slot.replace(second=0, microsecond=0)
+        slot_fraction = 15 / 60.0  # 0.25 hours
+
+        slot_time = base_slot
+        while slot_time < solar_start:
+            slot_hour = slot_time.hour
+
+            # Get solar (should be ~0 overnight) and load
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                None,  # current_hour - not available in this simulation
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw * slot_fraction
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Only accumulate if positive (excess solar)
+            if net_kwh > 0:
+                net_energy += net_kwh * 0.92  # Charging efficiency
+
+            slot_time += timedelta(minutes=15)
+
+        return net_energy
+
+    def _calculate_expected_replacement_price(
+        self,
+        slot_start: datetime,
+        solar_energy_available: float,
+        export_amount_kwh: float,
+        general_forecast: list[dict],
+        effective_cheap_price: float,
+    ) -> float:
+        """Calculate the expected cost to replace exported energy.
+
+        If solar will cover the export, return 0 (free replacement).
+        Otherwise, return the expected grid import price.
+
+        Args:
+            slot_start: Starting slot time
+            solar_energy_available: Net solar energy before grid import needed
+            export_amount_kwh: Amount to be exported
+            general_forecast: Buy price forecast
+            effective_cheap_price: Cheap price threshold for grid charging
+
+        Returns:
+            Expected replacement cost in $/kWh (0 if solar covers it)
+        """
+        # If solar energy covers the export, replacement is free
+        if solar_energy_available >= export_amount_kwh:
+            return 0.0
+
+        # Need to import from grid - find expected price
+        # Use the effective cheap price as the expected grid import price
+        # This is the price we would pay to recharge the battery
+        return effective_cheap_price
+
     def _should_proactive_export_at_slot(
         self,
         slot_start: datetime,
@@ -1547,10 +1640,12 @@ class ForecastComputer:
         export_min_soc_pct: float,
         effective_cheap_price: float,
         feed_in_price_current: float,
+        export_price_margin: float = DEFAULT_EXPORT_PRICE_MARGIN,
         all_solcast: list[dict] | None = None,
         historical_avg_kw: dict[int, float] | None = None,
         current_load_kw: float = 0.0,
         recent_load_kw: float = 0.0,
+        general_forecast: list[dict] | None = None,
         is_current_slot: bool = False,
         current_elapsed_minutes: float = 0,
         fill_point_elapsed_minutes: int | None = None,
@@ -1726,6 +1821,77 @@ class ForecastComputer:
                     slot_start.minute,
                 )
                 return False, 0.0
+
+        # REPLACEMENT COST CHECK (Issue #70):
+        # Before allowing export, check whether the exported energy will be replaced
+        # by solar (free) or by grid import (costly).
+        #
+        # If solar will recharge the battery for FREE -> Allow export
+        # If grid import needed to replace -> Only allow if FIT >= replacement_price + margin
+        #
+        # NOTE: This check only applies to OVERNIGHT exports (no solar in current slot).
+        # During the day, the fill-point-based solar check (CONSTRAINT 3 above) already
+        # ensures there's enough solar to recharge the exported amount.
+        if (
+            solar_kwh < 0.01  # Only for overnight slots (no solar in current slot)
+            and all_solcast is not None
+            and historical_avg_kw is not None
+            and general_forecast is not None
+        ):
+            # Calculate tentative export amount for replacement cost analysis
+            battery_exportable_kwh = (
+                (predicted_soc - export_min_soc_pct) / 100 * BATTERY_CAPACITY_KWH
+            )
+            max_export_rate_kwh = 8.7 / 4  # 2.175 kWh per 15 min slot
+            tentative_export = min(
+                battery_exportable_kwh,
+                remaining_export_budget_kwh,
+                max_export_rate_kwh,
+            )
+
+            # Calculate solar energy available until solar production starts
+            solar_energy_available = self._calculate_solar_energy_until_solar_start(
+                start_slot=slot_start,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=current_load_kw,
+                recent_load_kw=recent_load_kw,
+            )
+
+            # Calculate expected replacement price
+            expected_replacement_price = self._calculate_expected_replacement_price(
+                slot_start=slot_start,
+                solar_energy_available=solar_energy_available,
+                export_amount_kwh=tentative_export,
+                general_forecast=general_forecast,
+                effective_cheap_price=effective_cheap_price,
+            )
+
+            # If grid import needed to replace (expected_replacement_price > 0),
+            # check if export is profitable
+            if expected_replacement_price > 0:
+                min_required_fit = expected_replacement_price + export_price_margin
+                if use_price < min_required_fit:
+                    _LOGGER.debug(
+                        "PROACTIVE_EXPORT: %02d:%02d BLOCKED - FIT $%.3f < replacement $%.3f + margin $%.3f (solar=%.2f kWh, export=%.2f kWh)",
+                        slot_hour,
+                        slot_start.minute,
+                        use_price,
+                        expected_replacement_price,
+                        export_price_margin,
+                        solar_energy_available,
+                        tentative_export,
+                    )
+                    return False, 0.0
+                else:
+                    _LOGGER.debug(
+                        "PROACTIVE_EXPORT: %02d:%02d ALLOWED - FIT $%.3f >= replacement $%.3f + margin $%.3f (profitable arbitrage)",
+                        slot_hour,
+                        slot_start.minute,
+                        use_price,
+                        expected_replacement_price,
+                        export_price_margin,
+                    )
 
         # Calculate hours until fill point (for price window calculation)
         hours_until_fill = (
@@ -2254,6 +2420,13 @@ class ForecastComputer:
             # Calculate elapsed minutes from base_slot for hybrid timescale comparisons
             elapsed_minutes = (slot_start - base_slot).total_seconds() / 60
 
+            # Get export price margin from config (Issue #70)
+            export_price_margin = float(
+                self.entry.options.get(
+                    CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN
+                )
+            )
+
             _slot_fit_price = get_price_for_slot(data.feed_in_forecast, slot_start)
             should_proactive_export, proactive_export_amount = (
                 self._should_proactive_export_at_slot(
@@ -2271,10 +2444,12 @@ class ForecastComputer:
                     export_min_soc_pct=export_min_soc_pct,
                     effective_cheap_price=data.effective_cheap_price,
                     feed_in_price_current=data.feed_in_price,
+                    export_price_margin=export_price_margin,
                     all_solcast=all_solcast,
                     historical_avg_kw=historical_avg_kw,
                     current_load_kw=data.load_power_kw,
                     recent_load_kw=recent_load_kw,
+                    general_forecast=data.general_forecast,
                     is_current_slot=is_first_slot,
                     current_elapsed_minutes=elapsed_minutes,
                     fill_point_elapsed_minutes=fill_point_elapsed_minutes,

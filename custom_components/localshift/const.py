@@ -154,6 +154,7 @@ CONF_LOAD_WEIGHT_RECENT = "load_weight_recent"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
+CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 
 # Default values (matching YAML package)
 DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
@@ -171,6 +172,9 @@ DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
 )
 DEFAULT_SPIKE_PRICE_PERCENTILE = 75  # Only export at top 25% of spike prices
+DEFAULT_EXPORT_PRICE_MARGIN = (
+    0.10  # $/kWh minimum profit margin for export/re-import arbitrage
+)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -250,6 +254,13 @@ THRESHOLD_RANGES = {
         "step": 0.5,
         "unit": "°C",
         "icon": "mdi:thermometer-low",
+    },
+    CONF_EXPORT_PRICE_MARGIN: {
+        "min": 0.00,
+        "max": 0.30,
+        "step": 0.01,
+        "unit": "$/kWh",
+        "icon": "mdi:currency-usd",
     },
 }
 
