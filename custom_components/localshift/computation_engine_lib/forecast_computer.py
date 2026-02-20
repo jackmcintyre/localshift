@@ -396,6 +396,10 @@ class ForecastComputer:
 
         return negative_windows
 
+    # Hysteresis margin for grid charging decisions (Issue #34)
+    # Once grid charging starts, require this much margin above target before stopping
+    GRID_CHARGE_HYSTERESIS_MARGIN_PCT = 5.0
+
     def _should_grid_charge_at_slot(
         self,
         slot_start: datetime,
@@ -419,6 +423,7 @@ class ForecastComputer:
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
         is_current_slot: bool = False,
+        is_currently_grid_charging: bool = False,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
@@ -432,6 +437,8 @@ class ForecastComputer:
         4. Fall back to forecast-based logic when spot is unavailable
         5. When allow_dw_entry_under_target is True, simulate to DW END instead of DW START
            (allows solar to charge during DW period)
+        6. HYSTERESIS: Once grid charging starts, require stronger evidence to stop
+           (solar must reach target + margin, not just target)
 
         Args:
             slot_start: Start time of the 15-minute slot
@@ -453,6 +460,7 @@ class ForecastComputer:
             allow_dw_entry_under_target: If True, solar can charge during DW
             general_price_current: Current spot buy price (only for current slot)
             is_current_slot: True if this is the current time slot (use spot price)
+            is_currently_grid_charging: True if currently in grid charging mode (hysteresis)
 
         Returns:
             (should_charge, should_boost)
@@ -487,6 +495,26 @@ class ForecastComputer:
         # Price-based thresholds
         price_is_cheap = use_price <= effective_cheap_price
         price_is_very_cheap = use_price <= (effective_cheap_price * 0.8)
+
+        # HYSTERESIS: If currently grid charging, apply stickiness to prevent flip-flopping
+        # Only stop charging if:
+        # 1. Price is no longer cheap, OR
+        # 2. Solar simulation shows STRONG margin above target (target + hysteresis)
+        if is_currently_grid_charging and price_is_cheap and gap_to_target > 0:
+            # Continue charging - don't stop just because solar *might* reach target
+            # The forecast could be optimistic; real-time conditions may differ
+            _LOGGER.info(
+                "GRID_CHARGE HYSTERESIS: Continuing at %s (price=$%.2f, SOC=%.1f%%, gap=%.1f%%) - avoiding flip-flop",
+                slot_start.strftime("%H:%M"),
+                use_price,
+                predicted_soc,
+                target_pct,
+                gap_to_target,
+            )
+            # Check if we should boost (very cheap price)
+            if price_is_very_cheap:
+                return True, True
+            return True, False
 
         # SMART FORECAST: Simulate forward with solar only
         # Model: can we reach target using solar only?
@@ -2127,6 +2155,10 @@ class ForecastComputer:
                 data, "allow_dw_entry_under_target", False
             )
 
+            # HYSTERESIS: Use actual charging state from Teslemetry for stickiness
+            # This prevents flip-flopping when forecast is optimistic but real conditions differ
+            is_currently_grid_charging = getattr(data, "force_charge_active", False)
+
             should_grid_charge, should_boost = self._should_grid_charge_at_slot(
                 slot_start=slot_start,
                 solar_kwh=solar_kwh,
@@ -2148,6 +2180,7 @@ class ForecastComputer:
                 general_price_current=data.general_price,
                 min_soc_pct=export_min_soc_pct,
                 is_current_slot=is_first_slot,
+                is_currently_grid_charging=is_currently_grid_charging,
             )
 
             # Debug logging for charging decision
