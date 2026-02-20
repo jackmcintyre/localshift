@@ -138,51 +138,35 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 
 ## Dashboard
 
-A ready-to-use Lovelace dashboard is included at `dashboards/localshift.yaml`.
+A ready-to-use Lovelace dashboard is included at `dashboards/localshift.yaml`. All entities used by the dashboard are created automatically by the integration — no additional YAML configuration required.
 
-To install:
-1. Go to **Settings → Dashboards → Add Dashboard**
-2. Choose "New dashboard from scratch" with YAML mode
-3. Paste the contents of `dashboards/localshift.yaml`
+### Installation
 
-### Required YAML helpers
+1. Add the dashboard to your `configuration.yaml`:
+   ```yaml
+   lovelace:
+     mode: storage
+     dashboards:
+       localshift:
+         mode: yaml
+         filename: dashboards/localshift.yaml
+         title: LocalShift
+         icon: mdi:battery-sync
+   ```
+2. Restart Home Assistant
+3. Access the dashboard from the sidebar
 
-The dashboard's energy tracking cards require Riemann sum integration sensors and utility meters that are **not** created by the component. Add these to your `configuration.yaml` or a package:
+### Prerequisites
 
-```yaml
-sensor:
-  - platform: integration
-    source: sensor.localshift_power_grid_import
-    name: grid_import_energy
-    unit_prefix: k
-    round: 3
-    method: trapezoidal
+The dashboard uses custom cards that must be installed via HACS:
+- [power-flow-card-plus](https://github.com/ulic75/power-flow-card-plus)
+- [apexcharts-card](https://github.com/RomRider/apexcharts-card)
 
-  - platform: integration
-    source: sensor.localshift_power_grid_export
-    name: grid_export_energy
-    unit_prefix: k
-    round: 3
-    method: trapezoidal
+The dashboard also references entities from:
+- **Teslemetry** — `my_home_*` entities (Powerwall)
+- **Amber Electric** — `100h_*` entities (pricing)
 
-  - platform: integration
-    source: sensor.my_home_solar_power
-    name: solar_production_energy
-    unit_prefix: k
-    round: 3
-    method: trapezoidal
-
-utility_meter:
-  grid_import_energy_daily:
-    source: sensor.grid_import_energy
-    cycle: daily
-  grid_export_energy_daily:
-    source: sensor.grid_export_energy
-    cycle: daily
-  solar_production_energy_daily:
-    source: sensor.solar_production_energy
-    cycle: daily
-```
+Adjust entity IDs in the dashboard YAML to match your setup if different.
 
 ## State Machine
 
