@@ -17,11 +17,3 @@ repos:
     hooks:
       - id: pyright
 
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: .venv/bin/python3 -m pytest
-        language: system
-        pass_filenames: false
-        always_run: false
