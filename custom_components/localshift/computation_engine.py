@@ -250,6 +250,7 @@ class ComputationEngine:
         # ---- Step 4/16: daily_forecast (detailed 15-min forecast) ----
         # Compute detailed forecast AFTER effective_cheap_price is set
         # This is the single source of truth
+        # Pass current charging state for hysteresis (Issue #34)
         self._compute_daily_15min_forecast(data, now_dt)
 
         # ---- Step 5: solar_can_reach_target (derived from detailed forecast) ----
