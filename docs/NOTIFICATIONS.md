@@ -229,14 +229,35 @@ Check Home Assistant logs:
 
 ---
 
-## Future Improvements
+## Notification Preferences
 
-Planned enhancements (see backlog-med-024):
-- Health check correction notifications
-- Failed transition alerts
-- Configurable notification preferences
-- Persistent fallback when notify service fails
-- Branded "LocalShift:" prefix
+The integration provides 4 switches to control which notifications are sent:
+
+### Switches
+
+| Switch | Default | Description |
+|--------|---------|-------------|
+| `switch.localshift_notify_transitions` | ON | Send notifications when battery mode changes |
+| `switch.localshift_notify_daily_summary` | ON | Send daily energy/cost summary at demand window end |
+| `switch.localshift_notify_manual_actions` | ON | Send notifications when manual control buttons are pressed |
+| `switch.localshift_notify_alerts` | ON | Send alert notifications (automation disabled, health check failures) |
+
+### Usage
+
+- Turn off specific notification types if you find them too noisy
+- All switches default to ON for new installations
+- Settings persist across Home Assistant restarts
+
+### Examples
+
+**Quiet mode (only important alerts):**
+- Turn OFF `notify_transitions`
+- Turn OFF `notify_manual_actions`
+- Keep ON `notify_daily_summary`
+- Keep ON `notify_alerts`
+
+**Minimal notifications:**
+- Turn OFF all except `notify_alerts`
 
 ---
 
