@@ -27,20 +27,39 @@ Each Cline task should operate in its own git worktree. This provides:
 - Naming convention: `issue-{NNN}` (e.g., `issue-1`, `issue-42`)
 
 ## Starting a New Task
-1. **Create worktree for GitHub issue:**
+1. **Pull latest changes first:**
+   ```bash
+   git pull origin main
+   ```
+   This ensures you're branching from the latest state and prevents divergence.
+2. **Create worktree for GitHub issue:**
    ```bash
    git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
    ```
-2. **Or create worktree for ad-hoc task:**
+3. **Or create worktree for ad-hoc task:**
    ```bash
    git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
    ```
-3. **Change directory to the worktree before making changes**
+4. **Change directory to the worktree before making changes**
 
 ## During Task Execution
 - All file operations should target the worktree directory
 - The worktree shares the same git history but has its own working directory
 - Run tests and pre-commit hooks within the worktree
+
+## ⚠️ CRITICAL RULES
+
+### Never Commit Directly on Main
+- **Main branch is protected** - All changes must come via PR merges from worktree branches
+- If you find yourself on `main` with uncommitted changes, create a worktree immediately
+- Direct commits on `main` cause divergence when PRs are merged on GitHub
+
+### Git Configuration (Recommended)
+Set these globally to prevent ambiguous pull behavior:
+```bash
+git config --global pull.ff only
+```
+This makes `git pull` fail if branches have diverged, forcing an explicit choice of rebase or merge.
 
 ## Completing a Task
 1. Run pre-commit hooks in the worktree
