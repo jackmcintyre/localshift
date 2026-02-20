@@ -681,6 +681,13 @@ class ComputationEngine:
                 data.consumption_profile_type = (
                     self._history_fetcher.get_profile_source()
                 )
+                # Determine which profile is selected for TODAY's forecast
+                now_local = dt_util.now()
+                day_of_week = now_local.weekday()  # Monday=0, Sunday=6
+                if day_of_week >= 5:  # Saturday or Sunday
+                    data.forecast_profile_selected = "weekend"
+                else:
+                    data.forecast_profile_selected = "weekday"
                 data.weekday_sample_counts = weekday_counts
                 data.weekend_sample_counts = weekend_counts
                 data.weekday_hourly_profile_kw = weekday_avg
