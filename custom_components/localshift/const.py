@@ -84,6 +84,20 @@ CONF_NOTIFY_SERVICE = "notify_service"
 # Sun entity (for solar export hold logic)
 CONF_SUN_ENTITY = "sun_entity"
 
+# Weather entity (for temperature-based consumption prediction)
+CONF_WEATHER_ENTITY = "weather_entity"
+DEFAULT_WEATHER_ENTITY = "weather.home"
+
+# Temperature thresholds for degree-day model
+CONF_COOLING_THRESHOLD = "cooling_threshold"
+CONF_HEATING_THRESHOLD = "heating_threshold"
+DEFAULT_COOLING_THRESHOLD = 24.0  # °C - above this, cooling load increases
+DEFAULT_HEATING_THRESHOLD = 18.0  # °C - below this, heating load increases
+
+# Weather learning configuration
+CONF_WEATHER_LEARNING_ENABLED = "weather_learning_enabled"
+DEFAULT_WEATHER_LEARNING_ENABLED = True
+
 # Manual override auto-clear timeout
 CONF_MANUAL_OVERRIDE_TIMEOUT = "manual_override_timeout"
 
@@ -108,6 +122,7 @@ DEFAULT_ENTITY_IDS = {
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
     CONF_SUN_ENTITY: "sun.sun",
+    CONF_WEATHER_ENTITY: DEFAULT_WEATHER_ENTITY,
 }
 
 # -----------------------------------------------------------------------------
@@ -207,6 +222,20 @@ THRESHOLD_RANGES = {
         "step": 1,
         "unit": "%",
         "icon": "mdi:battery-lock",
+    },
+    CONF_COOLING_THRESHOLD: {
+        "min": 18.0,
+        "max": 30.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer-high",
+    },
+    CONF_HEATING_THRESHOLD: {
+        "min": 10.0,
+        "max": 22.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer-low",
     },
 }
 

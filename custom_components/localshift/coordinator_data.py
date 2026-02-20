@@ -161,3 +161,21 @@ class CoordinatorData:
     load_shift_confidence: str = "low"  # low/medium/high
     grid_charge_risk: bool = False  # Would adding load trigger grid charging?
     current_excess_rate_kw: float = 0.0  # Current excess generation rate (real-time)
+
+    # Weather correlation fields (Issue #61)
+    weather_entity_id: str = ""  # Configured weather entity
+    weather_temperature_current: float = 0.0  # Current temperature in °C
+    weather_temperature_forecast: dict[int, float] = field(
+        default_factory=dict
+    )  # hour -> temperature
+    weather_condition: str = "unknown"  # Current weather condition
+    weather_correlation_confidence: str = "low"  # low/medium/high
+    weather_adjustment_applied: bool = False  # Whether weather adjustment was used
+    weather_learning_enabled: bool = True  # Whether learning is enabled
+    weather_cooling_coefficient: float = (
+        0.0  # Learned kW per °C above cooling threshold
+    )
+    weather_heating_coefficient: float = (
+        0.0  # Learned kW per °C below heating threshold
+    )
+    weather_sample_count: int = 0  # Number of samples used for learning

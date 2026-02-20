@@ -24,6 +24,7 @@ from .const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_WEATHER_ENTITY,
     DEFAULT_ENTITY_IDS,
 )
 from .coordinator_data import CoordinatorData
@@ -228,4 +229,82 @@ class StateReader:
             len(data.solcast_today),
             tomorrow_entity,
             len(data.solcast_tomorrow),
+        )
+
+        # Weather
+        self._read_weather_state(data)
+
+    def _read_weather_state(self, data: CoordinatorData) -> None:
+        """Read weather entity state and forecast.
+
+        Populates weather-related fields in CoordinatorData for use by
+        the weather correlation system.
+
+        Args:
+            data: CoordinatorData instance to populate with weather data.
+        """
+        # Get weather entity from options (preferred) or data (fallback)
+        weather_entity = self.entry.options.get(
+            CONF_WEATHER_ENTITY
+        ) or self.entry.data.get(CONF_WEATHER_ENTITY)
+
+        if not weather_entity:
+            _LOGGER.debug("No weather entity configured")
+            data.weather_entity_id = ""
+            return
+
+        data.weather_entity_id = weather_entity
+
+        state = self.hass.states.get(weather_entity)
+        if state is None:
+            _LOGGER.warning("Weather entity %s not found", weather_entity)
+            return
+
+        if state.state in ("unknown", "unavailable"):
+            _LOGGER.debug("Weather entity %s is %s", weather_entity, state.state)
+            return
+
+        # Read current temperature
+        try:
+            data.weather_temperature_current = float(
+                state.attributes.get("temperature", 0)
+            )
+        except (ValueError, TypeError):
+            data.weather_temperature_current = 0.0
+
+        # Read current condition
+        data.weather_condition = state.state
+
+        # Read temperature forecast
+        forecast_data = state.attributes.get("forecast", [])
+        data.weather_temperature_forecast = {}
+
+        for forecast_entry in forecast_data:
+            forecast_time_str = forecast_entry.get("datetime")
+            if not forecast_time_str:
+                continue
+
+            try:
+                # Parse the datetime to extract the hour
+                from homeassistant.util import dt as dt_util
+
+                forecast_time = dt_util.parse_datetime(forecast_time_str)
+                if forecast_time is None:
+                    continue
+
+                hour = forecast_time.hour
+                temperature = forecast_entry.get("temperature")
+
+                if temperature is not None:
+                    data.weather_temperature_forecast[hour] = float(temperature)
+
+            except (ValueError, TypeError):
+                continue
+
+        _LOGGER.debug(
+            "Weather state read: entity=%s, temp=%.1f°C, condition=%s, forecast_hours=%d",
+            weather_entity,
+            data.weather_temperature_current,
+            data.weather_condition,
+            len(data.weather_temperature_forecast),
         )

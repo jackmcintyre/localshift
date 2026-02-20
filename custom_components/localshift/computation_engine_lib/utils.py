@@ -22,13 +22,13 @@ def parse_forecast_dt(dt_str: str | None) -> datetime | None:
         return None
 
 
-def percentile(prices: list[float], percentile: float) -> float:
+def percentile(prices: list[float], percentile_value: float) -> float:
     """Calculate Nth percentile of a list of prices."""
     if not prices:
         return 0.0
     sorted_prices = sorted(prices)
     n = len(sorted_prices)
-    index = (percentile / 100) * (n - 1)
+    index = (percentile_value / 100) * (n - 1)
     lower = int(index)
     upper = lower + 1
     if upper >= n:
@@ -215,16 +215,16 @@ def analyze_spike_window(
 
 def calculate_spike_price_threshold(
     spike_prices: list[float],
-    percentile: float,
+    percentile_value: float,
 ) -> float:
     """Calculate price threshold for top X% of spike prices.
 
-    For example, with percentile=75, returns the price at the 75th percentile
+    For example, with percentile_value=75, returns the price at the 75th percentile
     of spike prices, meaning only prices in the top 25% will trigger exports.
 
     Args:
         spike_prices: List of prices during spike window
-        percentile: Percentile threshold (50-95). Higher = more conservative.
+        percentile_value: Percentile threshold (50-95). Higher = more conservative.
 
     Returns:
         Price threshold - only export when FIT >= this price
@@ -232,4 +232,4 @@ def calculate_spike_price_threshold(
     if not spike_prices:
         return 0.0
 
-    return percentile(spike_prices, percentile)
+    return percentile(spike_prices, percentile_value)
