@@ -15,9 +15,11 @@ from .const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
+    CONF_COOLING_THRESHOLD,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
+    CONF_HEATING_THRESHOLD,
     CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
@@ -39,19 +41,25 @@ from .const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_WEATHER_ENTITY,
+    CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
+    DEFAULT_COOLING_THRESHOLD,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_HEATING_THRESHOLD,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
+    DEFAULT_WEATHER_ENTITY,
+    DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
     THRESHOLD_RANGES,
 )
@@ -101,6 +109,19 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 notify_services.append(f"notify.{service_name}")
 
         return sorted(notify_services)
+
+    async def _get_weather_entities(self) -> list[str]:
+        """Get list of available weather entities.
+
+        Returns:
+            List of weather entity IDs like ["weather.home", "weather.forecast"]
+        """
+        weather_entities = []
+        for state in self.hass.states.async_all():
+            if state.domain == "weather":
+                weather_entities.append(state.entity_id)
+
+        return sorted(weather_entities)
 
     async def _validate_notify_service(self, notify_service: str) -> str | None:
         """Validate that a notify service exists.
@@ -484,6 +505,13 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_LOAD_WEIGHT_RECENT: DEFAULT_LOAD_WEIGHT_RECENT,
                 CONF_MINIMUM_TARGET_SOC: DEFAULT_MINIMUM_TARGET_SOC,
                 CONF_ALLOW_DW_ENTRY_UNDER_TARGET: DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
+                # Weather correlation options
+                CONF_WEATHER_ENTITY: user_input.get(
+                    CONF_WEATHER_ENTITY, DEFAULT_WEATHER_ENTITY
+                ),
+                CONF_WEATHER_LEARNING_ENABLED: DEFAULT_WEATHER_LEARNING_ENABLED,
+                CONF_COOLING_THRESHOLD: DEFAULT_COOLING_THRESHOLD,
+                CONF_HEATING_THRESHOLD: DEFAULT_HEATING_THRESHOLD,
             }
 
             return self.async_create_entry(
@@ -494,6 +522,12 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
 
         # Determine default notify service (first available or empty)
         default_notify = notify_services[0] if notify_services else ""
+
+        # Get available weather entities
+        weather_entities = await self._get_weather_entities()
+        default_weather = (
+            weather_entities[0] if weather_entities else DEFAULT_WEATHER_ENTITY
+        )
 
         return self.async_show_form(
             step_id="solcast",
@@ -524,6 +558,17 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_SUN_ENTITY,
                         default=DEFAULT_ENTITY_IDS[CONF_SUN_ENTITY],
                     ): selector.EntitySelector(),
+                    vol.Optional(
+                        CONF_WEATHER_ENTITY,
+                        default=default_weather,
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=weather_entities
+                            if weather_entities
+                            else [DEFAULT_WEATHER_ENTITY],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
         )
@@ -600,12 +645,26 @@ class LocalShiftOptionsFlow(OptionsFlow):
             return self.config_entry.data[CONF_NOTIFY_SERVICE]
         return ""
 
+    async def _get_weather_entities(self) -> list[str]:
+        """Get list of available weather entities.
+
+        Returns:
+            List of weather entity IDs like ["weather.home", "weather.forecast"]
+        """
+        weather_entities = []
+        for state in self.hass.states.async_all():
+            if state.domain == "weather":
+                weather_entities.append(state.entity_id)
+
+        return sorted(weather_entities)
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the thresholds and timing options."""
-        # Get available notify services
+        # Get available notify services and weather entities
         notify_services = await self._get_notify_services()
+        weather_entities = await self._get_weather_entities()
 
         if user_input is not None:
             # Validate notify service
@@ -619,7 +678,9 @@ class LocalShiftOptionsFlow(OptionsFlow):
             if errors:
                 return self.async_show_form(
                     step_id="init",
-                    data_schema=self._build_options_schema(user_input, notify_services),
+                    data_schema=self._build_options_schema(
+                        user_input, notify_services, weather_entities
+                    ),
                     errors=errors,
                 )
 
@@ -676,19 +737,41 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         CONF_MINIMUM_TARGET_SOC,
                         DEFAULT_MINIMUM_TARGET_SOC,
                     ),
+                    # Weather correlation options
+                    CONF_WEATHER_ENTITY: current.get(
+                        CONF_WEATHER_ENTITY,
+                        DEFAULT_WEATHER_ENTITY,
+                    ),
+                    CONF_WEATHER_LEARNING_ENABLED: current.get(
+                        CONF_WEATHER_LEARNING_ENABLED,
+                        DEFAULT_WEATHER_LEARNING_ENABLED,
+                    ),
+                    CONF_COOLING_THRESHOLD: current.get(
+                        CONF_COOLING_THRESHOLD,
+                        DEFAULT_COOLING_THRESHOLD,
+                    ),
+                    CONF_HEATING_THRESHOLD: current.get(
+                        CONF_HEATING_THRESHOLD,
+                        DEFAULT_HEATING_THRESHOLD,
+                    ),
                 },
                 notify_services,
+                weather_entities,
             ),
         )
 
     def _build_options_schema(
-        self, values: dict[str, Any], notify_services: list[str]
+        self,
+        values: dict[str, Any],
+        notify_services: list[str],
+        weather_entities: list[str],
     ) -> vol.Schema:
         """Build the options form schema.
 
         Args:
             values: Current/default values for the form fields
             notify_services: List of available notify services
+            weather_entities: List of available weather entities
 
         Returns:
             Voluptuous schema for the options form
@@ -852,6 +935,62 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         max=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["max"],
                         step=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["step"],
                         unit_of_measurement=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                # Weather correlation settings
+                vol.Optional(
+                    CONF_WEATHER_ENTITY,
+                    default=values.get(
+                        CONF_WEATHER_ENTITY,
+                        DEFAULT_WEATHER_ENTITY,
+                    ),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=weather_entities
+                        if weather_entities
+                        else [DEFAULT_WEATHER_ENTITY],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_WEATHER_LEARNING_ENABLED,
+                    default=values.get(
+                        CONF_WEATHER_LEARNING_ENABLED,
+                        DEFAULT_WEATHER_LEARNING_ENABLED,
+                    ),
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    CONF_COOLING_THRESHOLD,
+                    default=values.get(
+                        CONF_COOLING_THRESHOLD,
+                        DEFAULT_COOLING_THRESHOLD,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD]["min"],
+                        max=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD]["max"],
+                        step=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_HEATING_THRESHOLD,
+                    default=values.get(
+                        CONF_HEATING_THRESHOLD,
+                        DEFAULT_HEATING_THRESHOLD,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD]["min"],
+                        max=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD]["max"],
+                        step=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD][
                             "unit"
                         ],
                         mode=selector.NumberSelectorMode.SLIDER,
