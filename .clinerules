@@ -1,5 +1,50 @@
 Do not use sed, awk, or direct shell commands to edit files. Only use the provided write_to_file or apply_diff tools for modifying code.
 
+# Worktree Workflow
+
+## Overview
+Each Cline task should operate in its own git worktree. This provides:
+- Isolation between tasks
+- Ability to work on multiple tasks in parallel
+- Clean separation of changes
+- No need to stash/commit unfinished work when switching tasks
+
+## Worktree Directory Structure
+- All worktrees are stored in `/Users/jackmcintyre/worktrees/`
+- Naming convention: `{type}-{id}` (e.g., `backlog-med-023`, `feature-solar-forecast`)
+
+## Starting a New Task
+1. **Create worktree for backlog item:**
+   ```bash
+   git worktree add /Users/jackmcintyre/worktrees/backlog-{priority}-{NNN} -b backlog/{priority}-{NNN}
+   ```
+2. **Or create worktree for ad-hoc task:**
+   ```bash
+   git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
+   ```
+3. **Change directory to the worktree before making changes**
+
+## During Task Execution
+- All file operations should target the worktree directory
+- The worktree shares the same git history but has its own working directory
+- Run tests and pre-commit hooks within the worktree
+
+## Completing a Task
+1. Run pre-commit hooks in the worktree
+2. Ask user to commit or merge changes
+3. After merge/completion, clean up:
+   ```bash
+   git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
+   git branch -d {branch-name}  # if merged
+   ```
+
+## Current Worktrees
+Check with: `git worktree list`
+
+## Reserve Worktrees
+- `_reserve/*` branches are temporary worktrees for Cline session isolation
+- These can be cleaned up between sessions if not in use
+
 # Backlog Management Rules
 
 ## Directory Structure
