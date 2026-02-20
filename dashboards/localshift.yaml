@@ -429,14 +429,9 @@ views:
             icon: mdi:battery-charging
 
           - type: tile
-            entity: sensor.localshift_power_grid_import
-            name: Grid Import
-            icon: mdi:transmission-tower-import
-
-          - type: tile
-            entity: sensor.localshift_power_grid_export
-            name: Grid Export
-            icon: mdi:transmission-tower-export
+            entity: sensor.my_home_grid_power
+            name: Grid Power
+            icon: mdi:transmission-tower
 
           - type: tile
             entity: sensor.my_home_solar_power
@@ -542,9 +537,7 @@ views:
 
               Battery Power: {{ states('sensor.my_home_battery_power') }} kW
 
-              Grid Import: {{ states('sensor.localshift_power_grid_import') }} kW
-
-              Grid Export: {{ states('sensor.localshift_power_grid_export') }} kW
+              Grid Power: {{ states('sensor.my_home_grid_power') }} kW
 
               Solar Power: {{ states('sensor.my_home_solar_power') }} kW
 
