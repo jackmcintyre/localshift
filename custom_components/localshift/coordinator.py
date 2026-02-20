@@ -20,6 +20,7 @@ from homeassistant.helpers.event import (
 
 from .const import (
     CONF_DEMAND_WINDOW_END,
+    CONF_NOTIFY_SERVICE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -96,9 +97,19 @@ class LocalShiftCoordinator:
     def _get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
 
-        Returns default from DEFAULT_ENTITY_IDS if key not in entry data
-        (handles missing keys in existing config entries).
+        For notify_service, checks options first (new location) then data
+        (old location for backward compatibility).
+
+        Returns default from DEFAULT_ENTITY_IDS if key not found.
         """
+        # Special handling for notify_service - check options first
+        if key == CONF_NOTIFY_SERVICE:
+            if key in self.entry.options:
+                return self.entry.options[key]
+            if key in self.entry.data:
+                return self.entry.data[key]
+            return ""
+
         if key in self.entry.data:
             return self.entry.data[key]
 

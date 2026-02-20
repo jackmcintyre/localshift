@@ -457,13 +457,19 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
 
             # Combine all data and create entry
+            # Note: notify_service goes into options, not data, so it can be changed later
             all_data = {
                 **self._teslemetry_data,
                 **self._pricing_data,
-                **user_input,
+                CONF_SOLCAST_FORECAST_TODAY: user_input[CONF_SOLCAST_FORECAST_TODAY],
+                CONF_SOLCAST_FORECAST_TOMORROW: user_input[
+                    CONF_SOLCAST_FORECAST_TOMORROW
+                ],
+                CONF_SUN_ENTITY: user_input[CONF_SUN_ENTITY],
             }
-            # Set default options
+            # Set default options (includes notify_service for configurability)
             options = {
+                CONF_NOTIFY_SERVICE: user_input[CONF_NOTIFY_SERVICE],
                 CONF_CHEAP_PRICE_PERCENTILE: DEFAULT_CHEAP_PRICE_PERCENTILE,
                 CONF_MAX_PRECHARGE_PRICE: DEFAULT_MAX_PRECHARGE_PRICE,
                 CONF_CHEAP_PRICE_DEADBAND: DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -529,48 +535,172 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
 class LocalShiftOptionsFlow(OptionsFlow):
     """Handle options flow for LocalShift."""
 
+    async def _get_notify_services(self) -> list[str]:
+        """Get list of available notify services.
+
+        Returns:
+            List of notify service strings like ["notify.mobile_app"]
+        """
+        services = self.hass.services.async_services()
+        notify_services = []
+
+        if "notify" in services:
+            for service_name in services["notify"].keys():
+                notify_services.append(f"notify.{service_name}")
+
+        return sorted(notify_services)
+
+    async def _validate_notify_service(self, notify_service: str) -> str | None:
+        """Validate that a notify service exists.
+
+        Args:
+            notify_service: Service string like "notify.mobile_app_xxx"
+
+        Returns:
+            None if valid, or error message string
+        """
+        if not notify_service:
+            return "Notify service is required"
+
+        if not notify_service.startswith("notify."):
+            return "Notify service must start with 'notify.'"
+
+        # Parse domain and service name
+        # Format: "notify.mobile_app_xxx" -> domain="notify", service="mobile_app_xxx"
+        parts = notify_service.split(".", 1)
+        if len(parts) != 2:
+            return "Invalid notify service format"
+
+        domain, service_name = parts
+
+        # Check if notify service exists
+        services = self.hass.services.async_services()
+        if domain not in services:
+            return f"Notify domain '{domain}' not found"
+
+        if service_name not in services[domain]:
+            return f"Notify service '{service_name}' not found in {domain}"
+
+        return None
+
+    def _get_current_notify_service(self) -> str:
+        """Get the current notify service from options or data (for backward compatibility).
+
+        Returns:
+            Current notify service string, or empty string if not set.
+        """
+        # Check options first (new location)
+        if CONF_NOTIFY_SERVICE in self.config_entry.options:
+            return self.config_entry.options[CONF_NOTIFY_SERVICE]
+        # Fall back to data (old location for existing entries)
+        if CONF_NOTIFY_SERVICE in self.config_entry.data:
+            return self.config_entry.data[CONF_NOTIFY_SERVICE]
+        return ""
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the thresholds and timing options."""
+        # Get available notify services
+        notify_services = await self._get_notify_services()
+
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            # Validate notify service
+            errors = {}
+            notify_error = await self._validate_notify_service(
+                user_input[CONF_NOTIFY_SERVICE]
+            )
+            if notify_error:
+                errors[CONF_NOTIFY_SERVICE] = notify_error
+
+            if errors:
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=self._build_options_schema(user_input, notify_services),
+                    errors=errors,
+                )
+
+            # Merge with existing options to preserve other settings
+            merged_options = dict(self.config_entry.options)
+            merged_options.update(user_input)
+            return self.async_create_entry(data=merged_options)
 
         current = self.config_entry.options
+        current_notify = self._get_current_notify_service()
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
+            data_schema=self._build_options_schema(
                 {
-                    vol.Required(
+                    CONF_NOTIFY_SERVICE: current_notify,
+                    CONF_DEMAND_WINDOW_START: current.get(
                         CONF_DEMAND_WINDOW_START,
-                        default=current.get(
-                            CONF_DEMAND_WINDOW_START,
-                            DEFAULT_DEMAND_WINDOW_START,
-                        ),
-                    ): selector.TimeSelector(),
-                    vol.Required(
-                        CONF_DEMAND_WINDOW_END,
-                        default=current.get(
-                            CONF_DEMAND_WINDOW_END,
-                            DEFAULT_DEMAND_WINDOW_END,
-                        ),
-                    ): selector.TimeSelector(),
-                    vol.Required(
-                        CONF_MANUAL_OVERRIDE_TIMEOUT,
-                        default=current.get(
-                            CONF_MANUAL_OVERRIDE_TIMEOUT,
-                            DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=24,
-                            step=1,
-                            unit_of_measurement="hours",
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
+                        DEFAULT_DEMAND_WINDOW_START,
                     ),
-                }
+                    CONF_DEMAND_WINDOW_END: current.get(
+                        CONF_DEMAND_WINDOW_END,
+                        DEFAULT_DEMAND_WINDOW_END,
+                    ),
+                    CONF_MANUAL_OVERRIDE_TIMEOUT: current.get(
+                        CONF_MANUAL_OVERRIDE_TIMEOUT,
+                        DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+                    ),
+                },
+                notify_services,
             ),
+        )
+
+    def _build_options_schema(
+        self, values: dict[str, Any], notify_services: list[str]
+    ) -> vol.Schema:
+        """Build the options form schema.
+
+        Args:
+            values: Current/default values for the form fields
+            notify_services: List of available notify services
+
+        Returns:
+            Voluptuous schema for the options form
+        """
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_NOTIFY_SERVICE,
+                    default=values.get(CONF_NOTIFY_SERVICE, ""),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=notify_services,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(
+                    CONF_DEMAND_WINDOW_START,
+                    default=values.get(
+                        CONF_DEMAND_WINDOW_START,
+                        DEFAULT_DEMAND_WINDOW_START,
+                    ),
+                ): selector.TimeSelector(),
+                vol.Required(
+                    CONF_DEMAND_WINDOW_END,
+                    default=values.get(
+                        CONF_DEMAND_WINDOW_END,
+                        DEFAULT_DEMAND_WINDOW_END,
+                    ),
+                ): selector.TimeSelector(),
+                vol.Required(
+                    CONF_MANUAL_OVERRIDE_TIMEOUT,
+                    default=values.get(
+                        CONF_MANUAL_OVERRIDE_TIMEOUT,
+                        DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        max=24,
+                        step=1,
+                        unit_of_measurement="hours",
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+            }
         )

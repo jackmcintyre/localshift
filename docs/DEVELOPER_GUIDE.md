@@ -358,18 +358,16 @@ The config flow has 3 steps:
 
 ### Options Flow
 
-After setup, users can configure thresholds via **Configure**:
+After setup, users can configure settings via **Configure**:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| Cheap Price Percentile | 25% | Base cheap price percentile |
-| Max Precharge Price | $0.20 | Maximum price when urgent |
-| Price Deadband | $0.03 | Hysteresis band |
-| Forecast Lookahead | 2h | Spike detection window |
-| Precharge Threshold | 50% | SOC for overnight charging |
-| Battery Target | 100% | Target SOC by demand window |
+| Notify Service | (first available) | Notification service for alerts |
 | Demand Window Start | 15:00 | Peak hours start |
 | Demand Window End | 21:00 | Peak hours end |
+| Manual Override Timeout | 4 hours | Auto-clear manual override |
+
+**Note:** The notification service is stored in `entry.options` (not `entry.data`) so it can be changed without reconfiguring the entire integration. For backward compatibility, the coordinator checks `options` first, then falls back to `data` for existing entries.
 
 ## Adding New Battery Modes
 
