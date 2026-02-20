@@ -458,7 +458,12 @@ class TestOptionsFlow:
         mock_hass.config_entries = mock_config_entries
         flow.hass = mock_hass
 
+        # Mock the _config_entry_id property to return the entry_id
+        # This is needed because OptionsFlow.config_entry property uses it
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
         user_input = {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
             CONF_DEMAND_WINDOW_START: "14:00:00",
             CONF_DEMAND_WINDOW_END: "20:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: 4,
@@ -467,7 +472,9 @@ class TestOptionsFlow:
         result = await flow.async_step_init(user_input)
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
-        assert result["data"] == user_input
+        # The result merges with existing options, so check that our input is included
+        for key, value in user_input.items():
+            assert result["data"][key] == value
 
 
 # =============================================================================

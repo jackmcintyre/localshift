@@ -2,6 +2,9 @@
 
 This module handles fetching historical load data from Home Assistant's
 recorder/statistics database for consumption forecasting.
+
+Supports day-of-week aware consumption prediction with separate weekday
+and weekend profiles for improved forecast accuracy.
 """
 
 from __future__ import annotations
@@ -14,11 +17,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..const import HISTORY_WINDOW_DAYS, MIN_SAMPLES_PER_HOUR
+
 _LOGGER = logging.getLogger(__name__)
 
 
 class HistoryFetcher:
-    """Fetches and caches historical load data from HA statistics."""
+    """Fetches and caches historical load data from HA statistics.
+
+    Supports separate weekday/weekend consumption profiles for better
+    forecast accuracy in households with different daily patterns.
+    """
 
     def __init__(
         self,
@@ -34,11 +43,20 @@ class HistoryFetcher:
         self.hass = hass
         self.entry = entry
 
-        # Historical load cache (hourly averages)
+        # Historical load cache (combined hourly averages - backward compatibility)
         self._historical_load_cache: dict[int, float] = {}
         self._historical_load_sample_counts: dict[int, int] = {}
         self._historical_load_source: str = "unknown"
         self._historical_load_cache_date: str = ""
+
+        # Day-of-week aware consumption profiles (issue-60)
+        self._weekday_hourly_avg_kw: dict[int, float] = {}
+        self._weekend_hourly_avg_kw: dict[int, float] = {}
+        self._weekday_sample_counts: dict[int, int] = {}
+        self._weekend_sample_counts: dict[int, int] = {}
+        self._profile_source: str = (
+            "unknown"  # "weekday_weekend" or "combined_fallback"
+        )
 
         # Recent load cache (1-hour average)
         self._recent_load_1hr_kw: float = 0.0
@@ -50,7 +68,10 @@ class HistoryFetcher:
     async def async_get_historical_hourly_averages(
         self, entity_id: str
     ) -> tuple[dict[int, float], dict[int, int], str]:
-        """Get 7-day hourly averages via thread pool, cached until midnight.
+        """Get hourly averages via thread pool, cached until midnight.
+
+        Returns combined profile for backward compatibility.
+        Use get_profile_for_day() for day-aware profiles.
 
         Returns: (hourly_avg_kw, sample_counts, source)
         """
@@ -74,25 +95,47 @@ class HistoryFetcher:
         _LOGGER.info("Fetching historical load data for entity: %s", entity_id)
 
         recorder_instance = recorder.get_instance(self.hass)
-        hourly_avg_kw, sample_counts = await recorder_instance.async_add_executor_job(
+        result = await recorder_instance.async_add_executor_job(
             self._fetch_historical_data_sync, entity_id, now
         )
 
+        hourly_avg_kw = result.get("combined_avg", {})
+        sample_counts = result.get("combined_counts", {})
+        weekday_avg = result.get("weekday_avg", {})
+        weekend_avg = result.get("weekend_avg", {})
+        weekday_counts = result.get("weekday_counts", {})
+        weekend_counts = result.get("weekend_counts", {})
+        profile_source = result.get("profile_source", "unknown")
+
         _LOGGER.info(
-            "Historical data result: %s hours found",
+            "Historical data result: %s hours found (weekday: %s, weekend: %s)",
             len(hourly_avg_kw) if hourly_avg_kw else 0,
+            len(weekday_avg) if weekday_avg else 0,
+            len(weekend_avg) if weekend_avg else 0,
         )
 
         if hourly_avg_kw and len(hourly_avg_kw) >= 6:
+            # Store combined profile (backward compatibility)
             self._historical_load_cache = hourly_avg_kw
             self._historical_load_sample_counts = sample_counts
             self._historical_load_source = "statistics"
+
+            # Store day-of-week profiles
+            self._weekday_hourly_avg_kw = weekday_avg
+            self._weekend_hourly_avg_kw = weekend_avg
+            self._weekday_sample_counts = weekday_counts
+            self._weekend_sample_counts = weekend_counts
+            self._profile_source = profile_source
+
             self._historical_load_cache_date = today_str
             _LOGGER.debug(
-                "Historical load profile fetched: %s hours", len(hourly_avg_kw)
+                "Historical load profile fetched: %s hours (source: %s)",
+                len(hourly_avg_kw),
+                profile_source,
             )
         else:
             self._historical_load_source = "live_load_fallback"
+            self._profile_source = "live_load_fallback"
             _LOGGER.debug(
                 "Using live load fallback (insufficient history: %s hours)",
                 len(hourly_avg_kw) if hourly_avg_kw else 0,
@@ -106,9 +149,19 @@ class HistoryFetcher:
 
     def _fetch_historical_data_sync(
         self, entity_id: str, now: datetime
-    ) -> tuple[dict[int, float], dict[int, int]]:
-        """Fetch historical data using HA recorder/statistics (runs in thread pool)."""
-        start_time = now - timedelta(days=7)
+    ) -> dict[str, Any]:
+        """Fetch historical data using HA recorder/statistics (runs in thread pool).
+
+        Returns dict with:
+        - combined_avg: Combined hourly averages (backward compatibility)
+        - combined_counts: Combined sample counts
+        - weekday_avg: Weekday hourly averages
+        - weekend_avg: Weekend hourly averages
+        - weekday_counts: Weekday sample counts
+        - weekend_counts: Weekend sample counts
+        - profile_source: "weekday_weekend" or "combined_fallback"
+        """
+        start_time = now - timedelta(days=HISTORY_WINDOW_DAYS)
 
         try:
             from homeassistant.components.recorder import (
@@ -116,7 +169,7 @@ class HistoryFetcher:
             )
         except Exception as e:
             _LOGGER.info("Failed to import recorder statistics: %s", e)
-            return {}, {}
+            return self._empty_result()
 
         # Get statistics metadata to find the correct statistic_id
         stat_ids: list[dict[str, Any]] = []
@@ -149,7 +202,7 @@ class HistoryFetcher:
         # Get statistics
         fn = getattr(recorder_statistics, "statistics_during_period", None)
         if not callable(fn):
-            return {}, {}
+            return self._empty_result()
 
         try:
             statistics_data_raw = fn(
@@ -163,28 +216,79 @@ class HistoryFetcher:
             )
         except Exception as e:
             _LOGGER.info("statistics_during_period exception: %s", e)
-            return {}, {}
+            return self._empty_result()
 
         if not isinstance(statistics_data_raw, dict):
-            return {}, {}
+            return self._empty_result()
 
         statistics_data = cast(dict[str, Any], statistics_data_raw)
 
         if not statistics_data or resolved_entity_id not in statistics_data:
-            return {}, {}
+            return self._empty_result()
 
         rows_raw = statistics_data.get(resolved_entity_id)
         if not isinstance(rows_raw, list) or not rows_raw:
-            return {}, {}
+            return self._empty_result()
 
         rows: list[dict[str, Any]] = [
             cast(dict[str, Any], r) for r in rows_raw if isinstance(r, dict)
         ]
         if not rows:
-            return {}, {}
+            return self._empty_result()
 
-        # Process statistics into hourly averages
-        by_hour_values: dict[int, list[float]] = {h: [] for h in range(24)}
+        # Separate samples by day type (weekday vs weekend)
+        weekday_by_hour, weekend_by_hour = self._separate_samples_by_day_type(
+            rows, dt_util.get_time_zone(self.hass.config.time_zone)
+        )
+
+        # Calculate profiles
+        (
+            weekday_avg,
+            weekend_avg,
+            weekday_counts,
+            weekend_counts,
+        ) = self._calculate_profiles(weekday_by_hour, weekend_by_hour)
+
+        # Calculate combined profile for backward compatibility
+        combined_avg: dict[int, float] = {}
+        combined_counts: dict[int, int] = {}
+        for hour in range(24):
+            weekday_vals = weekday_by_hour.get(hour, [])
+            weekend_vals = weekend_by_hour.get(hour, [])
+            all_vals = weekday_vals + weekend_vals
+            if all_vals:
+                combined_avg[hour] = sum(all_vals) / len(all_vals)
+                combined_counts[hour] = len(all_vals)
+
+        # Determine profile source
+        profile_source = self._determine_profile_source(weekday_counts, weekend_counts)
+
+        return {
+            "combined_avg": combined_avg,
+            "combined_counts": combined_counts,
+            "weekday_avg": weekday_avg,
+            "weekend_avg": weekend_avg,
+            "weekday_counts": weekday_counts,
+            "weekend_counts": weekend_counts,
+            "profile_source": profile_source,
+        }
+
+    def _separate_samples_by_day_type(
+        self, rows: list[dict[str, Any]], _local_tz: Any
+    ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
+        """Separate statistics rows into weekday and weekend hourly buckets.
+
+        Args:
+            rows: List of statistics rows with 'start' and 'mean' fields
+            _local_tz: Local timezone for day-of-week determination (unused, kept for API compatibility)
+
+        Returns:
+            Tuple of (weekday_by_hour, weekend_by_hour) where each is
+            {hour: [values]} for hours 0-23.
+        """
+        weekday_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
+        weekend_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
+
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -213,19 +317,179 @@ class HistoryFetcher:
             except (TypeError, ValueError):
                 continue
 
-            hour = dt_util.as_local(row_dt).hour
-            by_hour_values[hour].append(mean_kw)
+            # Convert to local time for day-of-week determination
+            local_dt = dt_util.as_local(row_dt)
+            hour = local_dt.hour
+            day_of_week = local_dt.weekday()  # Monday=0, Sunday=6
 
-        hourly_avg_kw: dict[int, float] = {}
-        sample_counts: dict[int, int] = {}
+            # Separate weekday (Mon-Fri, 0-4) vs weekend (Sat-Sun, 5-6)
+            if day_of_week >= 5:  # Saturday or Sunday
+                weekend_by_hour[hour].append(mean_kw)
+            else:
+                weekday_by_hour[hour].append(mean_kw)
+
+        return weekday_by_hour, weekend_by_hour
+
+    def _calculate_profiles(
+        self,
+        weekday_by_hour: dict[int, list[float]],
+        weekend_by_hour: dict[int, list[float]],
+    ) -> tuple[dict[int, float], dict[int, float], dict[int, int], dict[int, int]]:
+        """Calculate averages and sample counts for both profiles.
+
+        Args:
+            weekday_by_hour: {hour: [values]} for weekdays
+            weekend_by_hour: {hour: [values]} for weekends
+
+        Returns:
+            Tuple of (weekday_avg, weekend_avg, weekday_counts, weekend_counts)
+        """
+        weekday_avg: dict[int, float] = {}
+        weekend_avg: dict[int, float] = {}
+        weekday_counts: dict[int, int] = {}
+        weekend_counts: dict[int, int] = {}
+
         for hour in range(24):
-            samples = by_hour_values[hour]
-            if not samples:
-                continue
-            sample_counts[hour] = len(samples)
-            hourly_avg_kw[hour] = sum(samples) / len(samples)
+            # Weekday profile
+            weekday_samples = weekday_by_hour.get(hour, [])
+            if weekday_samples:
+                weekday_counts[hour] = len(weekday_samples)
+                weekday_avg[hour] = sum(weekday_samples) / len(weekday_samples)
 
-        return hourly_avg_kw, sample_counts
+            # Weekend profile
+            weekend_samples = weekend_by_hour.get(hour, [])
+            if weekend_samples:
+                weekend_counts[hour] = len(weekend_samples)
+                weekend_avg[hour] = sum(weekend_samples) / len(weekend_samples)
+
+        return weekday_avg, weekend_avg, weekday_counts, weekend_counts
+
+    def _determine_profile_source(
+        self,
+        weekday_counts: dict[int, int],
+        weekend_counts: dict[int, int],
+    ) -> str:
+        """Determine if we have sufficient samples for day-specific profiles.
+
+        Args:
+            weekday_counts: Sample counts per hour for weekdays
+            weekend_counts: Sample counts per hour for weekends
+
+        Returns:
+            "weekday_weekend" if sufficient samples, "combined_fallback" otherwise
+        """
+        # Check if we have minimum samples for most hours in both profiles
+        weekday_hours_with_min = sum(
+            1 for count in weekday_counts.values() if count >= MIN_SAMPLES_PER_HOUR
+        )
+        weekend_hours_with_min = sum(
+            1 for count in weekend_counts.values() if count >= MIN_SAMPLES_PER_HOUR
+        )
+
+        # Need at least 12 hours with minimum samples in each profile
+        # (allowing for some hours with low activity)
+        if weekday_hours_with_min >= 12 and weekend_hours_with_min >= 12:
+            return "weekday_weekend"
+        else:
+            _LOGGER.debug(
+                "Insufficient samples for day-specific profiles: "
+                "weekday_hours=%s, weekend_hours=%s (min required: 12)",
+                weekday_hours_with_min,
+                weekend_hours_with_min,
+            )
+            return "combined_fallback"
+
+    def _empty_result(self) -> dict[str, Any]:
+        """Return empty result structure."""
+        return {
+            "combined_avg": {},
+            "combined_counts": {},
+            "weekday_avg": {},
+            "weekend_avg": {},
+            "weekday_counts": {},
+            "weekend_counts": {},
+            "profile_source": "unknown",
+        }
+
+    def get_profile_for_day(
+        self, target_date: datetime
+    ) -> tuple[dict[int, float], dict[int, int], str]:
+        """Get appropriate hourly profile based on target day's day-of-week.
+
+        Args:
+            target_date: The date to get the profile for
+
+        Returns:
+            Tuple of (hourly_avg_kw, sample_counts, source) where source is
+            "weekday", "weekend", or "combined" (fallback).
+        """
+        # If no profiles available, return empty
+        if not self._weekday_hourly_avg_kw and not self._weekend_hourly_avg_kw:
+            return {}, {}, "combined"
+
+        # If using combined fallback, return combined profile
+        if self._profile_source == "combined_fallback":
+            return (
+                self._historical_load_cache,
+                self._historical_load_sample_counts,
+                "combined",
+            )
+
+        # Determine day type
+        day_of_week = target_date.weekday()  # Monday=0, Sunday=6
+
+        if day_of_week >= 5:  # Saturday or Sunday
+            # Check if weekend profile has sufficient data
+            if self._weekend_hourly_avg_kw:
+                return (
+                    self._weekend_hourly_avg_kw,
+                    self._weekend_sample_counts,
+                    "weekend",
+                )
+            # Fallback to combined if weekend profile insufficient
+            return (
+                self._historical_load_cache,
+                self._historical_load_sample_counts,
+                "combined",
+            )
+        else:
+            # Weekday
+            if self._weekday_hourly_avg_kw:
+                return (
+                    self._weekday_hourly_avg_kw,
+                    self._weekday_sample_counts,
+                    "weekday",
+                )
+            # Fallback to combined if weekday profile insufficient
+            return (
+                self._historical_load_cache,
+                self._historical_load_sample_counts,
+                "combined",
+            )
+
+    def get_weekday_profile(self) -> tuple[dict[int, float], dict[int, int]]:
+        """Get weekday profile for diagnostics.
+
+        Returns:
+            Tuple of (weekday_avg, weekday_counts)
+        """
+        return self._weekday_hourly_avg_kw, self._weekday_sample_counts
+
+    def get_weekend_profile(self) -> tuple[dict[int, float], dict[int, int]]:
+        """Get weekend profile for diagnostics.
+
+        Returns:
+            Tuple of (weekend_avg, weekend_counts)
+        """
+        return self._weekend_hourly_avg_kw, self._weekend_sample_counts
+
+    def get_profile_source(self) -> str:
+        """Get the current profile source for diagnostics.
+
+        Returns:
+            "weekday_weekend", "combined_fallback", or "unknown"
+        """
+        return self._profile_source
 
     async def async_get_recent_load_1hr(self, entity_id: str) -> float:
         """Get average load over the last 1 hour from HA statistics."""
@@ -402,7 +666,10 @@ class HistoryFetcher:
         }
 
     def get_cached_hourly_averages(self) -> dict[int, float]:
-        """Get cached hourly averages (sync version)."""
+        """Get cached hourly averages (sync version).
+
+        Returns combined profile for backward compatibility.
+        """
         return self._historical_load_cache
 
     def get_consumption_source(self, hourly_avg_kw: dict[int, float]) -> str:
@@ -424,7 +691,15 @@ class HistoryFetcher:
 
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
+        # Clear combined profile
         self._historical_load_cache = {}
         self._historical_load_sample_counts = {}
         self._historical_load_source = "unknown"
         self._historical_load_cache_date = ""
+
+        # Clear day-of-week profiles
+        self._weekday_hourly_avg_kw = {}
+        self._weekend_hourly_avg_kw = {}
+        self._weekday_sample_counts = {}
+        self._weekend_sample_counts = {}
+        self._profile_source = "unknown"

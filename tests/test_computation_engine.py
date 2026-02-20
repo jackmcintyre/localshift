@@ -484,21 +484,24 @@ class TestSpikeAnalysis:
         computation_engine._get_switch_state = MagicMock(side_effect=mock_switch_state)
 
         # Create forecast with spike prices (> 1.0 $/kWh)
+        # Note: spike_status field is required for spike detection
         coordinator_data.feed_in_forecast = [
             {
                 "start_time": "2026-02-16T18:00:00+11:00",
                 "end_time": "2026-02-16T18:05:00+11:00",
                 "per_kwh": 1.50,  # Spike price
+                "spike_status": "spike",  # Required for spike detection
             },
             {
                 "start_time": "2026-02-16T18:05:00+11:00",
                 "end_time": "2026-02-16T18:10:00+11:00",
                 "per_kwh": 2.00,  # Higher spike
+                "spike_status": "spike",  # Required for spike detection
             },
             {
                 "start_time": "2026-02-16T18:10:00+11:00",
                 "end_time": "2026-02-16T18:15:00+11:00",
-                "per_kwh": 0.10,  # Normal price
+                "per_kwh": 0.10,  # Normal price (no spike_status)
             },
         ]
 

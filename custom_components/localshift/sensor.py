@@ -351,6 +351,32 @@ class DailyForecastSensor(LocalShiftSensorBase):
             "consumption_hourly_profile_kw": {
                 str(hour): value for hour, value in sorted(profile_kw.items())
             },
+            # Day-of-week aware consumption profiles (issue-60)
+            "consumption_profile_type": self.coordinator.data.consumption_profile_type,
+            "weekday_sample_counts": {
+                str(hour): count
+                for hour, count in sorted(
+                    self.coordinator.data.weekday_sample_counts.items()
+                )
+            },
+            "weekend_sample_counts": {
+                str(hour): count
+                for hour, count in sorted(
+                    self.coordinator.data.weekend_sample_counts.items()
+                )
+            },
+            "weekday_hourly_profile_kw": {
+                str(hour): value
+                for hour, value in sorted(
+                    self.coordinator.data.weekday_hourly_profile_kw.items()
+                )
+            },
+            "weekend_hourly_profile_kw": {
+                str(hour): value
+                for hour, value in sorted(
+                    self.coordinator.data.weekend_hourly_profile_kw.items()
+                )
+            },
             "recent_load_1hr_kw": round(self.coordinator.data.recent_load_1hr_kw, 3),
             "recent_load_1hr_statistic_id": self.coordinator.data.recent_load_1hr_statistic_id,
             "recent_load_1hr_samples": self.coordinator.data.recent_load_1hr_samples,
