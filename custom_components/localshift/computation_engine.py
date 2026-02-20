@@ -257,15 +257,19 @@ class ComputationEngine:
         dw_entry = self._get_forecast_at_demand_window(data, target_hour)
         if dw_entry:
             data.solar_can_reach_target = dw_entry["predicted_soc"] >= target_pct
-            data.boost_charge_needed = dw_entry.get("grid_charge_boost", False)
         else:
             # Fallback if forecast doesn't span to DW (e.g., late in day)
             # Use current SOC as a conservative estimate
             data.solar_can_reach_target = data.soc >= target_pct
-            data.boost_charge_needed = False
 
         # ---- Step 6: boost_charge_needed ----
-        # (already set in Step 5 above)
+        # Read from CURRENT forecast slot (not DW entry) - fixes #44
+        # The boost_charge_needed flag indicates if boost charging is needed NOW,
+        # which is determined by the current slot's grid_charge_boost flag.
+        current_entry = self._get_forecast_entry_for_now(data, now_dt)
+        data.boost_charge_needed = (
+            current_entry.get("grid_charge_boost", False) if current_entry else False
+        )
 
         # ---- Step 6b: solar_can_reach_target_in_dw ----
         # Read from switch state (device-level toggle)
