@@ -206,6 +206,11 @@ net_cost = grid_import_cost - grid_export_revenue
 | `consumption_source` | string | Source of consumption data |
 | `consumption_profile_hours` | int | Hours of profile data available |
 | `consumption_weighting` | float | Recent vs historical weighting |
+| `consumption_profile_type` | string | "weekday_weekend" or "combined_fallback" |
+| `weekday_sample_counts` | dict | Sample counts per hour for weekdays |
+| `weekend_sample_counts` | dict | Sample counts per hour for weekends |
+| `weekday_hourly_profile_kw` | dict | Weekday hourly consumption averages (kW) |
+| `weekend_hourly_profile_kw` | dict | Weekend hourly consumption averages (kW) |
 | `forecast_import_cost` | float | Expected grid import cost (rest of day) |
 | `forecast_export_revenue` | float | Expected grid export revenue (rest of day) |
 | `forecast_net_cost` | float | Expected net cost (rest of day) |
