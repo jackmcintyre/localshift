@@ -1,35 +1,627 @@
 """Unit tests for coordinator."""
 
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from custom_components.localshift.coordinator import LocalShiftCoordinator
 
 
-def test_coordinator_initialization(mock_hass, mock_entry):
-    """Test coordinator initialization."""
-    coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
-
-    assert coordinator is not None
-    assert coordinator.hass == mock_hass
-    assert coordinator.entry == mock_entry
-
-
-def test_coordinator_get_entity_id(mock_hass, mock_entry, mock_get_entity_id):
-    """Test entity ID retrieval."""
-    entity_id = mock_get_entity_id("teslemetry_soc")
-    assert entity_id == "sensor.tesla_powerwall_soc"
+@pytest.fixture
+def mock_hass_with_services():
+    """Create a mock Home Assistant instance with services."""
+    hass = MagicMock()
+    hass.services = MagicMock()
+    hass.services.async_call = AsyncMock()
+    hass.states = MagicMock()
+    hass.async_create_task = MagicMock()
+    return hass
 
 
-def test_coordinator_get_switch_state(mock_hass, mock_entry):
-    """Test switch state retrieval."""
-    coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+@pytest.fixture
+def coordinator(mock_hass_with_services, mock_entry):
+    """Create a LocalShiftCoordinator instance."""
+    return LocalShiftCoordinator(mock_hass_with_services, mock_entry)
 
-    # Test with mock data
-    coordinator._switch_states = {
-        "automation_enabled": True,
-    }
 
-    state = coordinator.get_switch_state("automation_enabled")
-    assert state is True
+@pytest.fixture
+def coordinator_data():
+    """Create basic CoordinatorData for coordinator tests."""
+    from custom_components.localshift.coordinator_data import CoordinatorData
 
-    # Test default
-    state = coordinator.get_switch_state("nonexistent")
-    assert state is False
+    data = CoordinatorData()
+    data.soc = 50.0
+    data.operation_mode = "autonomous"
+    data.backup_reserve = 50
+    data.grid_power_kw = 0.0
+    data.load_power_kw = 0.5
+    data.solar_power_kw = 0.0
+    data.general_price = 0.25
+    data.feed_in_price = 0.08
+    data.price_spike = False
+    data.manual_override = False
+    data.decision_log = []
+    data.daily_forecast = []
+    return data
+
+
+# =============================================================================
+# INITIALIZATION TESTS
+# =============================================================================
+
+
+class TestCoordinatorInitialization:
+    """Tests for coordinator initialization."""
+
+    def test_coordinator_initialization(self, mock_hass, mock_entry):
+        """Test coordinator initialization."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+
+        assert coordinator is not None
+        assert coordinator.hass == mock_hass
+        assert coordinator.entry == mock_entry
+        assert coordinator.data is not None
+
+    def test_coordinator_get_entity_id(self, mock_hass, mock_entry, mock_get_entity_id):
+        """Test entity ID retrieval."""
+        entity_id = mock_get_entity_id("teslemetry_soc")
+        assert entity_id == "sensor.tesla_powerwall_soc"
+
+    def test_coordinator_get_switch_state(self, mock_hass, mock_entry):
+        """Test switch state retrieval."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+
+        # Test with mock data
+        coordinator._switch_states = {
+            "automation_enabled": True,
+        }
+
+        state = coordinator.get_switch_state("automation_enabled")
+        assert state is True
+
+        # Test default
+        state = coordinator.get_switch_state("nonexistent")
+        assert state is False
+
+    def test_coordinator_set_switch_state(self, mock_hass, mock_entry):
+        """Test setting switch state."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+
+        coordinator.set_switch_state("automation_enabled", True)
+        assert coordinator.get_switch_state("automation_enabled") is True
+
+        coordinator.set_switch_state("automation_enabled", False)
+        assert coordinator.get_switch_state("automation_enabled") is False
+
+
+# =============================================================================
+# ASYNC_START TESTS
+# =============================================================================
+
+
+class TestAsyncStart:
+    """Tests for async_start method."""
+
+    @pytest.mark.asyncio
+    async def test_async_start_initializes_modules(self, coordinator):
+        """Test that async_start initializes all helper modules."""
+        with (
+            patch(
+                "custom_components.localshift.coordinator.async_track_state_change_event"
+            ) as mock_track_state,
+            patch(
+                "custom_components.localshift.coordinator.async_track_time_interval"
+            ) as mock_track_time,
+            patch(
+                "custom_components.localshift.coordinator.async_track_time_change"
+            ) as mock_track_time_change,
+        ):
+            mock_track_state.return_value = MagicMock()
+            mock_track_time.return_value = MagicMock()
+            mock_track_time_change.return_value = MagicMock()
+
+            await coordinator.async_start()
+
+            # Verify modules are initialized
+            assert coordinator._state_reader is not None
+            assert coordinator._battery_controller is not None
+            assert coordinator._computation_engine is not None
+            assert coordinator._state_machine is not None
+            assert coordinator._notification_service is not None
+
+    @pytest.mark.asyncio
+    async def test_async_start_subscribes_to_events(self, coordinator):
+        """Test that async_start subscribes to state changes and timers."""
+        with (
+            patch(
+                "custom_components.localshift.coordinator.async_track_state_change_event"
+            ) as mock_track_state,
+            patch(
+                "custom_components.localshift.coordinator.async_track_time_interval"
+            ) as mock_track_time,
+            patch(
+                "custom_components.localshift.coordinator.async_track_time_change"
+            ) as mock_track_time_change,
+        ):
+            mock_track_state.return_value = MagicMock()
+            mock_track_time.return_value = MagicMock()
+            mock_track_time_change.return_value = MagicMock()
+
+            await coordinator.async_start()
+
+            # Verify state change subscription
+            mock_track_state.assert_called_once()
+            # Verify periodic timer subscription
+            mock_track_time.assert_called_once()
+            # Verify midnight and daily summary subscriptions
+            assert mock_track_time_change.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_start_sets_startup_grace(self, coordinator):
+        """Test that async_start sets startup grace period."""
+        with (
+            patch(
+                "custom_components.localshift.coordinator.async_track_state_change_event"
+            ) as mock_track_state,
+            patch(
+                "custom_components.localshift.coordinator.async_track_time_interval"
+            ) as mock_track_time,
+            patch(
+                "custom_components.localshift.coordinator.async_track_time_change"
+            ) as mock_track_time_change,
+        ):
+            mock_track_state.return_value = MagicMock()
+            mock_track_time.return_value = MagicMock()
+            mock_track_time_change.return_value = MagicMock()
+
+            await coordinator.async_start()
+
+            # State machine should have startup grace set
+            assert coordinator._state_machine is not None
+
+
+# =============================================================================
+# STATE CHANGE HANDLER TESTS
+# =============================================================================
+
+
+class TestHandleStateChange:
+    """Tests for _handle_state_change method."""
+
+    def test_handle_state_change_reads_state(self, coordinator, coordinator_data):
+        """Test that state change handler reads external state."""
+        coordinator.data = coordinator_data
+
+        # Mock state reader
+        coordinator._state_reader = MagicMock()
+        coordinator._state_reader.read_all_external_state = MagicMock()
+
+        # Mock state machine
+        coordinator._state_machine = MagicMock()
+        coordinator._state_machine.in_mode_transition = False
+
+        # Mock hass for async_create_task
+        coordinator.hass.async_create_task = MagicMock()
+
+        # Create mock event
+        event = MagicMock()
+
+        coordinator._handle_state_change(event)
+
+        # Verify state was read
+        coordinator._state_reader.read_all_external_state.assert_called_once()
+
+    def test_handle_state_change_skips_during_transition(
+        self, coordinator, coordinator_data
+    ):
+        """Test that state change is skipped during mode transition."""
+        coordinator.data = coordinator_data
+
+        # Mock state machine to be in transition
+        coordinator._state_machine = MagicMock()
+        coordinator._state_machine.in_mode_transition = True
+
+        # Mock state reader
+        coordinator._state_reader = MagicMock()
+        coordinator._state_reader.read_all_external_state = MagicMock()
+
+        # Create mock event
+        event = MagicMock()
+
+        coordinator._handle_state_change(event)
+
+        # State should NOT be read during transition
+        coordinator._state_reader.read_all_external_state.assert_not_called()
+
+
+# =============================================================================
+# PERIODIC TICK TESTS
+# =============================================================================
+
+
+class TestHandlePeriodicTick:
+    """Tests for _handle_periodic_tick method."""
+
+    def test_handle_periodic_tick_reads_state(self, coordinator, coordinator_data):
+        """Test that periodic tick reads external state."""
+        coordinator.data = coordinator_data
+
+        # Mock state reader
+        coordinator._state_reader = MagicMock()
+        coordinator._state_reader.read_all_external_state = MagicMock()
+
+        # Mock computation engine
+        coordinator._computation_engine = MagicMock()
+        coordinator._computation_engine.async_get_recent_load_1hr = AsyncMock()
+        coordinator._computation_engine.async_get_historical_hourly_averages = (
+            AsyncMock()
+        )
+
+        # Mock cost tracker
+        coordinator._cost_tracker = MagicMock()
+        coordinator._cost_tracker.accumulate_costs = MagicMock()
+
+        # Mock state machine
+        coordinator._state_machine = MagicMock()
+
+        # Mock hass for async_create_task
+        coordinator.hass.async_create_task = MagicMock()
+
+        now = datetime(2026, 2, 16, 12, 0, 0)
+        coordinator._handle_periodic_tick(now)
+
+        # Verify state was read
+        coordinator._state_reader.read_all_external_state.assert_called_once()
+
+    def test_handle_periodic_tick_accumulates_costs(
+        self, coordinator, coordinator_data
+    ):
+        """Test that periodic tick accumulates costs."""
+        coordinator.data = coordinator_data
+
+        # Mock state reader
+        coordinator._state_reader = MagicMock()
+        coordinator._state_reader.read_all_external_state = MagicMock()
+
+        # Mock cost tracker
+        coordinator._cost_tracker = MagicMock()
+        coordinator._cost_tracker.accumulate_costs = MagicMock()
+
+        # Mock computation engine
+        coordinator._computation_engine = MagicMock()
+        coordinator._computation_engine.async_get_recent_load_1hr = AsyncMock()
+        coordinator._computation_engine.async_get_historical_hourly_averages = (
+            AsyncMock()
+        )
+
+        # Mock state machine
+        coordinator._state_machine = MagicMock()
+
+        # Mock hass for async_create_task
+        coordinator.hass.async_create_task = MagicMock()
+
+        now = datetime(2026, 2, 16, 12, 0, 0)
+        coordinator._handle_periodic_tick(now)
+
+        # Verify costs were accumulated
+        coordinator._cost_tracker.accumulate_costs.assert_called_once()
+
+
+# =============================================================================
+# MIDNIGHT RESET TESTS
+# =============================================================================
+
+
+class TestHandleMidnightReset:
+    """Tests for _handle_midnight_reset method."""
+
+    def test_handle_midnight_reset_clears_accumulators(
+        self, coordinator, coordinator_data
+    ):
+        """Test that midnight reset clears cost accumulators."""
+        coordinator.data = coordinator_data
+        coordinator.data.grid_import_cost = 10.0
+        coordinator.data.grid_export_revenue = 5.0
+        coordinator.data.battery_savings = 3.0
+        coordinator.data.battery_charge_cost = 2.0
+        coordinator.data.target_reached_today = True
+
+        # Mock listeners
+        coordinator._notify_listeners = MagicMock()
+
+        now = datetime(2026, 2, 17, 0, 0, 0)
+        coordinator._handle_midnight_reset(now)
+
+        # Verify accumulators were reset
+        assert coordinator.data.grid_import_cost == 0.0
+        assert coordinator.data.grid_export_revenue == 0.0
+        assert coordinator.data.battery_savings == 0.0
+        assert coordinator.data.battery_charge_cost == 0.0
+        assert coordinator.data.target_reached_today is False
+
+    def test_handle_midnight_reset_notifies_listeners(
+        self, coordinator, coordinator_data
+    ):
+        """Test that midnight reset notifies listeners."""
+        coordinator.data = coordinator_data
+
+        # Mock listeners
+        coordinator._notify_listeners = MagicMock()
+
+        now = datetime(2026, 2, 17, 0, 0, 0)
+        coordinator._handle_midnight_reset(now)
+
+        coordinator._notify_listeners.assert_called_once()
+
+
+# =============================================================================
+# STATE MACHINE EVALUATION TESTS
+# =============================================================================
+
+
+class TestEvaluateStateMachine:
+    """Tests for state machine evaluation."""
+
+    @pytest.mark.asyncio
+    async def test_evaluate_state_machine_calls_evaluate(self, coordinator):
+        """Test that _evaluate_state_machine calls state machine evaluate."""
+        # Mock state machine
+        coordinator._state_machine = MagicMock()
+        coordinator._state_machine.evaluate_state_machine = AsyncMock()
+
+        # Mock computation engine
+        coordinator._computation_engine = MagicMock()
+
+        # Mock state reader
+        coordinator._state_reader = MagicMock()
+        coordinator._state_reader.read_all_external_state = MagicMock()
+
+        # Mock notify
+        coordinator._notify_listeners = MagicMock()
+
+        await coordinator._evaluate_state_machine()
+
+        # Verify evaluate was called
+        coordinator._state_machine.evaluate_state_machine.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_evaluate_state_machine_public(self, coordinator):
+        """Test public async_evaluate_state_machine method."""
+        # Mock state machine
+        coordinator._state_machine = MagicMock()
+        coordinator._state_machine.evaluate_state_machine = AsyncMock()
+
+        # Mock computation engine
+        coordinator._computation_engine = MagicMock()
+
+        # Mock state reader
+        coordinator._state_reader = MagicMock()
+        coordinator._state_reader.read_all_external_state = MagicMock()
+
+        # Mock notify
+        coordinator._notify_listeners = MagicMock()
+
+        await coordinator.async_evaluate_state_machine()
+
+        # Verify evaluate was called
+        coordinator._state_machine.evaluate_state_machine.assert_called_once()
+
+
+# =============================================================================
+# BUTTON HANDLER TESTS
+# =============================================================================
+
+
+class TestButtonHandlers:
+    """Tests for button handler methods."""
+
+    @pytest.mark.asyncio
+    async def test_async_set_self_consumption(self, coordinator, coordinator_data):
+        """Test set_self_consumption button handler."""
+        coordinator.data = coordinator_data
+
+        # Mock battery controller
+        coordinator._battery_controller = MagicMock()
+        coordinator._battery_controller.set_self_consumption = AsyncMock()
+
+        await coordinator.async_set_self_consumption()
+
+        coordinator._battery_controller.set_self_consumption.assert_called_once_with(
+            coordinator.data, False
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_force_charge(self, coordinator, coordinator_data):
+        """Test set_force_charge button handler."""
+        coordinator.data = coordinator_data
+
+        # Mock battery controller
+        coordinator._battery_controller = MagicMock()
+        coordinator._battery_controller.set_force_charge = AsyncMock()
+
+        await coordinator.async_set_force_charge()
+
+        coordinator._battery_controller.set_force_charge.assert_called_once_with(
+            coordinator.data, False
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_boost_charge(self, coordinator, coordinator_data):
+        """Test set_boost_charge button handler."""
+        coordinator.data = coordinator_data
+
+        # Mock battery controller
+        coordinator._battery_controller = MagicMock()
+        coordinator._battery_controller.set_boost_charge = AsyncMock()
+
+        await coordinator.async_set_boost_charge()
+
+        coordinator._battery_controller.set_boost_charge.assert_called_once_with(
+            coordinator.data, False
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_force_discharge(self, coordinator, coordinator_data):
+        """Test set_force_discharge button handler."""
+        coordinator.data = coordinator_data
+
+        # Mock battery controller
+        coordinator._battery_controller = MagicMock()
+        coordinator._battery_controller.set_force_discharge = AsyncMock()
+
+        await coordinator.async_set_force_discharge()
+
+        coordinator._battery_controller.set_force_discharge.assert_called_once_with(
+            coordinator.data, False
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_set_manual_override(self, coordinator, coordinator_data):
+        """Test set_manual_override button handler."""
+        coordinator.data = coordinator_data
+
+        # Mock state machine
+        coordinator._state_machine = MagicMock()
+        coordinator._state_machine.set_manual_override_timestamp = MagicMock()
+
+        # Mock battery controller
+        coordinator._battery_controller = MagicMock()
+
+        await coordinator.async_set_manual_override()
+
+        assert coordinator.data.manual_override is True
+        coordinator._state_machine.set_manual_override_timestamp.assert_called_once()
+
+
+# =============================================================================
+# LISTENER TESTS
+# =============================================================================
+
+
+class TestListeners:
+    """Tests for listener registration and notification."""
+
+    def test_async_add_listener(self, coordinator):
+        """Test adding a listener."""
+        callback = MagicMock()
+        unsubscribe = coordinator.async_add_listener(callback)
+
+        assert callback in coordinator._update_callbacks
+        assert callable(unsubscribe)
+
+    def test_listener_unsubscribe(self, coordinator):
+        """Test unsubscribing a listener."""
+        callback = MagicMock()
+        unsubscribe = coordinator.async_add_listener(callback)
+
+        assert callback in coordinator._update_callbacks
+
+        unsubscribe()
+
+        assert callback not in coordinator._update_callbacks
+
+    def test_notify_listeners(self, coordinator):
+        """Test notifying all listeners."""
+        callback1 = MagicMock()
+        callback2 = MagicMock()
+
+        coordinator.async_add_listener(callback1)
+        coordinator.async_add_listener(callback2)
+
+        coordinator._notify_listeners()
+
+        callback1.assert_called_once()
+        callback2.assert_called_once()
+
+
+# =============================================================================
+# OPTIONS TESTS
+# =============================================================================
+
+
+class TestOptions:
+    """Tests for options handling."""
+
+    def test_get_option_existing(self, coordinator, mock_entry):
+        """Test getting an existing option."""
+        mock_entry.options = {"battery_target": 85}
+        coordinator.entry = mock_entry
+
+        result = coordinator.get_option("battery_target", 90)
+
+        assert result == 85
+
+    def test_get_option_default(self, coordinator, mock_entry):
+        """Test getting an option with default value."""
+        mock_entry.options = {}
+        coordinator.entry = mock_entry
+
+        result = coordinator.get_option("nonexistent", 90)
+
+        assert result == 90
+
+    def test_parse_time_option(self, coordinator):
+        """Test parsing time option."""
+        coordinator.get_option = MagicMock(return_value="18:30:00")
+
+        result = coordinator._parse_time_option("demand_window_start", "00:00:00")
+
+        assert result.hour == 18
+        assert result.minute == 30
+        assert result.second == 0
+
+    def test_parse_time_option_invalid(self, coordinator):
+        """Test parsing invalid time option falls back to default."""
+        coordinator.get_option = MagicMock(return_value="invalid")
+
+        result = coordinator._parse_time_option("test", "18:00:00")
+
+        assert result.hour == 18
+        assert result.minute == 0
+
+
+# =============================================================================
+# ASYNC_STOP TESTS
+# =============================================================================
+
+
+class TestAsyncStop:
+    """Tests for async_stop method."""
+
+    @pytest.mark.asyncio
+    async def test_async_stop_unsubscribes(self, coordinator):
+        """Test that async_stop unsubscribes from all events."""
+        # Set up mock unsubscribers
+        mock_unsub1 = MagicMock()
+        mock_unsub2 = MagicMock()
+        mock_unsub3 = MagicMock()
+        mock_unsub4 = MagicMock()
+
+        coordinator._unsub_state = mock_unsub1
+        coordinator._unsub_timer = mock_unsub2
+        coordinator._unsub_midnight = mock_unsub3
+        coordinator._unsub_daily_summary = mock_unsub4
+
+        # Mock computation engine
+        coordinator._computation_engine = MagicMock()
+        coordinator._computation_engine.clear_historical_cache = MagicMock()
+
+        await coordinator.async_stop()
+
+        # Verify all unsubscribers were called
+        mock_unsub1.assert_called_once()
+        mock_unsub2.assert_called_once()
+        mock_unsub3.assert_called_once()
+        mock_unsub4.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_stop_clears_cache(self, coordinator):
+        """Test that async_stop clears historical cache."""
+        # Mock computation engine
+        coordinator._computation_engine = MagicMock()
+        coordinator._computation_engine.clear_historical_cache = MagicMock()
+
+        await coordinator.async_stop()
+
+        coordinator._computation_engine.clear_historical_cache.assert_called_once()

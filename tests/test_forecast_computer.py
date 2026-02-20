@@ -1,6 +1,6 @@
 """Unit tests for ForecastComputer."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 import pytest
 
@@ -379,3 +379,306 @@ def test_should_proactive_export_at_peak_price(mock_entry, mock_get_entity_id):
     )
 
     assert should_export == True, "Should export when at/near evening peak"
+
+
+# =============================================================================
+# COMPUTE_FORECAST TESTS
+# =============================================================================
+
+
+class TestComputeForecast:
+    """Tests for compute_forecast main entry point."""
+
+    def test_compute_forecast_returns_tuple(self, mock_entry, mock_get_entity_id):
+        """Test that compute_forecast returns the expected tuple structure."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
+
+        # Create minimal CoordinatorData
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 50.0
+        data.load_power_kw = 0.5
+        data.general_price = 0.25
+        data.feed_in_price = 0.08
+        data.effective_cheap_price = 0.15
+        data.solcast_today = []
+        data.solcast_tomorrow = []
+        data.general_forecast = []
+        data.feed_in_forecast = []
+
+        now_dt = dt_aware(2026, 2, 16, 12, 0, 0)
+
+        result = computer.compute_forecast(
+            data=data,
+            now_dt=now_dt,
+            historical_avg_kw={},
+            recent_load_kw=0.5,
+            historical_load_source="none",
+            historical_load_sample_counts={},
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        daily_forecast, daily_forecast_soc_15min, consumption_source_counts = result
+        assert isinstance(daily_forecast, list)
+        assert isinstance(daily_forecast_soc_15min, list)
+        assert isinstance(consumption_source_counts, dict)
+
+    def test_compute_forecast_generates_96_slots(self, mock_entry, mock_get_entity_id):
+        """Test that compute_forecast generates 96 15-minute slots."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
+
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 50.0
+        data.load_power_kw = 0.5
+        data.general_price = 0.25
+        data.feed_in_price = 0.08
+        data.effective_cheap_price = 0.15
+        data.solcast_today = []
+        data.solcast_tomorrow = []
+        data.general_forecast = []
+        data.feed_in_forecast = []
+
+        now_dt = dt_aware(2026, 2, 16, 12, 0, 0)
+
+        daily_forecast, daily_forecast_soc_15min, _ = computer.compute_forecast(
+            data=data,
+            now_dt=now_dt,
+            historical_avg_kw={},
+            recent_load_kw=0.5,
+            historical_load_source="none",
+            historical_load_sample_counts={},
+        )
+
+        # Should have 96 slots (24 hours × 4 slots/hour)
+        assert len(daily_forecast) == 96
+        assert len(daily_forecast_soc_15min) == 96
+
+    def test_compute_forecast_with_solar_data(self, mock_entry, mock_get_entity_id):
+        """Test compute_forecast with solar forecast data."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {12: 0.5})
+
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 50.0
+        data.load_power_kw = 0.5
+        data.general_price = 0.25
+        data.feed_in_price = 0.08
+        data.effective_cheap_price = 0.15
+        # Add solar forecast for midday
+        data.solcast_today = [
+            {
+                "period_start": "2026-02-16T12:00:00+11:00",
+                "pv_estimate10": 2.0,
+            },
+            {
+                "period_start": "2026-02-16T12:30:00+11:00",
+                "pv_estimate10": 2.5,
+            },
+        ]
+        data.solcast_tomorrow = []
+        data.general_forecast = []
+        data.feed_in_forecast = []
+
+        now_dt = dt_aware(2026, 2, 16, 12, 0, 0)
+
+        daily_forecast, _, _ = computer.compute_forecast(
+            data=data,
+            now_dt=now_dt,
+            historical_avg_kw={12: 0.5},
+            recent_load_kw=0.5,
+            historical_load_source="test",
+            historical_load_sample_counts={12: 100},
+        )
+
+        # Check that solar data is reflected in forecast
+        # First slot should have solar data
+        first_slot = daily_forecast[0]
+        assert "solar_kwh" in first_slot
+        assert "predicted_soc" in first_slot
+
+
+# =============================================================================
+# SHOULD_GRID_CHARGE_AT_SLOT TESTS
+# =============================================================================
+
+
+class TestShouldGridChargeAtSlot:
+    """Tests for _should_grid_charge_at_slot method."""
+
+    def test_should_grid_charge_in_demand_window(self, mock_entry, mock_get_entity_id):
+        """Should not grid charge during demand window."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
+
+        slot_start = dt_aware(2026, 2, 16, 19, 0, 0)  # 19:00, during DW (18:00-22:00)
+
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.10,
+            predicted_soc=50.0,
+            target_pct=90.0,
+            effective_cheap_price=0.15,
+            is_before_dw=False,
+            in_demand_window=True,
+            gap_to_target=40.0,
+            is_daylight=False,
+            all_solcast=[],
+            historical_avg_kw={},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.10,
+        )
+
+        assert should_charge is False
+        assert should_boost is False
+
+    def test_should_grid_charge_target_reached(self, mock_entry, mock_get_entity_id):
+        """Should not grid charge when target already reached."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
+
+        slot_start = dt_aware(2026, 2, 16, 10, 0, 0)
+
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.10,
+            predicted_soc=95.0,  # Already above target
+            target_pct=90.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,
+            in_demand_window=False,
+            gap_to_target=0.0,  # No gap
+            is_daylight=False,
+            all_solcast=[],
+            historical_avg_kw={},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.10,
+        )
+
+        assert should_charge is False
+        assert should_boost is False
+
+    def test_should_grid_charge_very_cheap_price(self, mock_entry, mock_get_entity_id):
+        """Should grid charge at very cheap price (safety net)."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {10: 0.5})
+
+        slot_start = dt_aware(2026, 2, 16, 10, 0, 0)
+
+        # Create solcast that shows no solar can reach target
+        all_solcast = [
+            {"period_start": "2026-02-16T10:00:00+11:00", "pv_estimate10": 0.0},
+        ]
+
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.08,  # Very cheap (< 0.15 * 0.8 = 0.12)
+            predicted_soc=50.0,
+            target_pct=90.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,
+            in_demand_window=False,
+            gap_to_target=40.0,
+            is_daylight=False,
+            all_solcast=all_solcast,
+            historical_avg_kw={10: 0.5},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.08,
+            min_soc_pct=10.0,
+        )
+
+        # Very cheap price should trigger boost charging
+        assert should_charge is True
+        assert should_boost is True
+
+    def test_should_grid_charge_after_dw(self, mock_entry, mock_get_entity_id):
+        """Should not grid charge after demand window."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
+
+        slot_start = dt_aware(2026, 2, 16, 23, 0, 0)  # After DW
+
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.10,
+            predicted_soc=50.0,
+            target_pct=90.0,
+            effective_cheap_price=0.15,
+            is_before_dw=False,  # After DW
+            in_demand_window=False,
+            gap_to_target=40.0,
+            is_daylight=False,
+            all_solcast=[],
+            historical_avg_kw={},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.10,
+        )
+
+        assert should_charge is False
+        assert should_boost is False

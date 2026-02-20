@@ -1,12 +1,13 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from custom_components.localshift.computation_engine import (
     BatteryMode,
+    ForecastChangeTracker,
 )
 
 
@@ -266,3 +267,325 @@ def test_decision_log_periodic_update(computation_engine, coordinator_data):
     assert initial_log_length >= 1
     # First entry should be initial status
     assert "reason" in coordinator_data.decision_log[-1]
+
+
+# =============================================================================
+# FORECAST CHANGE TRACKER TESTS
+# =============================================================================
+
+
+class TestForecastChangeTracker:
+    """Tests for ForecastChangeTracker logic."""
+
+    def test_should_recompute_first_run(self):
+        """First run should always recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        assert should_recompute is True
+        assert reason == "first_run"
+
+    def test_should_recompute_forced(self):
+        """Force flag should always trigger recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # Force recompute
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt, force=True
+        )
+
+        assert should_recompute is True
+        assert reason == "forced"
+
+    def test_should_recompute_price_change(self):
+        """Price change should trigger recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # Price change
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.0, price=0.30, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        assert should_recompute is True
+        assert "price_change" in reason
+
+    def test_should_recompute_feed_in_change(self):
+        """Feed-in price change should trigger recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # Feed-in change
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.10, now_dt=now_dt
+        )
+
+        assert should_recompute is True
+        assert "fit_change" in reason
+
+    def test_should_recompute_soc_change(self):
+        """SOC change >= 1% should trigger recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # SOC change >= 1%
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=52.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        assert should_recompute is True
+        assert "soc_change" in reason
+
+    def test_should_not_recompute_small_soc_change(self):
+        """SOC change < 1% should NOT trigger recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # Small SOC change < 1%
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.5, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        assert should_recompute is False
+        assert reason == "no_change"
+
+    def test_should_recompute_age_timeout(self):
+        """Forecast age > 1 minute should trigger recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # Move time forward by 2 minutes
+        later_dt = now_dt + timedelta(minutes=2)
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=later_dt
+        )
+
+        assert should_recompute is True
+        assert "age" in reason
+
+    def test_should_not_recompute_within_age_window(self):
+        """No changes within 1-minute window should NOT recompute."""
+        tracker = ForecastChangeTracker()
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize tracker
+        tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        # Check again immediately (no changes)
+        should_recompute, reason = tracker.should_recompute_forecast(
+            soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
+        )
+
+        assert should_recompute is False
+        assert reason == "no_change"
+
+
+# =============================================================================
+# SPIKE ANALYSIS TESTS (Conservative Mode)
+# =============================================================================
+
+
+class TestSpikeAnalysis:
+    """Tests for _analyze_spike conservative mode logic."""
+
+    def test_analyze_spike_disabled(self, computation_engine, coordinator_data):
+        """Spike analysis should skip when conservative mode disabled."""
+        computation_engine._get_switch_state = MagicMock(return_value=False)
+
+        now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+        computation_engine._analyze_spike(coordinator_data, now_dt)
+
+        # Should not populate spike fields
+        assert coordinator_data.spike_in_conservative_mode is False
+        assert coordinator_data.spike_end_time is None
+
+    def test_analyze_spike_no_spike_in_forecast(
+        self, computation_engine, coordinator_data
+    ):
+        """Spike analysis should handle no spike in forecast."""
+
+        # Enable conservative mode
+        def mock_switch_state(key):
+            if key == "spike_discharge_conservative":
+                return True
+            return False
+
+        computation_engine._get_switch_state = MagicMock(side_effect=mock_switch_state)
+
+        # No spike prices in forecast
+        coordinator_data.feed_in_forecast = [
+            {
+                "start_time": "2026-02-16T18:00:00+11:00",
+                "end_time": "2026-02-16T18:05:00+11:00",
+                "per_kwh": 0.08,
+            },
+            {
+                "start_time": "2026-02-16T18:05:00+11:00",
+                "end_time": "2026-02-16T18:10:00+11:00",
+                "per_kwh": 0.09,
+            },
+        ]
+
+        now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+        computation_engine._analyze_spike(coordinator_data, now_dt)
+
+        # Should not detect spike
+        assert coordinator_data.spike_end_time is None
+        assert coordinator_data.spike_max_price == 0.0
+
+    def test_analyze_spike_with_spike_prices(
+        self, computation_engine, coordinator_data
+    ):
+        """Spike analysis should detect and analyze spike prices."""
+
+        # Enable conservative mode
+        def mock_switch_state(key):
+            if key == "spike_discharge_conservative":
+                return True
+            return False
+
+        computation_engine._get_switch_state = MagicMock(side_effect=mock_switch_state)
+
+        # Create forecast with spike prices (> 1.0 $/kWh)
+        coordinator_data.feed_in_forecast = [
+            {
+                "start_time": "2026-02-16T18:00:00+11:00",
+                "end_time": "2026-02-16T18:05:00+11:00",
+                "per_kwh": 1.50,  # Spike price
+            },
+            {
+                "start_time": "2026-02-16T18:05:00+11:00",
+                "end_time": "2026-02-16T18:10:00+11:00",
+                "per_kwh": 2.00,  # Higher spike
+            },
+            {
+                "start_time": "2026-02-16T18:10:00+11:00",
+                "end_time": "2026-02-16T18:15:00+11:00",
+                "per_kwh": 0.10,  # Normal price
+            },
+        ]
+
+        now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+        computation_engine._analyze_spike(coordinator_data, now_dt)
+
+        # Should detect spike
+        assert coordinator_data.spike_in_conservative_mode is True
+        assert coordinator_data.spike_max_price > 1.0
+        assert coordinator_data.spike_price_threshold > 0
+
+    def test_analyze_spike_calculates_reserve_soc(
+        self, computation_engine, coordinator_data
+    ):
+        """Spike analysis should calculate reserve SOC needed."""
+
+        # Enable conservative mode
+        def mock_switch_state(key):
+            if key == "spike_discharge_conservative":
+                return True
+            return False
+
+        computation_engine._get_switch_state = MagicMock(side_effect=mock_switch_state)
+
+        # Create forecast with spike
+        coordinator_data.feed_in_forecast = [
+            {
+                "start_time": "2026-02-16T18:00:00+11:00",
+                "end_time": "2026-02-16T18:30:00+11:00",
+                "per_kwh": 2.00,
+            },
+        ]
+        coordinator_data.load_power_kw = 1.0  # 1 kW load
+
+        now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+        computation_engine._analyze_spike(coordinator_data, now_dt)
+
+        # Should calculate reserve SOC
+        assert coordinator_data.spike_reserve_soc >= 0
+        assert coordinator_data.spike_hours_remaining >= 0
+
+
+# =============================================================================
+# COMPUTE DAILY 15-MIN FORECAST TESTS
+# =============================================================================
+
+
+class TestComputeDaily15MinForecast:
+    """Tests for _compute_daily_15min_forecast method."""
+
+    def test_forecast_uses_change_tracker(self, computation_engine, coordinator_data):
+        """Forecast computation should use change tracker."""
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # First call should trigger recompute
+        with patch.object(
+            computation_engine._forecast_computer, "compute_forecast"
+        ) as mock_compute:
+            mock_compute.return_value = ([], [], {})
+            computation_engine._compute_daily_15min_forecast(coordinator_data, now_dt)
+            mock_compute.assert_called_once()
+
+    def test_forecast_skips_on_no_change(self, computation_engine, coordinator_data):
+        """Forecast should skip recompute when no significant changes."""
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Initialize with first call
+        with patch.object(
+            computation_engine._forecast_computer, "compute_forecast"
+        ) as mock_compute:
+            mock_compute.return_value = ([], [], {})
+            computation_engine._compute_daily_15min_forecast(coordinator_data, now_dt)
+
+        # Second call with same values should skip
+        mock_compute.reset_mock()
+        computation_engine._compute_daily_15min_forecast(coordinator_data, now_dt)
+        mock_compute.assert_not_called()
+
+    def test_forecast_handles_exception(self, computation_engine, coordinator_data):
+        """Forecast should handle exceptions gracefully."""
+        now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        with patch.object(
+            computation_engine._forecast_computer, "compute_forecast"
+        ) as mock_compute:
+            mock_compute.side_effect = Exception("Test error")
+            # Should not raise
+            computation_engine._compute_daily_15min_forecast(coordinator_data, now_dt)
+            # Should have empty forecast
+            assert coordinator_data.daily_forecast == []
