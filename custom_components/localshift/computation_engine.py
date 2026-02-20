@@ -1228,17 +1228,21 @@ class ComputationEngine:
         old_mode = self._previous_active_mode
         new_mode = data.active_mode
 
+        # Get friendly display names for modes
+        old_mode_display = old_mode.display_name if old_mode else "Unknown"
+        new_mode_display = new_mode.display_name if new_mode else "Unknown"
+
         if mode_change:
-            reason = f"Mode changed: {old_mode} -> {new_mode}"
-            # Only update previous mode when it actually changed
-            self._previous_active_mode = new_mode
+            reason = f"Mode changed: {old_mode_display} -> {new_mode_display}"
         else:
-            reason = f"Status update: {new_mode} (no change)"
+            reason = f"Status update: {new_mode_display}"
 
         entry = {
             "timestamp": now_dt.isoformat(),
-            "old_mode": old_mode if old_mode else "unknown",
-            "new_mode": new_mode,
+            "old_mode": old_mode.value if old_mode else "unknown",
+            "new_mode": new_mode.value if new_mode else "unknown",
+            "old_mode_display": old_mode_display,
+            "new_mode_display": new_mode_display,
             "buy_price": round(data.general_price, 2),
             "sell_price": round(data.feed_in_price, 2),
             "soc": round(data.soc),
@@ -1250,6 +1254,8 @@ class ComputationEngine:
         if len(data.decision_log) > 50:
             data.decision_log = data.decision_log[-50:]
 
+        # Always update previous mode so mode changes can be detected correctly
+        self._previous_active_mode = new_mode
         self._last_decision_log_time = now_dt
 
     def _get_expected_load_kw(

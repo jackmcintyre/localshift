@@ -26,6 +26,20 @@ class BatteryMode(str, Enum):
     DEMAND_BLOCK = "demand_block"
     MANUAL = "manual"
 
+    @property
+    def display_name(self) -> str:
+        """Return a user-friendly display name for the mode."""
+        names = {
+            BatteryMode.SELF_CONSUMPTION: "Self Consumption",
+            BatteryMode.GRID_CHARGING: "Grid Charging",
+            BatteryMode.BOOST_CHARGING: "Boost Charging",
+            BatteryMode.SPIKE_DISCHARGE: "Spike Discharge",
+            BatteryMode.PROACTIVE_EXPORT: "Proactive Export",
+            BatteryMode.DEMAND_BLOCK: "Demand Block",
+            BatteryMode.MANUAL: "Manual",
+        }
+        return names[self]
+
 
 # Teslemetry export modes (select.allow_export options)
 TESLEMETRY_EXPORT_PV_ONLY = "pv_only"
