@@ -9,7 +9,7 @@ A state machine replaces 18 YAML automations with a single priority-based evalua
 
 ## Features
 
-- **9 battery modes** — Self Consumption, Hold, Grid Charging, Boost Charging, Spike Discharge, Solar Export Hold, Holding for Spike, Demand Block, Manual
+- **7 battery modes** — Self Consumption, Grid Charging, Boost Charging, Spike Discharge, Proactive Export, Demand Block, Manual
 - **Dynamic pricing thresholds** — Urgency-based cheap price calculation that factors in time-to-demand-window, SOC, and solar forecast
 - **Solcast solar forecast** — SOC projection to demand window, target-by-DW calculation, boost charge detection
 - **Solar export hold** — Holds battery when surplus solar can cover demand window deficit, maximising feed-in revenue
@@ -78,7 +78,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (9)
+### Sensors (12)
 
 | Entity ID | Description |
 |---|---|
@@ -87,12 +87,15 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_solar_weighted_avg_fit` | Solcast × Amber weighted average feed-in tariff |
 | `sensor.localshift_battery_mode` | Current battery mode from the state machine |
 | `sensor.localshift_forecast_battery` | SOC projection with detailed attributes |
-| `sensor.localshift_power_grid_import` | Current grid import (kW) |
-| `sensor.localshift_power_grid_export` | Current grid export (kW) |
 | `sensor.localshift_cost_electricity_net` | Net cost with import/export/savings/charge cost attributes |
 | `sensor.localshift_decision_log` | Mode change history with reasons |
+| `sensor.localshift_forecast_history` | Historical forecast predictions for comparison |
+| `sensor.localshift_forecast_daily` | Full 24-hour forecast with 15-minute granularity |
+| `sensor.localshift_target_soc_minimum` | Minimum target SOC for discharge modes |
+| `sensor.localshift_excess_solar_kwh` | Forecasted excess solar for load shifting |
+| `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
 
-### Binary Sensors (8)
+### Binary Sensors (9)
 
 | Entity ID | Description |
 |---|---|
@@ -104,18 +107,24 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `binary_sensor.localshift_charge_boost` | Powerwall is currently boost charging (5kW) |
 | `binary_sensor.localshift_solar_can_reach_target` | Solar forecast can reach battery target before DW |
 | `binary_sensor.localshift_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
+| `binary_sensor.localshift_excess_solar_available` | Excess solar available for load shifting |
 
-### Switches (5)
+### Switches (10)
 
 | Entity ID | Default | Description |
 |---|---|---|
 | `switch.localshift_automation_enabled` | ON | Master toggle for all automation |
 | `switch.localshift_spike_discharge_enabled` | ON | Allow discharge during price spikes |
+| `switch.localshift_spike_discharge_conservative` | OFF | Conservative spike discharge with dynamic reserve |
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
 | `switch.localshift_demand_window_block` | ON | Block grid charging during demand window |
 | `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
+| `switch.localshift_notify_transitions` | ON | Enable mode transition notifications |
+| `switch.localshift_notify_daily_summary` | ON | Enable daily summary notification |
+| `switch.localshift_notify_manual_actions` | ON | Enable manual action notifications |
+| `switch.localshift_notify_alerts` | ON | Enable alert notifications |
 
-### Numbers (6)
+### Numbers (8)
 
 | Entity ID | Description |
 |---|---|
@@ -123,8 +132,10 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `number.localshift_max_pre_charge_price` | Maximum pre-charge price ($/kWh) |
 | `number.localshift_cheap_price_deadband` | Price deadband ($/kWh) |
 | `number.localshift_forecast_lookahead_hours` | Forecast lookahead window (hours) |
-| `number.localshift_pre_charge_battery_threshold` | Pre-charge SOC threshold (%) |
 | `number.localshift_battery_target` | Battery target SOC (%) |
+| `number.localshift_load_weight_recent` | Weight for recent vs historical consumption |
+| `number.localshift_spike_price_percentile` | Price percentile for spike discharge activation |
+| `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes |
 
 ### Buttons (5)
 

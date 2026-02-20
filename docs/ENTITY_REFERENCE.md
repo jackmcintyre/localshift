@@ -4,15 +4,17 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **31 entities** grouped under a single "LocalShift" device:
+The integration creates **44 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 11 | `sensor` |
-| Binary Sensors | 8 | `binary_sensor` |
-| Switches | 5 | `switch` |
-| Numbers | 6 | `number` |
+| Sensors | 12 | `sensor` |
+| Binary Sensors | 9 | `binary_sensor` |
+| Switches | 10 | `switch` |
+| Numbers | 8 | `number` |
 | Buttons | 5 | `button` |
+
+**Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
 
 ---
 
@@ -126,31 +128,7 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 ---
 
-### 6. sensor.localshift_power_grid_import
-
-**Purpose:** Current grid import power (always ≥ 0).
-
-**State:** Power in kW (e.g., `1.234`)
-
-**Calculation:** `max(grid_power_kw, 0)`
-
-This is the directional version of the raw Teslemetry grid power sensor.
-
----
-
-### 7. sensor.localshift_power_grid_export
-
-**Purpose:** Current grid export power (always ≥ 0).
-
-**State:** Power in kW (e.g., `2.500`)
-
-**Calculation:** `max(-grid_power_kw, 0)`
-
-This is the directional version of the raw Teslemetry grid power sensor.
-
----
-
-### 8. sensor.localshift_cost_electricity_net
+### 6. sensor.localshift_cost_electricity_net
 
 **Purpose:** Net cost for the day (import cost - export revenue).
 
@@ -174,7 +152,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 9. sensor.localshift_decision_log
+### 7. sensor.localshift_decision_log
 
 **Purpose:** History of mode changes with human-readable reasons.
 
@@ -193,7 +171,7 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 10. sensor.localshift_forecast_history
+### 8. sensor.localshift_forecast_history
 
 **Purpose:** Historical forecast predictions for comparison with actuals.
 
@@ -207,19 +185,20 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 11. sensor.localshift_forecast_daily
+### 9. sensor.localshift_forecast_daily
 
-**Purpose:** Full 24-hour forecast with 15-minute granularity.
+**Purpose:** Full 24-hour forecast with hybrid granularity (5-min near-term, 15-min long-term).
 
-**State:** Count of forecast slots (96 for 15-minute, 24 for hourly)
+**State:** Count of forecast slots (112 total: 24 × 5-min + 88 × 15-min)
 
 **Attributes:**
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
+| `forecast_slots` | list | All 112 forecast slots with compact keys |
 | `forecast_hourly` | list | Hourly summary (24 entries) |
-| `soc_series_15min` | list | SOC at each 15-min slot |
-| `debug_15min_slots` | list | Key 15-min slots for debugging |
+| `soc_series_15min` | list | SOC at each slot |
+| `debug_15min_slots` | list | Key slots for debugging |
 | `forecast_15min_slots` | int | Total number of slots |
 | `solcast_today_entries` | int | Number of Solcast periods |
 | `solcast_tomorrow_entries` | int | Number of tomorrow periods |
@@ -227,6 +206,77 @@ net_cost = grid_import_cost - grid_export_revenue
 | `consumption_source` | string | Source of consumption data |
 | `consumption_profile_hours` | int | Hours of profile data available |
 | `consumption_weighting` | float | Recent vs historical weighting |
+| `forecast_import_cost` | float | Expected grid import cost (rest of day) |
+| `forecast_export_revenue` | float | Expected grid export revenue (rest of day) |
+| `forecast_net_cost` | float | Expected net cost (rest of day) |
+
+---
+
+### 10. sensor.localshift_target_soc_minimum
+
+**Purpose:** Minimum target SOC for discharge modes (base reserve).
+
+**State:** Configured minimum SOC percentage (default 20%)
+
+**Configuration:** Set via `number.localshift_minimum_target_soc`
+
+This is the floor SOC maintained during spike discharge and proactive export modes to protect battery health and ensure reserve capacity.
+
+---
+
+### 11. sensor.localshift_excess_solar_kwh
+
+**Purpose:** Forecasted excess solar energy available for discretionary loads.
+
+**State:** Total excess solar until battery reaches 100% (kWh)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `excess_current_hour_kwh` | float | Excess available in the current hour |
+| `excess_next_2h_kwh` | float | Excess available in the next 2 hours |
+| `excess_next_4h_kwh` | float | Excess available in the next 4 hours |
+| `excess_until_battery_full_kwh` | float | Excess until battery reaches 100% |
+| `excess_until_negative_fit_kwh` | float | Excess before negative FIT window starts |
+| `time_until_battery_full_minutes` | int | Minutes until battery is full |
+| `negative_fit_window_start` | datetime | When negative FIT begins (or null) |
+| `negative_fit_window_duration_minutes` | int | Duration of negative FIT period |
+| `can_add_load_now` | bool | **Critical** — Is it safe to add load? |
+| `safe_additional_load_kw` | float | Max kW that can be safely added |
+| `forecast_confidence` | string | low/medium/high |
+| `current_excess_rate_kw` | float | Current excess generation rate |
+
+**Use Case:** Automate discretionary loads (AC, pool pump, EV) to consume excess solar that would otherwise export at negative or low FIT prices.
+
+---
+
+### 12. sensor.localshift_load_shift_signal
+
+**Purpose:** Simple actionable signal for load-shifting automations.
+
+**State:** One of the following signals:
+
+| Signal | Meaning | Action |
+|--------|---------|--------|
+| `INCREASE_LOAD` | Excess solar available | Turn on discretionary loads |
+| `MAINTAIN_LOAD` | Current balance is good | No changes needed |
+| `REDUCE_LOAD` | Risk of grid charging | Turn off discretionary loads |
+| `HOLD` | No signal / initializing | Wait for data |
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `recommended_additional_kw` | float | Suggested load change (+ or -) |
+| `recommended_duration_minutes` | int | How long to maintain the change |
+| `signal_reason` | string | Human-readable explanation |
+| `signal_confidence` | string | low/medium/high |
+| `current_excess_rate_kw` | float | Current excess generation rate |
+| `grid_charge_risk` | bool | Would adding load trigger grid charging? |
+| `safe_additional_load_kw` | float | Max kW that can be safely added |
+
+**Icon:** Dynamic based on signal (arrow-up-bold, arrow-down-bold, check-circle, pause-circle)
 
 ---
 
@@ -305,6 +355,26 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
+### 9. binary_sensor.localshift_excess_solar_available
+
+**Purpose:** Simple ON/OFF trigger for basic load-shifting automations.
+
+**State:** `on` when excess solar is available and safe to add load, `off` otherwise
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `current_excess_kw` | float | Current excess generation rate |
+| `battery_soc` | float | Current battery SOC |
+| `battery_charging` | bool | Whether battery is currently charging |
+| `can_add_load_now` | bool | Whether it's safe to add load |
+| `safe_additional_load_kw` | float | Max kW that can be safely added |
+
+**Icon:** Dynamic (solar-power-variant when on, solar-power-variant-outline when off)
+
+---
+
 ## Switches
 
 ### 1. switch.localshift_automation_enabled
@@ -331,7 +401,21 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ---
 
-### 3. switch.localshift_dry_run
+### 3. switch.localshift_spike_discharge_conservative
+
+**Purpose:** Enable conservative spike discharge mode.
+
+**Default:** OFF
+
+**Behavior:**
+- ON: During spike discharge, calculates a dynamic reserve SOC to ensure battery can survive the spike period without depleting below minimum target SOC
+- OFF: Standard spike discharge with fixed minimum reserve
+
+**Use Case:** Enable during extended spike periods or when you want to ensure battery reserve for overnight/demand window.
+
+---
+
+### 4. switch.localshift_dry_run
 
 **Purpose:** Log decisions without sending commands.
 
@@ -345,7 +429,7 @@ Use this to test automation behavior without affecting actual battery state.
 
 ---
 
-### 4. switch.localshift_demand_window_block
+### 5. switch.localshift_demand_window_block
 
 **Purpose:** Block grid charging during demand window.
 
@@ -357,7 +441,7 @@ Use this to test automation behavior without affecting actual battery state.
 
 ---
 
-### 5. switch.localshift_allow_dw_entry_under_target
+### 6. switch.localshift_allow_dw_entry_under_target
 
 **Purpose:** Allow demand window entry when SOC is under target but solar can reach it.
 
@@ -366,6 +450,54 @@ Use this to test automation behavior without affecting actual battery state.
 **Behavior:**
 - ON: Enter demand window mode even if SOC < target, if solar forecast shows target can be reached
 - OFF: Only enter demand window mode when SOC >= target
+
+---
+
+### 7. switch.localshift_notify_transitions
+
+**Purpose:** Enable notifications for mode transitions.
+
+**Default:** ON
+
+**Behavior:**
+- ON: Send notification when battery mode changes (grid charging, spike discharge, etc.)
+- OFF: No transition notifications
+
+---
+
+### 8. switch.localshift_notify_daily_summary
+
+**Purpose:** Enable daily summary notification.
+
+**Default:** ON
+
+**Behavior:**
+- ON: Send daily energy/cost summary at demand window end
+- OFF: No daily summary notification
+
+---
+
+### 9. switch.localshift_notify_manual_actions
+
+**Purpose:** Enable notifications for manual button actions.
+
+**Default:** ON
+
+**Behavior:**
+- ON: Send notification when manual control buttons are pressed
+- OFF: No manual action notifications
+
+---
+
+### 10. switch.localshift_notify_alerts
+
+**Purpose:** Enable alert notifications.
+
+**Default:** ON
+
+**Behavior:**
+- ON: Send alert notifications (automation disabled, health check failures, etc.)
+- OFF: No alert notifications
 
 ---
 
@@ -450,6 +582,34 @@ The battery aims to reach this SOC by the demand window start time.
 | Unit | (ratio) |
 
 **Calculation:** `weighted_avg = recent × weight + historical × (1 - weight)`
+
+---
+
+### 7. number.localshift_spike_price_percentile
+
+**Purpose:** Price percentile threshold for spike discharge activation.
+
+| Property | Value |
+|----------|-------|
+| Range | 50-95% |
+| Default | 75% |
+| Unit | % |
+
+**Example:** 75th percentile means spike discharge only activates when feed-in price is in the top 25% of forecast prices.
+
+---
+
+### 8. number.localshift_minimum_target_soc
+
+**Purpose:** Minimum SOC maintained during discharge modes.
+
+| Property | Value |
+|----------|-------|
+| Range | 5-30% |
+| Default | 20% |
+| Unit | % |
+
+This is the floor SOC during spike discharge and proactive export modes. Protects battery health and ensures reserve capacity.
 
 ---
 
@@ -540,12 +700,16 @@ Buttons trigger manual actions
    - `demand_window_active` — Are we in peak hours?
    - `forecast_spike_within_window` — Is a spike coming?
    - `solar_can_reach_target` — Can solar fill the battery?
+   - `excess_solar_available` — Is there excess solar for load shifting?
 
 3. **Look at attributes** — Many sensors have extra diagnostic attributes:
    - `effective_cheap_price` shows urgency calculation
    - `net_electricity_cost_today` shows cost breakdown
    - `solar_battery_forecast` shows predicted SOC
+   - `excess_solar_kwh` shows detailed excess calculations
 
 4. **Use decision log** — `sensor.localshift_decision_log` shows the last 10 mode changes with reasons.
 
 5. **Enable dry run** — Use `switch.localshift_dry_run` to test without affecting the battery.
+
+6. **Monitor load shift signal** — Use `sensor.localshift_load_shift_signal` for simple automation triggers.

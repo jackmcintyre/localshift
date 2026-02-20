@@ -240,3 +240,45 @@ When completing an edit that affects documentation:
 1. Add/update inline docstrings as needed
 2. Prompt user to include /docs/ updates
 3. Include summary of documentation changes in completion message
+
+## Entity Count Synchronization
+
+When adding or removing entities from the integration, update documentation in multiple places:
+
+### Files to Update When Adding/Removing Entities:
+
+1. **`docs/ENTITY_REFERENCE.md`** - Primary entity documentation
+   - Update overview table with correct counts
+   - Add/remove entity entries with full documentation
+   - Ensure numbering is sequential
+
+2. **`README.md`** - User-facing entity summary
+   - Update section headers with correct counts (e.g., "### Sensors (12)")
+   - Add/remove entity rows in tables
+   - Keep descriptions concise (one line each)
+
+3. **`docs/DEVELOPER_GUIDE.md`** - Developer reference
+   - Update entity counts in project structure section
+   - Update any code examples that reference entity counts
+
+### Entity Count Verification
+
+Before committing changes that affect entities:
+1. Count entities in `sensor.py`, `binary_sensor.py`, `switch.py`, `number.py`, `button.py`
+2. Verify counts match in all documentation files
+3. Total entities = sensors + binary_sensors + switches + numbers + buttons
+
+### Current Entity Counts (as of 2026-02-20):
+| Category | Count |
+|----------|-------|
+| Sensors | 12 |
+| Binary Sensors | 9 |
+| Switches | 10 |
+| Numbers | 8 |
+| Buttons | 5 |
+| **Total** | **44** |
+
+When these counts change, update:
+- This file (`.clinerules`)
+- `docs/ENTITY_REFERENCE.md` overview table
+- `README.md` entity section headers
