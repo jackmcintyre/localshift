@@ -413,6 +413,16 @@ class LocalShiftCoordinator:
         """
         await self._evaluate_state_machine()
 
+    async def async_recompute_and_evaluate(self) -> None:
+        """Public method for triggering recomputation and state evaluation.
+
+        Called by switch and number platforms when configuration changes.
+        Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
+        """
+        self._compute_derived_values()
+        self._notify_listeners()
+        await self.async_evaluate_state_machine()
+
     async def _evaluate_state_machine(self) -> None:
         """Compare desired mode with commanded mode and execute transitions."""
         if self._state_machine is not None and self._computation_engine is not None:

@@ -137,6 +137,4 @@ class LocalShiftNumber(NumberEntity):
 
         # Trigger immediate re-evaluation with new threshold values
         # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
-        self.coordinator._compute_derived_values()
-        self.coordinator._notify_listeners()
-        await self.coordinator.async_evaluate_state_machine()
+        await self.coordinator.async_recompute_and_evaluate()
