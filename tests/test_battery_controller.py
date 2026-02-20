@@ -127,10 +127,15 @@ class TestSetSelfConsumption:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_set_self_consumption_clears_manual_override(
+    async def test_set_self_consumption_preserves_manual_override(
         self, battery_controller, coordinator_data, mock_hass
     ):
-        """Test that manual_override is cleared."""
+        """Test that manual_override is NOT cleared by battery controller.
+
+        The manual_override flag is managed by button handlers (who set it)
+        and the state machine (who auto-clears it after timeout).
+        Battery controller should NOT modify this flag.
+        """
         coordinator_data.manual_override = True
         mock_hass.services.async_call.return_value = None
 
@@ -148,7 +153,8 @@ class TestSetSelfConsumption:
 
         await battery_controller.set_self_consumption(coordinator_data)
 
-        assert coordinator_data.manual_override is False
+        # manual_override should still be True - battery controller doesn't clear it
+        assert coordinator_data.manual_override is True
 
 
 # =============================================================================
@@ -281,6 +287,9 @@ class TestSetBoostCharge:
         await battery_controller.set_boost_charge(coordinator_data)
 
         # Check that set_value was called with 100
+        # call_args_list: each call is (positional_args, kwargs)
+        # async_call("number", "set_value", {"entity_id": ..., "value": ...}, blocking=True)
+        # So call[0][2] is the data dict
         calls = mock_hass.services.async_call.call_args_list
         reserve_call = None
         for call in calls:
@@ -288,7 +297,7 @@ class TestSetBoostCharge:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[1]["value"] == 100
+        assert reserve_call[0][2]["value"] == 100
 
 
 # =============================================================================
@@ -362,6 +371,7 @@ class TestSetForceDischarge:
 
         assert result is True
         # Check that set_value was called with 20
+        # call_args_list: each call is (positional_args, kwargs)
         calls = mock_hass.services.async_call.call_args_list
         reserve_call = None
         for call in calls:
@@ -369,7 +379,7 @@ class TestSetForceDischarge:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[1]["value"] == 20
+        assert reserve_call[0][2]["value"] == 20
 
     @pytest.mark.asyncio
     async def test_set_force_discharge_uses_minimum_target_soc(
@@ -403,7 +413,7 @@ class TestSetForceDischarge:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[1]["value"] == 15
+        assert reserve_call[0][2]["value"] == 15
 
     @pytest.mark.asyncio
     async def test_set_force_discharge_sets_battery_ok_export(
@@ -429,15 +439,17 @@ class TestSetForceDischarge:
         await battery_controller.set_force_discharge(coordinator_data)
 
         # Check that select_option was called with battery_ok
+        # call_args_list: each call is (positional_args, kwargs)
+        # async_call("select", "select_option", {"entity_id": ..., "option": ...}, blocking=True)
         calls = mock_hass.services.async_call.call_args_list
         export_call = None
         for call in calls:
             if call[0][0] == "select" and call[0][1] == "select_option":
-                if "allow_export" in call[1]["entity_id"]:
+                if "allow_export" in call[0][2]["entity_id"]:
                     export_call = call
                     break
         assert export_call is not None
-        assert export_call[1]["option"] == TESLEMETRY_EXPORT_BATTERY_OK
+        assert export_call[0][2]["option"] == TESLEMETRY_EXPORT_BATTERY_OK
 
 
 # =============================================================================
@@ -515,7 +527,7 @@ class TestSetProactiveExport:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[1]["value"] == 55  # 60 - 5
+        assert reserve_call[0][2]["value"] == 55  # 60 - 5
 
     @pytest.mark.asyncio
     async def test_set_proactive_export_minimum_reserve(
@@ -547,7 +559,7 @@ class TestSetProactiveExport:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[1]["value"] == 4  # max(4, 5-5) = max(4, 0) = 4
+        assert reserve_call[0][2]["value"] == 4  # max(4, 5-5) = max(4, 0) = 4
 
     @pytest.mark.asyncio
     async def test_set_proactive_export_sets_battery_ok_export(
@@ -576,11 +588,11 @@ class TestSetProactiveExport:
         export_call = None
         for call in calls:
             if call[0][0] == "select" and call[0][1] == "select_option":
-                if "allow_export" in call[1]["entity_id"]:
+                if "allow_export" in call[0][2]["entity_id"]:
                     export_call = call
                     break
         assert export_call is not None
-        assert export_call[1]["option"] == TESLEMETRY_EXPORT_BATTERY_OK
+        assert export_call[0][2]["option"] == TESLEMETRY_EXPORT_BATTERY_OK
 
 
 # =============================================================================
