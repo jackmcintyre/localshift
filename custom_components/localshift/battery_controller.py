@@ -115,7 +115,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.manual_override = False
+        # Note: manual_override is managed by button handlers and state machine
+        # Self-consumption is the default automated mode, so we don't set manual_override here
 
         if dry_run:
             _LOGGER.info("DRY RUN: set_self_consumption")
@@ -163,7 +164,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.manual_override = False
+        # Note: manual_override is managed by button handlers and state machine
+        # This method can be called manually (via button) or automatically (via state machine)
 
         if dry_run:
             _LOGGER.info("DRY RUN: set_force_charge")
@@ -208,7 +210,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.manual_override = False
+        # Note: manual_override is managed by button handlers and state machine
+        # This method can be called manually (via button) or automatically (via state machine)
 
         if dry_run:
             _LOGGER.info("DRY RUN: set_boost_charge")
@@ -272,7 +275,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.manual_override = False
+        # Note: manual_override is managed by button handlers and state machine
+        # This method can be called manually (via button) or automatically (via state machine)
 
         # Get minimum target SOC for reserve, or use override if provided
         minimum_target = (
@@ -327,7 +331,8 @@ class BatteryController:
         Returns:
             True if successful, False otherwise.
         """
-        data.manual_override = False
+        # Note: manual_override is managed by button handlers and state machine
+        # This method is only called automatically (via state machine)
 
         # Dynamic reserve for throttling: SOC - 5%, minimum 4%
         current_soc = data.soc
