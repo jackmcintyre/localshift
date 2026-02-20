@@ -26,6 +26,14 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Tesla Override Detection Constants
+# When Tesla activates Storm Watch, Grid Events, or VPP events, they set
+# backup_reserve to 80% and operation_mode to self_consumption, ignoring
+# external API commands until the event ends.
+TESLA_OVERRIDE_RESERVE = 80.0  # Reserve level that indicates Tesla control
+TESLA_OVERRIDE_RESERVE_TOLERANCE = 1.0  # Tolerance for reserve comparison
+TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)  # Extended cooldown during override
+
 
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
@@ -67,6 +75,42 @@ class StateMachine:
         self._last_successful_transition: datetime | None = None
         # Grace period after successful transition before health checks trigger corrections
         self._TRANSITION_GRACE_PERIOD = timedelta(seconds=30)
+        # Tesla Override Detection
+        # When Tesla activates Storm Watch, Grid Events, or VPP events, they take
+        # control of the Powerwall and ignore external API commands.
+        self._tesla_override_detected: bool = False
+        self._tesla_override_detected_at: datetime | None = None
+
+    def _detect_tesla_override(self, data: CoordinatorData) -> bool:
+        """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
+
+        Indicators: operation_mode=self_consumption, backup_reserve≈80%
+
+        Args:
+            data: Coordinator data with current hardware state
+
+        Returns:
+            True if Tesla override is detected, False otherwise.
+        """
+        # Tesla override signature: self_consumption mode with 80% reserve
+        # This combination is set by Tesla during Storm Watch, Grid Events, VPP
+        if data.operation_mode == "self_consumption":
+            reserve = data.backup_reserve
+            if (
+                reserve is not None
+                and abs(reserve - TESLA_OVERRIDE_RESERVE)
+                < TESLA_OVERRIDE_RESERVE_TOLERANCE
+            ):
+                return True
+        return False
+
+    def is_tesla_override_active(self) -> bool:
+        """Check if Tesla override is currently active.
+
+        Returns:
+            True if Tesla override is detected, False otherwise.
+        """
+        return self._tesla_override_detected
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
@@ -446,9 +490,49 @@ class StateMachine:
         power outages, or other issues that might cause the hardware
         state to diverge from what we think it is.
 
-        If drift is detected, we attempt to correct it.
+        If drift is detected, we attempt to correct it, unless Tesla
+        has taken control (Storm Watch, Grid Event, VPP).
         """
         now = dt_util.now()
+
+        # --- Tesla Override Detection ---
+        # Check if Tesla has taken control (Storm Watch, Grid Event, VPP)
+        if self._detect_tesla_override(data):
+            if not self._tesla_override_detected:
+                # First time detecting Tesla override
+                self._tesla_override_detected = True
+                self._tesla_override_detected_at = now
+                _LOGGER.warning(
+                    "[TESLA OVERRIDE] Detected Tesla has taken control of Powerwall "
+                    "(Storm Watch, Grid Event, or VPP active). Hardware state: "
+                    "op=%s, reserve=%.1f%%. Yielding control until event ends.",
+                    data.operation_mode,
+                    data.backup_reserve,
+                )
+            else:
+                # Already in Tesla override mode - check if we should log status
+                if self._tesla_override_detected_at is not None:
+                    duration = now - self._tesla_override_detected_at
+                    _LOGGER.info(
+                        "[TESLA OVERRIDE] Still active for %s. Skipping health check corrections.",
+                        duration,
+                    )
+            # Skip all health check corrections while Tesla has control
+            return
+        else:
+            # Tesla override has ended
+            if self._tesla_override_detected:
+                duration = (
+                    now - self._tesla_override_detected_at
+                    if self._tesla_override_detected_at
+                    else timedelta(0)
+                )
+                _LOGGER.info(
+                    "[TESLA OVERRIDE] Tesla has released control after %s. Resuming normal health checks.",
+                    duration,
+                )
+                self._tesla_override_detected = False
+                self._tesla_override_detected_at = None
 
         # Skip health check during transition grace period
         # This prevents false positives when Tesla API is still propagating
