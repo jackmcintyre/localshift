@@ -405,11 +405,16 @@ class ForecastComputer:
         current_load_kw: float,
         recent_load_kw: float,
         current_hour: int | None = None,
+        fill_point_datetime: datetime | None = None,
     ) -> float:
-        """Calculate total solar energy that will be produced during negative FIT windows.
+        """Calculate solar energy that would be exported at negative FIT prices.
 
-        This is the energy that would be exported at negative prices if the battery
-        is full during those periods.
+        This only counts solar AFTER the battery fills, because:
+        - Before fill: solar charges the battery (not exported)
+        - After fill: solar is exported at the current FIT price
+
+        If the battery fills DURING a negative FIT window, we only count
+        solar from the fill point onwards.
 
         Args:
             base_slot: Starting slot time
@@ -419,9 +424,10 @@ class ForecastComputer:
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             current_hour: Current hour for load estimation
+            fill_point_datetime: When battery reaches 100% (or None if never fills)
 
         Returns:
-            Total kWh of solar during negative FIT windows
+            Total kWh of solar that would be exported at negative FIT prices
         """
         if not negative_fit_windows:
             return 0.0
@@ -437,11 +443,21 @@ class ForecastComputer:
             # Adjust start to be at or after base_slot
             effective_start = max(window_start, base_slot)
 
+            # KEY FIX: If battery fills during or before this window,
+            # only count solar AFTER the fill point
+            if fill_point_datetime is not None:
+                if fill_point_datetime >= window_end:
+                    # Battery fills AFTER this window - no export at negative FIT
+                    continue
+                elif fill_point_datetime > effective_start:
+                    # Battery fills DURING this window - start counting from fill point
+                    effective_start = fill_point_datetime
+
             # Calculate slots in this window
             window_duration_minutes = (
                 window_end - effective_start
             ).total_seconds() / 60
-            slots_in_window = int(window_duration_minutes / 15)
+            slots_in_window = max(0, int(window_duration_minutes / 15))
 
             for offset in range(slots_in_window):
                 slot_start = effective_start + timedelta(minutes=15 * offset)
@@ -2210,7 +2226,14 @@ class ForecastComputer:
             data.feed_in_forecast, base_slot, max_hours=24
         )
 
-        # Calculate solar energy during negative FIT windows
+        # Calculate fill point datetime for solar calculation
+        fill_point_datetime = None
+        if fill_point_elapsed_minutes is not None:
+            fill_point_datetime = base_slot + timedelta(
+                minutes=fill_point_elapsed_minutes
+            )
+
+        # Calculate solar energy during negative FIT windows (only after fill point)
         solar_during_negative_fit_kwh = self._calculate_solar_during_negative_fit(
             base_slot=base_slot,
             negative_fit_windows=negative_fit_windows,
@@ -2219,6 +2242,7 @@ class ForecastComputer:
             current_load_kw=data.load_power_kw,
             recent_load_kw=recent_load_kw,
             current_hour=current_hour,
+            fill_point_datetime=fill_point_datetime,
         )
 
         # Calculate battery space at fill point (0% space when full)
