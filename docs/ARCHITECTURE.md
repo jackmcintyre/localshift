@@ -477,11 +477,78 @@ After issuing transition commands, the system polls for hardware confirmation fo
 
 ## Future Enhancements
 
-1. **Machine learning**: Improve consumption forecasting accuracy
-2. **Weather integration**: Adjust for cloud cover predictions
-3. **Dynamic thresholds**: Auto-tune change detection thresholds
-4. **Multi-battery support**: Extend for multiple Powerwalls
-5. **Cost optimization**: Goal-seeking algorithm for maximum savings
+1. **Dynamic thresholds**: Auto-tune change detection thresholds
+2. **Multi-battery support**: Extend for multiple Powerwalls
+3. **Cost optimization**: Goal-seeking algorithm for maximum savings
+
+## Weather Correlation (Issue #61)
+
+The integration includes a weather-aware consumption prediction system using a degree-day model that learns the correlation between temperature and household load.
+
+### Component: WeatherCorrelation (`weather_correlation.py`)
+
+The `WeatherCorrelation` class manages:
+- Loading/saving learned coefficients to HA storage
+- Learning from temperature/load observations
+- Predicting load adjustments based on temperature forecasts
+
+### Degree-Day Model
+
+The model learns separate coefficients for each hour of the day:
+
+| Coefficient | Description |
+|-------------|-------------|
+| **Base load** | Minimum load at mild temperatures (18-24°C band) |
+| **Cooling coefficient** | Additional kW per °C above cooling threshold (default 24°C) |
+| **Heating coefficient** | Additional kW per °C below heating threshold (default 18°C) |
+
+### How It Works
+
+1. **Learning Phase**: The system observes temperature and load pairs, updating hourly coefficients using a moving average approach
+2. **Prediction Phase**: When forecasting consumption, the system applies learned coefficients based on forecasted temperatures
+3. **Confidence Levels**: Based on sample count:
+   - Low: < 7 samples
+   - Medium: 7-30 samples
+   - High: 30+ samples
+
+### Configuration
+
+Weather correlation is configured via the integration options:
+- **Weather Entity**: Home Assistant weather entity providing temperature forecasts
+- **Cooling Threshold**: Temperature above which cooling load increases (default 24°C)
+- **Heating Threshold**: Temperature below which heating load increases (default 18°C)
+
+### Benefits
+
+- More accurate consumption predictions during temperature extremes
+- Better battery SOC planning during hot/cold days
+- Reduced risk of unexpected grid imports during demand windows
+
+## Day-of-Week Aware Consumption Profiles (Issue #60)
+
+The integration supports separate weekday and weekend consumption profiles for improved forecast accuracy in households with different daily patterns.
+
+### How It Works
+
+1. **Sample Separation**: Historical load samples are separated by day type (weekday: Mon-Fri, weekend: Sat-Sun)
+2. **Profile Calculation**: Separate hourly averages are calculated for each profile
+3. **Profile Selection**: When forecasting consumption, the appropriate profile is selected based on the target day's day-of-week
+4. **Fallback**: If insufficient samples exist for day-specific profiles, the system falls back to combined averages
+
+### Requirements for Day-Specific Profiles
+
+- Minimum 12 hours with 3+ samples each in both weekday and weekend profiles
+- If requirements not met, falls back to combined profile
+
+### Diagnostic Fields
+
+| Field | Description |
+|-------|-------------|
+| `consumption_profile_type` | "weekday_weekend" or "combined_fallback" |
+| `weekday_sample_counts` | Sample counts per hour for weekdays |
+| `weekend_sample_counts` | Sample counts per hour for weekends |
+| `weekday_hourly_profile_kw` | Weekday hourly averages |
+| `weekend_hourly_profile_kw` | Weekend hourly averages |
 
 ## References
 

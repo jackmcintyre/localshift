@@ -17,6 +17,7 @@ custom_components/localshift/
 ├── battery_controller.py    # Controls Powerwall via Teslemetry
 ├── cost_tracker.py          # Tracks energy costs
 ├── notification_service.py   # Sends notifications
+├── weather_correlation.py   # Weather-based consumption prediction
 ├── sensor.py                # Sensor entities (11)
 ├── binary_sensor.py         # Binary sensor entities (11)
 ├── switch.py                # Switch entities (4)
@@ -288,6 +289,63 @@ class BatteryStateMachine:
 - Health check runs every minute to detect drift
 - Manual override timeout (configurable)
 - Transition success validation
+
+### WeatherCorrelation (`weather_correlation.py`)
+
+Learns and applies temperature-based consumption adjustments:
+
+```python
+class WeatherCorrelation:
+    """Weather-aware consumption prediction using degree-day model."""
+
+    async def async_initialize(self):
+        """Load persisted coefficients from HA storage."""
+
+    def learn_from_sample(self, hour: int, temperature: float, actual_load_kw: float):
+        """Update coefficients based on observed temperature/load pair."""
+
+    def predict_load(self, hour: int, temperature: float, base_load_kw: float) -> tuple[float, str]:
+        """Apply learned coefficients to predict load given temperature."""
+
+    def get_temperature_forecast(self) -> list[TemperatureForecast]:
+        """Fetch forecasted temperatures from weather entity."""
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """Return learning statistics for diagnostics."""
+```
+
+**Key Features:**
+- Degree-day model with separate cooling/heating coefficients per hour
+- HA storage integration for persistence
+- Confidence levels based on sample count (low/medium/high)
+- Configurable cooling and heating thresholds
+
+### HistoryFetcher (`history_fetcher.py`)
+
+Fetches historical consumption data with day-of-week awareness:
+
+```python
+class HistoryFetcher:
+    """Fetches and caches historical load data from HA statistics."""
+
+    async def async_get_historical_hourly_averages(self, entity_id: str):
+        """Get hourly averages, cached until midnight."""
+
+    def get_profile_for_day(self, target_date: datetime) -> tuple[dict, dict, str]:
+        """Get appropriate hourly profile based on target day's day-of-week."""
+
+    def get_weekday_profile(self) -> tuple[dict[int, float], dict[int, int]]:
+        """Get weekday profile for diagnostics."""
+
+    def get_weekend_profile(self) -> tuple[dict[int, float], dict[int, int]]:
+        """Get weekend profile for diagnostics."""
+```
+
+**Day-of-Week Aware Profiles:**
+- Separates historical samples by day type (weekday: Mon-Fri, weekend: Sat-Sun)
+- Calculates separate hourly averages for each profile
+- Falls back to combined profile if insufficient samples
+- Requires minimum 12 hours with 3+ samples each for day-specific profiles
 
 ### BatteryController (`battery_controller.py`)
 

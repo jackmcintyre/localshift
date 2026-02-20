@@ -15,6 +15,8 @@ A state machine replaces 18 YAML automations with a single priority-based evalua
 - **Solar export hold** — Holds battery when surplus solar can cover demand window deficit, maximising feed-in revenue
 - **Price spike discharge** — Automatically exports battery during Amber price spikes
 - **Demand window blocking** — Prevents grid charging during peak periods (configurable)
+- **Weather-aware consumption prediction** — Learns temperature/load correlation for more accurate forecasts during hot/cold days
+- **Day-of-week consumption profiles** — Separate weekday and weekend profiles for households with different daily patterns
 - **Cost tracking** — Accumulates grid import cost, export revenue, battery savings, and charge cost per day
 - **Daily summary notification** — Sends energy and cost summary at demand window end
 - **Dry-run mode** — Logs what the state machine would do without sending commands to the Powerwall
