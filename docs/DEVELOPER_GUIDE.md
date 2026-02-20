@@ -358,16 +358,45 @@ The config flow has 3 steps:
 
 ### Options Flow
 
-After setup, users can configure settings via **Configure**:
+After setup, users can configure all settings via **Configure**:
+
+#### Notification Settings
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | Notify Service | (first available) | Notification service for alerts |
-| Demand Window Start | 15:00 | Peak hours start |
-| Demand Window End | 21:00 | Peak hours end |
-| Manual Override Timeout | 4 hours | Auto-clear manual override |
 
-**Note:** The notification service is stored in `entry.options` (not `entry.data`) so it can be changed without reconfiguring the entire integration. For backward compatibility, the coordinator checks `options` first, then falls back to `data` for existing entries.
+#### Demand Window Timing
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Demand Window Start | 15:00 | Time when demand window begins (battery held for evening peak) |
+| Demand Window End | 21:00 | Time when demand window ends (normal operation resumes) |
+| Manual Override Timeout | 4 hours | Hours before manual mode automatically returns to self-consumption (0 = never) |
+
+#### Price Thresholds
+
+| Option | Range | Default | Description |
+|--------|-------|---------|-------------|
+| Cheap Price Percentile | 5-50% | 25% | Price percentile threshold for grid charging (e.g., 25 = charge when price is in bottom 25%) |
+| Max Pre-charge Price | $0.00-0.50/kWh | $0.20/kWh | Maximum price to pay for pre-charging battery |
+| Price Deadband | $0.00-0.10/kWh | $0.03/kWh | Minimum price difference to start/stop charging (prevents rapid cycling) |
+| Spike Price Percentile | 50-95% | 75% | Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices) |
+
+#### Battery Settings
+
+| Option | Range | Default | Description |
+|--------|-------|---------|-------------|
+| Battery Target | 50-100% | 100% | Target SOC % for demand window (battery reserved for evening peak) |
+| Minimum Target SOC | 5-30% | 20% | Minimum SOC % maintained during discharge modes (spike, proactive export) |
+
+#### Advanced Settings
+
+| Option | Range | Default | Description |
+|--------|-------|---------|-------------|
+| Recent Load Weight | 0.0-1.0 | 0.67 | Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical) |
+
+**Note:** All options are stored in `entry.options` (not `entry.data`) so they can be changed without reconfiguring the entire integration. For backward compatibility, the coordinator checks `options` first, then falls back to `data` for existing entries.
 
 ## Adding New Battery Modes
 
