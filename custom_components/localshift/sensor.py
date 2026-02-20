@@ -352,7 +352,12 @@ class DailyForecastSensor(LocalShiftSensorBase):
                 str(hour): value for hour, value in sorted(profile_kw.items())
             },
             # Day-of-week aware consumption profiles (issue-60)
+            # consumption_profile_type: "weekday_weekend" means system has separate profiles
+            # "combined" means falling back to combined profile
             "consumption_profile_type": self.coordinator.data.consumption_profile_type,
+            # forecast_profile_selected: Which profile is actually being used for TODAY's forecast
+            # "weekday" (Mon-Fri), "weekend" (Sat-Sun), or "combined" (fallback)
+            "forecast_profile_selected": self.coordinator.data.forecast_profile_selected,
             "weekday_sample_counts": {
                 str(hour): count
                 for hour, count in sorted(
@@ -401,6 +406,26 @@ class DailyForecastSensor(LocalShiftSensorBase):
             "forecast_proactive_export_revenue": round(
                 self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
             ),
+            # Weather correlation visibility (Issue #61)
+            "weather_entity_id": self.coordinator.data.weather_entity_id,
+            "weather_temperature_current": self.coordinator.data.weather_temperature_current,
+            "weather_temperature_forecast": {
+                str(hour): temp
+                for hour, temp in sorted(
+                    self.coordinator.data.weather_temperature_forecast.items()
+                )
+            },
+            "weather_condition": self.coordinator.data.weather_condition,
+            "weather_correlation_confidence": self.coordinator.data.weather_correlation_confidence,
+            "weather_adjustment_applied": self.coordinator.data.weather_adjustment_applied,
+            "weather_learning_enabled": self.coordinator.data.weather_learning_enabled,
+            "weather_cooling_coefficient": round(
+                self.coordinator.data.weather_cooling_coefficient, 4
+            ),
+            "weather_heating_coefficient": round(
+                self.coordinator.data.weather_heating_coefficient, 4
+            ),
+            "weather_sample_count": self.coordinator.data.weather_sample_count,
         }
 
 
