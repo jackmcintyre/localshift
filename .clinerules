@@ -133,6 +133,52 @@ gh issue view {NNN}                           # View specific issue
 - Wait for user confirmation before running git commit
 - Reference the issue number in commit messages: `Fixes #NNN` or `Closes #NNN`
 
+# Pull Request Workflow
+
+## ⚠️ CRITICAL: PR-Issue Linking
+
+**Every PR MUST link to its related issue using GitHub's keywords.** This ensures issues automatically close when PRs are merged.
+
+### Required Keywords (use one of these)
+- `Closes #NNN` - For features/enhancements
+- `Fixes #NNN` - For bug fixes
+- `Resolves #NNN` - For either
+
+### Example PR Body
+```markdown
+## Summary
+Brief description of changes
+
+## Changes Made
+- Change 1
+- Change 2
+
+## Testing
+- Test details
+
+Closes #42
+```
+
+### ⚠️ Common Mistakes to Avoid
+- ❌ `Closes #N/A` - Not a valid issue reference
+- ❌ `Closes #med-005` - Labels are not issue numbers
+- ❌ `Closes issue-42` - Must use `#` prefix with number only
+- ✅ `Closes #42` - Correct format
+
+### Creating PRs with Issue Links
+When creating a PR via `gh pr create`, ensure the body includes the closing keyword:
+```bash
+gh pr create --title "feat: description" --body "## Summary
+...
+Closes #NNN"
+```
+
+### If PR Was Merged Without Issue Link
+If a PR was already merged without proper linking, manually close the issue:
+```bash
+gh issue close {NNN} --comment "Completed in PR #{PR_NUMBER}"
+```
+
 # Documentation Automation Rules
 
 ## Inline Documentation
