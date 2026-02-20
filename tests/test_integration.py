@@ -334,19 +334,19 @@ class TestErrorHandlingAndRecovery:
         """Test that validation timeout is handled gracefully."""
         from custom_components.localshift.battery_controller import BatteryController
 
-        controller = BatteryController(mock_hass, mock_get_entity_id)
-
-        # Create a proper mock for states
+        # Create a proper mock for states BEFORE creating the controller
+        # Use MagicMock with spec to allow attribute assignment
         mock_states = MagicMock()
 
-        # Mock states to never match expected
-        def mock_get_state(entity_id):
-            state = MagicMock()
-            state.state = "wrong_mode"  # Never matches
-            return state
+        # Mock states.get to return a state that never matches expected
+        mock_state = MagicMock()
+        mock_state.state = "wrong_mode"  # Never matches expected "self_consumption"
+        mock_states.get.return_value = mock_state
 
-        mock_states.get = mock_get_state
+        # Set mock_hass.states BEFORE passing to BatteryController
         mock_hass.states = mock_states
+
+        controller = BatteryController(mock_hass, mock_get_entity_id)
 
         result = await controller.validate_transition(
             expected_operation_mode="self_consumption",
