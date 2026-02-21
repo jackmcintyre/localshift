@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -42,6 +42,9 @@ STORAGE_KEY = "weather_correlation"
 # Confidence thresholds based on sample count
 CONFIDENCE_LOW_THRESHOLD = 7  # Less than 7 samples = low confidence
 CONFIDENCE_MEDIUM_THRESHOLD = 30  # 7-30 samples = medium, 30+ = high
+
+# Forecast cache settings
+FORECAST_CACHE_TTL = timedelta(minutes=30)
 
 
 @dataclass
@@ -192,6 +195,10 @@ class WeatherCorrelation:
             tuple[int, float, float]
         ] = []  # (hour, temp, load)
 
+        # Cached temperature forecast (updated periodically)
+        self._cached_forecasts: list[TemperatureForecast] = []
+        self._forecast_cache_time: datetime | None = None
+
     async def async_initialize(self) -> None:
         """Load persisted data from storage."""
         if self._initialized:
@@ -278,10 +285,109 @@ class WeatherCorrelation:
             )
 
         _LOGGER.debug(
-            "Got %d temperature forecasts from %s",
+            "Got %d temperature forecasts from %s (legacy attribute)",
             len(forecasts),
             weather_entity,
         )
+
+        return forecasts
+
+    async def async_get_temperature_forecast(
+        self, force_refresh: bool = False
+    ) -> list[TemperatureForecast]:
+        """Fetch forecasted temperatures using weather.get_forecasts service.
+
+        Uses Home Assistant's modern weather.get_forecasts service (HA 2024.3+)
+        with caching to avoid excessive service calls.
+
+        Args:
+            force_refresh: If True, bypass cache and fetch fresh data
+
+        Returns:
+            List of TemperatureForecast objects for upcoming hours.
+        """
+        weather_entity = self._data.weather_entity_id
+        if not weather_entity:
+            _LOGGER.debug("No weather entity configured")
+            return []
+
+        now = dt_util.now()
+
+        # Return cached forecasts if still valid
+        if (
+            not force_refresh
+            and self._forecast_cache_time is not None
+            and self._cached_forecasts
+            and (now - self._forecast_cache_time) < FORECAST_CACHE_TTL
+        ):
+            _LOGGER.debug(
+                "Returning %d cached temperature forecasts (age: %s)",
+                len(self._cached_forecasts),
+                now - self._forecast_cache_time,
+            )
+            return self._cached_forecasts
+
+        forecasts: list[TemperatureForecast] = []
+
+        # Try modern service call first (HA 2024.3+)
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": weather_entity, "type": "hourly"},
+                blocking=True,
+                return_response=True,
+            )
+
+            if response and weather_entity in response:
+                forecast_data = response[weather_entity]
+
+                for forecast_entry in forecast_data:
+                    # Parse forecast datetime - HA uses "datetime" key
+                    forecast_time_str = forecast_entry.get("datetime")
+                    if not forecast_time_str:
+                        continue
+
+                    try:
+                        forecast_time = dt_util.parse_datetime(forecast_time_str)
+                        if forecast_time is None:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+
+                    # Only include forecasts for the next 24 hours
+                    hours_ahead = (forecast_time - now).total_seconds() / 3600
+                    if hours_ahead < 0 or hours_ahead > 24:
+                        continue
+
+                    temperature = forecast_entry.get("temperature")
+                    condition = forecast_entry.get("condition", "unknown")
+
+                    forecasts.append(
+                        TemperatureForecast(
+                            slot_time=forecast_time,
+                            temperature=temperature,
+                            condition=condition,
+                        )
+                    )
+
+                _LOGGER.info(
+                    "Fetched %d temperature forecasts via weather.get_forecasts service",
+                    len(forecasts),
+                )
+
+        except Exception as e:
+            _LOGGER.warning(
+                "Failed to fetch forecasts via weather.get_forecasts service: %s, "
+                "falling back to legacy attribute",
+                e,
+            )
+            # Fall back to legacy attribute method
+            forecasts = self.get_temperature_forecast()
+
+        # Update cache
+        self._cached_forecasts = forecasts
+        self._forecast_cache_time = now
 
         return forecasts
 

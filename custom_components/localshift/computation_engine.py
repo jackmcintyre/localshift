@@ -1628,6 +1628,36 @@ class ComputationEngine:
             await self._weather_correlation.async_save()
             self._last_weather_save_hour = current_hour
 
+    async def async_refresh_weather_forecast(self) -> list | None:
+        """Refresh temperature forecast from weather entity.
+
+        Uses the modern weather.get_forecasts service (HA 2024.3+) with caching.
+        Should be called periodically (e.g., every 30 minutes) by the coordinator.
+
+        Returns:
+            List of TemperatureForecast objects, or None if unavailable.
+        """
+        if self._weather_correlation is None:
+            return None
+
+        weather_learning_enabled = self.entry.options.get(
+            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
+        )
+
+        if not weather_learning_enabled:
+            return None
+
+        try:
+            forecasts = await self._weather_correlation.async_get_temperature_forecast()
+            _LOGGER.debug(
+                "Refreshed %d temperature forecasts from weather entity",
+                len(forecasts),
+            )
+            return forecasts
+        except Exception as e:
+            _LOGGER.warning("Failed to refresh weather forecast: %s", e)
+            return None
+
     def get_weather_adjusted_load(
         self, hour: int, base_load_kw: float
     ) -> tuple[float, str]:

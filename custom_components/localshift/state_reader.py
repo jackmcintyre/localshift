@@ -235,10 +235,15 @@ class StateReader:
         self._read_weather_state(data)
 
     def _read_weather_state(self, data: CoordinatorData) -> None:
-        """Read weather entity state and forecast.
+        """Read weather entity current state (temperature and condition).
 
         Populates weather-related fields in CoordinatorData for use by
         the weather correlation system.
+
+        NOTE: Temperature forecast is fetched asynchronously via the coordinator's
+        _refresh_weather_forecast() method, which uses the modern weather.get_forecasts
+        service (HA 2024.3+). The forecast attribute on weather entities was deprecated
+        and removed in HA 2024.3+.
 
         Args:
             data: CoordinatorData instance to populate with weather data.
@@ -275,36 +280,14 @@ class StateReader:
         # Read current condition
         data.weather_condition = state.state
 
-        # Read temperature forecast
-        forecast_data = state.attributes.get("forecast", [])
-        data.weather_temperature_forecast = {}
-
-        for forecast_entry in forecast_data:
-            forecast_time_str = forecast_entry.get("datetime")
-            if not forecast_time_str:
-                continue
-
-            try:
-                # Parse the datetime to extract the hour
-                from homeassistant.util import dt as dt_util
-
-                forecast_time = dt_util.parse_datetime(forecast_time_str)
-                if forecast_time is None:
-                    continue
-
-                hour = forecast_time.hour
-                temperature = forecast_entry.get("temperature")
-
-                if temperature is not None:
-                    data.weather_temperature_forecast[hour] = float(temperature)
-
-            except (ValueError, TypeError):
-                continue
+        # NOTE: Temperature forecast is no longer read from the deprecated 'forecast' attribute.
+        # It's now fetched asynchronously via weather.get_forecasts service in the coordinator's
+        # _refresh_weather_forecast() method, which populates data.weather_temperature_forecast.
+        # The legacy 'forecast' attribute was removed in Home Assistant 2024.3+.
 
         _LOGGER.debug(
-            "Weather state read: entity=%s, temp=%.1f°C, condition=%s, forecast_hours=%d",
+            "Weather state read: entity=%s, temp=%.1f°C, condition=%s",
             weather_entity,
             data.weather_temperature_current,
             data.weather_condition,
-            len(data.weather_temperature_forecast),
         )
