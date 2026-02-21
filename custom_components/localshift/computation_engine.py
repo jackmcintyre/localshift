@@ -601,7 +601,65 @@ class ComputationEngine:
         solar_kwh: float,
         consumption_kwh: float,
     ) -> None:
-        """Store forecast prediction to history for planned vs actual comparison."""
+        """Store forecast prediction to history for planned vs actual comparison.
+
+        Stores predictions at specific future times for accuracy tracking:
+        - What SOC we predict for 15 minutes from now
+        - What SOC we predict for 1 hour from now
+        - What SOC we predict for 4 hours from now
+
+        Each prediction has a target_time so we can later compare:
+        "What did we predict for time T?" vs "What was actual at time T?"
+        """
+        # Find forecast entries for specific future times
+        slots = data.daily_forecast
+        if not slots:
+            return
+
+        # Store predictions for 15min, 1h, and 4h into the future
+        # These will be compared when that time arrives
+        for offset_minutes in [15, 60, 240]:
+            target_dt = now_dt + timedelta(minutes=offset_minutes)
+
+            # Normalize target_dt timezone for comparison
+            if target_dt.tzinfo is None:
+                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
+            else:
+                target_dt = dt_util.as_local(target_dt)
+
+            # Find the forecast slot that covers target_dt
+            for slot in slots:
+                ts = slot.get("timestamp", "")
+                if not ts:
+                    continue
+                try:
+                    slot_dt = datetime.fromisoformat(ts)
+                except ValueError:
+                    continue
+
+                # Normalize timezone
+                if slot_dt.tzinfo is None:
+                    slot_dt = dt_util.as_local(dt_util.as_utc(slot_dt))
+                else:
+                    slot_dt = dt_util.as_local(slot_dt)
+
+                # Check if this slot covers target_dt (within slot interval)
+                slot_interval = slot.get("slot_interval_minutes", 15)
+                slot_end = slot_dt + timedelta(minutes=slot_interval)
+
+                if slot_dt <= target_dt < slot_end:
+                    entry = {
+                        "prediction_time": now_dt.isoformat(),
+                        "target_time": target_dt.isoformat(),
+                        "offset_minutes": offset_minutes,
+                        "predicted_soc": slot.get("predicted_soc", 0),
+                        "predicted_buy_price": slot.get("buy_price", 0),
+                        "predicted_sell_price": slot.get("sell_price", 0),
+                    }
+                    data.forecast_history.append(entry)
+                    break
+
+        # Also store the legacy DW prediction for compatibility
         entry = {
             "timestamp": now_dt.isoformat(),
             "predicted_soc": round(predicted_soc, 1),
@@ -610,9 +668,9 @@ class ComputationEngine:
         }
         data.forecast_history.append(entry)
 
-        # Keep only last 48 entries (2 days of hourly data)
-        if len(data.forecast_history) > 48:
-            data.forecast_history = data.forecast_history[-48:]
+        # Keep last 200 entries (allows 4+ hours of predictions across multiple days)
+        if len(data.forecast_history) > 200:
+            data.forecast_history = data.forecast_history[-200:]
 
     def _compute_daily_15min_forecast(
         self,
@@ -1868,25 +1926,35 @@ class ComputationEngine:
     async def async_compute_forecast_accuracy(self, data: CoordinatorData) -> None:
         """Compare past forecast predictions with actual outcomes.
 
-        Uses HA history (which now works thanks to Phase 1) to look up
-        what we predicted N minutes ago for the current time, and compares
-        with actual current values.
+        Uses forecast_history to find predictions made N minutes ago for the
+        current time, and compares with actual current values.
+
+        The key insight: We stored predictions with target_time = now+offset.
+        When that target_time arrives, we compare the predicted value to actual.
 
         Args:
             data: CoordinatorData to populate with accuracy metrics
         """
-
         now_dt = dt_util.now()
 
-        # Initialize default values
-        data.forecast_error_soc_15min = 0.0
-        data.forecast_error_soc_1h = 0.0
-        data.forecast_error_soc_4h = 0.0
-        data.forecast_accuracy_soc_15min = 100.0
-        data.forecast_accuracy_soc_1h = 100.0
-        data.forecast_accuracy_soc_4h = 100.0
-        data.forecast_error_buy_price_1h = 0.0
-        data.forecast_error_sell_price_1h = 0.0
+        # Initialize default values (keep previous if no comparison possible)
+        if not hasattr(data, "forecast_error_soc_15min"):
+            data.forecast_error_soc_15min = 0.0
+        if not hasattr(data, "forecast_error_soc_1h"):
+            data.forecast_error_soc_1h = 0.0
+        if not hasattr(data, "forecast_error_soc_4h"):
+            data.forecast_error_soc_4h = 0.0
+        if not hasattr(data, "forecast_accuracy_soc_15min"):
+            data.forecast_accuracy_soc_15min = 100.0
+        if not hasattr(data, "forecast_accuracy_soc_1h"):
+            data.forecast_accuracy_soc_1h = 100.0
+        if not hasattr(data, "forecast_accuracy_soc_4h"):
+            data.forecast_accuracy_soc_4h = 100.0
+        if not hasattr(data, "forecast_error_buy_price_1h"):
+            data.forecast_error_buy_price_1h = 0.0
+        if not hasattr(data, "forecast_error_sell_price_1h"):
+            data.forecast_error_sell_price_1h = 0.0
+
         data.forecast_last_comparison_time = now_dt.isoformat()
 
         try:
@@ -1895,62 +1963,96 @@ class ComputationEngine:
             actual_buy_price = data.general_price
             actual_sell_price = data.feed_in_price
 
-            # Time offsets to check (in minutes)
-            offsets = [15, 60, 240]  # 15min, 1h, 4h
+            # Look for predictions whose target_time matches now
+            # These were made offset_minutes ago, predicting for now
+            history = data.forecast_history
 
-            for offset in offsets:
-                # Get the forecast sensor state from history
-                # We need to find what we predicted for NOW, looking from offset minutes ago
-                # The forecast_slots attribute contains predictions indexed by time
+            # Track which offsets we found comparisons for
+            comparisons_found = {15: False, 60: False, 240: False}
 
-                # For now, compute simple accuracy based on current slot
-                # This is a simplified approach - full implementation would
-                # query HA history for the exact forecast at that time
+            for entry in history:
+                # Skip legacy entries without offset_minutes
+                if "offset_minutes" not in entry:
+                    continue
 
-                # Use the current daily_forecast to find predictions
-                # The forecast contains predicted_soc for each slot
-                current_slot = self._get_forecast_entry_for_now(data, now_dt)
+                target_time_str = entry.get("target_time")
+                if not target_time_str:
+                    continue
 
-                if current_slot:
-                    predicted_soc = current_slot.get("predicted_soc", actual_soc)
-                    predicted_buy = current_slot.get("buy_price", actual_buy_price)
-                    predicted_sell = current_slot.get("sell_price", actual_sell_price)
+                try:
+                    target_dt = datetime.fromisoformat(target_time_str)
+                except ValueError:
+                    continue
 
-                    # Calculate error (predicted - actual)
-                    soc_error = predicted_soc - actual_soc
+                # Normalize timezone
+                if target_dt.tzinfo is None:
+                    target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
+                else:
+                    target_dt = dt_util.as_local(target_dt)
 
-                    # Store errors
-                    if offset == 15:
-                        data.forecast_error_soc_15min = soc_error
-                        data.forecast_accuracy_soc_15min = max(
-                            0.0, min(100.0, 100.0 - abs(soc_error))
-                        )
-                    elif offset == 60:
-                        data.forecast_error_soc_1h = soc_error
-                        data.forecast_accuracy_soc_1h = max(
-                            0.0, min(100.0, 100.0 - abs(soc_error))
-                        )
-                        data.forecast_error_buy_price_1h = (
-                            predicted_buy - actual_buy_price
-                        )
-                        data.forecast_error_sell_price_1h = (
-                            predicted_sell - actual_sell_price
-                        )
-                    elif offset == 240:
-                        data.forecast_error_soc_4h = soc_error
-                        data.forecast_accuracy_soc_4h = max(
-                            0.0, min(100.0, 100.0 - abs(soc_error))
-                        )
+                # Check if this prediction was for a time within 1 minute of now
+                time_diff = abs((target_dt - now_dt).total_seconds())
+                if time_diff > 60:  # More than 1 minute off
+                    continue
 
-            # Increment comparison count
-            data.forecast_comparisons_made += 1
+                offset = entry.get("offset_minutes")
+                predicted_soc = entry.get("predicted_soc")
+                predicted_buy = entry.get("predicted_buy_price", actual_buy_price)
+                predicted_sell = entry.get("predicted_sell_price", actual_sell_price)
 
-            _LOGGER.debug(
-                "Forecast accuracy: soc_error_1h=%.1f%%, accuracy_1h=%.1f%%, comparisons=%d",
-                data.forecast_error_soc_1h,
-                data.forecast_accuracy_soc_1h,
-                data.forecast_comparisons_made,
-            )
+                if predicted_soc is None:
+                    continue
+
+                # Calculate error (predicted - actual)
+                soc_error = predicted_soc - actual_soc
+
+                # Store errors based on offset
+                if offset == 15:
+                    data.forecast_error_soc_15min = round(soc_error, 1)
+                    data.forecast_accuracy_soc_15min = max(
+                        0.0, min(100.0, 100.0 - abs(soc_error))
+                    )
+                    comparisons_found[15] = True
+                elif offset == 60:
+                    data.forecast_error_soc_1h = round(soc_error, 1)
+                    data.forecast_accuracy_soc_1h = max(
+                        0.0, min(100.0, 100.0 - abs(soc_error))
+                    )
+                    data.forecast_error_buy_price_1h = round(
+                        predicted_buy - actual_buy_price, 4
+                    )
+                    data.forecast_error_sell_price_1h = round(
+                        predicted_sell - actual_sell_price, 4
+                    )
+                    comparisons_found[60] = True
+                elif offset == 240:
+                    data.forecast_error_soc_4h = round(soc_error, 1)
+                    data.forecast_accuracy_soc_4h = max(
+                        0.0, min(100.0, 100.0 - abs(soc_error))
+                    )
+                    comparisons_found[240] = True
+
+            # Increment comparison count if we found any comparisons
+            if any(comparisons_found.values()):
+                data.forecast_comparisons_made += 1
+
+                _LOGGER.info(
+                    "Forecast accuracy: 15min=%.1f%% (err=%.1f), 1h=%.1f%% (err=%.1f), 4h=%.1f%% (err=%.1f), comparisons=%d, found=%s",
+                    data.forecast_accuracy_soc_15min,
+                    data.forecast_error_soc_15min,
+                    data.forecast_accuracy_soc_1h,
+                    data.forecast_error_soc_1h,
+                    data.forecast_accuracy_soc_4h,
+                    data.forecast_error_soc_4h,
+                    data.forecast_comparisons_made,
+                    comparisons_found,
+                )
+            else:
+                _LOGGER.debug(
+                    "No forecast predictions found for comparison at %s (history has %d entries)",
+                    now_dt.strftime("%H:%M"),
+                    len(history),
+                )
 
         except Exception as e:
             _LOGGER.warning("Failed to compute forecast accuracy: %s", e)
