@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 # -----------------------------------------------------------------------------
 # Domain
@@ -15,7 +15,7 @@ DOMAIN = "localshift"
 # -----------------------------------------------------------------------------
 
 
-class BatteryMode(str, Enum):
+class BatteryMode(StrEnum):
     """Battery operating modes."""
 
     SELF_CONSUMPTION = "self_consumption"
