@@ -25,7 +25,7 @@ from .computation_engine_lib import (
 )
 from .const import (
     BATTERY_CAPACITY_KWH,
-    CHARGE_RATE_BACKUP_KW,
+    CHARGE_RATE_GRID_KW,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
@@ -573,7 +573,7 @@ class ComputationEngine:
                 else:
                     remaining_deficit = max(deficit_kwh - max(net_solar, 0), 0)
                     time_needed_hours = (
-                        remaining_deficit / (CHARGE_RATE_BACKUP_KW * 0.9)
+                        remaining_deficit / (CHARGE_RATE_GRID_KW * 0.9)
                         if remaining_deficit > 0
                         else 0
                     )

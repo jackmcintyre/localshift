@@ -199,7 +199,14 @@ class BatteryController:
     async def set_force_charge(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
-        """Set battery to force charge mode (backup).
+        """Set battery to force charge mode (autonomous, reserve=100).
+
+        Uses autonomous mode with reserve=100 for 5 kW charging rate.
+        This works around Tesla's July 2025 firmware restriction that
+        limits backup mode grid charging to ~1.2-1.8 kW.
+
+        SOC monitoring in the state machine stops charging when the
+        battery_target is reached (rather than charging to 100%).
 
         Returns:
             True if successful, False otherwise.
@@ -211,35 +218,54 @@ class BatteryController:
             _LOGGER.info("DRY RUN: set_force_charge")
             return True
 
-        _LOGGER.info("Setting battery to force charge mode")
+        # Capture initial state for diagnostics
+        initial_state = self._get_hardware_state_snapshot()
+        transition_start = time.monotonic()
+        _LOGGER.info(
+            "[TRANSITION] Starting force charge mode | Initial state: op=%s, reserve=%s, export=%s",
+            initial_state["operation_mode"],
+            initial_state["backup_reserve"],
+            initial_state["export_mode"],
+        )
 
         # Set allow_export to pv_only first (don't allow battery to export)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
             _LOGGER.error("Aborting force charge mode: Failed to set export mode")
             return False
 
-        # Set backup reserve to 10% (ensures consistent state for health checks)
-        if not await self._set_backup_reserve(10):
+        # Set backup reserve to 100% - SOC monitoring will stop at battery_target
+        if not await self._set_backup_reserve(100):
             _LOGGER.error("Aborting force charge mode: Failed to set backup reserve")
             return False
 
-        if not await self._set_operation_mode("backup"):
+        if not await self._set_operation_mode("autonomous"):
             _LOGGER.error("Aborting force charge mode: Failed to set operation mode")
             return False
 
+        # Use extended timeout for autonomous mode (15s instead of 10s)
+        # Tesla API takes longer to propagate autonomous mode changes
+        timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
+
         # Validate transition completed successfully
         if not await self.validate_transition(
-            expected_operation_mode="backup",
-            expected_backup_reserve=10,  # Default reserve for backup mode
+            expected_operation_mode="autonomous",
+            expected_backup_reserve=100,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
-            timeout=10,
+            timeout=timeout,
         ):
-            _LOGGER.error("Force charge mode validation failed")
+            final_state = self._get_hardware_state_snapshot()
+            elapsed = time.monotonic() - transition_start
+            _LOGGER.error(
+                "[TRANSITION] Force charge FAILED after %.2fs | Final state: op=%s, reserve=%s, export=%s",
+                elapsed,
+                final_state["operation_mode"],
+                final_state["backup_reserve"],
+                final_state["export_mode"],
+            )
             return False
 
-        _LOGGER.info(
-            "Successfully completed force charge mode transition with validation"
-        )
+        elapsed = time.monotonic() - transition_start
+        _LOGGER.info("[TRANSITION] Force charge SUCCESS in %.2fs", elapsed)
         return True
 
     def _get_hardware_state_snapshot(self) -> dict:

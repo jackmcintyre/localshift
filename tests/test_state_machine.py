@@ -276,12 +276,17 @@ class TestExpectedStateForMode:
         assert export == TESLEMETRY_EXPORT_PV_ONLY
 
     def test_grid_charging_expected_state(self, state_machine):
-        """GRID_CHARGING should expect pv_only export mode."""
+        """GRID_CHARGING should expect autonomous mode with reserve=100.
+
+        Grid charging now uses autonomous mode with reserve=100 for 5 kW charging
+        (workaround for Tesla July 2025 firmware that throttles backup mode).
+        SOC monitoring stops charging when battery_target is reached.
+        """
         op, reserve, export = state_machine._get_expected_state_for_mode(
             BatteryMode.GRID_CHARGING
         )
-        assert op == "backup"
-        assert reserve == 10
+        assert op == "autonomous"
+        assert reserve == 100
         assert export == TESLEMETRY_EXPORT_PV_ONLY
 
     def test_boost_charging_expected_state(self, state_machine):

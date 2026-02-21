@@ -4,12 +4,12 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **48 entities** grouped under a single "LocalShift" device:
+The integration creates **51 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 16 | `sensor` |
-| Binary Sensors | 9 | `binary_sensor` |
+| Sensors | 18 | `sensor` |
+| Binary Sensors | 10 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 8 | `number` |
 | Buttons | 5 | `button` |
@@ -438,6 +438,56 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 ---
 
+### 17. sensor.localshift_integration_status
+
+**Purpose:** Overall integration health status.
+
+Added in Issue #94 to provide a simple status indicator for dashboards.
+
+**State:** One of the following status strings:
+
+| Status | Meaning |
+|--------|---------|
+| `ok` | All required entities are available |
+| `degraded` | Some optional entities unavailable |
+| `error` | Required entities are unavailable |
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `message` | string | Human-readable status message |
+| `error_count` | int | Number of entity errors |
+| `warning_count` | int | Number of entity warnings |
+| `required_entities_healthy` | bool | Whether all required entities are healthy |
+| `errors` | list | List of error messages |
+| `warnings` | list | List of warning messages |
+| `last_check` | string | ISO timestamp of last health check |
+
+**Icon:** Dynamic (check-circle for ok, alert-circle for degraded, close-circle for error)
+
+---
+
+### 18. sensor.localshift_entity_health
+
+**Purpose:** Detailed health status for all tracked entities.
+
+Added in Issue #94 for detailed diagnostics and troubleshooting.
+
+**State:** Count of healthy entities (e.g., `12/15`)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `entities` | dict | Per-entity health status with details |
+| `errors` | list | List of error messages |
+| `warnings` | list | List of warning messages |
+
+**Use Case:** Troubleshoot entity availability issues. Each entity entry includes status, last seen time, and error details.
+
+---
+
 ## Binary Sensors
 
 ### 1. binary_sensor.localshift_demand_window
@@ -530,6 +580,31 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 | `safe_additional_load_kw` | float | Max kW that can be safely added |
 
 **Icon:** Dynamic (solar-power-variant when on, solar-power-variant-outline when off)
+
+---
+
+### 10. binary_sensor.localshift_tesla_override_active
+
+**Purpose:** Whether Tesla has taken control of the Powerwall (Storm Watch, Grid Event, VPP).
+
+Added in Issue #110 to provide visibility into when Tesla has override control.
+
+**State:** `on` when Tesla has control, `off` otherwise
+
+**Behavior:**
+When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_reserve` to 80% and `operation_mode` to `self_consumption`, ignoring external API commands until the event ends. This sensor detects when that override is active.
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `operation_mode` | string | Current Powerwall operation mode |
+| `backup_reserve` | float | Current backup reserve percentage |
+| `description` | string | Human-readable status description |
+
+**Icon:** Dynamic (shield-alert when active, shield-check when inactive)
+
+**Use Case:** When this sensor is `on`, LocalShift automation will pause and wait for Tesla to release control. No need to manually intervene.
 
 ---
 

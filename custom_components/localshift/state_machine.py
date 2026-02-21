@@ -10,7 +10,9 @@ from typing import TYPE_CHECKING
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
+    DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
@@ -242,6 +244,38 @@ class StateMachine:
                 if desired == self._commanded_mode:
                     self._mode_desired_since.clear()
 
+                    # --- SOC-based charge target enforcement ---
+                    # When grid charging or boost charging, monitor SOC against battery_target
+                    # and transition to SELF_CONSUMPTION when target is reached.
+                    # This is needed because we now use reserve=100 for charging modes.
+                    if self._commanded_mode in (
+                        BatteryMode.GRID_CHARGING,
+                        BatteryMode.BOOST_CHARGING,
+                    ):
+                        battery_target = float(
+                            self._get_option(
+                                CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
+                            )
+                        )
+                        if data.soc >= battery_target:
+                            _LOGGER.info(
+                                "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
+                                data.soc,
+                                battery_target,
+                                self._commanded_mode.value,
+                            )
+                            transition_success = await self._execute_mode_transition(
+                                data, BatteryMode.SELF_CONSUMPTION
+                            )
+                            if transition_success:
+                                old_mode = self._commanded_mode
+                                self._commanded_mode = BatteryMode.SELF_CONSUMPTION
+                                self._mode_desired_since.clear()
+                                await self._notification_service.send_transition_notification(
+                                    old_mode, BatteryMode.SELF_CONSUMPTION, data
+                                )
+                            return
+
                     # --- Periodic health check (every minute) ---
                     # Verify hardware state matches commanded state
                     # This catches drift from manual changes, power outages, etc.
@@ -471,7 +505,10 @@ class StateMachine:
         elif mode == BatteryMode.DEMAND_BLOCK:
             return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.GRID_CHARGING:
-            return ("backup", 10, TESLEMETRY_EXPORT_PV_ONLY)
+            # Grid charging now uses autonomous mode with reserve=100
+            # for 5 kW charging rate (workaround for Tesla July 2025 firmware)
+            # SOC monitoring stops charging when battery_target is reached
+            return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.BOOST_CHARGING:
             return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.SPIKE_DISCHARGE:
