@@ -82,6 +82,32 @@ class ForecastComputer:
             d_parts = default.split(":")
             return time(int(d_parts[0]), int(d_parts[1]), int(d_parts[2]))
 
+    @staticmethod
+    def _is_in_demand_window(
+        slot_time: time, dw_start_time: time, dw_end_time: time
+    ) -> bool:
+        """Check if slot falls within demand window, handling midnight wrap.
+
+        For overnight DW (e.g., 15:00-07:00), the window spans midnight:
+        - 15:00-23:59 today (before midnight)
+        - 00:00-06:59 tomorrow (after midnight)
+
+        Args:
+            slot_time: Time of the slot to check
+            dw_start_time: Demand window start time
+            dw_end_time: Demand window end time
+
+        Returns:
+            True if slot is within the demand window
+        """
+        # Case 1: DW doesn't span midnight (e.g., 15:00-20:00)
+        if dw_start_time < dw_end_time:
+            return dw_start_time <= slot_time < dw_end_time
+
+        # Case 2: DW spans midnight (e.g., 15:00-07:00)
+        # In DW if: slot >= start OR slot < end
+        return slot_time >= dw_start_time or slot_time < dw_end_time
+
     def _estimate_hourly_consumption_kw(
         self,
         hourly_avg_kw: dict[int, float],
@@ -2272,7 +2298,10 @@ class ForecastComputer:
             soc_at_slot_start = current_soc if is_first_slot else predicted_soc
 
             # Check if we're in demand window (zero grid import constraint)
-            in_demand_window = dw_start_time <= slot_time < dw_end_time
+            # Use helper function to correctly handle overnight DW (midnight wrap)
+            in_demand_window = self._is_in_demand_window(
+                slot_time, dw_start_time, dw_end_time
+            )
 
             # Get solar forecast scaled to this 15-min slot's duration.
             # Enable debug logging for: first slot, 6-hour marks, and afternoon slots (14-18)
