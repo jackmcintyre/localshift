@@ -35,6 +35,10 @@ async def async_setup_entry(
         DecisionLogSensor(coordinator, entry),
         ForecastHistorySensor(coordinator, entry),
         DailyForecastSensor(coordinator, entry),
+        # New split sensors for Issue #37 (forecast history collection)
+        ForecastPricesSensor(coordinator, entry),
+        ForecastGridSensor(coordinator, entry),
+        ForecastDiagnosticsSensor(coordinator, entry),
         MinimumTargetSOCSensor(coordinator, entry),
         # Excess solar load shifting sensors (backlog-high-017)
         ExcessSolarSensor(coordinator, entry),
@@ -249,101 +253,236 @@ class ForecastHistorySensor(LocalShiftSensorBase):
 
 
 class DailyForecastSensor(LocalShiftSensorBase):
-    """Full 24-hour forecast with hourly breakdown."""
+    """Full 24-hour forecast with SOC, solar, and consumption data.
+
+    This sensor provides the core forecast data for dashboards and history.
+    Split from the original monolithic sensor to stay under 16KB limit (Issue #37).
+    """
 
     _attr_unique_id = "localshift_forecast_daily"
     _attr_name = "Forecast Daily"
     _attr_icon = "mdi:chart-bar"
 
     def _update_from_coordinator(self) -> None:
-        """Update with count of hourly entries."""
+        """Update with count of forecast slots."""
         self._attr_native_value = len(self.coordinator.data.daily_forecast)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return daily forecast with hourly breakdown."""
-        sample_counts = self.coordinator.data.consumption_hourly_sample_counts
-        profile_kw = self.coordinator.data.consumption_hourly_profile_kw
-        source_counts = self.coordinator.data.forecast_consumption_source_counts
-
-        # Debug: Include key 15-min slots for debugging grid import/export
-        # Show first 24 slots + every top of hour (to capture midday, evening etc)
-        debug_15min = []
-
-        for idx, slot in enumerate(self.coordinator.data.daily_forecast):
-            hour = slot.get("hour", 0)
-            minute = slot.get("minute", 0)
-            # Include: first 24 slots OR any slot at top of hour (minute == 0)
-            if idx < 24 or minute == 0:
-                debug_15min.append(
-                    {
-                        "hour": hour,
-                        "minute": minute,
-                        "soc": slot.get("predicted_soc"),
-                        "solar": slot.get("solar_kwh"),
-                        "load": slot.get("consumption_kwh"),
-                        "net": slot.get("net_kwh"),
-                        "grid_in": slot.get("grid_import_kwh"),
-                        "grid_out": slot.get("grid_export_kwh"),
-                        "grid_charge": slot.get("grid_charge", False),
-                        "grid_charge_boost": slot.get("grid_charge_boost", False),
-                        "proactive_export": slot.get("proactive_export", False),
-                        "export_amt": slot.get("export_amount_kwh", 0.0),
-                    }
-                )
-
-        # Calculate totals for diagnostics
-        total_grid_import = sum(slot.get("grid_in", 0) or 0 for slot in debug_15min)
-        total_grid_export = sum(slot.get("grid_out", 0) or 0 for slot in debug_15min)
-
-        # Build compact full-resolution slot list for the dashboard table.
-        # Short key names keep the total attribute size under the 16 KB HA recorder limit.
-        # Format: h=hour, m=minute, soc=predicted_soc%, sol/ld/net in kWh, gi/go=grid in/out kWh
+        """Return daily forecast with descriptive key names for clarity."""
+        # Build forecast slots with descriptive keys
+        # Each slot contains the essential time-series data for dashboards
         forecast_slots = []
         for slot in self.coordinator.data.daily_forecast:
             ts = slot.get("timestamp", "")
             forecast_slots.append(
                 {
                     "time": ts[11:16] if len(ts) >= 16 else "",  # "HH:MM"
-                    "h": slot.get("hour", 0),
-                    "m": slot.get("minute", 0),
-                    "soc": slot.get("predicted_soc"),
-                    "sol": slot.get("solar_kwh"),
-                    "ld": slot.get("consumption_kwh"),
-                    "net": slot.get("net_kwh"),
-                    "gi": slot.get("grid_import_kwh"),
-                    "go": slot.get("grid_export_kwh"),
-                    "gc": slot.get("grid_charge", False),
-                    "pe": slot.get("proactive_export", False),
-                    "bp": slot.get("buy_price"),
-                    "sp": slot.get("sell_price"),
+                    "hour": slot.get("hour", 0),
+                    "minute": slot.get("minute", 0),
+                    "predicted_soc": slot.get("predicted_soc"),
+                    "solar_kwh": slot.get("solar_kwh"),
+                    "consumption_kwh": slot.get("consumption_kwh"),
+                    "net_kwh": slot.get("net_kwh"),
+                    "buy_price": slot.get("buy_price"),
+                    "sell_price": slot.get("sell_price"),
+                }
+            )
+
+        # SOC series for graphing (lightweight format)
+        soc_series = []
+        for slot in self.coordinator.data.daily_forecast_soc_15min:
+            if len(slot) >= 2:
+                soc_series.append({"time": slot[0], "soc": slot[1]})
+
+        return {
+            # Core forecast data (96 slots × 8 fields ≈ 8KB)
+            "forecast_slots": forecast_slots,
+            # SOC time series for graphing
+            "soc_series": soc_series,
+            # Summary counts
+            "slot_count": len(self.coordinator.data.daily_forecast),
+            "solcast_today_entries": len(self.coordinator.data.solcast_today),
+            "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
+            # Hourly summary for quick reference
+            "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
+        }
+
+
+class ForecastPricesSensor(LocalShiftSensorBase):
+    """Price forecast data for history collection.
+
+    Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
+    Provides buy/sell price time series for analysis and dashboards.
+    """
+
+    _attr_unique_id = "localshift_forecast_prices"
+    _attr_name = "Forecast Prices"
+    _attr_icon = "mdi:currency-usd"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with current effective cheap price."""
+        self._attr_native_value = round(self.coordinator.data.effective_cheap_price, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return price forecast data."""
+        # Build price time series with descriptive keys
+        buy_prices = []
+        sell_prices = []
+
+        for slot in self.coordinator.data.daily_forecast:
+            ts = slot.get("timestamp", "")
+            time_str = ts[11:16] if len(ts) >= 16 else ""
+            buy_prices.append(
+                {
+                    "time": time_str,
+                    "hour": slot.get("hour", 0),
+                    "minute": slot.get("minute", 0),
+                    "price": slot.get("buy_price"),
+                }
+            )
+            sell_prices.append(
+                {
+                    "time": time_str,
+                    "hour": slot.get("hour", 0),
+                    "minute": slot.get("minute", 0),
+                    "price": slot.get("sell_price"),
                 }
             )
 
         return {
-            # All forecast slots in compact form (short keys keep attribute under 16 KB limit).
-            "forecast_slots": forecast_slots,
-            "debug_15min_slots": debug_15min,
-            "debug_total_grid_import_kwh": round(total_grid_import, 3),
-            "debug_total_grid_export_kwh": round(total_grid_export, 3),
-            # New debug fields for troubleshooting mode decisions
-            "debug_forecast_slot_found": self.coordinator.data.debug_forecast_slot_found,
-            "debug_forecast_slot_time": self.coordinator.data.debug_forecast_slot_time,
-            "debug_first_forecast_slot_time": self.coordinator.data.debug_first_forecast_slot_time,
-            "debug_time_gap_seconds": round(
-                self.coordinator.data.debug_time_gap_seconds, 1
+            # Price time series (96 slots each ≈ 3KB total)
+            "buy_prices": buy_prices,
+            "sell_prices": sell_prices,
+            # Price thresholds
+            "effective_cheap_price": round(
+                self.coordinator.data.effective_cheap_price, 4
             ),
-            "debug_mode_source": self.coordinator.data.debug_mode_source,
-            "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
-            "soc_series_15min": self.coordinator.data.daily_forecast_soc_15min,
-            "forecast_15min_slots": len(self.coordinator.data.daily_forecast),
-            "solcast_today_entries": len(self.coordinator.data.solcast_today),
-            "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
-            "current_load_kw": round(self.coordinator.data.load_power_kw, 3),
+            "cheap_charge_stop_price": round(
+                self.coordinator.data.cheap_charge_stop_price, 4
+            ),
+            # Forecast cost totals (rest of today)
+            "forecast_import_cost": round(
+                self.coordinator.data.forecast_import_cost or 0.0, 2
+            ),
+            "forecast_export_revenue": round(
+                self.coordinator.data.forecast_export_revenue or 0.0, 2
+            ),
+            "forecast_net_cost": round(
+                self.coordinator.data.forecast_net_cost or 0.0, 2
+            ),
+            "forecast_grid_charge_cost": round(
+                self.coordinator.data.forecast_grid_charge_cost or 0.0, 2
+            ),
+            "forecast_proactive_export_revenue": round(
+                self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
+            ),
+        }
+
+
+class ForecastGridSensor(LocalShiftSensorBase):
+    """Grid interaction forecast data for history collection.
+
+    Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
+    Provides grid import/export time series for analysis and dashboards.
+    """
+
+    _attr_unique_id = "localshift_forecast_grid"
+    _attr_name = "Forecast Grid"
+    _attr_icon = "mdi:transmission-tower"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with total forecast grid import."""
+        total_import = sum(
+            slot.get("grid_import_kwh", 0) or 0
+            for slot in self.coordinator.data.daily_forecast
+        )
+        self._attr_native_value = round(total_import, 3)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return grid interaction forecast data."""
+        # Build grid interaction time series with descriptive keys
+        grid_interaction = []
+        total_import = 0.0
+        total_export = 0.0
+        grid_charge_slots = 0
+        proactive_export_slots = 0
+
+        for slot in self.coordinator.data.daily_forecast:
+            ts = slot.get("timestamp", "")
+            time_str = ts[11:16] if len(ts) >= 16 else ""
+            import_kwh = slot.get("grid_import_kwh", 0) or 0
+            export_kwh = slot.get("grid_export_kwh", 0) or 0
+            is_grid_charge = slot.get("grid_charge", False)
+            is_proactive_export = slot.get("proactive_export", False)
+
+            total_import += import_kwh
+            total_export += export_kwh
+            if is_grid_charge:
+                grid_charge_slots += 1
+            if is_proactive_export:
+                proactive_export_slots += 1
+
+            grid_interaction.append(
+                {
+                    "time": time_str,
+                    "hour": slot.get("hour", 0),
+                    "minute": slot.get("minute", 0),
+                    "grid_import_kwh": round(import_kwh, 4),
+                    "grid_export_kwh": round(export_kwh, 4),
+                    "grid_charge": is_grid_charge,
+                    "grid_charge_boost": slot.get("grid_charge_boost", False),
+                    "proactive_export": is_proactive_export,
+                    "export_amount_kwh": round(
+                        slot.get("export_amount_kwh", 0) or 0, 4
+                    ),
+                }
+            )
+
+        return {
+            # Grid interaction time series (96 slots × 8 fields ≈ 4KB)
+            "grid_interaction": grid_interaction,
+            # Summary totals
+            "total_grid_import_kwh": round(total_import, 3),
+            "total_grid_export_kwh": round(total_export, 3),
+            "grid_charge_slots": grid_charge_slots,
+            "proactive_export_slots": proactive_export_slots,
+        }
+
+
+class ForecastDiagnosticsSensor(LocalShiftSensorBase):
+    """Diagnostic and debug data for the forecast system.
+
+    Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
+    Contains consumption profiles, weather correlation, and debug fields.
+    """
+
+    _attr_unique_id = "localshift_forecast_diagnostics"
+    _attr_name = "Forecast Diagnostics"
+    _attr_icon = "mdi:bug-outline"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with consumption source."""
+        self._attr_native_value = self.coordinator.data.consumption_source
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return diagnostic and debug data."""
+        sample_counts = self.coordinator.data.consumption_hourly_sample_counts
+        profile_kw = self.coordinator.data.consumption_hourly_profile_kw
+        source_counts = self.coordinator.data.forecast_consumption_source_counts
+
+        return {
+            # Consumption profile information
             "consumption_source": self.coordinator.data.consumption_source,
             "consumption_statistic_id": self.coordinator.data.consumption_statistic_id,
             "consumption_profile_hours": self.coordinator.data.consumption_profile_hours,
             "consumption_fallback_hours": self.coordinator.data.consumption_fallback_hours,
+            "consumption_weighting": round(
+                self.coordinator.data.consumption_weighting, 2
+            ),
             "forecast_consumption_source_counts": dict(source_counts),
             "consumption_hourly_sample_counts": {
                 str(hour): count for hour, count in sorted(sample_counts.items())
@@ -352,11 +491,7 @@ class DailyForecastSensor(LocalShiftSensorBase):
                 str(hour): value for hour, value in sorted(profile_kw.items())
             },
             # Day-of-week aware consumption profiles (issue-60)
-            # consumption_profile_type: "weekday_weekend" means system has separate profiles
-            # "combined" means falling back to combined profile
             "consumption_profile_type": self.coordinator.data.consumption_profile_type,
-            # forecast_profile_selected: Which profile is actually being used for TODAY's forecast
-            # "weekday" (Mon-Fri), "weekend" (Sat-Sun), or "combined" (fallback)
             "forecast_profile_selected": self.coordinator.data.forecast_profile_selected,
             "weekday_sample_counts": {
                 str(hour): count
@@ -382,30 +517,22 @@ class DailyForecastSensor(LocalShiftSensorBase):
                     self.coordinator.data.weekend_hourly_profile_kw.items()
                 )
             },
+            # Recent load data
             "recent_load_1hr_kw": round(self.coordinator.data.recent_load_1hr_kw, 3),
             "recent_load_1hr_statistic_id": self.coordinator.data.recent_load_1hr_statistic_id,
             "recent_load_1hr_samples": self.coordinator.data.recent_load_1hr_samples,
             "recent_load_1hr_last_error": self.coordinator.data.recent_load_1hr_last_error,
-            "consumption_weighting": round(
-                self.coordinator.data.consumption_weighting, 2
+            "current_load_kw": round(self.coordinator.data.load_power_kw, 3),
+            # Debug fields for troubleshooting mode decisions
+            "debug_forecast_slot_found": self.coordinator.data.debug_forecast_slot_found,
+            "debug_forecast_slot_time": self.coordinator.data.debug_forecast_slot_time,
+            "debug_first_forecast_slot_time": self.coordinator.data.debug_first_forecast_slot_time,
+            "debug_time_gap_seconds": round(
+                self.coordinator.data.debug_time_gap_seconds, 1
             ),
+            "debug_mode_source": self.coordinator.data.debug_mode_source,
+            # Export permission
             "allow_export": self.coordinator.data.allow_export,
-            # Forecast cost totals (rest of today)
-            "forecast_import_cost": round(
-                self.coordinator.data.forecast_import_cost or 0.0, 2
-            ),
-            "forecast_export_revenue": round(
-                self.coordinator.data.forecast_export_revenue or 0.0, 2
-            ),
-            "forecast_net_cost": round(
-                self.coordinator.data.forecast_net_cost or 0.0, 2
-            ),
-            "forecast_grid_charge_cost": round(
-                self.coordinator.data.forecast_grid_charge_cost or 0.0, 2
-            ),
-            "forecast_proactive_export_revenue": round(
-                self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
-            ),
             # Weather correlation visibility (Issue #61)
             "weather_entity_id": self.coordinator.data.weather_entity_id,
             "weather_temperature_current": self.coordinator.data.weather_temperature_current,
