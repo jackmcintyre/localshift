@@ -1,19 +1,27 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.7
+    rev: v0.15.2
     hooks:
       - id: ruff
         args: ["--fix"]
       - id: ruff-format
 
   - repo: https://github.com/jendrikseipp/vulture
-    rev: v2.11
+    rev: v2.14
     hooks:
       - id: vulture
         args: ["custom_components/localshift", "--min-confidence", "80"]
 
+  - repo: local
+    hooks:
+      - id: bandit
+        name: bandit
+        entry: bandit
+        args: ["-r", "custom_components/localshift", "-x", "tests/"]
+        language: system
+        pass_filenames: false
+
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.394
+    rev: v1.1.408
     hooks:
       - id: pyright
-
