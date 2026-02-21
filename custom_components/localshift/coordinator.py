@@ -458,6 +458,11 @@ class LocalShiftCoordinator:
                 self._computation_engine.async_learn_weather_sample(self.data),
                 "localshift_weather_learning",
             )
+            # Compute forecast accuracy metrics (Issue #37 Phase 2)
+            self.hass.async_create_task(
+                self._computation_engine.async_compute_forecast_accuracy(self.data),
+                "localshift_forecast_accuracy",
+            )
 
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently

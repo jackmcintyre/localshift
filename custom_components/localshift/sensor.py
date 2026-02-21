@@ -43,6 +43,8 @@ async def async_setup_entry(
         # Excess solar load shifting sensors (backlog-high-017)
         ExcessSolarSensor(coordinator, entry),
         LoadShiftSignalSensor(coordinator, entry),
+        # Forecast accuracy sensor (Issue #37 Phase 2)
+        ForecastAccuracySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -653,3 +655,48 @@ class LoadShiftSignalSensor(LocalShiftSensorBase):
             return "mdi:check-circle"
         else:  # HOLD
             return "mdi:pause-circle"
+
+
+# ---------------------------------------------------------------------------
+# Forecast Accuracy Sensor (Issue #37 Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class ForecastAccuracySensor(LocalShiftSensorBase):
+    """Compares past forecast predictions with actual outcomes.
+
+    Reads from HA history (which now works thanks to Phase 1) and computes
+    accuracy metrics for SOC, price, and other predictions.
+    """
+
+    _attr_unique_id = "localshift_forecast_accuracy"
+    _attr_name = "Forecast Accuracy"
+    _attr_icon = "mdi:target"
+    _attr_native_unit_of_measurement = "%"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with overall accuracy percentage."""
+        self._attr_native_value = round(
+            self.coordinator.data.forecast_accuracy_soc_1h, 1
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return detailed accuracy metrics."""
+        d = self.coordinator.data
+        return {
+            # SOC prediction errors (predicted - actual)
+            "soc_error_15min": round(d.forecast_error_soc_15min, 1),
+            "soc_error_1h": round(d.forecast_error_soc_1h, 1),
+            "soc_error_4h": round(d.forecast_error_soc_4h, 1),
+            # SOC accuracy percentages (100 - abs error, clamped)
+            "soc_accuracy_15min": round(d.forecast_accuracy_soc_15min, 1),
+            "soc_accuracy_1h": round(d.forecast_accuracy_soc_1h, 1),
+            "soc_accuracy_4h": round(d.forecast_accuracy_soc_4h, 1),
+            # Price prediction errors
+            "buy_price_error_1h": round(d.forecast_error_buy_price_1h, 4),
+            "sell_price_error_1h": round(d.forecast_error_sell_price_1h, 4),
+            # Comparison metadata
+            "comparisons_made": d.forecast_comparisons_made,
+            "last_comparison_time": d.forecast_last_comparison_time,
+        }

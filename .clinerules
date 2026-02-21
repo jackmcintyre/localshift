@@ -285,12 +285,12 @@ Before committing changes that affect entities:
 ### Current Entity Counts (as of 2026-02-21):
 | Category | Count |
 |----------|-------|
-| Sensors | 15 |
+| Sensors | 16 |
 | Binary Sensors | 9 |
 | Switches | 10 |
 | Numbers | 8 |
 | Buttons | 5 |
-| **Total** | **47** |
+| **Total** | **48** |
 
 When these counts change, update:
 - This file (`.clinerules`)

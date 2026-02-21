@@ -80,7 +80,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (15)
+### Sensors (16)
 
 | Entity ID | Description |
 |---|---|
@@ -99,6 +99,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_target_soc_minimum` | Minimum target SOC for discharge modes |
 | `sensor.localshift_excess_solar_kwh` | Forecasted excess solar for load shifting |
 | `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
+| `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |
 
 ### Binary Sensors (9)
 
