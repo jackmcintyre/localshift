@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BACKUP_RESERVE_MAX_VALID,
+    CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
+    DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
@@ -65,6 +68,8 @@ class StateMachine:
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
+        # Track grid charging target reserve (clamped for Tesla firmware compatibility)
+        self._grid_charging_reserve: int | None = None
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
@@ -242,6 +247,48 @@ class StateMachine:
                 if desired == self._commanded_mode:
                     self._mode_desired_since.clear()
 
+                    # --- SOC-based charge target enforcement ---
+                    # For BOOST_CHARGING: Always uses autonomous+100, so SOC monitoring stops at target.
+                    # For GRID_CHARGING: Uses backup mode with clamped reserve (80 for targets 81-99),
+                    # so SOC monitoring is only needed when target is in 81-99% range.
+                    if self._commanded_mode in (
+                        BatteryMode.GRID_CHARGING,
+                        BatteryMode.BOOST_CHARGING,
+                    ):
+                        battery_target = float(
+                            self._get_option(
+                                CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
+                            )
+                        )
+                        # Determine if SOC monitoring is needed:
+                        # - BOOST_CHARGING: always (uses reserve=100)
+                        # - GRID_CHARGING: only when target is 81-99% (reserve clamped to 80)
+                        needs_soc_monitoring = (
+                            self._commanded_mode == BatteryMode.BOOST_CHARGING
+                            or (
+                                self._commanded_mode == BatteryMode.GRID_CHARGING
+                                and BACKUP_RESERVE_MAX_VALID < battery_target < 100
+                            )
+                        )
+                        if needs_soc_monitoring and data.soc >= battery_target:
+                            _LOGGER.info(
+                                "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
+                                data.soc,
+                                battery_target,
+                                self._commanded_mode.value,
+                            )
+                            transition_success = await self._execute_mode_transition(
+                                data, BatteryMode.SELF_CONSUMPTION
+                            )
+                            if transition_success:
+                                old_mode = self._commanded_mode
+                                self._commanded_mode = BatteryMode.SELF_CONSUMPTION
+                                self._mode_desired_since.clear()
+                                await self._notification_service.send_transition_notification(
+                                    old_mode, BatteryMode.SELF_CONSUMPTION, data
+                                )
+                            return
+
                     # --- Periodic health check (every minute) ---
                     # Verify hardware state matches commanded state
                     # This catches drift from manual changes, power outages, etc.
@@ -381,11 +428,29 @@ class StateMachine:
                     _LOGGER.error("Demand block mode transition FAILED")
 
             elif target == BatteryMode.GRID_CHARGING:
+                # Get battery target for grid charging
+                battery_target = float(
+                    self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+                )
+                # Calculate clamped reserve for Tesla firmware compatibility
+                if battery_target <= BACKUP_RESERVE_MAX_VALID:
+                    reserve = int(battery_target)
+                elif battery_target >= 100:
+                    reserve = 100
+                else:
+                    reserve = BACKUP_RESERVE_MAX_VALID  # 81-99% clamped to 80
+
                 transition_success = await self._battery_controller.set_force_charge(
-                    data, dry_run
+                    data, dry_run, target_soc=battery_target
                 )
                 if transition_success:
-                    _LOGGER.info("Grid charging mode transition completed")
+                    # Track the reserve for health checks
+                    self._grid_charging_reserve = reserve
+                    _LOGGER.info(
+                        "Grid charging mode transition completed (target=%.0f%%, reserve=%d%%)",
+                        battery_target,
+                        reserve,
+                    )
                 else:
                     _LOGGER.error("Grid charging mode transition FAILED")
 
@@ -471,7 +536,10 @@ class StateMachine:
         elif mode == BatteryMode.DEMAND_BLOCK:
             return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.GRID_CHARGING:
-            return ("backup", 10, TESLEMETRY_EXPORT_PV_ONLY)
+            # Grid charging uses backup mode for 3.3 kW rate.
+            # Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
+            # The actual reserve is tracked in _grid_charging_reserve.
+            return ("backup", -1, TESLEMETRY_EXPORT_PV_ONLY)  # reserve is dynamic
         elif mode == BatteryMode.BOOST_CHARGING:
             return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY)
         elif mode == BatteryMode.SPIKE_DISCHARGE:
@@ -561,6 +629,13 @@ class StateMachine:
             and self._proactive_export_reserve is not None
         ):
             expected_reserve = int(self._proactive_export_reserve)
+
+        # For GRID_CHARGING, use the tracked clamped reserve
+        if (
+            self._commanded_mode == BatteryMode.GRID_CHARGING
+            and self._grid_charging_reserve is not None
+        ):
+            expected_reserve = self._grid_charging_reserve
 
         # Use quick verification from battery controller
         is_valid = await self._battery_controller.verify_current_state(

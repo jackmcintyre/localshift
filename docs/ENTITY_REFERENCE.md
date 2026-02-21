@@ -4,7 +4,7 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **48 entities** grouped under a single "LocalShift" device:
+The integration creates **52 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
@@ -442,21 +442,29 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 **Purpose:** Overall integration health status.
 
-**State:** One of "ok", "degraded", or "error" based on entity availability.
+Added in Issue #94 to provide a simple status indicator for dashboards.
+
+**State:** One of the following status strings:
+
+| Status | Meaning |
+|--------|---------|
+| `ok` | All required entities are available |
+| `degraded` | Some optional entities unavailable |
+| `error` | Required entities are unavailable |
 
 **Attributes:**
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `message` | string | Status message explaining the current state |
-| `error_count` | int | Number of entities with errors |
-| `warning_count` | int | Number of entities with warnings |
+| `message` | string | Human-readable status message |
+| `error_count` | int | Number of entity errors |
+| `warning_count` | int | Number of entity warnings |
 | `required_entities_healthy` | bool | Whether all required entities are healthy |
-| `errors` | list | List of entity error details |
-| `warnings` | list | List of entity warning details |
-| `last_check` | datetime | When the health check was last performed |
+| `errors` | list | List of error messages |
+| `warnings` | list | List of warning messages |
+| `last_check` | string | ISO timestamp of last health check |
 
-**Icon:** Dynamic based on status (check-circle for ok, alert-circle for degraded, close-circle for error)
+**Icon:** Dynamic (check-circle for ok, alert-circle for degraded, close-circle for error)
 
 ---
 
@@ -464,17 +472,19 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 **Purpose:** Detailed health status for all tracked entities.
 
-**State:** Count of healthy entities out of total tracked entities (e.g., "8/10").
+Added in Issue #94 for detailed diagnostics and troubleshooting.
+
+**State:** Count of healthy entities (e.g., `12/15`)
 
 **Attributes:**
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `entities` | dict | Detailed health information for each entity |
-| `errors` | list | List of entity error details |
-| `warnings` | list | List of entity warning details |
+| `entities` | dict | Per-entity health status with details |
+| `errors` | list | List of error messages |
+| `warnings` | list | List of warning messages |
 
-**Use Case:** Provides detailed diagnostics for troubleshooting entity issues and integration health.
+**Use Case:** Troubleshoot entity availability issues. Each entity entry includes status, last seen time, and error details.
 
 ---
 
@@ -577,19 +587,24 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 **Purpose:** Whether Tesla has taken control of the Powerwall (Storm Watch, Grid Event, VPP).
 
-**State:** `on` when Tesla override is active, `off` otherwise
+Added in Issue #110 to provide visibility into when Tesla has override control.
+
+**State:** `on` when Tesla has control, `off` otherwise
+
+**Behavior:**
+When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_reserve` to 80% and `operation_mode` to `self_consumption`, ignoring external API commands until the event ends. This sensor detects when that override is active.
 
 **Attributes:**
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `operation_mode` | string | Current operation mode |
+| `operation_mode` | string | Current Powerwall operation mode |
 | `backup_reserve` | float | Current backup reserve percentage |
-| `description` | string | Description of the override state |
+| `description` | string | Human-readable status description |
 
-**Icon:** Dynamic (shield-alert when on, shield-check when off)
+**Icon:** Dynamic (shield-alert when active, shield-check when inactive)
 
-**Use Case:** Provides visibility into when Tesla has control of the Powerwall, which can override LocalShift commands during Storm Watch, Grid Events, or VPP events.
+**Use Case:** When this sensor is `on`, LocalShift automation will pause and wait for Tesla to release control. No need to manually intervene.
 
 ---
 

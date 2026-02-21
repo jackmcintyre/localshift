@@ -11,8 +11,8 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
-    CHARGE_RATE_BACKUP_KW,
     CHARGE_RATE_BOOST_KW,
+    CHARGE_RATE_GRID_KW,
     CHARGE_RATE_SOLAR_KW,
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
@@ -343,7 +343,7 @@ class ForecastComputer:
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery discharge
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
+            max_slot_transfer_kwh = CHARGE_RATE_GRID_KW * slot_fraction
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -511,7 +511,12 @@ class ForecastComputer:
         # NOTE: Hysteresis only applies to the current real-time slot to prevent hardware
         # flip-flopping. Future forecast slots should always run through solar simulation
         # for optimal planning.
-        if is_current_slot and is_currently_grid_charging and price_is_cheap and gap_to_target > 0:
+        if (
+            is_current_slot
+            and is_currently_grid_charging
+            and price_is_cheap
+            and gap_to_target > 0
+        ):
             # Continue charging - don't stop just because solar *might* reach target
             # The forecast could be optimistic; real-time conditions may differ
             _LOGGER.info(
@@ -844,7 +849,7 @@ class ForecastComputer:
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply realistic battery limits (no grid charging in this simulation)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
+            max_slot_transfer_kwh = CHARGE_RATE_GRID_KW * slot_fraction
 
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
@@ -931,7 +936,7 @@ class ForecastComputer:
             net_kwh = solar_kwh - consumption_kwh
 
             # Apply battery discharge (negative net = discharge)
-            max_slot_transfer_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
+            max_slot_transfer_kwh = CHARGE_RATE_GRID_KW * slot_fraction
             if net_kwh >= 0:
                 delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
             else:
@@ -2338,7 +2343,7 @@ class ForecastComputer:
 
             # Scale charge-rate caps to this slot's duration
             max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
-            max_grid_charge_kwh = CHARGE_RATE_BACKUP_KW * slot_fraction
+            max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction
 
             # Use single source of truth for grid charging decision
             # Get allow_dw_entry_under_target from data (set by computation_engine)

@@ -46,9 +46,15 @@ TESLEMETRY_EXPORT_PV_ONLY = "pv_only"
 TESLEMETRY_EXPORT_BATTERY_OK = "battery_ok"
 
 # Teslemetry power charge thresholds
-CHARGE_RATE_BACKUP_KW = 3.3  # Force charge rate (backup mode - grid charging)
-CHARGE_RATE_BOOST_KW = 5.0  # Boost charge rate (5kW)
+CHARGE_RATE_GRID_KW = 3.3  # Grid charging rate (backup mode)
+CHARGE_RATE_BOOST_KW = 5.0  # Boost charge rate (autonomous mode)
 CHARGE_RATE_SOLAR_KW = 5.0  # Max solar-to-battery charge rate (inverter limit)
+
+# Tesla firmware (July 2025) silently resets backup reserve values 81-99% to 80%.
+# Valid backup reserve values: 0-80% or 100%
+BACKUP_RESERVE_MAX_VALID = (
+    80  # Maximum reserve that Tesla firmware accepts in backup mode
+)
 
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
