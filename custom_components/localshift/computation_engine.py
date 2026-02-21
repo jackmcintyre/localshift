@@ -173,6 +173,9 @@ class ComputationEngine:
         # History fetcher for historical load data (delegated to separate module)
         self._history_fetcher = HistoryFetcher(hass, entry)
 
+        # Weather correlation for temperature-based consumption prediction
+        self._weather_correlation: WeatherCorrelation | None = None
+
         # Forecast computer for 15-minute battery SOC forecasting
         # Pass day-aware profile function for issue-60
         self._forecast_computer = ForecastComputer(
@@ -180,13 +183,11 @@ class ComputationEngine:
             get_entity_id_func,
             self._get_historical_hourly_averages,
             self._get_profile_for_day,
+            weather_correlation=self._weather_correlation,
         )
 
         # Change tracker for forecast regeneration
         self._forecast_change_tracker = ForecastChangeTracker()
-
-        # Weather correlation for temperature-based consumption prediction
-        self._weather_correlation: WeatherCorrelation | None = None
 
         # Local cache properties (delegated to history_fetcher for storage)
         self._last_weighting: float = DEFAULT_LOAD_WEIGHT_RECENT
@@ -1527,10 +1528,12 @@ class ComputationEngine:
         try:
             self._weather_correlation = WeatherCorrelation(self.hass, self.entry)
             await self._weather_correlation.async_initialize()
+            self._forecast_computer.set_weather_correlation(self._weather_correlation)
             _LOGGER.info("Weather correlation initialized successfully")
         except Exception as e:
             _LOGGER.error("Failed to initialize weather correlation: %s", e)
             self._weather_correlation = None
+            self._forecast_computer.set_weather_correlation(None)
 
     async def async_learn_weather_sample(self, data: CoordinatorData) -> None:
         """Learn from current temperature/load observation.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime, time, timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import dt as dt_util
@@ -54,6 +55,7 @@ class ForecastComputer:
             [datetime], tuple[dict[int, float], dict[int, int], str]
         ]
         | None = None,
+        weather_correlation: Any | None = None,
     ) -> None:
         """Initialize forecast computer.
 
@@ -62,11 +64,17 @@ class ForecastComputer:
             get_entity_id_func: Function to get entity IDs by config key
             get_historical_func: Function to get historical hourly averages (combined profile)
             get_profile_for_day_func: Optional function to get day-aware profile (issue-60)
+            weather_correlation: Optional WeatherCorrelation instance for temperature-based adjustments
         """
         self.entry = entry
         self._get_entity_id = get_entity_id_func
         self._get_historical_hourly_averages = get_historical_func
         self._get_profile_for_day = get_profile_for_day_func
+        self._weather_correlation = weather_correlation
+
+    def set_weather_correlation(self, weather_correlation: Any | None) -> None:
+        """Set or clear WeatherCorrelation dependency at runtime."""
+        self._weather_correlation = weather_correlation
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -89,6 +97,7 @@ class ForecastComputer:
         current_hour: int | None,
         current_load_kw: float,
         recent_load_kw: float = 0.0,
+        temperature: float | None = None,
     ) -> tuple[float, str]:
         """Estimate hourly household consumption with time-distance-weighted blend.
 
@@ -97,6 +106,9 @@ class ForecastComputer:
 
         For distant hours (e.g., overnight when forecasting from midday),
         uses historical profile only to avoid overestimating load.
+
+        When temperature is provided and weather correlation is available with
+        sufficient confidence, applies temperature-based adjustments for heating/cooling.
 
         Returns tuple of (kW, source_tag).
         """
@@ -113,6 +125,10 @@ class ForecastComputer:
 
         # Check if we have valid historical data
         has_historical = historical_kw > 0
+
+        # Calculate base load using existing logic
+        base_load_kw = 0.0
+        base_source = ""
 
         # TIME-DISTANCE WEIGHTING: Only blend recent load for hours close to now
         # When current_hour is None (simulations without time context), skip blending
@@ -131,18 +147,53 @@ class ForecastComputer:
                 and recent_weight > 0
                 and has_historical
             ):
-                weighted = (recent_weight * recent_load_kw) + (
+                base_load_kw = (recent_weight * recent_load_kw) + (
                     historical_weight * historical_kw
                 )
-                return round(weighted, 3), "weighted_load"
+                base_source = "weighted_load"
 
         # Fallback to historical if available (primary path for distant hours)
-        if has_historical:
-            return round(historical_kw, 3), "profile_hour"
+        if not base_source and has_historical:
+            base_load_kw = historical_kw
+            base_source = "profile_hour"
 
         # Fallback to current load
-        base_kw = current_load_kw if current_load_kw > 0 else 0.6
-        return round(base_kw, 3), "live_load_fallback"
+        if not base_source:
+            base_load_kw = current_load_kw if current_load_kw > 0 else 0.6
+            base_source = "live_load_fallback"
+
+        # WEATHER CORRELATION: Apply temperature-based adjustment if available
+        # Only apply when:
+        # 1. Weather correlation is initialized
+        # 2. Temperature is provided
+        # 3. We have base load to adjust
+        # 4. Confidence is medium or high (not low)
+        if (
+            self._weather_correlation is not None
+            and temperature is not None
+            and base_load_kw > 0
+        ):
+            # Get coefficients for this hour
+            coef = self._weather_correlation.get_coefficients_for_hour(slot_hour)
+            if coef is not None and coef.confidence in ("medium", "high"):
+                # Apply weather-based prediction
+                adjusted_load, adjustment_source = (
+                    self._weather_correlation.predict_load(
+                        hour=slot_hour,
+                        temperature=temperature,
+                        base_load_kw=base_load_kw,
+                    )
+                )
+                # Only use adjustment if it's not a fallback
+                if adjustment_source not in (
+                    "no_coefficients",
+                    "low_confidence",
+                    "invalid_hour",
+                ):
+                    return round(adjusted_load, 3), adjustment_source
+
+        # Return base load without weather adjustment
+        return round(base_load_kw, 3), base_source
 
     def _simulate_future_soc_with_solar_only(
         self,
@@ -2105,6 +2156,32 @@ class ForecastComputer:
         # Get all Solcast forecasts
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
 
+        # Weather temperature forecasts (hourly), keyed by local date/hour for fast lookup.
+        temperature_by_hour: dict[tuple[int, int, int, int], float] = {}
+        if self._weather_correlation is not None:
+            try:
+                for forecast in self._weather_correlation.get_temperature_forecast():
+                    if forecast.temperature is None:
+                        continue
+                    temp = float(forecast.temperature)
+                    slot_local = dt_util.as_local(forecast.slot_time)
+                    key = (
+                        slot_local.year,
+                        slot_local.month,
+                        slot_local.day,
+                        slot_local.hour,
+                    )
+                    # Keep first forecast for each hour.
+                    if key not in temperature_by_hour:
+                        temperature_by_hour[key] = temp
+            except Exception as err:
+                _LOGGER.debug(
+                    "Failed to read temperature forecast for load adjustment: %s", err
+                )
+
+        # Reset and re-populate during this forecast cycle.
+        data.weather_adjustment_applied = False
+
         # Publish consumption profile diagnostics for transparency
         data.consumption_source = (
             historical_load_source if historical_avg_kw else "live_load_fallback"
@@ -2179,6 +2256,9 @@ class ForecastComputer:
         for offset in range(96):
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
+            slot_temp = temperature_by_hour.get(
+                (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
+            )
 
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
             load_kw, _ = self._estimate_hourly_consumption_kw(
@@ -2187,6 +2267,7 @@ class ForecastComputer:
                 current_hour,
                 data.load_power_kw,
                 recent_load_kw,
+                slot_temp,
             )
             consumption_kwh = load_kw / 4
             net_kwh = solar_kwh - consumption_kwh
@@ -2306,13 +2387,19 @@ class ForecastComputer:
                 get_solar_for_15min_slot(all_solcast, slot_start, debug_log=True)
 
             # Get expected consumption scaled to this slot's duration.
+            slot_temp = temperature_by_hour.get(
+                (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
+            )
             load_kw, load_source = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
                 current_hour,
                 data.load_power_kw,
                 recent_load_kw,
+                slot_temp,
             )
+            if load_source.startswith("weather_"):
+                data.weather_adjustment_applied = True
             if load_source != "profile_hour":
                 data.consumption_fallback_hours += 1
             consumption_source_counts[load_source] = (
