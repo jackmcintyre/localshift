@@ -11,7 +11,7 @@
 #   lovelace:
 #     mode: storage
 #     dashboards:
-#       localshift:
+#       local-shift:  # URL path requires a hyphen
 #         mode: yaml
 #         filename: dashboards/localshift.yaml
 #         title: LocalShift
