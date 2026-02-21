@@ -780,63 +780,30 @@ views:
               entity_id:
                 - sensor.localshift_battery_mode
 
-      # --- Daily Forecast ---
+      # --- Unified Forecast Table ---
       - type: grid
         cards:
           - type: heading
-            heading: 24-Hour Forecast (all slots)
+            heading: 24-Hour Forecast (Unified)
             heading_style: title
 
           - type: markdown
             content: |
+              **Grid Summary:** {{ state_attr('sensor.localshift_forecast_grid', 'grid_charge_slots') | default(0) }} grid charge slots, {{ state_attr('sensor.localshift_forecast_grid', 'proactive_export_slots') | default(0) }} proactive export slots | **Total Import:** {{ state_attr('sensor.localshift_forecast_grid', 'total_grid_import_kwh') | default(0) }} kWh | **Total Export:** {{ state_attr('sensor.localshift_forecast_grid', 'total_grid_export_kwh') | default(0) }} kWh
+              
+              **Price Thresholds:** Effective Cheap Price: ${{ state_attr('sensor.localshift_forecast_prices', 'effective_cheap_price') | default(0) }}/kWh | Cheap Charge Stop Price: ${{ state_attr('sensor.localshift_forecast_prices', 'cheap_charge_stop_price') | default(0) }}/kWh
+              
               ```
-              Time  | SOC (%) | Solar  | Load   | Net    | Buy $  | Sell $
-              ------|---------|--------|--------|--------|--------|--------
-              {%- for item in state_attr('sensor.localshift_forecast_daily', 'forecast_slots') | default([]) %}
-              {{ item.time }} | {{ "%.1f"|format(item.predicted_soc | float) }}     | {{ "%.3f"|format(item.solar_kwh | float) }} | {{ "%.3f"|format(item.consumption_kwh | float) }} | {{ "%.3f"|format(item.net_kwh | float) }} | {{ "%.3f"|format(item.buy_price | float(0)) }} | {{ "%.3f"|format(item.sell_price | float(0)) }}
+              Time  | SOC% | Solar  | Load   | Net    | Buy $  | Sell $ | GridIn | GridOut | GC | Boost | PE | Export
+              ------|------|--------|--------|--------|--------|--------|--------|---------|----|-------|----|--------
+              {%- set forecast_slots = state_attr('sensor.localshift_forecast_daily', 'forecast_slots') | default([]) %}
+              {%- set grid_data = state_attr('sensor.localshift_forecast_grid', 'grid_interaction') | default([]) %}
+              {%- set buy_prices = state_attr('sensor.localshift_forecast_prices', 'buy_prices') | default([]) %}
+              {%- set sell_prices = state_attr('sensor.localshift_forecast_prices', 'sell_prices') | default([]) %}
+              {%- for item in forecast_slots %}
+              {%- set grid_item = grid_data[loop.index0] | default({}) %}
+              {%- set buy_item = buy_prices[loop.index0] | default({}) %}
+              {%- set sell_item = sell_prices[loop.index0] | default({}) %}
+              {{ item.time }} | {{ "%.1f"|format(item.predicted_soc | float) }} | {{ "%.3f"|format(item.solar_kwh | float) }} | {{ "%.3f"|format(item.consumption_kwh | float) }} | {{ "%.3f"|format(item.net_kwh | float) }} | {{ "%.3f"|format(item.buy_price | float(0)) }} | {{ "%.3f"|format(item.sell_price | float(0)) }} | {{ "%.4f"|format(grid_item.grid_import_kwh | float) }} | {{ "%.4f"|format(grid_item.grid_export_kwh | float) }} | {{ 'Y' if grid_item.grid_charge else '-' }} | {{ 'Y' if grid_item.grid_charge_boost else '-' }} | {{ 'Y' if grid_item.proactive_export else '-' }} | {{ "%.4f"|format(grid_item.export_amount_kwh | float) }}
               {%- endfor %}
               ```
-
-      # --- Grid Interaction Forecast ---
-      - type: grid
-        cards:
-          - type: heading
-            heading: Grid Interaction Forecast
-            heading_style: title
-
-          - type: markdown
-            content: |
-              **Summary:** {{ state_attr('sensor.localshift_forecast_grid', 'grid_charge_slots') | default(0) }} grid charge slots, {{ state_attr('sensor.localshift_forecast_grid', 'proactive_export_slots') | default(0) }} proactive export slots
-              
-              **Total Import:** {{ state_attr('sensor.localshift_forecast_grid', 'total_grid_import_kwh') | default(0) }} kWh
-              
-              **Total Export:** {{ state_attr('sensor.localshift_forecast_grid', 'total_grid_export_kwh') | default(0) }} kWh
-              
-              ```
-              Time  | Grid In | Grid Out | GC | Boost | PE | Export
-              ------|---------|----------|----|-------|----|--------
-              {%- for item in state_attr('sensor.localshift_forecast_grid', 'grid_interaction') | default([]) %}
-              {{ item.time }} | {{ "%.4f"|format(item.grid_import_kwh | float) }} | {{ "%.4f"|format(item.grid_export_kwh | float) }} | {{ 'Y' if item.grid_charge else '-' }}  | {{ 'Y' if item.grid_charge_boost else '-' }}    | {{ 'Y' if item.proactive_export else '-' }}  | {{ "%.4f"|format(item.export_amount_kwh | float) }}
-              {%- endfor %}
-              ```
-
-      # --- Price Forecast ---
-      - type: grid
-        cards:
-          - type: heading
-            heading: Price Forecast
-            heading_style: title
-
-          - type: markdown
-            content: |
-              **Effective Cheap Price:** ${{ state_attr('sensor.localshift_forecast_prices', 'effective_cheap_price') | default(0) }}/kWh
-              
-              **Cheap Charge Stop Price:** ${{ state_attr('sensor.localshift_forecast_prices', 'cheap_charge_stop_price') | default(0) }}/kWh
-              
-              ```
-              Time  | Buy $  | Sell $
-              ------|--------|--------
-              {%- for item in state_attr('sensor.localshift_forecast_prices', 'buy_prices') | default([]) %}
-              {%- set sell_item = state_attr('sensor.localshift_forecast_prices', 'sell_prices')[loop.index0] | default({}) %}
-              {{ item.time }} | {{ "%.3f"|format(item.price | float(0)) }} | {{ "%.3f"|format(sell_item.price | float(0)) }}
-              {%- endfor %}
