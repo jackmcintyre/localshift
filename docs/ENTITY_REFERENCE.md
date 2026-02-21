@@ -4,12 +4,12 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **51 entities** grouped under a single "LocalShift" device:
+The integration creates **52 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 18 | `sensor` |
-| Binary Sensors | 10 | `binary_sensor` |
+| Binary Sensors | 11 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 8 | `number` |
 | Buttons | 5 | `button` |
@@ -336,7 +336,7 @@ Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 | `weather_condition` | string | Current weather condition |
 | `weather_correlation_confidence` | string | low/medium/high |
 | `weather_adjustment_applied` | bool | Weather adjustment used |
-| `weather_learning_enabled` | bool | Learning enabled |
+| `weather_learning_enabled` | string | Learning enabled |
 | `weather_cooling_coefficient` | float | Cooling coefficient (kW/°C) |
 | `weather_heating_coefficient` | float | Heating coefficient (kW/°C) |
 | `weather_sample_count` | int | Learning samples collected |
@@ -565,7 +565,7 @@ Added in Issue #94 for detailed diagnostics and troubleshooting.
 
 ### 9. binary_sensor.localshift_excess_solar_available
 
-**Purpose:** Simple ON/OFF trigger for basic load-shifting automations.
+**Purpose:** Simple ON/OFF trigger for basic automations - excess solar available.
 
 **State:** `on` when excess solar is available and safe to add load, `off` otherwise
 
@@ -605,6 +605,21 @@ When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_r
 **Icon:** Dynamic (shield-alert when active, shield-check when inactive)
 
 **Use Case:** When this sensor is `on`, LocalShift automation will pause and wait for Tesla to release control. No need to manually intervene.
+
+---
+
+### 11. binary_sensor.localshift_forecast_expensive_period
+
+**Purpose:** Whether an expensive period is forecast within lookahead.
+
+**State:** `on` if any price exceeds `max_precharge_price`, `off` otherwise
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `max_forecast_price` | float | Maximum feed-in price in forecast |
+| `max_buy_forecast_price` | float | Maximum buy price in forecast |
 
 ---
 
@@ -914,9 +929,9 @@ External Inputs (Teslemetry/Amber/Solcast)
          │         ├─► Cost Tracker
          │         └─► State Machine (determines desired mode)
          │
-         └─► Battery Controller (executes commands)
+         └► Battery Controller (executes commands)
                    │
-                   └─► Teslemetry (controls Powerwall)
+                   └► Teslemetry (controls Powerwall)
 
 Sensors/Binary Sensors display computed values
 Switches/Numbers control configuration
