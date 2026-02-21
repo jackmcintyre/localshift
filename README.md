@@ -80,7 +80,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (16)
+### Sensors (18)
 
 | Entity ID | Description |
 |---|---|
@@ -100,8 +100,10 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_excess_solar_kwh` | Forecasted excess solar for load shifting |
 | `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
 | `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |
+| `sensor.localshift_integration_status` | Overall integration health status (ok/degraded/error) |
+| `sensor.localshift_entity_health` | Detailed health status for all tracked entities |
 
-### Binary Sensors (9)
+### Binary Sensors (11)
 
 | Entity ID | Description |
 |---|---|
@@ -114,6 +116,8 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `binary_sensor.localshift_solar_can_reach_target` | Solar forecast can reach battery target before DW |
 | `binary_sensor.localshift_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
 | `binary_sensor.localshift_excess_solar_available` | Excess solar available for load shifting |
+| `binary_sensor.localshift_tesla_override_active` | Whether Tesla has taken control (Storm Watch, Grid Event, VPP) |
+| `binary_sensor.localshift_forecast_expensive_period` | Whether expensive period is forecast within lookahead |
 
 ### Switches (10)
 

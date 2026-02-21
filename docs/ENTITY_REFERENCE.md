@@ -8,8 +8,8 @@ The integration creates **48 entities** grouped under a single "LocalShift" devi
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 16 | `sensor` |
-| Binary Sensors | 9 | `binary_sensor` |
+| Sensors | 18 | `sensor` |
+| Binary Sensors | 11 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 8 | `number` |
 | Buttons | 5 | `button` |
@@ -336,7 +336,7 @@ Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 | `weather_condition` | string | Current weather condition |
 | `weather_correlation_confidence` | string | low/medium/high |
 | `weather_adjustment_applied` | bool | Weather adjustment used |
-| `weather_learning_enabled` | bool | Learning enabled |
+| `weather_learning_enabled` | string | Learning enabled |
 | `weather_cooling_coefficient` | float | Cooling coefficient (kW/°C) |
 | `weather_heating_coefficient` | float | Heating coefficient (kW/°C) |
 | `weather_sample_count` | int | Learning samples collected |
@@ -438,6 +438,46 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 ---
 
+### 17. sensor.localshift_integration_status
+
+**Purpose:** Overall integration health status.
+
+**State:** One of "ok", "degraded", or "error" based on entity availability.
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `message` | string | Status message explaining the current state |
+| `error_count` | int | Number of entities with errors |
+| `warning_count` | int | Number of entities with warnings |
+| `required_entities_healthy` | bool | Whether all required entities are healthy |
+| `errors` | list | List of entity error details |
+| `warnings` | list | List of entity warning details |
+| `last_check` | datetime | When the health check was last performed |
+
+**Icon:** Dynamic based on status (check-circle for ok, alert-circle for degraded, close-circle for error)
+
+---
+
+### 18. sensor.localshift_entity_health
+
+**Purpose:** Detailed health status for all tracked entities.
+
+**State:** Count of healthy entities out of total tracked entities (e.g., "8/10").
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `entities` | dict | Detailed health information for each entity |
+| `errors` | list | List of entity error details |
+| `warnings` | list | List of entity warning details |
+
+**Use Case:** Provides detailed diagnostics for troubleshooting entity issues and integration health.
+
+---
+
 ## Binary Sensors
 
 ### 1. binary_sensor.localshift_demand_window
@@ -515,7 +555,7 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 ### 9. binary_sensor.localshift_excess_solar_available
 
-**Purpose:** Simple ON/OFF trigger for basic load-shifting automations.
+**Purpose:** Simple ON/OFF trigger for basic automations - excess solar available.
 
 **State:** `on` when excess solar is available and safe to add load, `off` otherwise
 
@@ -530,6 +570,41 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 | `safe_additional_load_kw` | float | Max kW that can be safely added |
 
 **Icon:** Dynamic (solar-power-variant when on, solar-power-variant-outline when off)
+
+---
+
+### 10. binary_sensor.localshift_tesla_override_active
+
+**Purpose:** Whether Tesla has taken control of the Powerwall (Storm Watch, Grid Event, VPP).
+
+**State:** `on` when Tesla override is active, `off` otherwise
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `operation_mode` | string | Current operation mode |
+| `backup_reserve` | float | Current backup reserve percentage |
+| `description` | string | Description of the override state |
+
+**Icon:** Dynamic (shield-alert when on, shield-check when off)
+
+**Use Case:** Provides visibility into when Tesla has control of the Powerwall, which can override LocalShift commands during Storm Watch, Grid Events, or VPP events.
+
+---
+
+### 11. binary_sensor.localshift_forecast_expensive_period
+
+**Purpose:** Whether an expensive period is forecast within lookahead.
+
+**State:** `on` if any price exceeds `max_precharge_price`, `off` otherwise
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `max_forecast_price` | float | Maximum feed-in price in forecast |
+| `max_buy_forecast_price` | float | Maximum buy price in forecast |
 
 ---
 
@@ -839,9 +914,9 @@ External Inputs (Teslemetry/Amber/Solcast)
          │         ├─► Cost Tracker
          │         └─► State Machine (determines desired mode)
          │
-         └─► Battery Controller (executes commands)
+         └► Battery Controller (executes commands)
                    │
-                   └─► Teslemetry (controls Powerwall)
+                   └► Teslemetry (controls Powerwall)
 
 Sensors/Binary Sensors display computed values
 Switches/Numbers control configuration
