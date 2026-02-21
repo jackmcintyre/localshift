@@ -283,6 +283,8 @@ class ComputationEngine:
         )
 
         # ---- Step 6b: solar_can_reach_target_in_dw ----
+        # MOVED BEFORE solar_battery_forecast so boost_needed can use this flag.
+        # This ensures the diagnostic boost_needed matches the actual decision logic.
         # Read from switch state (device-level toggle)
         allow_dw_under_target = self._get_switch_state(
             SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
@@ -290,12 +292,12 @@ class ComputationEngine:
 
         if allow_dw_under_target and before_dw:
             # Simulate solar-only charging through entire DW period
-            dw_end_time = self._parse_time_option(
+            dw_end_time_obj = self._parse_time_option(
                 CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
             )
             sim_end = now_dt.replace(
-                hour=dw_end_time.hour,
-                minute=dw_end_time.minute,
+                hour=dw_end_time_obj.hour,
+                minute=dw_end_time_obj.minute,
                 second=0,
                 microsecond=0,
             )
@@ -329,7 +331,7 @@ class ComputationEngine:
                 "DW end=%s, solar can reach=%s",
                 data.soc,
                 target_pct,
-                dw_end_time.strftime("%H:%M"),
+                dw_end_time_obj.strftime("%H:%M"),
                 can_reach,
             )
         else:
@@ -516,8 +518,23 @@ class ComputationEngine:
                 # Net solar (after consumption) - solar only, no grid charging
                 net_solar = solar_kwh - consumption_kwh
 
-                # Boost needed if solar alone can't reach target
-                boost_needed = data.soc < target_pct and net_solar < deficit_kwh
+                # Boost needed if solar alone can't reach target.
+                # When allow_dw_entry_under_target is enabled, use solar_can_reach_target_in_dw
+                # which simulates solar charging through the DW period (not just to DW START).
+                # This ensures the diagnostic flag matches the actual decision logic.
+                allow_dw_under_target = self._get_switch_state(
+                    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
+                )
+                if allow_dw_under_target and hasattr(
+                    data, "solar_can_reach_target_in_dw"
+                ):
+                    # Use the DW-extended simulation result for consistency
+                    boost_needed = (
+                        data.soc < target_pct and not data.solar_can_reach_target_in_dw
+                    )
+                else:
+                    # Standard calculation: boost needed if solar alone can't reach target before DW
+                    boost_needed = data.soc < target_pct and net_solar < deficit_kwh
             else:
                 # Fallback if detailed forecast unavailable (shouldn't normally happen)
                 # Hours remaining until DW start
