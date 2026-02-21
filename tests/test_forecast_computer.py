@@ -71,6 +71,84 @@ def test_estimate_hourly_consumption_fallback(mock_entry, mock_get_entity_id):
     assert source == "live_load_fallback"
 
 
+def test_estimate_hourly_consumption_applies_weather_adjustment(
+    mock_entry, mock_get_entity_id
+):
+    """Uses weather-adjusted prediction when confidence is medium/high."""
+
+    class _Coeff:
+        confidence = "medium"
+
+    class _Weather:
+        def get_coefficients_for_hour(self, _hour):
+            return _Coeff()
+
+        def predict_load(self, hour, temperature, base_load_kw):
+            assert hour == 17
+            assert temperature == 35.0
+            return base_load_kw + 0.4, "weather_cooling"
+
+    entry = mock_entry
+    entry.options = {"load_weight_recent": 0.7}
+
+    computer = ForecastComputer(
+        entry,
+        mock_get_entity_id,
+        lambda x: {},
+        weather_correlation=_Weather(),
+    )
+
+    kw, source = computer._estimate_hourly_consumption_kw(
+        {17: 0.6},
+        17,
+        17,
+        0.4,
+        0.5,
+        temperature=35.0,
+    )
+
+    assert source == "weather_cooling"
+    assert kw > 0.6
+
+
+def test_estimate_hourly_consumption_skips_low_confidence_weather(
+    mock_entry, mock_get_entity_id
+):
+    """Falls back to base source when weather model confidence is low."""
+
+    class _Coeff:
+        confidence = "low"
+
+    class _Weather:
+        def get_coefficients_for_hour(self, _hour):
+            return _Coeff()
+
+        def predict_load(self, hour, temperature, base_load_kw):  # pragma: no cover
+            return base_load_kw + 1.0, "weather_cooling"
+
+    entry = mock_entry
+    entry.options = {"load_weight_recent": 0.7}
+
+    computer = ForecastComputer(
+        entry,
+        mock_get_entity_id,
+        lambda x: {},
+        weather_correlation=_Weather(),
+    )
+
+    kw, source = computer._estimate_hourly_consumption_kw(
+        {17: 0.6},
+        17,
+        17,
+        0.4,
+        0.5,
+        temperature=35.0,
+    )
+
+    assert source == "weighted_load"
+    assert kw == pytest.approx(0.53, rel=0.01)
+
+
 def test_find_negative_fit_windows_no_negatives(mock_entry, mock_get_entity_id):
     """Test negative FIT window detection with no negative prices."""
     entry = mock_entry

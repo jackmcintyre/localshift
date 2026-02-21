@@ -1,7 +1,7 @@
 """Unit tests for ComputationEngine."""
 
 from datetime import datetime, time, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -592,3 +592,26 @@ class TestComputeDaily15MinForecast:
             computation_engine._compute_daily_15min_forecast(coordinator_data, now_dt)
             # Should have empty forecast
             assert coordinator_data.daily_forecast == []
+
+
+@pytest.mark.asyncio
+async def test_async_initialize_weather_correlation_updates_forecast_computer(
+    computation_engine,
+):
+    """Weather initialization should wire correlation into ForecastComputer."""
+    computation_engine.entry.options["weather_learning_enabled"] = True
+
+    with patch(
+        "custom_components.localshift.computation_engine.WeatherCorrelation"
+    ) as mock_weather_cls:
+        mock_weather = MagicMock()
+        mock_weather.async_initialize = AsyncMock(return_value=None)
+        mock_weather_cls.return_value = mock_weather
+
+        with patch.object(
+            computation_engine._forecast_computer,
+            "set_weather_correlation",
+        ) as mock_set_weather:
+            await computation_engine.async_initialize_weather_correlation()
+
+        mock_set_weather.assert_called_once_with(mock_weather)
