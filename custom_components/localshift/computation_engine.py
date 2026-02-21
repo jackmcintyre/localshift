@@ -32,6 +32,7 @@ from .const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
+    CONF_LOAD_WEIGHT_RECENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     CONF_SPIKE_PRICE_PERCENTILE,
@@ -1337,11 +1338,27 @@ class ComputationEngine:
     def _get_expected_load_kw(
         self, data: CoordinatorData, hours_to_target: float
     ) -> float:
-        """Calculate expected load based on 7-day historical averages."""
+        """Calculate expected load based on 7-day historical averages with time-distance weighting.
+
+        Uses time-distance weighting consistent with forecast slots:
+        - For hours close to current time: blend recent load with historical
+        - For distant hours: use historical profile only
+
+        This prevents overestimation when recent load is much lower than historical averages.
+        """
         load_entity_id = self._get_entity_id("teslemetry_load_power")
 
         # Get cached historical hourly averages
         hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+
+        # Get recent 1-hour load for weighted blending
+        recent_load_kw = self._recent_load_1hr_kw
+
+        # Get weighting configuration
+        recent_weight = float(
+            self.entry.options.get(CONF_LOAD_WEIGHT_RECENT, DEFAULT_LOAD_WEIGHT_RECENT)
+        )
+        historical_weight = 1.0 - recent_weight
 
         if hourly_avg_kw:
             # Sum hourly averages from current hour until demand window
@@ -1354,11 +1371,45 @@ class ComputationEngine:
 
             total_expected_kwh = 0.0
             hour = current_hour
+            hours_counted = 0
 
-            # Sum hours from now until target hour
+            # Sum hours from now until target hour with time-distance weighting
             while hour != target_hour:
-                if hour in hourly_avg_kw:
-                    total_expected_kwh += hourly_avg_kw[hour]
+                historical_kw = hourly_avg_kw.get(hour, 0.0)
+
+                # TIME-DISTANCE WEIGHTING: Only blend recent load for hours close to now
+                # Calculate distance from current hour (handles midnight wrap)
+                hour_distance = abs(hour - current_hour)
+                hour_distance = min(hour_distance, 24 - hour_distance)
+
+                # Only apply weighted blend for hours within 3 hours of current time
+                # Beyond that, recent load is NOT predictive
+                max_blend_distance = 3
+
+                if (
+                    hour_distance <= max_blend_distance
+                    and recent_load_kw > 0
+                    and recent_weight > 0
+                    and historical_kw > 0
+                ):
+                    # Blend recent load with historical for nearby hours
+                    load_kw = (recent_weight * recent_load_kw) + (
+                        historical_weight * historical_kw
+                    )
+                    _LOGGER.debug(
+                        "Load estimate for hour %d: %.2f kW (blended: recent=%.2f, hist=%.2f, distance=%d)",
+                        hour,
+                        load_kw,
+                        recent_load_kw,
+                        historical_kw,
+                        hour_distance,
+                    )
+                else:
+                    # Use historical only for distant hours
+                    load_kw = historical_kw
+
+                total_expected_kwh += load_kw
+                hours_counted += 1
                 hour = (hour + 1) % 24
                 # Safety: don't loop forever
                 if hour == current_hour:
@@ -1367,10 +1418,9 @@ class ComputationEngine:
             # Add 10% buffer to be conservative
             total_expected_kwh *= 1.1
 
-            if total_expected_kwh > 0:
-                return total_expected_kwh / max(
-                    hours_to_target, 1
-                )  # Return average kW, not total kWh
+            if total_expected_kwh > 0 and hours_counted > 0:
+                # Return average kW
+                return total_expected_kwh / max(hours_to_target, 1)
 
         # Fallback to current load or default
         current_load = data.load_power_kw if hasattr(data, "load_power_kw") else 0

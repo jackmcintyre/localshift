@@ -16,16 +16,20 @@ from ..const import (
     CHARGE_RATE_GRID_KW,
     CHARGE_RATE_SOLAR_KW,
     CONF_BATTERY_TARGET,
+    CONF_CHEAP_PRICE_PERCENTILE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_LOAD_WEIGHT_RECENT,
+    CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
+    DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_LOAD_WEIGHT_RECENT,
+    DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
 )
 from ..coordinator_data import CoordinatorData
@@ -458,6 +462,91 @@ class ForecastComputer:
     # Hysteresis margin for grid charging decisions (Issue #34)
     # Once grid charging starts, require this much margin above target before stopping
     GRID_CHARGE_HYSTERESIS_MARGIN_PCT = 5.0
+
+    def _calculate_local_effective_cheap_price(
+        self,
+        slot_start: datetime,
+        general_forecast: list[dict],
+        target_pct: float,
+        current_soc: float,
+        dw_start_time: time,
+        base_cheap_price: float,
+        max_price: float,
+    ) -> float:
+        """Calculate local effective cheap price for a specific slot.
+
+        Key insight: Urgency pricing should only apply to slots before TODAY's DW.
+        For slots after today's DW (targeting tomorrow's DW), use base price only.
+
+        This prevents evening slots from being gated by urgency pricing calculated
+        in the morning for today's target.
+
+        Args:
+            slot_start: Start time of the slot
+            general_forecast: Buy price forecast
+            target_pct: Target SOC percentage
+            current_soc: Current SOC percentage
+            dw_start_time: Demand window start time
+            base_cheap_price: Base percentile cheap price
+            max_price: Maximum allowed price
+
+        Returns:
+            Local effective cheap price for this slot
+        """
+        # Get today's DW start datetime
+        now_local = dt_util.now()
+        today_dw_start = now_local.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+
+        # Check if slot is before or after TODAY's DW
+        if slot_start < today_dw_start:
+            # Slot is before today's DW - urgency pricing may apply
+            # Calculate hours left until today's DW
+            hours_left = max((today_dw_start - slot_start).total_seconds() / 3600, 0)
+
+            # Check if there's a solar gap for today's target
+            # Simplified: if SOC is well below target, apply urgency
+            gap_to_target = target_pct - current_soc
+            solar_gap = gap_to_target > 5  # More than 5% gap = urgency
+
+            if solar_gap and hours_left < 8:
+                # Apply urgency pricing
+                urgency = max(min(1 - (hours_left / 8.0), 1.0), 0.0)
+                urgency_price = (
+                    base_cheap_price + (max_price - base_cheap_price) * urgency
+                )
+
+                # Find minimum forecast price before today's DW
+                min_forecast = max_price
+                for f in general_forecast:
+                    if not isinstance(f, dict):
+                        continue
+                    start_str = f.get("start_time")
+                    if not start_str:
+                        continue
+                    try:
+                        f_start = datetime.fromisoformat(start_str)
+                        f_local = dt_util.as_local(f_start)
+                    except ValueError:
+                        continue
+
+                    if f_local >= slot_start and f_local < today_dw_start:
+                        price = float(f.get("per_kwh", max_price))
+                        if price < min_forecast:
+                            min_forecast = price
+
+                forecast_floor = max(min_forecast + 0.02, base_cheap_price)
+                final = min(urgency_price, max_price)
+                final = max(final, forecast_floor)
+                return round(final, 2)
+
+        # Slot is after today's DW, or no urgency needed
+        # Use base price only - tomorrow has plenty of time for solar
+        return base_cheap_price
 
     def _should_grid_charge_at_slot(
         self,
@@ -2433,13 +2522,62 @@ class ForecastComputer:
             # This prevents flip-flopping when forecast is optimistic but real conditions differ
             is_currently_grid_charging = getattr(data, "force_charge_active", False)
 
+            # FIX #132: Calculate LOCAL effective cheap price for this slot
+            # The global effective_cheap_price is based on TODAY's DW urgency.
+            # For slots after today's DW (targeting tomorrow), use base price only.
+            max_price = float(
+                self.entry.options.get(
+                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                )
+            )
+            cheap_price_percentile = float(
+                self.entry.options.get(
+                    CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
+                )
+            )
+
+            # Calculate base cheap price from percentile of forecast prices
+            # This is the "no urgency" baseline
+            forecast_prices = []
+            for f in data.general_forecast:
+                if not isinstance(f, dict):
+                    continue
+                start_str = f.get("start_time")
+                if not start_str:
+                    continue
+                try:
+                    f_start = datetime.fromisoformat(start_str)
+                    f_local = dt_util.as_local(f_start)
+                except ValueError:
+                    continue
+                if f_local >= slot_start:
+                    forecast_prices.append(float(f.get("per_kwh", 0)))
+            if forecast_prices:
+                forecast_prices.sort()
+                idx = int(len(forecast_prices) * cheap_price_percentile / 100)
+                idx = min(idx, len(forecast_prices) - 1)
+                base_cheap_price = round(forecast_prices[idx], 2)
+            else:
+                base_cheap_price = data.effective_cheap_price
+
+            # Calculate slot-local effective cheap price (urgency only for today's DW)
+            local_effective_cheap_price = self._calculate_local_effective_cheap_price(
+                slot_start=slot_start,
+                general_forecast=data.general_forecast,
+                target_pct=target_pct,
+                current_soc=soc_at_slot_start,
+                dw_start_time=dw_start_time,
+                base_cheap_price=base_cheap_price,
+                max_price=max_price,
+            )
+
             should_grid_charge, should_boost = self._should_grid_charge_at_slot(
                 slot_start=slot_start,
                 solar_kwh=solar_kwh,
                 slot_price=_slot_price,
                 predicted_soc=soc_at_slot_start,
                 target_pct=target_pct,
-                effective_cheap_price=data.effective_cheap_price,
+                effective_cheap_price=local_effective_cheap_price,
                 is_before_dw=is_before_dw,
                 in_demand_window=in_demand_window,
                 gap_to_target=gap_to_target,
