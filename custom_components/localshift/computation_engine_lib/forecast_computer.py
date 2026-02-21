@@ -508,7 +508,10 @@ class ForecastComputer:
         # Only stop charging if:
         # 1. Price is no longer cheap, OR
         # 2. Solar simulation shows STRONG margin above target (target + hysteresis)
-        if is_currently_grid_charging and price_is_cheap and gap_to_target > 0:
+        # NOTE: Hysteresis only applies to the current real-time slot to prevent hardware
+        # flip-flopping. Future forecast slots should always run through solar simulation
+        # for optimal planning.
+        if is_current_slot and is_currently_grid_charging and price_is_cheap and gap_to_target > 0:
             # Continue charging - don't stop just because solar *might* reach target
             # The forecast could be optimistic; real-time conditions may differ
             _LOGGER.info(
