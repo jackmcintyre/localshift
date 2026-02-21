@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **44 entities** grouped under a single "LocalShift" device:
+The integration creates **47 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 12 | `sensor` |
+| Sensors | 15 | `sensor` |
 | Binary Sensors | 9 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 8 | `number` |
@@ -187,37 +187,163 @@ net_cost = grid_import_cost - grid_export_revenue
 
 ### 9. sensor.localshift_forecast_daily
 
-**Purpose:** Full 24-hour forecast with hybrid granularity (5-min near-term, 15-min long-term).
+**Purpose:** Core 24-hour forecast with SOC, solar, and consumption data.
 
-**State:** Count of forecast slots (112 total: 24 × 5-min + 88 × 15-min)
+Split from the original monolithic sensor to stay under Home Assistant's 16KB attribute limit (Issue #37). Related sensors: `forecast_prices`, `forecast_grid`, `forecast_diagnostics`.
+
+**State:** Count of forecast slots (96 × 15-min slots)
 
 **Attributes:**
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `forecast_slots` | list | All 112 forecast slots with compact keys |
+| `forecast_slots` | list | 96 slots with SOC, solar, consumption, prices |
+| `soc_series` | list | SOC time series for graphing `[{time, soc}, ...]` |
+| `slot_count` | int | Total number of forecast slots |
+| `solcast_today_entries` | int | Number of Solcast periods today |
+| `solcast_tomorrow_entries` | int | Number of Solcast periods tomorrow |
 | `forecast_hourly` | list | Hourly summary (24 entries) |
-| `soc_series_15min` | list | SOC at each slot |
-| `debug_15min_slots` | list | Key slots for debugging |
-| `forecast_15min_slots` | int | Total number of slots |
-| `solcast_today_entries` | int | Number of Solcast periods |
-| `solcast_tomorrow_entries` | int | Number of tomorrow periods |
-| `current_load_kw` | float | Current load estimation |
-| `consumption_source` | string | Source of consumption data |
-| `consumption_profile_hours` | int | Hours of profile data available |
-| `consumption_weighting` | float | Recent vs historical weighting |
-| `consumption_profile_type` | string | "weekday_weekend" or "combined_fallback" |
-| `weekday_sample_counts` | dict | Sample counts per hour for weekdays |
-| `weekend_sample_counts` | dict | Sample counts per hour for weekends |
-| `weekday_hourly_profile_kw` | dict | Weekday hourly consumption averages (kW) |
-| `weekend_hourly_profile_kw` | dict | Weekend hourly consumption averages (kW) |
-| `forecast_import_cost` | float | Expected grid import cost (rest of day) |
-| `forecast_export_revenue` | float | Expected grid export revenue (rest of day) |
-| `forecast_net_cost` | float | Expected net cost (rest of day) |
+
+**Forecast Slot Structure:**
+
+Each slot in `forecast_slots` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `time` | string | HH:MM format |
+| `hour` | int | Hour (0-23) |
+| `minute` | int | Minute (0, 15, 30, 45) |
+| `predicted_soc` | float | Predicted battery SOC (%) |
+| `solar_kwh` | float | Solar production (kWh) |
+| `consumption_kwh` | float | Estimated consumption (kWh) |
+| `net_kwh` | float | Net energy (solar - consumption) |
+| `buy_price` | float | Buy price ($/kWh) |
+| `sell_price` | float | Sell price ($/kWh) |
 
 ---
 
-### 10. sensor.localshift_target_soc_minimum
+### 10. sensor.localshift_forecast_prices
+
+**Purpose:** Price forecast data for history collection.
+
+Split from `forecast_daily` to stay under 16KB limit (Issue #37).
+
+**State:** Current effective cheap price ($/kWh)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `buy_prices` | list | 96-slot buy price time series |
+| `sell_prices` | list | 96-slot sell price time series |
+| `effective_cheap_price` | float | Current cheap price threshold |
+| `cheap_charge_stop_price` | float | Stop charging threshold |
+| `forecast_import_cost` | float | Expected import cost (rest of day) |
+| `forecast_export_revenue` | float | Expected export revenue (rest of day) |
+| `forecast_net_cost` | float | Expected net cost (rest of day) |
+| `forecast_grid_charge_cost` | float | Expected grid charging cost |
+| `forecast_proactive_export_revenue` | float | Expected proactive export revenue |
+
+**Price Slot Structure:**
+
+Each slot in `buy_prices` and `sell_prices` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `time` | string | HH:MM format |
+| `hour` | int | Hour (0-23) |
+| `minute` | int | Minute (0, 15, 30, 45) |
+| `price` | float | Price ($/kWh) |
+
+---
+
+### 11. sensor.localshift_forecast_grid
+
+**Purpose:** Grid interaction forecast data for history collection.
+
+Split from `forecast_daily` to stay under 16KB limit (Issue #37).
+
+**State:** Total forecast grid import (kWh)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `grid_interaction` | list | 96-slot grid interaction time series |
+| `total_grid_import_kwh` | float | Total grid import forecast (kWh) |
+| `total_grid_export_kwh` | float | Total grid export forecast (kWh) |
+| `grid_charge_slots` | int | Number of slots with grid charging |
+| `proactive_export_slots` | int | Number of slots with proactive export |
+
+**Grid Interaction Slot Structure:**
+
+Each slot in `grid_interaction` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `time` | string | HH:MM format |
+| `hour` | int | Hour (0-23) |
+| `minute` | int | Minute (0, 15, 30, 45) |
+| `grid_import_kwh` | float | Grid import (kWh) |
+| `grid_export_kwh` | float | Grid export (kWh) |
+| `grid_charge` | bool | Grid charging active |
+| `grid_charge_boost` | bool | Boost charging active |
+| `proactive_export` | bool | Proactive export active |
+| `export_amount_kwh` | float | Export amount (kWh) |
+
+---
+
+### 12. sensor.localshift_forecast_diagnostics
+
+**Purpose:** Diagnostic and debug data for the forecast system.
+
+Split from `forecast_daily` to stay under 16KB limit (Issue #37).
+
+**State:** Consumption data source (e.g., "profile_hour", "live_load_fallback")
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `consumption_source` | string | Source of consumption data |
+| `consumption_statistic_id` | string | HA statistic ID used |
+| `consumption_profile_hours` | int | Hours of profile data available |
+| `consumption_fallback_hours` | int | Hours using fallback data |
+| `consumption_weighting` | float | Recent vs historical weighting |
+| `forecast_consumption_source_counts` | dict | Count by source type |
+| `consumption_hourly_sample_counts` | dict | Samples per hour |
+| `consumption_hourly_profile_kw` | dict | Hourly consumption averages (kW) |
+| `consumption_profile_type` | string | "weekday_weekend" or "combined" |
+| `forecast_profile_selected` | string | Profile used for today |
+| `weekday_sample_counts` | dict | Weekday samples per hour |
+| `weekend_sample_counts` | dict | Weekend samples per hour |
+| `weekday_hourly_profile_kw` | dict | Weekday hourly averages |
+| `weekend_hourly_profile_kw` | dict | Weekend hourly averages |
+| `recent_load_1hr_kw` | float | Recent 1-hour average load |
+| `recent_load_1hr_statistic_id` | string | Statistic ID for recent load |
+| `recent_load_1hr_samples` | int | Samples in recent load calc |
+| `recent_load_1hr_last_error` | string | Last error message |
+| `current_load_kw` | float | Current load (kW) |
+| `debug_forecast_slot_found` | bool | Current slot found in forecast |
+| `debug_forecast_slot_time` | string | Time of matched slot |
+| `debug_first_forecast_slot_time` | string | Time of first forecast slot |
+| `debug_time_gap_seconds` | float | Seconds between now and first slot |
+| `debug_mode_source` | string | "forecast" or "fallback" |
+| `allow_export` | string | Export permission state |
+| `weather_entity_id` | string | Weather entity ID |
+| `weather_temperature_current` | float | Current temperature (°C) |
+| `weather_temperature_forecast` | dict | Hourly temperature forecast |
+| `weather_condition` | string | Current weather condition |
+| `weather_correlation_confidence` | string | low/medium/high |
+| `weather_adjustment_applied` | bool | Weather adjustment used |
+| `weather_learning_enabled` | bool | Learning enabled |
+| `weather_cooling_coefficient` | float | Cooling coefficient (kW/°C) |
+| `weather_heating_coefficient` | float | Heating coefficient (kW/°C) |
+| `weather_sample_count` | int | Learning samples collected |
+
+---
+
+### 13. sensor.localshift_target_soc_minimum
 
 **Purpose:** Minimum target SOC for discharge modes (base reserve).
 
@@ -229,7 +355,7 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 
 ---
 
-### 11. sensor.localshift_excess_solar_kwh
+### 14. sensor.localshift_excess_solar_kwh
 
 **Purpose:** Forecasted excess solar energy available for discretionary loads.
 
@@ -256,7 +382,7 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 
 ---
 
-### 12. sensor.localshift_load_shift_signal
+### 15. sensor.localshift_load_shift_signal
 
 **Purpose:** Simple actionable signal for load-shifting automations.
 
@@ -718,3 +844,5 @@ Buttons trigger manual actions
 5. **Enable dry run** — Use `switch.localshift_dry_run` to test without affecting the battery.
 
 6. **Monitor load shift signal** — Use `sensor.localshift_load_shift_signal` for simple automation triggers.
+
+7. **Check forecast diagnostics** — `sensor.localshift_forecast_diagnostics` contains debug fields and consumption profile information for troubleshooting forecast accuracy.

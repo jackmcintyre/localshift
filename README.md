@@ -80,7 +80,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (12)
+### Sensors (15)
 
 | Entity ID | Description |
 |---|---|
@@ -92,7 +92,10 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_cost_electricity_net` | Net cost with import/export/savings/charge cost attributes |
 | `sensor.localshift_decision_log` | Mode change history with reasons |
 | `sensor.localshift_forecast_history` | Historical forecast predictions for comparison |
-| `sensor.localshift_forecast_daily` | Full 24-hour forecast with 15-minute granularity |
+| `sensor.localshift_forecast_daily` | Core 24-hour forecast with SOC, solar, and consumption data |
+| `sensor.localshift_forecast_prices` | Price forecast data for history collection |
+| `sensor.localshift_forecast_grid` | Grid interaction forecast data for history collection |
+| `sensor.localshift_forecast_diagnostics` | Diagnostic and debug data for the forecast system |
 | `sensor.localshift_target_soc_minimum` | Minimum target SOC for discharge modes |
 | `sensor.localshift_excess_solar_kwh` | Forecasted excess solar for load shifting |
 | `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
