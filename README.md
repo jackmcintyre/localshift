@@ -164,9 +164,9 @@ A ready-to-use Lovelace dashboard is included at `dashboards/localshift.yaml`. A
    lovelace:
      mode: storage
      dashboards:
-       localshift:
+       local-shift:  # URL path requires a hyphen
          mode: yaml
-         filename: dashboards/localshift.yaml
+         filename: custom_components/localshift/dashboard.yaml
          title: LocalShift
          icon: mdi:battery-sync
    ```
