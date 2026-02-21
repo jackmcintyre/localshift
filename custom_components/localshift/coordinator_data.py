@@ -184,3 +184,19 @@ class CoordinatorData:
         0.0  # Learned kW per °C below heating threshold
     )
     weather_sample_count: int = 0  # Number of samples used for learning
+
+    # Forecast accuracy tracking fields (Issue #37 Phase 2)
+    # SOC prediction errors (predicted - actual, in percentage points)
+    forecast_error_soc_15min: float = 0.0  # Error for 15-minute predictions
+    forecast_error_soc_1h: float = 0.0  # Error for 1-hour predictions
+    forecast_error_soc_4h: float = 0.0  # Error for 4-hour predictions
+    # SOC accuracy percentages (100 - abs error, clamped to 0-100)
+    forecast_accuracy_soc_15min: float = 100.0
+    forecast_accuracy_soc_1h: float = 100.0
+    forecast_accuracy_soc_4h: float = 100.0
+    # Price prediction errors
+    forecast_error_buy_price_1h: float = 0.0  # Buy price error ($/kWh)
+    forecast_error_sell_price_1h: float = 0.0  # Sell price error ($/kWh)
+    # Comparison metadata
+    forecast_comparisons_made: int = 0  # Total comparisons since restart
+    forecast_last_comparison_time: str = ""  # ISO timestamp of last comparison

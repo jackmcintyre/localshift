@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **47 entities** grouped under a single "LocalShift" device:
+The integration creates **48 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 15 | `sensor` |
+| Sensors | 16 | `sensor` |
 | Binary Sensors | 9 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 8 | `number` |
@@ -408,6 +408,33 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 | `safe_additional_load_kw` | float | Max kW that can be safely added |
 
 **Icon:** Dynamic based on signal (arrow-up-bold, arrow-down-bold, check-circle, pause-circle)
+
+---
+
+### 16. sensor.localshift_forecast_accuracy
+
+**Purpose:** Compares past forecast predictions with actual outcomes to track accuracy.
+
+Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC and prices.
+
+**State:** SOC accuracy percentage for 1-hour predictions (e.g., `95.5`)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `soc_error_15min` | float | SOC prediction error at 15 minutes (predicted - actual) |
+| `soc_error_1h` | float | SOC prediction error at 1 hour (predicted - actual) |
+| `soc_error_4h` | float | SOC prediction error at 4 hours (predicted - actual) |
+| `soc_accuracy_15min` | float | SOC accuracy percentage at 15 min (100 - abs error) |
+| `soc_accuracy_1h` | float | SOC accuracy percentage at 1 hour (100 - abs error) |
+| `soc_accuracy_4h` | float | SOC accuracy percentage at 4 hours (100 - abs error) |
+| `buy_price_error_1h` | float | Buy price error at 1 hour ($/kWh) |
+| `sell_price_error_1h` | float | Sell price error at 1 hour ($/kWh) |
+| `comparisons_made` | int | Total comparisons since restart |
+| `last_comparison_time` | string | ISO timestamp of last comparison |
+
+**Use Case:** Monitor forecast quality over time. Lower errors indicate better predictions. Use to identify when the forecast model needs adjustment.
 
 ---
 
