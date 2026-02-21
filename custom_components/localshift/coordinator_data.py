@@ -200,3 +200,14 @@ class CoordinatorData:
     # Comparison metadata
     forecast_comparisons_made: int = 0  # Total comparisons since restart
     forecast_last_comparison_time: str = ""  # ISO timestamp of last comparison
+
+    # Entity health and error tracking (Issue #94)
+    integration_status: str = "ok"  # "ok", "degraded", "error"
+    integration_status_message: str = "All systems operational"
+    entity_errors: list[str] = field(default_factory=list)  # Current error messages
+    entity_warnings: list[str] = field(default_factory=list)  # Current warning messages
+    entity_health: dict[str, Any] = field(
+        default_factory=dict
+    )  # Per-entity health status
+    last_entity_check: str = ""  # ISO timestamp of last health check
+    required_entities_healthy: bool = True  # Are all required entities available?

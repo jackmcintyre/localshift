@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
     from .cost_tracker import CostTracker
+    from .entity_validator import EntityValidator
     from .notification_service import NotificationService
     from .state_machine import StateMachine
     from .state_reader import StateReader
@@ -88,6 +89,7 @@ class LocalShiftCoordinator:
         self._notification_service: NotificationService | None = None
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
+        self._entity_validator: EntityValidator | None = None
 
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
@@ -156,6 +158,7 @@ class LocalShiftCoordinator:
         from .battery_controller import BatteryController
         from .computation_engine import ComputationEngine
         from .cost_tracker import CostTracker
+        from .entity_validator import EntityValidator
         from .notification_service import NotificationService
         from .state_machine import StateMachine
         from .state_reader import StateReader
@@ -175,6 +178,7 @@ class LocalShiftCoordinator:
             self.get_switch_state,
             self.get_option,
         )
+        self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
 
         # Collect all external entity IDs to watch
         # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
@@ -309,6 +313,44 @@ class LocalShiftCoordinator:
             return
         self._state_reader.read_all_external_state(self.data)
 
+    def _check_entity_health(self) -> None:
+        """Check health of all tracked entities and update data.
+
+        Populates integration status, errors, and warnings in CoordinatorData
+        for sensors to expose to users.
+        """
+        if self._entity_validator is None:
+            return
+
+        # Check all entities
+        self._entity_validator.check_all_entities()
+
+        # Update coordinator data with health status
+        self.data.integration_status = self._entity_validator.status.value
+        self.data.integration_status_message = (
+            self._entity_validator.get_user_friendly_message()
+        )
+        self.data.entity_errors = self._entity_validator.errors
+        self.data.entity_warnings = self._entity_validator.warnings
+        self.data.required_entities_healthy = all(
+            self._entity_validator.get_required_entities_status().values()
+        )
+
+        # Get detailed health summary
+        health_summary = self._entity_validator.get_health_summary()
+        self.data.entity_health = health_summary.get("entities", {})
+        self.data.last_entity_check = health_summary.get("last_check", "")
+
+        # Log any new errors
+        if self.data.entity_errors:
+            for error in self.data.entity_errors:
+                _LOGGER.warning("Entity health error: %s", error)
+
+        # Log warnings at debug level
+        if self.data.entity_warnings:
+            for warning in self.data.entity_warnings:
+                _LOGGER.debug("Entity health warning: %s", warning)
+
     def _check_solcast_ready(self) -> bool:
         """Check if Solcast forecast data is available and valid.
 
@@ -430,6 +472,9 @@ class LocalShiftCoordinator:
         """Handle the 1-minute periodic re-evaluation."""
         # Read raw entity values now — needed for cost accumulation below.
         self._read_all_external_state()
+
+        # Check entity health periodically
+        self._check_entity_health()
 
         # Refresh load data periodically (every ~5 minutes)
         # This is async so we fire it and forget - it will update the cache

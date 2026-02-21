@@ -45,6 +45,9 @@ async def async_setup_entry(
         LoadShiftSignalSensor(coordinator, entry),
         # Forecast accuracy sensor (Issue #37 Phase 2)
         ForecastAccuracySensor(coordinator, entry),
+        # Entity health and error tracking sensors (Issue #94)
+        IntegrationStatusSensor(coordinator, entry),
+        EntityHealthSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -699,4 +702,78 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
             # Comparison metadata
             "comparisons_made": d.forecast_comparisons_made,
             "last_comparison_time": d.forecast_last_comparison_time,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Entity Health and Error Tracking Sensors (Issue #94)
+# ---------------------------------------------------------------------------
+
+
+class IntegrationStatusSensor(LocalShiftSensorBase):
+    """Overall integration health status.
+
+    Shows "ok", "degraded", or "error" based on entity availability.
+    Provides a simple status indicator for dashboards.
+    """
+
+    _attr_unique_id = "localshift_integration_status"
+    _attr_name = "Integration Status"
+    _attr_icon = "mdi:check-circle"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with current integration status."""
+        self._attr_native_value = self.coordinator.data.integration_status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return status details."""
+        d = self.coordinator.data
+        return {
+            "message": d.integration_status_message,
+            "error_count": len(d.entity_errors),
+            "warning_count": len(d.entity_warnings),
+            "required_entities_healthy": d.required_entities_healthy,
+            "errors": d.entity_errors,
+            "warnings": d.entity_warnings,
+            "last_check": d.last_entity_check,
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "ok":
+            return "mdi:check-circle"
+        elif status == "degraded":
+            return "mdi:alert-circle"
+        else:  # error
+            return "mdi:close-circle"
+
+
+class EntityHealthSensor(LocalShiftSensorBase):
+    """Detailed health status for all tracked entities.
+
+    Provides per-entity health information as JSON attributes
+    for detailed diagnostics and troubleshooting.
+    """
+
+    _attr_unique_id = "localshift_entity_health"
+    _attr_name = "Entity Health"
+    _attr_icon = "mdi:heart-pulse"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with count of healthy entities."""
+        health = self.coordinator.data.entity_health
+        healthy_count = sum(1 for e in health.values() if e.get("status") == "ok")
+        total_count = len(health)
+        self._attr_native_value = f"{healthy_count}/{total_count}"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return detailed entity health."""
+        return {
+            "entities": self.coordinator.data.entity_health,
+            "errors": self.coordinator.data.entity_errors,
+            "warnings": self.coordinator.data.entity_warnings,
         }
