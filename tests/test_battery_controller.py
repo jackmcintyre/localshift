@@ -171,17 +171,17 @@ class TestSetForceCharge:
     ):
         """Test successful transition to force charge mode.
 
-        Force charge now uses autonomous mode with reserve=100 for 5 kW charging
-        (workaround for Tesla July 2025 firmware that throttles backup mode).
+        Force charge now uses backup mode for 3.3 kW grid charging.
+        The reserve is clamped to 80 for targets 81-99% (Tesla firmware restriction).
         """
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
             state = MagicMock()
             if "operation_mode" in entity_id:
-                state.state = "autonomous"
+                state.state = "backup"
             elif "backup_reserve" in entity_id:
-                state.state = "100"
+                state.state = "80"  # Clamped for default target=100
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
             return state

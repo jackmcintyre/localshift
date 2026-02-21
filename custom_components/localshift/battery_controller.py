@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from .const import (
+    BACKUP_RESERVE_MAX_VALID,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
@@ -196,17 +197,48 @@ class BatteryController:
         )
         return True
 
+    @staticmethod
+    def _clamp_backup_reserve(target: float) -> int:
+        """Clamp backup reserve for Tesla firmware compatibility.
+
+        Tesla's July 2025 firmware silently resets backup reserve values
+        81-99% to 80%. Valid values are 0-80% or 100%.
+
+        Args:
+            target: Desired backup reserve percentage
+
+        Returns:
+            Clamped reserve value that Tesla firmware will accept.
+        """
+        if target <= BACKUP_RESERVE_MAX_VALID:
+            # 0-80%: Tesla accepts these values directly
+            return int(target)
+        elif target >= 100:
+            # 100%: Tesla accepts this value
+            return 100
+        else:
+            # 81-99%: Clamp to 80% (Tesla would reset anyway)
+            # SOC monitoring in state machine will stop at actual target
+            return BACKUP_RESERVE_MAX_VALID
+
     async def set_force_charge(
-        self, data: CoordinatorData, dry_run: bool = False
+        self,
+        data: CoordinatorData,
+        dry_run: bool = False,
+        target_soc: float | None = None,
     ) -> bool:
-        """Set battery to force charge mode (autonomous, reserve=100).
+        """Set battery to force charge mode (backup, reserve=target).
 
-        Uses autonomous mode with reserve=100 for 5 kW charging rate.
-        This works around Tesla's July 2025 firmware restriction that
-        limits backup mode grid charging to ~1.2-1.8 kW.
+        Uses backup mode for 3.3 kW grid charging. The Powerwall naturally
+        stops charging when SOC reaches the backup reserve level.
 
-        SOC monitoring in the state machine stops charging when the
-        battery_target is reached (rather than charging to 100%).
+        For target 81-99%, reserve is clamped to 80% due to Tesla firmware
+        restriction. SOC monitoring in state machine handles the gap.
+
+        Args:
+            data: Coordinator data
+            dry_run: If True, log action without executing
+            target_soc: Target SOC to charge to. If None, uses battery_target config.
 
         Returns:
             True if successful, False otherwise.
@@ -214,15 +246,32 @@ class BatteryController:
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
 
+        # Get target SOC - use provided value or fall back to battery_target config
+        if target_soc is None:
+            # Import here to avoid circular import
+
+            # This will be set by state machine which has access to get_option
+            # For now, use 100 as safe default
+            target_soc = 100.0
+
+        # Clamp reserve for Tesla firmware compatibility
+        reserve = self._clamp_backup_reserve(target_soc)
+
         if dry_run:
-            _LOGGER.info("DRY RUN: set_force_charge")
+            _LOGGER.info(
+                "DRY RUN: set_force_charge (target=%.0f%%, reserve=%d%%)",
+                target_soc,
+                reserve,
+            )
             return True
 
         # Capture initial state for diagnostics
         initial_state = self._get_hardware_state_snapshot()
         transition_start = time.monotonic()
         _LOGGER.info(
-            "[TRANSITION] Starting force charge mode | Initial state: op=%s, reserve=%s, export=%s",
+            "[TRANSITION] Starting force charge mode (target=%.0f%%, reserve=%d%%) | Initial state: op=%s, reserve=%s, export=%s",
+            target_soc,
+            reserve,
             initial_state["operation_mode"],
             initial_state["backup_reserve"],
             initial_state["export_mode"],
@@ -233,23 +282,22 @@ class BatteryController:
             _LOGGER.error("Aborting force charge mode: Failed to set export mode")
             return False
 
-        # Set backup reserve to 100% - SOC monitoring will stop at battery_target
-        if not await self._set_backup_reserve(100):
+        # Set backup reserve to target (or clamped value)
+        if not await self._set_backup_reserve(reserve):
             _LOGGER.error("Aborting force charge mode: Failed to set backup reserve")
             return False
 
-        if not await self._set_operation_mode("autonomous"):
+        # Use backup mode for 3.3 kW charging
+        if not await self._set_operation_mode("backup"):
             _LOGGER.error("Aborting force charge mode: Failed to set operation mode")
             return False
 
-        # Use extended timeout for autonomous mode (15s instead of 10s)
-        # Tesla API takes longer to propagate autonomous mode changes
-        timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
+        timeout = TRANSITION_TIMEOUTS.get("backup", 10)
 
         # Validate transition completed successfully
         if not await self.validate_transition(
-            expected_operation_mode="autonomous",
-            expected_backup_reserve=100,
+            expected_operation_mode="backup",
+            expected_backup_reserve=reserve,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
             timeout=timeout,
         ):
@@ -265,7 +313,12 @@ class BatteryController:
             return False
 
         elapsed = time.monotonic() - transition_start
-        _LOGGER.info("[TRANSITION] Force charge SUCCESS in %.2fs", elapsed)
+        _LOGGER.info(
+            "[TRANSITION] Force charge SUCCESS in %.2fs (target=%.0f%%, reserve=%d%%)",
+            elapsed,
+            target_soc,
+            reserve,
+        )
         return True
 
     def _get_hardware_state_snapshot(self) -> dict:
