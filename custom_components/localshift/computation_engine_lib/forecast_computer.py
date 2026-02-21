@@ -2321,6 +2321,18 @@ class ForecastComputer:
             CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
         )
 
+        # FIX #132: Calculate TODAY's DW start datetime based on forecast generation time.
+        # This is used to determine if a slot is before or after today's DW.
+        # For evening slots (e.g., 22:05), comparing against "next DW from slot" would give
+        # tomorrow's DW, which is wrong. We need to compare against TODAY's DW.
+        today_dw_start = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        # If we've already passed today's DW, today_dw_start is in the past
+
         # ========================================================================
         # CALCULATE FORECASTED EXCESS AND MINIMUM SOC FOR PROACTIVE EXPORT
         # ========================================================================
@@ -2496,13 +2508,16 @@ class ForecastComputer:
             # Determine if we should grid charge using single source of truth
             gap_to_target = max(target_pct - soc_at_slot_start, 0)
 
-            # A slot is eligible for pre-DW grid charging only if it falls before
-            # the daily demand-window start hour. Use proper datetime comparison
-            # via _next_demand_window_start_dt() which correctly handles day boundaries.
-            # (Fixes is_before_dw wrap-around bug — Issue 4 in MODE_SWITCHING_DELAY_ANALYSIS.md)
-            # (backlog-high-019: Previous `slot_hour < target_hour` failed for evening slots)
-            next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
-            is_before_dw = slot_start < next_dw_start
+            # FIX #132: A slot is eligible for pre-DW grid charging only if it's
+            # before TODAY's DW. Evening slots after today's DW should NOT grid charge
+            # because:
+            # 1. Today's target has already been reached (or missed)
+            # 2. Tomorrow has its own full solar day
+            # 3. No urgency to charge overnight
+            #
+            # Previous logic used "next DW from slot" which gave tomorrow's DW for
+            # evening slots, causing incorrect grid charging decisions.
+            is_before_dw = slot_start < today_dw_start
 
             # is_daylight is kept for the method signature but no longer used as a gate.
             # Grid charging decisions are independent of solar availability.
