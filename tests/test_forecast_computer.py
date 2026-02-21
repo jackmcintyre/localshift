@@ -761,6 +761,115 @@ class TestShouldGridChargeAtSlot:
         assert should_charge is False
         assert should_boost is False
 
+    def test_should_grid_charge_no_solar_forecast_skips(
+        self, mock_entry, mock_get_entity_id
+    ):
+        """Should skip grid charging when solar forecast not available in lookahead window.
+
+        This is the fix for the bug where evening slots on "tomorrow" would grid charge
+        because the overnight simulation tried to find solar in "tomorrow+1" which
+        doesn't exist in Solcast data.
+
+        When _find_solar_start_time() returns None (no solar found), we should:
+        1. Skip grid charging (assume solar will be available)
+        2. Only grid charge if price is very cheap (safety net)
+        """
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {21: 0.5})
+
+        # Evening slot at 21:00, before DW (which starts at 18:00 next day)
+        slot_start = dt_aware(2026, 2, 16, 21, 0, 0)
+
+        # Solcast only has data through today, no solar in the 12-hour lookahead window
+        # (21:00 -> 09:00 next day, but solcast ends at midnight)
+        all_solcast = [
+            # No solar after 21:00 tonight
+            {"period_start": "2026-02-16T21:00:00+11:00", "pv_estimate10": 0.0},
+        ]
+
+        # Price is cheap but not "very cheap" (0.15 * 0.8 = 0.12)
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,  # Overnight slot
+            slot_price=0.14,  # Cheap but not very cheap
+            predicted_soc=60.0,
+            target_pct=90.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,  # Before next day's DW
+            in_demand_window=False,
+            gap_to_target=30.0,
+            is_daylight=False,
+            all_solcast=all_solcast,  # No solar in lookahead
+            historical_avg_kw={21: 0.5},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.14,
+            min_soc_pct=10.0,
+        )
+
+        # Should NOT grid charge - no solar forecast available, so skip the decision
+        assert should_charge is False
+        assert should_boost is False
+
+    def test_should_grid_charge_no_solar_very_cheap_allowed(
+        self, mock_entry, mock_get_entity_id
+    ):
+        """Should still grid charge at very cheap price even without solar forecast.
+
+        The safety net allows grid charging at very cheap prices (<80% of cheap_price)
+        even when solar simulation can't be performed.
+        """
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 90,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {21: 0.5})
+
+        slot_start = dt_aware(2026, 2, 16, 21, 0, 0)
+
+        all_solcast = [
+            {"period_start": "2026-02-16T21:00:00+11:00", "pv_estimate10": 0.0},
+        ]
+
+        # Very cheap price (< 0.15 * 0.8 = 0.12)
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.10,  # Very cheap (safety net)
+            predicted_soc=60.0,
+            target_pct=90.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,
+            in_demand_window=False,
+            gap_to_target=30.0,
+            is_daylight=False,
+            all_solcast=all_solcast,
+            historical_avg_kw={21: 0.5},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.10,
+            min_soc_pct=10.0,
+        )
+
+        # Very cheap price should trigger boost charging (safety net)
+        assert should_charge is True
+        assert should_boost is True
+
 
 # =============================================================================
 # REPLACEMENT COST CHECK TESTS (Issue #70)
