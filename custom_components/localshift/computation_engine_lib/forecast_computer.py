@@ -671,29 +671,20 @@ class ForecastComputer:
                     )
                     return False, False
             else:
-                # No solar found in forecast - proceed with normal simulation
-                soc_at_end, max_soc, can_reach_with_solar_only = (
-                    self._simulate_future_soc_with_solar_only(
-                        actual_current_soc=predicted_soc,
-                        start_slot=sim_start,
-                        target_pct=target_pct,
-                        all_solcast=all_solcast,
-                        historical_avg_kw=historical_avg_kw,
-                        current_load_kw=current_load_kw,
-                        recent_load_kw=recent_load_kw,
-                        dw_start_time=dw_start_time,
-                        end_time=sim_end,
-                        min_soc_pct=min_soc_pct,
-                    )
+                # No solar found in forecast lookahead window.
+                # This happens for slots near the end of the Solcast forecast horizon
+                # (e.g., evening slots on "tomorrow" when Solcast only has today + tomorrow).
+                # These slots are far enough away that we shouldn't make grid charging decisions.
+                # Skip grid charging - don't simulate when we lack the data.
+                _LOGGER.debug(
+                    "OVERNIGHT_CHECK: %02d:%02d - no solar forecast found within lookahead window, skipping grid charge decision (slot beyond reliable simulation horizon)",
+                    slot_start.hour,
+                    slot_start.minute,
                 )
-
-                if can_reach_with_solar_only:
-                    _LOGGER.debug(
-                        "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
-                        max_soc,
-                        target_pct,
-                    )
-                    return False, False
+                # Only grid charge if price is very cheap (safety net for extreme cases)
+                if price_is_very_cheap:
+                    return True, True
+                return False, False
         else:
             # Daylight slot - use original simulation logic
             soc_at_end, max_soc, can_reach_with_solar_only = (
