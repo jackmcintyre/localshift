@@ -12,8 +12,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .computation_engine_lib import (
+    ExcessSolarSignalsEngine,
+    ForecastAccuracyEngine,
+    ForecastChangeTracker,
     ForecastComputer,
     HistoryFetcher,
+    ModeDecisionEngine,
+    PriceCalculator,
+    SpikeAnalyzer,
+    WeatherDiagnosticsEngine,
     analyze_spike_window,
     build_hourly_forecast_summary,
     calculate_spike_price_threshold,
@@ -28,124 +35,32 @@ from .const import (
     CHARGE_RATE_GRID_KW,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
-    CONF_CHEAP_PRICE_PERCENTILE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_LOAD_WEIGHT_RECENT,
-    CONF_MAX_PRECHARGE_PRICE,
-    CONF_MINIMUM_TARGET_SOC,
-    CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
-    DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_LOAD_WEIGHT_RECENT,
-    DEFAULT_MAX_PRECHARGE_PRICE,
-    DEFAULT_MINIMUM_TARGET_SOC,
-    DEFAULT_SPIKE_PRICE_PERCENTILE,
     DEFAULT_WEATHER_LEARNING_ENABLED,
-    DISCHARGE_EARLIEST_HOUR,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
-    SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
-    BatteryMode,
+)
+from .const import (
+    BatteryMode as _BatteryMode,
 )
 from .coordinator_data import CoordinatorData
 from .weather_correlation import WeatherCorrelation
 
+# Backward-compatible re-export for tests/importers that import BatteryMode
+# from computation_engine.
+BatteryMode = _BatteryMode
+
 _LOGGER = logging.getLogger(__name__)
-
-
-class ForecastChangeTracker:
-    """Tracks when forecast should regenerate based on significant changes."""
-
-    def __init__(self) -> None:
-        """Initialize change tracker."""
-        self._last_soc: float = -1.0  # -1 = not initialized
-        self._last_price: float = -1.0
-        self._last_feed_in: float = -1.0
-        self._last_forecast_time: datetime | None = None
-
-        # Change thresholds (hardcoded, no config needed)
-        self._SOC_THRESHOLD = 1.0  # 1% SOC change
-        self._MAX_FORECAST_AGE = timedelta(minutes=1)
-
-    def should_recompute_forecast(
-        self,
-        soc: float,
-        price: float,
-        feed_in_price: float,
-        now_dt: datetime,
-        force: bool = False,
-    ) -> tuple[bool, str]:
-        """Check if forecast should recompute.
-
-        Args:
-            soc: Current battery SOC percentage
-            price: Current buy price ($/kWh)
-            feed_in_price: Current feed-in price ($/kWh)
-            now_dt: Current datetime
-            force: If True, skip checks and recompute
-
-        Returns:
-            (should_recompute, reason)
-            reason is a string for logging (e.g., "price_change_0.15")
-        """
-        # Force recompute (e.g., mode change, startup)
-        if force:
-            self._update_cache(soc, price, feed_in_price, now_dt)
-            return True, "forced"
-
-        # First run: no cached values
-        if self._last_soc < 0:
-            self._update_cache(soc, price, feed_in_price, now_dt)
-            return True, "first_run"
-
-        # Price changes (ANY change = recalc)
-        if price != self._last_price:
-            reason = f"price_change_{price:.2f}"
-            self._update_cache(soc, price, feed_in_price, now_dt)
-            return True, reason
-
-        if feed_in_price != self._last_feed_in:
-            reason = f"fit_change_{feed_in_price:.2f}"
-            self._update_cache(soc, price, feed_in_price, now_dt)
-            return True, reason
-
-        # SOC change (1% threshold)
-        soc_change = abs(soc - self._last_soc)
-        if soc_change >= self._SOC_THRESHOLD:
-            reason = f"soc_change_{soc_change:.1f}%"
-            self._update_cache(soc, price, feed_in_price, now_dt)
-            return True, reason
-
-        # Age check (1-minute backup timer)
-        if self._last_forecast_time is not None:
-            age = now_dt - self._last_forecast_time
-            if age > self._MAX_FORECAST_AGE:
-                reason = f"age_{age.total_seconds():.0f}s"
-                self._update_cache(soc, price, feed_in_price, now_dt)
-                return True, reason
-
-        # No significant changes
-        return False, "no_change"
-
-    def _update_cache(
-        self,
-        soc: float,
-        price: float,
-        feed_in_price: float,
-        now_dt: datetime,
-    ) -> None:
-        """Update cached values after recompute."""
-        self._last_soc = soc
-        self._last_price = price
-        self._last_feed_in = feed_in_price
-        self._last_forecast_time = now_dt
 
 
 class ComputationEngine:
@@ -190,6 +105,35 @@ class ComputationEngine:
             self._get_profile_for_day,
             weather_correlation=self._weather_correlation,
         )
+
+        self._price_calculator = PriceCalculator(
+            entry=entry,
+            parse_forecast_dt=self._parse_forecast_dt,
+            percentile_func=self._percentile,
+            sum_solar_before_target=self._sum_solar_before_target,
+            get_expected_load_kw=self._get_expected_load_kw,
+        )
+        self._mode_decision = ModeDecisionEngine(
+            get_switch_state=self._get_switch_state,
+            get_forecast_entry_for_now=self._get_forecast_entry_for_now,
+        )
+        self._spike_analyzer = SpikeAnalyzer(
+            entry=entry,
+            get_switch_state=self._get_switch_state,
+            parse_time_option=self._parse_time_option,
+            analyze_spike_window=analyze_spike_window,
+            calculate_spike_price_threshold=calculate_spike_price_threshold,
+        )
+        self._excess_solar_signals = ExcessSolarSignalsEngine(
+            entry=entry,
+            forecast_computer=self._forecast_computer,
+            get_entity_id=self._get_entity_id,
+            get_historical_hourly_averages=self._get_historical_hourly_averages,
+            recent_load_1hr_getter=lambda: self._recent_load_1hr_kw,
+            parse_time_option=self._parse_time_option,
+        )
+        self._forecast_accuracy = ForecastAccuracyEngine()
+        self._weather_diagnostics = WeatherDiagnosticsEngine(entry)
 
         # Change tracker for forecast regeneration
         self._forecast_change_tracker = ForecastChangeTracker()
@@ -838,226 +782,36 @@ class ComputationEngine:
         target_hour: int,
         target_pct: float,
     ) -> None:
-        """Compute preliminary effective cheap price threshold using solar estimate.
-
-        This breaks the circular dependency by using a quick solar estimate instead
-        of the actual solar_can_reach_target from the forecast.
-        """
-        # Calculate base from percentile of forecast prices
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
+        """Compute preliminary effective cheap price threshold."""
+        self._price_calculator.compute_effective_cheap_price_preliminary(
+            data=data,
+            now_dt=now_dt,
+            before_dw=before_dw,
+            target_hour=target_hour,
+            target_pct=target_pct,
         )
-        cutoff = now_dt + timedelta(hours=lookahead)
-
-        # Collect forecast prices within lookahead window
-        forecast_prices = []
-        for f in data.general_forecast:
-            if not isinstance(f, dict):
-                continue
-            start = self._parse_forecast_dt(f.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                forecast_prices.append(float(f.get("per_kwh", 0)))
-
-        # Calculate percentile-based cheap price
-        percentile = float(
-            self.entry.options.get(
-                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
-            )
-        )
-        if forecast_prices:
-            base = round(self._percentile(forecast_prices, percentile), 2)
-        else:
-            # Fallback to max_precharge_price if no forecast data
-            base = float(
-                self.entry.options.get(
-                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-                )
-            )
-
-        max_price = float(
-            self.entry.options.get(
-                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-            )
-        )
-
-        # PRELIMINARY SOLAR ESTIMATE: Use simple solar forecast + load estimate
-        # This avoids the circular dependency with the detailed forecast
-        try:
-            solar_kwh = self._sum_solar_before_target(
-                data.solcast_today, now_dt, target_hour
-            )
-        except (AttributeError, TypeError):
-            # Handle missing or malformed Solcast data gracefully
-            solar_kwh = 0.0
-        deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
-
-        # Estimate consumption using historical averages
-        target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-        hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
-        expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
-        consumption_kwh = expected_load_kw * hours_to_target
-
-        # Preliminary solar gap assessment
-        net_solar = solar_kwh - consumption_kwh
-        preliminary_solar_can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
-        solar_gap = not preliminary_solar_can_reach
-
-        if not solar_gap or not before_dw or data.target_reached_today:
-            data.effective_cheap_price = base
-        else:
-            target_dt = now_dt.replace(
-                hour=target_hour, minute=0, second=0, microsecond=0
-            )
-            hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-            total_window = 8.0
-            urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
-            urgency_price = base + (max_price - base) * urgency
-
-            # Find minimum forecast price before DW
-            min_forecast = max_price
-            for f in data.general_forecast:
-                start = self._parse_forecast_dt(f.get("start_time"))
-                if start is None:
-                    continue
-                start_local = dt_util.as_local(start)
-                if start_local >= now_dt and start_local.hour < target_hour:
-                    price = float(f.get("per_kwh", max_price))
-                    if price < min_forecast:
-                        min_forecast = price
-
-            forecast_floor = max(min_forecast + 0.02, base)
-            final = min(urgency_price, max_price)
-            final = max(final, forecast_floor)
-            data.effective_cheap_price = round(final, 2)
 
     def _compute_effective_cheap_price(
         self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
     ) -> None:
-        """Compute the final effective cheap price threshold using actual forecast results.
-
-        This is called after the forecast is computed, allowing it to use the actual
-        solar_can_reach_target from the detailed forecast simulation.
-        """
-        # Calculate base from percentile of forecast prices
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
+        """Compute final effective cheap price threshold."""
+        self._price_calculator.compute_effective_cheap_price(
+            data=data,
+            now_dt=now_dt,
+            before_dw=before_dw,
+            target_hour=target_hour,
         )
-        cutoff = now_dt + timedelta(hours=lookahead)
-
-        # Collect forecast prices within lookahead window
-        forecast_prices = []
-        for f in data.general_forecast:
-            if not isinstance(f, dict):
-                continue
-            start = self._parse_forecast_dt(f.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                forecast_prices.append(float(f.get("per_kwh", 0)))
-
-        # Calculate percentile-based cheap price
-        percentile = float(
-            self.entry.options.get(
-                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
-            )
-        )
-        if forecast_prices:
-            base = round(self._percentile(forecast_prices, percentile), 2)
-        else:
-            # Fallback to max_precharge_price if no forecast data
-            base = float(
-                self.entry.options.get(
-                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-                )
-            )
-
-        max_price = float(
-            self.entry.options.get(
-                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-            )
-        )
-        solar_gap = not data.solar_can_reach_target
-
-        if not solar_gap or not before_dw or data.target_reached_today:
-            data.effective_cheap_price = base
-        else:
-            target_dt = now_dt.replace(
-                hour=target_hour, minute=0, second=0, microsecond=0
-            )
-            hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-            total_window = 8.0
-            urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
-            urgency_price = base + (max_price - base) * urgency
-
-            # Find minimum forecast price before DW
-            min_forecast = max_price
-            for f in data.general_forecast:
-                start = self._parse_forecast_dt(f.get("start_time"))
-                if start is None:
-                    continue
-                start_local = dt_util.as_local(start)
-                if start_local >= now_dt and start_local.hour < target_hour:
-                    price = float(f.get("per_kwh", max_price))
-                    if price < min_forecast:
-                        min_forecast = price
-
-            forecast_floor = max(min_forecast + 0.02, base)
-            final = min(urgency_price, max_price)
-            final = max(final, forecast_floor)
-            data.effective_cheap_price = round(final, 2)
 
     def _compute_solar_weighted_avg_fit(
         self, data: CoordinatorData, now_dt: datetime, target_hour: int, after_dw: bool
     ) -> None:
         """Compute solar-weighted average feed-in tariff."""
-        if after_dw:
-            data.solar_weighted_avg_fit = 0.0
-            data.solar_remaining_kwh = 0.0
-        else:
-            weighted_sum = 0.0
-            total_solar = 0.0
-
-            for period in data.solcast_today:
-                period_start = self._parse_forecast_dt(period.get("period_start"))
-                if period_start is None:
-                    continue
-                ps_local = dt_util.as_local(period_start)
-                if ps_local >= now_dt and ps_local.hour <= target_hour:
-                    solar_kwh_val = float(period.get("pv_estimate10", 0))
-                    if solar_kwh_val > 0:
-                        # Find FIT price at midpoint of 30-min period
-                        # Use local time for both solar midpoint and FIT periods
-                        mid_local = ps_local + timedelta(minutes=15)
-                        fit_price = 0.0
-                        for f in data.feed_in_forecast:
-                            f_start = self._parse_forecast_dt(f.get("start_time"))
-                            f_end = self._parse_forecast_dt(f.get("end_time"))
-                            if f_start is not None and f_end is not None:
-                                # Convert FIT period to local time for comparison
-                                f_start_local = dt_util.as_local(f_start)
-                                f_end_local = dt_util.as_local(f_end)
-
-                                # Check if midpoint falls within FIT period
-                                if f_start_local <= mid_local < f_end_local:
-                                    fit_price = float(f.get("per_kwh", 0))
-                                    break
-
-                        weighted_sum += solar_kwh_val * fit_price
-                        total_solar += solar_kwh_val
-
-            if total_solar > 0:
-                data.solar_weighted_avg_fit = round(weighted_sum / total_solar, 4)
-            else:
-                data.solar_weighted_avg_fit = 0.0
-            data.solar_remaining_kwh = round(total_solar, 2)
+        self._price_calculator.compute_solar_weighted_avg_fit(
+            data=data,
+            now_dt=now_dt,
+            target_hour=target_hour,
+            after_dw=after_dw,
+        )
 
     def _get_forecast_entry_for_now(
         self, data: CoordinatorData, now_dt: datetime
@@ -1201,188 +955,18 @@ class ComputationEngine:
 
     def _compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
         """Compute active battery mode."""
-        automation_enabled = self._get_switch_state("automation_enabled")
-        spike_discharge_enabled = self._get_switch_state("spike_discharge_enabled")
-
-        # ========================================================================
-        # AUTOMATION DISABLED (Highest Priority - Bypass all logic)
-        # ========================================================================
-
-        # When automation is disabled, set to self-consumption and bypass all state changes
-        if not automation_enabled:
-            data.active_mode = BatteryMode.SELF_CONSUMPTION
-            return
-
-        # Reset flags at the start of each computation
-        data.proactive_export_active = False
-
-        # Check if we're in valid discharge window (6am-midnight)
-        current_hour = now_dt.hour
-        in_discharge_window = current_hour >= DISCHARGE_EARLIEST_HOUR
-
-        # ========================================================================
-        # FORECAST-DRIVED CONTROL (Single Source of Truth)
-        # ========================================================================
-
-        # Get forecast entry for current time
-        forecast_entry = self._get_forecast_entry_for_now(data, now_dt)
-
-        # Fallback: Forecast unavailable - default to self-consumption
-        # If we don't have forecast data, we can't make intelligent decisions,
-        # so stay in safe mode (self-consumption)
-        if not forecast_entry:
-            data.debug_mode_source = "no_forecast"
-            _LOGGER.warning(
-                "Forecast unavailable, defaulting to self-consumption (no fallback logic)"
-            )
-            data.active_mode = BatteryMode.SELF_CONSUMPTION
-            return
-
-        # Forecast-driven path
-        data.debug_mode_source = "forecast"
-
-        # Log forecast entry for debugging
-        _LOGGER.info(
-            "Mode decision at %s: slot_time=%s, grid_charge=%s, grid_charge_boost=%s, grid_import_kwh=%.3f, proactive_export=%s, soc=%.1f%%",
-            now_dt.strftime("%H:%M"),
-            forecast_entry.get("timestamp", "unknown")[
-                -14:-9
-            ],  # Extract HH:MM from ISO
-            forecast_entry.get("grid_charge", False),
-            forecast_entry.get("grid_charge_boost", False),
-            forecast_entry.get("grid_import_kwh", 0),
-            forecast_entry.get("proactive_export", False),
-            data.soc,
-        )
-
-        # FORECAST-DRIVED: Grid charging (follow forecast plan)
-        # Safety: Only activate if there's actual grid import planned
-        # Use small threshold (0.01 kWh) to handle floating point edge cases
-        grid_import_kwh = forecast_entry.get("grid_import_kwh", 0)
-        GRID_IMPORT_THRESHOLD = 0.01  # Minimum kWh to consider grid charging active
-
-        if forecast_entry.get("grid_charge_boost"):
-            if grid_import_kwh > GRID_IMPORT_THRESHOLD:
-                data.active_mode = BatteryMode.BOOST_CHARGING
-                _LOGGER.info(
-                    "Forecast-driven: BOOST_CHARGING at %s, import=%.3f kWh",
-                    now_dt.strftime("%H:%M"),
-                    grid_import_kwh,
-                )
-                return
-            else:
-                # Boost flag set but no import - fall through to check grid_charge
-                _LOGGER.debug(
-                    "grid_charge_boost=True but grid_import_kwh=0, checking grid_charge"
-                )
-
-        if forecast_entry.get("grid_charge"):
-            if grid_import_kwh > GRID_IMPORT_THRESHOLD:
-                data.active_mode = BatteryMode.GRID_CHARGING
-                _LOGGER.info(
-                    "Forecast-driven: GRID_CHARGING at %s, import=%.3f kWh",
-                    now_dt.strftime("%H:%M"),
-                    grid_import_kwh,
-                )
-                return
-            else:
-                _LOGGER.debug(
-                    "grid_charge=True but grid_import_kwh=%.3f, staying in self-consumption",
-                    grid_import_kwh,
-                )
-
-        # FORECAST-DRIVED: Proactive export (before negative feed-in prices)
-        # No discharge-window guard here — unlike SPIKE_DISCHARGE (which is reactive),
-        # proactive export is forecast-driven and the forecast computer already tracks
-        # predicted SOC across all slots.  It will only mark a slot for export if the
-        # battery SOC remaining after export is sufficient to cover overnight load until
-        # solar returns the next morning.  A time-of-day guard would incorrectly block
-        # legitimate overnight export at high feed-in prices.
-        if forecast_entry.get("proactive_export"):
-            export_amount = forecast_entry.get("export_amount_kwh", 0.0)
-            EXPORT_THRESHOLD = 0.01  # Minimum kWh to consider export active
-
-            if export_amount > EXPORT_THRESHOLD:
-                data.active_mode = BatteryMode.PROACTIVE_EXPORT
-                data.proactive_export_active = True
-                _LOGGER.info(
-                    "Forecast-driven: PROACTIVE_EXPORT at %s, amount=%.2f kWh",
-                    now_dt.strftime("%H:%M"),
-                    export_amount,
-                )
-                return
-            else:
-                _LOGGER.debug(
-                    "proactive_export=True but export_amount_kwh=%.3f, staying in self-consumption",
-                    export_amount,
-                )
-
-        # ========================================================================
-        # OTHER MODES (Non-Charging)
-        # ========================================================================
-
-        if data.price_spike and spike_discharge_enabled and in_discharge_window:
-            data.active_mode = BatteryMode.SPIKE_DISCHARGE
-        elif data.demand_window_active:
-            # Once in demand window, STAY in DEMAND_BLOCK regardless of SOC.
-            # The solar_can_reach_target_in_dw check is only for ENTRY decision (before DW starts).
-            # This prevents premature exit from demand block when SOC drops below target during DW.
-            data.active_mode = BatteryMode.DEMAND_BLOCK
-        elif data.manual_override:
-            data.active_mode = BatteryMode.MANUAL
-        else:
-            _LOGGER.debug(
-                "Mode fallthrough to SELF_CONSUMPTION at %s: "
-                "grid_charge=%s grid_boost=%s proactive=%s "
-                "spike=%s dw=%s manual=%s",
-                now_dt.strftime("%H:%M"),
-                forecast_entry.get("grid_charge"),
-                forecast_entry.get("grid_charge_boost"),
-                forecast_entry.get("proactive_export"),
-                data.price_spike,
-                data.demand_window_active,
-                data.manual_override,
-            )
-            data.active_mode = BatteryMode.SELF_CONSUMPTION
+        self._mode_decision.compute_active_mode(data, now_dt)
 
     def _add_to_decision_log(
         self, data: CoordinatorData, now_dt: datetime, mode_change: bool
     ) -> None:
         """Add entry to decision log when mode changes or periodically."""
-        # Startup check is now handled in calling code (Step 15)
-        # This method assumes data is already validated
-
-        old_mode = self._previous_active_mode
-        new_mode = data.active_mode
-
-        # Get friendly display names for modes
-        old_mode_display = old_mode.display_name if old_mode else "Unknown"
-        new_mode_display = new_mode.display_name if new_mode else "Unknown"
-
-        if mode_change:
-            reason = f"Mode changed: {old_mode_display} -> {new_mode_display}"
-        else:
-            reason = f"Status update: {new_mode_display}"
-
-        entry = {
-            "timestamp": now_dt.isoformat(),
-            "old_mode": old_mode.value if old_mode else "unknown",
-            "new_mode": new_mode.value if new_mode else "unknown",
-            "old_mode_display": old_mode_display,
-            "new_mode_display": new_mode_display,
-            "buy_price": round(data.general_price, 2),
-            "sell_price": round(data.feed_in_price, 2),
-            "soc": round(data.soc),
-            "effective_threshold": data.effective_cheap_price,
-            "reason": reason,
-        }
-        data.decision_log.append(entry)
-        # Cap log at 50 entries
-        if len(data.decision_log) > 50:
-            data.decision_log = data.decision_log[-50:]
-
-        # Always update previous mode so mode changes can be detected correctly
-        self._previous_active_mode = new_mode
+        self._previous_active_mode = self._mode_decision.add_to_decision_log(
+            data=data,
+            now_dt=now_dt,
+            previous_active_mode=self._previous_active_mode,
+            mode_change=mode_change,
+        )
         self._last_decision_log_time = now_dt
 
     def _get_expected_load_kw(
@@ -1945,72 +1529,8 @@ class ComputationEngine:
         data: CoordinatorData,
         now_dt: datetime,
     ) -> None:
-        """Analyze feed-in forecast for spike window details (conservative mode).
-
-        Called during compute_derived_values to populate spike analysis fields.
-        These fields are used by _compute_active_mode for conservative decisions.
-        """
-        # Get configuration
-        conservative_enabled = self._get_switch_state(
-            SWITCH_SPIKE_DISCHARGE_CONSERVATIVE
-        )
-        spike_percentile = float(
-            self.entry.options.get(
-                CONF_SPIKE_PRICE_PERCENTILE, DEFAULT_SPIKE_PRICE_PERCENTILE
-            )
-        )
-
-        # Default values
-        data.spike_end_time = None
-        data.spike_max_price = 0.0
-        data.spike_price_threshold = 0.0
-        data.spike_reserve_soc = 0.0
-        data.spike_hours_remaining = 0.0
-        data.spike_in_conservative_mode = False
-
-        # Skip analysis if conservative mode not enabled
-        if not conservative_enabled:
-            return
-
-        # Analyze spike window
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
-        )
-
-        spike_end, max_price, spike_prices = analyze_spike_window(
-            data.feed_in_forecast, now_dt, lookahead
-        )
-
-        if spike_end is None or not spike_prices:
-            # No spike detected
-            return
-
-        # Populate spike analysis fields
-        data.spike_end_time = spike_end
-        data.spike_max_price = max_price
-        data.spike_hours_remaining = (spike_end - now_dt).total_seconds() / 3600
-
-        # Calculate price threshold for top X% of spike prices
-        data.spike_price_threshold = calculate_spike_price_threshold(
-            spike_prices, spike_percentile
-        )
-
-        # Calculate reserve SOC needed to survive spike + demand window if overlapping
-        data.spike_reserve_soc = self._calculate_spike_reserve_soc(
-            data, now_dt, spike_end, spike_percentile
-        )
-
-        data.spike_in_conservative_mode = True
-
-        _LOGGER.info(
-            "Spike analysis: max_price=%.2f, threshold=%.2f, reserve=%.1f%%, hours_remaining=%.1f",
-            data.spike_max_price,
-            data.spike_price_threshold,
-            data.spike_reserve_soc,
-            data.spike_hours_remaining,
-        )
+        """Analyze feed-in forecast for spike window details."""
+        self._spike_analyzer.analyze_spike(data, now_dt)
 
     def _calculate_spike_reserve_soc(
         self,
@@ -2019,66 +1539,13 @@ class ComputationEngine:
         spike_end: datetime,
         spike_percentile: float,
     ) -> float:
-        """Calculate reserve SOC needed to survive spike period.
-
-        Reserve = max(spike_duration_hours, demand_window_hours) * avg_load_kWh
-        divided by battery_capacity_kWh * 100%
-
-        If demand window overlaps with or starts during spike, include full DW duration.
-        """
-        # Get demand window times
-        dw_start_time = self._parse_time_option(
-            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        """Calculate reserve SOC needed to survive spike period."""
+        return self._spike_analyzer.calculate_spike_reserve_soc(
+            data=data,
+            now_dt=now_dt,
+            spike_end=spike_end,
+            _spike_percentile=spike_percentile,
         )
-        dw_end_time = self._parse_time_option(
-            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
-        )
-
-        # Calculate spike duration
-        spike_duration_hours = max((spike_end - now_dt).total_seconds() / 3600, 0)
-
-        # Calculate demand window duration
-        dw_duration_hours = (
-            datetime.combine(now_dt.date(), dw_end_time)
-            - datetime.combine(now_dt.date(), dw_start_time)
-        ).total_seconds() / 3600
-        if dw_duration_hours < 0:
-            dw_duration_hours += 24  # Handle overnight DW
-
-        # Determine if DW overlaps with or starts during spike
-        dw_start_dt = now_dt.replace(
-            hour=dw_start_time.hour,
-            minute=dw_start_time.minute,
-            second=0,
-            microsecond=0,
-        )
-        # If DW starts after now but before spike ends, include it
-        dw_overlaps = dw_start_dt > now_dt and dw_start_dt < spike_end
-
-        # Use the longer of spike duration or DW duration (if overlapping)
-        if dw_overlaps:
-            # Include full demand window - battery must survive spike + DW
-            required_hours = max(spike_duration_hours, dw_duration_hours)
-            _LOGGER.debug(
-                "DW overlaps spike: spike=%.1fh, dw=%.1fh, using=%.1fh",
-                spike_duration_hours,
-                dw_duration_hours,
-                required_hours,
-            )
-        else:
-            required_hours = spike_duration_hours
-
-        # Get expected load (use current load as estimate)
-        expected_load_kw = data.load_power_kw if data.load_power_kw > 0 else 0.5
-
-        # Calculate reserve kWh needed
-        reserve_kwh = expected_load_kw * required_hours
-
-        # Convert to SOC percentage
-        reserve_soc = (reserve_kwh / BATTERY_CAPACITY_KWH) * 100
-
-        # Cap at reasonable maximum (can't reserve more than 100%)
-        return min(reserve_soc, 100.0)
 
     # ========================================================================
     # EXCESS SOLAR LOAD SHIFTING (backlog-high-017)
@@ -2089,380 +1556,24 @@ class ComputationEngine:
         data: CoordinatorData,
         now_dt: datetime,
     ) -> None:
-        """Compute excess solar load shifting signals.
-
-        This method calculates:
-        1. Excess solar available in different time windows
-        2. Safe additional load that won't trigger grid charging
-        3. Load shift signal (INCREASE/MAINTAIN/REDUCE/HOLD)
-        4. Binary sensor state for simple automations
-
-        Args:
-            data: CoordinatorData to populate with excess solar fields
-            now_dt: Current datetime
-        """
-        # Get configuration
-        target_pct = float(
-            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
-        min_soc_pct = float(
-            self.entry.options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
-        )
-        dw_start_time = self._parse_time_option(
-            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
-        )
-
-        # Get all Solcast forecasts
-        all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-
-        # Get historical load data
-        load_entity_id = self._get_entity_id("teslemetry_load_power")
-        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-        recent_load_kw = self._recent_load_1hr_kw
-
-        # Calculate current excess rate (real-time)
-        current_excess_kw = max(0.0, data.solar_power_kw - data.load_power_kw)
-        data.current_excess_rate_kw = round(current_excess_kw, 2)
-
-        # Base slot for calculations
-        current_5min = (now_dt.minute // 5) * 5
-        base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
-        current_hour = base_slot.hour
-
-        # Calculate excess by time windows
-        excess_by_windows = self._forecast_computer._calculate_excess_by_windows(
-            base_slot=base_slot,
-            all_solcast=all_solcast,
-            historical_avg_kw=hourly_avg_kw,
-            current_load_kw=data.load_power_kw,
-            recent_load_kw=recent_load_kw,
-            current_soc=data.soc,
-            target_pct=target_pct,
-            current_hour=current_hour,
-        )
-
-        # Store windowed excess values
-        data.excess_solar_current_hour_kwh = excess_by_windows.get(
-            "excess_current_hour_kwh", 0.0
-        )
-        data.excess_solar_next_2h_kwh = excess_by_windows.get("excess_next_2h_kwh", 0.0)
-        data.excess_solar_next_4h_kwh = excess_by_windows.get("excess_next_4h_kwh", 0.0)
-        data.excess_until_battery_full_kwh = excess_by_windows.get(
-            "excess_until_battery_full_kwh", 0.0
-        )
-
-        # Find negative FIT window
-        negative_fit_start, negative_fit_duration = (
-            self._forecast_computer._find_nearest_negative_fit_window(
-                data.feed_in_forecast, now_dt
-            )
-        )
-        data.negative_fit_window_start = negative_fit_start
-        data.negative_fit_window_duration_minutes = negative_fit_duration
-
-        # Calculate excess until negative FIT
-        data.excess_until_negative_fit_kwh = (
-            self._forecast_computer._calculate_excess_until_negative_fit(
-                base_slot=base_slot,
-                negative_fit_start=negative_fit_start,
-                all_solcast=all_solcast,
-                historical_avg_kw=hourly_avg_kw,
-                current_load_kw=data.load_power_kw,
-                recent_load_kw=recent_load_kw,
-                current_soc=data.soc,
-                target_pct=target_pct,
-                current_hour=current_hour,
-            )
-        )
-
-        # Calculate time until battery full
-        fill_point_minutes = self._forecast_computer._find_battery_fill_point(
-            start_soc=data.soc,
-            start_slot=base_slot,
-            all_solcast=all_solcast,
-            historical_avg_kw=hourly_avg_kw,
-            current_load_kw=data.load_power_kw,
-            recent_load_kw=recent_load_kw,
-            current_hour=current_hour,
-        )
-        data.time_until_battery_full_minutes = fill_point_minutes or 0
-
-        # Calculate safe additional load
-        safe_additional_load, grid_charge_risk = (
-            self._forecast_computer._calculate_safe_additional_load(
-                base_slot=base_slot,
-                all_solcast=all_solcast,
-                historical_avg_kw=hourly_avg_kw,
-                current_load_kw=data.load_power_kw,
-                recent_load_kw=recent_load_kw,
-                current_soc=data.soc,
-                target_pct=target_pct,
-                dw_start_time=dw_start_time,
-                effective_cheap_price=data.effective_cheap_price,
-                general_forecast=data.general_forecast,
-                min_soc_pct=min_soc_pct,
-                current_hour=current_hour,
-            )
-        )
-        data.safe_additional_load_kw = round(safe_additional_load, 1)
-        data.grid_charge_risk = grid_charge_risk
-
-        # Compute load shift signal
-        signal, recommended_kw, duration, reason, confidence = (
-            self._forecast_computer._compute_load_shift_signal(
-                data=data,
-                excess_by_windows=excess_by_windows,
-                negative_fit_start=negative_fit_start,
-                safe_additional_load=safe_additional_load,
-                grid_charge_risk=grid_charge_risk,
-                fill_point_minutes=fill_point_minutes,
-            )
-        )
-        data.load_shift_signal = signal
-        data.load_shift_recommended_kw = round(recommended_kw, 1)
-        data.load_shift_recommended_duration_minutes = duration
-        data.load_shift_reason = reason
-        data.load_shift_confidence = confidence
-
-        # Determine can_add_load_now (critical safety flag)
-        # Only true if:
-        # 1. There's actual excess available
-        # 2. Safe additional load > 0
-        # 3. No grid charge risk
-        # 4. Not in demand window
-        # 5. Not in manual override
-        data.can_add_load_now = (
-            data.excess_solar_next_2h_kwh > 0.5
-            and safe_additional_load > 0.5
-            and not grid_charge_risk
-            and not data.demand_window_active
-            and not data.manual_override
-        )
-
-        # Determine binary sensor state
-        # ON when:
-        # 1. Solar production > household load + battery charge rate
-        # 2. Battery SOC > 80% OR battery charging at max rate
-        # 3. Not in demand window
-        # 4. can_add_load_now is true
-        battery_charging = data.battery_power_kw < -0.1  # Negative = charging
-        battery_near_full = data.soc > 80
-        solar_exceeds_load = data.solar_power_kw > data.load_power_kw + 0.5
-
-        data.excess_solar_available = (
-            solar_exceeds_load
-            and (battery_near_full or battery_charging)
-            and not data.demand_window_active
-            and data.can_add_load_now
-        )
-
-        _LOGGER.info(
-            "Excess solar: available=%s, can_add_load=%s, signal=%s, safe_kw=%.1f, next_2h=%.1fkWh",
-            data.excess_solar_available,
-            data.can_add_load_now,
-            data.load_shift_signal,
-            data.safe_additional_load_kw,
-            data.excess_solar_next_2h_kwh,
-        )
+        """Compute excess solar load shifting signals."""
+        self._excess_solar_signals.compute_signals(data, now_dt)
 
     # ========================================================================
     # FORECAST ACCURACY TRACKING (Issue #37 Phase 2)
     # ========================================================================
 
     async def async_compute_forecast_accuracy(self, data: CoordinatorData) -> None:
-        """Compare past forecast predictions with actual outcomes.
-
-        Uses forecast_history to find predictions made N minutes ago for the
-        current time, and compares with actual current values.
-
-        The key insight: We stored predictions with target_time = now+offset.
-        When that target_time arrives, we compare the predicted value to actual.
-
-        Args:
-            data: CoordinatorData to populate with accuracy metrics
-        """
-        now_dt = dt_util.now()
-
-        # Initialize default values (keep previous if no comparison possible)
-        if not hasattr(data, "forecast_error_soc_15min"):
-            data.forecast_error_soc_15min = 0.0
-        if not hasattr(data, "forecast_error_soc_1h"):
-            data.forecast_error_soc_1h = 0.0
-        if not hasattr(data, "forecast_error_soc_4h"):
-            data.forecast_error_soc_4h = 0.0
-        if not hasattr(data, "forecast_accuracy_soc_15min"):
-            data.forecast_accuracy_soc_15min = 100.0
-        if not hasattr(data, "forecast_accuracy_soc_1h"):
-            data.forecast_accuracy_soc_1h = 100.0
-        if not hasattr(data, "forecast_accuracy_soc_4h"):
-            data.forecast_accuracy_soc_4h = 100.0
-        if not hasattr(data, "forecast_error_buy_price_1h"):
-            data.forecast_error_buy_price_1h = 0.0
-        if not hasattr(data, "forecast_error_sell_price_1h"):
-            data.forecast_error_sell_price_1h = 0.0
-
-        data.forecast_last_comparison_time = now_dt.isoformat()
-
-        try:
-            # Get current actual values
-            actual_soc = data.soc
-            actual_buy_price = data.general_price
-            actual_sell_price = data.feed_in_price
-
-            # Look for predictions whose target_time matches now
-            # These were made offset_minutes ago, predicting for now
-            history = data.forecast_history
-
-            # Track which offsets we found comparisons for
-            comparisons_found = {15: False, 60: False, 240: False}
-
-            for entry in history:
-                # Skip legacy entries without offset_minutes
-                if "offset_minutes" not in entry:
-                    continue
-
-                target_time_str = entry.get("target_time")
-                if not target_time_str:
-                    continue
-
-                try:
-                    target_dt = datetime.fromisoformat(target_time_str)
-                except ValueError:
-                    continue
-
-                # Normalize timezone
-                if target_dt.tzinfo is None:
-                    target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-                else:
-                    target_dt = dt_util.as_local(target_dt)
-
-                # Check if this prediction was for a time within 1 minute of now
-                time_diff = abs((target_dt - now_dt).total_seconds())
-                if time_diff > 60:  # More than 1 minute off
-                    continue
-
-                offset = entry.get("offset_minutes")
-                predicted_soc = entry.get("predicted_soc")
-                predicted_buy = entry.get("predicted_buy_price", actual_buy_price)
-                predicted_sell = entry.get("predicted_sell_price", actual_sell_price)
-
-                if predicted_soc is None:
-                    continue
-
-                # Calculate error (predicted - actual)
-                soc_error = predicted_soc - actual_soc
-
-                # Store errors based on offset
-                if offset == 15:
-                    data.forecast_error_soc_15min = round(soc_error, 1)
-                    data.forecast_accuracy_soc_15min = max(
-                        0.0, min(100.0, 100.0 - abs(soc_error))
-                    )
-                    comparisons_found[15] = True
-                elif offset == 60:
-                    data.forecast_error_soc_1h = round(soc_error, 1)
-                    data.forecast_accuracy_soc_1h = max(
-                        0.0, min(100.0, 100.0 - abs(soc_error))
-                    )
-                    data.forecast_error_buy_price_1h = round(
-                        predicted_buy - actual_buy_price, 4
-                    )
-                    data.forecast_error_sell_price_1h = round(
-                        predicted_sell - actual_sell_price, 4
-                    )
-                    comparisons_found[60] = True
-                elif offset == 240:
-                    data.forecast_error_soc_4h = round(soc_error, 1)
-                    data.forecast_accuracy_soc_4h = max(
-                        0.0, min(100.0, 100.0 - abs(soc_error))
-                    )
-                    comparisons_found[240] = True
-
-            # Increment comparison count if we found any comparisons
-            if any(comparisons_found.values()):
-                data.forecast_comparisons_made += 1
-
-                _LOGGER.info(
-                    "Forecast accuracy: 15min=%.1f%% (err=%.1f), 1h=%.1f%% (err=%.1f), 4h=%.1f%% (err=%.1f), comparisons=%d, found=%s",
-                    data.forecast_accuracy_soc_15min,
-                    data.forecast_error_soc_15min,
-                    data.forecast_accuracy_soc_1h,
-                    data.forecast_error_soc_1h,
-                    data.forecast_accuracy_soc_4h,
-                    data.forecast_error_soc_4h,
-                    data.forecast_comparisons_made,
-                    comparisons_found,
-                )
-            else:
-                _LOGGER.debug(
-                    "No forecast predictions found for comparison at %s (history has %d entries)",
-                    now_dt.strftime("%H:%M"),
-                    len(history),
-                )
-
-        except Exception as e:
-            _LOGGER.warning("Failed to compute forecast accuracy: %s", e)
+        """Compare past forecast predictions with actual outcomes."""
+        await self._forecast_accuracy.compute_forecast_accuracy(data)
 
     # ========================================================================
     # WEATHER DIAGNOSTICS (Issue #61)
     # ========================================================================
 
     def _populate_weather_diagnostics(self, data: CoordinatorData) -> None:
-        """Populate weather correlation diagnostic fields.
-
-        Exposes learned coefficients, confidence levels, and sample counts
-        for dashboard visibility into weather-based load prediction.
-
-        Args:
-            data: CoordinatorData to populate with weather diagnostics
-        """
-        # Check if weather learning is enabled
-        weather_learning_enabled = self.entry.options.get(
-            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
-        )
-        data.weather_learning_enabled = weather_learning_enabled
-
-        if not weather_learning_enabled or self._weather_correlation is None:
-            # Clear diagnostics if disabled
-            data.weather_correlation_confidence = "low"
-            data.weather_adjustment_applied = False
-            data.weather_cooling_coefficient = 0.0
-            data.weather_heating_coefficient = 0.0
-            data.weather_sample_count = 0
-            return
-
-        # Get diagnostics from weather correlation
-        diagnostics = self._weather_correlation.get_diagnostics()
-
-        # Populate data fields
-        data.weather_correlation_confidence = "low"  # Will be updated per-hour
-        data.weather_sample_count = diagnostics.get("total_samples", 0)
-        data.weather_cooling_coefficient = diagnostics.get(
-            "average_cooling_coefficient", 0.0
-        )
-        data.weather_heating_coefficient = diagnostics.get(
-            "average_heating_coefficient", 0.0
-        )
-
-        # Check if any hourly coefficients have high confidence
-        hourly_coefs = diagnostics.get("hourly_coefficients", {})
-        has_medium_confidence = any(
-            coef.get("confidence") in ("medium", "high")
-            for coef in hourly_coefs.values()
-        )
-        if has_medium_confidence:
-            data.weather_correlation_confidence = "medium"
-
-        # Track if weather adjustment was applied in the current forecast
-        # This is set to True if any slot used weather-adjusted load
-        data.weather_adjustment_applied = (
-            False  # Will be set during forecast computation
-        )
-
-        _LOGGER.debug(
-            "Weather diagnostics: samples=%d, cooling=%.4f, heating=%.4f, confidence=%s",
-            data.weather_sample_count,
-            data.weather_cooling_coefficient,
-            data.weather_heating_coefficient,
-            data.weather_correlation_confidence,
+        """Populate weather correlation diagnostic fields."""
+        self._weather_diagnostics.populate_weather_diagnostics(
+            data=data,
+            weather_correlation=self._weather_correlation,
         )
