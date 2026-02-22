@@ -294,6 +294,19 @@ class WeatherCorrelation:
 
         return forecasts
 
+    def _refresh_weather_entity_from_config(self) -> str:
+        """Get the current weather entity from config entry.
+
+        Always reads fresh from config to pick up user changes without
+        requiring a restart. Checks options first (Configure UI), then data.
+
+        Returns:
+            Current weather entity ID from config, or empty string.
+        """
+        return self.entry.options.get(CONF_WEATHER_ENTITY, "") or self.entry.data.get(
+            CONF_WEATHER_ENTITY, ""
+        )
+
     async def async_get_temperature_forecast(
         self, force_refresh: bool = False
     ) -> list[TemperatureForecast]:
@@ -308,10 +321,20 @@ class WeatherCorrelation:
         Returns:
             List of TemperatureForecast objects for upcoming hours.
         """
-        weather_entity = self._data.weather_entity_id
+        # Always get fresh entity ID from config to pick up user changes
+        weather_entity = self._refresh_weather_entity_from_config()
         if not weather_entity:
             _LOGGER.debug("No weather entity configured")
             return []
+
+        # Update cached entity ID if changed
+        if weather_entity != self._data.weather_entity_id:
+            _LOGGER.info(
+                "Weather entity changed from %s to %s",
+                self._data.weather_entity_id,
+                weather_entity,
+            )
+            self._data.weather_entity_id = weather_entity
 
         now = dt_util.now()
 
