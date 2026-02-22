@@ -466,11 +466,16 @@ class WeatherCorrelation:
                                         )
                                     continue
                             else:
+                                # dt_util.parse_datetime may return naive datetime
+                                # Ensure it's timezone-aware
+                                if forecast_time.tzinfo is None:
+                                    forecast_time = dt_util.as_local(forecast_time)
                                 if i == 0:
                                     _LOGGER.info(
-                                        "First entry: datetime='%s' parsed directly as %s",
+                                        "First entry: datetime='%s' parsed as %s (tzinfo=%s)",
                                         forecast_time_str,
                                         forecast_time,
+                                        forecast_time.tzinfo,
                                     )
                             parsed_count += 1
                         except (ValueError, TypeError) as e:
