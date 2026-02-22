@@ -503,6 +503,12 @@ class LocalShiftCoordinator:
                 self._computation_engine.async_learn_weather_sample(self.data),
                 "localshift_weather_learning",
             )
+            # Refresh temperature forecast from weather entity (Issue #135)
+            # Uses modern weather.get_forecasts service with 30-min cache
+            self.hass.async_create_task(
+                self._refresh_weather_forecast(),
+                "localshift_weather_forecast",
+            )
             # Compute forecast accuracy metrics (Issue #37 Phase 2)
             self.hass.async_create_task(
                 self._computation_engine.async_compute_forecast_accuracy(self.data),
@@ -691,3 +697,29 @@ class LocalShiftCoordinator:
         """Send a notification via the notification service."""
         if self._notification_service is not None:
             await self._notification_service.send_notification(title, message)
+
+    async def _refresh_weather_forecast(self) -> None:
+        """Refresh temperature forecast from weather entity.
+
+        Uses the modern weather.get_forecasts service (HA 2024.3+) with caching.
+        Updates CoordinatorData with the latest forecast for use by sensors.
+        """
+        if self._computation_engine is None:
+            return
+
+        forecasts = await self._computation_engine.async_refresh_weather_forecast()
+
+        if forecasts is not None:
+            # Update CoordinatorData with the forecast data
+
+            self.data.weather_temperature_forecast = {}
+            for forecast in forecasts:
+                hour = forecast.slot_time.hour
+                temperature = forecast.temperature
+                if temperature is not None:
+                    self.data.weather_temperature_forecast[hour] = temperature
+
+            _LOGGER.debug(
+                "Updated weather forecast: %d hours of temperature data",
+                len(self.data.weather_temperature_forecast),
+            )
