@@ -127,6 +127,14 @@ The architecture was designed to solve several problems from the original YAML-b
 2. **Computation Engine** (`computation_engine.py`)
    - Computes derived values (directional power, mode detection, forecasts)
    - Delegates to `ForecastComputer` for 15-minute SOC simulation
+   - Delegates focused responsibilities to `computation_engine_lib/` helpers:
+     - `change_tracker.py` → `ForecastChangeTracker`
+     - `price_calculator.py` → effective cheap price + solar-weighted FIT
+     - `mode_decision.py` → active mode + decision-log maintenance
+     - `spike_analyzer.py` → conservative spike analysis + reserve SOC
+     - `excess_solar_signals.py` → excess-solar/load-shift signal orchestration
+     - `forecast_accuracy.py` → planned-vs-actual forecast accuracy comparisons
+     - `weather_diagnostics.py` → weather-learning diagnostic population
    - Determines `active_mode` based on all conditions
 
 3. **State Machine** (`state_machine.py`)
@@ -480,6 +488,22 @@ After issuing transition commands, the system polls for hardware confirmation fo
 1. **Dynamic thresholds**: Auto-tune change detection thresholds
 2. **Multi-battery support**: Extend for multiple Powerwalls
 3. **Cost optimization**: Goal-seeking algorithm for maximum savings
+
+## Computation Engine Modularization (Issue #146)
+
+To reduce `computation_engine.py` complexity and improve maintainability, forecast-adjacent logic has been extracted into dedicated helper modules under `custom_components/localshift/computation_engine_lib/`.
+
+### Why this extraction was done
+
+- Keep `ComputationEngine` focused on orchestration and lifecycle concerns
+- Make each algorithm area independently testable and easier to reason about
+- Reduce risk when modifying one decision area (e.g., spike logic) by isolating it from unrelated sections
+
+### Delegation pattern
+
+- `ComputationEngine` constructs helper engines in `__init__` and injects dependencies (callbacks/utilities/config).
+- Existing public/internal method signatures in `ComputationEngine` are retained as thin wrappers for compatibility.
+- Behavior remains forecast-driven and compatible with existing coordinator/state-machine flow.
 
 ## Weather Correlation (Issue #61)
 

@@ -50,7 +50,7 @@ The system should:
 
 ### Class Structure
 
-**Location**: `computation_engine.py`
+**Location**: `custom_components/localshift/computation_engine_lib/change_tracker.py`
 
 ```python
 from datetime import datetime, timedelta
@@ -149,7 +149,7 @@ def _update_cache(
 
 ### Integration with Computation Engine
 
-**Location**: `computation_engine.py` in `ComputationEngine` class
+**Location**: `computation_engine.py` in `ComputationEngine` class (orchestration layer)
 
 **Add to `__init__()`:**
 ```python
@@ -401,6 +401,21 @@ class ForecastChangeTracker:
 5. **Cost-based trigger**: Recompute if missed opportunity cost > threshold
 
 ## Change Log
+
+### 2026-02-23: Modular extraction of change detection (Issue #146)
+
+**What changed:**
+- `ForecastChangeTracker` was extracted from `computation_engine.py` into `computation_engine_lib/change_tracker.py`.
+- `ComputationEngine` now composes this helper via dependency wiring in `__init__`.
+- Runtime imports are surfaced through `computation_engine_lib/__init__.py` for stable package-level access.
+
+**Why:**
+- Keeps `ComputationEngine` focused on orchestration instead of low-level comparison logic.
+- Improves maintainability and targeted testability of forecast recompute rules.
+
+**Behavior impact:**
+- No intended functional change to recompute thresholds or decision criteria.
+- Existing triggers remain: price/FIT any-change, SOC ≥1%, or age >1 minute.
 
 ### 2026-02-19: Hybrid Timescale Slot Duration Fix
 
