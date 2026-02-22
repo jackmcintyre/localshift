@@ -15,6 +15,26 @@ DOMAIN = "localshift"
 # -----------------------------------------------------------------------------
 
 
+class ThermalMode(StrEnum):
+    """Daily thermal operating mode for HVAC automation."""
+
+    OFF = "off"  # No thermal automation needed (mild day)
+    COOL = "cool"  # Cooling mode (hot day)
+    HEAT = "heat"  # Heating mode (cold day)
+    DRY = "dry"  # Dehumidification mode (humid day)
+
+    @property
+    def display_name(self) -> str:
+        """Return a user-friendly display name for the mode."""
+        names = {
+            ThermalMode.OFF: "Off",
+            ThermalMode.COOL: "Cooling",
+            ThermalMode.HEAT: "Heating",
+            ThermalMode.DRY: "Dehumidify",
+        }
+        return names[self]
+
+
 class BatteryMode(StrEnum):
     """Battery operating modes."""
 
@@ -120,6 +140,42 @@ DEFAULT_WEATHER_LEARNING_ENABLED = True
 
 # Manual override auto-clear timeout
 CONF_MANUAL_OVERRIDE_TIMEOUT = "manual_override_timeout"
+
+# -----------------------------------------------------------------------------
+# Thermal Manager Configuration (Issue #137, #63)
+# -----------------------------------------------------------------------------
+
+# Climate entity configuration
+CONF_CLIMATE_ENTITIES = "climate_entities"  # All climate entities (monitored)
+CONF_CLIMATE_CONTROL_ENTITIES = "climate_control_entities"  # Subset to control
+
+# Thermal management switches
+CONF_THERMAL_MANAGEMENT_ENABLED = "thermal_management_enabled"
+CONF_SOLAR_TAPER_ENABLED = "solar_taper_enabled"
+
+# Mode determination thresholds
+CONF_COOLING_TRIGGER_TEMP = "cooling_trigger_temp"
+CONF_HEATING_TRIGGER_TEMP = "heating_trigger_temp"
+CONF_DEHUMIDIFY_TRIGGER_HUMIDITY = "dehumidify_trigger_humidity"
+CONF_THERMAL_MODE_DECISION_TIME = "thermal_mode_decision_time"
+
+# Pre-conditioning settings
+CONF_PRECONDITION_HOURS_BEFORE_DW = "precondition_hours_before_dw"
+CONF_PRECONDITION_TEMP_OFFSET = "precondition_temp_offset"
+
+# Solar tapering settings
+CONF_TAPER_MAX_SETPOINT_OFFSET = "taper_max_setpoint_offset"
+
+# Defaults for thermal manager
+DEFAULT_THERMAL_MANAGEMENT_ENABLED = False
+DEFAULT_SOLAR_TAPER_ENABLED = True
+DEFAULT_COOLING_TRIGGER_TEMP = 28.0  # °C - above this, commit to COOL mode
+DEFAULT_HEATING_TRIGGER_TEMP = 15.0  # °C - below this, commit to HEAT mode
+DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY = 70.0  # % - above this, commit to DRY mode
+DEFAULT_THERMAL_MODE_DECISION_TIME = "06:00"
+DEFAULT_PRECONDITION_HOURS_BEFORE_DW = 1.0
+DEFAULT_PRECONDITION_TEMP_OFFSET = 2.0
+DEFAULT_TAPER_MAX_SETPOINT_OFFSET = 3.0
 
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Default Entity IDs
@@ -267,6 +323,49 @@ THRESHOLD_RANGES = {
         "step": 0.01,
         "unit": "$/kWh",
         "icon": "mdi:currency-usd",
+    },
+    # Thermal manager thresholds
+    CONF_COOLING_TRIGGER_TEMP: {
+        "min": 20.0,
+        "max": 35.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer-high",
+    },
+    CONF_HEATING_TRIGGER_TEMP: {
+        "min": 5.0,
+        "max": 20.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer-low",
+    },
+    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY: {
+        "min": 50.0,
+        "max": 90.0,
+        "step": 5.0,
+        "unit": "%",
+        "icon": "mdi:water-percent",
+    },
+    CONF_PRECONDITION_HOURS_BEFORE_DW: {
+        "min": 0.5,
+        "max": 4.0,
+        "step": 0.5,
+        "unit": "hours",
+        "icon": "mdi:clock-start",
+    },
+    CONF_PRECONDITION_TEMP_OFFSET: {
+        "min": 0.5,
+        "max": 5.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer",
+    },
+    CONF_TAPER_MAX_SETPOINT_OFFSET: {
+        "min": 1.0,
+        "max": 6.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:tune-vertical",
     },
 }
 
