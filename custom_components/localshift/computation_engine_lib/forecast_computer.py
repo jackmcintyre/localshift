@@ -212,6 +212,7 @@ class ForecastComputer:
         end_time: datetime,
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
@@ -222,22 +223,39 @@ class ForecastComputer:
 
         This helps determine if grid charging is necessary.
 
+        CRITICAL for Issue #137: When baseline_avg_kw is provided, use it instead
+        of historical_avg_kw for load estimation. This prevents the chicken-and-egg
+        feedback loop where:
+        1. HVAC turns on → load increases
+        2. System forecasts higher consumption using historical (with HVAC spikes)
+        3. System triggers grid charging unnecessarily
+        4. Energy wasted instead of using solar surplus
+
+        By using baseline (non-HVAC) load for grid charging decisions, we ensure
+        that discretionary HVAC load doesn't trigger unnecessary grid charging.
+
         Args:
             actual_current_soc: ACTUAL current battery SOC (from real-time data)
             start_slot: Starting slot time
             target_pct: Target SOC percentage
             all_solcast: Full Solcast forecast (today + tomorrow)
-            historical_avg_kw: Historical hourly load profile
+            historical_avg_kw: Historical hourly load profile (fallback)
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
             end_time: End time (exclusive) to simulate until
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for #137
 
         Returns:
             (soc_at_end_pct, max_soc_pct, can_reach_target)
         """
         soc = actual_current_soc
         base_slot = start_slot.replace(second=0, microsecond=0)
+
+        # ISSUE #137: Use baseline load for grid charging decisions
+        # When baseline_avg_kw is provided, use it instead of historical_avg_kw
+        # This prevents the feedback loop where HVAC spikes trigger grid charging
+        load_profile = baseline_avg_kw if baseline_avg_kw else historical_avg_kw
 
         # Cap end_time to Solcast horizon to avoid repeated solar lookups outside forecast range.
         solcast_end: datetime | None = None
@@ -275,8 +293,9 @@ class ForecastComputer:
             # Get solar and load for this 15-min slot
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
 
+            # ISSUE #137: Use baseline load profile when provided
             load_kw, _ = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
+                load_profile,  # Uses baseline_avg_kw if provided
                 slot_hour,
                 current_hour,
                 current_load_kw,
