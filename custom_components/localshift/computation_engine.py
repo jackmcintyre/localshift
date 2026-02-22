@@ -171,6 +171,10 @@ class ComputationEngine:
         self._get_entity_id = get_entity_id_func
         self._get_switch_state = get_switch_state_func
 
+        # Forecast history storage (HA Storage) - persists predictions across restarts
+        self._forecast_history_store: Any = None  # Initialized in async_start
+        self._forecast_history_loaded: bool = False
+
         # History fetcher for historical load data (delegated to separate module)
         self._history_fetcher = HistoryFetcher(hass, entry)
 
@@ -769,6 +773,10 @@ class ComputationEngine:
                 data.weekend_sample_counts = weekend_counts
                 data.weekday_hourly_profile_kw = weekday_avg
                 data.weekend_hourly_profile_kw = weekend_avg
+
+                # Store forecast history on every recompute (Issue #131)
+                # This ensures predictions are available for accuracy tracking
+                self._store_forecast_history_every_update(data, now_dt)
 
             except Exception as e:
                 _LOGGER.error("Forecast computation failed: %s", e, exc_info=True)
@@ -1557,6 +1565,198 @@ class ComputationEngine:
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
         self._history_fetcher.clear_historical_cache()
+
+    # ========================================================================
+    # FORECAST HISTORY PERSISTENCE (Issue #131)
+    # ========================================================================
+
+    async def async_initialize_forecast_history_storage(self) -> None:
+        """Initialize forecast history storage and load persisted data."""
+        try:
+            from homeassistant.helpers.storage import Store
+
+            self._forecast_history_store = Store(
+                self.hass, 1, "localshift_forecast_history"
+            )
+            _LOGGER.info("Forecast history storage initialized")
+        except Exception as e:
+            _LOGGER.warning("Failed to initialize forecast history storage: %s", e)
+            self._forecast_history_store = None
+
+    async def async_load_forecast_history(self, data: CoordinatorData) -> None:
+        """Load persisted forecast history from storage.
+
+        Called during coordinator startup to restore predictions across restarts.
+        """
+        if self._forecast_history_store is None:
+            _LOGGER.debug("No forecast history store available")
+            return
+
+        try:
+            stored_data = await self._forecast_history_store.async_load()
+            if stored_data and isinstance(stored_data, dict):
+                history = stored_data.get("forecast_history", [])
+                first_prediction = stored_data.get("first_prediction_time", "")
+
+                if history:
+                    # Filter out entries with target_time in the past (older than 4 hours)
+                    # These are no longer useful for accuracy tracking
+                    now_dt = dt_util.now()
+                    cutoff = now_dt - timedelta(hours=4)
+
+                    valid_entries = []
+                    for entry in history:
+                        if "target_time" not in entry:
+                            continue
+                        try:
+                            target_dt = datetime.fromisoformat(entry["target_time"])
+                            if target_dt.tzinfo is None:
+                                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
+                            else:
+                                target_dt = dt_util.as_local(target_dt)
+
+                            if target_dt >= cutoff:
+                                valid_entries.append(entry)
+                        except (ValueError, TypeError):
+                            continue
+
+                    data.forecast_history = valid_entries
+                    data.forecast_first_prediction_time = first_prediction
+                    data.forecast_history_count = len(valid_entries)
+
+                    _LOGGER.info(
+                        "Loaded %d forecast history entries from storage (filtered from %d)",
+                        len(valid_entries),
+                        len(history),
+                    )
+
+                    # Find first prediction time from loaded entries if not stored
+                    if not first_prediction and valid_entries:
+                        for entry in valid_entries:
+                            if entry.get("prediction_time"):
+                                data.forecast_first_prediction_time = entry[
+                                    "prediction_time"
+                                ]
+                                break
+
+                self._forecast_history_loaded = True
+        except Exception as e:
+            _LOGGER.warning("Failed to load forecast history: %s", e)
+
+    async def async_save_forecast_history(self, data: CoordinatorData) -> None:
+        """Persist forecast history to storage.
+
+        Called after new predictions are stored.
+        """
+        if self._forecast_history_store is None:
+            return
+
+        try:
+            # Store only entries with target_time (not legacy entries)
+            entries_to_save = [
+                entry
+                for entry in data.forecast_history
+                if "target_time" in entry and "offset_minutes" in entry
+            ]
+
+            # Limit to recent entries (keep storage size manageable)
+            if len(entries_to_save) > 100:
+                entries_to_save = entries_to_save[-100:]
+
+            stored_data = {
+                "forecast_history": entries_to_save,
+                "first_prediction_time": data.forecast_first_prediction_time,
+            }
+
+            await self._forecast_history_store.async_save(stored_data)
+            _LOGGER.debug("Saved %d forecast history entries", len(entries_to_save))
+        except Exception as e:
+            _LOGGER.warning("Failed to save forecast history: %s", e)
+
+    def _store_forecast_history_every_update(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+    ) -> None:
+        """Store forecast predictions on every forecast recompute.
+
+        This ensures we always have predictions available for accuracy tracking,
+        not just on hour boundaries.
+
+        Args:
+            data: CoordinatorData to update
+            now_dt: Current datetime
+        """
+        slots = data.daily_forecast
+        if not slots:
+            return
+
+        # Track if this is the first prediction
+        is_first_prediction = len(data.forecast_history) == 0
+
+        # Store predictions for 15min, 1h, and 4h into the future
+        for offset_minutes in [15, 60, 240]:
+            target_dt = now_dt + timedelta(minutes=offset_minutes)
+
+            # Normalize target_dt timezone
+            if target_dt.tzinfo is None:
+                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
+            else:
+                target_dt = dt_util.as_local(target_dt)
+
+            # Find the forecast slot that covers target_dt
+            for slot in slots:
+                ts = slot.get("timestamp", "")
+                if not ts:
+                    continue
+                try:
+                    slot_dt = datetime.fromisoformat(ts)
+                except ValueError:
+                    continue
+
+                # Normalize timezone
+                if slot_dt.tzinfo is None:
+                    slot_dt = dt_util.as_local(dt_util.as_utc(slot_dt))
+                else:
+                    slot_dt = dt_util.as_local(slot_dt)
+
+                # Check if this slot covers target_dt
+                slot_interval = slot.get("slot_interval_minutes", 15)
+                slot_end = slot_dt + timedelta(minutes=slot_interval)
+
+                if slot_dt <= target_dt < slot_end:
+                    # Check if we already have a prediction for this target_time
+                    # Avoid duplicates by checking target_time + offset combination
+                    target_key = f"{target_dt.isoformat()}_{offset_minutes}"
+                    existing_keys = {
+                        f"{e.get('target_time')}_{e.get('offset_minutes')}"
+                        for e in data.forecast_history
+                        if "target_time" in e and "offset_minutes" in e
+                    }
+
+                    if target_key not in existing_keys:
+                        entry = {
+                            "prediction_time": now_dt.isoformat(),
+                            "target_time": target_dt.isoformat(),
+                            "offset_minutes": offset_minutes,
+                            "predicted_soc": slot.get("predicted_soc", 0),
+                            "predicted_buy_price": slot.get("buy_price", 0),
+                            "predicted_sell_price": slot.get("sell_price", 0),
+                        }
+                        data.forecast_history.append(entry)
+
+                        # Track first prediction time
+                        if is_first_prediction:
+                            data.forecast_first_prediction_time = now_dt.isoformat()
+                            is_first_prediction = False
+                    break
+
+        # Update count
+        data.forecast_history_count = len(data.forecast_history)
+
+        # Keep last 200 entries
+        if len(data.forecast_history) > 200:
+            data.forecast_history = data.forecast_history[-200:]
 
     # ========================================================================
     # WEATHER CORRELATION (Issue #61)

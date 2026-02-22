@@ -702,6 +702,9 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
             # Comparison metadata
             "comparisons_made": d.forecast_comparisons_made,
             "last_comparison_time": d.forecast_last_comparison_time,
+            # Forecast history persistence (Issue #131)
+            "first_prediction_time": d.forecast_first_prediction_time,
+            "history_count": d.forecast_history_count,
         }
 
 
