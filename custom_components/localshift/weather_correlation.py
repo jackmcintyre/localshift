@@ -416,7 +416,13 @@ class WeatherCorrelation:
 
                 if isinstance(forecast_data, list):
                     parsed_count = 0
+                    skipped_no_datetime = 0
                     filtered_count = 0
+                    _LOGGER.info(
+                        "Processing %d forecast entries, first entry keys: %s",
+                        len(forecast_data),
+                        list(forecast_data[0].keys()) if forecast_data else "empty",
+                    )
                     for forecast_entry in forecast_data:
                         # Skip if not a dict (handles 'str' object error)
                         if not isinstance(forecast_entry, dict):
@@ -425,6 +431,12 @@ class WeatherCorrelation:
                         # Parse forecast datetime - HA uses "datetime" key
                         forecast_time_str = forecast_entry.get("datetime")
                         if not forecast_time_str:
+                            skipped_no_datetime += 1
+                            if skipped_no_datetime <= 2:
+                                _LOGGER.info(
+                                    "Entry missing 'datetime', keys: %s",
+                                    list(forecast_entry.keys()),
+                                )
                             continue
 
                         try:
