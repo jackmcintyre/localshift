@@ -214,9 +214,11 @@ class WeatherCorrelation:
             )
         else:
             # Initialize with config values
-            self._data.weather_entity_id = self.entry.data.get(
+            # Check options first (user can change via Configure UI),
+            # then fall back to data (initial setup)
+            self._data.weather_entity_id = self.entry.options.get(
                 CONF_WEATHER_ENTITY, ""
-            ) or self.entry.options.get(CONF_WEATHER_ENTITY, "")
+            ) or self.entry.data.get(CONF_WEATHER_ENTITY, "")
             self._data.cooling_threshold = self.entry.options.get(
                 CONF_COOLING_THRESHOLD, DEFAULT_COOLING_THRESHOLD
             )
@@ -342,47 +344,66 @@ class WeatherCorrelation:
             if response and weather_entity in response:
                 forecast_data = response[weather_entity]
 
-                for forecast_entry in forecast_data:
-                    # Parse forecast datetime - HA uses "datetime" key
-                    forecast_time_str = forecast_entry.get("datetime")
-                    if not forecast_time_str:
-                        continue
-
-                    try:
-                        forecast_time = dt_util.parse_datetime(forecast_time_str)
-                        if forecast_time is None:
+                # Handle different response formats
+                if isinstance(forecast_data, list):
+                    for forecast_entry in forecast_data:
+                        # Skip if not a dict (handles 'str' object error)
+                        if not isinstance(forecast_entry, dict):
                             continue
-                    except (ValueError, TypeError):
-                        continue
 
-                    # Only include forecasts for the next 24 hours
-                    hours_ahead = (forecast_time - now).total_seconds() / 3600
-                    if hours_ahead < 0 or hours_ahead > 24:
-                        continue
+                        # Parse forecast datetime - HA uses "datetime" key
+                        forecast_time_str = forecast_entry.get("datetime")
+                        if not forecast_time_str:
+                            continue
 
-                    temperature = forecast_entry.get("temperature")
-                    condition = forecast_entry.get("condition", "unknown")
+                        try:
+                            forecast_time = dt_util.parse_datetime(forecast_time_str)
+                            if forecast_time is None:
+                                continue
+                        except (ValueError, TypeError):
+                            continue
 
-                    forecasts.append(
-                        TemperatureForecast(
-                            slot_time=forecast_time,
-                            temperature=temperature,
-                            condition=condition,
+                        # Only include forecasts for the next 24 hours
+                        hours_ahead = (forecast_time - now).total_seconds() / 3600
+                        if hours_ahead < 0 or hours_ahead > 24:
+                            continue
+
+                        temperature = forecast_entry.get("temperature")
+                        condition = forecast_entry.get("condition", "unknown")
+
+                        forecasts.append(
+                            TemperatureForecast(
+                                slot_time=forecast_time,
+                                temperature=temperature,
+                                condition=condition,
+                            )
                         )
-                    )
 
-                _LOGGER.info(
-                    "Fetched %d temperature forecasts via weather.get_forecasts service",
-                    len(forecasts),
+                    _LOGGER.info(
+                        "Fetched %d temperature forecasts via weather.get_forecasts service",
+                        len(forecasts),
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Unexpected forecast_data format: %s",
+                        type(forecast_data).__name__,
+                    )
+            else:
+                _LOGGER.debug(
+                    "No response from weather.get_forecasts for entity %s, "
+                    "trying legacy attribute",
+                    weather_entity,
                 )
 
         except Exception as e:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "Failed to fetch forecasts via weather.get_forecasts service: %s, "
                 "falling back to legacy attribute",
                 e,
             )
-            # Fall back to legacy attribute method
+
+        # If no forecasts from modern service, try legacy attribute
+        if not forecasts:
             forecasts = self.get_temperature_forecast()
 
         # Update cache
