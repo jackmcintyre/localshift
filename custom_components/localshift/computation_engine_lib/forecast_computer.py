@@ -591,6 +591,7 @@ class ForecastComputer:
         current_hour: int | None = None,
         is_current_slot: bool = False,
         is_currently_grid_charging: bool = False,
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
@@ -606,6 +607,10 @@ class ForecastComputer:
            (allows solar to charge during DW period)
         6. HYSTERESIS: Once grid charging starts, require stronger evidence to stop
            (solar must reach target + margin, not just target)
+
+        Issue #137: When baseline_avg_kw is provided, use it instead of historical_avg_kw
+        for grid charging decisions. This prevents the feedback loop where HVAC spikes
+        trigger unnecessary grid charging.
 
         Args:
             slot_start: Start time of the 15-minute slot
@@ -628,6 +633,7 @@ class ForecastComputer:
             general_price_current: Current spot buy price (only for current slot)
             is_current_slot: True if this is the current time slot (use spot price)
             is_currently_grid_charging: True if currently in grid charging mode (hysteresis)
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for Issue #137
 
         Returns:
             (should_charge, should_boost)
@@ -744,6 +750,7 @@ class ForecastComputer:
                 )
 
                 # Now simulate from solar start to next DW
+                # ISSUE #137: Pass baseline for grid charging decisions
                 soc_at_end, max_soc, can_reach_with_solar_only = (
                     self._simulate_future_soc_with_solar_only(
                         actual_current_soc=soc_at_solar_start,
@@ -756,6 +763,7 @@ class ForecastComputer:
                         dw_start_time=dw_start_time,
                         end_time=sim_end,
                         min_soc_pct=min_soc_pct,
+                        baseline_avg_kw=baseline_avg_kw,
                     )
                 )
 
@@ -795,6 +803,7 @@ class ForecastComputer:
                 return False, False
         else:
             # Daylight slot - use original simulation logic
+            # ISSUE #137: Pass baseline for grid charging decisions
             soc_at_end, max_soc, can_reach_with_solar_only = (
                 self._simulate_future_soc_with_solar_only(
                     actual_current_soc=predicted_soc,
@@ -807,6 +816,7 @@ class ForecastComputer:
                     dw_start_time=dw_start_time,
                     end_time=sim_end,
                     min_soc_pct=min_soc_pct,
+                    baseline_avg_kw=baseline_avg_kw,
                 )
             )
 
@@ -2239,11 +2249,25 @@ class ForecastComputer:
         recent_load_kw: float,
         historical_load_source: str,
         historical_load_sample_counts: dict[int, int],
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[list[dict], list[list], dict[str, int]]:
         """Compute full 24-hour forecast with 15-minute breakdown.
 
         Provides 4x granularity over hourly forecast, capturing meaningful
         price variations from 5-minute pricing data.
+
+        Issue #137: When baseline_avg_kw is provided, use it for grid charging
+        decisions instead of historical_avg_kw. This prevents the feedback loop
+        where HVAC spikes trigger unnecessary grid charging.
+
+        Args:
+            data: CoordinatorData with current state
+            now_dt: Current datetime
+            historical_avg_kw: Historical hourly load profile (includes HVAC spikes)
+            recent_load_kw: Recent 1-hour average load
+            historical_load_source: Source of historical data
+            historical_load_sample_counts: Sample counts per hour
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for Issue #137
 
         Returns:
             tuple of (daily_forecast, daily_forecast_soc_15min, consumption_source_counts)
@@ -2627,6 +2651,7 @@ class ForecastComputer:
                 min_soc_pct=export_min_soc_pct,
                 is_current_slot=is_first_slot,
                 is_currently_grid_charging=is_currently_grid_charging,
+                baseline_avg_kw=baseline_avg_kw,
             )
 
             # Debug logging for charging decision

@@ -598,6 +598,95 @@ class ThermalManager:
             for entity_id, power in self._learned_power.items()
         }
 
+    def estimate_baseline_from_historical(
+        self,
+        historical_avg_kw: dict[int, float],
+        daily_mode: ThermalMode | None = None,
+    ) -> dict[int, float]:
+        """Estimate baseline load by subtracting learned HVAC power from historical averages.
+
+        This is the key method for solving Issue #137. It estimates the non-HVAC
+        (baseline) consumption by subtracting the learned HVAC power from the
+        historical average load.
+
+        The historical average includes HVAC spikes. By subtracting the learned
+        HVAC power, we get an estimate of what load would be WITHOUT HVAC.
+
+        This baseline is then used for grid charging decisions, preventing the
+        feedback loop where:
+        1. HVAC turns on → load increases
+        2. System forecasts higher consumption using historical (with HVAC spikes)
+        3. System triggers grid charging unnecessarily
+        4. Energy wasted instead of using solar surplus
+
+        Args:
+            historical_avg_kw: Historical hourly average load (includes HVAC).
+            daily_mode: Current daily thermal mode. If None, uses COOL as default
+                       since cooling is the most common HVAC load in summer.
+
+        Returns:
+            Dict of hour -> estimated baseline load in kW (non-HVAC).
+        """
+        if not historical_avg_kw:
+            return {}
+
+        # Determine which power value to subtract based on mode
+        if daily_mode is None:
+            daily_mode = ThermalMode.COOL  # Default assumption
+
+        # Sum learned HVAC power for the active mode
+        total_hvac_power_kw = 0.0
+        valid_entities = 0
+
+        for _entity_id, power in self._learned_power.items():
+            # Only use medium/high confidence learning
+            if power.confidence == "low":
+                continue
+
+            if daily_mode == ThermalMode.COOL and power.cooling_power_kw > 0:
+                total_hvac_power_kw += power.cooling_power_kw
+                valid_entities += 1
+            elif daily_mode == ThermalMode.HEAT and power.heating_power_kw > 0:
+                total_hvac_power_kw += power.heating_power_kw
+                valid_entities += 1
+            elif daily_mode == ThermalMode.DRY and power.drying_power_kw > 0:
+                total_hvac_power_kw += power.drying_power_kw
+                valid_entities += 1
+
+        # If no learned power, use a default estimate based on typical AC
+        if valid_entities == 0:
+            # Typical split system AC: 2-4 kW
+            # Use conservative estimate of 2.5 kW
+            total_hvac_power_kw = 2.5
+            _LOGGER.debug(
+                "No learned HVAC power, using default estimate: %.1f kW",
+                total_hvac_power_kw,
+            )
+
+        # Estimate duty cycle based on historical patterns
+        # HVAC typically runs 30-50% of the time during active cooling/heating
+        # Use 40% as a reasonable default
+        duty_cycle = 0.4
+
+        # Calculate effective HVAC contribution to historical average
+        effective_hvac_kw = total_hvac_power_kw * duty_cycle
+
+        _LOGGER.info(
+            "Baseline estimation: mode=%s, learned_hvac=%.2f kW, duty_cycle=%.0f%%, effective=%.2f kW",
+            daily_mode.value,
+            total_hvac_power_kw,
+            duty_cycle * 100,
+            effective_hvac_kw,
+        )
+
+        # Subtract HVAC contribution from historical averages
+        baseline: dict[int, float] = {}
+        for hour, avg_kw in historical_avg_kw.items():
+            # Estimate baseline by subtracting HVAC
+            baseline[hour] = max(0.0, avg_kw - effective_hvac_kw)
+
+        return baseline
+
     # ------------------------------------------------------------------
     # Pre-conditioning Evaluation
     # ------------------------------------------------------------------

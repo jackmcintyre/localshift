@@ -544,6 +544,11 @@ class LocalShiftCoordinator:
                 self._learn_hvac_power(),
                 "localshift_hvac_learning",
             )
+            # Calculate and pass baseline load to computation engine
+            # This completes the Issue #137 feedback loop fix
+            baseline = self._calculate_baseline_load()
+            if baseline and self._computation_engine is not None:
+                self._computation_engine.set_baseline_load(baseline)
 
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently
@@ -789,3 +794,53 @@ class LocalShiftCoordinator:
             current_load_kw,
             len(self.data.learned_hvac_power),
         )
+
+    def _calculate_baseline_load(self) -> dict[int, float]:
+        """Calculate baseline load profile for Issue #137 feedback loop fix.
+
+        This estimates the non-HVAC baseline consumption by subtracting
+        learned HVAC power from historical averages. This baseline is then
+        used for grid charging decisions, preventing unnecessary charging
+        when HVAC is running.
+
+        Returns:
+            Dict of hour -> baseline load in kW, or empty dict if unavailable.
+        """
+        if self._thermal_manager is None:
+            return {}
+
+        if not self._thermal_manager.is_enabled():
+            return {}
+
+        if self._computation_engine is None:
+            return {}
+
+        # Get historical hourly averages
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        hourly_avg_kw = self._computation_engine._get_historical_hourly_averages(
+            load_entity_id
+        )
+
+        if not hourly_avg_kw:
+            return {}
+
+        # Get daily thermal mode
+        daily_mode = self.data.daily_thermal_mode
+
+        # Estimate baseline from historical
+        baseline = self._thermal_manager.estimate_baseline_from_historical(
+            historical_avg_kw=hourly_avg_kw,
+            daily_mode=daily_mode,
+        )
+
+        # Store in coordinator data for diagnostics
+        self.data.baseline_load_kw = baseline
+
+        if baseline:
+            _LOGGER.info(
+                "Baseline load calculated: %d hours, avg=%.2f kW",
+                len(baseline),
+                sum(baseline.values()) / len(baseline),
+            )
+
+        return baseline

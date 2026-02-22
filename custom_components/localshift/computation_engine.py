@@ -200,6 +200,9 @@ class ComputationEngine:
         self._last_forecast_hour: int | None = None
         self._last_decision_log_time: datetime | None = None
 
+        # Baseline load profile for Issue #137 (set by coordinator)
+        self._baseline_avg_kw: dict[int, float] = {}
+
     # ========================================================================
     # MAIN ENTRY POINT
     # ========================================================================
@@ -695,6 +698,24 @@ class ComputationEngine:
         if len(data.forecast_history) > 200:
             data.forecast_history = data.forecast_history[-200:]
 
+    def set_baseline_load(self, baseline_avg_kw: dict[int, float]) -> None:
+        """Set the baseline load profile for Issue #137 feedback loop fix.
+
+        Called by coordinator to provide the estimated non-HVAC baseline
+        consumption. This is used for grid charging decisions to prevent
+        the feedback loop where HVAC load triggers unnecessary charging.
+
+        Args:
+            baseline_avg_kw: Dict of hour -> baseline load in kW.
+        """
+        self._baseline_avg_kw = baseline_avg_kw
+        if baseline_avg_kw:
+            _LOGGER.debug(
+                "Baseline load set: %d hours, avg=%.2f kW",
+                len(baseline_avg_kw),
+                sum(baseline_avg_kw.values()) / len(baseline_avg_kw),
+            )
+
     def _compute_daily_15min_forecast(
         self,
         data: CoordinatorData,
@@ -706,6 +727,10 @@ class ComputationEngine:
         price variations from 5-minute pricing data.
 
         Uses change detection to skip unnecessary recomputations.
+
+        Issue #137: Uses baseline load (non-HVAC) for grid charging decisions
+        when available, preventing the feedback loop where HVAC spikes trigger
+        unnecessary grid charging.
         """
         # Check if recompute is needed
         should_recompute, reason = (
@@ -728,6 +753,22 @@ class ComputationEngine:
                 # Get recent 1-hour load for weighted forecasting
                 recent_load_kw = self._recent_load_1hr_kw
 
+                # Issue #137: Use baseline load if available for grid charging decisions
+                # This prevents HVAC spikes from triggering unnecessary grid charging
+                baseline_for_forecast = (
+                    self._baseline_avg_kw if self._baseline_avg_kw else None
+                )
+
+                if baseline_for_forecast:
+                    _LOGGER.info(
+                        "Using baseline load for forecast (Issue #137): avg=%.2f kW vs historical %.2f kW",
+                        sum(baseline_for_forecast.values())
+                        / len(baseline_for_forecast),
+                        sum(hourly_avg_kw.values()) / len(hourly_avg_kw)
+                        if hourly_avg_kw
+                        else 0,
+                    )
+
                 # Delegate to ForecastComputer
                 (
                     data.daily_forecast,
@@ -740,6 +781,7 @@ class ComputationEngine:
                     recent_load_kw=recent_load_kw,
                     historical_load_source=self._historical_load_source,
                     historical_load_sample_counts=self._historical_load_sample_counts,
+                    baseline_avg_kw=baseline_for_forecast,  # Issue #137
                 )
 
                 # Also keep a compact 24-entry hourly view for markdown table
