@@ -9,6 +9,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_CLIMATE_CONTROL_ENTITIES,
+    CONF_CLIMATE_ENTITIES,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -234,6 +236,9 @@ class StateReader:
         # Weather
         self._read_weather_state(data)
 
+        # Climate entities (Thermal Manager - Issue #137, #63)
+        self._read_climate_states(data)
+
     def _read_weather_state(self, data: CoordinatorData) -> None:
         """Read weather entity current state (temperature and condition).
 
@@ -291,3 +296,100 @@ class StateReader:
             data.weather_temperature_current,
             data.weather_condition,
         )
+
+    def _read_climate_states(self, data: CoordinatorData) -> None:
+        """Read current state of all configured climate entities.
+
+        Populates climate-related fields in CoordinatorData for use by
+        the thermal manager system (Issue #137, #63).
+
+        For each climate entity, reads:
+        - state: The HVAC mode ("off", "cool", "heat", "dry", "auto")
+        - hvac_action: Current action ("off", "cooling", "heating", "drying", "idle")
+        - temperature: Target setpoint
+        - current_temperature: Room temperature from entity
+
+        Args:
+            data: CoordinatorData instance to populate with climate data.
+        """
+        # Get configured climate entities from options (preferred) or data (fallback)
+        climate_entities = self.entry.options.get(
+            CONF_CLIMATE_ENTITIES, []
+        ) or self.entry.data.get(CONF_CLIMATE_ENTITIES, [])
+
+        control_entities = self.entry.options.get(
+            CONF_CLIMATE_CONTROL_ENTITIES, []
+        ) or self.entry.data.get(CONF_CLIMATE_CONTROL_ENTITIES, [])
+
+        # Store the entity lists in coordinator data
+        data.climate_entities = climate_entities if climate_entities else []
+        data.climate_control_entities = control_entities if control_entities else []
+
+        if not data.climate_entities:
+            _LOGGER.debug("No climate entities configured for thermal manager")
+            data.climate_states = {}
+            return
+
+        climate_states: dict[str, dict[str, Any]] = {}
+
+        for entity_id in data.climate_entities:
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                _LOGGER.debug("Climate entity %s not found", entity_id)
+                continue
+
+            if state.state in ("unknown", "unavailable"):
+                _LOGGER.debug("Climate entity %s is %s", entity_id, state.state)
+                continue
+
+            # Build climate state dict for this entity
+            entity_state: dict[str, Any] = {
+                "entity_id": entity_id,
+                "state": state.state,  # HVAC mode: off, cool, heat, dry, auto
+                "hvac_action": state.attributes.get("hvac_action", "unknown"),
+                "setpoint": self._read_float_attr(state, "temperature"),
+                "current_temperature": self._read_float_attr(
+                    state, "current_temperature"
+                ),
+                "is_controlled": entity_id in data.climate_control_entities,
+                "friendly_name": state.attributes.get("friendly_name", entity_id),
+            }
+
+            climate_states[entity_id] = entity_state
+
+            _LOGGER.debug(
+                "Climate state: %s mode=%s action=%s setpoint=%.1f°C current=%.1f°C controlled=%s",
+                entity_id,
+                entity_state["state"],
+                entity_state["hvac_action"],
+                entity_state["setpoint"],
+                entity_state["current_temperature"] or 0.0,
+                entity_state["is_controlled"],
+            )
+
+        data.climate_states = climate_states
+
+        _LOGGER.debug(
+            "Climate states read: %d entities (%d controlled)",
+            len(climate_states),
+            len(data.climate_control_entities),
+        )
+
+    def _read_float_attr(self, state: Any, attr: str, default: float = 0.0) -> float:
+        """Read a float value from a state's attributes.
+
+        Args:
+            state: Home Assistant state object.
+            attr: Attribute name to read.
+            default: Default value if attribute missing or invalid.
+
+        Returns:
+            Float value from attribute, or default.
+        """
+        try:
+            value = state.attributes.get(attr)
+            if value is None:
+                return default
+            return float(value)
+        except (ValueError, TypeError):
+            return default

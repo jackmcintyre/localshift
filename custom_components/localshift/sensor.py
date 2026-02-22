@@ -48,6 +48,10 @@ async def async_setup_entry(
         # Entity health and error tracking sensors (Issue #94)
         IntegrationStatusSensor(coordinator, entry),
         EntityHealthSensor(coordinator, entry),
+        # Thermal management sensors (Issue #140)
+        DailyThermalModeSensor(coordinator, entry),
+        BaselineLoadProfileSensor(coordinator, entry),
+        HVACLoadProfileSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -779,4 +783,131 @@ class EntityHealthSensor(LocalShiftSensorBase):
             "entities": self.coordinator.data.entity_health,
             "errors": self.coordinator.data.entity_errors,
             "warnings": self.coordinator.data.entity_warnings,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Thermal Management Sensors (Issue #140)
+# ---------------------------------------------------------------------------
+
+
+class DailyThermalModeSensor(LocalShiftSensorBase):
+    """Current daily thermal mode (HEAT/COOL/DRY/OFF).
+
+    Determined once per day at thermal_mode_decision_time based on
+    weather forecast. Mode is locked until next day's decision time.
+    """
+
+    _attr_unique_id = "localshift_daily_thermal_mode"
+    _attr_name = "Daily Thermal Mode"
+    _attr_icon = "mdi:thermometer"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with current daily thermal mode."""
+        self._attr_native_value = self.coordinator.data.daily_thermal_mode.value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return mode details."""
+        d = self.coordinator.data
+        return {
+            "mode_locked": d.daily_mode_locked,
+            "determined_at": d.daily_mode_determined_at,
+            "climate_entities": list(d.climate_states.keys()),
+            "controlled_entities": d.climate_control_entities,
+            "learned_hvac_power": d.learned_hvac_power,
+            "baseline_load_hours": len(d.baseline_load_kw),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on mode."""
+        mode = self._attr_native_value
+        if mode is None:
+            return "mdi:thermometer"
+        # ThermalMode enum values are lowercase, compare accordingly
+        mode_upper = mode.upper() if isinstance(mode, str) else str(mode)
+        if mode_upper == "HEAT":
+            return "mdi:fire"
+        elif mode_upper == "COOL":
+            return "mdi:snowflake"
+        elif mode_upper == "DRY":
+            return "mdi:water-off"
+        else:  # OFF
+            return "mdi:thermometer-off"
+
+
+class BaselineLoadProfileSensor(LocalShiftSensorBase):
+    """Non-HVAC baseline load profile by hour.
+
+    Exposes the estimated baseline load (non-HVAC) for each hour,
+    derived from historical data with HVAC samples excluded.
+    Used for debugging and understanding thermal management decisions.
+    """
+
+    _attr_unique_id = "localshift_baseline_load_profile"
+    _attr_name = "Baseline Load Profile"
+    _attr_icon = "mdi:chart-bar"
+    _attr_native_unit_of_measurement = "kW"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with average baseline load."""
+        baseline = self.coordinator.data.baseline_load_kw
+        if baseline:
+            avg_baseline = sum(baseline.values()) / len(baseline)
+            self._attr_native_value = round(avg_baseline, 3)
+        else:
+            self._attr_native_value = 0.0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return hourly baseline profile."""
+        baseline = self.coordinator.data.baseline_load_kw
+        return {
+            "hourly_profile_kw": {
+                str(hour): round(kw, 3) for hour, kw in sorted(baseline.items())
+            },
+            "total_hours": len(baseline),
+            "average_kw": round(sum(baseline.values()) / len(baseline), 3)
+            if baseline
+            else 0.0,
+        }
+
+
+class HVACLoadProfileSensor(LocalShiftSensorBase):
+    """HVAC load profile by hour.
+
+    Exposes the estimated HVAC load for each hour based on
+    learned power consumption and climate entity state tracking.
+    Used for debugging and understanding thermal management decisions.
+    """
+
+    _attr_unique_id = "localshift_hvac_load_profile"
+    _attr_name = "HVAC Load Profile"
+    _attr_icon = "mdi:air-conditioner"
+    _attr_native_unit_of_measurement = "kW"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with average HVAC load."""
+        hvac = self.coordinator.data.hvac_load_kw
+        if hvac:
+            avg_hvac = sum(hvac.values()) / len(hvac)
+            self._attr_native_value = round(avg_hvac, 3)
+        else:
+            self._attr_native_value = 0.0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return hourly HVAC profile and learned power data."""
+        hvac = self.coordinator.data.hvac_load_kw
+        learned = self.coordinator.data.learned_hvac_power
+        return {
+            "hourly_profile_kw": {
+                str(hour): round(kw, 3) for hour, kw in sorted(hvac.items())
+            },
+            "total_hours": len(hvac),
+            "average_kw": round(sum(hvac.values()) / len(hvac), 3) if hvac else 0.0,
+            "learned_power": learned,
         }

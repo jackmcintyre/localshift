@@ -237,21 +237,116 @@ class ForecastComputer:
         end_time: datetime,
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[float, float, bool]:
-        """Delegate _simulate_future_soc_with_solar_only to extracted helper module."""
-        return self._soc_simulator._simulate_future_soc_with_solar_only(
-            actual_current_soc=actual_current_soc,
-            start_slot=start_slot,
-            target_pct=target_pct,
-            all_solcast=all_solcast,
-            historical_avg_kw=historical_avg_kw,
-            current_load_kw=current_load_kw,
-            recent_load_kw=recent_load_kw,
-            dw_start_time=dw_start_time,
-            end_time=end_time,
-            min_soc_pct=min_soc_pct,
-            current_hour=current_hour,
-        )
+        """Simulate future SOC trajectory with solar only (no grid charging).
+
+        Uses 15-min slots throughout for consistency with main forecast loop.
+
+        When end_time == dw_start_time, simulation stops at DW start (existing behavior).
+        When end_time > dw_start_time, simulation continues through DW period.
+
+        This helps determine if grid charging is necessary.
+
+        CRITICAL for Issue #137: When baseline_avg_kw is provided, use it instead
+        of historical_avg_kw for load estimation. This prevents the chicken-and-egg
+        feedback loop where:
+        1. HVAC turns on → load increases
+        2. System forecasts higher consumption using historical (with HVAC spikes)
+        3. System triggers grid charging unnecessarily
+        4. Energy wasted instead of using solar surplus
+
+        By using baseline (non-HVAC) load for grid charging decisions, we ensure
+        that discretionary HVAC load doesn't trigger unnecessary grid charging.
+
+        Args:
+            actual_current_soc: ACTUAL current battery SOC (from real-time data)
+            start_slot: Starting slot time
+            target_pct: Target SOC percentage
+            all_solcast: Full Solcast forecast (today + tomorrow)
+            historical_avg_kw: Historical hourly load profile (fallback)
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            dw_start_time: Demand window start time
+            end_time: End time (exclusive) to simulate until
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for #137
+
+        Returns:
+            (soc_at_end_pct, max_soc_pct, can_reach_target)
+        """
+        soc = actual_current_soc
+        base_slot = start_slot.replace(second=0, microsecond=0)
+
+        # ISSUE #137: Use baseline load for grid charging decisions
+        # When baseline_avg_kw is provided, use it instead of historical_avg_kw
+        # This prevents the feedback loop where HVAC spikes trigger grid charging
+        load_profile = baseline_avg_kw if baseline_avg_kw else historical_avg_kw
+
+        # Cap end_time to Solcast horizon to avoid repeated solar lookups outside forecast range.
+        solcast_end: datetime | None = None
+        period_duration = timedelta(minutes=30)
+        for entry in all_solcast:
+            if not isinstance(entry, dict):
+                continue
+            period_start_raw = entry.get("period_start") or entry.get("start")
+            if period_start_raw is None:
+                continue
+            start_dt = dt_util.parse_datetime(str(period_start_raw))
+            if not start_dt:
+                continue
+            start_local = dt_util.as_local(start_dt)
+            end_local = start_local + period_duration
+            if solcast_end is None or end_local > solcast_end:
+                solcast_end = end_local
+
+        sim_end = end_time
+        if solcast_end is not None and sim_end > solcast_end:
+            sim_end = solcast_end
+
+        if sim_end <= base_slot:
+            return soc, soc, soc >= target_pct
+
+        # Use 15-min slots throughout for consistency
+        max_soc = soc
+        slot_fraction = 15 / 60.0  # 0.25 hours
+
+        slot_time = base_slot
+        while slot_time < sim_end:
+            slot_time += timedelta(minutes=15)
+            slot_hour = slot_time.hour
+
+            # Get solar and load for this 15-min slot
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
+            # ISSUE #137: Use baseline load profile when provided
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                load_profile,  # Uses baseline_avg_kw if provided
+                slot_hour,
+                current_hour,
+                current_load_kw,
+                recent_load_kw,
+            )
+            consumption_kwh = load_kw * slot_fraction
+            net_kwh = solar_kwh - consumption_kwh
+
+            # Apply battery delta (no grid charging)
+            # Use solar charge rate (5kW) as max
+            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+            if net_kwh >= 0:
+                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+            else:
+                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+            soc += delta / BATTERY_CAPACITY_KWH * 100
+            soc = max(min_soc_pct, min(100.0, soc))
+
+            max_soc = max(max_soc, soc)
+
+            # Fast-path: if we've already reached target, we can stop.
+            if max_soc >= target_pct:
+                return soc, max_soc, True
+
+        return soc, max_soc, max_soc >= target_pct
 
     def _next_demand_window_start_dt(
         self,
@@ -377,32 +472,266 @@ class ForecastComputer:
         current_hour: int | None = None,
         is_current_slot: bool = False,
         is_currently_grid_charging: bool = False,
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[bool, bool]:
-        """Delegate _should_grid_charge_at_slot to extracted helper module."""
-        return self._grid_charge_decision._should_grid_charge_at_slot(
-            slot_start=slot_start,
-            solar_kwh=solar_kwh,
-            slot_price=slot_price,
-            predicted_soc=predicted_soc,
-            target_pct=target_pct,
-            effective_cheap_price=effective_cheap_price,
-            is_before_dw=is_before_dw,
-            in_demand_window=in_demand_window,
-            gap_to_target=gap_to_target,
-            is_daylight=is_daylight,
-            all_solcast=all_solcast,
-            historical_avg_kw=historical_avg_kw,
-            current_load_kw=current_load_kw,
-            recent_load_kw=recent_load_kw,
-            dw_start_time=dw_start_time,
-            dw_end_time=dw_end_time,
-            allow_dw_entry_under_target=allow_dw_entry_under_target,
-            general_price_current=general_price_current,
-            min_soc_pct=min_soc_pct,
-            current_hour=current_hour,
-            is_current_slot=is_current_slot,
-            is_currently_grid_charging=is_currently_grid_charging,
-        )
+        """Determine if grid charging should happen at this slot.
+
+        Smart grid charging with very cheap price as safety net.
+        Uses forecast simulation to avoid unnecessary grid charging.
+
+        Strategy:
+        1. PREFER SPOT: Use current spot price ONLY for current slot (real-time decision)
+        2. For future slots, use forecast price
+        3. Only charge when price is cheap (<= effective_cheap_price)
+        4. Fall back to forecast-based logic when spot is unavailable
+        5. When allow_dw_entry_under_target is True, simulate to DW END instead of DW START
+           (allows solar to charge during DW period)
+        6. HYSTERESIS: Once grid charging starts, require stronger evidence to stop
+           (solar must reach target + margin, not just target)
+
+        Issue #137: When baseline_avg_kw is provided, use it instead of historical_avg_kw
+        for grid charging decisions. This prevents the feedback loop where HVAC spikes
+        trigger unnecessary grid charging.
+
+        Args:
+            slot_start: Start time of the 15-minute slot
+            solar_kwh: Solar forecast for this slot
+            slot_price: Buy price for this slot (from forecast)
+            predicted_soc: Predicted SOC at start of slot
+            target_pct: Target SOC percentage
+            effective_cheap_price: Cheap price threshold
+            is_before_dw: True if before demand window
+            in_demand_window: True if in demand window
+            gap_to_target: How many percent to target
+            is_daylight: True if solar_kwh > 0.05
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_load_kw: Current load power
+            recent_load_kw: Recent 1-hour average load
+            dw_start_time: Demand window start time
+            dw_end_time: Demand window end time
+            allow_dw_entry_under_target: If True, solar can charge during DW
+            general_price_current: Current spot buy price (only for current slot)
+            is_current_slot: True if this is the current time slot (use spot price)
+            is_currently_grid_charging: True if currently in grid charging mode (hysteresis)
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for Issue #137
+
+        Returns:
+            (should_charge, should_boost)
+        """
+        # Basic constraints
+        if in_demand_window:
+            return False, False
+
+        if not is_before_dw:
+            return False, False
+
+        # Grid charging decisions are independent of daylight/solar.
+        # The daylight check has been removed to allow overnight grid charging
+        # when prices are cheap and solar alone cannot reach the target. (Fix #1)
+
+        if gap_to_target <= 0:
+            return False, False
+
+        # SPOT PRICE: Only use for current slot (real-time decision)
+        # For future slots, always use forecast price
+        if is_current_slot and general_price_current > 0:
+            use_price = general_price_current
+            _LOGGER.debug(
+                "GRID_CHARGE: Using spot price $%.2f for current slot (forecast: $%.2f)",
+                general_price_current,
+                slot_price,
+            )
+        else:
+            # Future slot or spot unavailable - use forecast price
+            use_price = slot_price
+
+        # Price-based thresholds
+        price_is_cheap = use_price <= effective_cheap_price
+        price_is_very_cheap = use_price <= (effective_cheap_price * 0.8)
+
+        # HYSTERESIS: If currently grid charging, apply stickiness to prevent flip-flopping
+        # Only stop charging if:
+        # 1. Price is no longer cheap, OR
+        # 2. Solar simulation shows STRONG margin above target (target + hysteresis)
+        # NOTE: Hysteresis only applies to the current real-time slot to prevent hardware
+        # flip-flopping. Future forecast slots should always run through solar simulation
+        # for optimal planning.
+        if (
+            is_current_slot
+            and is_currently_grid_charging
+            and price_is_cheap
+            and gap_to_target > 0
+        ):
+            # Continue charging - don't stop just because solar *might* reach target
+            # The forecast could be optimistic; real-time conditions may differ
+            _LOGGER.info(
+                "GRID_CHARGE HYSTERESIS: Continuing at %s (price=$%.2f, SOC=%.1f%%, gap=%.1f%%) - avoiding flip-flop",
+                slot_start.strftime("%H:%M"),
+                use_price,
+                predicted_soc,
+                target_pct,
+                gap_to_target,
+            )
+            # Check if we should boost (very cheap price)
+            if price_is_very_cheap:
+                return True, True
+            return True, False
+
+        # SMART FORECAST: Simulate forward with solar only
+        # Model: can we reach target using solar only?
+        # If yes, do NOT grid charge.
+        #
+        # KEY: When allow_dw_entry_under_target is True, simulate to DW END
+        # instead of DW START. This allows solar to continue charging during
+        # the DW period and reach target within the DW window.
+        sim_start = slot_start
+
+        if allow_dw_entry_under_target:
+            # Simulate through entire DW period to DW end
+            # This allows solar to charge during DW hours
+            sim_end = slot_start.replace(
+                hour=dw_end_time.hour,
+                minute=dw_end_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            # If DW end is earlier than now, it's tomorrow
+            if sim_end <= slot_start:
+                sim_end += timedelta(days=1)
+            _LOGGER.debug(
+                "GRID_CHARGE: Simulating to DW END %s (allow_dw_entry_under_target=True)",
+                sim_end.strftime("%H:%M"),
+            )
+        else:
+            # Standard behavior: simulate to next DW start
+            sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
+
+        # OVERNIGHT EFFICIENCY CHECK:
+        # For overnight slots (no solar), we need to check differently.
+        # Grid charging overnight at $0.15/kWh when tomorrow's solar is "free" is
+        # economically wrong. Only grid charge overnight if solar truly can't reach target.
+        is_overnight_slot = solar_kwh < 0.01  # No meaningful solar
+
+        if is_overnight_slot:
+            # Find when solar production starts
+            solar_start = self._find_solar_start_time(slot_start, all_solcast)
+
+            if solar_start is not None:
+                # Simulate overnight drain to get SOC at solar start
+                soc_at_solar_start = self._simulate_overnight_drain_to_solar(
+                    start_soc=predicted_soc,
+                    start_slot=slot_start,
+                    solar_start=solar_start,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=historical_avg_kw,
+                    current_load_kw=current_load_kw,
+                    recent_load_kw=recent_load_kw,
+                    min_soc_pct=min_soc_pct,
+                )
+
+                # Now simulate from solar start to next DW
+                # ISSUE #137: Pass baseline for grid charging decisions
+                soc_at_end, max_soc, can_reach_with_solar_only = (
+                    self._simulate_future_soc_with_solar_only(
+                        actual_current_soc=soc_at_solar_start,
+                        start_slot=solar_start,  # Start from solar, not from now
+                        target_pct=target_pct,
+                        all_solcast=all_solcast,
+                        historical_avg_kw=historical_avg_kw,
+                        current_load_kw=current_load_kw,
+                        recent_load_kw=recent_load_kw,
+                        dw_start_time=dw_start_time,
+                        end_time=sim_end,
+                        min_soc_pct=min_soc_pct,
+                        baseline_avg_kw=baseline_avg_kw,
+                    )
+                )
+
+                _LOGGER.debug(
+                    "OVERNIGHT_CHECK: %02d:%02d SOC %.1f%% -> %.1f%% at solar start %s, max_soc=%.1f%%",
+                    slot_start.hour,
+                    slot_start.minute,
+                    predicted_soc,
+                    soc_at_solar_start,
+                    solar_start.strftime("%H:%M"),
+                    max_soc,
+                )
+
+                # Solar from dawn can reach target: NO overnight grid charging
+                if can_reach_with_solar_only:
+                    _LOGGER.debug(
+                        "Grid charge SKIPPED overnight: solar from %s reaches target (SOC at dawn: %.1f%% -> max %.1f%%)",
+                        solar_start.strftime("%H:%M"),
+                        soc_at_solar_start,
+                        max_soc,
+                    )
+                    return False, False
+            else:
+                # No solar found in forecast lookahead window.
+                # This happens for slots near the end of the Solcast forecast horizon
+                # (e.g., evening slots on "tomorrow" when Solcast only has today + tomorrow).
+                # These slots are far enough away that we shouldn't make grid charging decisions.
+                # Skip grid charging - don't simulate when we lack the data.
+                _LOGGER.debug(
+                    "OVERNIGHT_CHECK: %02d:%02d - no solar forecast found within lookahead window, skipping grid charge decision (slot beyond reliable simulation horizon)",
+                    slot_start.hour,
+                    slot_start.minute,
+                )
+                # Only grid charge if price is very cheap (safety net for extreme cases)
+                if price_is_very_cheap:
+                    return True, True
+                return False, False
+        else:
+            # Daylight slot - use original simulation logic
+            # ISSUE #137: Pass baseline for grid charging decisions
+            soc_at_end, max_soc, can_reach_with_solar_only = (
+                self._simulate_future_soc_with_solar_only(
+                    actual_current_soc=predicted_soc,
+                    start_slot=sim_start,
+                    target_pct=target_pct,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=historical_avg_kw,
+                    current_load_kw=current_load_kw,
+                    recent_load_kw=recent_load_kw,
+                    dw_start_time=dw_start_time,
+                    end_time=sim_end,
+                    min_soc_pct=min_soc_pct,
+                    baseline_avg_kw=baseline_avg_kw,
+                )
+            )
+
+            # Solar forecast says we'll reach target: NO grid charging
+            if can_reach_with_solar_only:
+                _LOGGER.debug(
+                    "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
+                    max_soc,
+                    target_pct,
+                )
+                return False, False
+
+        # SAFETY NET: Charge if very cheap (forecast could be wrong)
+        # IMPORTANT: only applies when solar *cannot* meet the target before DW.
+        if price_is_very_cheap:
+            _LOGGER.info(
+                "Grid charge: VERY CHEAP price $%.2f at %s (safety net)",
+                slot_price,
+                slot_start.strftime("%H:%M"),
+            )
+            return True, True
+
+        # Solar not enough: Charge at cheap prices
+        if price_is_cheap:
+            _LOGGER.info(
+                "Grid charge: CHEAP price $%.2f at %s (gap to target: %.1f%%)",
+                slot_price,
+                slot_start.strftime("%H:%M"),
+                gap_to_target,
+            )
+            return True, False
+
+        # Not cheap, no urgent need: Wait
+        return False, False
 
     def _calculate_average_fit_price(
         self, feed_in_forecast: list[dict], start_time: datetime, hours: int = 24
@@ -891,11 +1220,25 @@ class ForecastComputer:
         recent_load_kw: float,
         historical_load_source: str,
         historical_load_sample_counts: dict[int, int],
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[list[dict], list[list], dict[str, int]]:
         """Compute full 24-hour forecast with 15-minute breakdown.
 
         Provides 4x granularity over hourly forecast, capturing meaningful
         price variations from 5-minute pricing data.
+
+        Issue #137: When baseline_avg_kw is provided, use it for grid charging
+        decisions instead of historical_avg_kw. This prevents the feedback loop
+        where HVAC spikes trigger unnecessary grid charging.
+
+        Args:
+            data: CoordinatorData with current state
+            now_dt: Current datetime
+            historical_avg_kw: Historical hourly load profile (includes HVAC spikes)
+            recent_load_kw: Recent 1-hour average load
+            historical_load_source: Source of historical data
+            historical_load_sample_counts: Sample counts per hour
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for Issue #137
 
         Returns:
             tuple of (daily_forecast, daily_forecast_soc_15min, consumption_source_counts)
@@ -1276,6 +1619,7 @@ class ForecastComputer:
                 min_soc_pct=export_min_soc_pct,
                 is_current_slot=is_first_slot,
                 is_currently_grid_charging=is_currently_grid_charging,
+                baseline_avg_kw=baseline_avg_kw,
             )
 
             # Debug logging for charging decision

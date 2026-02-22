@@ -35,7 +35,9 @@ from .const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_THERMAL_MODE_DECISION_TIME,
     DEFAULT_DEMAND_WINDOW_END,
+    DEFAULT_THERMAL_MODE_DECISION_TIME,
     SWITCH_DEFAULTS,
 )
 from .coordinator_data import CoordinatorData
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
     from .notification_service import NotificationService
     from .state_machine import StateMachine
     from .state_reader import StateReader
+    from .thermal_manager import ThermalManager
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +80,7 @@ class LocalShiftCoordinator:
         self._unsub_timer: CALLBACK_TYPE | None = None
         self._unsub_midnight: CALLBACK_TYPE | None = None
         self._unsub_daily_summary: CALLBACK_TYPE | None = None
+        self._unsub_thermal_mode_decision: CALLBACK_TYPE | None = None
         self._update_callbacks: list[CALLBACK_TYPE] = []
 
         # Switch state bridge — switches read/write via these methods
@@ -90,6 +94,7 @@ class LocalShiftCoordinator:
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
         self._entity_validator: EntityValidator | None = None
+        self._thermal_manager: ThermalManager | None = None
 
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
@@ -180,6 +185,20 @@ class LocalShiftCoordinator:
         )
         self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
 
+        # Initialize ThermalManager for HVAC-aware load correlation (Issue #137)
+        from .thermal_manager import ThermalManager
+
+        self._thermal_manager = ThermalManager(
+            self.hass,
+            self.entry,
+            self._get_entity_id,
+            self.get_switch_state,
+            self.get_option,
+        )
+
+        # Load persisted HVAC power data from storage
+        await self._thermal_manager.async_initialize()
+
         # Collect all external entity IDs to watch
         # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
         # programmatically and don't want to trigger re-evaluation loops
@@ -228,6 +247,18 @@ class LocalShiftCoordinator:
             second=0,
         )
 
+        # Daily thermal mode determination (Issue #140): fires at decision time
+        decision_time = self._parse_time_option(
+            CONF_THERMAL_MODE_DECISION_TIME, DEFAULT_THERMAL_MODE_DECISION_TIME
+        )
+        self._unsub_thermal_mode_decision = async_track_time_change(
+            self.hass,
+            self._handle_thermal_mode_decision,
+            hour=decision_time.hour,
+            minute=decision_time.minute,
+            second=0,
+        )
+
         # Read initial state and compute
         self._read_all_external_state()
 
@@ -269,6 +300,7 @@ class LocalShiftCoordinator:
             self._unsub_timer,
             self._unsub_midnight,
             self._unsub_daily_summary,
+            self._unsub_thermal_mode_decision,
         ):
             if unsub:
                 unsub()
@@ -276,6 +308,7 @@ class LocalShiftCoordinator:
         self._unsub_timer = None
         self._unsub_midnight = None
         self._unsub_daily_summary = None
+        self._unsub_thermal_mode_decision = None
 
         # (backlog-med-004) Clean up historical load cache on shutdown
         if self._computation_engine is not None:
@@ -524,6 +557,33 @@ class LocalShiftCoordinator:
                 "localshift_save_forecast_history",
             )
 
+        # Learn HVAC power from climate state changes (Issue #137)
+        # This separates thermal load from baseline for grid charging decisions
+        if self._thermal_manager is not None:
+            self.hass.async_create_task(
+                self._learn_hvac_power(),
+                "localshift_hvac_learning",
+            )
+            # Calculate and pass baseline load to computation engine
+            # This completes the Issue #137 feedback loop fix
+            baseline = self._calculate_baseline_load()
+            if baseline and self._computation_engine is not None:
+                self._computation_engine.set_baseline_load(baseline)
+
+            # Evaluate pre-conditioning (Issue #63 Phase 4)
+            # Pre-heat or pre-cool before demand window
+            self.hass.async_create_task(
+                self._evaluate_preconditioning(),
+                "localshift_preconditioning",
+            )
+
+            # Evaluate solar tapering (Issue #141 Phase 5)
+            # Consume excess solar by adjusting HVAC setpoints
+            self.hass.async_create_task(
+                self._evaluate_solar_taper(),
+                "localshift_solar_taper",
+            )
+
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently
         # mutate shared data or operate on stale post-transition state.
@@ -537,14 +597,22 @@ class LocalShiftCoordinator:
         """Reset daily cost accumulators and target flag at midnight.
 
         Replaces YAML A12 (localshift_reset_target_reached).
+        Also unlocks daily thermal mode for re-determination.
         """
         self.data.grid_import_cost = 0.0
         self.data.grid_export_revenue = 0.0
         self.data.battery_savings = 0.0
         self.data.battery_charge_cost = 0.0
         self.data.target_reached_today = False
+
+        # Unlock daily thermal mode for new decision at decision time
+        self.data.daily_mode_locked = False
+        self.data.daily_mode_determined_at = ""
+
         self._notify_listeners()
-        _LOGGER.info("Midnight reset: cost accumulators and target flag cleared")
+        _LOGGER.info(
+            "Midnight reset: cost accumulators, target flag, and thermal mode unlocked"
+        )
 
     @callback
     def _handle_daily_summary(self, now: datetime) -> None:
@@ -561,6 +629,50 @@ class LocalShiftCoordinator:
             self._send_daily_summary(),
             "localshift_daily_summary",
         )
+
+    @callback
+    def _handle_thermal_mode_decision(self, now: datetime) -> None:
+        """Determine daily thermal mode from weather forecast.
+
+        Fires at thermal_mode_decision_time (default 06:00) to decide
+        today's HVAC operating mode: HEAT, COOL, DRY, or OFF.
+
+        The mode is locked until the next day's decision time.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            _LOGGER.debug("Thermal management disabled, skipping mode decision")
+            return
+
+        # Get weather temperature forecast
+        temp_forecast = self.data.weather_temperature_forecast
+
+        # Get current humidity if available
+        humidity = None
+        from .const import CONF_WEATHER_ENTITY
+
+        weather_entity = self._get_entity_id(CONF_WEATHER_ENTITY)
+        weather_state = self.hass.states.get(weather_entity)
+        if weather_state is not None:
+            humidity = weather_state.attributes.get("humidity")
+
+        # Determine mode from forecast
+        mode = self._thermal_manager.determine_daily_mode(temp_forecast, humidity)
+
+        # Update coordinator data
+        self.data.daily_thermal_mode = mode
+        self.data.daily_mode_locked = True
+        self.data.daily_mode_determined_at = now.isoformat()
+
+        _LOGGER.info(
+            "Daily thermal mode determined: %s (locked until tomorrow)",
+            mode.value,
+        )
+
+        # Notify listeners of the mode change
+        self._notify_listeners()
 
     # ------------------------------------------------------------------
     # Computation
@@ -734,4 +846,186 @@ class LocalShiftCoordinator:
             _LOGGER.debug(
                 "Updated weather forecast: %d hours of temperature data",
                 len(self.data.weather_temperature_forecast),
+            )
+
+    async def _learn_hvac_power(self) -> None:
+        """Learn HVAC power from climate state changes.
+
+        This is the key method that solves Issue #137 by learning how much
+        power the HVAC system uses when it changes state. This learned power
+        is then used to separate HVAC load from baseline consumption.
+        """
+        if self._thermal_manager is None:
+            return
+
+        # Get current load power for learning
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        load_state = self.hass.states.get(load_entity_id)
+        current_load_kw = 0.0
+        if load_state is not None:
+            try:
+                current_load_kw = float(load_state.state) / 1000.0  # W to kW
+            except (ValueError, TypeError):
+                pass
+
+        # Learn from current state (synchronous method)
+        self._thermal_manager.learn_hvac_power(
+            data=self.data,
+            current_load_kw=current_load_kw,
+            timestamp=datetime.now(),
+        )
+
+        # Update coordinator data with learned HVAC power summary
+        self.data.learned_hvac_power = self._thermal_manager.get_learned_power_summary()
+
+        _LOGGER.debug(
+            "HVAC learning: total load = %.2f kW, learned entities = %d",
+            current_load_kw,
+            len(self.data.learned_hvac_power),
+        )
+
+    def _calculate_baseline_load(self) -> dict[int, float]:
+        """Calculate baseline load profile for Issue #137 feedback loop fix.
+
+        This estimates the non-HVAC baseline consumption by subtracting
+        learned HVAC power from historical averages. This baseline is then
+        used for grid charging decisions, preventing unnecessary charging
+        when HVAC is running.
+
+        Returns:
+            Dict of hour -> baseline load in kW, or empty dict if unavailable.
+        """
+        if self._thermal_manager is None:
+            return {}
+
+        if not self._thermal_manager.is_enabled():
+            return {}
+
+        if self._computation_engine is None:
+            return {}
+
+        # Get historical hourly averages
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        hourly_avg_kw = self._computation_engine._get_historical_hourly_averages(
+            load_entity_id
+        )
+
+        if not hourly_avg_kw:
+            return {}
+
+        # Get daily thermal mode
+        daily_mode = self.data.daily_thermal_mode
+
+        # Estimate baseline from historical
+        baseline = self._thermal_manager.estimate_baseline_from_historical(
+            historical_avg_kw=hourly_avg_kw,
+            daily_mode=daily_mode,
+        )
+
+        # Store in coordinator data for diagnostics
+        self.data.baseline_load_kw = baseline
+
+        if baseline:
+            _LOGGER.info(
+                "Baseline load calculated: %d hours, avg=%.2f kW",
+                len(baseline),
+                sum(baseline.values()) / len(baseline),
+            )
+
+        return baseline
+
+    async def _evaluate_preconditioning(self) -> None:
+        """Evaluate pre-conditioning before demand window.
+
+        Pre-heats or pre-cools the home before the demand window starts,
+        using battery power to shift thermal load away from peak pricing.
+
+        Issue #63 Phase 4.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            # Clear state when disabled
+            self.data.preconditioning_active = False
+            return
+
+        # Get demand window times
+        from .const import CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+
+        dw_start = self._parse_time_option(
+            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        )
+        dw_end = self._parse_time_option(
+            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+        )
+
+        # Evaluate pre-conditioning
+        is_active, setpoint_offset = self._thermal_manager.evaluate_preconditioning(
+            data=self.data,
+            now=datetime.now(),
+            demand_window_start=dw_start,
+            demand_window_end=dw_end,
+        )
+
+        # Update CoordinatorData with state
+        self.data.preconditioning_active = is_active
+
+        if is_active and setpoint_offset != 0.0:
+            _LOGGER.info(
+                "Pre-conditioning active: offset=%.1f°C",
+                setpoint_offset,
+            )
+            # Apply setpoint adjustment to controlled climate entities
+            await self._thermal_manager.async_apply_climate_control(
+                self.data, setpoint_offset
+            )
+
+    async def _evaluate_solar_taper(self) -> None:
+        """Evaluate solar tapering to consume excess solar.
+
+        Adjusts HVAC setpoints to consume excess solar generation
+        instead of exporting to grid at low FIT prices.
+
+        Issue #141 Phase 5.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            # Clear state when disabled
+            self.data.solar_taper_active = False
+            self.data.taper_setpoint_offset = 0.0
+            return
+
+        if not self._thermal_manager.is_solar_taper_enabled():
+            # Clear state when solar taper disabled
+            self.data.solar_taper_active = False
+            self.data.taper_setpoint_offset = 0.0
+            return
+
+        # Get excess solar and load shift signal
+        excess_solar_kw = self.data.current_excess_rate_kw
+        load_shift_signal = self.data.load_shift_signal
+
+        # Evaluate solar taper
+        is_active, setpoint_offset = self._thermal_manager.evaluate_solar_taper(
+            data=self.data,
+            excess_solar_kw=excess_solar_kw,
+            load_shift_signal=load_shift_signal,
+        )
+
+        # Update CoordinatorData with state
+        self.data.solar_taper_active = is_active
+        self.data.taper_setpoint_offset = setpoint_offset if is_active else 0.0
+
+        if is_active and setpoint_offset != 0.0:
+            _LOGGER.info(
+                "Solar taper active: excess=%.2f kW, offset=%.1f°C",
+                excess_solar_kw,
+                setpoint_offset,
+            )
+            # Apply setpoint adjustment to controlled climate entities
+            await self._thermal_manager.async_apply_climate_control(
+                self.data, setpoint_offset
             )

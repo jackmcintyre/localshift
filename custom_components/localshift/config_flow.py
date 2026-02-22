@@ -15,26 +15,35 @@ from .const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
+    CONF_CLIMATE_CONTROL_ENTITIES,
+    CONF_CLIMATE_ENTITIES,
     CONF_COOLING_THRESHOLD,
+    CONF_COOLING_TRIGGER_TEMP,
+    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HEATING_THRESHOLD,
+    CONF_HEATING_TRIGGER_TEMP,
     CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
+    CONF_PRECONDITION_HOURS_BEFORE_DW,
+    CONF_PRECONDITION_TEMP_OFFSET,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
     CONF_PRICING_GENERAL_PRICE,
     CONF_PRICING_PRICE_SPIKE,
+    CONF_SOLAR_TAPER_ENABLED,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
+    CONF_TAPER_MAX_SETPOINT_OFFSET,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -42,6 +51,8 @@ from .const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_THERMAL_MANAGEMENT_ENABLED,
+    CONF_THERMAL_MODE_DECISION_TIME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -49,17 +60,26 @@ from .const import (
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_COOLING_THRESHOLD,
+    DEFAULT_COOLING_TRIGGER_TEMP,
+    DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HEATING_THRESHOLD,
+    DEFAULT_HEATING_TRIGGER_TEMP,
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
+    DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
+    DEFAULT_PRECONDITION_TEMP_OFFSET,
+    DEFAULT_SOLAR_TAPER_ENABLED,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
+    DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
+    DEFAULT_THERMAL_MANAGEMENT_ENABLED,
+    DEFAULT_THERMAL_MODE_DECISION_TIME,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
@@ -124,6 +144,19 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 weather_entities.append(state.entity_id)
 
         return sorted(weather_entities)
+
+    async def _get_climate_entities(self) -> list[str]:
+        """Get list of available climate entities.
+
+        Returns:
+            List of climate entity IDs like ["climate.living_room", "climate.bedroom"]
+        """
+        climate_entities = []
+        for state in self.hass.states.async_all():
+            if state.domain == "climate":
+                climate_entities.append(state.entity_id)
+
+        return sorted(climate_entities)
 
     async def _validate_notify_service(self, notify_service: str) -> str | None:
         """Validate that a notify service exists.
@@ -660,13 +693,27 @@ class LocalShiftOptionsFlow(OptionsFlow):
 
         return sorted(weather_entities)
 
+    async def _get_climate_entities(self) -> list[str]:
+        """Get list of available climate entities.
+
+        Returns:
+            List of climate entity IDs like ["climate.living_room", "climate.bedroom"]
+        """
+        climate_entities = []
+        for state in self.hass.states.async_all():
+            if state.domain == "climate":
+                climate_entities.append(state.entity_id)
+
+        return sorted(climate_entities)
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the thresholds and timing options."""
-        # Get available notify services and weather entities
+        # Get available notify services, weather entities, and climate entities
         notify_services = await self._get_notify_services()
         weather_entities = await self._get_weather_entities()
+        climate_entities = await self._get_climate_entities()
 
         if user_input is not None:
             # Validate notify service
@@ -681,7 +728,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 return self.async_show_form(
                     step_id="init",
                     data_schema=self._build_options_schema(
-                        user_input, notify_services, weather_entities
+                        user_input, notify_services, weather_entities, climate_entities
                     ),
                     errors=errors,
                 )
@@ -761,9 +808,51 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         CONF_EXPORT_PRICE_MARGIN,
                         DEFAULT_EXPORT_PRICE_MARGIN,
                     ),
+                    # Thermal Manager options (Issue #137, #63)
+                    CONF_THERMAL_MANAGEMENT_ENABLED: current.get(
+                        CONF_THERMAL_MANAGEMENT_ENABLED,
+                        DEFAULT_THERMAL_MANAGEMENT_ENABLED,
+                    ),
+                    CONF_CLIMATE_ENTITIES: current.get(CONF_CLIMATE_ENTITIES, []),
+                    CONF_CLIMATE_CONTROL_ENTITIES: current.get(
+                        CONF_CLIMATE_CONTROL_ENTITIES, []
+                    ),
+                    CONF_COOLING_TRIGGER_TEMP: current.get(
+                        CONF_COOLING_TRIGGER_TEMP,
+                        DEFAULT_COOLING_TRIGGER_TEMP,
+                    ),
+                    CONF_HEATING_TRIGGER_TEMP: current.get(
+                        CONF_HEATING_TRIGGER_TEMP,
+                        DEFAULT_HEATING_TRIGGER_TEMP,
+                    ),
+                    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY: current.get(
+                        CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
+                        DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
+                    ),
+                    CONF_SOLAR_TAPER_ENABLED: current.get(
+                        CONF_SOLAR_TAPER_ENABLED,
+                        DEFAULT_SOLAR_TAPER_ENABLED,
+                    ),
+                    CONF_PRECONDITION_HOURS_BEFORE_DW: current.get(
+                        CONF_PRECONDITION_HOURS_BEFORE_DW,
+                        DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
+                    ),
+                    CONF_PRECONDITION_TEMP_OFFSET: current.get(
+                        CONF_PRECONDITION_TEMP_OFFSET,
+                        DEFAULT_PRECONDITION_TEMP_OFFSET,
+                    ),
+                    CONF_TAPER_MAX_SETPOINT_OFFSET: current.get(
+                        CONF_TAPER_MAX_SETPOINT_OFFSET,
+                        DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
+                    ),
+                    CONF_THERMAL_MODE_DECISION_TIME: current.get(
+                        CONF_THERMAL_MODE_DECISION_TIME,
+                        DEFAULT_THERMAL_MODE_DECISION_TIME,
+                    ),
                 },
                 notify_services,
                 weather_entities,
+                climate_entities,
             ),
         )
 
@@ -772,6 +861,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
         values: dict[str, Any],
         notify_services: list[str],
         weather_entities: list[str],
+        climate_entities: list[str] | None = None,
     ) -> vol.Schema:
         """Build the options form schema.
 
@@ -779,10 +869,14 @@ class LocalShiftOptionsFlow(OptionsFlow):
             values: Current/default values for the form fields
             notify_services: List of available notify services
             weather_entities: List of available weather entities
+            climate_entities: List of available climate entities
 
         Returns:
             Voluptuous schema for the options form
         """
+        if climate_entities is None:
+            climate_entities = []
+
         return vol.Schema(
             {
                 # Notification settings
@@ -1021,5 +1115,151 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
+                # Thermal Manager settings (Issue #137, #63)
+                vol.Optional(
+                    CONF_THERMAL_MANAGEMENT_ENABLED,
+                    default=values.get(
+                        CONF_THERMAL_MANAGEMENT_ENABLED,
+                        DEFAULT_THERMAL_MANAGEMENT_ENABLED,
+                    ),
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    CONF_CLIMATE_ENTITIES,
+                    default=values.get(CONF_CLIMATE_ENTITIES, []),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=climate_entities,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_CLIMATE_CONTROL_ENTITIES,
+                    default=values.get(CONF_CLIMATE_CONTROL_ENTITIES, []),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=climate_entities,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_COOLING_TRIGGER_TEMP,
+                    default=values.get(
+                        CONF_COOLING_TRIGGER_TEMP,
+                        DEFAULT_COOLING_TRIGGER_TEMP,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP]["min"],
+                        max=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP]["max"],
+                        step=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_HEATING_TRIGGER_TEMP,
+                    default=values.get(
+                        CONF_HEATING_TRIGGER_TEMP,
+                        DEFAULT_HEATING_TRIGGER_TEMP,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP]["min"],
+                        max=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP]["max"],
+                        step=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP][
+                            "unit"
+                        ],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
+                    default=values.get(
+                        CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
+                        DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_DEHUMIDIFY_TRIGGER_HUMIDITY]["min"],
+                        max=THRESHOLD_RANGES[CONF_DEHUMIDIFY_TRIGGER_HUMIDITY]["max"],
+                        step=THRESHOLD_RANGES[CONF_DEHUMIDIFY_TRIGGER_HUMIDITY]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[
+                            CONF_DEHUMIDIFY_TRIGGER_HUMIDITY
+                        ]["unit"],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_TAPER_ENABLED,
+                    default=values.get(
+                        CONF_SOLAR_TAPER_ENABLED,
+                        DEFAULT_SOLAR_TAPER_ENABLED,
+                    ),
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    CONF_PRECONDITION_HOURS_BEFORE_DW,
+                    default=values.get(
+                        CONF_PRECONDITION_HOURS_BEFORE_DW,
+                        DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_PRECONDITION_HOURS_BEFORE_DW]["min"],
+                        max=THRESHOLD_RANGES[CONF_PRECONDITION_HOURS_BEFORE_DW]["max"],
+                        step=THRESHOLD_RANGES[CONF_PRECONDITION_HOURS_BEFORE_DW][
+                            "step"
+                        ],
+                        unit_of_measurement=THRESHOLD_RANGES[
+                            CONF_PRECONDITION_HOURS_BEFORE_DW
+                        ]["unit"],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_PRECONDITION_TEMP_OFFSET,
+                    default=values.get(
+                        CONF_PRECONDITION_TEMP_OFFSET,
+                        DEFAULT_PRECONDITION_TEMP_OFFSET,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET]["min"],
+                        max=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET]["max"],
+                        step=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[
+                            CONF_PRECONDITION_TEMP_OFFSET
+                        ]["unit"],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_TAPER_MAX_SETPOINT_OFFSET,
+                    default=values.get(
+                        CONF_TAPER_MAX_SETPOINT_OFFSET,
+                        DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=THRESHOLD_RANGES[CONF_TAPER_MAX_SETPOINT_OFFSET]["min"],
+                        max=THRESHOLD_RANGES[CONF_TAPER_MAX_SETPOINT_OFFSET]["max"],
+                        step=THRESHOLD_RANGES[CONF_TAPER_MAX_SETPOINT_OFFSET]["step"],
+                        unit_of_measurement=THRESHOLD_RANGES[
+                            CONF_TAPER_MAX_SETPOINT_OFFSET
+                        ]["unit"],
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_THERMAL_MODE_DECISION_TIME,
+                    default=values.get(
+                        CONF_THERMAL_MODE_DECISION_TIME,
+                        DEFAULT_THERMAL_MODE_DECISION_TIME,
+                    ),
+                ): selector.TimeSelector(),
             }
         )
