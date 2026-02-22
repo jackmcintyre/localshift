@@ -416,6 +416,7 @@ class WeatherCorrelation:
 
                 if isinstance(forecast_data, list):
                     parsed_count = 0
+                    parse_failed_count = 0
                     skipped_no_datetime = 0
                     filtered_count = 0
                     _LOGGER.info(
@@ -423,7 +424,7 @@ class WeatherCorrelation:
                         len(forecast_data),
                         list(forecast_data[0].keys()) if forecast_data else "empty",
                     )
-                    for forecast_entry in forecast_data:
+                    for i, forecast_entry in enumerate(forecast_data):
                         # Skip if not a dict (handles 'str' object error)
                         if not isinstance(forecast_entry, dict):
                             continue
@@ -448,17 +449,38 @@ class WeatherCorrelation:
 
                                     naive_dt = dt.fromisoformat(forecast_time_str)
                                     forecast_time = dt_util.as_local(naive_dt)
-                                except (ValueError, TypeError):
-                                    _LOGGER.debug(
-                                        "Failed to parse datetime: %s",
-                                        forecast_time_str,
-                                    )
+                                    if i == 0:
+                                        _LOGGER.info(
+                                            "First entry: datetime='%s' parsed as naive=%s, localized=%s",
+                                            forecast_time_str,
+                                            naive_dt,
+                                            forecast_time,
+                                        )
+                                except (ValueError, TypeError) as e:
+                                    parse_failed_count += 1
+                                    if parse_failed_count <= 3:
+                                        _LOGGER.info(
+                                            "Failed to parse datetime '%s': %s",
+                                            forecast_time_str,
+                                            e,
+                                        )
                                     continue
+                            else:
+                                if i == 0:
+                                    _LOGGER.info(
+                                        "First entry: datetime='%s' parsed directly as %s",
+                                        forecast_time_str,
+                                        forecast_time,
+                                    )
                             parsed_count += 1
-                        except (ValueError, TypeError):
-                            _LOGGER.debug(
-                                "Exception parsing datetime: %s", forecast_time_str
-                            )
+                        except (ValueError, TypeError) as e:
+                            parse_failed_count += 1
+                            if parse_failed_count <= 3:
+                                _LOGGER.info(
+                                    "Exception parsing datetime '%s': %s",
+                                    forecast_time_str,
+                                    e,
+                                )
                             continue
 
                         # Only include forecasts for the next 24 hours
