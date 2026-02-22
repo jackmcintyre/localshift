@@ -330,11 +330,14 @@ class WeatherCorrelation:
         # Update cached entity ID if changed
         if weather_entity != self._data.weather_entity_id:
             _LOGGER.info(
-                "Weather entity changed from %s to %s",
+                "Weather entity changed from %s to %s, clearing forecast cache",
                 self._data.weather_entity_id,
                 weather_entity,
             )
             self._data.weather_entity_id = weather_entity
+            # Clear cache to force fresh fetch with new entity
+            self._cached_forecasts = []
+            self._forecast_cache_time = None
 
         now = dt_util.now()
 
