@@ -13,18 +13,49 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 
 This ensures isolation between tasks and prevents changes to the main repo.
 
+# ⚠️ MANDATORY: PLANNING BEFORE IMPLEMENTATION
+
+**This applies to non-trivial coding tasks. Failure to follow this is a process violation.**
+
+## Trivial Changes (Plan NOT Required)
+- Typo fixes in comments or documentation
+- Formatting/whitespace changes
+- Version number or date updates
+- Single-line configuration tweaks
+
+## Non-Trivial Changes (Plan REQUIRED)
+- New functionality or features
+- Bug fixes with logic changes
+- Refactoring across multiple files
+- API/interface changes
+- Database schema or data model changes
+
+## When in Doubt
+**Create a plan.** It's cheap insurance against mistakes.
+
+## Planning Workflow
+1. **BEFORE writing code for non-trivial changes**, create a `*_plan.md` file
+2. **Plan must outline:**
+   - Changes required
+   - Files affected
+   - Approach and reasoning
+3. **Plan file handling (one of):**
+   - Match a pattern in `.gitignore` (e.g., `*_plan.md`) - preferred
+   - Delete the plan file before committing changes
+4. **Implementation follows the plan**
+
 # ⚠️ MANDATORY: DEEP THINKING MODE
 
-**When entering deep thinking mode, implementation_plan.md may be created. This must be done in a worktree.**
+**When entering deep thinking mode, a plan file may be created. This must be done in a worktree.**
 
-1. **BEFORE creating `implementation_plan.md`:** Ensure you are in a worktree (follow the worktree workflow above)
-2. **Why this matters:** Multiple agents may work on different tasks simultaneously. If `implementation_plan.md` is created on main, it will be overwritten by other agents
-3. **The file is gitignored:** `implementation_plan.md` is ignored by git to prevent conflicts, but it still needs worktree isolation for agent coordination
+1. **BEFORE creating a plan file:** Ensure you are in a worktree (follow the worktree workflow above)
+2. **Why this matters:** Multiple agents may work on different tasks simultaneously. If a plan is created on main, it will be overwritten by other agents
+3. **Plan files are gitignored:** Files matching `*_plan.md` are ignored by git to prevent conflicts, but still need worktree isolation for agent coordination
 
 ### Deep Thinking Mode Workflow
 1. Check worktree status with `git worktree list`
 2. If not in a worktree, create one before proceeding
-3. Create/modify `implementation_plan.md` in the worktree
+3. Create/modify a `*_plan.md` file in the worktree
 4. The plan stays local to that worktree and won't interfere with other agents
 
 # Worktree Workflow
