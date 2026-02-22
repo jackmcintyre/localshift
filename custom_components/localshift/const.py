@@ -386,6 +386,10 @@ SWITCH_NOTIFY_DAILY_SUMMARY = "notify_daily_summary"
 SWITCH_NOTIFY_MANUAL_ACTIONS = "notify_manual_actions"
 SWITCH_NOTIFY_ALERTS = "notify_alerts"
 
+# Thermal management switches (Issue #137)
+SWITCH_THERMAL_MANAGEMENT_ENABLED = "thermal_management_enabled"
+SWITCH_SOLAR_TAPER_ENABLED = "solar_taper_enabled"
+
 SWITCH_DEFAULTS = {
     SWITCH_AUTOMATION_ENABLED: True,
     SWITCH_SPIKE_DISCHARGE_ENABLED: True,
@@ -397,6 +401,8 @@ SWITCH_DEFAULTS = {
     SWITCH_NOTIFY_DAILY_SUMMARY: True,
     SWITCH_NOTIFY_MANUAL_ACTIONS: True,
     SWITCH_NOTIFY_ALERTS: True,
+    SWITCH_THERMAL_MANAGEMENT_ENABLED: False,
+    SWITCH_SOLAR_TAPER_ENABLED: True,
 }
 
 SWITCH_ICONS = {
@@ -410,6 +416,8 @@ SWITCH_ICONS = {
     SWITCH_NOTIFY_DAILY_SUMMARY: "mdi:calendar-today",
     SWITCH_NOTIFY_MANUAL_ACTIONS: "mdi:gesture-tap",
     SWITCH_NOTIFY_ALERTS: "mdi:alert-circle",
+    SWITCH_THERMAL_MANAGEMENT_ENABLED: "mdi:air-conditioner",
+    SWITCH_SOLAR_TAPER_ENABLED: "mdi:solar-power",
 }
 
 SWITCH_NAMES = {
@@ -423,6 +431,8 @@ SWITCH_NAMES = {
     SWITCH_NOTIFY_DAILY_SUMMARY: "Notify Daily Summary",
     SWITCH_NOTIFY_MANUAL_ACTIONS: "Notify Manual Actions",
     SWITCH_NOTIFY_ALERTS: "Notify Alerts",
+    SWITCH_THERMAL_MANAGEMENT_ENABLED: "Thermal Management",
+    SWITCH_SOLAR_TAPER_ENABLED: "Solar Taper",
 }
 
 # -----------------------------------------------------------------------------
