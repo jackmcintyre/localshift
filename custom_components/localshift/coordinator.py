@@ -565,6 +565,20 @@ class LocalShiftCoordinator:
             if baseline and self._computation_engine is not None:
                 self._computation_engine.set_baseline_load(baseline)
 
+            # Evaluate pre-conditioning (Issue #63 Phase 4)
+            # Pre-heat or pre-cool before demand window
+            self.hass.async_create_task(
+                self._evaluate_preconditioning(),
+                "localshift_preconditioning",
+            )
+
+            # Evaluate solar tapering (Issue #141 Phase 5)
+            # Consume excess solar by adjusting HVAC setpoints
+            self.hass.async_create_task(
+                self._evaluate_solar_taper(),
+                "localshift_solar_taper",
+            )
+
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently
         # mutate shared data or operate on stale post-transition state.
@@ -911,3 +925,84 @@ class LocalShiftCoordinator:
             )
 
         return baseline
+
+    async def _evaluate_preconditioning(self) -> None:
+        """Evaluate pre-conditioning before demand window.
+
+        Pre-heats or pre-cools the home before the demand window starts,
+        using battery power to shift thermal load away from peak pricing.
+
+        Issue #63 Phase 4.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            return
+
+        # Get demand window times
+        from .const import CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+
+        dw_start = self._parse_time_option(
+            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        )
+        dw_end = self._parse_time_option(
+            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+        )
+
+        # Evaluate pre-conditioning
+        is_active, setpoint_offset = self._thermal_manager.evaluate_preconditioning(
+            data=self.data,
+            now=datetime.now(),
+            demand_window_start=dw_start,
+            demand_window_end=dw_end,
+        )
+
+        if is_active and setpoint_offset != 0.0:
+            _LOGGER.info(
+                "Pre-conditioning active: offset=%.1f°C",
+                setpoint_offset,
+            )
+            # Apply setpoint adjustment to controlled climate entities
+            await self._thermal_manager.async_apply_climate_control(
+                self.data, setpoint_offset
+            )
+
+    async def _evaluate_solar_taper(self) -> None:
+        """Evaluate solar tapering to consume excess solar.
+
+        Adjusts HVAC setpoints to consume excess solar generation
+        instead of exporting to grid at low FIT prices.
+
+        Issue #141 Phase 5.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            return
+
+        if not self._thermal_manager.is_solar_taper_enabled():
+            return
+
+        # Get excess solar and load shift signal
+        excess_solar_kw = self.data.current_excess_rate_kw
+        load_shift_signal = self.data.load_shift_signal
+
+        # Evaluate solar taper
+        is_active, setpoint_offset = self._thermal_manager.evaluate_solar_taper(
+            data=self.data,
+            excess_solar_kw=excess_solar_kw,
+            load_shift_signal=load_shift_signal,
+        )
+
+        if is_active and setpoint_offset != 0.0:
+            _LOGGER.info(
+                "Solar taper active: excess=%.2f kW, offset=%.1f°C",
+                excess_solar_kw,
+                setpoint_offset,
+            )
+            # Apply setpoint adjustment to controlled climate entities
+            await self._thermal_manager.async_apply_climate_control(
+                self.data, setpoint_offset
+            )
