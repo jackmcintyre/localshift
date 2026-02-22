@@ -257,6 +257,13 @@ class WeatherCorrelation:
         forecast_data = state.attributes.get("forecast", [])
         now = dt_util.now()
 
+        _LOGGER.debug(
+            "Forecast data for %s: %d entries, now=%s",
+            weather_entity,
+            len(forecast_data) if forecast_data else 0,
+            now.isoformat(),
+        )
+
         for forecast_entry in forecast_data:
             # Parse forecast datetime
             forecast_time_str = forecast_entry.get("datetime")
