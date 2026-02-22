@@ -374,8 +374,19 @@ class WeatherCorrelation:
                 return_response=True,
             )
 
+            _LOGGER.info(
+                "weather.get_forecasts response for %s: %s",
+                weather_entity,
+                "found" if response else "None",
+            )
+
             if response and weather_entity in response:
                 forecast_data = response[weather_entity]
+                _LOGGER.info(
+                    "forecast_data type=%s, len=%s",
+                    type(forecast_data).__name__,
+                    len(forecast_data) if isinstance(forecast_data, list) else "N/A",
+                )
 
                 # Handle different response formats
                 if isinstance(forecast_data, list):
