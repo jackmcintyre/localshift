@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from .notification_service import NotificationService
     from .state_machine import StateMachine
     from .state_reader import StateReader
+    from .thermal_manager import ThermalManager
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class LocalShiftCoordinator:
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
         self._entity_validator: EntityValidator | None = None
+        self._thermal_manager: ThermalManager | None = None
 
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
@@ -179,6 +181,17 @@ class LocalShiftCoordinator:
             self.get_option,
         )
         self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
+
+        # Initialize ThermalManager for HVAC-aware load correlation (Issue #137)
+        from .thermal_manager import ThermalManager
+
+        self._thermal_manager = ThermalManager(
+            self.hass,
+            self.entry,
+            self._get_entity_id,
+            self.get_switch_state,
+            self.get_option,
+        )
 
         # Collect all external entity IDs to watch
         # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
@@ -524,6 +537,14 @@ class LocalShiftCoordinator:
                 "localshift_save_forecast_history",
             )
 
+        # Learn HVAC power from climate state changes (Issue #137)
+        # This separates thermal load from baseline for grid charging decisions
+        if self._thermal_manager is not None:
+            self.hass.async_create_task(
+                self._learn_hvac_power(),
+                "localshift_hvac_learning",
+            )
+
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently
         # mutate shared data or operate on stale post-transition state.
@@ -732,3 +753,39 @@ class LocalShiftCoordinator:
                 "Updated weather forecast: %d hours of temperature data",
                 len(self.data.weather_temperature_forecast),
             )
+
+    async def _learn_hvac_power(self) -> None:
+        """Learn HVAC power from climate state changes.
+
+        This is the key method that solves Issue #137 by learning how much
+        power the HVAC system uses when it changes state. This learned power
+        is then used to separate HVAC load from baseline consumption.
+        """
+        if self._thermal_manager is None:
+            return
+
+        # Get current load power for learning
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        load_state = self.hass.states.get(load_entity_id)
+        current_load_kw = 0.0
+        if load_state is not None:
+            try:
+                current_load_kw = float(load_state.state) / 1000.0  # W to kW
+            except (ValueError, TypeError):
+                pass
+
+        # Learn from current state (synchronous method)
+        self._thermal_manager.learn_hvac_power(
+            data=self.data,
+            current_load_kw=current_load_kw,
+            timestamp=datetime.now(),
+        )
+
+        # Update coordinator data with learned HVAC power summary
+        self.data.learned_hvac_power = self._thermal_manager.get_learned_power_summary()
+
+        _LOGGER.debug(
+            "HVAC learning: total load = %.2f kW, learned entities = %d",
+            current_load_kw,
+            len(self.data.learned_hvac_power),
+        )
