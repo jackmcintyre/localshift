@@ -243,6 +243,10 @@ class LocalShiftCoordinator:
         # Initialize weather correlation for temperature-based load prediction
         await self._computation_engine.async_initialize_weather_correlation()
 
+        # Initialize forecast history storage and load persisted history (Issue #131)
+        await self._computation_engine.async_initialize_forecast_history_storage()
+        await self._computation_engine.async_load_forecast_history(self.data)
+
         # Wait for Solcast data to be ready before computing forecasts
         # This prevents errors when Solcast hasn't initialized yet
         await self._wait_for_solcast_and_compute()
@@ -513,6 +517,11 @@ class LocalShiftCoordinator:
             self.hass.async_create_task(
                 self._computation_engine.async_compute_forecast_accuracy(self.data),
                 "localshift_forecast_accuracy",
+            )
+            # Save forecast history periodically (Issue #131)
+            self.hass.async_create_task(
+                self._computation_engine.async_save_forecast_history(self.data),
+                "localshift_save_forecast_history",
             )
 
         # Derived-value computation and listener notification happen inside the

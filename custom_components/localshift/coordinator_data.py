@@ -200,6 +200,8 @@ class CoordinatorData:
     # Comparison metadata
     forecast_comparisons_made: int = 0  # Total comparisons since restart
     forecast_last_comparison_time: str = ""  # ISO timestamp of last comparison
+    forecast_first_prediction_time: str = ""  # ISO timestamp of first stored prediction
+    forecast_history_count: int = 0  # Number of predictions in history
 
     # Entity health and error tracking (Issue #94)
     integration_status: str = "ok"  # "ok", "degraded", "error"
