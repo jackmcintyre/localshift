@@ -430,9 +430,23 @@ class WeatherCorrelation:
                         try:
                             forecast_time = dt_util.parse_datetime(forecast_time_str)
                             if forecast_time is None:
-                                continue
+                                # Try parsing as naive datetime and localize it
+                                try:
+                                    from datetime import datetime as dt
+
+                                    naive_dt = dt.fromisoformat(forecast_time_str)
+                                    forecast_time = dt_util.as_local(naive_dt)
+                                except (ValueError, TypeError):
+                                    _LOGGER.debug(
+                                        "Failed to parse datetime: %s",
+                                        forecast_time_str,
+                                    )
+                                    continue
                             parsed_count += 1
                         except (ValueError, TypeError):
+                            _LOGGER.debug(
+                                "Exception parsing datetime: %s", forecast_time_str
+                            )
                             continue
 
                         # Only include forecasts for the next 24 hours
