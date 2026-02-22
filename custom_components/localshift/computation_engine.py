@@ -1880,6 +1880,9 @@ class ComputationEngine:
             List of TemperatureForecast objects, or None if unavailable.
         """
         if self._weather_correlation is None:
+            _LOGGER.info(
+                "Weather correlation not initialized, skipping forecast refresh"
+            )
             return None
 
         weather_learning_enabled = self.entry.options.get(
@@ -1887,11 +1890,12 @@ class ComputationEngine:
         )
 
         if not weather_learning_enabled:
+            _LOGGER.debug("Weather learning disabled, skipping forecast refresh")
             return None
 
         try:
             forecasts = await self._weather_correlation.async_get_temperature_forecast()
-            _LOGGER.debug(
+            _LOGGER.info(
                 "Refreshed %d temperature forecasts from weather entity",
                 len(forecasts),
             )

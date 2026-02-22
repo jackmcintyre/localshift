@@ -826,6 +826,9 @@ class LocalShiftCoordinator:
         Updates CoordinatorData with the latest forecast for use by sensors.
         """
         if self._computation_engine is None:
+            _LOGGER.debug(
+                "Computation engine not initialized, skipping weather forecast"
+            )
             return
 
         forecasts = await self._computation_engine.async_refresh_weather_forecast()

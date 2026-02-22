@@ -1,7 +1,12 @@
 """Computation engine library modules."""
 
+from .excess_solar import ExcessSolarEngine
+from .fit_analyzer import FitAnalyzer
 from .forecast_computer import ForecastComputer
+from .grid_charge_decision import GridChargeDecisionEngine
 from .history_fetcher import HistoryFetcher
+from .proactive_export import ProactiveExportEngine
+from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_price_for_slot,
     get_solar_for_5min_slot,
@@ -20,8 +25,13 @@ from .utils import (
 )
 
 __all__ = [
+    "ExcessSolarEngine",
+    "FitAnalyzer",
     "ForecastComputer",
+    "GridChargeDecisionEngine",
     "HistoryFetcher",
+    "ProactiveExportEngine",
+    "SocSimulator",
     "analyze_spike_window",
     "build_hourly_forecast_summary",
     "calculate_spike_price_threshold",
