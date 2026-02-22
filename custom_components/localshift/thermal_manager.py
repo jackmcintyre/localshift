@@ -126,6 +126,13 @@ class ThermalManager:
         self._prev_load_kw: float = 0.0
         self._prev_load_timestamp: datetime | None = None
 
+        # Original setpoints for controlled entities (to prevent ratchet bug)
+        # These are the user-configured setpoints before any thermal adjustments
+        self._original_setpoints: dict[str, float] = {}
+
+        # Current active offset (to avoid re-applying the same offset)
+        self._current_active_offset: float = 0.0
+
     # ------------------------------------------------------------------
     # Initialization and Storage
     # ------------------------------------------------------------------
@@ -804,6 +811,46 @@ class ThermalManager:
     # Climate Control
     # ------------------------------------------------------------------
 
+    def _capture_original_setpoints(self, data: CoordinatorData) -> None:
+        """Capture original setpoints for controlled entities if not already tracked.
+
+        This is called when thermal control starts to establish a baseline
+        for offset calculations, preventing the "ratchet bug" where offsets
+        accumulate on each tick.
+
+        Args:
+            data: CoordinatorData with current climate states.
+        """
+        control_entities = data.climate_control_entities
+        if not control_entities:
+            return
+
+        for entity_id in control_entities:
+            # Only capture if not already tracking
+            if entity_id not in self._original_setpoints:
+                state = data.climate_states.get(entity_id, {})
+                current_setpoint = state.get("setpoint")
+                if current_setpoint is not None:
+                    self._original_setpoints[entity_id] = current_setpoint
+                    _LOGGER.debug(
+                        "Captured original setpoint for %s: %.1f°C",
+                        entity_id,
+                        current_setpoint,
+                    )
+
+    def _clear_original_setpoints(self) -> None:
+        """Clear tracked original setpoints when thermal control stops.
+
+        Called when offset returns to 0 or thermal management is disabled.
+        """
+        if self._original_setpoints:
+            _LOGGER.debug(
+                "Clearing original setpoints for %d entities",
+                len(self._original_setpoints),
+            )
+        self._original_setpoints.clear()
+        self._current_active_offset = 0.0
+
     async def async_apply_climate_control(
         self,
         data: CoordinatorData,
@@ -811,25 +858,77 @@ class ThermalManager:
     ) -> None:
         """Apply setpoint adjustments to controlled climate entities.
 
+        This method tracks original setpoints to prevent the "ratchet bug"
+        where offsets would accumulate on each tick. Instead, it calculates
+        the new setpoint from the original baseline.
+
         Args:
             data: CoordinatorData with current state.
             setpoint_offset: Setpoint adjustment in °C (positive = higher temp).
         """
         if not self.is_enabled():
-            return
-
-        if setpoint_offset == 0.0:
+            self._clear_original_setpoints()
             return
 
         control_entities = data.climate_control_entities
         if not control_entities:
+            self._clear_original_setpoints()
             return
 
-        for entity_id in control_entities:
-            state = data.climate_states.get(entity_id, {})
-            current_setpoint = state.get("setpoint", 22.0)
+        # If offset is 0, restore original setpoints and clear tracking
+        if setpoint_offset == 0.0:
+            if self._current_active_offset != 0.0:
+                # We had an active offset, now need to restore
+                for entity_id in control_entities:
+                    if entity_id in self._original_setpoints:
+                        original = self._original_setpoints[entity_id]
+                        try:
+                            await self.hass.services.async_call(
+                                "climate",
+                                "set_temperature",
+                                {
+                                    "entity_id": entity_id,
+                                    "temperature": original,
+                                },
+                                blocking=False,
+                            )
+                            _LOGGER.info(
+                                "Restored %s setpoint to original: %.1f°C",
+                                entity_id,
+                                original,
+                            )
+                        except Exception as err:
+                            _LOGGER.warning(
+                                "Failed to restore %s setpoint: %s", entity_id, err
+                            )
+            self._clear_original_setpoints()
+            return
 
-            new_setpoint = current_setpoint + setpoint_offset
+        # Skip if this is the same offset we already applied
+        # (avoid unnecessary service calls)
+        if setpoint_offset == self._current_active_offset:
+            _LOGGER.debug(
+                "Offset %.1f°C already active, skipping adjustment",
+                setpoint_offset,
+            )
+            return
+
+        # Capture original setpoints if this is a new control session
+        if not self._original_setpoints:
+            self._capture_original_setpoints(data)
+
+        for entity_id in control_entities:
+            # Get the original setpoint (user's configured value)
+            original_setpoint = self._original_setpoints.get(entity_id)
+
+            if original_setpoint is None:
+                # Fallback to current setpoint if original not tracked
+                state = data.climate_states.get(entity_id, {})
+                original_setpoint = state.get("setpoint", 22.0)
+                self._original_setpoints[entity_id] = original_setpoint
+
+            # Calculate new setpoint from ORIGINAL, not current
+            new_setpoint = original_setpoint + setpoint_offset
 
             # Clamp to reasonable range
             new_setpoint = max(16.0, min(30.0, new_setpoint))
@@ -846,11 +945,14 @@ class ThermalManager:
                     blocking=False,
                 )
                 _LOGGER.info(
-                    "Adjusted %s setpoint: %.1f°C -> %.1f°C (offset %.1f°C)",
+                    "Adjusted %s setpoint: %.1f°C (original) -> %.1f°C (offset %.1f°C)",
                     entity_id,
-                    current_setpoint,
+                    original_setpoint,
                     new_setpoint,
                     setpoint_offset,
                 )
             except Exception as err:
                 _LOGGER.warning("Failed to adjust %s setpoint: %s", entity_id, err)
+
+        # Track the current active offset
+        self._current_active_offset = setpoint_offset

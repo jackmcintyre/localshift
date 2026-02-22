@@ -821,11 +821,15 @@ class DailyThermalModeSensor(LocalShiftSensorBase):
     def icon(self) -> str:
         """Return icon based on mode."""
         mode = self._attr_native_value
-        if mode == "HEAT":
+        if mode is None:
+            return "mdi:thermometer"
+        # ThermalMode enum values are lowercase, compare accordingly
+        mode_upper = mode.upper() if isinstance(mode, str) else str(mode)
+        if mode_upper == "HEAT":
             return "mdi:fire"
-        elif mode == "COOL":
+        elif mode_upper == "COOL":
             return "mdi:snowflake"
-        elif mode == "DRY":
+        elif mode_upper == "DRY":
             return "mdi:water-off"
         else:  # OFF
             return "mdi:thermometer-off"

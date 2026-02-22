@@ -196,6 +196,9 @@ class LocalShiftCoordinator:
             self.get_option,
         )
 
+        # Load persisted HVAC power data from storage
+        await self._thermal_manager.async_initialize()
+
         # Collect all external entity IDs to watch
         # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
         # programmatically and don't want to trigger re-evaluation loops
@@ -297,6 +300,7 @@ class LocalShiftCoordinator:
             self._unsub_timer,
             self._unsub_midnight,
             self._unsub_daily_summary,
+            self._unsub_thermal_mode_decision,
         ):
             if unsub:
                 unsub()
@@ -304,6 +308,7 @@ class LocalShiftCoordinator:
         self._unsub_timer = None
         self._unsub_midnight = None
         self._unsub_daily_summary = None
+        self._unsub_thermal_mode_decision = None
 
         # (backlog-med-004) Clean up historical load cache on shutdown
         if self._computation_engine is not None:
@@ -938,6 +943,8 @@ class LocalShiftCoordinator:
             return
 
         if not self._thermal_manager.is_enabled():
+            # Clear state when disabled
+            self.data.preconditioning_active = False
             return
 
         # Get demand window times
@@ -957,6 +964,9 @@ class LocalShiftCoordinator:
             demand_window_start=dw_start,
             demand_window_end=dw_end,
         )
+
+        # Update CoordinatorData with state
+        self.data.preconditioning_active = is_active
 
         if is_active and setpoint_offset != 0.0:
             _LOGGER.info(
@@ -980,9 +990,15 @@ class LocalShiftCoordinator:
             return
 
         if not self._thermal_manager.is_enabled():
+            # Clear state when disabled
+            self.data.solar_taper_active = False
+            self.data.taper_setpoint_offset = 0.0
             return
 
         if not self._thermal_manager.is_solar_taper_enabled():
+            # Clear state when solar taper disabled
+            self.data.solar_taper_active = False
+            self.data.taper_setpoint_offset = 0.0
             return
 
         # Get excess solar and load shift signal
@@ -995,6 +1011,10 @@ class LocalShiftCoordinator:
             excess_solar_kw=excess_solar_kw,
             load_shift_signal=load_shift_signal,
         )
+
+        # Update CoordinatorData with state
+        self.data.solar_taper_active = is_active
+        self.data.taper_setpoint_offset = setpoint_offset if is_active else 0.0
 
         if is_active and setpoint_offset != 0.0:
             _LOGGER.info(

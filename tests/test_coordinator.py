@@ -116,10 +116,15 @@ class TestAsyncStart:
             patch(
                 "custom_components.localshift.coordinator.async_track_time_change"
             ) as mock_track_time_change,
+            patch(
+                "custom_components.localshift.thermal_manager.ThermalManager.async_initialize",
+                new_callable=AsyncMock,
+            ) as mock_thermal_init,
         ):
             mock_track_state.return_value = MagicMock()
             mock_track_time.return_value = MagicMock()
             mock_track_time_change.return_value = MagicMock()
+            mock_thermal_init.return_value = None
 
             await coordinator.async_start()
 
@@ -129,6 +134,7 @@ class TestAsyncStart:
             assert coordinator._computation_engine is not None
             assert coordinator._state_machine is not None
             assert coordinator._notification_service is not None
+            assert coordinator._thermal_manager is not None
 
     @pytest.mark.asyncio
     async def test_async_start_subscribes_to_events(self, coordinator, mock_recorder):
@@ -143,10 +149,15 @@ class TestAsyncStart:
             patch(
                 "custom_components.localshift.coordinator.async_track_time_change"
             ) as mock_track_time_change,
+            patch(
+                "custom_components.localshift.thermal_manager.ThermalManager.async_initialize",
+                new_callable=AsyncMock,
+            ) as mock_thermal_init,
         ):
             mock_track_state.return_value = MagicMock()
             mock_track_time.return_value = MagicMock()
             mock_track_time_change.return_value = MagicMock()
+            mock_thermal_init.return_value = None
 
             await coordinator.async_start()
 
@@ -154,8 +165,8 @@ class TestAsyncStart:
             mock_track_state.assert_called_once()
             # Verify periodic timer subscription
             mock_track_time.assert_called_once()
-            # Verify midnight and daily summary subscriptions
-            assert mock_track_time_change.call_count == 2
+            # Verify midnight, daily summary, and thermal mode decision subscriptions
+            assert mock_track_time_change.call_count == 3
 
     @pytest.mark.asyncio
     async def test_async_start_sets_startup_grace(self, coordinator, mock_recorder):
@@ -170,10 +181,15 @@ class TestAsyncStart:
             patch(
                 "custom_components.localshift.coordinator.async_track_time_change"
             ) as mock_track_time_change,
+            patch(
+                "custom_components.localshift.thermal_manager.ThermalManager.async_initialize",
+                new_callable=AsyncMock,
+            ) as mock_thermal_init,
         ):
             mock_track_state.return_value = MagicMock()
             mock_track_time.return_value = MagicMock()
             mock_track_time_change.return_value = MagicMock()
+            mock_thermal_init.return_value = None
 
             await coordinator.async_start()
 
