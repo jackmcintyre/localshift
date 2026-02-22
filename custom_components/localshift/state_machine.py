@@ -24,6 +24,7 @@ from .coordinator_data import CoordinatorData
 if TYPE_CHECKING:
     from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
+    from .entity_validator import EntityValidator
     from .notification_service import NotificationService
 
 
@@ -47,6 +48,7 @@ class StateMachine:
         notification_service: NotificationService,
         get_switch_state_func: callable,
         get_option_func: callable,
+        entity_validator: EntityValidator,
     ) -> None:
         """Initialize the state machine.
 
@@ -55,11 +57,13 @@ class StateMachine:
             notification_service: Notification service instance
             get_switch_state_func: Function to get switch states
             get_option_func: Function to get configuration options
+            entity_validator: Entity validator instance for availability checks
         """
         self._battery_controller = battery_controller
         self._notification_service = notification_service
         self._get_switch_state = get_switch_state_func
         self._get_option = get_option_func
+        self.entity_validator = entity_validator
         self._commanded_mode: BatteryMode = BatteryMode.SELF_CONSUMPTION
         self._mode_desired_since: dict[BatteryMode, datetime] = {}
         self._startup_grace_until: datetime | None = None
@@ -270,7 +274,11 @@ class StateMachine:
                                 and BACKUP_RESERVE_MAX_VALID < battery_target < 100
                             )
                         )
-                        if needs_soc_monitoring and data.soc >= battery_target:
+                        if (
+                            needs_soc_monitoring
+                            and data.soc is not None
+                            and data.soc >= battery_target
+                        ):
                             _LOGGER.info(
                                 "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
                                 data.soc,
@@ -349,6 +357,15 @@ class StateMachine:
                     desired.value,
                     elapsed,
                 )
+
+                # --- Check entity availability before transition ---
+                if not self.entity_validator.should_allow_automation():
+                    _LOGGER.warning(
+                        "Automation blocked: Required entities unavailable. Maintaining current mode %s.",
+                        old_mode.value,
+                    )
+                    # Do not transition, keep current mode
+                    return
 
                 # Execute the transition and check if it succeeded
                 transition_success = await self._execute_mode_transition(data, desired)
@@ -485,7 +502,7 @@ class StateMachine:
                 )
                 if transition_success:
                     # Track the dynamic reserve for health checks
-                    self._proactive_export_reserve = max(4.0, data.soc - 5.0)
+                    self._proactive_export_reserve = max(4.0, (data.soc or 0.0) - 5.0)
                     _LOGGER.info(
                         "Proactive export mode transition completed (throttled reserve=%s)",
                         self._proactive_export_reserve,

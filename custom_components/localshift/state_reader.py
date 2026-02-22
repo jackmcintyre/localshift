@@ -30,6 +30,7 @@ from .const import (
     DEFAULT_ENTITY_IDS,
 )
 from .coordinator_data import CoordinatorData
+from .entity_validator import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,10 +38,13 @@ _LOGGER = logging.getLogger(__name__)
 class StateReader:
     """Handles reading state from external Home Assistant entities."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, entity_validator: EntityValidator
+    ) -> None:
         """Initialize the state reader."""
         self.hass = hass
         self.entry = entry
+        self.entity_validator = entity_validator
 
     def _get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.

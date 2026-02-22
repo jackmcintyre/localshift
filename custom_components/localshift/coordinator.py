@@ -168,7 +168,8 @@ class LocalShiftCoordinator:
         from .state_machine import StateMachine
         from .state_reader import StateReader
 
-        self._state_reader = StateReader(self.hass, self.entry)
+        self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
+        self._state_reader = StateReader(self.hass, self.entry, self._entity_validator)
         self._cost_tracker = CostTracker(self.hass)
         self._battery_controller = BatteryController(self.hass, self._get_entity_id)
         self._notification_service = NotificationService(
@@ -182,8 +183,8 @@ class LocalShiftCoordinator:
             self._notification_service,
             self.get_switch_state,
             self.get_option,
+            self._entity_validator,
         )
-        self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
 
         # Initialize ThermalManager for HVAC-aware load correlation (Issue #137)
         from .thermal_manager import ThermalManager
