@@ -701,10 +701,26 @@ class ForecastComputer:
                 )
             )
 
+            # DEBUG: Log simulation result for every slot
+            _LOGGER.info(
+                "SOLAR_SIM[%02d:%02d]: start_soc=%.1f%% sim_end=%s max_soc=%.1f%% target=%d%% can_reach=%s price=$%.3f cheap=$%.3f",
+                slot_start.hour,
+                slot_start.minute,
+                predicted_soc,
+                sim_end.strftime("%H:%M"),
+                max_soc,
+                target_pct,
+                can_reach_with_solar_only,
+                use_price,
+                effective_cheap_price,
+            )
+
             # Solar forecast says we'll reach target: NO grid charging
             if can_reach_with_solar_only:
-                _LOGGER.debug(
-                    "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
+                _LOGGER.info(
+                    "GRID_CHARGE_SKIP[%02d:%02d]: solar forecast reaches target (max_soc=%.1f%% >= %d%%)",
+                    slot_start.hour,
+                    slot_start.minute,
                     max_soc,
                     target_pct,
                 )
