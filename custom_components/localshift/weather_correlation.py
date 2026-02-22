@@ -415,6 +415,8 @@ class WeatherCorrelation:
                         )
 
                 if isinstance(forecast_data, list):
+                    parsed_count = 0
+                    filtered_count = 0
                     for forecast_entry in forecast_data:
                         # Skip if not a dict (handles 'str' object error)
                         if not isinstance(forecast_entry, dict):
@@ -429,12 +431,21 @@ class WeatherCorrelation:
                             forecast_time = dt_util.parse_datetime(forecast_time_str)
                             if forecast_time is None:
                                 continue
+                            parsed_count += 1
                         except (ValueError, TypeError):
                             continue
 
                         # Only include forecasts for the next 24 hours
                         hours_ahead = (forecast_time - now).total_seconds() / 3600
                         if hours_ahead < 0 or hours_ahead > 24:
+                            filtered_count += 1
+                            if filtered_count <= 3:
+                                _LOGGER.info(
+                                    "Filtering out forecast: time=%s, now=%s, hours_ahead=%.1f",
+                                    forecast_time.isoformat(),
+                                    now.isoformat(),
+                                    hours_ahead,
+                                )
                             continue
 
                         temperature = forecast_entry.get("temperature")
