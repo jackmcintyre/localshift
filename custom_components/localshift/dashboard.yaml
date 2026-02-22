@@ -370,6 +370,65 @@ views:
                 entity_id: button.localshift_force_discharge
             icon_height: 40px
 
+      # Thermal Status
+      - type: grid
+        cards:
+          - type: heading
+            heading: Thermal Status
+            heading_style: title
+
+          - type: tile
+            entity: sensor.localshift_daily_thermal_mode
+            name: Today's Mode
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.localshift_preconditioning_active
+                state: "on"
+            card:
+              type: tile
+              entity: binary_sensor.localshift_preconditioning_active
+              name: Pre-conditioning
+              color: blue
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.localshift_solar_taper_active
+                state: "on"
+            card:
+              type: tile
+              entity: binary_sensor.localshift_solar_taper_active
+              name: Solar Taper
+              color: green
+
+          - type: markdown
+            content: >
+              {%- set thermal_enabled = is_state('binary_sensor.localshift_thermal_management_enabled', 'on') %}
+              {%- set mode = states('sensor.localshift_daily_thermal_mode') %}
+              {%- set preconditioning = is_state('binary_sensor.localshift_preconditioning_active', 'on') %}
+              {%- set solar_taper = is_state('binary_sensor.localshift_solar_taper_active', 'on') %}
+              {%- set offset = state_attr('binary_sensor.localshift_solar_taper_active', 'taper_setpoint_offset') | default(0) %}
+              
+              {% if not thermal_enabled %}
+              ⚪ **Thermal management disabled**
+              {% elif mode == 'off' %}
+              ⚪ **No HVAC action needed** — mild day
+              {% elif preconditioning %}
+              🌡️ **Pre-conditioning** — adjusting setpoints before demand window
+              {% elif solar_taper %}
+              ☀️ **Solar taper active** — offset {{ offset }}°C to consume excess
+              {% elif mode == 'cool' %}
+              ❄️ **Cooling mode** — ready to pre-cool if needed
+              {% elif mode == 'heat' %}
+              🔥 **Heating mode** — ready to pre-heat if needed
+              {% elif mode == 'dry' %}
+              💧 **Dehumidify mode** — high humidity detected
+              {% else %}
+              ⚪ **Monitoring** — {{ mode }}
+              {% endif %}
+
 
   # =============================================================================
   # VIEW 2: CONTROLS (Adjust Settings Occasionally)
@@ -554,6 +613,49 @@ views:
             entity: number.localshift_load_weight_recent
             name: Load Weight
             icon: mdi:scale-balance
+
+      # Thermal Management
+      - type: grid
+        cards:
+          - type: heading
+            heading: Thermal Management
+            heading_style: title
+
+          - type: tile
+            entity: switch.localshift_thermal_management_enabled
+            name: Thermal Control
+            icon: mdi:air-conditioner
+
+          - type: tile
+            entity: switch.localshift_solar_taper_enabled
+            name: Solar Taper
+            icon: mdi:solar-power
+
+          - type: tile
+            entity: number.localshift_cooling_trigger_temp
+            name: Cooling Trigger
+
+          - type: tile
+            entity: number.localshift_heating_trigger_temp
+            name: Heating Trigger
+
+          - type: tile
+            entity: number.localshift_dehumidify_trigger_humidity
+            name: Dehumidify Trigger
+
+          - type: tile
+            entity: number.localshift_solar_taper_max_offset
+            name: Taper Max Offset
+
+          - type: markdown
+            content: >
+              {%- set mode = states('sensor.localshift_daily_thermal_mode') %}
+              {%- set locked = state_attr('sensor.localshift_daily_thermal_mode', 'mode_locked') %}
+              {%- set determined = state_attr('sensor.localshift_daily_thermal_mode', 'determined_at') %}
+              
+              **Today's Mode:** {{ mode | upper }}  
+              **Locked:** {{ 'Yes' if locked else 'No' }}  
+              {% if determined %}**Determined at:** {{ determined }}{% endif %}
 
 
   # =============================================================================
@@ -761,6 +863,58 @@ views:
               Backup Reserve: {{ states('number.my_home_backup_reserve') }}%
               
               Allow Export: {{ states('select.my_home_allow_export') }}
+              
+              === THERMAL MANAGEMENT ===
+              
+              Thermal Management Enabled: {{ states('binary_sensor.localshift_thermal_management_enabled') }}
+              
+              Daily Thermal Mode: {{ states('sensor.localshift_daily_thermal_mode') }}
+              
+              Mode Locked: {{ state_attr('sensor.localshift_daily_thermal_mode', 'mode_locked') }}
+              
+              Mode Determined At: {{ state_attr('sensor.localshift_daily_thermal_mode', 'determined_at') }}
+              
+              Climate Entities: {{ state_attr('sensor.localshift_daily_thermal_mode', 'climate_entities') }}
+              
+              Controlled Entities: {{ state_attr('sensor.localshift_daily_thermal_mode', 'controlled_entities') }}
+              
+              Preconditioning Active: {{ states('binary_sensor.localshift_preconditioning_active') }}
+              
+              Solar Taper Active: {{ states('binary_sensor.localshift_solar_taper_active') }}
+              
+              Taper Setpoint Offset: {{ state_attr('sensor.localshift_daily_thermal_mode', 'taper_setpoint_offset') | default(0) }}°C
+              
+              Solar Taper Enabled: {{ state_attr('binary_sensor.localshift_thermal_management_enabled', 'solar_taper_enabled') }}
+              
+              Cooling Trigger Temp: {{ states('number.localshift_cooling_trigger_temp') }}°C
+              
+              Heating Trigger Temp: {{ states('number.localshift_heating_trigger_temp') }}°C
+              
+              Dehumidify Trigger Humidity: {{ states('number.localshift_dehumidify_trigger_humidity') }}%
+              
+              Solar Taper Max Offset: {{ states('number.localshift_solar_taper_max_offset') }}°C
+              
+              === LEARNED HVAC POWER ===
+              
+              {% set learned = state_attr('sensor.localshift_daily_thermal_mode', 'learned_hvac_power') | default({}) %}
+              {% if learned %}
+              {% for entity_id, power in learned.items() %}
+              {{ entity_id }}:
+                Cooling: {{ power.cooling_power_kw | default(0) }} kW
+                Heating: {{ power.heating_power_kw | default(0) }} kW
+                Drying: {{ power.drying_power_kw | default(0) }} kW
+                Samples: {{ power.sample_count | default(0) }}
+                Confidence: {{ power.confidence | default('low') }}
+              {% endfor %}
+              {% else %}
+              No HVAC power data learned yet
+              {% endif %}
+              
+              === BASELINE LOAD PROFILE ===
+              
+              Baseline Load Hours: {{ state_attr('sensor.localshift_daily_thermal_mode', 'baseline_load_hours') | default(0) }}
+              
+              HVAC Load Hours: {{ state_attr('sensor.localshift_daily_thermal_mode', 'hvac_load_hours') | default(0) }}
               
               === END OF DEBUG SUMMARY ===
               ```
