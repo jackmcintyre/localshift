@@ -622,12 +622,12 @@ views:
             heading_style: title
 
           - type: tile
-            entity: switch.localshift_thermal_management_enabled
+            entity: switch.localshift_thermal_management
             name: Thermal Control
             icon: mdi:air-conditioner
 
           - type: tile
-            entity: switch.localshift_solar_taper_enabled
+            entity: switch.localshift_solar_taper
             name: Solar Taper
             icon: mdi:solar-power
 
