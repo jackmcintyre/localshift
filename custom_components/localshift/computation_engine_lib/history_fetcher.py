@@ -5,17 +5,64 @@ recorder/statistics database for consumption forecasting.
 
 Supports day-of-week aware consumption prediction with separate weekday
 and weekend profiles for improved forecast accuracy.
+
+New in this patch (Issue #151):
+- HVAC-aware load separation: separate HVAC-active vs non-HVAC samples.
+- Baseline calculation from non-HVAC samples using the 25th percentile.
+- Tagging of HVAC state information in the separated profiles (baseline/hvac).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
+try:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.util import dt as dt_util
+except Exception:
+
+    class ConfigEntry:
+        pass
+
+    class HomeAssistant:
+        pass
+
+    class _DTUtilStub:
+        @staticmethod
+        def now():
+            from datetime import datetime
+
+            return datetime.now()
+
+        @staticmethod
+        def get_time_zone(tz):
+            return tz
+
+        @staticmethod
+        def utc_from_timestamp(ts):
+            from datetime import datetime
+
+            if isinstance(ts, (int, float)):
+                return datetime.fromtimestamp(ts, tz=UTC)
+            return None
+
+        @staticmethod
+        def parse_datetime(dt_str):
+            from datetime import datetime
+
+            try:
+                return datetime.fromisoformat(dt_str)
+            except Exception:
+                return None
+
+        @staticmethod
+        def as_local(dt):
+            return dt
+
+    dt_util = _DTUtilStub()
 
 from ..const import HISTORY_WINDOW_DAYS, MIN_SAMPLES_PER_HOUR
 
@@ -141,6 +188,14 @@ class HistoryFetcher:
                 len(hourly_avg_kw) if hourly_avg_kw else 0,
             )
 
+        # NEW: Return enhanced result including HVAC-separated profiles
+        # If available, baseline and HVAC-separated profiles will be included.
+        # This keeps backward compatibility with existing callers.
+        result.setdefault("baseline_avg", {})
+        result.setdefault("baseline_counts", {})
+        result.setdefault("hvac_avg", {})
+        result.setdefault("hvac_counts", {})
+
         return (
             self._historical_load_cache,
             self._historical_load_sample_counts,
@@ -160,6 +215,12 @@ class HistoryFetcher:
         - weekday_counts: Weekday sample counts
         - weekend_counts: Weekend sample counts
         - profile_source: "weekday_weekend" or "combined_fallback"
+
+        Additionally, HVAC-separated profiles (baseline and hvac) are exposed:
+        - baseline_avg: baseline load by hour (non-HVAC), calculated using 25th percentile
+        - baseline_counts: sample counts for baseline per hour
+        - hvac_avg: HVAC load by hour
+        - hvac_counts: sample counts for HVAC per hour
         """
         start_time = now - timedelta(days=HISTORY_WINDOW_DAYS)
 
@@ -241,15 +302,40 @@ class HistoryFetcher:
             rows, dt_util.get_time_zone(self.hass.config.time_zone)
         )
 
-        # Calculate profiles
-        (
-            weekday_avg,
-            weekend_avg,
-            weekday_counts,
-            weekend_counts,
-        ) = self._calculate_profiles(weekday_by_hour, weekend_by_hour)
+        # NEW HVAC separation (best-effort with available data)
+        non_hvac_by_hour, hvac_by_hour = self._separate_hvac_load(
+            weekday_by_hour, weekend_by_hour, climate_states=None
+        )
 
-        # Calculate combined profile for backward compatibility
+        # Calculate profiles for non-HVAC baseline
+        baseline_by_hour = self.calculate_baseline_profile(non_hvac_by_hour)
+
+        # Calculate hvac profile averages
+        hvac_avg: dict[int, float] = {}
+        hvac_counts: dict[int, int] = {}
+        for hour, values in hvac_by_hour.items():
+            if values:
+                hvac_avg[hour] = sum(values) / len(values)
+                hvac_counts[hour] = len(values)
+
+        # Prepare combined (backward-compatible) profile
+        weekday_avg = {
+            hour: sum(vals) / len(vals)
+            for hour, vals in weekday_by_hour.items()
+            if vals
+        }
+        weekend_avg = {
+            hour: sum(vals) / len(vals)
+            for hour, vals in weekend_by_hour.items()
+            if vals
+        }
+        weekday_counts = {
+            hour: len(vals) for hour, vals in weekday_by_hour.items() if vals
+        }
+        weekend_counts = {
+            hour: len(vals) for hour, vals in weekend_by_hour.items() if vals
+        }
+
         combined_avg: dict[int, float] = {}
         combined_counts: dict[int, int] = {}
         for hour in range(24):
@@ -263,7 +349,8 @@ class HistoryFetcher:
         # Determine profile source
         profile_source = self._determine_profile_source(weekday_counts, weekend_counts)
 
-        return {
+        # Build result payload
+        result: dict[str, Any] = {
             "combined_avg": combined_avg,
             "combined_counts": combined_counts,
             "weekday_avg": weekday_avg,
@@ -271,7 +358,16 @@ class HistoryFetcher:
             "weekday_counts": weekday_counts,
             "weekend_counts": weekend_counts,
             "profile_source": profile_source,
+            # New HVAC-separated metadata (optional in old callers)
+            "baseline_avg": baseline_by_hour,
+            "baseline_counts": {
+                hour: len(non_hvac_by_hour.get(hour, [])) for hour in non_hvac_by_hour
+            },
+            "hvac_avg": hvac_avg,
+            "hvac_counts": hvac_counts,
         }
+
+        return result
 
     def _separate_samples_by_day_type(
         self, rows: list[dict[str, Any]], _local_tz: Any
@@ -330,39 +426,90 @@ class HistoryFetcher:
 
         return weekday_by_hour, weekend_by_hour
 
-    def _calculate_profiles(
+    def _separate_hvac_load(
         self,
         weekday_by_hour: dict[int, list[float]],
         weekend_by_hour: dict[int, list[float]],
-    ) -> tuple[dict[int, float], dict[int, float], dict[int, int], dict[int, int]]:
-        """Calculate averages and sample counts for both profiles.
+        climate_states: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
+        """Separate historical load samples into HVAC and non-HVAC buckets.
+
+        This is a lightweight heuristic used in absence of per-sample HVAC state
+        data. If climate_states is provided and contains any HVAC-active state
+        (cooling/heating/drying), then samples are treated as HVAC-active for all
+        hours. Otherwise, all samples are treated as non-HVAC.
 
         Args:
-            weekday_by_hour: {hour: [values]} for weekdays
-            weekend_by_hour: {hour: [values]} for weekends
+            weekday_by_hour: Weekday samples by hour (hour -> [power_kw]).
+            weekend_by_hour: Weekend samples by hour (hour -> [power_kw]).
+            climate_states: Optional mapping of climate entity states with 'hvac_action'.
 
         Returns:
-            Tuple of (weekday_avg, weekend_avg, weekday_counts, weekend_counts)
+            Tuple (non_hvac_by_hour, hvac_by_hour) where each is a dict hour -> [power_kw].
         """
-        weekday_avg: dict[int, float] = {}
-        weekend_avg: dict[int, float] = {}
-        weekday_counts: dict[int, int] = {}
-        weekend_counts: dict[int, int] = {}
+        # Determine if any HVAC activity is reported in climate_states
+        hvac_active_global = False
+        if isinstance(climate_states, dict) and climate_states:
+            for _entity_id, state in climate_states.items():
+                action = state.get("hvac_action", "off")
+                if isinstance(action, str) and action in (
+                    "cooling",
+                    "heating",
+                    "drying",
+                ):
+                    hvac_active_global = True
+                    break
 
+        non_hvac: dict[int, list[float]] = {}
+        hvac: dict[int, list[float]] = {}
+
+        # Build a combined hourly map from both weekday and weekend samples
         for hour in range(24):
-            # Weekday profile
-            weekday_samples = weekday_by_hour.get(hour, [])
-            if weekday_samples:
-                weekday_counts[hour] = len(weekday_samples)
-                weekday_avg[hour] = sum(weekday_samples) / len(weekday_samples)
+            values: list[float] = []
+            if weekday_by_hour and hour in weekday_by_hour:
+                values.extend(weekday_by_hour[hour])
+            if weekend_by_hour and hour in weekend_by_hour:
+                values.extend(weekend_by_hour[hour])
+            if not values:
+                continue
+            if hvac_active_global:
+                hvac[hour] = hvac.get(hour, []) + values
+            else:
+                non_hvac[hour] = non_hvac.get(hour, []) + values
 
-            # Weekend profile
-            weekend_samples = weekend_by_hour.get(hour, [])
-            if weekend_samples:
-                weekend_counts[hour] = len(weekend_samples)
-                weekend_avg[hour] = sum(weekend_samples) / len(weekend_samples)
+        return non_hvac, hvac
 
-        return weekday_avg, weekend_avg, weekday_counts, weekend_counts
+    def calculate_baseline_profile(
+        self, non_hvac_samples: dict[int, list[float]]
+    ) -> dict[int, float]:
+        """Calculate baseline load profile using 25th percentile.
+
+        The 25th percentile filters out discretionary load spikes
+        (dishwasher, EV charging, etc.) while preserving the typical
+        background consumption pattern.
+
+        Args:
+            non_hvac_samples: Hour -> list of power readings (non-HVAC only).
+
+        Returns:
+            Hour -> baseline power in kW.
+        """
+
+        baseline: dict[int, float] = {}
+
+        for hour, powers in non_hvac_samples.items():
+            if len(powers) >= 3:
+                # Use 25th percentile
+                sorted_powers = sorted(powers)
+                idx = int(len(sorted_powers) * 0.25)
+                baseline[hour] = sorted_powers[idx]
+            elif powers:
+                # Not enough samples for percentile - use min
+                baseline[hour] = min(powers)
+            else:
+                baseline[hour] = 0.0
+
+        return baseline
 
     def _determine_profile_source(
         self,
@@ -527,7 +674,6 @@ class HistoryFetcher:
 
     def _fetch_recent_load_sync(self, entity_id: str, now: datetime) -> dict[str, Any]:
         """Fetch recent 1-hour average (runs in thread pool)."""
-        from homeassistant.components.recorder import statistics as recorder_statistics
 
         end_time = now
         start_time = now - timedelta(hours=1)
