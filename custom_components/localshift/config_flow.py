@@ -52,6 +52,7 @@ from .const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_THERMAL_MANAGEMENT_ENABLED,
+    CONF_THERMAL_MODE_DECISION_TIME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -78,6 +79,7 @@ from .const import (
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
     DEFAULT_THERMAL_MANAGEMENT_ENABLED,
+    DEFAULT_THERMAL_MODE_DECISION_TIME,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
@@ -843,6 +845,10 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         CONF_TAPER_MAX_SETPOINT_OFFSET,
                         DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
                     ),
+                    CONF_THERMAL_MODE_DECISION_TIME: current.get(
+                        CONF_THERMAL_MODE_DECISION_TIME,
+                        DEFAULT_THERMAL_MODE_DECISION_TIME,
+                    ),
                 },
                 notify_services,
                 weather_entities,
@@ -1248,5 +1254,12 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         mode=selector.NumberSelectorMode.SLIDER,
                     )
                 ),
+                vol.Optional(
+                    CONF_THERMAL_MODE_DECISION_TIME,
+                    default=values.get(
+                        CONF_THERMAL_MODE_DECISION_TIME,
+                        DEFAULT_THERMAL_MODE_DECISION_TIME,
+                    ),
+                ): selector.TimeSelector(),
             }
         )
