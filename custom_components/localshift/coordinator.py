@@ -35,7 +35,9 @@ from .const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_THERMAL_MODE_DECISION_TIME,
     DEFAULT_DEMAND_WINDOW_END,
+    DEFAULT_THERMAL_MODE_DECISION_TIME,
     SWITCH_DEFAULTS,
 )
 from .coordinator_data import CoordinatorData
@@ -78,6 +80,7 @@ class LocalShiftCoordinator:
         self._unsub_timer: CALLBACK_TYPE | None = None
         self._unsub_midnight: CALLBACK_TYPE | None = None
         self._unsub_daily_summary: CALLBACK_TYPE | None = None
+        self._unsub_thermal_mode_decision: CALLBACK_TYPE | None = None
         self._update_callbacks: list[CALLBACK_TYPE] = []
 
         # Switch state bridge — switches read/write via these methods
@@ -238,6 +241,18 @@ class LocalShiftCoordinator:
             self._handle_daily_summary,
             hour=dw_end.hour,
             minute=dw_end.minute,
+            second=0,
+        )
+
+        # Daily thermal mode determination (Issue #140): fires at decision time
+        decision_time = self._parse_time_option(
+            CONF_THERMAL_MODE_DECISION_TIME, DEFAULT_THERMAL_MODE_DECISION_TIME
+        )
+        self._unsub_thermal_mode_decision = async_track_time_change(
+            self.hass,
+            self._handle_thermal_mode_decision,
+            hour=decision_time.hour,
+            minute=decision_time.minute,
             second=0,
         )
 
@@ -563,14 +578,22 @@ class LocalShiftCoordinator:
         """Reset daily cost accumulators and target flag at midnight.
 
         Replaces YAML A12 (localshift_reset_target_reached).
+        Also unlocks daily thermal mode for re-determination.
         """
         self.data.grid_import_cost = 0.0
         self.data.grid_export_revenue = 0.0
         self.data.battery_savings = 0.0
         self.data.battery_charge_cost = 0.0
         self.data.target_reached_today = False
+
+        # Unlock daily thermal mode for new decision at decision time
+        self.data.daily_mode_locked = False
+        self.data.daily_mode_determined_at = ""
+
         self._notify_listeners()
-        _LOGGER.info("Midnight reset: cost accumulators and target flag cleared")
+        _LOGGER.info(
+            "Midnight reset: cost accumulators, target flag, and thermal mode unlocked"
+        )
 
     @callback
     def _handle_daily_summary(self, now: datetime) -> None:
@@ -587,6 +610,50 @@ class LocalShiftCoordinator:
             self._send_daily_summary(),
             "localshift_daily_summary",
         )
+
+    @callback
+    def _handle_thermal_mode_decision(self, now: datetime) -> None:
+        """Determine daily thermal mode from weather forecast.
+
+        Fires at thermal_mode_decision_time (default 06:00) to decide
+        today's HVAC operating mode: HEAT, COOL, DRY, or OFF.
+
+        The mode is locked until the next day's decision time.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            _LOGGER.debug("Thermal management disabled, skipping mode decision")
+            return
+
+        # Get weather temperature forecast
+        temp_forecast = self.data.weather_temperature_forecast
+
+        # Get current humidity if available
+        humidity = None
+        from .const import CONF_WEATHER_ENTITY
+
+        weather_entity = self._get_entity_id(CONF_WEATHER_ENTITY)
+        weather_state = self.hass.states.get(weather_entity)
+        if weather_state is not None:
+            humidity = weather_state.attributes.get("humidity")
+
+        # Determine mode from forecast
+        mode = self._thermal_manager.determine_daily_mode(temp_forecast, humidity)
+
+        # Update coordinator data
+        self.data.daily_thermal_mode = mode
+        self.data.daily_mode_locked = True
+        self.data.daily_mode_determined_at = now.isoformat()
+
+        _LOGGER.info(
+            "Daily thermal mode determined: %s (locked until tomorrow)",
+            mode.value,
+        )
+
+        # Notify listeners of the mode change
+        self._notify_listeners()
 
     # ------------------------------------------------------------------
     # Computation

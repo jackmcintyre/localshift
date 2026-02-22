@@ -48,6 +48,8 @@ async def async_setup_entry(
         # Entity health and error tracking sensors (Issue #94)
         IntegrationStatusSensor(coordinator, entry),
         EntityHealthSensor(coordinator, entry),
+        # Thermal management sensors (Issue #140)
+        DailyThermalModeSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -780,3 +782,50 @@ class EntityHealthSensor(LocalShiftSensorBase):
             "errors": self.coordinator.data.entity_errors,
             "warnings": self.coordinator.data.entity_warnings,
         }
+
+
+# ---------------------------------------------------------------------------
+# Thermal Management Sensors (Issue #140)
+# ---------------------------------------------------------------------------
+
+
+class DailyThermalModeSensor(LocalShiftSensorBase):
+    """Current daily thermal mode (HEAT/COOL/DRY/OFF).
+
+    Determined once per day at thermal_mode_decision_time based on
+    weather forecast. Mode is locked until next day's decision time.
+    """
+
+    _attr_unique_id = "localshift_daily_thermal_mode"
+    _attr_name = "Daily Thermal Mode"
+    _attr_icon = "mdi:thermometer"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with current daily thermal mode."""
+        self._attr_native_value = self.coordinator.data.daily_thermal_mode.value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return mode details."""
+        d = self.coordinator.data
+        return {
+            "mode_locked": d.daily_mode_locked,
+            "determined_at": d.daily_mode_determined_at,
+            "climate_entities": list(d.climate_states.keys()),
+            "controlled_entities": d.climate_control_entities,
+            "learned_hvac_power": d.learned_hvac_power,
+            "baseline_load_hours": len(d.baseline_load_kw),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on mode."""
+        mode = self._attr_native_value
+        if mode == "HEAT":
+            return "mdi:fire"
+        elif mode == "COOL":
+            return "mdi:snowflake"
+        elif mode == "DRY":
+            return "mdi:water-off"
+        else:  # OFF
+            return "mdi:thermometer-off"
