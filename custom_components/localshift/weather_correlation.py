@@ -383,12 +383,37 @@ class WeatherCorrelation:
             if response and weather_entity in response:
                 forecast_data = response[weather_entity]
                 _LOGGER.info(
-                    "forecast_data type=%s, len=%s",
+                    "forecast_data type=%s, len=%s, keys=%s",
                     type(forecast_data).__name__,
                     len(forecast_data) if isinstance(forecast_data, list) else "N/A",
+                    list(forecast_data.keys())
+                    if isinstance(forecast_data, dict)
+                    else "N/A",
                 )
 
                 # Handle different response formats
+                if isinstance(forecast_data, dict):
+                    # Some integrations return {"forecast": [...]} or {"hourly": [...]}
+                    _LOGGER.info(
+                        "forecast_data is dict, checking for forecast/hourly keys"
+                    )
+                    if "forecast" in forecast_data:
+                        forecast_data = forecast_data["forecast"]
+                        _LOGGER.info(
+                            "Found 'forecast' key with %d entries",
+                            len(forecast_data)
+                            if isinstance(forecast_data, list)
+                            else 0,
+                        )
+                    elif "hourly" in forecast_data:
+                        forecast_data = forecast_data["hourly"]
+                        _LOGGER.info(
+                            "Found 'hourly' key with %d entries",
+                            len(forecast_data)
+                            if isinstance(forecast_data, list)
+                            else 0,
+                        )
+
                 if isinstance(forecast_data, list):
                     for forecast_entry in forecast_data:
                         # Skip if not a dict (handles 'str' object error)
