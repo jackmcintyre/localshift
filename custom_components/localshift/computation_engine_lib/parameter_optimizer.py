@@ -2,6 +2,7 @@
 
 Issue #170 Phase 2: Bayesian-inspired parameter optimization using Thompson sampling.
 Adjusts tunable parameters based on decision outcome data from Phase 1.
+Issue #170 Phase 3: Enhanced to accept bias corrections from pattern analysis.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from .decision_outcome_tracker import DecisionRecord
+    from .pattern_analyzer import BiasCorrection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ class ParameterOptimizer:
         self._consecutive_degrading_days: int = 0
         self._last_7d_score: float = 0.0
         self._adjustment_log: list[dict[str, Any]] = []
+        self._pending_bias_corrections: list[BiasCorrection] = []
 
     def should_update(self, decision_count: int) -> bool:
         """Check if enough data has accumulated for an update.
@@ -91,7 +94,10 @@ class ParameterOptimizer:
         return True
 
     def optimize(
-        self, decisions: list[DecisionRecord], current_7d_score: float
+        self,
+        decisions: list[DecisionRecord],
+        current_7d_score: float,
+        bias_corrections: list[BiasCorrection] | None = None,
     ) -> AdaptiveParameters:
         """Run optimization using recent decision outcomes.
 
@@ -102,10 +108,12 @@ class ParameterOptimizer:
         4. Sample from distributions, pick the range with highest sample
         5. Set parameter to center of winning range
         6. Add small exploration noise
+        7. Apply bias corrections from pattern analysis (Phase 3)
 
         Args:
             decisions: List of decision records with outcomes
             current_7d_score: Current 7-day rolling score for rollback detection
+            bias_corrections: Optional list of bias corrections from pattern analyzer
 
         Returns:
             Updated AdaptiveParameters
@@ -163,6 +171,12 @@ class ParameterOptimizer:
                         }
                     )
 
+        # Apply bias corrections from pattern analysis (Issue #170 Phase 3)
+        if bias_corrections:
+            new_values, new_confidence = self._apply_bias_corrections(
+                new_values, new_confidence, bias_corrections
+            )
+
         # Update the parameters
         self._current_params = AdaptiveParameters(
             values=new_values,
@@ -173,6 +187,118 @@ class ParameterOptimizer:
         self._last_update = datetime.now()
 
         return self._current_params
+
+    def _apply_bias_corrections(
+        self,
+        values: dict[str, float],
+        confidence: dict[str, float],
+        bias_corrections: list[BiasCorrection],
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Apply bias corrections from pattern analysis.
+
+        High-confidence corrections (>0.8) are applied directly as offsets.
+        Medium-confidence corrections (0.5-0.8) are used as priors in sampling.
+        Low-confidence corrections (<0.5) are ignored.
+
+        Args:
+            values: Current parameter values
+            confidence: Current confidence scores
+            bias_corrections: List of bias corrections from pattern analyzer
+
+        Returns:
+            Tuple of (updated_values, updated_confidence)
+        """
+        # Group corrections by parameter
+        param_corrections: dict[str, list[BiasCorrection]] = {}
+        for correction in bias_corrections:
+            if correction.param_name not in param_corrections:
+                param_corrections[correction.param_name] = []
+            param_corrections[correction.param_name].append(correction)
+
+        applied_count = 0
+
+        for param_name, corrections in param_corrections.items():
+            if param_name not in OPTIMIZABLE_PARAMS:
+                _LOGGER.debug(
+                    "Ignoring bias correction for unknown parameter: %s",
+                    param_name,
+                )
+                continue
+
+            param_def = OPTIMIZABLE_PARAMS[param_name]
+            current_value = values.get(param_name, param_def.default)
+
+            # Separate by confidence level
+            high_confidence = [c for c in corrections if c.confidence > 0.8]
+            medium_confidence = [c for c in corrections if 0.5 <= c.confidence <= 0.8]
+
+            # Apply high-confidence corrections directly
+            if high_confidence:
+                # Use weighted average based on confidence
+                total_weight = sum(c.confidence for c in high_confidence)
+                weighted_adjustment = (
+                    sum(c.adjustment * c.confidence for c in high_confidence)
+                    / total_weight
+                )
+
+                new_value = current_value + weighted_adjustment
+
+                # Clamp to bounds
+                new_value = max(param_def.min_val, min(param_def.max_val, new_value))
+
+                if new_value != current_value:
+                    values[param_name] = new_value
+                    # Boost confidence when multiple high-confidence corrections agree
+                    avg_confidence = total_weight / len(high_confidence)
+                    confidence[param_name] = min(1.0, avg_confidence + 0.1)
+
+                    _LOGGER.info(
+                        "Applied bias correction to %s: %.3f -> %.3f (from %d high-confidence patterns)",
+                        param_name,
+                        current_value,
+                        new_value,
+                        len(high_confidence),
+                    )
+                    applied_count += 1
+
+            # Apply medium-confidence corrections as smaller adjustments
+            elif medium_confidence:
+                # Use smaller weight for medium confidence
+                avg_adjustment = sum(c.adjustment for c in medium_confidence) / len(
+                    medium_confidence
+                )
+                # Scale down the adjustment based on confidence
+                avg_conf = sum(c.confidence for c in medium_confidence) / len(
+                    medium_confidence
+                )
+                scaled_adjustment = avg_adjustment * avg_conf
+
+                new_value = (
+                    current_value + scaled_adjustment * 0.5
+                )  # Scale down further
+
+                # Clamp to bounds
+                new_value = max(param_def.min_val, min(param_def.max_val, new_value))
+
+                if abs(new_value - current_value) > 0.01:  # Only log meaningful changes
+                    values[param_name] = new_value
+
+                    _LOGGER.info(
+                        "Applied medium-confidence bias correction to %s: %.3f -> %.3f (from %d patterns)",
+                        param_name,
+                        current_value,
+                        new_value,
+                        len(medium_confidence),
+                    )
+                    applied_count += 1
+
+        if applied_count > 0:
+            _LOGGER.info(
+                "Applied %d bias corrections from pattern analysis",
+                applied_count,
+            )
+
+        return values, confidence
 
     def _optimize_single_param(
         self,
@@ -409,6 +535,20 @@ class ParameterOptimizer:
             len(self._current_params.values),
         )
 
+    def set_bias_corrections(self, bias_corrections: list[BiasCorrection]) -> None:
+        """Set bias corrections from pattern analysis for next optimization.
+
+        Bias corrections are applied during the next optimize() call.
+
+        Args:
+            bias_corrections: List of bias corrections from pattern analyzer
+        """
+        self._pending_bias_corrections = bias_corrections
+        _LOGGER.debug(
+            "Stored %d bias corrections for next optimization cycle",
+            len(bias_corrections),
+        )
+
     def get_diagnostics(self) -> dict[str, Any]:
         """Get diagnostic information about the optimizer.
 
@@ -424,4 +564,5 @@ class ParameterOptimizer:
             "last_update": self._last_update.isoformat() if self._last_update else None,
             "min_observations": LEARNING_MIN_OBSERVATIONS,
             "update_interval_hours": LEARNING_UPDATE_INTERVAL_HOURS,
+            "pending_bias_corrections": len(self._pending_bias_corrections),
         }

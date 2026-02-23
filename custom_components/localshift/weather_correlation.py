@@ -92,6 +92,37 @@ class HourlyTemperatureCoefficients:
 
 
 @dataclass
+class PredictionAccuracySample:
+    """A single prediction accuracy sample.
+
+    Attributes:
+        predicted_kw: Predicted load in kW
+        actual_kw: Actual load in kW
+        error: Prediction error (predicted - actual) in kW
+        abs_error: Absolute error in kW
+        weather_condition: Weather condition at prediction time
+        temperature: Temperature at prediction time in °C
+        timestamp: When the prediction was made
+    """
+
+    predicted_kw: float
+    actual_kw: float
+    weather_condition: str
+    temperature: float
+    timestamp: str = ""  # ISO format
+
+    @property
+    def error(self) -> float:
+        """Prediction error (predicted - actual)."""
+        return self.predicted_kw - self.actual_kw
+
+    @property
+    def abs_error(self) -> float:
+        """Absolute prediction error."""
+        return abs(self.error)
+
+
+@dataclass
 class WeatherCorrelationData:
     """Complete weather correlation data structure for storage.
 
@@ -102,6 +133,7 @@ class WeatherCorrelationData:
         heating_threshold: Temperature below which heating load increases
         hourly_coefficients: Dict mapping hour (0-23) to coefficients
         learning_stats: Aggregated statistics for diagnostics
+        prediction_accuracy: Accuracy tracking by weather condition (Issue #170 Phase 3)
     """
 
     version: int = 1
@@ -112,6 +144,10 @@ class WeatherCorrelationData:
         default_factory=dict
     )
     learning_stats: dict[str, Any] = field(default_factory=dict)
+    # Prediction accuracy tracking for pattern analysis (Issue #170 Phase 3)
+    prediction_accuracy: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict
+    )  # weather_condition -> [{predicted, actual, temp, timestamp}]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
@@ -825,3 +861,210 @@ class WeatherCorrelation:
         """
         self._data.weather_entity_id = entity_id
         _LOGGER.info("Updated weather entity to %s", entity_id)
+
+    # ------------------------------------------------------------------
+    # Prediction Accuracy Tracking (Issue #170 Phase 3)
+    # ------------------------------------------------------------------
+
+    def record_prediction_accuracy(
+        self,
+        predicted_consumption_kw: float,
+        actual_consumption_kw: float,
+        weather_condition: str,
+        temperature: float,
+    ) -> None:
+        """Track prediction accuracy by weather condition.
+
+        Stores (predicted, actual) pairs bucketed by weather condition
+        and temperature range. Used by PatternAnalyzer to detect
+        weather-correlated forecasting biases.
+
+        Args:
+            predicted_consumption_kw: Predicted load in kW
+            actual_consumption_kw: Actual observed load in kW
+            weather_condition: Current weather condition (sunny, cloudy, etc.)
+            temperature: Current temperature in °C
+        """
+        # Normalize weather condition
+        condition = self._normalize_weather_condition(weather_condition)
+
+        # Create accuracy sample
+        sample = {
+            "predicted_kw": predicted_consumption_kw,
+            "actual_kw": actual_consumption_kw,
+            "error": predicted_consumption_kw - actual_consumption_kw,
+            "abs_error": abs(predicted_consumption_kw - actual_consumption_kw),
+            "temperature": temperature,
+            "timestamp": dt_util.now().isoformat(),
+        }
+
+        # Store by weather condition
+        if condition not in self._data.prediction_accuracy:
+            self._data.prediction_accuracy[condition] = []
+
+        self._data.prediction_accuracy[condition].append(sample)
+
+        # Keep only last 100 samples per condition
+        if len(self._data.prediction_accuracy[condition]) > 100:
+            self._data.prediction_accuracy[condition] = self._data.prediction_accuracy[
+                condition
+            ][-100:]
+
+        _LOGGER.debug(
+            "Recorded prediction accuracy: condition=%s, predicted=%.2f kW, "
+            "actual=%.2f kW, error=%.2f kW",
+            condition,
+            predicted_consumption_kw,
+            actual_consumption_kw,
+            sample["error"],
+        )
+
+    def get_accuracy_by_weather(self) -> dict[str, dict[str, Any]]:
+        """Return prediction accuracy stats grouped by weather condition.
+
+        Returns:
+            Dictionary with accuracy stats per weather condition:
+            {
+                "sunny": {"mean_error": -0.3, "std_error": 0.5, "samples": 42},
+                "cloudy": {"mean_error": +0.8, "std_error": 1.2, "samples": 28},
+                ...
+            }
+        """
+        result: dict[str, dict[str, Any]] = {}
+
+        for condition, samples in self._data.prediction_accuracy.items():
+            if not samples:
+                continue
+
+            errors = [s["error"] for s in samples]
+            n = len(errors)
+
+            if n == 0:
+                continue
+
+            mean_error = sum(errors) / n
+
+            # Calculate standard deviation
+            if n > 1:
+                variance = sum((e - mean_error) ** 2 for e in errors) / (n - 1)
+                std_error = variance**0.5
+            else:
+                std_error = 0.0
+
+            # Calculate mean absolute error
+            mean_abs_error = sum(abs(e) for e in errors) / n
+
+            result[condition] = {
+                "mean_error": round(mean_error, 3),
+                "std_error": round(std_error, 3),
+                "mean_abs_error": round(mean_abs_error, 3),
+                "samples": n,
+                # Bias indicator: positive = over-predict, negative = under-predict
+                "bias": "over_predict"
+                if mean_error > 0.2
+                else ("under_predict" if mean_error < -0.2 else "neutral"),
+            }
+
+        return result
+
+    def get_accuracy_by_temperature_range(self) -> dict[str, dict[str, Any]]:
+        """Return prediction accuracy stats grouped by temperature range.
+
+        Groups by:
+        - cold: < 10°C
+        - mild: 10-25°C
+        - hot: > 25°C
+
+        Returns:
+            Dictionary with accuracy stats per temperature range.
+        """
+        ranges = {
+            "cold": [],  # < 10°C
+            "mild": [],  # 10-25°C
+            "hot": [],  # > 25°C
+        }
+
+        for condition_samples in self._data.prediction_accuracy.values():
+            for sample in condition_samples:
+                temp = sample.get("temperature", 20)
+                if temp < 10:
+                    ranges["cold"].append(sample)
+                elif temp > 25:
+                    ranges["hot"].append(sample)
+                else:
+                    ranges["mild"].append(sample)
+
+        result: dict[str, dict[str, Any]] = {}
+
+        for range_name, samples in ranges.items():
+            if not samples:
+                continue
+
+            errors = [s["error"] for s in samples]
+            n = len(errors)
+
+            if n == 0:
+                continue
+
+            mean_error = sum(errors) / n
+
+            result[range_name] = {
+                "mean_error": round(mean_error, 3),
+                "samples": n,
+                "bias": "over_predict"
+                if mean_error > 0.2
+                else ("under_predict" if mean_error < -0.2 else "neutral"),
+            }
+
+        return result
+
+    def _normalize_weather_condition(self, condition: str) -> str:
+        """Normalize weather condition to a standard set.
+
+        Args:
+            condition: Raw weather condition string
+
+        Returns:
+            Normalized condition name
+        """
+        condition_lower = condition.lower()
+
+        if "sunny" in condition_lower or "clear" in condition_lower:
+            return "sunny"
+        elif "cloudy" in condition_lower or "overcast" in condition_lower:
+            return "cloudy"
+        elif "rain" in condition_lower or "shower" in condition_lower:
+            return "rainy"
+        elif "snow" in condition_lower or "hail" in condition_lower:
+            return "snow"
+        elif "fog" in condition_lower or "mist" in condition_lower:
+            return "foggy"
+        elif "storm" in condition_lower or "thunder" in condition_lower:
+            return "stormy"
+        else:
+            return "unknown"
+
+    def get_prediction_accuracy_diagnostics(self) -> dict[str, Any]:
+        """Get comprehensive prediction accuracy diagnostics.
+
+        Returns:
+            Dictionary with accuracy stats for diagnostics.
+        """
+        return {
+            "accuracy_by_weather": self.get_accuracy_by_weather(),
+            "accuracy_by_temperature": self.get_accuracy_by_temperature_range(),
+            "total_samples": sum(
+                len(samples) for samples in self._data.prediction_accuracy.values()
+            ),
+            "conditions_tracked": list(self._data.prediction_accuracy.keys()),
+        }
+
+    def get_accuracy_summary(self) -> dict[str, dict[str, Any]]:
+        """Get prediction accuracy summary for pattern analysis.
+
+        Alias for get_accuracy_by_weather() for use by PatternAnalyzer.
+
+        Returns:
+            Dictionary with accuracy stats per weather condition.
+        """
+        return self.get_accuracy_by_weather()
