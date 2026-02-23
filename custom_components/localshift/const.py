@@ -444,6 +444,7 @@ BUTTON_FORCE_DISCHARGE = "force_discharge"
 BUTTON_BOOST_CHARGE = "boost_charge"
 BUTTON_SELF_CONSUMPTION = "self_consumption"
 BUTTON_UPDATE_FORECAST = "update_forecast"
+BUTTON_RESET_LEARNING = "reset_learning"
 
 BUTTON_ICONS = {
     BUTTON_FORCE_CHARGE: "mdi:battery-charging",
@@ -451,6 +452,7 @@ BUTTON_ICONS = {
     BUTTON_BOOST_CHARGE: "mdi:battery-charging-high",
     BUTTON_SELF_CONSUMPTION: "mdi:battery-sync",
     BUTTON_UPDATE_FORECAST: "mdi:refresh",
+    BUTTON_RESET_LEARNING: "mdi:brain-off",
 }
 
 BUTTON_NAMES = {
@@ -459,6 +461,7 @@ BUTTON_NAMES = {
     BUTTON_BOOST_CHARGE: "Boost Charge",
     BUTTON_SELF_CONSUMPTION: "Self Consumption",
     BUTTON_UPDATE_FORECAST: "Update Forecast",
+    BUTTON_RESET_LEARNING: "Reset Learning Data",
 }
 
 # -----------------------------------------------------------------------------

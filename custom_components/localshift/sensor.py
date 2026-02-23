@@ -52,6 +52,10 @@ async def async_setup_entry(
         DailyThermalModeSensor(coordinator, entry),
         BaselineLoadProfileSensor(coordinator, entry),
         HVACLoadProfileSensor(coordinator, entry),
+        # Learning system sensors (Issue #170 Phase 5)
+        LearningStatusSensor(coordinator, entry),
+        DecisionQualitySensor(coordinator, entry),
+        LearningDecisionHistorySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -910,4 +914,115 @@ class HVACLoadProfileSensor(LocalShiftSensorBase):
             "total_hours": len(hvac),
             "average_kw": round(sum(hvac.values()) / len(hvac), 3) if hvac else 0.0,
             "learned_power": learned,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Learning System Sensors (Issue #170 Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class LearningStatusSensor(LocalShiftSensorBase):
+    """Current learning system status and parameter values.
+
+    Shows the learning phase: 'observing', 'tuning', 'optimizing', or 'disabled'.
+    Provides visibility into adaptive parameters and their confidence scores.
+    """
+
+    _attr_unique_id = "localshift_learning_status"
+    _attr_name = "Learning Status"
+    _attr_icon = "mdi:brain"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with current learning status."""
+        self._attr_native_value = self.coordinator.data.learning_status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return learning system details."""
+        d = self.coordinator.data
+        metrics = d.performance_metrics
+        return {
+            "total_decisions_today": metrics.total_decisions_today,
+            "avg_decision_score_today": round(metrics.avg_decision_score_today, 3),
+            "avg_decision_score_7d": round(metrics.avg_decision_score_7d, 3),
+            "cost_trend": metrics.cost_trend,
+            "mode_durations_today": metrics.mode_durations_today,
+            "mode_cost_attribution": {
+                k: round(v, 3) for k, v in metrics.mode_cost_attribution.items()
+            },
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "optimizing":
+            return "mdi:brain"
+        elif status == "tuning":
+            return "mdi:tune"
+        elif status == "observing":
+            return "mdi:eye"
+        else:  # disabled
+            return "mdi:brain-off"
+
+
+class DecisionQualitySensor(LocalShiftSensorBase):
+    """Rolling decision quality score.
+
+    Shows today's average decision quality as a percentage.
+    Provides detailed metrics about decision outcomes.
+    """
+
+    _attr_unique_id = "localshift_decision_quality"
+    _attr_name = "Decision Quality"
+    _attr_icon = "mdi:chart-line"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with today's average decision quality."""
+        score = self.coordinator.data.performance_metrics.avg_decision_score_today
+        self._attr_native_value = round(score * 100, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return detailed quality metrics."""
+        metrics = self.coordinator.data.performance_metrics
+        return {
+            "total_decisions_today": metrics.total_decisions_today,
+            "avg_score_7d": round(metrics.avg_decision_score_7d * 100, 1),
+            "cost_trend": metrics.cost_trend,
+            "grid_charge_efficiency": round(metrics.grid_charge_efficiency * 100, 1),
+            "export_loss_ratio": round(metrics.export_loss_ratio * 100, 1),
+            "unnecessary_grid_charge_kwh": round(
+                metrics.unnecessary_grid_charge_kwh, 2
+            ),
+            "mode_durations_today": metrics.mode_durations_today,
+            "mode_cost_attribution": {
+                k: round(v, 3) for k, v in metrics.mode_cost_attribution.items()
+            },
+        }
+
+
+class LearningDecisionHistorySensor(LocalShiftSensorBase):
+    """Recent decision history with outcomes.
+
+    Shows count of decisions in last 24h and provides
+    the most recent decision records for debugging.
+    """
+
+    _attr_unique_id = "localshift_learning_decision_history"
+    _attr_name = "Learning Decision History"
+    _attr_icon = "mdi:history"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with count of recent decisions."""
+        self._attr_native_value = len(self.coordinator.data.recent_decision_log)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return recent decision records."""
+        return {
+            "decisions": self.coordinator.data.recent_decision_log[-20:],
         }
