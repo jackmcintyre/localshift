@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 
 from ..const import BATTERY_CAPACITY_KWH, DEFAULT_EXPORT_PRICE_MARGIN
-from .solar_utils import get_price_for_slot
+from .price_calculator import get_price_for_slot
 
 _LOGGER = logging.getLogger(__name__)
 
