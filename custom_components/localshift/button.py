@@ -24,6 +24,7 @@ from .const import (
     BUTTON_FORCE_DISCHARGE,
     BUTTON_ICONS,
     BUTTON_NAMES,
+    BUTTON_RESET_LEARNING,
     BUTTON_SELF_CONSUMPTION,
     BUTTON_UPDATE_FORECAST,
     DOMAIN,
@@ -47,6 +48,7 @@ async def async_setup_entry(
         BoostChargeButton(coordinator, entry),
         SelfConsumptionButton(coordinator, entry),
         UpdateForecastButton(coordinator, entry),
+        ResetLearningDataButton(coordinator, entry),
     ]
 
     _LOGGER.info("Setting up %d LocalShift button entities", len(entities))
@@ -181,5 +183,47 @@ class UpdateForecastButton(LocalShiftButtonBase):
             await (
                 self.coordinator._notification_service.send_manual_action_notification(
                     "Forecast Update", self.coordinator.data
+                )
+            )
+
+
+class ResetLearningDataButton(LocalShiftButtonBase):
+    """Reset all learning system data and start fresh.
+
+    Clears decision tracker data and resets learning status to 'observing'.
+    Used when the user wants to start the learning process over.
+    """
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, BUTTON_RESET_LEARNING)
+
+    async def async_press(self) -> None:
+        """Handle button press - reset all learning data."""
+        _LOGGER.info("Resetting learning system data")
+
+        # Clear decision tracker data
+        tracker = getattr(self.coordinator, "decision_tracker", None)
+        if tracker is not None:
+            tracker._pending_decisions.clear()
+            tracker._completed_decisions.clear()
+            await tracker.async_save()
+
+        # Reset learning status
+        self.coordinator.data.learning_status = "observing"
+
+        # Clear recent decision log
+        self.coordinator.data.recent_decision_log.clear()
+
+        # Reset performance metrics to defaults
+        from .coordinator_data import PerformanceMetrics
+
+        self.coordinator.data.performance_metrics = PerformanceMetrics()
+
+        _LOGGER.info("Learning system data reset complete")
+
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Reset Learning Data", self.coordinator.data
                 )
             )

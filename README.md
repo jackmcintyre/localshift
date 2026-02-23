@@ -80,7 +80,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (18)
+### Sensors (24)
 
 | Entity ID | Description |
 |---|---|
@@ -102,8 +102,14 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |
 | `sensor.localshift_integration_status` | Overall integration health status (ok/degraded/error) |
 | `sensor.localshift_entity_health` | Detailed health status for all tracked entities |
+| `sensor.localshift_daily_thermal_mode` | Current daily thermal mode (HEAT/COOL/DRY/OFF) |
+| `sensor.localshift_baseline_load_profile` | Non-HVAC baseline load profile by hour |
+| `sensor.localshift_hvac_load_profile` | HVAC load profile by hour |
+| `sensor.localshift_learning_status` | Learning system status (observing/tuning/optimizing) |
+| `sensor.localshift_decision_quality` | Today's average decision quality score (%) |
+| `sensor.localshift_learning_decision_history` | Recent mode decisions with outcomes |
 
-### Binary Sensors (11)
+### Binary Sensors (10)
 
 | Entity ID | Description |
 |---|---|
@@ -147,7 +153,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `number.localshift_spike_price_percentile` | Price percentile for spike discharge activation |
 | `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes |
 
-### Buttons (5)
+### Buttons (6)
 
 | Entity ID | Description |
 |---|---|
@@ -156,6 +162,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `button.localshift_boost_charge` | Manually boost charge at 5kW |
 | `button.localshift_self_consumption` | Clear manual override, return to automation |
 | `button.localshift_update_forecast` | Force forecast update and clear historical load cache |
+| `button.localshift_reset_learning` | Reset learning system data and restart observation |
 
 ## Dashboard
 

@@ -24,6 +24,7 @@ from .coordinator_data import CoordinatorData
 if TYPE_CHECKING:
     from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
+    from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
     from .entity_validator import EntityValidator
     from .notification_service import NotificationService
 
@@ -49,6 +50,7 @@ class StateMachine:
         get_switch_state_func: callable,
         get_option_func: callable,
         entity_validator: EntityValidator,
+        decision_tracker: DecisionOutcomeTracker | None = None,
     ) -> None:
         """Initialize the state machine.
 
@@ -58,12 +60,14 @@ class StateMachine:
             get_switch_state_func: Function to get switch states
             get_option_func: Function to get configuration options
             entity_validator: Entity validator instance for availability checks
+            decision_tracker: Decision outcome tracker for learning system (Issue #170 Phase 1)
         """
         self._battery_controller = battery_controller
         self._notification_service = notification_service
         self._get_switch_state = get_switch_state_func
         self._get_option = get_option_func
         self.entity_validator = entity_validator
+        self._decision_tracker = decision_tracker
         self._commanded_mode: BatteryMode = BatteryMode.SELF_CONSUMPTION
         self._mode_desired_since: dict[BatteryMode, datetime] = {}
         self._startup_grace_until: datetime | None = None
@@ -394,6 +398,12 @@ class StateMachine:
                 # Clear proactive export reserve when leaving that mode
                 if desired != BatteryMode.PROACTIVE_EXPORT:
                     self._proactive_export_reserve = None
+
+                # Record decision for learning system (Issue #170 Phase 1)
+                if self._decision_tracker is not None and not self._get_switch_state(
+                    "dry_run"
+                ):
+                    self._decision_tracker.record_decision(data, desired, old_mode)
 
                 # Send notification
                 await self._notification_service.send_transition_notification(

@@ -271,6 +271,17 @@ class NotificationService:
 
         soc = round(data.soc)
 
+        # Learning system stats (Issue #170 Phase 5)
+        metrics = data.performance_metrics
+        learning_summary = ""
+        if metrics.total_decisions_today > 0:
+            quality_pct = round(metrics.avg_decision_score_today * 100)
+            learning_summary = (
+                f"\n\nLearning: {data.learning_status} | "
+                f"Quality: {quality_pct}% | "
+                f"Trend: {metrics.cost_trend}"
+            )
+
         message = (
             f"Today so far:\n\n"
             f"Solar: {solar_kwh:.1f} kWh\n"
@@ -282,6 +293,7 @@ class NotificationService:
             f"Battery savings: ${data.battery_savings:.2f}\n"
             f"Battery charge cost: ${data.battery_charge_cost:.2f}\n"
             f"SOC: {soc}%"
+            f"{learning_summary}"
         )
 
         await self.send_notification(

@@ -94,6 +94,26 @@
     }
   },
   "entity": {
+    "sensor": {
+      "learning_status": {
+        "name": "Learning Status",
+        "description": "Current learning system phase (observing, tuning, optimizing)"
+      },
+      "decision_quality": {
+        "name": "Decision Quality",
+        "description": "Today's average decision quality score"
+      },
+      "learning_decision_history": {
+        "name": "Learning Decision History",
+        "description": "Recent mode decisions with outcomes"
+      }
+    },
+    "button": {
+      "reset_learning": {
+        "name": "Reset Learning Data",
+        "description": "Clear all learning data and restart observation phase"
+      }
+    },
     "number": {
       "cheap_price_percentile": {
         "name": "Cheap Price Percentile",

@@ -42,6 +42,7 @@ async def async_get_config_entry_diagnostics(
         "current_state": _get_current_state(coordinator),
         "configuration": _get_safe_configuration(entry),
         "recent_errors": _get_recent_errors(coordinator),
+        "learning_system": _get_learning_system_status(coordinator),
     }
 
     return diagnostics
@@ -265,3 +266,63 @@ def _get_recent_errors(coordinator: Any) -> dict[str, Any]:
         "total_errors": len(errors),
         "total_warnings": len(warnings),
     }
+
+
+def _get_learning_system_status(coordinator: Any) -> dict[str, Any]:
+    """Get learning system status and metrics.
+
+    Issue #170 Phase 5: Provides learning system diagnostics including
+    decision tracker state, performance metrics, and adaptive parameters.
+
+    Args:
+        coordinator: LocalShift coordinator instance
+
+    Returns:
+        Dictionary with learning system status
+    """
+    if coordinator is None:
+        return {"status": "not_loaded"}
+
+    status: dict[str, Any] = {"status": "unknown"}
+
+    # Get learning status from coordinator data
+    if hasattr(coordinator, "data") and coordinator.data:
+        data = coordinator.data
+        status["status"] = getattr(data, "learning_status", "unknown")
+
+        # Performance metrics
+        metrics = getattr(data, "performance_metrics", None)
+        if metrics:
+            status["performance_metrics"] = {
+                "total_decisions_today": metrics.total_decisions_today,
+                "avg_decision_score_today": round(metrics.avg_decision_score_today, 3),
+                "avg_decision_score_7d": round(metrics.avg_decision_score_7d, 3),
+                "cost_trend": metrics.cost_trend,
+                "grid_charge_efficiency": round(metrics.grid_charge_efficiency, 3),
+                "export_loss_ratio": round(metrics.export_loss_ratio, 3),
+                "unnecessary_grid_charge_kwh": round(
+                    metrics.unnecessary_grid_charge_kwh, 2
+                ),
+                "mode_durations_today": metrics.mode_durations_today,
+                "mode_cost_attribution": {
+                    k: round(v, 3) for k, v in metrics.mode_cost_attribution.items()
+                },
+            }
+        else:
+            status["performance_metrics"] = None
+
+        # Recent decision log count
+        recent_log = getattr(data, "recent_decision_log", [])
+        status["recent_decision_count"] = len(recent_log)
+
+    # Decision tracker state
+    if hasattr(coordinator, "decision_tracker"):
+        tracker = coordinator.decision_tracker
+        status["decision_tracker"] = {
+            "pending_decisions": tracker.pending_count,
+            "completed_decisions": tracker.completed_count,
+        }
+    else:
+        status["decision_tracker"] = None
+
+    return status
