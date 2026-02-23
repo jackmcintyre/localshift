@@ -437,6 +437,11 @@ views:
             heading_style: title
 
           - type: tile
+            entity: switch.localshift_enable_learning
+            name: Learning
+            icon: mdi:brain
+
+          - type: tile
             entity: sensor.localshift_learning_status
             name: Status
 
@@ -467,6 +472,25 @@ views:
               📉 **{{ trend }}** — review settings
               {% else %}
               ➡️ **{{ trend }}**
+              {% endif %}
+
+          - type: markdown
+            content: >
+              {%- set weights = state_attr('sensor.localshift_learning_status', 'optimization_weights') | default({}) %}
+              {%- set adjustments = state_attr('sensor.localshift_learning_status', 'contextual_adjustments_active') | default([]) %}
+              
+              **Optimization Weights**
+              Cost: {{ (weights.get('cost_minimization', 0.5) * 100) | round(0) }}% · 
+              Export: {{ (weights.get('export_avoidance', 0.2) * 100) | round(0) }}% · 
+              Target: {{ (weights.get('target_achievement', 0.2) * 100) | round(0) }}% · 
+              Cycle: {{ (weights.get('cycle_reduction', 0.1) * 100) | round(0) }}%
+              
+              {% if adjustments %}
+              ---
+              **Active Adjustments**
+              {% for adj in adjustments %}
+              · {{ adj.get('param_name', '') }}: {{ adj.get('adjustment', 0) | round(1) }} ({{ adj.get('reason', '') }})
+              {% endfor %}
               {% endif %}
 
           - type: button
@@ -504,6 +528,11 @@ views:
             entity: switch.localshift_automation_enabled
             name: Automation
             icon: mdi:power
+
+          - type: tile
+            entity: switch.localshift_enable_learning
+            name: Learning
+            icon: mdi:brain
 
           - type: tile
             entity: switch.localshift_dry_run
