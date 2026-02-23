@@ -86,6 +86,13 @@ class TestFullStateMachineFlow:
             computation_engine._get_switch_state = MagicMock(
                 side_effect=mock_switch_state
             )
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                side_effect=mock_switch_state
+            )
+
+            # Set up the forecast directly and mock forecast computation
+            integration_data.daily_forecast = [forecast_entry]
 
             # Mock forecast entry lookup
             with patch.object(
@@ -93,7 +100,8 @@ class TestFullStateMachineFlow:
                 "_get_forecast_entry_for_now",
                 return_value=forecast_entry,
             ):
-                computation_engine.compute_derived_values(integration_data)
+                with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                    computation_engine.compute_derived_values(integration_data)
 
         # Should be in GRID_CHARGING mode
         assert integration_data.active_mode == BatteryMode.GRID_CHARGING
@@ -226,6 +234,13 @@ class TestForecastToActiveModePipeline:
 
         with patch("homeassistant.util.dt.now", return_value=test_time):
             computation_engine._get_switch_state = MagicMock(return_value=True)
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                return_value=True
+            )
+
+            # Set up the forecast directly and mock forecast computation
+            integration_data.daily_forecast = [forecast_entry]
 
             # Mock forecast entry lookup
             with patch.object(
@@ -233,7 +248,8 @@ class TestForecastToActiveModePipeline:
                 "_get_forecast_entry_for_now",
                 return_value=forecast_entry,
             ):
-                computation_engine.compute_derived_values(integration_data)
+                with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                    computation_engine.compute_derived_values(integration_data)
 
         # Should be in PROACTIVE_EXPORT mode
         assert integration_data.active_mode == BatteryMode.PROACTIVE_EXPORT
@@ -247,6 +263,13 @@ class TestForecastToActiveModePipeline:
 
         with patch("homeassistant.util.dt.now", return_value=test_time):
             computation_engine._get_switch_state = MagicMock(return_value=True)
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                return_value=True
+            )
+
+            # Set up empty forecast
+            integration_data.daily_forecast = []
 
             # Mock forecast entry lookup to return None (no forecast)
             with patch.object(
@@ -254,7 +277,8 @@ class TestForecastToActiveModePipeline:
                 "_get_forecast_entry_for_now",
                 return_value=None,
             ):
-                computation_engine.compute_derived_values(integration_data)
+                with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                    computation_engine.compute_derived_values(integration_data)
 
         # Should fall back to SELF_CONSUMPTION
         assert integration_data.active_mode == BatteryMode.SELF_CONSUMPTION
@@ -574,6 +598,13 @@ class TestManualOverrideIntegration:
 
         with patch("homeassistant.util.dt.now", return_value=test_time):
             computation_engine._get_switch_state = MagicMock(return_value=True)
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                return_value=True
+            )
+
+            # Set up the forecast directly and mock forecast computation
+            integration_data.daily_forecast = [forecast_entry]
 
             # Mock forecast entry lookup
             with patch.object(
@@ -581,7 +612,8 @@ class TestManualOverrideIntegration:
                 "_get_forecast_entry_for_now",
                 return_value=forecast_entry,
             ):
-                computation_engine.compute_derived_values(integration_data)
+                with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                    computation_engine.compute_derived_values(integration_data)
 
         # Should be in MANUAL mode
         assert integration_data.active_mode == BatteryMode.MANUAL
@@ -610,6 +642,13 @@ class TestManualOverrideIntegration:
 
         with patch("homeassistant.util.dt.now", return_value=test_time):
             computation_engine._get_switch_state = MagicMock(return_value=True)
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                return_value=True
+            )
+
+            # Set up the forecast directly and mock forecast computation
+            integration_data.daily_forecast = [forecast_entry]
 
             # Mock forecast entry lookup
             with patch.object(
@@ -617,7 +656,8 @@ class TestManualOverrideIntegration:
                 "_get_forecast_entry_for_now",
                 return_value=forecast_entry,
             ):
-                computation_engine.compute_derived_values(integration_data)
+                with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                    computation_engine.compute_derived_values(integration_data)
 
         # After computation, manual_override should be respected
         assert integration_data.active_mode == BatteryMode.MANUAL
@@ -640,8 +680,16 @@ class TestAutomationDisabled:
         with patch("homeassistant.util.dt.now", return_value=test_time):
             # Disable automation
             computation_engine._get_switch_state = MagicMock(return_value=False)
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                return_value=False
+            )
 
-            computation_engine.compute_derived_values(integration_data)
+            # Set up empty forecast and mock forecast computation
+            integration_data.daily_forecast = []
+
+            with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                computation_engine.compute_derived_values(integration_data)
 
         # Should be in SELF_CONSUMPTION regardless of other conditions
         assert integration_data.active_mode == BatteryMode.SELF_CONSUMPTION
@@ -666,8 +714,16 @@ class TestAutomationDisabled:
             computation_engine._get_switch_state = MagicMock(
                 side_effect=mock_switch_state
             )
+            # Also mock the mode decision engine's reference
+            computation_engine._mode_decision._get_switch_state = MagicMock(
+                side_effect=mock_switch_state
+            )
 
-            computation_engine.compute_derived_values(integration_data)
+            # Set up empty forecast and mock forecast computation
+            integration_data.daily_forecast = []
+
+            with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                computation_engine.compute_derived_values(integration_data)
 
         # Should be in SELF_CONSUMPTION, not SPIKE_DISCHARGE
         assert integration_data.active_mode == BatteryMode.SELF_CONSUMPTION

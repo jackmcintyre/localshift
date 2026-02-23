@@ -14,11 +14,14 @@ from .forecast_computer import ForecastComputer
 from .grid_charge_decision import GridChargeDecisionEngine
 from .history_fetcher import HistoryFetcher
 from .mode_decision import ModeDecisionEngine
-from .price_calculator import PriceCalculator
+from .price_calculator import (
+    PriceCalculator,
+    get_price_for_slot,
+    get_price_for_slot_or_none,
+)
 from .proactive_export import ProactiveExportEngine
 from .soc_simulator import SocSimulator
 from .solar_utils import (
-    get_price_for_slot,
     get_solar_for_5min_slot,
     get_solar_for_15min_slot,
     get_solar_for_slot,
@@ -58,6 +61,7 @@ __all__ = [
     "build_hourly_forecast_summary",
     "calculate_spike_price_threshold",
     "get_price_for_slot",
+    "get_price_for_slot_or_none",
     "get_solar_for_15min_slot",
     "get_solar_for_5min_slot",
     "get_solar_for_slot",

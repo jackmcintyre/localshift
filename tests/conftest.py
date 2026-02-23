@@ -494,35 +494,61 @@ def mock_hass_negative_prices(realistic_entity_states):
 
 
 # =============================================================================
+# ENTITY VALIDATOR FIXTURE
+# =============================================================================
+
+
+@pytest.fixture
+def mock_entity_validator():
+    """Create a mock EntityValidator for testing.
+
+    By default, reports all entities as healthy and allows automation.
+    Tests can override the return values as needed.
+    """
+    from custom_components.localshift.entity_validator import IntegrationStatus
+
+    validator = MagicMock()
+    validator.should_allow_automation = MagicMock(return_value=True)
+    validator.status = IntegrationStatus.OK
+    validator.errors = []
+    validator.warnings = []
+    return validator
+
+
+# =============================================================================
 # STATE READER FIXTURES
 # =============================================================================
 
 
 @pytest.fixture
-def state_reader(mock_hass_with_states, mock_entry):
+def state_reader(mock_hass_with_states, mock_entry, mock_entity_validator):
     """Create a StateReader instance with realistic HA states.
 
     Use this for testing state reading functionality with realistic entity states.
     """
     from custom_components.localshift.state_reader import StateReader
 
-    return StateReader(mock_hass_with_states, mock_entry)
+    return StateReader(mock_hass_with_states, mock_entry, mock_entity_validator)
 
 
 @pytest.fixture
-def state_reader_unavailable(mock_hass_unavailable_entities, mock_entry):
+def state_reader_unavailable(
+    mock_hass_unavailable_entities, mock_entry, mock_entity_validator
+):
     """Create a StateReader with all entities unavailable."""
     from custom_components.localshift.state_reader import StateReader
 
-    return StateReader(mock_hass_unavailable_entities, mock_entry)
+    return StateReader(
+        mock_hass_unavailable_entities, mock_entry, mock_entity_validator
+    )
 
 
 @pytest.fixture
-def state_reader_missing(mock_hass_missing_entities, mock_entry):
+def state_reader_missing(mock_hass_missing_entities, mock_entry, mock_entity_validator):
     """Create a StateReader with missing entities."""
     from custom_components.localshift.state_reader import StateReader
 
-    return StateReader(mock_hass_missing_entities, mock_entry)
+    return StateReader(mock_hass_missing_entities, mock_entry, mock_entity_validator)
 
 
 # =============================================================================

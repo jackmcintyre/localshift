@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from .solar_utils import get_price_for_slot, get_price_for_slot_or_none
+from .price_calculator import get_price_for_slot, get_price_for_slot_or_none
 
 
 class FitAnalyzer:

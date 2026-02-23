@@ -12,7 +12,8 @@ from ..const import (
     CHARGE_RATE_GRID_KW,
     CHARGE_RATE_SOLAR_KW,
 )
-from .solar_utils import get_price_for_slot, get_solar_for_15min_slot
+from .price_calculator import get_price_for_slot
+from .solar_utils import get_solar_for_15min_slot
 
 
 class SocSimulator:

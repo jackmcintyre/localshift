@@ -36,10 +36,10 @@ from ..coordinator_data import CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
+from .price_calculator import get_price_for_slot
 from .proactive_export import ProactiveExportEngine
 from .soc_simulator import SocSimulator
 from .solar_utils import (
-    get_price_for_slot,
     get_solar_for_15min_slot,
     get_solar_for_15min_slot_or_none,
 )
