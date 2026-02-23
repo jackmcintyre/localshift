@@ -19,6 +19,7 @@ from homeassistant.helpers.event import (
 )
 
 from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
+from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
@@ -101,6 +102,9 @@ class LocalShiftCoordinator:
 
         # Decision outcome tracker for learning system (Issue #170 Phase 1)
         self.decision_tracker: DecisionOutcomeTracker | None = None
+
+        # Parameter optimizer for learning system (Issue #170 Phase 2)
+        self.param_optimizer: ParameterOptimizer | None = None
 
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
@@ -210,6 +214,10 @@ class LocalShiftCoordinator:
         # Initialize decision outcome tracker for learning system (Issue #170 Phase 1)
         self.decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
         await self.decision_tracker.async_load()
+
+        # Initialize parameter optimizer for learning system (Issue #170 Phase 2)
+        self.param_optimizer = ParameterOptimizer(self.hass, self.entry.entry_id)
+        await self.param_optimizer.async_load()
 
         # Wire the decision tracker to the state machine
         self._state_machine._decision_tracker = self.decision_tracker
@@ -561,6 +569,19 @@ class LocalShiftCoordinator:
                 limit=20
             )
 
+            # Run parameter optimization (Issue #170 Phase 2)
+            # Check if we have enough decisions and enough time has passed
+            if self.param_optimizer is not None:
+                completed_count = len(self.decision_tracker._completed_decisions)
+                if self.param_optimizer.should_update(completed_count):
+                    decisions = self.decision_tracker.get_recent_decisions(hours=168)
+                    current_7d_score = (
+                        self.data.performance_metrics.avg_decision_score_7d
+                    )
+                    self.data.adaptive_params = self.param_optimizer.optimize(
+                        decisions, current_7d_score
+                    )
+
         # Learn from current temperature/load for weather correlation
         # This runs asynchronously and won't block the periodic tick
         if self._computation_engine is not None:
@@ -642,6 +663,13 @@ class LocalShiftCoordinator:
             self.hass.async_create_task(
                 self.decision_tracker.async_save(),
                 "localshift_save_decision_outcomes",
+            )
+
+        # Save parameter optimizer state (Issue #170 Phase 2)
+        if self.param_optimizer is not None:
+            self.hass.async_create_task(
+                self.param_optimizer.async_save(),
+                "localshift_save_param_optimizer",
             )
 
         self._notify_listeners()

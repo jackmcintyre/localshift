@@ -465,6 +465,92 @@ BUTTON_NAMES = {
 }
 
 # -----------------------------------------------------------------------------
+# Learning System: Optimizable Parameters (Issue #170 Phase 2)
+# -----------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class OptimizableParam:
+    """Definition of a parameter that the learning system can adjust."""
+
+    name: str
+    default: float
+    min_val: float
+    max_val: float
+    step: float
+    description: str
+
+
+OPTIMIZABLE_PARAMS: dict[str, OptimizableParam] = {
+    "cheap_price_bias": OptimizableParam(
+        name="cheap_price_bias",
+        default=0.0,
+        min_val=-5.0,
+        max_val=5.0,
+        step=0.5,
+        description="Additive bias (c/kWh) to effective cheap price threshold. "
+        "Positive = more willing to grid charge, Negative = more conservative.",
+    ),
+    "solar_confidence_factor": OptimizableParam(
+        name="solar_confidence_factor",
+        default=1.0,
+        min_val=0.5,
+        max_val=1.5,
+        step=0.05,
+        description="Multiplier on Solcast solar forecast. <1.0 = pessimistic (charge more), "
+        ">1.0 = optimistic (trust solar, charge less).",
+    ),
+    "overnight_drain_safety_margin": OptimizableParam(
+        name="overnight_drain_safety_margin",
+        default=0.0,
+        min_val=-5.0,
+        max_val=10.0,
+        step=1.0,
+        description="Extra SOC% safety margin added to overnight drain simulations. "
+        "Positive = keep more buffer.",
+    ),
+    "grid_charge_soc_headroom": OptimizableParam(
+        name="grid_charge_soc_headroom",
+        default=0.0,
+        min_val=-5.0,
+        max_val=10.0,
+        step=1.0,
+        description="SOC% headroom above target. Positive = charge slightly above target "
+        "to account for forecast errors.",
+    ),
+    "export_threshold_adjustment": OptimizableParam(
+        name="export_threshold_adjustment",
+        default=0.0,
+        min_val=-3.0,
+        max_val=3.0,
+        step=0.5,
+        description="Adjustment to proactive export profitability threshold (c/kWh). "
+        "Positive = more conservative about exporting.",
+    ),
+    "consumption_forecast_bias": OptimizableParam(
+        name="consumption_forecast_bias",
+        default=0.0,
+        min_val=-0.5,
+        max_val=0.5,
+        step=0.05,
+        description="Additive bias (kW) to consumption forecast. "
+        "Positive = assume higher consumption.",
+    ),
+}
+
+# Learning system configuration
+CONF_ENABLE_LEARNING = "enable_learning"
+DEFAULT_ENABLE_LEARNING = False  # Users must opt-in to active optimization
+
+# Minimum observations before first optimization
+LEARNING_MIN_OBSERVATIONS = 50
+
+# Hours between optimization updates
+LEARNING_UPDATE_INTERVAL_HOURS = 24
+
+# -----------------------------------------------------------------------------
 # Platforms
 # -----------------------------------------------------------------------------
 

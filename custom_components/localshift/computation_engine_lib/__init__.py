@@ -14,6 +14,7 @@ from .forecast_computer import ForecastComputer
 from .grid_charge_decision import GridChargeDecisionEngine
 from .history_fetcher import HistoryFetcher
 from .mode_decision import ModeDecisionEngine
+from .parameter_optimizer import ParameterOptimizer
 from .price_calculator import (
     PriceCalculator,
     get_price_for_slot,
@@ -43,6 +44,7 @@ __all__ = [
     "DecisionOutcomeTracker",
     "DecisionRecord",
     "ForecastChangeTracker",
+    "ParameterOptimizer",
     "ExcessSolarEngine",
     "ExcessSolarSignalsEngine",
     "FitAnalyzer",
