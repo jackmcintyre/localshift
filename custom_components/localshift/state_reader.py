@@ -68,6 +68,23 @@ class StateReader:
         except (ValueError, TypeError):
             return default
 
+    def _read_float_optional(self, entity_id: str) -> float | None:
+        """Read a float value from an entity's state, returning None if unavailable.
+
+        This is used for price entities where we need to distinguish between
+        a genuine $0 price and an unavailable entity.
+
+        Returns:
+            Float value if entity is available, None if unavailable or invalid.
+        """
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return None
+
     def _read_state(self, entity_id: str, default: str = "") -> str:
         """Read a string value from an entity's state."""
         state = self.hass.states.get(entity_id)
@@ -199,13 +216,31 @@ class StateReader:
             self._get_entity_id(CONF_TESLEMETRY_ALLOW_EXPORT)
         )
 
-        # Pricing
-        data.general_price = self._read_float(
-            self._get_entity_id(CONF_PRICING_GENERAL_PRICE)
-        )
-        data.feed_in_price = self._read_float(
-            self._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
-        )
+        # Pricing - read prices with unavailable detection
+        # Log warning if price entities are unavailable (helps diagnose $0 vs unavailable)
+        general_price_entity = self._get_entity_id(CONF_PRICING_GENERAL_PRICE)
+        feed_in_price_entity = self._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
+
+        general_price_raw = self._read_float_optional(general_price_entity)
+        feed_in_price_raw = self._read_float_optional(feed_in_price_entity)
+
+        if general_price_raw is None:
+            _LOGGER.warning(
+                "General price entity '%s' is unavailable - treating as $0. Check entity configuration.",
+                general_price_entity,
+            )
+            data.general_price = 0.0
+        else:
+            data.general_price = general_price_raw
+
+        if feed_in_price_raw is None:
+            _LOGGER.warning(
+                "Feed-in price entity '%s' is unavailable - treating as $0. Check entity configuration.",
+                feed_in_price_entity,
+            )
+            data.feed_in_price = 0.0
+        else:
+            data.feed_in_price = feed_in_price_raw
         data.price_spike = self._read_bool(
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
         )

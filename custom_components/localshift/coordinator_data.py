@@ -30,16 +30,15 @@ class CoordinatorData:
     """Snapshot of all computed data, consumed by sensor entities."""
 
     # External state (raw reads)
-    # Note: These fields can be None when required entities are unavailable
-    grid_power_kw: float | None = 0.0
-    battery_power_kw: float | None = 0.0
-    solar_power_kw: float | None = 0.0
-    load_power_kw: float | None = 0.0
-    soc: float | None = 0.0
+    grid_power_kw: float = 0.0
+    battery_power_kw: float = 0.0
+    solar_power_kw: float = 0.0
+    load_power_kw: float = 0.0
+    soc: float = 0.0
     operation_mode: str = ""
-    backup_reserve: float | None = 0.0
-    general_price: float | None = 0.0
-    feed_in_price: float | None = 0.0
+    backup_reserve: float = 0.0
+    general_price: float = 0.0
+    feed_in_price: float = 0.0
     price_spike: bool = False
     general_forecast: list[dict[str, Any]] = field(default_factory=list)
     feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
