@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Any
 
 from ..const import BATTERY_CAPACITY_KWH, DEFAULT_EXPORT_PRICE_MARGIN
 from .price_calculator import get_price_for_slot
@@ -33,6 +34,19 @@ class ProactiveExportEngine:
         self._simulate_overnight_drain_after_export = (
             simulate_overnight_drain_after_export
         )
+        self._adaptive_params = None
+
+    def set_adaptive_params(self, adaptive_params: Any | None) -> None:
+        """Set adaptive parameters from the learning system (Issue #170 Phase 2).
+
+        These parameters adjust export decisions based on learned
+        outcomes from historical performance.
+
+        Args:
+            adaptive_params: AdaptiveParameters instance with tuned values,
+                           or None to use defaults.
+        """
+        self._adaptive_params = adaptive_params
 
     def _calculate_expected_replacement_price(
         self,

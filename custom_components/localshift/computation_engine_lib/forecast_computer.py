@@ -32,7 +32,7 @@ from ..const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator_data import AdaptiveParameters, CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
@@ -116,6 +116,22 @@ class ForecastComputer:
                            or None to disable HVAC prediction.
         """
         self._thermal_manager = thermal_manager
+
+    def set_adaptive_params(self, adaptive_params: AdaptiveParameters | None) -> None:
+        """Set adaptive parameters from the learning system (Issue #170 Phase 2).
+
+        These parameters are tuned by the ParameterOptimizer based on measured
+        outcomes from decision tracking. They adjust key thresholds and biases
+        to improve system performance over time.
+
+        Args:
+            adaptive_params: AdaptiveParameters instance with tuned values,
+                           or None to use defaults.
+        """
+        self._adaptive_params = adaptive_params
+        # Propagate to sub-engines
+        self._grid_charge_decision.set_adaptive_params(adaptive_params)
+        self._proactive_export.set_adaptive_params(adaptive_params)
 
     def _predict_hvac_load_for_slot(
         self,

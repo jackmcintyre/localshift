@@ -162,6 +162,9 @@ class ComputationEngine:
         """
         now_dt = dt_util.now()
 
+        # Pass adaptive parameters to forecast computer (Issue #170 Phase 2)
+        self._forecast_computer.set_adaptive_params(data.adaptive_params)
+
         # Common time values used by multiple steps
         dw_start_time = self._parse_time_option(
             CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
