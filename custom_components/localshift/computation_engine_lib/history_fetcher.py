@@ -27,8 +27,15 @@ except Exception:
     class ConfigEntry:
         pass
 
+    class _ConfigStub:
+        """Stub for HA config when homeassistant is not available."""
+
+        time_zone: str = "UTC"
+
     class HomeAssistant:
-        pass
+        """Stub for HomeAssistant when homeassistant is not available."""
+
+        config = _ConfigStub()
 
     class _DTUtilStub:
         @staticmethod
@@ -249,16 +256,7 @@ class HistoryFetcher:
             pass
 
         # Find matching statistic_id
-        resolved_entity_id = entity_id
-        for sid in stat_ids:
-            if not isinstance(sid, dict):
-                continue
-            stat_id = sid.get("statistic_id", "")
-            if stat_id == entity_id or stat_id.replace(
-                "sensor.", ""
-            ) == entity_id.replace("sensor.", ""):
-                resolved_entity_id = stat_id
-                break
+        resolved_entity_id = self._resolve_statistic_id(entity_id, stat_ids)
 
         # Get statistics
         fn = getattr(recorder_statistics, "statistics_during_period", None)
@@ -558,6 +556,29 @@ class HistoryFetcher:
             "profile_source": "unknown",
         }
 
+    def _resolve_statistic_id(
+        self, entity_id: str, stat_ids: list[dict[str, Any]]
+    ) -> str:
+        """Find matching statistic_id from list.
+
+        Args:
+            entity_id: The entity ID to resolve
+            stat_ids: List of statistic metadata dicts from recorder
+
+        Returns:
+            The matching statistic_id, or entity_id if not found
+        """
+        for sid in stat_ids:
+            if not isinstance(sid, dict):
+                continue
+            stat_id = sid.get("statistic_id", "")
+            # Match exact or without sensor. prefix
+            if stat_id == entity_id or stat_id.replace(
+                "sensor.", ""
+            ) == entity_id.replace("sensor.", ""):
+                return stat_id
+        return entity_id  # Fallback to original
+
     def get_profile_for_day(
         self, target_date: datetime
     ) -> tuple[dict[int, float], dict[int, int], str]:
@@ -674,6 +695,17 @@ class HistoryFetcher:
 
     def _fetch_recent_load_sync(self, entity_id: str, now: datetime) -> dict[str, Any]:
         """Fetch recent 1-hour average (runs in thread pool)."""
+        try:
+            from homeassistant.components.recorder import (
+                statistics as recorder_statistics,
+            )
+        except Exception:
+            return {
+                "recent_avg_kw": 0.0,
+                "samples": 0,
+                "statistic_id": "",
+                "error": "recorder import failed",
+            }
 
         end_time = now
         start_time = now - timedelta(hours=1)
@@ -698,24 +730,7 @@ class HistoryFetcher:
                 "error": "list_statistic_ids failed",
             }
 
-        resolved_entity_id = entity_id
-        for sid in stat_ids:
-            if not isinstance(sid, dict):
-                continue
-            stat_id = sid.get("statistic_id", "")
-            if stat_id == entity_id or stat_id.replace(
-                "sensor.", ""
-            ) == entity_id.replace("sensor.", ""):
-                resolved_entity_id = stat_id
-                break
-
-        if not resolved_entity_id:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": "",
-                "error": "empty statistic_id",
-            }
+        resolved_entity_id = self._resolve_statistic_id(entity_id, stat_ids)
 
         # Get statistics for last hour
         fn = getattr(recorder_statistics, "statistics_during_period", None)
