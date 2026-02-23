@@ -373,3 +373,11 @@ class CoordinatorData:
     active_bias_corrections: list[dict[str, Any]] = field(
         default_factory=list
     )  # Currently active corrections
+
+    # --- Optimization controller (Issue #170 Phase 4) ---
+    optimization_weights: dict[str, float] = field(
+        default_factory=dict
+    )  # Objective weights for multi-objective scoring
+    contextual_adjustments_active: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # Active contextual adjustments

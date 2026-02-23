@@ -14,6 +14,11 @@ from .forecast_computer import ForecastComputer
 from .grid_charge_decision import GridChargeDecisionEngine
 from .history_fetcher import HistoryFetcher
 from .mode_decision import ModeDecisionEngine
+from .optimization_controller import (
+    ContextualAdjustment,
+    ObjectiveWeights,
+    OptimizationController,
+)
 from .parameter_optimizer import ParameterOptimizer
 from .pattern_analyzer import (
     BiasCorrection,
@@ -48,9 +53,12 @@ from .weather_diagnostics import WeatherDiagnosticsEngine
 
 __all__ = [
     "BiasCorrection",
+    "ContextualAdjustment",
     "DecisionOutcomeTracker",
     "DecisionRecord",
     "ForecastChangeTracker",
+    "ObjectiveWeights",
+    "OptimizationController",
     "ParameterOptimizer",
     "PatternAnalyzer",
     "PatternBucket",

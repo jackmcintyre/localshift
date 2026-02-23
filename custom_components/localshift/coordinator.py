@@ -19,6 +19,7 @@ from homeassistant.helpers.event import (
 )
 
 from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
+from .computation_engine_lib.optimization_controller import OptimizationController
 from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
 from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
 from .const import (
@@ -109,6 +110,9 @@ class LocalShiftCoordinator:
 
         # Pattern analyzer for learning system (Issue #170 Phase 3)
         self.pattern_analyzer: PatternAnalyzer | None = None
+
+        # Optimization controller for learning system (Issue #170 Phase 4)
+        self.optimization_controller: OptimizationController | None = None
 
         # Pattern analysis tracking
         self._last_pattern_analysis: datetime | None = None
@@ -230,6 +234,28 @@ class LocalShiftCoordinator:
         # Initialize pattern analyzer for learning system (Issue #170 Phase 3)
         self.pattern_analyzer = PatternAnalyzer(self.hass, self.entry.entry_id)
         await self.pattern_analyzer.async_load()
+
+        # Initialize optimization controller for learning system (Issue #170 Phase 4)
+        # Requires all three learning components to be initialized first
+        if (
+            self.decision_tracker is not None
+            and self.param_optimizer is not None
+            and self.pattern_analyzer is not None
+        ):
+            self.optimization_controller = OptimizationController(
+                self.hass,
+                self.entry.entry_id,
+                self.decision_tracker,
+                self.param_optimizer,
+                self.pattern_analyzer,
+            )
+            await self.optimization_controller.async_load()
+
+            # Sync learning enabled state from switch
+            from .const import SWITCH_ENABLE_LEARNING
+
+            learning_enabled = self.get_switch_state(SWITCH_ENABLE_LEARNING)
+            self.optimization_controller.set_learning_enabled(learning_enabled)
 
         # Wire the decision tracker to the state machine
         self._state_machine._decision_tracker = self.decision_tracker
@@ -1130,6 +1156,19 @@ class LocalShiftCoordinator:
             report.data_points_analyzed,
             len(report.biases_detected),
         )
+
+        # Run optimization controller cycle (Issue #170 Phase 4)
+        # This computes contextual adjustments and returns adaptive parameters
+        if self.optimization_controller is not None:
+            # Evaluate returns AdaptiveParameters, which updates the data
+            self.optimization_controller.evaluate(self.data)
+            # Update coordinator data with optimization state
+            self.data.optimization_weights = (
+                self.optimization_controller.weights.to_dict()
+            )
+            self.data.contextual_adjustments_active = (
+                self.optimization_controller.get_active_adjustments()
+            )
 
     async def _evaluate_solar_taper(self) -> None:
         """Evaluate solar tapering to consume excess solar.

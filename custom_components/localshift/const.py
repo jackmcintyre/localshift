@@ -390,6 +390,9 @@ SWITCH_NOTIFY_ALERTS = "notify_alerts"
 SWITCH_THERMAL_MANAGEMENT_ENABLED = "thermal_management_enabled"
 SWITCH_SOLAR_TAPER_ENABLED = "solar_taper_enabled"
 
+# Learning system switch (Issue #170 Phase 4)
+SWITCH_ENABLE_LEARNING = "enable_learning"
+
 SWITCH_DEFAULTS = {
     SWITCH_AUTOMATION_ENABLED: True,
     SWITCH_SPIKE_DISCHARGE_ENABLED: True,
@@ -403,6 +406,7 @@ SWITCH_DEFAULTS = {
     SWITCH_NOTIFY_ALERTS: True,
     SWITCH_THERMAL_MANAGEMENT_ENABLED: False,
     SWITCH_SOLAR_TAPER_ENABLED: True,
+    SWITCH_ENABLE_LEARNING: False,  # Users must opt-in to active optimization
 }
 
 SWITCH_ICONS = {
@@ -418,6 +422,7 @@ SWITCH_ICONS = {
     SWITCH_NOTIFY_ALERTS: "mdi:alert-circle",
     SWITCH_THERMAL_MANAGEMENT_ENABLED: "mdi:air-conditioner",
     SWITCH_SOLAR_TAPER_ENABLED: "mdi:solar-power",
+    SWITCH_ENABLE_LEARNING: "mdi:brain",
 }
 
 SWITCH_NAMES = {
@@ -433,6 +438,7 @@ SWITCH_NAMES = {
     SWITCH_NOTIFY_ALERTS: "Notify Alerts",
     SWITCH_THERMAL_MANAGEMENT_ENABLED: "Thermal Management",
     SWITCH_SOLAR_TAPER_ENABLED: "Solar Taper",
+    SWITCH_ENABLE_LEARNING: "Enable Learning",
 }
 
 # -----------------------------------------------------------------------------
