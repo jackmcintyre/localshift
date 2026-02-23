@@ -166,6 +166,17 @@ class LocalShiftNumber(NumberEntity):
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         self.async_write_ha_state()
 
-        # Trigger immediate re-evaluation with new threshold values
-        # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
-        await self.coordinator.async_recompute_and_evaluate()
+        # Check if this is a thermal-related threshold that requires mode re-determination
+        thermal_keys = {
+            CONF_COOLING_TRIGGER_TEMP,
+            CONF_HEATING_TRIGGER_TEMP,
+            CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
+        }
+
+        if self._conf_key in thermal_keys:
+            # Thermal thresholds affect daily mode determination - re-run it
+            await self.coordinator.async_redetermine_thermal_mode()
+        else:
+            # Trigger immediate re-evaluation with new threshold values
+            # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
+            await self.coordinator.async_recompute_and_evaluate()
