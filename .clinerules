@@ -13,6 +13,33 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 
 This ensures isolation between tasks and prevents changes to the main repo.
 
+## ⚠️ FOUND CHANGES ON MAIN (Crashed Session / Orphaned Changes)
+
+**If you discover staged or unstaged changes on main (e.g., from a crashed session):**
+
+1. **STOP** - Do not immediately commit
+2. **Alert the user** that changes exist on main and ask for direction:
+   - Option A: Move changes to a worktree (recommended)
+   - Option B: Commit directly on main (only if user explicitly confirms)
+3. **To move changes to a worktree:**
+   ```bash
+   # Stash changes if needed
+   git stash push -m "orphaned changes from crashed session"
+   
+   # Create worktree
+   git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
+   
+   # In worktree, apply the stash
+   cd /Users/jackmcintyre/worktrees/{task-name}
+   git stash pop
+   ```
+4. **Only commit directly on main** if:
+   - User explicitly confirms (e.g., "commit as is")
+   - Changes are trivial (typo fixes, documentation)
+   - You have explained the process violation
+
+**This prevents accidental commits on main from orphaned changes.**
+
 # ⚠️ MANDATORY: PLANNING BEFORE IMPLEMENTATION
 
 **This applies to non-trivial coding tasks. Failure to follow this is a process violation.**
