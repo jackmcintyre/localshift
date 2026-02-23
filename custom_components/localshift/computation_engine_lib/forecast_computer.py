@@ -82,6 +82,9 @@ class ForecastComputer:
         self._get_profile_for_day = get_profile_for_day_func
         self._weather_correlation = weather_correlation
         self._thermal_manager = thermal_manager
+        self._adaptive_params = (
+            None  # Issue #170 Phase 2: Adaptive parameters from learning
+        )
 
         # Extracted helper modules (issue #145)
         self._fit_analyzer = FitAnalyzer()
@@ -276,6 +279,9 @@ class ForecastComputer:
         # 2. Temperature is provided
         # 3. We have base load to adjust
         # 4. Confidence is medium or high (not low)
+        adjusted_load_kw = base_load_kw
+        adjusted_source = base_source
+
         if (
             self._weather_correlation is not None
             and temperature is not None
@@ -285,7 +291,7 @@ class ForecastComputer:
             coef = self._weather_correlation.get_coefficients_for_hour(slot_hour)
             if coef is not None and coef.confidence in ("medium", "high"):
                 # Apply weather-based prediction
-                adjusted_load, adjustment_source = (
+                weather_adjusted, adjustment_source = (
                     self._weather_correlation.predict_load(
                         hour=slot_hour,
                         temperature=temperature,
@@ -298,10 +304,27 @@ class ForecastComputer:
                     "low_confidence",
                     "invalid_hour",
                 ):
-                    return round(adjusted_load, 3), adjustment_source
+                    adjusted_load_kw = weather_adjusted
+                    adjusted_source = adjustment_source
 
-        # Return base load without weather adjustment
-        return round(base_load_kw, 3), base_source
+        # Issue #170 Phase 2: Apply consumption_forecast_bias adaptive parameter
+        # Positive = assume higher consumption (more conservative for grid charging)
+        # Negative = assume lower consumption (more optimistic for grid charging)
+        if self._adaptive_params is not None:
+            consumption_bias = self._adaptive_params.get(
+                "consumption_forecast_bias", 0.0
+            )
+            if consumption_bias != 0.0:
+                adjusted_load_kw = max(0.0, adjusted_load_kw + consumption_bias)
+                _LOGGER.debug(
+                    "CONSUMPTION_BIAS: hour=%d, base=%.2f kW, bias=%.2f kW, final=%.2f kW",
+                    slot_hour,
+                    base_load_kw,
+                    consumption_bias,
+                    adjusted_load_kw,
+                )
+
+        return round(adjusted_load_kw, 3), adjusted_source
 
     def _simulate_future_soc_with_solar_only(
         self,
