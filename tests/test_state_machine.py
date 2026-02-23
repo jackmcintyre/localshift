@@ -81,11 +81,25 @@ def mock_get_option():
 
 
 @pytest.fixture
+def mock_entity_validator():
+    """Create a mock EntityValidator."""
+    from custom_components.localshift.entity_validator import IntegrationStatus
+
+    validator = MagicMock()
+    validator.should_allow_automation = MagicMock(return_value=True)
+    validator.status = IntegrationStatus.OK
+    validator.errors = []
+    validator.warnings = []
+    return validator
+
+
+@pytest.fixture
 def state_machine(
     mock_battery_controller,
     mock_notification_service,
     mock_get_switch_state,
     mock_get_option,
+    mock_entity_validator,
 ):
     """Create a StateMachine instance."""
     return StateMachine(
@@ -93,6 +107,7 @@ def state_machine(
         mock_notification_service,
         mock_get_switch_state,
         mock_get_option,
+        mock_entity_validator,
     )
 
 
@@ -666,6 +681,122 @@ class TestManualOverride:
 
         # Manual override should be cleared
         assert coordinator_data.manual_override == False
+
+
+# =============================================================================
+# ENTITY AVAILABILITY BLOCKING TESTS (Issue #161)
+# =============================================================================
+
+
+class TestEntityAvailabilityBlocking:
+    """Tests for blocking mode transitions when required entities unavailable.
+
+    Issue #161: When REQUIRED entities (prices, SOC, operation_mode) are
+    unavailable, mode transitions should be blocked to prevent incorrect
+    automation decisions.
+    """
+
+    def test_mode_transition_blocked_when_required_entity_unavailable(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Mode transition should be blocked when a required entity is unavailable."""
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        # Mock entity validator to report unavailable required entity
+        mock_validator = MagicMock()
+        mock_validator.should_allow_automation = MagicMock(return_value=False)
+        state_machine.entity_validator = mock_validator
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # Should NOT have transitioned - should stay in SELF_CONSUMPTION
+        assert state_machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+        # Should not have issued any commands
+        mock_battery_controller.set_force_charge.assert_not_called()
+
+    def test_mode_transition_allowed_when_entities_healthy(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Mode transition should proceed when all required entities are healthy."""
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = (
+            BatteryMode.SPIKE_DISCHARGE
+        )  # Immediate transition
+
+        # Mock entity validator to report all entities healthy
+        mock_validator = MagicMock()
+        mock_validator.should_allow_automation = MagicMock(return_value=True)
+        state_machine.entity_validator = mock_validator
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # Should have transitioned to SPIKE_DISCHARGE
+        assert state_machine._commanded_mode == BatteryMode.SPIKE_DISCHARGE
+        # Should have issued the command
+        mock_battery_controller.set_force_discharge.assert_called_once()
+
+    def test_current_mode_maintained_when_entities_unavailable(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Current mode should be maintained when entities become unavailable.
+
+        This tests the key requirement from #161: don't reset mode, maintain it.
+        """
+        # Start in GRID_CHARGING mode
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+
+        # Desired mode is different (e.g., SPIKE_DISCHARGE)
+        coordinator_data.active_mode = BatteryMode.SPIKE_DISCHARGE
+
+        # But entities are unavailable
+        mock_validator = MagicMock()
+        mock_validator.should_allow_automation = MagicMock(return_value=False)
+        state_machine.entity_validator = mock_validator
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # Should STILL be in GRID_CHARGING (maintained, not reset)
+        assert state_machine._commanded_mode == BatteryMode.GRID_CHARGING
+        # Should not have issued any transition commands
+        mock_battery_controller.set_force_discharge.assert_not_called()
+
+    def test_blocked_transition_preserves_desired_timer(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """When transition is blocked, the desired mode timer should be preserved.
+
+        This ensures proper debounce when entities become available again.
+        """
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        # Mock entity validator to block automation
+        mock_validator = MagicMock()
+        mock_validator.should_allow_automation = MagicMock(return_value=False)
+        state_machine.entity_validator = mock_validator
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        # Set a timer for the desired mode
+        state_machine._mode_desired_since[BatteryMode.GRID_CHARGING] = dt_aware(
+            2020, 1, 1, 0, 0, 0
+        )
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # Timer should still be present (preserved for when entities become available)
+        assert BatteryMode.GRID_CHARGING in state_machine._mode_desired_since
 
 
 # =============================================================================

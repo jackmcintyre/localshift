@@ -64,6 +64,7 @@ class ForecastComputer:
         ]
         | None = None,
         weather_correlation: Any | None = None,
+        thermal_manager: Any | None = None,
     ) -> None:
         """Initialize forecast computer.
 
@@ -73,12 +74,14 @@ class ForecastComputer:
             get_historical_func: Function to get historical hourly averages (combined profile)
             get_profile_for_day_func: Optional function to get day-aware profile (issue-60)
             weather_correlation: Optional WeatherCorrelation instance for temperature-based adjustments
+            thermal_manager: Optional ThermalManager instance for HVAC-aware load forecasting (Issue #152)
         """
         self.entry = entry
         self._get_entity_id = get_entity_id_func
         self._get_historical_hourly_averages = get_historical_func
         self._get_profile_for_day = get_profile_for_day_func
         self._weather_correlation = weather_correlation
+        self._thermal_manager = thermal_manager
 
         # Extracted helper modules (issue #145)
         self._fit_analyzer = FitAnalyzer()
@@ -104,6 +107,66 @@ class ForecastComputer:
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
         self._weather_correlation = weather_correlation
+
+    def set_thermal_manager(self, thermal_manager: Any | None) -> None:
+        """Set or clear ThermalManager dependency at runtime.
+
+        Args:
+            thermal_manager: ThermalManager instance for HVAC-aware load forecasting,
+                           or None to disable HVAC prediction.
+        """
+        self._thermal_manager = thermal_manager
+
+    def _predict_hvac_load_for_slot(
+        self,
+        slot_hour: int,
+        temperature: float | None,
+        daily_thermal_mode: str | None,
+    ) -> float:
+        """Predict HVAC load for a given slot.
+
+        Uses the thermal manager's learned HVAC power data and the daily
+        thermal mode to predict how much HVAC load to expect.
+
+        Args:
+            slot_hour: Hour of day (0-23)
+            temperature: Forecasted temperature in °C, or None
+            daily_thermal_mode: Current daily thermal mode ("off", "cool", "heat", "dry")
+
+        Returns:
+            Predicted HVAC load in kW, or 0.0 if unavailable.
+        """
+        if self._thermal_manager is None:
+            return 0.0
+
+        if daily_thermal_mode is None or daily_thermal_mode == "off":
+            return 0.0
+
+        # Import ThermalMode for comparison
+        try:
+            from ..const import ThermalMode
+
+            mode = ThermalMode(daily_thermal_mode)
+        except (ValueError, ImportError):
+            return 0.0
+
+        # Use temperature if available, otherwise use a default estimate
+        temp = temperature if temperature is not None else 25.0
+
+        try:
+            hvac_kw = self._thermal_manager.predict_hvac_load(
+                hour=slot_hour,
+                temperature=temp,
+                daily_mode=mode,
+            )
+            return max(0.0, hvac_kw)
+        except Exception as err:
+            _LOGGER.debug(
+                "HVAC prediction failed for hour %d: %s",
+                slot_hour,
+                err,
+            )
+            return 0.0
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -238,6 +301,7 @@ class ForecastComputer:
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
         baseline_avg_kw: dict[int, float] | None = None,
+        dw_end_time: time | None = None,
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
@@ -245,6 +309,11 @@ class ForecastComputer:
 
         When end_time == dw_start_time, simulation stops at DW start (existing behavior).
         When end_time > dw_start_time, simulation continues through DW period.
+
+        FIX FOR DW SIMULATION: When simulating through DW period, we need to check
+        if SOC reaches target DURING the relevant period (DW), not just at any point
+        during the simulation. Previously, max_soc could peak at midday and then
+        decline before DW, but the simulation would say "target reached" incorrectly.
 
         This helps determine if grid charging is necessary.
 
@@ -269,7 +338,10 @@ class ForecastComputer:
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
             end_time: End time (exclusive) to simulate until
+            min_soc_pct: Minimum SOC floor
+            current_hour: Current hour for load estimation
             baseline_avg_kw: Optional baseline (non-HVAC) load profile for #137
+            dw_end_time: Demand window end time (for DW-period max_soc tracking)
 
         Returns:
             (soc_at_end_pct, max_soc_pct, can_reach_target)
@@ -308,7 +380,31 @@ class ForecastComputer:
 
         # Use 15-min slots throughout for consistency
         max_soc = soc
+        max_soc_in_dw = soc  # Track max SOC specifically during DW period
         slot_fraction = 15 / 60.0  # 0.25 hours
+
+        # Determine DW period boundaries for max_soc_in_dw tracking
+        dw_start_dt = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if dw_start_dt <= base_slot:
+            dw_start_dt += timedelta(days=1)
+
+        # Calculate DW end time
+        if dw_end_time is not None:
+            dw_end_dt = base_slot.replace(
+                hour=dw_end_time.hour,
+                minute=dw_end_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if dw_end_dt <= dw_start_dt:
+                dw_end_dt += timedelta(days=1)
+        else:
+            dw_end_dt = dw_start_dt + timedelta(hours=6)  # Default 6-hour DW
 
         slot_time = base_slot
         while slot_time < sim_end:
@@ -342,9 +438,29 @@ class ForecastComputer:
 
             max_soc = max(max_soc, soc)
 
+            # Track max_soc specifically during DW period
+            # This is critical for allow_dw_entry_under_target logic
+            if dw_start_dt <= slot_time < dw_end_dt:
+                max_soc_in_dw = max(max_soc_in_dw, soc)
+
             # Fast-path: if we've already reached target, we can stop.
             if max_soc >= target_pct:
                 return soc, max_soc, True
+
+        # FIX: When simulating through DW period (allow_dw_entry_under_target=True),
+        # check if max_soc DURING DW reaches target, not just max_soc during entire simulation.
+        # This prevents false positives where SOC peaks at midday but declines before DW.
+        if end_time > dw_start_dt:
+            # Simulation went through DW period - check DW-specific max_soc
+            can_reach = max_soc_in_dw >= target_pct
+            _LOGGER.debug(
+                "SIMulate DW: max_soc=%.1f%% max_soc_in_dw=%.1f%% target=%d%% can_reach=%s",
+                max_soc,
+                max_soc_in_dw,
+                target_pct,
+                can_reach,
+            )
+            return soc, max_soc, can_reach
 
         return soc, max_soc, max_soc >= target_pct
 
@@ -632,6 +748,7 @@ class ForecastComputer:
 
                 # Now simulate from solar start to next DW
                 # ISSUE #137: Pass baseline for grid charging decisions
+                # FIX: Pass dw_end_time for proper DW-period max_soc tracking
                 soc_at_end, max_soc, can_reach_with_solar_only = (
                     self._simulate_future_soc_with_solar_only(
                         actual_current_soc=soc_at_solar_start,
@@ -645,6 +762,7 @@ class ForecastComputer:
                         end_time=sim_end,
                         min_soc_pct=min_soc_pct,
                         baseline_avg_kw=baseline_avg_kw,
+                        dw_end_time=dw_end_time,
                     )
                 )
 
@@ -685,6 +803,7 @@ class ForecastComputer:
         else:
             # Daylight slot - use original simulation logic
             # ISSUE #137: Pass baseline for grid charging decisions
+            # FIX: Pass dw_end_time for proper DW-period max_soc tracking
             soc_at_end, max_soc, can_reach_with_solar_only = (
                 self._simulate_future_soc_with_solar_only(
                     actual_current_soc=predicted_soc,
@@ -698,6 +817,7 @@ class ForecastComputer:
                     end_time=sim_end,
                     min_soc_pct=min_soc_pct,
                     baseline_avg_kw=baseline_avg_kw,
+                    dw_end_time=dw_end_time,
                 )
             )
 
@@ -1504,7 +1624,7 @@ class ForecastComputer:
             slot_temp = temperature_by_hour.get(
                 (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
             )
-            load_kw, load_source = self._estimate_hourly_consumption_kw(
+            baseline_kw, load_source = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
                 current_hour,
@@ -1519,7 +1639,42 @@ class ForecastComputer:
             consumption_source_counts[load_source] = (
                 consumption_source_counts.get(load_source, 0) + 1
             )
-            consumption_kwh = load_kw * slot_fraction
+
+            # Issue #152: Add HVAC prediction to total load forecast
+            # Grid charging decisions use baseline only (passed via baseline_avg_kw),
+            # but SOC forecast needs total = baseline + predicted_hvac
+            daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
+            if isinstance(daily_thermal_mode, str):
+                pass  # Already a string
+            elif daily_thermal_mode is not None:
+                daily_thermal_mode = str(daily_thermal_mode)
+
+            hvac_kw = self._predict_hvac_load_for_slot(
+                slot_hour=slot_hour,
+                temperature=slot_temp,
+                daily_thermal_mode=daily_thermal_mode,
+            )
+
+            # Total load = baseline + HVAC prediction
+            # Grid charging decisions use baseline only (Issue #137 via baseline_avg_kw param)
+            # SOC forecast uses total to account for thermal load
+            total_load_kw = baseline_kw + hvac_kw
+
+            # Log HVAC contribution when significant
+            if hvac_kw > 0.1:
+                _LOGGER.debug(
+                    "HVAC_PREDICTION[%02d:%02d]: baseline=%.2f kW, hvac=%.2f kW, total=%.2f kW, mode=%s",
+                    slot_hour,
+                    slot_minute,
+                    baseline_kw,
+                    hvac_kw,
+                    total_load_kw,
+                    daily_thermal_mode or "off",
+                )
+                # Track HVAC prediction in source for diagnostics
+                load_source = f"{load_source}+hvac"
+
+            consumption_kwh = total_load_kw * slot_fraction
 
             # Calculate raw net energy for this slot
             net_kwh = solar_kwh - consumption_kwh
