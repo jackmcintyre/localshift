@@ -14,7 +14,8 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
 )
 from ..coordinator_data import CoordinatorData
-from .solar_utils import get_price_for_slot_or_none, get_solar_for_15min_slot
+from .price_calculator import get_price_for_slot_or_none
+from .solar_utils import get_solar_for_15min_slot
 
 
 class ExcessSolarEngine:
