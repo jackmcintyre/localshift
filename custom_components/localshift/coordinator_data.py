@@ -71,6 +71,52 @@ class PerformanceMetrics:
 
 
 @dataclass
+class AdaptiveParameters:
+    """Current state of learning system parameters.
+
+    Issue #170 Phase 2: Holds optimized parameter values from the learning system.
+    """
+
+    values: dict[str, float] = field(
+        default_factory=dict
+    )  # param_name -> current_value
+    confidence: dict[str, float] = field(default_factory=dict)  # param_name -> 0.0-1.0
+    last_updated: datetime | None = None
+    update_count: int = 0
+
+    def get(self, param_name: str, default: float = 0.0) -> float:
+        """Get current parameter value, falling back to default."""
+        return self.values.get(param_name, default)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "values": self.values,
+            "confidence": self.confidence,
+            "last_updated": self.last_updated.isoformat()
+            if self.last_updated
+            else None,
+            "update_count": self.update_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AdaptiveParameters:
+        """Create from dictionary (deserialization)."""
+        last_updated = None
+        if data.get("last_updated"):
+            try:
+                last_updated = datetime.fromisoformat(data["last_updated"])
+            except (ValueError, TypeError):
+                pass
+        return cls(
+            values=data.get("values", {}),
+            confidence=data.get("confidence", {}),
+            last_updated=last_updated,
+            update_count=data.get("update_count", 0),
+        )
+
+
+@dataclass
 class ChargingDecision:
     """Represents a charging decision for a specific time slot.
 
@@ -316,3 +362,6 @@ class CoordinatorData:
     )  # last 24h of decisions for sensor
     learning_status: str = "observing"  # "observing", "tuning", "optimizing"
     battery_target_soc: float = 80.0  # Configured battery target for decision scoring
+
+    # --- Adaptive parameters (Issue #170 Phase 2) ---
+    adaptive_params: AdaptiveParameters = field(default_factory=AdaptiveParameters)

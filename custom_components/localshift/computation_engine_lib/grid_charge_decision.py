@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime, time, timedelta
+from typing import Any
 
 from homeassistant.util import dt as dt_util
 
@@ -26,6 +27,19 @@ class GridChargeDecisionEngine:
         self._find_solar_start_time = find_solar_start_time
         self._simulate_overnight_drain_to_solar = simulate_overnight_drain_to_solar
         self._simulate_future_soc_with_solar_only = simulate_future_soc_with_solar_only
+        self._adaptive_params = None
+
+    def set_adaptive_params(self, adaptive_params: Any | None) -> None:
+        """Set adaptive parameters from the learning system (Issue #170 Phase 2).
+
+        These parameters adjust grid charging decisions based on learned
+        outcomes from historical performance.
+
+        Args:
+            adaptive_params: AdaptiveParameters instance with tuned values,
+                           or None to use defaults.
+        """
+        self._adaptive_params = adaptive_params
 
     def _calculate_local_effective_cheap_price(
         self,
