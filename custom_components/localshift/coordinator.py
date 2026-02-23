@@ -348,6 +348,11 @@ class LocalShiftCoordinator:
         # This prevents errors when Solcast hasn't initialized yet
         await self._wait_for_solcast_and_compute()
 
+        # Refresh weather forecast and determine thermal mode if needed (startup catch-up)
+        # This handles the case where HA restarts after the daily decision time
+        await self._refresh_weather_forecast()
+        await self._determine_thermal_mode_if_needed(is_startup=True)
+
         # Startup grace: wait 30 s for entities to populate before acting
         self._state_machine.set_startup_grace(30)
 
@@ -1218,3 +1223,82 @@ class LocalShiftCoordinator:
             await self._thermal_manager.async_apply_climate_control(
                 self.data, setpoint_offset
             )
+
+    async def _determine_thermal_mode_if_needed(self, is_startup: bool = False) -> None:
+        """Determine thermal mode if needed (startup catch-up or normal decision).
+
+        This handles the case where HA restarts after the daily decision time.
+        At startup, if we're past the decision time and the mode isn't locked,
+        we determine the mode from the current weather forecast.
+
+        Args:
+            is_startup: If True, this is a startup catch-up call. Logs differently.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            _LOGGER.debug("Thermal management disabled, skipping mode determination")
+            return
+
+        # If mode is already locked, no need to determine
+        if self.data.daily_mode_locked:
+            _LOGGER.debug(
+                "Thermal mode already locked: %s", self.data.daily_thermal_mode.value
+            )
+            return
+
+        now = datetime.now()
+        decision_time = self._parse_time_option(
+            CONF_THERMAL_MODE_DECISION_TIME, DEFAULT_THERMAL_MODE_DECISION_TIME
+        )
+        decision_dt = datetime.combine(now.date(), decision_time)
+
+        # Only determine if we're past decision time
+        if now < decision_dt:
+            _LOGGER.debug(
+                "Before decision time (%s), skipping mode determination",
+                decision_time.strftime("%H:%M"),
+            )
+            return
+
+        # Get weather temperature forecast
+        temp_forecast = self.data.weather_temperature_forecast
+
+        if not temp_forecast:
+            _LOGGER.warning(
+                "No weather forecast available for thermal mode determination"
+            )
+            return
+
+        # Get current humidity if available
+        humidity = None
+        from .const import CONF_WEATHER_ENTITY
+
+        weather_entity = self._get_entity_id(CONF_WEATHER_ENTITY)
+        weather_state = self.hass.states.get(weather_entity)
+        if weather_state is not None:
+            humidity = weather_state.attributes.get("humidity")
+
+        # Determine mode from forecast
+        mode = self._thermal_manager.determine_daily_mode(temp_forecast, humidity)
+
+        # Update coordinator data
+        self.data.daily_thermal_mode = mode
+        self.data.daily_mode_locked = True
+        self.data.daily_mode_determined_at = now.isoformat()
+
+        if is_startup:
+            _LOGGER.info(
+                "Startup thermal mode determined: %s (catch-up after restart, past %s)",
+                mode.value,
+                decision_time.strftime("%H:%M"),
+            )
+        else:
+            _LOGGER.info(
+                "Thermal mode determined: %s (locked until tomorrow)",
+                mode.value,
+            )
+
+        # Notify listeners of the mode change
+        self._notify_listeners()
