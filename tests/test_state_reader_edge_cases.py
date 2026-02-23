@@ -91,19 +91,25 @@ class TestStateReaderUnavailableEntities:
 class TestStateReaderUnknownEntities:
     """Tests for handling entities with unknown state."""
 
-    def test_unknown_soc_returns_default(self, mock_hass_unknown_entities, mock_entry):
+    def test_unknown_soc_returns_default(
+        self, mock_hass_unknown_entities, mock_entry, mock_entity_validator
+    ):
         """Test that unknown SOC returns default value."""
-        state_reader = StateReader(mock_hass_unknown_entities, mock_entry)
+        state_reader = StateReader(
+            mock_hass_unknown_entities, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.soc == 0.0
 
     def test_unknown_operation_mode_returns_default(
-        self, mock_hass_unknown_entities, mock_entry
+        self, mock_hass_unknown_entities, mock_entry, mock_entity_validator
     ):
         """Test that unknown operation mode returns empty string."""
-        state_reader = StateReader(mock_hass_unknown_entities, mock_entry)
+        state_reader = StateReader(
+            mock_hass_unknown_entities, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -156,10 +162,12 @@ class TestStateReaderPartialAvailability:
     """Tests for handling partial entity availability."""
 
     def test_partial_availability_reads_available_entities(
-        self, mock_hass_partial_availability, mock_entry
+        self, mock_hass_partial_availability, mock_entry, mock_entity_validator
     ):
         """Test that available entities are read correctly when some are unavailable."""
-        state_reader = StateReader(mock_hass_partial_availability, mock_entry)
+        state_reader = StateReader(
+            mock_hass_partial_availability, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -176,10 +184,12 @@ class TestStateReaderPartialAvailability:
         assert data.feed_in_price == 0.08
 
     def test_partial_availability_missing_entities(
-        self, mock_hass_partial_availability, mock_entry
+        self, mock_hass_partial_availability, mock_entry, mock_entity_validator
     ):
         """Test that missing entities return defaults."""
-        state_reader = StateReader(mock_hass_partial_availability, mock_entry)
+        state_reader = StateReader(
+            mock_hass_partial_availability, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -198,50 +208,66 @@ class TestStateReaderPartialAvailability:
 class TestStateReaderMalformedValues:
     """Tests for handling malformed state values."""
 
-    def test_non_numeric_soc_returns_default(self, mock_hass_with_states, mock_entry):
+    def test_non_numeric_soc_returns_default(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that non-numeric SOC returns default value."""
         # Override SOC with non-numeric value (using DEFAULT_ENTITY_IDS naming)
         mock_hass_with_states._mock_states.set(
             "sensor.my_home_percentage_charged", "not_a_number", {}
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.soc == 0.0
 
-    def test_non_numeric_price_returns_default(self, mock_hass_with_states, mock_entry):
+    def test_non_numeric_price_returns_default(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that non-numeric price returns default value."""
         mock_hass_with_states._mock_states.set(
             "sensor.100h_general_price", "invalid", {}
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.general_price == 0.0
 
-    def test_empty_string_soc_returns_default(self, mock_hass_with_states, mock_entry):
+    def test_empty_string_soc_returns_default(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that empty string SOC returns default value."""
         mock_hass_with_states._mock_states.set(
             "sensor.my_home_percentage_charged", "", {}
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.soc == 0.0
 
-    def test_negative_soc_is_accepted(self, mock_hass_with_states, mock_entry):
+    def test_negative_soc_is_accepted(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that negative SOC values are accepted (edge case)."""
         mock_hass_with_states._mock_states.set(
             "sensor.my_home_percentage_charged", "-5.0", {}
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -249,13 +275,17 @@ class TestStateReaderMalformedValues:
         # (validation happens elsewhere)
         assert data.soc == -5.0
 
-    def test_very_large_soc_is_accepted(self, mock_hass_with_states, mock_entry):
+    def test_very_large_soc_is_accepted(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that very large SOC values are accepted (edge case)."""
         mock_hass_with_states._mock_states.set(
             "sensor.my_home_percentage_charged", "999999.99", {}
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -272,7 +302,7 @@ class TestStateReaderAttributes:
     """Tests for reading entity attributes."""
 
     def test_missing_forecast_attribute_returns_empty_list(
-        self, mock_hass_with_states, mock_entry
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test that missing forecast attribute returns empty list."""
         # Set entity without forecasts attribute (using DEFAULT_ENTITY_IDS naming)
@@ -282,14 +312,16 @@ class TestStateReaderAttributes:
             {},  # No attributes
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.general_forecast == []
 
     def test_none_forecast_attribute_returns_empty_list(
-        self, mock_hass_with_states, mock_entry
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test that None forecast attribute returns empty list."""
         mock_hass_with_states._mock_states.set(
@@ -298,17 +330,21 @@ class TestStateReaderAttributes:
             {"forecasts": None},
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.general_forecast == []
 
     def test_valid_forecast_attribute_is_read(
-        self, mock_hass_with_forecasts, mock_entry
+        self, mock_hass_with_forecasts, mock_entry, mock_entity_validator
     ):
         """Test that valid forecast attribute is read correctly."""
-        state_reader = StateReader(mock_hass_with_forecasts, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_forecasts, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -326,10 +362,12 @@ class TestStateReaderParametrized:
     """Parametrized tests for various availability scenarios."""
 
     def test_read_all_external_state_never_crashes(
-        self, mock_hass_various_states, mock_entry
+        self, mock_hass_various_states, mock_entry, mock_entity_validator
     ):
         """Test that read_all_external_state never crashes regardless of availability."""
-        state_reader = StateReader(mock_hass_various_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_various_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
 
         # Should never raise an exception
@@ -340,33 +378,49 @@ class TestStateReaderParametrized:
         assert isinstance(data.operation_mode, str)
         assert isinstance(data.general_price, float)
 
-    def test_soc_value_available(self, mock_hass_with_states, mock_entry):
+    def test_soc_value_available(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that SOC value is correct when entity is available."""
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.soc == 50.0
 
-    def test_soc_value_unavailable(self, mock_hass_unavailable_entities, mock_entry):
+    def test_soc_value_unavailable(
+        self, mock_hass_unavailable_entities, mock_entry, mock_entity_validator
+    ):
         """Test that SOC value is default when entity is unavailable."""
-        state_reader = StateReader(mock_hass_unavailable_entities, mock_entry)
+        state_reader = StateReader(
+            mock_hass_unavailable_entities, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.soc == 0.0
 
-    def test_soc_value_unknown(self, mock_hass_unknown_entities, mock_entry):
+    def test_soc_value_unknown(
+        self, mock_hass_unknown_entities, mock_entry, mock_entity_validator
+    ):
         """Test that SOC value is default when entity is unknown."""
-        state_reader = StateReader(mock_hass_unknown_entities, mock_entry)
+        state_reader = StateReader(
+            mock_hass_unknown_entities, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.soc == 0.0
 
-    def test_soc_value_missing(self, mock_hass_missing_entities, mock_entry):
+    def test_soc_value_missing(
+        self, mock_hass_missing_entities, mock_entry, mock_entity_validator
+    ):
         """Test that SOC value is default when entity is missing."""
-        state_reader = StateReader(mock_hass_missing_entities, mock_entry)
+        state_reader = StateReader(
+            mock_hass_missing_entities, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -382,7 +436,7 @@ class TestStateReaderSolcastForecasts:
     """Tests for Solcast forecast reading edge cases."""
 
     def test_solcast_unavailable_returns_empty_list(
-        self, mock_hass_unavailable_entities, mock_entry
+        self, mock_hass_unavailable_entities, mock_entry, mock_entity_validator
     ):
         """Test that unavailable Solcast entity returns empty list."""
         # Add Solcast entities to unavailable states
@@ -393,7 +447,9 @@ class TestStateReaderSolcastForecasts:
             "sensor.solcast_tomorrow"
         )
 
-        state_reader = StateReader(mock_hass_unavailable_entities, mock_entry)
+        state_reader = StateReader(
+            mock_hass_unavailable_entities, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -401,7 +457,7 @@ class TestStateReaderSolcastForecasts:
         assert data.solcast_tomorrow == []
 
     def test_solcast_missing_attribute_returns_empty_list(
-        self, mock_hass_with_states, mock_entry
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test that Solcast without forecast attribute returns empty list."""
         mock_hass_with_states._mock_states.set(
@@ -410,14 +466,16 @@ class TestStateReaderSolcastForecasts:
             {"friendly_name": "Solcast"},  # No forecast attribute
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert data.solcast_today == []
 
     def test_solcast_with_detailed_forecast_attribute(
-        self, mock_hass_with_states, mock_entry
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test reading Solcast with detailedForecast attribute."""
         forecast_data = [
@@ -431,14 +489,16 @@ class TestStateReaderSolcastForecasts:
             {"detailedForecast": forecast_data},
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert len(data.solcast_today) == 2
 
     def test_solcast_with_detailed_hourly_attribute(
-        self, mock_hass_with_states, mock_entry
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test reading Solcast with detailedHourly attribute."""
         forecast_data = [
@@ -451,13 +511,17 @@ class TestStateReaderSolcastForecasts:
             {"detailedHourly": forecast_data},
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
         assert len(data.solcast_today) == 1
 
-    def test_solcast_with_forecast_attribute(self, mock_hass_with_states, mock_entry):
+    def test_solcast_with_forecast_attribute(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test reading Solcast with forecast attribute."""
         forecast_data = [
             {"start": "2026-02-16T06:00:00", "pv_estimate": 3.0},
@@ -469,7 +533,9 @@ class TestStateReaderSolcastForecasts:
             {"forecast": forecast_data},
         )
 
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -484,9 +550,13 @@ class TestStateReaderSolcastForecasts:
 class TestStateReaderPriceSpike:
     """Tests for price spike reading."""
 
-    def test_price_spike_on(self, mock_hass_price_spike, mock_entry):
+    def test_price_spike_on(
+        self, mock_hass_price_spike, mock_entry, mock_entity_validator
+    ):
         """Test reading price spike when it's on."""
-        state_reader = StateReader(mock_hass_price_spike, mock_entry)
+        state_reader = StateReader(
+            mock_hass_price_spike, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -523,10 +593,12 @@ class TestStateReaderIntegration:
     """Integration-style tests combining multiple scenarios."""
 
     def test_full_state_read_with_all_entities(
-        self, mock_hass_with_forecasts, mock_entry
+        self, mock_hass_with_forecasts, mock_entry, mock_entity_validator
     ):
         """Test reading all entities with complete data."""
-        state_reader = StateReader(mock_hass_with_forecasts, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_forecasts, mock_entry, mock_entity_validator
+        )
         data = CoordinatorData()
         state_reader.read_all_external_state(data)
 
@@ -563,9 +635,13 @@ class TestStateReaderIntegration:
         assert soc1 == soc2
         assert price1 == price2
 
-    def test_state_read_clears_previous_data(self, mock_hass_with_states, mock_entry):
+    def test_state_read_clears_previous_data(
+        self, mock_hass_with_states, mock_entry, mock_entity_validator
+    ):
         """Test that reading state overwrites previous data."""
-        state_reader = StateReader(mock_hass_with_states, mock_entry)
+        state_reader = StateReader(
+            mock_hass_with_states, mock_entry, mock_entity_validator
+        )
 
         # Set up data with non-default values
         data = CoordinatorData()

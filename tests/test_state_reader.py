@@ -41,9 +41,22 @@ def mock_entry():
 
 
 @pytest.fixture
-def state_reader(mock_hass, mock_entry):
+def mock_entity_validator():
+    """Create a mock EntityValidator for testing."""
+    from custom_components.localshift.entity_validator import IntegrationStatus
+
+    validator = MagicMock()
+    validator.should_allow_automation = MagicMock(return_value=True)
+    validator.status = IntegrationStatus.OK
+    validator.errors = []
+    validator.warnings = []
+    return validator
+
+
+@pytest.fixture
+def state_reader(mock_hass, mock_entry, mock_entity_validator):
     """Create a StateReader instance."""
-    return StateReader(mock_hass, mock_entry)
+    return StateReader(mock_hass, mock_entry, mock_entity_validator)
 
 
 @pytest.fixture
@@ -265,12 +278,12 @@ class TestGetEntityId:
 
         assert result == "sensor.tesla_powerwall_grid_power"
 
-    def test_get_entity_id_fallback_to_default(self, mock_hass):
+    def test_get_entity_id_fallback_to_default(self, mock_hass, mock_entity_validator):
         """Test fallback to default when key not in entry data."""
         entry = MagicMock()
         entry.data = {}  # Empty config
 
-        reader = StateReader(mock_hass, entry)
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
         result = reader._get_entity_id(CONF_TESLEMETRY_GRID_POWER)
 
         assert result == DEFAULT_ENTITY_IDS.get(CONF_TESLEMETRY_GRID_POWER, "")
