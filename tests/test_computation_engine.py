@@ -147,8 +147,17 @@ def test_effective_cheap_price_with_solar_gap(computation_engine, coordinator_da
 def test_active_mode_automation_disabled(computation_engine, coordinator_data):
     """Test active_mode when automation is disabled."""
     computation_engine._get_switch_state = MagicMock(return_value=False)
+    # Also mock the mode decision engine's reference to the switch state function
+    computation_engine._mode_decision._get_switch_state = MagicMock(return_value=False)
 
-    computation_engine.compute_derived_values(coordinator_data)
+    # Mock the forecast computation to prevent forecast-driven mode selection
+    with patch.object(
+        computation_engine, "_compute_daily_15min_forecast"
+    ) as mock_forecast:
+        # Set up an empty forecast so the mode decision falls through to SELF_CONSUMPTION
+        coordinator_data.daily_forecast = []
+        computation_engine.compute_derived_values(coordinator_data)
+        mock_forecast.assert_called_once()
 
     assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
 
@@ -214,14 +223,23 @@ def test_active_mode_forecast_driven(
         coordinator_data.manual_override = manual_override
 
         # Mock switch state - for demand_block test we need demand_window_block = True
+        # Also need to mock spike_discharge_enabled for price_spike test case
         def mock_switch_state(key):
             if key == "demand_window_block" and demand_window_active:
                 return True
             if key == "automation_enabled":
                 return True
+            # spike_discharge_enabled must be False for the price_spike test case
+            # to ensure it stays in SELF_CONSUMPTION, not SPIKE_DISCHARGE
+            if key == "spike_discharge_enabled":
+                return False
             return False
 
         computation_engine._get_switch_state = MagicMock(side_effect=mock_switch_state)
+        # Also mock the mode decision engine's reference to the switch state function
+        computation_engine._mode_decision._get_switch_state = MagicMock(
+            side_effect=mock_switch_state
+        )
 
         # Mock the forecast computation to prevent it from overwriting our test data
         with patch.object(
@@ -482,6 +500,10 @@ class TestSpikeAnalysis:
             return False
 
         computation_engine._get_switch_state = MagicMock(side_effect=mock_switch_state)
+        # Also mock the spike analyzer's reference to the switch state function
+        computation_engine._spike_analyzer._get_switch_state = MagicMock(
+            side_effect=mock_switch_state
+        )
 
         # Create forecast with spike prices (> 1.0 $/kWh)
         # Note: spike_status field is required for spike detection
@@ -506,6 +528,17 @@ class TestSpikeAnalysis:
         ]
 
         now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+        # Mock the _analyze_spike_window utility function to return spike data
+        spike_end = datetime(
+            2026, 2, 16, 18, 10, 0, tzinfo=timezone(timedelta(hours=11))
+        )
+        max_price = 2.0
+        spike_prices = [1.50, 2.00]
+        computation_engine._spike_analyzer._analyze_spike_window = MagicMock(
+            return_value=(spike_end, max_price, spike_prices)
+        )
+
         computation_engine._analyze_spike(coordinator_data, now_dt)
 
         # Should detect spike
