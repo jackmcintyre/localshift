@@ -238,6 +238,7 @@ class ForecastComputer:
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
         baseline_avg_kw: dict[int, float] | None = None,
+        dw_end_time: time | None = None,
     ) -> tuple[float, float, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
@@ -245,6 +246,11 @@ class ForecastComputer:
 
         When end_time == dw_start_time, simulation stops at DW start (existing behavior).
         When end_time > dw_start_time, simulation continues through DW period.
+
+        FIX FOR DW SIMULATION: When simulating through DW period, we need to check
+        if SOC reaches target DURING the relevant period (DW), not just at any point
+        during the simulation. Previously, max_soc could peak at midday and then
+        decline before DW, but the simulation would say "target reached" incorrectly.
 
         This helps determine if grid charging is necessary.
 
@@ -269,7 +275,10 @@ class ForecastComputer:
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
             end_time: End time (exclusive) to simulate until
+            min_soc_pct: Minimum SOC floor
+            current_hour: Current hour for load estimation
             baseline_avg_kw: Optional baseline (non-HVAC) load profile for #137
+            dw_end_time: Demand window end time (for DW-period max_soc tracking)
 
         Returns:
             (soc_at_end_pct, max_soc_pct, can_reach_target)
@@ -308,7 +317,31 @@ class ForecastComputer:
 
         # Use 15-min slots throughout for consistency
         max_soc = soc
+        max_soc_in_dw = soc  # Track max SOC specifically during DW period
         slot_fraction = 15 / 60.0  # 0.25 hours
+
+        # Determine DW period boundaries for max_soc_in_dw tracking
+        dw_start_dt = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if dw_start_dt <= base_slot:
+            dw_start_dt += timedelta(days=1)
+
+        # Calculate DW end time
+        if dw_end_time is not None:
+            dw_end_dt = base_slot.replace(
+                hour=dw_end_time.hour,
+                minute=dw_end_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if dw_end_dt <= dw_start_dt:
+                dw_end_dt += timedelta(days=1)
+        else:
+            dw_end_dt = dw_start_dt + timedelta(hours=6)  # Default 6-hour DW
 
         slot_time = base_slot
         while slot_time < sim_end:
@@ -342,9 +375,29 @@ class ForecastComputer:
 
             max_soc = max(max_soc, soc)
 
+            # Track max_soc specifically during DW period
+            # This is critical for allow_dw_entry_under_target logic
+            if dw_start_dt <= slot_time < dw_end_dt:
+                max_soc_in_dw = max(max_soc_in_dw, soc)
+
             # Fast-path: if we've already reached target, we can stop.
             if max_soc >= target_pct:
                 return soc, max_soc, True
+
+        # FIX: When simulating through DW period (allow_dw_entry_under_target=True),
+        # check if max_soc DURING DW reaches target, not just max_soc during entire simulation.
+        # This prevents false positives where SOC peaks at midday but declines before DW.
+        if end_time > dw_start_dt:
+            # Simulation went through DW period - check DW-specific max_soc
+            can_reach = max_soc_in_dw >= target_pct
+            _LOGGER.debug(
+                "SIMulate DW: max_soc=%.1f%% max_soc_in_dw=%.1f%% target=%d%% can_reach=%s",
+                max_soc,
+                max_soc_in_dw,
+                target_pct,
+                can_reach,
+            )
+            return soc, max_soc, can_reach
 
         return soc, max_soc, max_soc >= target_pct
 
@@ -632,6 +685,7 @@ class ForecastComputer:
 
                 # Now simulate from solar start to next DW
                 # ISSUE #137: Pass baseline for grid charging decisions
+                # FIX: Pass dw_end_time for proper DW-period max_soc tracking
                 soc_at_end, max_soc, can_reach_with_solar_only = (
                     self._simulate_future_soc_with_solar_only(
                         actual_current_soc=soc_at_solar_start,
@@ -645,6 +699,7 @@ class ForecastComputer:
                         end_time=sim_end,
                         min_soc_pct=min_soc_pct,
                         baseline_avg_kw=baseline_avg_kw,
+                        dw_end_time=dw_end_time,
                     )
                 )
 
@@ -685,6 +740,7 @@ class ForecastComputer:
         else:
             # Daylight slot - use original simulation logic
             # ISSUE #137: Pass baseline for grid charging decisions
+            # FIX: Pass dw_end_time for proper DW-period max_soc tracking
             soc_at_end, max_soc, can_reach_with_solar_only = (
                 self._simulate_future_soc_with_solar_only(
                     actual_current_soc=predicted_soc,
@@ -698,6 +754,7 @@ class ForecastComputer:
                     end_time=sim_end,
                     min_soc_pct=min_soc_pct,
                     baseline_avg_kw=baseline_avg_kw,
+                    dw_end_time=dw_end_time,
                 )
             )
 
