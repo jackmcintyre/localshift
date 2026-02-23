@@ -13,6 +13,7 @@ A state machine replaces 18 YAML automations with a single priority-based evalua
 - **Dynamic pricing thresholds** — Urgency-based cheap price calculation that factors in time-to-demand-window, SOC, and solar forecast
 - **Solcast solar forecast** — SOC projection to demand window, target-by-DW calculation, boost charge detection
 - **Solar export hold** — Holds battery when surplus solar can cover demand window deficit, maximising feed-in revenue
+- **Adaptive learning system** — Continuously optimizes decision parameters based on measured outcomes to minimize electricity costs
 - **Price spike discharge** — Automatically exports battery during Amber price spikes
 - **Demand window blocking** — Prevents grid charging during peak periods (configurable)
 - **Weather-aware consumption prediction** — Learns temperature/load correlation for more accurate forecasts during hot/cold days
@@ -125,7 +126,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `binary_sensor.localshift_tesla_override_active` | Whether Tesla has taken control (Storm Watch, Grid Event, VPP) |
 | `binary_sensor.localshift_forecast_expensive_period` | Whether expensive period is forecast within lookahead |
 
-### Switches (10)
+### Switches (11)
 
 | Entity ID | Default | Description |
 |---|---|---|
@@ -139,6 +140,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `switch.localshift_notify_daily_summary` | ON | Enable daily summary notification |
 | `switch.localshift_notify_manual_actions` | ON | Enable manual action notifications |
 | `switch.localshift_notify_alerts` | ON | Enable alert notifications |
+| `switch.localshift_enable_learning` | OFF | Enable learning system parameter optimization |
 
 ### Numbers (8)
 

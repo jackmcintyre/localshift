@@ -548,6 +548,137 @@ Weather correlation is configured via the integration options:
 - Better battery SOC planning during hot/cold days
 - Reduced risk of unexpected grid imports during demand windows
 
+## Learning System Architecture (Issue #170)
+
+The integration includes an adaptive learning system that continuously optimizes battery decisions based on measured outcomes. This is a **feedback loop system** that starts in observation-only mode and progressively enables optimization as data accumulates.
+
+### High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        LEARNING SYSTEM LOOP                                  │
+│                                                                              │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         │
+│  │   State         │    │   Decision      │    │   Parameter     │         │
+│  │   Machine       │───▶│   Outcome       │───▶│   Optimizer     │         │
+│  │   (decisions)   │    │   Tracker       │    │   (tuning)      │         │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘         │
+│          │                      │                      │                    │
+│          │                      ▼                      │                    │
+│          │              ┌─────────────────┐            │                    │
+│          │              │   Pattern       │            │                    │
+│          │              │   Analyzer      │            │                    │
+│          │              └─────────────────┘            │                    │
+│          │                      │                      │                    │
+│          ▼                      ▼                      ▼                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Optimization Controller                           │   │
+│  │                    (real-time parameter evaluation)                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                      │
+│                                      ▼                                      │
+│                          AdaptiveParameters                                 │
+│                          (applied to decisions)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Component Responsibilities
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **DecisionOutcomeTracker** | `decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
+| **ParameterOptimizer** | `parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
+| **PatternAnalyzer** | `pattern_analyzer.py` | Detects systematic biases across contextual dimensions |
+| **OptimizationController** | `optimization_controller.py` | Real-time parameter evaluation with contextual adjustments |
+
+### Data Flow
+
+1. **Decision Recording** (State Machine → Tracker)
+   - On every mode transition, `DecisionOutcomeTracker.record_decision()` is called
+   - Records: timestamp, mode, SOC, prices, forecasts, weather condition
+
+2. **Outcome Backfilling** (Coordinator → Tracker)
+   - On periodic tick, `backfill_outcomes()` fills in actual results
+   - Computes: actual cost, SOC change, export/import amounts, outcome score
+
+3. **Parameter Optimization** (Coordinator → Optimizer)
+   - Daily (after 50+ decisions), `ParameterOptimizer.optimize()` runs
+   - Uses Thompson sampling to find optimal parameter values
+   - Applies safety rails: step limits, bounds, rollback
+
+4. **Pattern Analysis** (Coordinator → Analyzer)
+   - Weekly, `PatternAnalyzer.analyze()` detects biases
+   - Generates `BiasCorrection` recommendations
+   - Feeds into parameter optimizer as priors
+
+5. **Real-time Evaluation** (Computation Engine → Controller)
+   - Every computation cycle, `OptimizationController.evaluate()` runs
+   - Applies contextual adjustments based on current conditions
+   - Returns final `AdaptiveParameters` for decision engines
+
+### Adaptive Parameters
+
+The learning system adjusts these parameters:
+
+| Parameter | Default | Range | Effect |
+|-----------|---------|-------|--------|
+| `cheap_price_bias` | 0.0 | -5.0 to +5.0 c/kWh | Adjusts cheap price threshold |
+| `solar_confidence_factor` | 1.0 | 0.5 to 1.5 | Multiplier on solar forecasts |
+| `overnight_drain_safety_margin` | 0.0 | -5.0 to +10.0 % | Extra SOC buffer for overnight |
+| `grid_charge_soc_headroom` | 0.0 | -5.0 to +10.0 % | Extra SOC above target |
+| `export_threshold_adjustment` | 0.0 | -3.0 to +3.0 c/kWh | Adjusts export profitability |
+| `consumption_forecast_bias` | 0.0 | -0.5 to +0.5 kW | Adjusts consumption predictions |
+
+### Multi-Objective Scoring
+
+Each decision is scored using weighted objectives:
+
+```
+score = 0.50 × cost_score 
+      + 0.20 × export_avoidance_score 
+      + 0.20 × target_achievement_score 
+      + 0.10 × cycle_reduction_score
+```
+
+### Safety Rails
+
+| Mechanism | Description |
+|-----------|-------------|
+| **Warm-up period** | No adjustments until 50+ decisions collected |
+| **Step limits** | Parameters move max 1 step per daily update |
+| **Bounds clamping** | All parameters stay within defined min/max |
+| **Rollback** | Revert if 7-day score decreases for 3 consecutive days |
+
+### Storage Keys
+
+Learning data persists across restarts using HA Storage:
+
+| Key | Content |
+|-----|---------|
+| `localshift.decision_outcomes.{entry_id}` | Decision records (last 500) |
+| `localshift.param_optimizer.{entry_id}` | Optimizer state |
+| `localshift.pattern_analysis.{entry_id}` | Pattern analysis data |
+| `localshift.opt_controller.{entry_id}` | Controller weights |
+
+### Integration Points
+
+```python
+# coordinator.py - Initialization
+self.decision_tracker = DecisionOutcomeTracker(hass, entry.entry_id)
+self.param_optimizer = ParameterOptimizer(hass, entry.entry_id)
+self.pattern_analyzer = PatternAnalyzer(hass, entry.entry_id)
+self.optimization_controller = OptimizationController(...)
+
+# coordinator.py - Periodic tick
+self.decision_tracker.backfill_outcomes(self.data)
+if self.param_optimizer.should_update(decision_count):
+    self.data.adaptive_params = self.param_optimizer.optimize(decisions)
+
+# computation_engine.py - Apply parameters
+data.adaptive_params = self._optimization_controller.evaluate(data)
+self._forecast_computer.set_adaptive_params(data.adaptive_params)
+```
+
 ## Day-of-Week Aware Consumption Profiles (Issue #60)
 
 The integration supports separate weekday and weekend consumption profiles for improved forecast accuracy in households with different daily patterns.
