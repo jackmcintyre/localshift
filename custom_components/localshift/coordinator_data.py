@@ -355,6 +355,12 @@ class CoordinatorData:
     solar_taper_active: bool = False
     taper_setpoint_offset: float = 0.0  # Degrees to adjust setpoint
 
+    # Real-time thermal control (Issue #63 Phase 6)
+    realtime_thermal_active: bool = False  # Whether real-time control is active
+    realtime_thermal_reason: str = ""  # Reason for current state
+    avg_room_temp: float | None = None  # Current average room temperature
+    thermal_activated_today: bool = False  # Has thermal control activated today
+
     # --- Learning system (Issue #170 Phase 1) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
     recent_decision_log: list[dict[str, Any]] = field(

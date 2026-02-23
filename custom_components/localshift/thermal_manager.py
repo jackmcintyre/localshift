@@ -28,19 +28,29 @@ from .const import (
     CONF_COOLING_TRIGGER_TEMP,
     CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
     CONF_HEATING_TRIGGER_TEMP,
+    CONF_MIN_SETPOINT_CHANGE_INTERVAL,
     CONF_PRECONDITION_HOURS_BEFORE_DW,
     CONF_PRECONDITION_TEMP_OFFSET,
     CONF_SOLAR_TAPER_ENABLED,
     CONF_TAPER_MAX_SETPOINT_OFFSET,
+    CONF_THERMAL_HYSTERESIS,
     CONF_THERMAL_MANAGEMENT_ENABLED,
+    CONF_THERMAL_OFF_FORECAST_CLEAR,
+    CONF_THERMAL_OFF_TEMP_MARGIN,
+    CONF_THERMAL_OFF_TIME,
     DEFAULT_COOLING_TRIGGER_TEMP,
     DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
     DEFAULT_HEATING_TRIGGER_TEMP,
+    DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
     DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
     DEFAULT_PRECONDITION_TEMP_OFFSET,
     DEFAULT_SOLAR_TAPER_ENABLED,
     DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
+    DEFAULT_THERMAL_HYSTERESIS,
     DEFAULT_THERMAL_MANAGEMENT_ENABLED,
+    DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
+    DEFAULT_THERMAL_OFF_TEMP_MARGIN,
+    DEFAULT_THERMAL_OFF_TIME,
     ThermalMode,
 )
 
@@ -133,6 +143,13 @@ class ThermalManager:
         # Current active offset (to avoid re-applying the same offset)
         self._current_active_offset: float = 0.0
 
+        # Real-time thermal control state
+        self._thermal_activated_today: bool = False
+        self._thermal_activated_at: datetime | None = None
+        self._last_setpoint_change: datetime | None = None
+        self._recent_room_temps: list[float] = []  # For trend detection
+        self._last_avg_room_temp: float | None = None
+
     # ------------------------------------------------------------------
     # Initialization and Storage
     # ------------------------------------------------------------------
@@ -219,6 +236,34 @@ class ThermalManager:
         """Get max setpoint offset for solar tapering."""
         return self._get_option(
             CONF_TAPER_MAX_SETPOINT_OFFSET, DEFAULT_TAPER_MAX_SETPOINT_OFFSET
+        )
+
+    def get_thermal_hysteresis(self) -> float:
+        """Get thermal hysteresis (deadband between on/off)."""
+        return self._get_option(CONF_THERMAL_HYSTERESIS, DEFAULT_THERMAL_HYSTERESIS)
+
+    def get_thermal_off_time(self) -> time:
+        """Get earliest time to consider turning off AC."""
+        time_str = self._get_option(CONF_THERMAL_OFF_TIME, DEFAULT_THERMAL_OFF_TIME)
+        parts = time_str.split(":")
+        return time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+
+    def get_thermal_off_temp_margin(self) -> float:
+        """Get temperature margin for turning off."""
+        return self._get_option(
+            CONF_THERMAL_OFF_TEMP_MARGIN, DEFAULT_THERMAL_OFF_TEMP_MARGIN
+        )
+
+    def get_thermal_off_forecast_clear(self) -> bool:
+        """Check if clear forecast is required for turn-off."""
+        return self._get_option(
+            CONF_THERMAL_OFF_FORECAST_CLEAR, DEFAULT_THERMAL_OFF_FORECAST_CLEAR
+        )
+
+    def get_min_setpoint_change_interval(self) -> int:
+        """Get minimum minutes between setpoint changes."""
+        return self._get_option(
+            CONF_MIN_SETPOINT_CHANGE_INTERVAL, DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL
         )
 
     # ------------------------------------------------------------------
@@ -956,3 +1001,354 @@ class ThermalManager:
 
         # Track the current active offset
         self._current_active_offset = setpoint_offset
+
+    # ------------------------------------------------------------------
+    # Real-time Thermal Control
+    # ------------------------------------------------------------------
+
+    def calculate_average_room_temp(self, data: CoordinatorData) -> float | None:
+        """Calculate average room temperature from climate entities.
+
+        Uses current_temperature from all available climate entities.
+        Updates trend tracking for turn-off decisions.
+
+        Args:
+            data: CoordinatorData with current climate states.
+
+        Returns:
+            Average temperature in °C, or None if no readings available.
+        """
+        temps: list[float] = []
+        for state_dict in data.climate_states.values():
+            current_temp = state_dict.get("current_temperature")
+            if current_temp is not None and current_temp > 0:
+                temps.append(current_temp)
+
+        if not temps:
+            return None
+
+        avg_temp = sum(temps) / len(temps)
+        self._last_avg_room_temp = avg_temp
+
+        # Track recent temps for trend detection (keep last 6 readings ~30 min)
+        self._recent_room_temps.append(avg_temp)
+        if len(self._recent_room_temps) > 6:
+            self._recent_room_temps.pop(0)
+
+        return avg_temp
+
+    def _is_rate_limited(self, now: datetime) -> bool:
+        """Check if setpoint change is rate-limited.
+
+        Args:
+            now: Current datetime.
+
+        Returns:
+            True if change should be skipped due to rate limiting.
+        """
+        min_interval = self.get_min_setpoint_change_interval()
+        if min_interval <= 0:
+            return False
+
+        if self._last_setpoint_change is None:
+            return False
+
+        elapsed = (now - self._last_setpoint_change).total_seconds() / 60
+        return elapsed < min_interval
+
+    def _should_turn_on(
+        self,
+        avg_room_temp: float,
+        daily_mode: ThermalMode,
+    ) -> bool:
+        """Determine if thermal control should activate.
+
+        Uses hysteresis to prevent rapid on/off cycling:
+        - For COOL: Turn on when room > trigger + hysteresis
+        - For HEAT: Turn on when room < trigger - hysteresis
+
+        Args:
+            avg_room_temp: Current average room temperature.
+            daily_mode: Current daily thermal mode.
+
+        Returns:
+            True if thermal control should activate.
+        """
+        if daily_mode == ThermalMode.OFF:
+            return False
+
+        hysteresis = self.get_thermal_hysteresis()
+
+        if daily_mode == ThermalMode.COOL:
+            trigger = self.get_cooling_trigger_temp()
+            # Turn on when room is significantly above trigger
+            should_on = avg_room_temp > trigger + hysteresis
+            if should_on:
+                _LOGGER.debug(
+                    "Turn-on check (COOL): room=%.1f°C > trigger+hyst(%.1f+%.1f=%.1f°C) = %s",
+                    avg_room_temp,
+                    trigger,
+                    hysteresis,
+                    trigger + hysteresis,
+                    should_on,
+                )
+            return should_on
+
+        elif daily_mode == ThermalMode.HEAT:
+            trigger = self.get_heating_trigger_temp()
+            # Turn on when room is significantly below trigger
+            should_on = avg_room_temp < trigger - hysteresis
+            if should_on:
+                _LOGGER.debug(
+                    "Turn-on check (HEAT): room=%.1f°C < trigger-hyst(%.1f-%.1f=%.1f°C) = %s",
+                    avg_room_temp,
+                    trigger,
+                    hysteresis,
+                    trigger - hysteresis,
+                    should_on,
+                )
+            return should_on
+
+        return False
+
+    def _should_turn_off(
+        self,
+        avg_room_temp: float,
+        daily_mode: ThermalMode,
+        now: datetime,
+        temperature_forecast: dict[int, float] | None,
+    ) -> tuple[bool, str]:
+        """Determine if thermal control should deactivate.
+
+        Conservative multi-condition turn-off:
+        1. Time check: Must be after configured off_time
+        2. Temperature check: Room must be beyond trigger with margin
+        3. Trend check (optional): Temperature trend should be favorable
+        4. Forecast check (optional): No upcoming temperature spikes
+
+        Args:
+            avg_room_temp: Current average room temperature.
+            daily_mode: Current daily thermal mode.
+            now: Current datetime.
+            temperature_forecast: Hourly temperature forecast.
+
+        Returns:
+            Tuple of (should_turn_off, reason).
+        """
+        if daily_mode == ThermalMode.OFF:
+            return False, ""
+
+        # Condition 1: Time check
+        off_time = self.get_thermal_off_time()
+        current_time = now.time()
+
+        if current_time < off_time:
+            return False, f"Before off_time ({off_time})"
+
+        margin = self.get_thermal_off_temp_margin()
+
+        if daily_mode == ThermalMode.COOL:
+            trigger = self.get_cooling_trigger_temp()
+            # Room must be below trigger - margin
+            target_temp = trigger - margin
+            temp_ok = avg_room_temp < target_temp
+
+            if not temp_ok:
+                return (
+                    False,
+                    f"Room still warm ({avg_room_temp:.1f}°C >= {target_temp:.1f}°C)",
+                )
+
+            # Condition 4: Forecast check (optional)
+            if self.get_thermal_off_forecast_clear() and temperature_forecast:
+                # Check next 3 hours for temperature spikes
+                current_hour = now.hour
+                for h in range(current_hour, min(current_hour + 3, 24)):
+                    if h in temperature_forecast:
+                        forecast_temp = temperature_forecast[h]
+                        if forecast_temp > trigger:
+                            return (
+                                False,
+                                f"Forecast spike at {h}:00 ({forecast_temp:.1f}°C)",
+                            )
+
+            return (
+                True,
+                f"Room cool enough ({avg_room_temp:.1f}°C < {target_temp:.1f}°C)",
+            )
+
+        elif daily_mode == ThermalMode.HEAT:
+            trigger = self.get_heating_trigger_temp()
+            # Room must be above trigger + margin
+            target_temp = trigger + margin
+            temp_ok = avg_room_temp > target_temp
+
+            if not temp_ok:
+                return (
+                    False,
+                    f"Room still cool ({avg_room_temp:.1f}°C <= {target_temp:.1f}°C)",
+                )
+
+            # Condition 4: Forecast check (optional)
+            if self.get_thermal_off_forecast_clear() and temperature_forecast:
+                current_hour = now.hour
+                for h in range(current_hour, min(current_hour + 3, 24)):
+                    if h in temperature_forecast:
+                        forecast_temp = temperature_forecast[h]
+                        if forecast_temp < trigger:
+                            return (
+                                False,
+                                f"Forecast cold at {h}:00 ({forecast_temp:.1f}°C)",
+                            )
+
+            return (
+                True,
+                f"Room warm enough ({avg_room_temp:.1f}°C > {target_temp:.1f}°C)",
+            )
+
+        return False, "Unknown mode"
+
+    def evaluate_realtime_thermal(
+        self,
+        data: CoordinatorData,
+        now: datetime,
+        demand_window_start: time,
+        demand_window_end: time,
+        excess_solar_kw: float,
+        load_shift_signal: str,
+        temperature_forecast: dict[int, float] | None = None,
+    ) -> tuple[bool, float, str]:
+        """Main real-time thermal evaluation method.
+
+        Determines if and how thermal control should be active, considering:
+        1. Pre-conditioning before demand window (highest priority)
+        2. Solar tapering for excess solar (second priority)
+        3. Real-time on/off control (base layer)
+
+        The layers stack: if pre-conditioning is active, its offset is used.
+        Otherwise, solar taper offset. Otherwise, real-time control.
+
+        Args:
+            data: CoordinatorData with current state.
+            now: Current datetime.
+            demand_window_start: Demand window start time.
+            demand_window_end: Demand window end time.
+            excess_solar_kw: Current excess solar generation.
+            load_shift_signal: Current load shift signal.
+            temperature_forecast: Hourly temperature forecast.
+
+        Returns:
+            Tuple of (is_active, setpoint_offset, reason).
+        """
+        if not self.is_enabled():
+            return False, 0.0, "Thermal management disabled"
+
+        daily_mode = data.daily_thermal_mode
+        if daily_mode not in (ThermalMode.HEAT, ThermalMode.COOL):
+            return False, 0.0, f"Mode not applicable: {daily_mode.value}"
+
+        # Layer 1: Check pre-conditioning (highest priority)
+        precon_active, precon_offset = self.evaluate_preconditioning(
+            data, now, demand_window_start, demand_window_end
+        )
+        if precon_active:
+            self._thermal_activated_today = True
+            if self._thermal_activated_at is None:
+                self._thermal_activated_at = now
+            return True, precon_offset, "Pre-conditioning active"
+
+        # Layer 2: Check solar tapering (second priority)
+        taper_active, taper_offset = self.evaluate_solar_taper(
+            data, excess_solar_kw, load_shift_signal
+        )
+        if taper_active:
+            self._thermal_activated_today = True
+            if self._thermal_activated_at is None:
+                self._thermal_activated_at = now
+            return True, taper_offset, f"Solar taper ({excess_solar_kw:.1f}kW excess)"
+
+        # Layer 3: Real-time control (base layer)
+        avg_room_temp = self.calculate_average_room_temp(data)
+        if avg_room_temp is None:
+            return False, 0.0, "No room temperature reading"
+
+        # Check rate limiting
+        if self._is_rate_limited(now):
+            # Return current state without change
+            if self._thermal_activated_today:
+                return True, 0.0, "Rate limited (keeping current)"
+            return False, 0.0, "Rate limited"
+
+        # Determine if we should turn on or off
+        if not self._thermal_activated_today:
+            # Not yet activated today - check if we should turn on
+            if self._should_turn_on(avg_room_temp, daily_mode):
+                self._thermal_activated_today = True
+                self._thermal_activated_at = now
+                self._last_setpoint_change = now
+
+                # Calculate offset based on mode
+                precondition_offset = self.get_precondition_temp_offset()
+                if daily_mode == ThermalMode.COOL:
+                    return (
+                        True,
+                        -precondition_offset,
+                        f"Activated: room {avg_room_temp:.1f}°C",
+                    )
+                else:
+                    return (
+                        True,
+                        precondition_offset,
+                        f"Activated: room {avg_room_temp:.1f}°C",
+                    )
+            else:
+                return False, 0.0, f"Waiting to activate (room: {avg_room_temp:.1f}°C)"
+        else:
+            # Already activated - check if we should turn off
+            should_off, reason = self._should_turn_off(
+                avg_room_temp, daily_mode, now, temperature_forecast
+            )
+            if should_off:
+                self._last_setpoint_change = now
+                return False, 0.0, f"Deactivated: {reason}"
+            else:
+                # Stay active with normal offset
+                precondition_offset = self.get_precondition_temp_offset()
+                if daily_mode == ThermalMode.COOL:
+                    return True, -precondition_offset, f"Active: {reason}"
+                else:
+                    return True, precondition_offset, f"Active: {reason}"
+
+    def reset_daily_thermal_state(self) -> None:
+        """Reset daily thermal control state at midnight.
+
+        Should be called once per day at midnight to reset the activation
+        tracking for the new day.
+        """
+        _LOGGER.info(
+            "Resetting daily thermal state (was activated: %s)",
+            self._thermal_activated_today,
+        )
+        self._thermal_activated_today = False
+        self._thermal_activated_at = None
+        self._last_setpoint_change = None
+        self._recent_room_temps.clear()
+
+    def get_realtime_thermal_status(self) -> dict[str, Any]:
+        """Get current real-time thermal control status for sensors.
+
+        Returns:
+            Dict with status information for sensor entities.
+        """
+        return {
+            "activated_today": self._thermal_activated_today,
+            "activated_at": self._thermal_activated_at.isoformat()
+            if self._thermal_activated_at
+            else None,
+            "last_setpoint_change": self._last_setpoint_change.isoformat()
+            if self._last_setpoint_change
+            else None,
+            "avg_room_temp": self._last_avg_room_temp,
+            "recent_temps": self._recent_room_temps.copy(),
+            "current_offset": self._current_active_offset,
+        }

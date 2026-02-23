@@ -28,6 +28,7 @@ from ..const import (
     CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
+    CONF_MIN_SETPOINT_CHANGE_INTERVAL,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_PRECONDITION_HOURS_BEFORE_DW,
@@ -50,8 +51,12 @@ from ..const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_THERMAL_HYSTERESIS,
     CONF_THERMAL_MANAGEMENT_ENABLED,
     CONF_THERMAL_MODE_DECISION_TIME,
+    CONF_THERMAL_OFF_FORECAST_CLEAR,
+    CONF_THERMAL_OFF_TEMP_MARGIN,
+    CONF_THERMAL_OFF_TIME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
@@ -69,14 +74,19 @@ from ..const import (
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
+    DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
     DEFAULT_PRECONDITION_TEMP_OFFSET,
     DEFAULT_SOLAR_TAPER_ENABLED,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
+    DEFAULT_THERMAL_HYSTERESIS,
     DEFAULT_THERMAL_MANAGEMENT_ENABLED,
     DEFAULT_THERMAL_MODE_DECISION_TIME,
+    DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
+    DEFAULT_THERMAL_OFF_TEMP_MARGIN,
+    DEFAULT_THERMAL_OFF_TIME,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     THRESHOLD_RANGES,
@@ -666,5 +676,71 @@ def build_options_schema(
                     DEFAULT_THERMAL_MODE_DECISION_TIME,
                 ),
             ): selector.TimeSelector(),
+            # Real-time thermal control settings
+            vol.Optional(
+                CONF_THERMAL_HYSTERESIS,
+                default=values.get(
+                    CONF_THERMAL_HYSTERESIS,
+                    DEFAULT_THERMAL_HYSTERESIS,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS]["min"],
+                    max=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS]["max"],
+                    step=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS]["step"],
+                    unit_of_measurement=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS][
+                        "unit"
+                    ],
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Optional(
+                CONF_THERMAL_OFF_TIME,
+                default=values.get(
+                    CONF_THERMAL_OFF_TIME,
+                    DEFAULT_THERMAL_OFF_TIME,
+                ),
+            ): selector.TimeSelector(),
+            vol.Optional(
+                CONF_THERMAL_OFF_TEMP_MARGIN,
+                default=values.get(
+                    CONF_THERMAL_OFF_TEMP_MARGIN,
+                    DEFAULT_THERMAL_OFF_TEMP_MARGIN,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN]["min"],
+                    max=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN]["max"],
+                    step=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN]["step"],
+                    unit_of_measurement=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN][
+                        "unit"
+                    ],
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Optional(
+                CONF_THERMAL_OFF_FORECAST_CLEAR,
+                default=values.get(
+                    CONF_THERMAL_OFF_FORECAST_CLEAR,
+                    DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
+                ),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_MIN_SETPOINT_CHANGE_INTERVAL,
+                default=values.get(
+                    CONF_MIN_SETPOINT_CHANGE_INTERVAL,
+                    DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=THRESHOLD_RANGES[CONF_MIN_SETPOINT_CHANGE_INTERVAL]["min"],
+                    max=THRESHOLD_RANGES[CONF_MIN_SETPOINT_CHANGE_INTERVAL]["max"],
+                    step=THRESHOLD_RANGES[CONF_MIN_SETPOINT_CHANGE_INTERVAL]["step"],
+                    unit_of_measurement=THRESHOLD_RANGES[
+                        CONF_MIN_SETPOINT_CHANGE_INTERVAL
+                    ]["unit"],
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
         }
     )

@@ -24,6 +24,8 @@ from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
 from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
 from .const import (
     CONF_BATTERY_TARGET,
+    CONF_CLIMATE_CONTROL_ENTITIES,
+    CONF_CLIMATE_ENTITIES,
     CONF_DEMAND_WINDOW_END,
     CONF_NOTIFY_SERVICE,
     CONF_PRICING_FEED_IN_FORECAST,
@@ -285,6 +287,19 @@ class LocalShiftCoordinator:
             self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
             self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
         ]
+
+        # Add climate entities for real-time thermal control (Issue #63 Phase 6)
+        # These trigger re-evaluation when room temperature or setpoints change
+        climate_entities = self.entry.options.get(
+            CONF_CLIMATE_ENTITIES, []
+        ) or self.entry.data.get(CONF_CLIMATE_ENTITIES, [])
+        control_entities = self.entry.options.get(
+            CONF_CLIMATE_CONTROL_ENTITIES, []
+        ) or self.entry.data.get(CONF_CLIMATE_CONTROL_ENTITIES, [])
+
+        # Combine all climate entities (monitored + controlled)
+        all_climate_entities = list(set(climate_entities + control_entities))
+        monitored_entities.extend(all_climate_entities)
 
         # Subscribe to state changes
         self._unsub_state = async_track_state_change_event(
@@ -676,6 +691,13 @@ class LocalShiftCoordinator:
                 "localshift_solar_taper",
             )
 
+            # Evaluate real-time thermal control (Issue #63 Phase 6)
+            # Real-time on/off control based on room temperature
+            self.hass.async_create_task(
+                self._evaluate_realtime_thermal(),
+                "localshift_realtime_thermal",
+            )
+
         # Derived-value computation and listener notification happen inside the
         # evaluate lock so that back-to-back periodic ticks don't concurrently
         # mutate shared data or operate on stale post-transition state.
@@ -700,6 +722,10 @@ class LocalShiftCoordinator:
         # Unlock daily thermal mode for new decision at decision time
         self.data.daily_mode_locked = False
         self.data.daily_mode_determined_at = ""
+
+        # Reset daily thermal control state (real-time control)
+        if self._thermal_manager is not None:
+            self._thermal_manager.reset_daily_thermal_state()
 
         # Save decision outcomes to storage (Issue #170 Phase 1)
         if self.decision_tracker is not None:
@@ -1223,6 +1249,83 @@ class LocalShiftCoordinator:
             await self._thermal_manager.async_apply_climate_control(
                 self.data, setpoint_offset
             )
+
+    async def _evaluate_realtime_thermal(self) -> None:
+        """Evaluate real-time thermal control based on room temperature.
+
+        This is the base layer of thermal control that turns HVAC on/off
+        based on actual room temperature readings. It stacks with:
+        1. Pre-conditioning (highest priority - before demand window)
+        2. Solar tapering (second priority - excess solar consumption)
+        3. Real-time control (this method - base on/off layer)
+
+        Issue #63 Phase 6.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            # Clear state when disabled
+            self.data.realtime_thermal_active = False
+            self.data.realtime_thermal_reason = "Disabled"
+            return
+
+        # Get demand window times
+        from .const import (
+            CONF_DEMAND_WINDOW_START,
+            DEFAULT_DEMAND_WINDOW_START,
+        )
+
+        dw_start = self._parse_time_option(
+            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+        )
+        dw_end = self._parse_time_option(
+            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+        )
+
+        # Get excess solar and load shift signal
+        excess_solar_kw = self.data.current_excess_rate_kw
+        load_shift_signal = self.data.load_shift_signal
+
+        # Get temperature forecast for turn-off decisions
+        temp_forecast = self.data.weather_temperature_forecast
+
+        # Evaluate real-time thermal control
+        is_active, setpoint_offset, reason = (
+            self._thermal_manager.evaluate_realtime_thermal(
+                data=self.data,
+                now=datetime.now(),
+                demand_window_start=dw_start,
+                demand_window_end=dw_end,
+                excess_solar_kw=excess_solar_kw,
+                load_shift_signal=load_shift_signal,
+                temperature_forecast=temp_forecast if temp_forecast else None,
+            )
+        )
+
+        # Update CoordinatorData with state
+        self.data.realtime_thermal_active = is_active
+        self.data.realtime_thermal_reason = reason
+
+        # Update thermal status for sensors
+        status = self._thermal_manager.get_realtime_thermal_status()
+        self.data.avg_room_temp = status.get("avg_room_temp")
+        self.data.thermal_activated_today = status.get("activated_today", False)
+
+        # Apply setpoint adjustment if active (only if not already applied by higher priority layers)
+        # The evaluate_realtime_thermal method handles priority stacking internally
+        if is_active and setpoint_offset != 0.0:
+            _LOGGER.info(
+                "Real-time thermal control: %s, offset=%.1f°C",
+                reason,
+                setpoint_offset,
+            )
+            await self._thermal_manager.async_apply_climate_control(
+                self.data, setpoint_offset
+            )
+        elif not is_active and self.data.realtime_thermal_active:
+            # Just deactivated - restore original setpoints
+            await self._thermal_manager.async_apply_climate_control(self.data, 0.0)
 
     async def _determine_thermal_mode_if_needed(self, is_startup: bool = False) -> None:
         """Determine thermal mode if needed (startup catch-up or normal decision).
