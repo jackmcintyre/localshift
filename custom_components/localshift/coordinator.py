@@ -20,6 +20,7 @@ from homeassistant.helpers.event import (
 
 from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
 from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
+from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
@@ -105,6 +106,13 @@ class LocalShiftCoordinator:
 
         # Parameter optimizer for learning system (Issue #170 Phase 2)
         self.param_optimizer: ParameterOptimizer | None = None
+
+        # Pattern analyzer for learning system (Issue #170 Phase 3)
+        self.pattern_analyzer: PatternAnalyzer | None = None
+
+        # Pattern analysis tracking
+        self._last_pattern_analysis: datetime | None = None
+        self._days_since_pattern_analysis: int = 0
 
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
@@ -218,6 +226,10 @@ class LocalShiftCoordinator:
         # Initialize parameter optimizer for learning system (Issue #170 Phase 2)
         self.param_optimizer = ParameterOptimizer(self.hass, self.entry.entry_id)
         await self.param_optimizer.async_load()
+
+        # Initialize pattern analyzer for learning system (Issue #170 Phase 3)
+        self.pattern_analyzer = PatternAnalyzer(self.hass, self.entry.entry_id)
+        await self.pattern_analyzer.async_load()
 
         # Wire the decision tracker to the state machine
         self._state_machine._decision_tracker = self.decision_tracker
@@ -672,6 +684,27 @@ class LocalShiftCoordinator:
                 "localshift_save_param_optimizer",
             )
 
+        # Run weekly pattern analysis (Issue #170 Phase 3)
+        # Analyze patterns every 7 days to generate bias corrections
+        self._days_since_pattern_analysis += 1
+        if (
+            self.pattern_analyzer is not None
+            and self.decision_tracker is not None
+            and self._days_since_pattern_analysis >= 7
+        ):
+            self._days_since_pattern_analysis = 0
+            self.hass.async_create_task(
+                self._run_pattern_analysis(),
+                "localshift_pattern_analysis",
+            )
+
+        # Save pattern analyzer state (Issue #170 Phase 3)
+        if self.pattern_analyzer is not None:
+            self.hass.async_create_task(
+                self.pattern_analyzer.async_save(),
+                "localshift_save_pattern_analyzer",
+            )
+
         self._notify_listeners()
         _LOGGER.info(
             "Midnight reset: cost accumulators, target flag, and thermal mode unlocked"
@@ -1043,6 +1076,60 @@ class LocalShiftCoordinator:
             await self._thermal_manager.async_apply_climate_control(
                 self.data, setpoint_offset
             )
+
+    async def _run_pattern_analysis(self) -> None:
+        """Run weekly pattern analysis to generate bias corrections.
+
+        Issue #170 Phase 3: Analyzes decision outcomes by dimension buckets
+        to identify systematic biases and generate corrections for the
+        parameter optimizer.
+        """
+        if self.pattern_analyzer is None or self.decision_tracker is None:
+            return
+
+        # Get recent decisions for analysis (last 30 days)
+        decisions = self.decision_tracker.get_recent_decisions(hours=720)
+
+        if len(decisions) < 50:
+            _LOGGER.info(
+                "Pattern analysis skipped: only %d decisions (need 50+)",
+                len(decisions),
+            )
+            return
+
+        # Run analysis (PatternAnalyzer.analyze only takes decisions)
+        report = self.pattern_analyzer.analyze(decisions)
+
+        # Update coordinator data with results
+        self.data.pattern_report_summary = report.get_summary()
+        self.data.active_bias_corrections = [
+            bc.to_dict() for bc in report.biases_detected
+        ]
+
+        # Update learning status based on data quality
+        total_samples = report.data_points_analyzed
+        if total_samples >= 100:
+            self.data.learning_status = "optimizing"
+        elif total_samples >= 50:
+            self.data.learning_status = "tuning"
+        else:
+            self.data.learning_status = "observing"
+
+        # Pass bias corrections to parameter optimizer
+        if self.param_optimizer is not None and report.biases_detected:
+            self.param_optimizer.set_bias_corrections(report.biases_detected)
+            _LOGGER.info(
+                "Pattern analysis complete: %d bias corrections applied",
+                len(report.biases_detected),
+            )
+
+        self._last_pattern_analysis = datetime.now()
+
+        _LOGGER.info(
+            "Pattern analysis complete: %d decisions analyzed, %d biases detected",
+            report.data_points_analyzed,
+            len(report.biases_detected),
+        )
 
     async def _evaluate_solar_taper(self) -> None:
         """Evaluate solar tapering to consume excess solar.

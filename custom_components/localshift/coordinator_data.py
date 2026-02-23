@@ -365,3 +365,11 @@ class CoordinatorData:
 
     # --- Adaptive parameters (Issue #170 Phase 2) ---
     adaptive_params: AdaptiveParameters = field(default_factory=AdaptiveParameters)
+
+    # --- Pattern analysis (Issue #170 Phase 3) ---
+    pattern_report_summary: dict[str, Any] = field(
+        default_factory=dict
+    )  # Latest pattern analysis summary
+    active_bias_corrections: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # Currently active corrections

@@ -15,6 +15,12 @@ from .grid_charge_decision import GridChargeDecisionEngine
 from .history_fetcher import HistoryFetcher
 from .mode_decision import ModeDecisionEngine
 from .parameter_optimizer import ParameterOptimizer
+from .pattern_analyzer import (
+    BiasCorrection,
+    PatternAnalyzer,
+    PatternBucket,
+    PatternReport,
+)
 from .price_calculator import (
     PriceCalculator,
     get_price_for_slot,
@@ -41,10 +47,14 @@ from .utils import (
 from .weather_diagnostics import WeatherDiagnosticsEngine
 
 __all__ = [
+    "BiasCorrection",
     "DecisionOutcomeTracker",
     "DecisionRecord",
     "ForecastChangeTracker",
     "ParameterOptimizer",
+    "PatternAnalyzer",
+    "PatternBucket",
+    "PatternReport",
     "ExcessSolarEngine",
     "ExcessSolarSignalsEngine",
     "FitAnalyzer",
