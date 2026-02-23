@@ -59,6 +59,8 @@ class GridChargeDecisionEngine:
         This prevents evening slots from being gated by urgency pricing calculated
         in the morning for today's target.
 
+        Issue #170 Phase 2: Applies cheap_price_bias adaptive parameter.
+
         Args:
             slot_start: Start time of the slot
             general_forecast: Buy price forecast
@@ -71,6 +73,13 @@ class GridChargeDecisionEngine:
         Returns:
             Local effective cheap price for this slot
         """
+        # Issue #170 Phase 2: Apply cheap_price_bias adaptive parameter
+        # Positive bias = more willing to grid charge (higher threshold)
+        # Negative bias = more conservative (lower threshold)
+        if self._adaptive_params is not None:
+            bias_cents = self._adaptive_params.get("cheap_price_bias", 0.0)
+            # Convert c/kWh to $/kWh and apply to base price
+            base_cheap_price = base_cheap_price + (bias_cents / 100.0)
         # Get today's DW start datetime
         now_local = dt_util.now()
         today_dw_start = now_local.replace(
@@ -166,6 +175,11 @@ class GridChargeDecisionEngine:
         6. HYSTERESIS: Once grid charging starts, require stronger evidence to stop
            (solar must reach target + margin, not just target)
 
+        Issue #170 Phase 2: Applies adaptive parameters:
+        - solar_confidence_factor: Scales solar forecasts (pessimistic/optimistic)
+        - overnight_drain_safety_margin: Extra buffer for overnight simulations
+        - grid_charge_soc_headroom: Adjusts target SOC
+
         Args:
             slot_start: Start time of the 15-minute slot
             solar_kwh: Solar forecast for this slot
@@ -204,6 +218,27 @@ class GridChargeDecisionEngine:
 
         if gap_to_target <= 0:
             return False, False
+
+        # Issue #170 Phase 2: Apply adaptive parameters
+        # solar_confidence_factor: Scale solar forecast (0.5-1.5)
+        # <1.0 = pessimistic (charge more), >1.0 = optimistic (trust solar, charge less)
+        solar_confidence_factor = 1.0
+        if self._adaptive_params is not None:
+            solar_confidence_factor = self._adaptive_params.get(
+                "solar_confidence_factor", 1.0
+            )
+
+        # grid_charge_soc_headroom: Add headroom to target SOC
+        # Positive = charge slightly above target to account for forecast errors
+        soc_headroom = 0.0
+        if self._adaptive_params is not None:
+            soc_headroom = self._adaptive_params.get("grid_charge_soc_headroom", 0.0)
+
+        # Apply headroom to effective target
+        effective_target_pct = target_pct + soc_headroom
+
+        # Apply solar confidence factor to the solar forecast
+        adjusted_solar_kwh = solar_kwh * solar_confidence_factor
 
         # SPOT PRICE: Only use for current slot (real-time decision)
         # For future slots, always use forecast price
@@ -279,11 +314,20 @@ class GridChargeDecisionEngine:
             # Standard behavior: simulate to next DW start
             sim_end = self._next_demand_window_start_dt(slot_start, dw_start_time)
 
+        # Issue #170 Phase 2: Get overnight_drain_safety_margin
+        # Positive = keep more buffer (be more conservative about overnight drain)
+        overnight_drain_margin = 0.0
+        if self._adaptive_params is not None:
+            overnight_drain_margin = self._adaptive_params.get(
+                "overnight_drain_safety_margin", 0.0
+            )
+
         # OVERNIGHT EFFICIENCY CHECK:
         # For overnight slots (no solar), we need to check differently.
         # Grid charging overnight at $0.15/kWh when tomorrow's solar is "free" is
         # economically wrong. Only grid charge overnight if solar truly can't reach target.
-        is_overnight_slot = solar_kwh < 0.01  # No meaningful solar
+        # Use adjusted solar to determine if this is an overnight slot
+        is_overnight_slot = adjusted_solar_kwh < 0.01  # No meaningful solar
 
         if is_overnight_slot:
             # Find when solar production starts
@@ -302,12 +346,17 @@ class GridChargeDecisionEngine:
                     min_soc_pct=min_soc_pct,
                 )
 
+                # Issue #170 Phase 2: Apply overnight drain safety margin
+                # Reduce the simulated SOC by the margin to be more conservative
+                adjusted_soc_at_solar = soc_at_solar_start - overnight_drain_margin
+
                 # Now simulate from solar start to next DW
+                # Use effective_target_pct for simulation (includes headroom)
                 soc_at_end, max_soc, can_reach_with_solar_only = (
                     self._simulate_future_soc_with_solar_only(
-                        actual_current_soc=soc_at_solar_start,
+                        actual_current_soc=max(min_soc_pct, adjusted_soc_at_solar),
                         start_slot=solar_start,  # Start from solar, not from now
-                        target_pct=target_pct,
+                        target_pct=effective_target_pct,
                         all_solcast=all_solcast,
                         historical_avg_kw=historical_avg_kw,
                         current_load_kw=current_load_kw,
@@ -319,12 +368,13 @@ class GridChargeDecisionEngine:
                 )
 
                 _LOGGER.debug(
-                    "OVERNIGHT_CHECK: %02d:%02d SOC %.1f%% -> %.1f%% at solar start %s, max_soc=%.1f%%",
+                    "OVERNIGHT_CHECK: %02d:%02d SOC %.1f%% -> %.1f%% at solar start %s (margin -%.1f%%), max_soc=%.1f%%",
                     slot_start.hour,
                     slot_start.minute,
                     predicted_soc,
-                    soc_at_solar_start,
+                    adjusted_soc_at_solar,
                     solar_start.strftime("%H:%M"),
+                    overnight_drain_margin,
                     max_soc,
                 )
 
@@ -333,7 +383,7 @@ class GridChargeDecisionEngine:
                     _LOGGER.debug(
                         "Grid charge SKIPPED overnight: solar from %s reaches target (SOC at dawn: %.1f%% -> max %.1f%%)",
                         solar_start.strftime("%H:%M"),
-                        soc_at_solar_start,
+                        adjusted_soc_at_solar,
                         max_soc,
                     )
                     return False, False
@@ -353,12 +403,13 @@ class GridChargeDecisionEngine:
                     return True, True
                 return False, False
         else:
-            # Daylight slot - use original simulation logic
+            # Daylight slot - use simulation with adaptive parameters
+            # Use effective_target_pct for simulation (includes headroom)
             soc_at_end, max_soc, can_reach_with_solar_only = (
                 self._simulate_future_soc_with_solar_only(
                     actual_current_soc=predicted_soc,
                     start_slot=sim_start,
-                    target_pct=target_pct,
+                    target_pct=effective_target_pct,
                     all_solcast=all_solcast,
                     historical_avg_kw=historical_avg_kw,
                     current_load_kw=current_load_kw,
@@ -372,9 +423,10 @@ class GridChargeDecisionEngine:
             # Solar forecast says we'll reach target: NO grid charging
             if can_reach_with_solar_only:
                 _LOGGER.debug(
-                    "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%)",
+                    "Grid charge SKIPPED: solar forecast reaches target before DW (max_soc=%.1f%% >= %d%%, headroom=%.1f%%)",
                     max_soc,
-                    target_pct,
+                    effective_target_pct,
+                    soc_headroom,
                 )
                 return False, False
 

@@ -162,17 +162,32 @@ class ProactiveExportEngine:
             # Future slot or spot unavailable - use forecast-based logic
             use_price = slot_fit_price
 
+        # Issue #170 Phase 2: Apply export_threshold_adjustment
+        # Positive = more conservative (require higher FIT price to export)
+        # Negative = more willing to export (accept lower FIT price)
+        export_threshold_adj = 0.0
+        if self._adaptive_params is not None:
+            export_threshold_adj = self._adaptive_params.get(
+                "export_threshold_adjustment", 0.0
+            )
+        # Convert c/kWh to $/kWh and apply to effective cheap price
+        adjusted_cheap_price_floor = effective_cheap_price + (
+            export_threshold_adj / 100.0
+        )
+
         # PROFITABILITY FLOOR: Never export below the effective cheap price.
         # This prevents selling grid-charged energy at a loss. If the sell price is
         # below what we would pay to charge (effective_cheap_price), export is
         # unprofitable regardless of other conditions.
-        if use_price <= effective_cheap_price:
+        if use_price <= adjusted_cheap_price_floor:
             _LOGGER.debug(
-                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - sell $%.3f <= cheap_price floor $%.3f (unprofitable)",
+                "PROACTIVE_EXPORT: %02d:%02d BLOCKED - sell $%.3f <= adjusted floor $%.3f (base=$%.3f + adj=%.2fc, unprofitable)",
                 slot_hour,
                 slot_start.minute,
                 use_price,
+                adjusted_cheap_price_floor,
                 effective_cheap_price,
+                export_threshold_adj,
             )
             return False, 0.0
 
