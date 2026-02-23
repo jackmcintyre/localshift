@@ -429,6 +429,58 @@ views:
               ⚪ **Monitoring** — {{ mode }}
               {% endif %}
 
+      # Learning System
+      - type: grid
+        cards:
+          - type: heading
+            heading: Learning System
+            heading_style: title
+
+          - type: tile
+            entity: sensor.localshift_learning_status
+            name: Status
+
+          - type: gauge
+            entity: sensor.localshift_decision_quality
+            name: Decision Quality
+            min: 0
+            max: 100
+            severity:
+              green: 70
+              yellow: 50
+              red: 30
+            needle: true
+
+          - type: markdown
+            content: >
+              {%- set status = states('sensor.localshift_learning_status') %}
+              {%- set quality = states('sensor.localshift_decision_quality') | float(0) %}
+              {%- set decisions = state_attr('sensor.localshift_learning_status', 'total_decisions_today') | int(0) %}
+              {%- set trend = state_attr('sensor.localshift_learning_status', 'cost_trend') %}
+              {%- set score_7d = state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | float(0) * 100 %}
+              
+              **{{ decisions }}** decisions today · {{ score_7d | round(0) }}% 7-day avg
+              
+              {% if trend == 'improving' %}
+              📈 **{{ trend }}** — learning from data
+              {% elif trend == 'degrading' %}
+              📉 **{{ trend }}** — review settings
+              {% else %}
+              ➡️ **{{ trend }}**
+              {% endif %}
+
+          - type: button
+            name: Reset Learning
+            icon: mdi:brain-off
+            tap_action:
+              action: call-service
+              service: button.press
+              target:
+                entity_id: button.localshift_reset_learning
+            icon_height: 40px
+            hold_action:
+              action: none
+
 
   # =============================================================================
   # VIEW 2: CONTROLS (Adjust Settings Occasionally)
@@ -514,6 +566,16 @@ views:
               service: button.press
               target:
                 entity_id: button.localshift_update_forecast
+            icon_height: 40px
+
+          - type: button
+            name: Reset Learning
+            icon: mdi:brain-off
+            tap_action:
+              action: call-service
+              service: button.press
+              target:
+                entity_id: button.localshift_reset_learning
             icon_height: 40px
 
       # Live System (Tesla Controls)
@@ -915,6 +977,32 @@ views:
               Baseline Load Hours: {{ state_attr('sensor.localshift_daily_thermal_mode', 'baseline_load_hours') | default(0) }}
               
               HVAC Load Hours: {{ state_attr('sensor.localshift_daily_thermal_mode', 'hvac_load_hours') | default(0) }}
+              
+              === LEARNING SYSTEM ===
+              
+              Learning Status: {{ states('sensor.localshift_learning_status') }}
+              
+              Decision Quality: {{ states('sensor.localshift_decision_quality') }}%
+              
+              Decisions Today: {{ state_attr('sensor.localshift_learning_status', 'total_decisions_today') | default(0) }}
+              
+              Avg Score Today: {{ state_attr('sensor.localshift_learning_status', 'avg_decision_score_today') | default(0) }}
+              
+              Avg Score 7d: {{ state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | default(0) }}
+              
+              Cost Trend: {{ state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') }}
+              
+              Grid Charge Efficiency: {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
+              
+              Export Loss Ratio: {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
+              
+              Unnecessary Grid Charge: {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
+              
+              Mode Durations Today: {{ state_attr('sensor.localshift_learning_status', 'mode_durations_today') | default({}) }}
+              
+              Mode Cost Attribution: {{ state_attr('sensor.localshift_learning_status', 'mode_cost_attribution') | default({}) }}
+              
+              Decision History Count: {{ states('sensor.localshift_learning_decision_history') }}
               
               === END OF DEBUG SUMMARY ===
               ```
