@@ -24,6 +24,7 @@ from .const import (
     SWITCH_DEFAULTS,
     SWITCH_DEMAND_WINDOW_BLOCK,
     SWITCH_DRY_RUN,
+    SWITCH_ENABLE_LEARNING,
     SWITCH_ICONS,
     SWITCH_NAMES,
     SWITCH_NOTIFY_ALERTS,
@@ -56,6 +57,8 @@ SWITCH_KEYS = [
     # Thermal management switches (Issue #137)
     SWITCH_THERMAL_MANAGEMENT_ENABLED,
     SWITCH_SOLAR_TAPER_ENABLED,
+    # Learning system switch (Issue #170 Phase 4)
+    SWITCH_ENABLE_LEARNING,
 ]
 
 
@@ -128,6 +131,12 @@ class LocalShiftSwitch(SwitchEntity):
 
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info("LocalShift automation enabled")
+
+        # Handle Enable Learning switch (Issue #170 Phase 4)
+        if self._key == SWITCH_ENABLE_LEARNING:
+            if self.coordinator.optimization_controller is not None:
+                self.coordinator.optimization_controller.set_learning_enabled(True)
+                _LOGGER.info("Learning system active optimization enabled")
 
         # Re-evaluate derived values and trigger state machine
         await self.coordinator.async_recompute_and_evaluate()
