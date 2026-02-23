@@ -1,6 +1,11 @@
 """Computation engine library modules."""
 
 from .change_tracker import ForecastChangeTracker
+from .decision_outcome_tracker import (
+    DecisionOutcomeTracker,
+    DecisionRecord,
+    PerformanceMetrics,
+)
 from .excess_solar import ExcessSolarEngine
 from .excess_solar_signals import ExcessSolarSignalsEngine
 from .fit_analyzer import FitAnalyzer
@@ -32,6 +37,8 @@ from .utils import (
 from .weather_diagnostics import WeatherDiagnosticsEngine
 
 __all__ = [
+    "DecisionOutcomeTracker",
+    "DecisionRecord",
     "ForecastChangeTracker",
     "ExcessSolarEngine",
     "ExcessSolarSignalsEngine",
@@ -41,6 +48,7 @@ __all__ = [
     "GridChargeDecisionEngine",
     "HistoryFetcher",
     "ModeDecisionEngine",
+    "PerformanceMetrics",
     "PriceCalculator",
     "ProactiveExportEngine",
     "SocSimulator",

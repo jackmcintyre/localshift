@@ -10,6 +10,67 @@ from .const import BatteryMode, ThermalMode
 
 
 @dataclass
+class PerformanceMetrics:
+    """Aggregated performance metrics for the learning system.
+
+    Issue #170 Phase 1: Tracks decision outcomes and efficiency metrics.
+    """
+
+    # Daily metrics
+    total_decisions_today: int = 0
+    avg_decision_score_today: float = 0.0
+    grid_charge_efficiency: float = 0.0  # kWh used vs kWh needed
+    export_loss_ratio: float = (
+        0.0  # exported kWh that was grid-purchased / total grid purchased
+    )
+    unnecessary_grid_charge_kwh: float = 0.0
+
+    # Rolling metrics (7-day)
+    avg_decision_score_7d: float = 0.0
+    avg_daily_cost_7d: float = 0.0
+    cost_trend: str = "stable"  # "improving", "stable", "degrading"
+
+    # Per-mode metrics
+    mode_durations_today: dict[str, float] = field(
+        default_factory=dict
+    )  # mode -> minutes
+    mode_cost_attribution: dict[str, float] = field(
+        default_factory=dict
+    )  # mode -> $ cost/saving
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "total_decisions_today": self.total_decisions_today,
+            "avg_decision_score_today": self.avg_decision_score_today,
+            "grid_charge_efficiency": self.grid_charge_efficiency,
+            "export_loss_ratio": self.export_loss_ratio,
+            "unnecessary_grid_charge_kwh": self.unnecessary_grid_charge_kwh,
+            "avg_decision_score_7d": self.avg_decision_score_7d,
+            "avg_daily_cost_7d": self.avg_daily_cost_7d,
+            "cost_trend": self.cost_trend,
+            "mode_durations_today": self.mode_durations_today,
+            "mode_cost_attribution": self.mode_cost_attribution,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PerformanceMetrics:
+        """Create from dictionary (deserialization)."""
+        return cls(
+            total_decisions_today=data.get("total_decisions_today", 0),
+            avg_decision_score_today=data.get("avg_decision_score_today", 0.0),
+            grid_charge_efficiency=data.get("grid_charge_efficiency", 0.0),
+            export_loss_ratio=data.get("export_loss_ratio", 0.0),
+            unnecessary_grid_charge_kwh=data.get("unnecessary_grid_charge_kwh", 0.0),
+            avg_decision_score_7d=data.get("avg_decision_score_7d", 0.0),
+            avg_daily_cost_7d=data.get("avg_daily_cost_7d", 0.0),
+            cost_trend=data.get("cost_trend", "stable"),
+            mode_durations_today=data.get("mode_durations_today", {}),
+            mode_cost_attribution=data.get("mode_cost_attribution", {}),
+        )
+
+
+@dataclass
 class ChargingDecision:
     """Represents a charging decision for a specific time slot.
 
@@ -247,3 +308,11 @@ class CoordinatorData:
     preconditioning_active: bool = False
     solar_taper_active: bool = False
     taper_setpoint_offset: float = 0.0  # Degrees to adjust setpoint
+
+    # --- Learning system (Issue #170 Phase 1) ---
+    performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
+    recent_decision_log: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # last 24h of decisions for sensor
+    learning_status: str = "observing"  # "observing", "tuning", "optimizing"
+    battery_target_soc: float = 80.0  # Configured battery target for decision scoring

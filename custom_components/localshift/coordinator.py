@@ -18,7 +18,9 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 
+from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
 from .const import (
+    CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
     CONF_NOTIFY_SERVICE,
     CONF_PRICING_FEED_IN_FORECAST,
@@ -36,6 +38,7 @@ from .const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_THERMAL_MODE_DECISION_TIME,
+    DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_THERMAL_MODE_DECISION_TIME,
     SWITCH_DEFAULTS,
@@ -95,6 +98,9 @@ class LocalShiftCoordinator:
         self._state_machine: StateMachine | None = None
         self._entity_validator: EntityValidator | None = None
         self._thermal_manager: ThermalManager | None = None
+
+        # Decision outcome tracker for learning system (Issue #170 Phase 1)
+        self.decision_tracker: DecisionOutcomeTracker | None = None
 
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
@@ -184,6 +190,7 @@ class LocalShiftCoordinator:
             self.get_switch_state,
             self.get_option,
             self._entity_validator,
+            decision_tracker=None,  # Will be set after tracker is initialized
         )
 
         # Initialize ThermalManager for HVAC-aware load correlation (Issue #137)
@@ -199,6 +206,18 @@ class LocalShiftCoordinator:
 
         # Load persisted HVAC power data from storage
         await self._thermal_manager.async_initialize()
+
+        # Initialize decision outcome tracker for learning system (Issue #170 Phase 1)
+        self.decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
+        await self.decision_tracker.async_load()
+
+        # Wire the decision tracker to the state machine
+        self._state_machine._decision_tracker = self.decision_tracker
+
+        # Set battery target SOC in coordinator data for decision scoring
+        self.data.battery_target_soc = float(
+            self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
 
         # Collect all external entity IDs to watch
         # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
@@ -534,6 +553,14 @@ class LocalShiftCoordinator:
         # Cost accumulation uses the raw state we just read (sync, no lock needed)
         self._accumulate_costs()
 
+        # Backfill decision outcomes and update performance metrics (Issue #170 Phase 1)
+        if self.decision_tracker is not None:
+            self.decision_tracker.backfill_outcomes(self.data)
+            self.data.performance_metrics = self.decision_tracker.get_daily_summary()
+            self.data.recent_decision_log = self.decision_tracker.get_decision_log(
+                limit=20
+            )
+
         # Learn from current temperature/load for weather correlation
         # This runs asynchronously and won't block the periodic tick
         if self._computation_engine is not None:
@@ -609,6 +636,13 @@ class LocalShiftCoordinator:
         # Unlock daily thermal mode for new decision at decision time
         self.data.daily_mode_locked = False
         self.data.daily_mode_determined_at = ""
+
+        # Save decision outcomes to storage (Issue #170 Phase 1)
+        if self.decision_tracker is not None:
+            self.hass.async_create_task(
+                self.decision_tracker.async_save(),
+                "localshift_save_decision_outcomes",
+            )
 
         self._notify_listeners()
         _LOGGER.info(
