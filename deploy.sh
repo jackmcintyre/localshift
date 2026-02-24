@@ -128,14 +128,61 @@ elif [ -z "$HA_TOKEN" ]; then
 else
     log_info "Attempting to reload integration via API..."
     
-    # Get the config entry ID for localshift
-    ENTRY_ID=$(curl -s -X GET \
-        -H "Authorization: Bearer $HA_TOKEN" \
-        -H "Content-Type: application/json" \
-        "$HA_URL/api/config/config_entries/entry" 2>/dev/null | \
-        grep -o '"entry_id":"[^"]*","domain":"localshift"' | \
-        head -1 | \
-        sed 's/"entry_id":"\([^"]*\)".*/\1/' || true)
+    # Get the config entry ID for localshift using jq for reliable JSON parsing
+    if command -v jq &> /dev/null; then
+        # Fetch the API response and validate it's valid JSON before parsing
+        API_RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Bearer $HA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "${HA_URL%/}/api/config/config_entries/entry" 2>/dev/null || true)
+        
+        # Check if we got a valid JSON response (starts with [ or {)
+        if echo "$API_RESPONSE" | grep -q '^\[' 2>/dev/null; then
+            ENTRY_ID=$(echo "$API_RESPONSE" | \
+                jq -r '.[] | select(.domain == "localshift") | .entry_id' 2>/dev/null | head -1 || true)
+        elif echo "$API_RESPONSE" | grep -q '^\{' 2>/dev/null; then
+            # Response is a JSON object (might be an error or single entry)
+            ENTRY_ID=$(echo "$API_RESPONSE" | \
+                jq -r 'select(.domain == "localshift") | .entry_id' 2>/dev/null || true)
+        else
+            # Not valid JSON - could be 404, auth error, or proxy issue
+            # Try to extract HTTP status code for better error message
+            if echo "$API_RESPONSE" | grep -qi "404\|not found"; then
+                log_warning "API endpoint not found (404) - check HA_URL is correct and API is accessible"
+            elif echo "$API_RESPONSE" | grep -qi "401\|unauthorized\|forbidden"; then
+                log_warning "API authentication failed - check HA_LONG_LIVED_TOKEN is valid"
+            else
+                log_warning "API returned non-JSON response: ${API_RESPONSE:0:100}..."
+            fi
+            log_info "Tip: Ensure HA_URL points to Home Assistant (e.g., http://homeassistant:8123)"
+            ENTRY_ID=""
+        fi
+    else
+        # Fallback to grep/sed if jq not available (less reliable)
+        log_warning "jq not found - using fallback JSON parsing (may be less reliable)"
+        API_RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Bearer $HA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "${HA_URL%/}/api/config/config_entries/entry" 2>/dev/null || true)
+        
+        # Only try to parse if it looks like JSON
+        if echo "$API_RESPONSE" | grep -q '"entry_id"' 2>/dev/null; then
+            ENTRY_ID=$(echo "$API_RESPONSE" | \
+                grep -o '"entry_id"[[:space:]]*:[[:space:]]*"[^"]*"' | \
+                head -1 | \
+                sed 's/.*"entry_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+        else
+            if echo "$API_RESPONSE" | grep -qi "404\|not found"; then
+                log_warning "API endpoint not found (404) - check HA_URL is correct and API is accessible"
+            elif echo "$API_RESPONSE" | grep -qi "401\|unauthorized\|forbidden"; then
+                log_warning "API authentication failed - check HA_LONG_LIVED_TOKEN is valid"
+            else
+                log_warning "API returned non-JSON response: ${API_RESPONSE:0:100}..."
+            fi
+            log_info "Tip: Ensure HA_URL points to Home Assistant (e.g., http://homeassistant:8123)"
+            ENTRY_ID=""
+        fi
+    fi
     
     if [ -n "$ENTRY_ID" ]; then
         # Reload the config entry
