@@ -969,11 +969,31 @@ views:
               
               Controlled Entities: {{ state_attr('sensor.localshift_daily_thermal_mode', 'controlled_entities') }}
               
+              === CLIMATE ENTITY DIAGNOSTICS (Issue #193) ===
+              
+              Climate Read Success: {{ state_attr('sensor.localshift_realtime_thermal_status', 'climate_read_success') }}
+              
+              Climate Entities Configured: {{ state_attr('sensor.localshift_realtime_thermal_status', 'climate_entities_configured') }}
+              
+              Climate Entities Controlled: {{ state_attr('sensor.localshift_realtime_thermal_status', 'climate_entities_controlled') }}
+              
+              Climate Missing Entities: {{ state_attr('sensor.localshift_realtime_thermal_status', 'climate_missing_entities') }}
+              
+              Climate Unavailable Entities: {{ state_attr('sensor.localshift_realtime_thermal_status', 'climate_unavailable_entities') }}
+              
+              Average Room Temp: {{ state_attr('sensor.localshift_realtime_thermal_status', 'avg_room_temp') }}°C
+              
+              Realtime Thermal Active: {{ states('sensor.localshift_realtime_thermal_status') }}
+              
+              Realtime Thermal Reason: {{ state_attr('sensor.localshift_realtime_thermal_status', 'reason') }}
+              
+              === THERMAL CONTROL STATE ===
+              
               Preconditioning Active: {{ states('binary_sensor.localshift_preconditioning_active') }}
               
               Solar Taper Active: {{ states('binary_sensor.localshift_solar_taper_active') }}
               
-              Taper Setpoint Offset: {{ state_attr('sensor.localshift_daily_thermal_mode', 'taper_setpoint_offset') | default(0) }}°C
+              Taper Setpoint Offset: {{ state_attr('sensor.localshift_realtime_thermal_status', 'taper_setpoint_offset') | default(0) }}°C
               
               Solar Taper Enabled: {{ state_attr('binary_sensor.localshift_thermal_management_enabled', 'solar_taper_enabled') }}
               
