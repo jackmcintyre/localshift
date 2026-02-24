@@ -159,7 +159,8 @@ views:
               {% endif %}
 
       # Today's Cost (Hero Metric)
-      - type: horizontal-stack
+      - type: grid
+        columns: 2
         cards:
           - type: markdown
             content: >
