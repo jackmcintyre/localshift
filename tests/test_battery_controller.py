@@ -1,7 +1,6 @@
 """Unit tests for BatteryController."""
 
-from unittest.mock import AsyncMock as AsyncMockClass
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,13 +9,6 @@ from custom_components.localshift.const import (
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
-
-
-class AsyncMock(MagicMock):
-    """Mock that can be awaited."""
-
-    async def __call__(self, *args, **kwargs):
-        return super().__call__(*args, **kwargs)
 
 
 @pytest.fixture
@@ -669,7 +661,7 @@ class TestValidateTransition:
         # Use mock_battery_sleep to make this instant
         with patch(
             "custom_components.localshift.battery_controller.asyncio.sleep",
-            new_callable=AsyncMockClass,
+            new_callable=AsyncMock,
         ):
             result = await battery_controller.validate_transition(
                 expected_operation_mode="autonomous",
