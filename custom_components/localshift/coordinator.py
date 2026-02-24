@@ -679,6 +679,9 @@ class LocalShiftCoordinator:
                 self._learn_hvac_power(),
                 "localshift_hvac_learning",
             )
+            # Sample HVAC power during operation for temperature correlation (Issue #171)
+            # This collects power samples at different outdoor temperatures
+            self._sample_hvac_power_temperature()
             # Calculate and pass baseline load to computation engine
             # This completes the Issue #137 feedback loop fix
             baseline = self._calculate_baseline_load()
@@ -1071,6 +1074,60 @@ class LocalShiftCoordinator:
             "HVAC learning: total load = %.2f kW, learned entities = %d",
             current_load_kw,
             len(self.data.learned_hvac_power),
+        )
+
+    def _sample_hvac_power_temperature(self) -> None:
+        """Sample HVAC power during operation for temperature correlation.
+
+        This is called periodically (every minute) to collect power samples
+        at different outdoor temperatures. This enables learning how HVAC
+        power consumption varies with temperature (Issue #171).
+
+        The sampling respects the configured sample_interval to avoid
+        excessive data collection.
+        """
+        if self._thermal_manager is None:
+            return
+
+        # Check if we should sample based on configured interval
+        sample_interval = self._thermal_manager.get_sample_interval()
+        # Simple approach: sample every Nth tick (N = sample_interval)
+        # This is approximate since ticks are 1 minute apart
+        from datetime import datetime
+
+        current_minute = datetime.now().minute
+        if sample_interval > 1 and current_minute % sample_interval != 0:
+            return
+
+        # Get outdoor temperature from configured entity
+        outdoor_temp = self._thermal_manager.get_outdoor_temperature()
+
+        if outdoor_temp is None:
+            _LOGGER.debug("No outdoor temperature available for HVAC sampling")
+            return
+
+        # Get current load power
+        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        load_state = self.hass.states.get(load_entity_id)
+        current_load_kw = 0.0
+        if load_state is not None:
+            try:
+                current_load_kw = float(load_state.state) / 1000.0  # W to kW
+            except (ValueError, TypeError):
+                pass
+
+        # Sample HVAC power during operation (synchronous method)
+        self._thermal_manager.sample_hvac_power_during_operation(
+            data=self.data,
+            current_load_kw=current_load_kw,
+            outdoor_temp=outdoor_temp,
+            timestamp=datetime.now(),
+        )
+
+        _LOGGER.debug(
+            "HVAC temperature sampling: outdoor_temp=%.1f°C, load=%.2f kW",
+            outdoor_temp,
+            current_load_kw,
         )
 
     def _calculate_baseline_load(self) -> dict[int, float]:

@@ -173,6 +173,11 @@ CONF_THERMAL_OFF_TEMP_MARGIN = "thermal_off_temp_margin"
 CONF_THERMAL_OFF_FORECAST_CLEAR = "thermal_off_forecast_clear"
 CONF_MIN_SETPOINT_CHANGE_INTERVAL = "min_setpoint_change_interval"
 
+# Temperature-correlated HVAC power learning (Issue #171)
+CONF_OUTDOOR_TEMP_ENTITY = "outdoor_temp_entity"
+CONF_HVAC_SAMPLE_INTERVAL = "hvac_sample_interval"  # minutes
+CONF_TEMP_MODEL_MIN_SAMPLES = "temp_model_min_samples"
+
 # Defaults for thermal manager
 DEFAULT_THERMAL_MANAGEMENT_ENABLED = False
 DEFAULT_SOLAR_TAPER_ENABLED = True
@@ -190,6 +195,10 @@ DEFAULT_THERMAL_OFF_TIME = "18:00"  # Earliest time to turn off AC
 DEFAULT_THERMAL_OFF_TEMP_MARGIN = 3.0  # °C - room must be threshold - margin
 DEFAULT_THERMAL_OFF_FORECAST_CLEAR = True  # Require clear forecast to turn off
 DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL = 10  # minutes between setpoint changes
+
+# Temperature-correlated HVAC power learning defaults (Issue #171)
+DEFAULT_HVAC_SAMPLE_INTERVAL = 5  # Sample every 5 minutes during operation
+DEFAULT_TEMP_MODEL_MIN_SAMPLES = 20  # Minimum samples before using temp model
 
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Default Entity IDs
