@@ -718,6 +718,97 @@ cp -r custom_components/localshift ~/.config/homeassistant/custom_components/
 # Restart HA to load changes
 ```
 
+## Automated Deployment
+
+When running Cline and Home Assistant on the same host (in different Docker containers), you can automate deployment when `main` is updated.
+
+### Prerequisites
+
+1. **Mount HA config into Cline container:**
+
+   Add the HA config directory as a volume mount to your Cline/VSCode container:
+
+   ```yaml
+   # In docker-compose.yml for Cline container
+   services:
+     cline:
+       volumes:
+         - /mnt/user/appdata/Home-Assistant-Container:/homeassistant
+   ```
+
+   Or with Docker run:
+   ```bash
+   docker run ... -v /mnt/user/appdata/Home-Assistant-Container:/homeassistant ...
+   ```
+
+2. **Create a Home Assistant Long-Lived Access Token:**
+
+   - Go to HA Profile → Security → Long-Lived Access Tokens
+   - Create a token named "Cline Deploy"
+   - Set as environment variable: `export HA_LONG_LIVED_TOKEN="your_token_here"`
+
+### Deployment Script
+
+The `deploy.sh` script handles deployment:
+
+```bash
+# Basic deployment (pulls latest main, copies files, reloads integration)
+./deploy.sh
+
+# Dry run to see what would happen
+./deploy.sh --dry-run
+
+# Deploy without reloading (if you want to restart HA manually)
+./deploy.sh --no-reload
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HA_CONFIG` | `/homeassistant` | Path to HA config directory |
+| `HA_URL` | `http://homeassistant:8123` | HA API URL |
+| `HA_LONG_LIVED_TOKEN` | (none) | Token for API reload |
+
+### Automatic Deployment on Pull
+
+To automatically deploy when pulling changes, create a git post-merge hook:
+
+```bash
+# Create .git/hooks/post-merge
+#!/bin/bash
+./deploy.sh
+
+# Make executable
+chmod +x .git/hooks/post-merge
+```
+
+Now whenever you `git pull` on main, the integration will automatically deploy.
+
+### What Gets Reloaded vs Requires Restart
+
+| Change Type | Reload Works? | Restart Needed? |
+|-------------|---------------|-----------------|
+| Python code changes | ✅ Yes | No |
+| `manifest.json` changes | ⚠️ Partial | Recommended |
+| New dependencies | ❌ No | Yes |
+| Config flow changes | ⚠️ Partial | Sometimes |
+
+### Manual Deployment
+
+If you prefer manual control:
+
+```bash
+# 1. Pull latest changes
+git pull origin main
+
+# 2. Copy to HA config
+cp -r custom_components/localshift /homeassistant/custom_components/
+
+# 3. Reload integration via HA UI
+# Settings → Devices & Services → LocalShift → ⋮ → Reload
+```
+
 ## References
 
 - `docs/ARCHITECTURE.md` - System architecture diagrams
