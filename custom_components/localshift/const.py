@@ -178,6 +178,9 @@ CONF_OUTDOOR_TEMP_ENTITY = "outdoor_temp_entity"
 CONF_HVAC_SAMPLE_INTERVAL = "hvac_sample_interval"  # minutes
 CONF_TEMP_MODEL_MIN_SAMPLES = "temp_model_min_samples"
 
+# User override detection
+CONF_USER_OVERRIDE_COOLDOWN = "user_override_cooldown"  # minutes
+
 # Defaults for thermal manager
 DEFAULT_THERMAL_MANAGEMENT_ENABLED = False
 DEFAULT_SOLAR_TAPER_ENABLED = True
@@ -199,6 +202,9 @@ DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL = 10  # minutes between setpoint changes
 # Temperature-correlated HVAC power learning defaults (Issue #171)
 DEFAULT_HVAC_SAMPLE_INTERVAL = 5  # Sample every 5 minutes during operation
 DEFAULT_TEMP_MODEL_MIN_SAMPLES = 20  # Minimum samples before using temp model
+
+# User override detection defaults
+DEFAULT_USER_OVERRIDE_COOLDOWN = 120  # minutes (2 hours)
 
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Default Entity IDs

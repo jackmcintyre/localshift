@@ -41,6 +41,7 @@ from .const import (
     CONF_THERMAL_OFF_FORECAST_CLEAR,
     CONF_THERMAL_OFF_TEMP_MARGIN,
     CONF_THERMAL_OFF_TIME,
+    CONF_USER_OVERRIDE_COOLDOWN,
     DEFAULT_COOLING_TRIGGER_TEMP,
     DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
     DEFAULT_HEATING_TRIGGER_TEMP,
@@ -56,6 +57,7 @@ from .const import (
     DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
     DEFAULT_THERMAL_OFF_TEMP_MARGIN,
     DEFAULT_THERMAL_OFF_TIME,
+    DEFAULT_USER_OVERRIDE_COOLDOWN,
     ThermalMode,
 )
 
@@ -192,6 +194,12 @@ class ThermalManager:
         self._last_setpoint_change: datetime | None = None
         self._recent_room_temps: list[float] = []  # For trend detection
         self._last_avg_room_temp: float | None = None
+
+        # User override detection
+        self._last_applied_mode: dict[str, str] = {}  # entity_id -> "cool", "heat", "off"
+        self._last_applied_setpoint: dict[str, float] = {}  # entity_id -> temp
+        self._user_override_until: datetime | None = None
+        self._user_override_reason: str = ""
 
     # ------------------------------------------------------------------
     # Initialization and Storage
@@ -330,6 +338,110 @@ class ThermalManager:
         return self._get_option(
             CONF_MIN_SETPOINT_CHANGE_INTERVAL, DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL
         )
+
+    def get_user_override_cooldown(self) -> int:
+        """Get user override cooldown period in minutes."""
+        return self._get_option(
+            CONF_USER_OVERRIDE_COOLDOWN, DEFAULT_USER_OVERRIDE_COOLDOWN
+        )
+
+    # ------------------------------------------------------------------
+    # User Override Detection
+    # ------------------------------------------------------------------
+
+    def _detect_user_override(
+        self,
+        data: CoordinatorData,
+        now: datetime,
+    ) -> bool:
+        """Detect if user has manually changed HVAC settings.
+
+        Compares current state to what we last applied. If different,
+        sets override cooldown and returns True.
+
+        Args:
+            data: CoordinatorData with current climate states.
+            now: Current datetime.
+
+        Returns:
+            True if user override detected and control should be suspended.
+        """
+        # Check if we're already in override cooldown
+        if self._user_override_until is not None:
+            if now < self._user_override_until:
+                _LOGGER.debug(
+                    "User override active, suspending thermal control (reason: %s)",
+                    self._user_override_reason,
+                )
+                return True
+            else:
+                # Cooldown expired, clear override state
+                _LOGGER.info("User override cooldown expired, resuming thermal control")
+                self._user_override_until = None
+                self._user_override_reason = ""
+                # Reset original setpoints to current values when resuming
+                self._original_setpoints.clear()
+                self._last_applied_mode.clear()
+                self._last_applied_setpoint.clear()
+                return False
+
+        # No active override - check if user changed settings
+        control_entities = data.climate_control_entities
+        if not control_entities:
+            return False
+
+        for entity_id in control_entities:
+            state_dict = data.climate_states.get(entity_id, {})
+            current_mode = state_dict.get("state", "off")  # "off", "cool", "heat"
+            current_setpoint = state_dict.get("setpoint")
+
+            # Get what we last applied
+            last_mode = self._last_applied_mode.get(entity_id)
+            last_setpoint = self._last_applied_setpoint.get(entity_id)
+
+            # Skip if we haven't applied anything yet
+            if last_mode is None:
+                continue
+
+            # Check for mode change
+            if current_mode != last_mode:
+                cooldown_minutes = self.get_user_override_cooldown()
+                self._user_override_until = now + timedelta(minutes=cooldown_minutes)
+                self._user_override_reason = (
+                    f"Mode changed from {last_mode} to {current_mode} on {entity_id}"
+                )
+                _LOGGER.info(
+                    "User override detected: %s. Suspending thermal control for %d minutes",
+                    self._user_override_reason,
+                    cooldown_minutes,
+                )
+                return True
+
+            # Check for setpoint change (with 0.5°C tolerance for rounding)
+            if last_setpoint is not None and current_setpoint is not None:
+                setpoint_diff = abs(current_setpoint - last_setpoint)
+                if setpoint_diff > 0.5:
+                    cooldown_minutes = self.get_user_override_cooldown()
+                    self._user_override_until = now + timedelta(minutes=cooldown_minutes)
+                    self._user_override_reason = (
+                        f"Setpoint changed from {last_setpoint:.1f}°C to {current_setpoint:.1f}°C on {entity_id}"
+                    )
+                    _LOGGER.info(
+                        "User override detected: %s. Suspending thermal control for %d minutes",
+                        self._user_override_reason,
+                        cooldown_minutes,
+                    )
+                    return True
+
+        return False
+
+    def is_user_override_active(self) -> bool:
+        """Check if user override is currently active.
+
+        Returns:
+            True if thermal control is suspended due to user override.
+        """
+        return self._user_override_until is not None
 
     # ------------------------------------------------------------------
     # Daily Mode Determination
@@ -1420,6 +1532,11 @@ class ThermalManager:
             except Exception as err:
                 _LOGGER.warning("Failed to adjust %s setpoint: %s", entity_id, err)
 
+        # Track what we applied for user override detection
+        for entity_id in control_entities:
+            self._last_applied_mode[entity_id] = hvac_mode
+            self._last_applied_setpoint[entity_id] = new_setpoint
+
         # Track the current active offset
         self._current_active_offset = setpoint_offset
 
@@ -1661,9 +1778,10 @@ class ThermalManager:
         """Main real-time thermal evaluation method.
 
         Determines if and how thermal control should be active, considering:
-        1. Pre-conditioning before demand window (highest priority)
-        2. Solar tapering for excess solar (second priority)
-        3. Real-time on/off control (base layer)
+        1. User override detection (highest priority - suspends control)
+        2. Pre-conditioning before demand window (second priority)
+        3. Solar tapering for excess solar (third priority)
+        4. Real-time on/off control (base layer)
 
         The layers stack: if pre-conditioning is active, its offset is used.
         Otherwise, solar taper offset. Otherwise, real-time control.
@@ -1686,6 +1804,10 @@ class ThermalManager:
         daily_mode = data.daily_thermal_mode
         if daily_mode not in (ThermalMode.HEAT, ThermalMode.COOL):
             return False, 0.0, f"Mode not applicable: {daily_mode.value}"
+
+        # Check for user override (suspends all thermal control)
+        if self._detect_user_override(data, now):
+            return False, 0.0, f"User override: {self._user_override_reason}"
 
         # Always calculate average room temperature (needed for all layers and diagnostics)
         avg_room_temp = self.calculate_average_room_temp(data)
@@ -1793,4 +1915,9 @@ class ThermalManager:
             "avg_room_temp": self._last_avg_room_temp,
             "recent_temps": self._recent_room_temps.copy(),
             "current_offset": self._current_active_offset,
+            "user_override_active": self._user_override_until is not None,
+            "user_override_until": self._user_override_until.isoformat()
+            if self._user_override_until
+            else None,
+            "user_override_reason": self._user_override_reason,
         }
