@@ -100,8 +100,14 @@ class TestCoordinatorInitialization:
 # =============================================================================
 
 
+@pytest.mark.usefixtures("mock_storage")
 class TestAsyncStart:
-    """Tests for async_start method."""
+    """Tests for async_start method.
+
+    Uses mock_storage fixture to mock HA's Store class for components
+    that use persistent storage (DecisionOutcomeTracker, ParameterOptimizer,
+    PatternAnalyzer, OptimizationController, ThermalManager).
+    """
 
     @pytest.mark.asyncio
     async def test_async_start_initializes_modules(self, coordinator, mock_recorder):
