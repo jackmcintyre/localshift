@@ -128,14 +128,24 @@ elif [ -z "$HA_TOKEN" ]; then
 else
     log_info "Attempting to reload integration via API..."
     
-    # Get the config entry ID for localshift
-    ENTRY_ID=$(curl -s -X GET \
-        -H "Authorization: Bearer $HA_TOKEN" \
-        -H "Content-Type: application/json" \
-        "$HA_URL/api/config/config_entries/entry" 2>/dev/null | \
-        grep -o '"entry_id":"[^"]*","domain":"localshift"' | \
-        head -1 | \
-        sed 's/"entry_id":"\([^"]*\)".*/\1/' || true)
+    # Get the config entry ID for localshift using jq for reliable JSON parsing
+    if command -v jq &> /dev/null; then
+        ENTRY_ID=$(curl -s -X GET \
+            -H "Authorization: Bearer $HA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$HA_URL/api/config/config_entries/entry" 2>/dev/null | \
+            jq -r '.[] | select(.domain == "localshift") | .entry_id' | head -1 || true)
+    else
+        # Fallback to grep/sed if jq not available (less reliable)
+        log_warning "jq not found - using fallback JSON parsing (may be less reliable)"
+        ENTRY_ID=$(curl -s -X GET \
+            -H "Authorization: Bearer $HA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$HA_URL/api/config/config_entries/entry" 2>/dev/null | \
+            grep -o '"entry_id"[[:space:]]*:[[:space:]]*"[^"]*"' | \
+            head -1 | \
+            sed 's/.*"entry_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+    fi
     
     if [ -n "$ENTRY_ID" ]; then
         # Reload the config entry
