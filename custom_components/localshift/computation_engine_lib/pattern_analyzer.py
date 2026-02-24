@@ -469,6 +469,15 @@ class PatternAnalyzer:
         """
         biases: list[BiasCorrection] = []
 
+        # Check if we have enough weeks of data for reliable bias detection
+        if self._weeks_of_data < MIN_WEEKS_OBSERVED:
+            _LOGGER.debug(
+                "Skipping bias detection: only %d weeks of data (need %d)",
+                self._weeks_of_data,
+                MIN_WEEKS_OBSERVED,
+            )
+            return biases
+
         for dimension_name, stats in report.dimensions.items():
             if stats.global_std == 0:
                 continue  # No variance, no biases
