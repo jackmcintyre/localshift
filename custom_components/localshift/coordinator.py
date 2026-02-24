@@ -627,6 +627,14 @@ class LocalShiftCoordinator:
                 limit=20
             )
 
+            # Save decisions if backfill occurred (prevents data loss on restart)
+            if self.decision_tracker.save_pending:
+                self.hass.async_create_task(
+                    self.decision_tracker.async_save(),
+                    "localshift_save_decision_outcomes",
+                )
+                self.decision_tracker.clear_save_pending()
+
             # Run parameter optimization (Issue #170 Phase 2)
             # Check if we have enough decisions and enough time has passed
             if self.param_optimizer is not None:

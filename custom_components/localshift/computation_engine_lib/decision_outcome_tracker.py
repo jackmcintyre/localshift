@@ -159,6 +159,9 @@ class DecisionOutcomeTracker:
             "cost": 0.0,
         }
 
+        # Track if save is needed (after backfill)
+        self._save_pending: bool = False
+
     def record_decision(
         self,
         data: CoordinatorData,
@@ -282,6 +285,9 @@ class DecisionOutcomeTracker:
         # Move to completed
         self._completed_decisions.append(pending)
 
+        # Mark save needed
+        self._save_pending = True
+
         _LOGGER.info(
             "Decision outcome backfilled: %s lasted %.1f min, SOC change=%.1f%%, score=%.2f",
             pending.mode_chosen.value,
@@ -348,6 +354,9 @@ class DecisionOutcomeTracker:
 
         # Move to completed
         self._completed_decisions.append(pending)
+
+        # Mark save needed
+        self._save_pending = True
 
         _LOGGER.info(
             "Decision timed out: %s lasted %.1f min, SOC change=%.1f%%, score=%.2f",
@@ -533,24 +542,35 @@ class DecisionOutcomeTracker:
         return [record.to_dict() for record in reversed(decisions)]
 
     async def async_save(self) -> None:
-        """Persist completed decisions to HA storage."""
+        """Persist both pending and completed decisions to HA storage.
+
+        Pending decisions are saved so they can be restored after a restart,
+        preventing loss of in-flight decisions that haven't been backfilled yet.
+        """
         data = {
+            "pending_decisions": [r.to_dict() for r in self._pending_decisions],
             "completed_decisions": [r.to_dict() for r in self._completed_decisions],
         }
         await self._store.async_save(data)
         _LOGGER.debug(
-            "Saved %d decision records to storage",
+            "Saved %d pending + %d completed decision records to storage",
+            len(self._pending_decisions),
             len(self._completed_decisions),
         )
 
     async def async_load(self) -> None:
-        """Restore completed decisions from HA storage."""
+        """Restore both pending and completed decisions from HA storage.
+
+        Pending decisions are restored so that in-flight decisions can be
+        backfilled after a restart, preventing data loss.
+        """
         data = await self._store.async_load()
 
         if data is None:
             _LOGGER.debug("No saved decision records found")
             return
 
+        # Restore completed decisions
         completed = data.get("completed_decisions", [])
         self._completed_decisions.clear()
 
@@ -559,10 +579,37 @@ class DecisionOutcomeTracker:
                 record = DecisionRecord.from_dict(record_dict)
                 self._completed_decisions.append(record)
             except (KeyError, ValueError) as e:
-                _LOGGER.warning("Failed to load decision record: %s", e)
+                _LOGGER.warning("Failed to load completed decision record: %s", e)
+
+        # Restore pending decisions
+        pending = data.get("pending_decisions", [])
+        self._pending_decisions.clear()
+
+        for record_dict in pending:
+            try:
+                record = DecisionRecord.from_dict(record_dict)
+                # Only restore pending decisions that haven't exceeded max duration
+                # (they may have timed out while HA was down)
+                elapsed = dt_util.now() - record.timestamp
+                if elapsed < MAX_DECISION_DURATION:
+                    self._pending_decisions.append(record)
+                else:
+                    # Decision timed out while HA was down - mark as completed
+                    # with partial outcome (we don't have the actual data)
+                    record.duration_minutes = MAX_DECISION_DURATION.total_seconds() / 60.0
+                    record.outcome_score = 0.5  # Neutral score (unknown outcome)
+                    self._completed_decisions.append(record)
+                    _LOGGER.info(
+                        "Pending decision from %s timed out during HA downtime, "
+                        "moved to completed with neutral score",
+                        record.timestamp.strftime("%Y-%m-%d %H:%M"),
+                    )
+            except (KeyError, ValueError) as e:
+                _LOGGER.warning("Failed to load pending decision record: %s", e)
 
         _LOGGER.info(
-            "Loaded %d decision records from storage",
+            "Loaded %d pending + %d completed decision records from storage",
+            len(self._pending_decisions),
             len(self._completed_decisions),
         )
 
@@ -575,3 +622,12 @@ class DecisionOutcomeTracker:
     def completed_count(self) -> int:
         """Return total number of completed decisions."""
         return len(self._completed_decisions)
+
+    @property
+    def save_pending(self) -> bool:
+        """Return True if there are unsaved changes (after backfill)."""
+        return self._save_pending
+
+    def clear_save_pending(self) -> None:
+        """Clear the save pending flag after save completes."""
+        self._save_pending = False
