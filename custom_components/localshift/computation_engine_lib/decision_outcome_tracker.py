@@ -468,7 +468,9 @@ class DecisionOutcomeTracker:
         """Aggregate today's decision outcomes into summary metrics.
 
         Returns:
-            PerformanceMetrics with today's aggregated data
+            PerformanceMetrics with today's aggregated data and 7-day rolling metrics.
+            Note: 7-day metrics are calculated even if there are no decisions today,
+            to ensure historical data is reflected in the dashboard.
         """
         today = dt_util.now().date()
         today_decisions = [
@@ -477,8 +479,37 @@ class DecisionOutcomeTracker:
             if record.timestamp.date() == today
         ]
 
+        # Compute 7-day rolling metrics FIRST (independent of today's decisions)
+        # This ensures historical data is shown even when no decisions today
+        week_decisions = self.get_recent_decisions(hours=168)
+        week_scores = [
+            r.outcome_score for r in week_decisions if r.outcome_score is not None
+        ]
+        avg_score_7d = sum(week_scores) / len(week_scores) if week_scores else 0.0
+
+        # Determine cost trend from 7-day data
+        if len(week_scores) >= 7:
+            recent_avg = sum(week_scores[-3:]) / 3
+            older_avg = sum(week_scores[:4]) / 4
+            if recent_avg > older_avg + 0.05:
+                cost_trend = "improving"
+            elif recent_avg < older_avg - 0.05:
+                cost_trend = "degrading"
+            else:
+                cost_trend = "stable"
+        else:
+            cost_trend = "stable"
+
+        # If no decisions today, return with 7-day metrics populated
         if not today_decisions:
-            return PerformanceMetrics()
+            return PerformanceMetrics(
+                total_decisions_today=0,
+                avg_decision_score_today=0.0,
+                avg_decision_score_7d=avg_score_7d,
+                cost_trend=cost_trend,
+                mode_durations_today={},
+                mode_cost_attribution={},
+            )
 
         # Compute daily metrics
         scores = [
@@ -499,26 +530,6 @@ class DecisionOutcomeTracker:
                 mode_costs[mode_key] = (
                     mode_costs.get(mode_key, 0.0) + record.actual_cost_during_period
                 )
-
-        # Compute 7-day rolling metrics
-        week_decisions = self.get_recent_decisions(hours=168)
-        week_scores = [
-            r.outcome_score for r in week_decisions if r.outcome_score is not None
-        ]
-        avg_score_7d = sum(week_scores) / len(week_scores) if week_scores else 0.0
-
-        # Determine cost trend
-        if len(week_scores) >= 7:
-            recent_avg = sum(week_scores[-3:]) / 3
-            older_avg = sum(week_scores[:4]) / 4
-            if recent_avg > older_avg + 0.05:
-                cost_trend = "improving"
-            elif recent_avg < older_avg - 0.05:
-                cost_trend = "degrading"
-            else:
-                cost_trend = "stable"
-        else:
-            cost_trend = "stable"
 
         return PerformanceMetrics(
             total_decisions_today=len(today_decisions),
