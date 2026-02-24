@@ -159,14 +159,12 @@ views:
               {% endif %}
 
       # Today's Cost (Hero Metric)
-      - type: grid
+      - type: horizontal-stack
         cards:
-          - type: heading
-            heading: Today's Cost
-            heading_style: title
-
           - type: markdown
             content: >
+              Earned Today
+
               {% set cost = 'sensor.localshift_cost_electricity_net' %}
               {% set net = states(cost) | float(0) %}
               {% if net >= 0 %}
@@ -179,13 +177,10 @@ views:
               
               **Import:** ${{ state_attr(cost, 'grid_import_cost') | round(2) }}  
               **Export:** ${{ state_attr(cost, 'grid_export_revenue') | round(2) }}
-
-          - type: heading
-            heading: Forecast (Rest of Day)
-            heading_style: title
-
           - type: markdown
             content: >
+              Forecast Today
+
               {% set forecast = 'sensor.localshift_forecast_prices' %}
               {% set net = state_attr(forecast, 'forecast_net_cost') | float(0) %}
               {% if net >= 0 %}
