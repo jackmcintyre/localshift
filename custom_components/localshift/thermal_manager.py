@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -28,11 +28,14 @@ from .const import (
     CONF_COOLING_TRIGGER_TEMP,
     CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
     CONF_HEATING_TRIGGER_TEMP,
+    CONF_HVAC_SAMPLE_INTERVAL,
     CONF_MIN_SETPOINT_CHANGE_INTERVAL,
+    CONF_OUTDOOR_TEMP_ENTITY,
     CONF_PRECONDITION_HOURS_BEFORE_DW,
     CONF_PRECONDITION_TEMP_OFFSET,
     CONF_SOLAR_TAPER_ENABLED,
     CONF_TAPER_MAX_SETPOINT_OFFSET,
+    CONF_TEMP_MODEL_MIN_SAMPLES,
     CONF_THERMAL_HYSTERESIS,
     CONF_THERMAL_MANAGEMENT_ENABLED,
     CONF_THERMAL_OFF_FORECAST_CLEAR,
@@ -41,11 +44,13 @@ from .const import (
     DEFAULT_COOLING_TRIGGER_TEMP,
     DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
     DEFAULT_HEATING_TRIGGER_TEMP,
+    DEFAULT_HVAC_SAMPLE_INTERVAL,
     DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
     DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
     DEFAULT_PRECONDITION_TEMP_OFFSET,
     DEFAULT_SOLAR_TAPER_ENABLED,
     DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
+    DEFAULT_TEMP_MODEL_MIN_SAMPLES,
     DEFAULT_THERMAL_HYSTERESIS,
     DEFAULT_THERMAL_MANAGEMENT_ENABLED,
     DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
@@ -66,14 +71,52 @@ STORAGE_KEY = "localshift_thermal_manager"
 
 @dataclass
 class LearnedHVACPower:
-    """Learned power consumption for a climate entity."""
+    """Learned power consumption for a climate entity.
+
+    Supports both fixed power values (legacy) and temperature-correlated
+    models (Issue #171). The temperature model provides more accurate
+    predictions by accounting for outdoor temperature variation.
+
+    Attributes:
+        entity_id: Climate entity identifier.
+        cooling_power_kw: Fixed cooling power (legacy, kW).
+        heating_power_kw: Fixed heating power (legacy, kW).
+        drying_power_kw: Fixed drying power (legacy, kW).
+        sample_count: Number of state transition samples (legacy).
+        confidence: Confidence level for fixed values.
+        cooling_power_at_25c: Reference cooling power at 25°C outdoor.
+        cooling_temp_coefficient: Additional kW per °C above 25°C.
+        heating_power_at_15c: Reference heating power at 15°C outdoor.
+        heating_temp_coefficient: Additional kW per °C below 15°C.
+        cooling_samples: List of (outdoor_temp, power_kw) samples for cooling.
+        heating_samples: List of (outdoor_temp, power_kw) samples for heating.
+        temp_model_r2: R² value of temperature correlation model.
+        temp_model_samples: Number of samples used for temperature model.
+        temp_model_confidence: Confidence level for temperature model.
+    """
 
     entity_id: str
+    # Legacy: fixed power values
     cooling_power_kw: float = 0.0  # kW when cooling
     heating_power_kw: float = 0.0  # kW when heating
     drying_power_kw: float = 0.0  # kW when drying
     sample_count: int = 0
     confidence: str = "low"  # "low", "medium", "high"
+
+    # Temperature-correlated model (Issue #171)
+    cooling_power_at_25c: float = 0.0  # Reference power at 25°C outdoor
+    cooling_temp_coefficient: float = 0.0  # Additional kW per °C above 25°C
+    heating_power_at_15c: float = 0.0  # Reference power at 15°C outdoor
+    heating_temp_coefficient: float = 0.0  # Additional kW per °C below 15°C
+
+    # Sample storage for model fitting (not persisted)
+    cooling_samples: list[tuple[float, float]] = field(default_factory=list)
+    heating_samples: list[tuple[float, float]] = field(default_factory=list)
+
+    # Model quality metrics
+    temp_model_r2: float = 0.0  # R² of temperature correlation
+    temp_model_samples: int = 0  # Samples used for temperature model
+    temp_model_confidence: str = "low"  # Confidence for temp model
 
 
 @dataclass
@@ -161,11 +204,24 @@ class ThermalManager:
             for entity_id, power_data in data["learned_power"].items():
                 self._learned_power[entity_id] = LearnedHVACPower(
                     entity_id=entity_id,
+                    # Legacy fields
                     cooling_power_kw=power_data.get("cooling_power_kw", 0.0),
                     heating_power_kw=power_data.get("heating_power_kw", 0.0),
                     drying_power_kw=power_data.get("drying_power_kw", 0.0),
                     sample_count=power_data.get("sample_count", 0),
                     confidence=power_data.get("confidence", "low"),
+                    # Temperature-correlated model fields (Issue #171)
+                    cooling_power_at_25c=power_data.get("cooling_power_at_25c", 0.0),
+                    cooling_temp_coefficient=power_data.get(
+                        "cooling_temp_coefficient", 0.0
+                    ),
+                    heating_power_at_15c=power_data.get("heating_power_at_15c", 0.0),
+                    heating_temp_coefficient=power_data.get(
+                        "heating_temp_coefficient", 0.0
+                    ),
+                    temp_model_r2=power_data.get("temp_model_r2", 0.0),
+                    temp_model_samples=power_data.get("temp_model_samples", 0),
+                    temp_model_confidence=power_data.get("temp_model_confidence", "low"),
                 )
             _LOGGER.info(
                 "Loaded learned HVAC power for %d entities",
@@ -177,11 +233,20 @@ class ThermalManager:
         data = {
             "learned_power": {
                 entity_id: {
+                    # Legacy fields
                     "cooling_power_kw": power.cooling_power_kw,
                     "heating_power_kw": power.heating_power_kw,
                     "drying_power_kw": power.drying_power_kw,
                     "sample_count": power.sample_count,
                     "confidence": power.confidence,
+                    # Temperature-correlated model fields (Issue #171)
+                    "cooling_power_at_25c": power.cooling_power_at_25c,
+                    "cooling_temp_coefficient": power.cooling_temp_coefficient,
+                    "heating_power_at_15c": power.heating_power_at_15c,
+                    "heating_temp_coefficient": power.heating_temp_coefficient,
+                    "temp_model_r2": power.temp_model_r2,
+                    "temp_model_samples": power.temp_model_samples,
+                    "temp_model_confidence": power.temp_model_confidence,
                 }
                 for entity_id, power in self._learned_power.items()
             }
@@ -504,6 +569,307 @@ class ThermalManager:
             return "medium"
         return "low"
 
+    # ------------------------------------------------------------------
+    # Temperature-Correlated Power Learning (Issue #171)
+    # ------------------------------------------------------------------
+
+    def get_outdoor_temp_entity(self) -> str | None:
+        """Get configured outdoor temperature entity.
+
+        Returns:
+            Entity ID for outdoor temperature sensor, or None.
+        """
+        return self._get_option(CONF_OUTDOOR_TEMP_ENTITY, "")
+
+    def get_sample_interval(self) -> int:
+        """Get HVAC sample interval in minutes."""
+        return self._get_option(CONF_HVAC_SAMPLE_INTERVAL, DEFAULT_HVAC_SAMPLE_INTERVAL)
+
+    def get_temp_model_min_samples(self) -> int:
+        """Get minimum samples required for temperature model."""
+        return self._get_option(
+            CONF_TEMP_MODEL_MIN_SAMPLES, DEFAULT_TEMP_MODEL_MIN_SAMPLES
+        )
+
+    def get_outdoor_temperature(self) -> float | None:
+        """Get current outdoor temperature from configured entity.
+
+        Returns:
+            Outdoor temperature in °C, or None if unavailable.
+        """
+        entity_id = self.get_outdoor_temp_entity()
+        if not entity_id:
+            return None
+
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            _LOGGER.debug("Outdoor temp entity %s not found", entity_id)
+            return None
+
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            _LOGGER.debug("Invalid outdoor temp value from %s", entity_id)
+            return None
+
+    def sample_hvac_power_during_operation(
+        self,
+        data: CoordinatorData,
+        current_load_kw: float,
+        outdoor_temp: float | None,
+        timestamp: datetime,
+    ) -> None:
+        """Sample HVAC power during continuous operation.
+
+        Called periodically (every 5-10 min) while HVAC is running to collect
+        temperature-correlated power data. This enables learning how power
+        consumption varies with outdoor temperature.
+
+        Args:
+            data: CoordinatorData with current climate states.
+            current_load_kw: Current total household load in kW.
+            outdoor_temp: Current outdoor temperature in °C.
+            timestamp: Current timestamp.
+        """
+        if not self.is_enabled():
+            return
+
+        if outdoor_temp is None:
+            return
+
+        if not data.climate_states:
+            return
+
+        # Estimate baseline load (non-HVAC consumption)
+        baseline_kw = self._estimate_baseline_load(data, current_load_kw)
+
+        # Sample each active HVAC entity
+        for entity_id, state_dict in data.climate_states.items():
+            hvac_action = state_dict.get("hvac_action", "off")
+
+            if hvac_action not in ("cooling", "heating"):
+                continue
+
+            # Get or create learned power entry
+            if entity_id not in self._learned_power:
+                self._learned_power[entity_id] = LearnedHVACPower(entity_id=entity_id)
+
+            power = self._learned_power[entity_id]
+
+            # Estimate this unit's power contribution
+            # For single AC: hvac_power = current_load - baseline
+            hvac_power_kw = current_load_kw - baseline_kw
+
+            # Validate reasonable range
+            if not (0.1 < hvac_power_kw < 10.0):
+                _LOGGER.debug(
+                    "HVAC power estimate %.2f kW out of range for %s, skipping sample",
+                    hvac_power_kw,
+                    entity_id,
+                )
+                continue
+
+            # Store sample with temperature
+            if hvac_action == "cooling":
+                power.cooling_samples.append((outdoor_temp, hvac_power_kw))
+                # Keep last 200 samples (rolling window)
+                if len(power.cooling_samples) > 200:
+                    power.cooling_samples.pop(0)
+                _LOGGER.debug(
+                    "Sampled cooling power for %s: %.2f kW at %.1f°C (n=%d)",
+                    entity_id,
+                    hvac_power_kw,
+                    outdoor_temp,
+                    len(power.cooling_samples),
+                )
+            elif hvac_action == "heating":
+                power.heating_samples.append((outdoor_temp, hvac_power_kw))
+                if len(power.heating_samples) > 200:
+                    power.heating_samples.pop(0)
+                _LOGGER.debug(
+                    "Sampled heating power for %s: %.2f kW at %.1f°C (n=%d)",
+                    entity_id,
+                    hvac_power_kw,
+                    outdoor_temp,
+                    len(power.heating_samples),
+                )
+
+        # Periodically fit temperature models
+        self._maybe_fit_models()
+
+    def _estimate_baseline_load(
+        self, data: CoordinatorData, current_load_kw: float
+    ) -> float:
+        """Estimate baseline (non-HVAC) load from current state.
+
+        Uses historical baseline if available, otherwise estimates from
+        current load minus expected HVAC power.
+
+        Args:
+            data: CoordinatorData with current state.
+            current_load_kw: Current total load in kW.
+
+        Returns:
+            Estimated baseline load in kW.
+        """
+        # Count active HVAC entities
+        active_hvac_count = 0
+        expected_hvac_power = 0.0
+
+        for entity_id, state_dict in data.climate_states.items():
+            hvac_action = state_dict.get("hvac_action", "off")
+            if hvac_action in ("cooling", "heating"):
+                active_hvac_count += 1
+                # Use learned power if available
+                if entity_id in self._learned_power:
+                    power = self._learned_power[entity_id]
+                    if hvac_action == "cooling" and power.cooling_power_kw > 0:
+                        expected_hvac_power += power.cooling_power_kw
+                    elif hvac_action == "heating" and power.heating_power_kw > 0:
+                        expected_hvac_power += power.heating_power_kw
+
+        # If no HVAC active, current load is baseline
+        if active_hvac_count == 0:
+            return current_load_kw
+
+        # If we have expected HVAC power, subtract it
+        if expected_hvac_power > 0:
+            baseline = current_load_kw - expected_hvac_power
+            return max(0.1, baseline)
+
+        # Fallback: assume 0.5 kW baseline per non-HVAC
+        # This is a rough estimate when no learned data available
+        return max(0.1, current_load_kw * 0.2)
+
+    def _maybe_fit_models(self) -> None:
+        """Periodically fit temperature models if enough new samples."""
+        min_samples = self.get_temp_model_min_samples()
+
+        for power in self._learned_power.values():
+            # Fit cooling model if enough new samples
+            cooling_count = len(power.cooling_samples)
+            if cooling_count >= min_samples and (
+                power.temp_model_samples == 0
+                or cooling_count >= power.temp_model_samples + 20
+            ):
+                self._fit_temperature_model(power, mode="cooling")
+
+            # Fit heating model if enough new samples
+            heating_count = len(power.heating_samples)
+            if heating_count >= min_samples and (
+                power.temp_model_samples == 0
+                or heating_count >= power.temp_model_samples + 20
+            ):
+                self._fit_temperature_model(power, mode="heating")
+
+    def _fit_temperature_model(
+        self, power: LearnedHVACPower, mode: str
+    ) -> None:
+        """Fit temperature correlation model from samples.
+
+        Uses simple linear regression to fit:
+            power = base + coefficient × (temp - reference)
+
+        For cooling: power = cooling_power_at_25c + cooling_temp_coefficient × (temp - 25)
+        For heating: power = heating_power_at_15c + heating_temp_coefficient × (15 - temp)
+
+        Args:
+            power: LearnedHVACPower to update with fitted model.
+            mode: "cooling" or "heating".
+        """
+        if mode == "cooling":
+            samples = power.cooling_samples
+            reference_temp = 25.0  # Reference temperature for cooling
+        else:
+            samples = power.heating_samples
+            reference_temp = 15.0  # Reference temperature for heating
+
+        if len(samples) < self.get_temp_model_min_samples():
+            return
+
+        # Extract temperatures and powers
+        temps = [s[0] for s in samples]
+        powers = [s[1] for s in samples]
+
+        # Simple linear regression: y = a + bx
+        n = len(temps)
+        sum_x = sum(temps)
+        sum_y = sum(powers)
+        sum_xy = sum(t * p for t, p in samples)
+        sum_x2 = sum(t * t for t in temps)
+
+        # Calculate slope and intercept
+        denominator = n * sum_x2 - sum_x * sum_x
+        if denominator == 0:
+            _LOGGER.warning(
+                "Cannot fit temperature model for %s: all samples at same temperature",
+                power.entity_id,
+            )
+            return
+
+        slope = (n * sum_xy - sum_x * sum_y) / denominator
+        intercept = (sum_y - slope * sum_x) / n
+
+        # Calculate R² for model quality
+        y_mean = sum_y / n
+        ss_tot = sum((p - y_mean) ** 2 for p in powers)
+        ss_res = sum((p - (intercept + slope * t)) ** 2 for t, p in samples)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        # Store model parameters
+        if mode == "cooling":
+            # power_at_25c = intercept + slope × 25
+            power.cooling_power_at_25c = intercept + slope * reference_temp
+            power.cooling_temp_coefficient = slope
+            _LOGGER.info(
+                "Fitted cooling model for %s: power=%.2f + %.3f×(T-25), R²=%.2f, n=%d",
+                power.entity_id,
+                power.cooling_power_at_25c,
+                power.cooling_temp_coefficient,
+                r2,
+                n,
+            )
+        else:
+            # For heating, coefficient is positive when power increases as temp drops
+            power.heating_power_at_15c = intercept + slope * reference_temp
+            power.heating_temp_coefficient = -slope  # Negative because temp delta is inverted
+            _LOGGER.info(
+                "Fitted heating model for %s: power=%.2f + %.3f×(15-T), R²=%.2f, n=%d",
+                power.entity_id,
+                power.heating_power_at_15c,
+                power.heating_temp_coefficient,
+                r2,
+                n,
+            )
+
+        # Update model quality metrics
+        power.temp_model_r2 = r2
+        power.temp_model_samples = n
+        power.temp_model_confidence = self._calculate_temp_model_confidence(n, r2)
+
+        # Save the updated model
+        self.hass.async_create_task(
+            self._async_save_learned_power(),
+            "localshift_save_hvac_temp_model",
+        )
+
+    def _calculate_temp_model_confidence(self, sample_count: int, r2: float) -> str:
+        """Calculate confidence level for temperature model.
+
+        Args:
+            sample_count: Number of samples used for model.
+            r2: R² value of the fitted model.
+
+        Returns:
+            Confidence level string: "low", "medium", or "high".
+        """
+        # Need both sufficient samples AND good correlation
+        if sample_count >= 50 and r2 >= 0.7:
+            return "high"
+        elif sample_count >= 20 and r2 >= 0.5:
+            return "medium"
+        return "low"
+
     def predict_hvac_load(
         self,
         hour: int,
@@ -513,9 +879,12 @@ class ThermalManager:
     ) -> float:
         """Predict HVAC load for given hour based on weather and learned power.
 
+        Uses temperature-correlated model when available (Issue #171), falling
+        back to fixed power values when the model is not ready.
+
         Args:
             hour: Hour of day (0-23).
-            temperature: Forecasted temperature in °C.
+            temperature: Forecasted outdoor temperature in °C.
             humidity: Current humidity percentage (optional).
             daily_mode: Current daily thermal mode.
 
@@ -525,37 +894,100 @@ class ThermalManager:
         if daily_mode == ThermalMode.OFF:
             return 0.0
 
-        # Get average learned power for the active mode
         total_power = 0.0
         entity_count = 0
 
         for _entity_id, power in self._learned_power.items():
-            if power.confidence == "low":
-                continue  # Skip low-confidence learning
+            if daily_mode == ThermalMode.COOL:
+                # Prefer temperature-correlated model if available and confident
+                if (
+                    power.cooling_power_at_25c > 0
+                    and power.temp_model_r2 >= 0.5
+                    and power.temp_model_confidence != "low"
+                ):
+                    # Use temperature-correlated model
+                    temp_delta = temperature - 25.0  # Reference is 25°C
+                    predicted = power.cooling_power_at_25c + (
+                        power.cooling_temp_coefficient * temp_delta
+                    )
+                    # Clamp to reasonable range
+                    predicted = max(0.5, min(6.0, predicted))
+                    total_power += predicted
+                    entity_count += 1
+                    _LOGGER.debug(
+                        "Temp-correlated prediction for %s: %.2f kW at %.1f°C (model: %.2f + %.3f×ΔT)",
+                        power.entity_id,
+                        predicted,
+                        temperature,
+                        power.cooling_power_at_25c,
+                        power.cooling_temp_coefficient,
+                    )
+                elif power.cooling_power_kw > 0 and power.confidence != "low":
+                    # Fallback to fixed value
+                    total_power += power.cooling_power_kw
+                    entity_count += 1
 
-            if daily_mode == ThermalMode.COOL and power.cooling_power_kw > 0:
-                total_power += power.cooling_power_kw
-                entity_count += 1
-            elif daily_mode == ThermalMode.HEAT and power.heating_power_kw > 0:
-                total_power += power.heating_power_kw
-                entity_count += 1
+            elif daily_mode == ThermalMode.HEAT:
+                # Prefer temperature-correlated model if available and confident
+                if (
+                    power.heating_power_at_15c > 0
+                    and power.temp_model_r2 >= 0.5
+                    and power.temp_model_confidence != "low"
+                ):
+                    # Use temperature-correlated model
+                    temp_delta = 15.0 - temperature  # Reference is 15°C
+                    predicted = power.heating_power_at_15c + (
+                        power.heating_temp_coefficient * temp_delta
+                    )
+                    predicted = max(0.5, min(5.0, predicted))
+                    total_power += predicted
+                    entity_count += 1
+                    _LOGGER.debug(
+                        "Temp-correlated prediction for %s: %.2f kW at %.1f°C (model: %.2f + %.3f×ΔT)",
+                        power.entity_id,
+                        predicted,
+                        temperature,
+                        power.heating_power_at_15c,
+                        power.heating_temp_coefficient,
+                    )
+                elif power.heating_power_kw > 0 and power.confidence != "low":
+                    # Fallback to fixed value
+                    total_power += power.heating_power_kw
+                    entity_count += 1
+
             elif daily_mode == ThermalMode.DRY and power.drying_power_kw > 0:
-                total_power += power.drying_power_kw
-                entity_count += 1
+                if power.confidence != "low":
+                    total_power += power.drying_power_kw
+                    entity_count += 1
 
         if entity_count == 0:
             # No learned data - use heuristic estimate
-            if daily_mode == ThermalMode.COOL:
-                # Estimate based on temperature differential
-                cooling_trigger = self.get_cooling_trigger_temp()
-                temp_diff = max(0, temperature - cooling_trigger)
-                return min(4.0, temp_diff * 0.5)  # ~0.5 kW per degree over trigger
-            elif daily_mode == ThermalMode.HEAT:
-                heating_trigger = self.get_heating_trigger_temp()
-                temp_diff = max(0, heating_trigger - temperature)
-                return min(3.5, temp_diff * 0.35)  # ~0.35 kW per degree under trigger
+            return self._heuristic_hvac_estimate(temperature, daily_mode)
 
         return total_power
+
+    def _heuristic_hvac_estimate(
+        self, temperature: float, daily_mode: ThermalMode
+    ) -> float:
+        """Estimate HVAC load using heuristics when no learned data available.
+
+        Args:
+            temperature: Forecasted outdoor temperature in °C.
+            daily_mode: Current daily thermal mode.
+
+        Returns:
+            Estimated HVAC load in kW.
+        """
+        if daily_mode == ThermalMode.COOL:
+            # Estimate based on temperature differential
+            cooling_trigger = self.get_cooling_trigger_temp()
+            temp_diff = max(0, temperature - cooling_trigger)
+            return min(4.0, temp_diff * 0.5)  # ~0.5 kW per degree over trigger
+        elif daily_mode == ThermalMode.HEAT:
+            heating_trigger = self.get_heating_trigger_temp()
+            temp_diff = max(0, heating_trigger - temperature)
+            return min(3.5, temp_diff * 0.35)  # ~0.35 kW per degree under trigger
+        return 0.0
 
     def get_learned_power_summary(self) -> dict[str, dict[str, Any]]:
         """Get summary of learned HVAC power for all entities.
@@ -565,11 +997,22 @@ class ThermalManager:
         """
         return {
             entity_id: {
+                # Legacy fields
                 "cooling_power_kw": power.cooling_power_kw,
                 "heating_power_kw": power.heating_power_kw,
                 "drying_power_kw": power.drying_power_kw,
                 "sample_count": power.sample_count,
                 "confidence": power.confidence,
+                # Temperature-correlated model fields (Issue #171)
+                "cooling_power_at_25c": power.cooling_power_at_25c,
+                "cooling_temp_coefficient": power.cooling_temp_coefficient,
+                "heating_power_at_15c": power.heating_power_at_15c,
+                "heating_temp_coefficient": power.heating_temp_coefficient,
+                "temp_model_r2": power.temp_model_r2,
+                "temp_model_samples": power.temp_model_samples,
+                "temp_model_confidence": power.temp_model_confidence,
+                "cooling_samples_count": len(power.cooling_samples),
+                "heating_samples_count": len(power.heating_samples),
             }
             for entity_id, power in self._learned_power.items()
         }
