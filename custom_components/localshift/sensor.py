@@ -1102,6 +1102,12 @@ class RealtimeThermalStatusSensor(LocalShiftSensorBase):
             "preconditioning_active": d.preconditioning_active,
             "solar_taper_active": d.solar_taper_active,
             "taper_setpoint_offset": round(d.taper_setpoint_offset, 1),
+            # Climate entity read diagnostics (Issue #193)
+            "climate_read_success": d.climate_read_success,
+            "climate_missing_entities": d.climate_missing_entities,
+            "climate_unavailable_entities": d.climate_unavailable_entities,
+            "climate_entities_configured": d.climate_entities,
+            "climate_entities_controlled": d.climate_control_entities,
         }
 
     @property

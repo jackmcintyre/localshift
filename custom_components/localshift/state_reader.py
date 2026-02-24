@@ -364,8 +364,13 @@ class StateReader:
         data.climate_entities = climate_entities if climate_entities else []
         data.climate_control_entities = control_entities if control_entities else []
 
+        # Initialize diagnostic fields (Issue #193)
+        data.climate_missing_entities = []
+        data.climate_unavailable_entities = []
+        data.climate_read_success = False
+
         if not data.climate_entities:
-            _LOGGER.debug("No climate entities configured for thermal manager")
+            _LOGGER.info("No climate entities configured for thermal manager")
             data.climate_states = {}
             return
 
@@ -374,11 +379,21 @@ class StateReader:
         for entity_id in data.climate_entities:
             state = self.hass.states.get(entity_id)
             if state is None:
-                _LOGGER.debug("Climate entity %s not found", entity_id)
+                _LOGGER.warning(
+                    "Climate entity '%s' not found in Home Assistant state machine. "
+                    "Check the entity ID in integration configuration.",
+                    entity_id,
+                )
+                data.climate_missing_entities.append(entity_id)
                 continue
 
             if state.state in ("unknown", "unavailable"):
-                _LOGGER.debug("Climate entity %s is %s", entity_id, state.state)
+                _LOGGER.warning(
+                    "Climate entity '%s' is %s. Thermal control may not function correctly.",
+                    entity_id,
+                    state.state,
+                )
+                data.climate_unavailable_entities.append(entity_id)
                 continue
 
             # Build climate state dict for this entity
@@ -408,10 +423,22 @@ class StateReader:
 
         data.climate_states = climate_states
 
+        # Set success flag if at least one climate entity was read successfully (Issue #193)
+        data.climate_read_success = len(climate_states) > 0
+
+        if data.climate_missing_entities or data.climate_unavailable_entities:
+            _LOGGER.warning(
+                "Climate entity read issues: %d missing, %d unavailable. "
+                "Thermal control may not function correctly.",
+                len(data.climate_missing_entities),
+                len(data.climate_unavailable_entities),
+            )
+
         _LOGGER.debug(
-            "Climate states read: %d entities (%d controlled)",
+            "Climate states read: %d entities (%d controlled), success=%s",
             len(climate_states),
             len(data.climate_control_entities),
+            data.climate_read_success,
         )
 
     def _read_float_attr(self, state: Any, attr: str, default: float = 0.0) -> float:

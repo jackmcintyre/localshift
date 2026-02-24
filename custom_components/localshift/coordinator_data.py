@@ -361,6 +361,17 @@ class CoordinatorData:
     avg_room_temp: float | None = None  # Current average room temperature
     thermal_activated_today: bool = False  # Has thermal control activated today
 
+    # Climate entity read diagnostics (Issue #193)
+    climate_read_success: bool = (
+        False  # Whether climate entities were read successfully
+    )
+    climate_missing_entities: list[str] = field(
+        default_factory=list
+    )  # Entities not found in HA state machine
+    climate_unavailable_entities: list[str] = field(
+        default_factory=list
+    )  # Entities that are unknown/unavailable
+
     # --- Learning system (Issue #170 Phase 1) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
     recent_decision_log: list[dict[str, Any]] = field(
