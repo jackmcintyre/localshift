@@ -380,7 +380,7 @@ class ForecastComputer:
             dw_end_time: Demand window end time (for DW-period max_soc tracking)
 
         Returns:
-            (soc_at_end_pct, max_soc_pct, can_reach_target)
+            (soc_at_end_pct, max_soc_pct, can_reach_target, was_truncated)
         """
         soc = actual_current_soc
         base_slot = start_slot.replace(second=0, microsecond=0)
@@ -408,11 +408,13 @@ class ForecastComputer:
                 solcast_end = end_local
 
         sim_end = end_time
+        truncated = False
         if solcast_end is not None and sim_end > solcast_end:
             sim_end = solcast_end
+            truncated = True
 
         if sim_end <= base_slot:
-            return soc, soc, soc >= target_pct
+            return soc, soc, soc >= target_pct, truncated
 
         # Use 15-min slots throughout for consistency
         max_soc = soc
@@ -481,7 +483,7 @@ class ForecastComputer:
 
             # Fast-path: if we've already reached target, we can stop.
             if max_soc >= target_pct:
-                return soc, max_soc, True
+                return soc, max_soc, True, truncated
 
         # FIX: When simulating through DW period (allow_dw_entry_under_target=True),
         # check if max_soc DURING DW reaches target, not just max_soc during entire simulation.
@@ -502,7 +504,7 @@ class ForecastComputer:
                 can_reach,
                 solcast_end.strftime("%H:%M") if solcast_end else "None",
             )
-            return soc, max_soc, can_reach
+            return soc, max_soc, can_reach, truncated
 
         _LOGGER.debug(
             "SOLAR_SIM_RESULT: start_soc=%.1f%% start=%s end=%s max_soc=%.1f%% target=%d%% can_reach=%s (solcast_end=%s)",
@@ -514,7 +516,7 @@ class ForecastComputer:
             max_soc >= target_pct,
             solcast_end.strftime("%H:%M") if solcast_end else "None",
         )
-        return soc, max_soc, max_soc >= target_pct
+        return soc, max_soc, max_soc >= target_pct, truncated
 
     def _next_demand_window_start_dt(
         self,
@@ -808,7 +810,7 @@ class ForecastComputer:
                 # Now simulate from solar start to next DW
                 # ISSUE #137: Pass baseline for grid charging decisions
                 # FIX: Pass dw_end_time for proper DW-period max_soc tracking
-                soc_at_end, max_soc, can_reach_with_solar_only = (
+                soc_at_end, max_soc, can_reach_with_solar_only, was_truncated = (
                     self._simulate_future_soc_with_solar_only(
                         actual_current_soc=soc_at_solar_start,
                         start_slot=solar_start,  # Start from solar, not from now
@@ -824,6 +826,19 @@ class ForecastComputer:
                         dw_end_time=dw_end_time,
                     )
                 )
+
+                # FIX: If simulation was truncated by Solcast horizon, we can't
+                # reliably determine if solar can reach target. Skip grid charging
+                # unless price is very cheap (safety net).
+                if was_truncated:
+                    _LOGGER.info(
+                        "OVERNIGHT_SKIP_TRUNCATED[%02d:%02d]: simulation truncated by Solcast horizon, skipping grid charge decision",
+                        slot_start.hour,
+                        slot_start.minute,
+                    )
+                    if price_is_very_cheap:
+                        return True, True
+                    return False, False
 
                 # Solar from dawn can reach target: NO overnight grid charging
                 if can_reach_with_solar_only:
@@ -865,7 +880,7 @@ class ForecastComputer:
             # Daylight slot - use original simulation logic
             # ISSUE #137: Pass baseline for grid charging decisions
             # FIX: Pass dw_end_time for proper DW-period max_soc tracking
-            soc_at_end, max_soc, can_reach_with_solar_only = (
+            soc_at_end, max_soc, can_reach_with_solar_only, was_truncated = (
                 self._simulate_future_soc_with_solar_only(
                     actual_current_soc=predicted_soc,
                     start_slot=sim_start,
@@ -881,6 +896,19 @@ class ForecastComputer:
                     dw_end_time=dw_end_time,
                 )
             )
+
+            # FIX: If simulation was truncated by Solcast horizon, we can't
+            # reliably determine if solar can reach target. Skip grid charging
+            # unless price is very cheap (safety net).
+            if was_truncated:
+                _LOGGER.info(
+                    "DAYLIGHT_SKIP_TRUNCATED[%02d:%02d]: simulation truncated by Solcast horizon, skipping grid charge decision",
+                    slot_start.hour,
+                    slot_start.minute,
+                )
+                if price_is_very_cheap:
+                    return True, True
+                return False, False
 
             # Solar forecast says we'll reach target: NO grid charging
             if can_reach_with_solar_only:
