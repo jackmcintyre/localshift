@@ -1274,6 +1274,10 @@ class ThermalManager:
         where offsets would accumulate on each tick. Instead, it calculates
         the new setpoint from the original baseline.
 
+        Also controls HVAC mode:
+        - When activating (offset != 0): Turns AC on in cool/heat mode
+        - When deactivating (offset == 0): Turns AC off
+
         Args:
             data: CoordinatorData with current state.
             setpoint_offset: Setpoint adjustment in °C (positive = higher temp).
@@ -1287,11 +1291,46 @@ class ThermalManager:
             self._clear_original_setpoints()
             return
 
-        # If offset is 0, restore original setpoints and clear tracking
+        # Determine HVAC mode from daily thermal mode
+        daily_mode = data.daily_thermal_mode
+        if daily_mode == ThermalMode.COOL:
+            hvac_mode = "cool"
+        elif daily_mode == ThermalMode.HEAT:
+            hvac_mode = "heat"
+        else:
+            # For DRY/OFF modes, don't control HVAC
+            _LOGGER.debug(
+                "Skipping climate control for mode: %s",
+                daily_mode.value,
+            )
+            return
+
+        # If offset is 0, turn off AC and restore original setpoints
         if setpoint_offset == 0.0:
             if self._current_active_offset != 0.0:
-                # We had an active offset, now need to restore
+                # We had an active offset, now need to turn off and restore
                 for entity_id in control_entities:
+                    # Turn off AC
+                    try:
+                        await self.hass.services.async_call(
+                            "climate",
+                            "set_hvac_mode",
+                            {
+                                "entity_id": entity_id,
+                                "hvac_mode": "off",
+                            },
+                            blocking=False,
+                        )
+                        _LOGGER.info(
+                            "Turned off %s (thermal control deactivated)",
+                            entity_id,
+                        )
+                    except Exception as err:
+                        _LOGGER.warning(
+                            "Failed to turn off %s: %s", entity_id, err
+                        )
+
+                    # Restore original setpoint
                     if entity_id in self._original_setpoints:
                         original = self._original_setpoints[entity_id]
                         try:
@@ -1345,7 +1384,26 @@ class ThermalManager:
             # Clamp to reasonable range
             new_setpoint = max(16.0, min(30.0, new_setpoint))
 
-            # Apply via climate.set_temperature service
+            # Turn on AC with correct HVAC mode
+            try:
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_hvac_mode",
+                    {
+                        "entity_id": entity_id,
+                        "hvac_mode": hvac_mode,
+                    },
+                    blocking=False,
+                )
+                _LOGGER.info(
+                    "Turned on %s in %s mode (thermal control activated)",
+                    entity_id,
+                    hvac_mode,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to turn on %s: %s", entity_id, err)
+
+            # Apply setpoint via climate.set_temperature service
             try:
                 await self.hass.services.async_call(
                     "climate",
