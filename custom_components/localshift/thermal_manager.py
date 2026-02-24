@@ -1355,14 +1355,10 @@ class ThermalManager:
             self._clear_original_setpoints()
             return
 
-        # Skip if this is the same offset we already applied
-        # (avoid unnecessary service calls)
-        if setpoint_offset == self._current_active_offset:
-            _LOGGER.debug(
-                "Offset %.1f°C already active, skipping adjustment",
-                setpoint_offset,
-            )
-            return
+        # Note: We intentionally do NOT skip when offset is the same as before.
+        # The user may have manually changed the setpoint, or the AC may have been
+        # on with a different setpoint. We always re-apply to ensure correctness.
+        # The set_temperature call is idempotent, so repeated calls are harmless.
 
         # Capture original setpoints if this is a new control session
         if not self._original_setpoints:
