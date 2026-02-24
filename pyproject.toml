@@ -68,4 +68,6 @@ dev = [
     "pytest-xdist>=3.0.0",
     "bandit>=1.7.0",
     "safety>=3.0.0",
+    "vulture>=2.14",
+    "ruff>=0.15.2",
 ]
