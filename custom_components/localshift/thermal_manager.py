@@ -1019,12 +1019,24 @@ class ThermalManager:
             Average temperature in °C, or None if no readings available.
         """
         temps: list[float] = []
-        for state_dict in data.climate_states.values():
+        entities_with_temp = []
+        entities_without_temp = []
+
+        for entity_id, state_dict in data.climate_states.items():
             current_temp = state_dict.get("current_temperature")
             if current_temp is not None and current_temp > 0:
                 temps.append(current_temp)
+                entities_with_temp.append(entity_id)
+            else:
+                entities_without_temp.append(entity_id)
 
         if not temps:
+            _LOGGER.info(
+                "No room temperature readings available from %d climate entities. "
+                "Entities without temp: %s",
+                len(data.climate_states),
+                entities_without_temp if entities_without_temp else "none",
+            )
             return None
 
         avg_temp = sum(temps) / len(temps)
@@ -1034,6 +1046,13 @@ class ThermalManager:
         self._recent_room_temps.append(avg_temp)
         if len(self._recent_room_temps) > 6:
             self._recent_room_temps.pop(0)
+
+        _LOGGER.info(
+            "Average room temperature: %.1f°C from %d entities (%s)",
+            avg_temp,
+            len(temps),
+            ", ".join(entities_with_temp),
+        )
 
         return avg_temp
 

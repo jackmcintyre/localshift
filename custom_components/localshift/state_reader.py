@@ -434,12 +434,25 @@ class StateReader:
                 len(data.climate_unavailable_entities),
             )
 
-        _LOGGER.debug(
+        # INFO-level logging for visibility (Issue #193 follow-up)
+        _LOGGER.info(
             "Climate states read: %d entities (%d controlled), success=%s",
             len(climate_states),
             len(data.climate_control_entities),
             data.climate_read_success,
         )
+
+        # Log each entity's state at INFO level for troubleshooting
+        for entity_id, entity_state in climate_states.items():
+            _LOGGER.info(
+                "Climate entity: %s mode=%s action=%s setpoint=%.1f°C current=%.1f°C controlled=%s",
+                entity_id,
+                entity_state["state"],
+                entity_state["hvac_action"],
+                entity_state["setpoint"],
+                entity_state["current_temperature"] or 0.0,
+                entity_state["is_controlled"],
+            )
 
     def _read_float_attr(self, state: Any, attr: str, default: float = 0.0) -> float:
         """Read a float value from a state's attributes.

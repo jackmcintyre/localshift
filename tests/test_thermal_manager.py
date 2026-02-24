@@ -454,7 +454,7 @@ class TestPreconditioning:
             data=coordinator_data,
             now=datetime(2026, 2, 16, 14, 0, 0),
             demand_window_start=time(15, 0),
-            _demand_window_end=time(21, 0),
+            demand_window_end=time(21, 0),
         )
         assert is_active is False
         assert offset == 0.0
@@ -470,7 +470,7 @@ class TestPreconditioning:
             data=coordinator_data,
             now=datetime(2026, 2, 16, 10, 0, 0),
             demand_window_start=time(15, 0),
-            _demand_window_end=time(21, 0),
+            demand_window_end=time(21, 0),
         )
         assert is_active is False
 
@@ -485,7 +485,7 @@ class TestPreconditioning:
             data=coordinator_data,
             now=datetime(2026, 2, 16, 14, 30, 0),
             demand_window_start=time(15, 0),
-            _demand_window_end=time(21, 0),
+            demand_window_end=time(21, 0),
         )
         assert is_active is True
         # COOL mode should lower setpoint (negative offset)
@@ -501,7 +501,7 @@ class TestPreconditioning:
             data=coordinator_data,
             now=datetime(2026, 2, 16, 14, 30, 0),
             demand_window_start=time(15, 0),
-            _demand_window_end=time(21, 0),
+            demand_window_end=time(21, 0),
         )
         assert is_active is True
         # HEAT mode should raise setpoint (positive offset)
@@ -516,7 +516,7 @@ class TestPreconditioning:
             data=coordinator_data,
             now=datetime(2026, 2, 16, 14, 30, 0),
             demand_window_start=time(15, 0),
-            _demand_window_end=time(21, 0),
+            demand_window_end=time(21, 0),
         )
         assert is_active is False
 
