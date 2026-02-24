@@ -149,6 +149,165 @@ Check with: `git worktree list`
 - `_reserve/*` branches are temporary worktrees for Cline session isolation
 - These can be cleaned up between sessions if not in use
 
+# ⚠️ MANDATORY: Testing Workflow (test → main Staging)
+
+**All changes flow through `test` branch before reaching `main`.**
+
+## Branch Roles
+
+| Branch | Purpose | Deploy Behavior |
+|--------|---------|-----------------|
+| `test` | Staging/testing | Auto-deploy on push |
+| `main` | Production | Manual deploy only |
+| `issue/*`, `fix/*`, `task/*` | Feature branches | Never deployed directly |
+
+## Workflow Steps
+
+### 1. Develop in Worktree
+```bash
+git worktree add /Users/jackmcintyre/worktrees/issue-42 -b issue/42
+# Make changes, commit, push
+```
+
+### 2. Open PR
+Create PR via `gh pr create` (see Pull Request Workflow section)
+
+### 3. Merge to Test for Testing
+```bash
+git checkout test
+git pull origin test
+git merge --no-ff issue/42
+git push origin test
+# Auto-deploy triggers automatically
+```
+
+### 4. Test in Home Assistant
+Verify the changes work correctly in HA
+
+### 5. If Issues Found
+- Fix in the original worktree
+- Push to PR branch
+- Merge to test again:
+  ```bash
+  git checkout test
+  git merge --no-ff issue/42
+  git push origin test
+  ```
+- Retest
+
+### 6. When Satisfied
+Merge PR to main via GitHub (this closes the PR automatically)
+
+### 7. Cleanup
+```bash
+git worktree remove /Users/jackmcintyre/worktrees/issue-42
+git branch -d issue/42
+```
+
+## ⚠️ CRITICAL: PR State Check Before Committing
+
+**Before committing in a worktree, ALWAYS check if the PR is already merged:**
+
+```bash
+gh pr view --json state,number
+```
+
+### If PR State is `MERGED` or `CLOSED`:
+- **STOP** - Do NOT add commits to this branch
+- Create a NEW worktree for any additional work
+- Open a NEW PR for the new changes
+
+### Why This Matters
+- Prevents adding commits to already-merged PRs
+- Keeps git history clean
+- Avoids confusion about what's deployed
+
+## Post-Merge Cleanup
+
+After a PR is merged to main:
+
+```bash
+# 1. Remove the worktree
+git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
+
+# 2. Delete local branch (if merged)
+git branch -d {branch-name}
+
+# 3. Sync test with main (reset test to main)
+git checkout test
+git fetch origin
+git reset --hard origin/main
+git push origin test --force
+```
+
+## Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      DEVELOPMENT FLOW                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   worktree/issue-42  ──PR──►  test  ──merge──►  main           │
+│        │                        │                   │           │
+│        │                        │                   │           │
+│        │                   AUTO-DEPLOY         MANUAL DEPLOY    │
+│        │                        │                   │           │
+│        │                        ▼                   ▼           │
+│        │                   ┌─────────┐         ┌─────────┐      │
+│        └──────────────────►│   HA    │◄────────│   HA    │      │
+│           (for testing)    │ (test)  │         │ (prod)  │      │
+│                           └─────────┘         └─────────┘      │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+# Deploy Script Reference
+
+The `deploy.sh` script deploys LocalShift to Home Assistant.
+
+## Usage
+
+```bash
+./deploy.sh                    # Deploy test branch (default, for testing)
+./deploy.sh --branch main      # Deploy main branch (production)
+./deploy.sh --branch test      # Explicitly deploy test branch
+./deploy.sh --no-reload        # Deploy without reloading HA integration
+./deploy.sh --dry-run          # Preview changes without deploying
+./deploy.sh --watch            # Watch for changes and auto-deploy
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HA_CONFIG` | HA config directory | `/homeassistant` |
+| `HA_URL` | HA API URL | `http://homeassistant:8123` |
+| `HA_LONG_LIVED_TOKEN` | HA API token for reload | (none) |
+
+## What Deploy Does
+
+1. **Backs up** existing installation to `$HA_CONFIG/backups/`
+2. **Pulls** from the specified branch (test or main)
+3. **Copies** files from `custom_components/localshift/` to HA config
+4. **Reloads** integration via HA API (if token set)
+
+## When to Use Which Branch
+
+| Scenario | Command |
+|----------|---------|
+| Testing a PR | `./deploy.sh` (test branch) |
+| After merging to test | Automatic (auto-deploy) |
+| Production deployment | `./deploy.sh --branch main` |
+| Preview changes | `./deploy.sh --dry-run` |
+
+## User Requests for Deploy
+
+When the user says:
+- "deploy" → Run `./deploy.sh` (test branch)
+- "deploy to production" → Run `./deploy.sh --branch main`
+- "deploy main" → Run `./deploy.sh --branch main`
+- "preview deploy" → Run `./deploy.sh --dry-run`
+
 # GitHub Issues Workflow
 
 ## Overview
