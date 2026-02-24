@@ -1384,7 +1384,7 @@ class ThermalManager:
             # Clamp to reasonable range
             new_setpoint = max(16.0, min(30.0, new_setpoint))
 
-            # Turn on AC with correct HVAC mode
+            # Turn on AC with correct HVAC mode (blocking to ensure mode is set before temperature)
             try:
                 await self.hass.services.async_call(
                     "climate",
@@ -1393,7 +1393,7 @@ class ThermalManager:
                         "entity_id": entity_id,
                         "hvac_mode": hvac_mode,
                     },
-                    blocking=False,
+                    blocking=True,
                 )
                 _LOGGER.info(
                     "Turned on %s in %s mode (thermal control activated)",
