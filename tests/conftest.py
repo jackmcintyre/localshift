@@ -630,6 +630,58 @@ def mock_hass_various_states(request, realistic_entity_states):
 
 
 # =============================================================================
+# STORAGE MOCK FIXTURE
+# =============================================================================
+
+
+@pytest.fixture
+def mock_storage():
+    """Mock Home Assistant's Store class for storage operations.
+
+    This fixture patches Store at all locations where it's imported to return
+    a mock store that properly handles async_load() and async_save().
+
+    The mock store returns None from async_load() (empty storage) and
+    async_save() is a no-op AsyncMock.
+
+    Use this for tests that initialize components with persistent storage:
+    - DecisionOutcomeTracker
+    - ParameterOptimizer
+    - PatternAnalyzer
+    - OptimizationController
+    - ThermalManager
+    """
+    mock_store = MagicMock()
+    mock_store.async_load = AsyncMock(return_value=None)
+    mock_store.async_save = AsyncMock()
+
+    # Patch Store at all locations where it's imported
+    with (
+        patch(
+            "custom_components.localshift.computation_engine_lib.decision_outcome_tracker.Store",
+            return_value=mock_store,
+        ),
+        patch(
+            "custom_components.localshift.computation_engine_lib.parameter_optimizer.Store",
+            return_value=mock_store,
+        ),
+        patch(
+            "custom_components.localshift.computation_engine_lib.pattern_analyzer.Store",
+            return_value=mock_store,
+        ),
+        patch(
+            "custom_components.localshift.computation_engine_lib.optimization_controller.Store",
+            return_value=mock_store,
+        ),
+        patch(
+            "custom_components.localshift.thermal_manager.Store",
+            return_value=mock_store,
+        ),
+    ):
+        yield mock_store
+
+
+# =============================================================================
 # RECORDER MOCK FIXTURE
 # =============================================================================
 
