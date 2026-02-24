@@ -622,10 +622,15 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 | `preconditioning_active` | bool | Whether pre-conditioning is active |
 | `solar_taper_active` | bool | Whether solar tapering is active |
 | `taper_setpoint_offset` | float | Current setpoint offset from solar taper |
+| `climate_read_success` | bool | Whether climate entities were read successfully (Issue #193) |
+| `climate_missing_entities` | list | Climate entities not found in HA state machine |
+| `climate_unavailable_entities` | list | Climate entities that are unknown/unavailable |
+| `climate_entities_configured` | list | All configured climate entity IDs |
+| `climate_entities_controlled` | list | Climate entities marked for control |
 
 **Icon:** Dynamic (air-conditioner when active, air-conditioner-off when inactive)
 
-**Use Case:** Monitor the real-time thermal control layer. Check the `reason` attribute to understand why the system is in its current state.
+**Use Case:** Monitor the real-time thermal control layer. Check the `reason` attribute to understand why the system is in its current state. Use `climate_read_success` to diagnose why thermal control may not be activating - if `false`, check `climate_missing_entities` and `climate_unavailable_entities` for configuration issues.
 
 ---
 
