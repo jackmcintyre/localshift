@@ -12,8 +12,6 @@ from ..const import (
     BATTERY_CAPACITY_KWH,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
-    CONF_FORECAST_LOOKAHEAD_HOURS,
-    CONF_SPIKE_PRICE_PERCENTILE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -52,11 +50,8 @@ class SpikeAnalyzer:
         conservative_enabled = self._get_switch_state(
             SWITCH_SPIKE_DISCHARGE_CONSERVATIVE
         )
-        spike_percentile = float(
-            self.entry.options.get(
-                CONF_SPIKE_PRICE_PERCENTILE, DEFAULT_SPIKE_PRICE_PERCENTILE
-            )
-        )
+        # Hardcoded defaults (Issue #214)
+        spike_percentile = DEFAULT_SPIKE_PRICE_PERCENTILE
 
         data.spike_end_time = None
         data.spike_max_price = 0.0
@@ -68,11 +63,8 @@ class SpikeAnalyzer:
         if not conservative_enabled:
             return
 
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
-        )
+        # Hardcoded default (Issue #214)
+        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
 
         spike_end, max_price, spike_prices = self._analyze_spike_window(
             data.feed_in_forecast, now_dt, lookahead

@@ -20,7 +20,6 @@ from ..const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
-    CONF_LOAD_WEIGHT_RECENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
@@ -223,10 +222,8 @@ class ForecastComputer:
 
         Returns tuple of (kW, source_tag).
         """
-        # Get the weighting configuration
-        recent_weight = float(
-            self.entry.options.get(CONF_LOAD_WEIGHT_RECENT, DEFAULT_LOAD_WEIGHT_RECENT)
-        )
+        # Get the weighting configuration (hardcoded default - Issue #214)
+        recent_weight = DEFAULT_LOAD_WEIGHT_RECENT
         historical_weight = 1.0 - recent_weight
 
         historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
@@ -1461,9 +1458,8 @@ class ForecastComputer:
 
         # Get recent 1-hour load for weighted forecasting
         data.recent_load_1hr_kw = recent_load_kw
-        data.consumption_weighting = float(
-            self.entry.options.get(CONF_LOAD_WEIGHT_RECENT, DEFAULT_LOAD_WEIGHT_RECENT)
-        )
+        # Hardcoded weighting (Issue #214)
+        data.consumption_weighting = DEFAULT_LOAD_WEIGHT_RECENT
 
         if not all_solcast:
             _LOGGER.warning(

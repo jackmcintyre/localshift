@@ -29,7 +29,6 @@ from ..const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HEATING_THRESHOLD,
     CONF_HEATING_TRIGGER_TEMP,
-    CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
@@ -70,7 +69,6 @@ from ..const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HEATING_THRESHOLD,
     DEFAULT_HEATING_TRIGGER_TEMP,
-    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
@@ -286,7 +284,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_DEMAND_WINDOW_START: DEFAULT_DEMAND_WINDOW_START,
                 CONF_DEMAND_WINDOW_END: DEFAULT_DEMAND_WINDOW_END,
                 CONF_MANUAL_OVERRIDE_TIMEOUT: DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
-                CONF_LOAD_WEIGHT_RECENT: DEFAULT_LOAD_WEIGHT_RECENT,
                 CONF_MINIMUM_TARGET_SOC: DEFAULT_MINIMUM_TARGET_SOC,
                 CONF_ALLOW_DW_ENTRY_UNDER_TARGET: DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
                 # Weather correlation options
@@ -392,10 +389,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     CONF_BATTERY_TARGET: current.get(
                         CONF_BATTERY_TARGET,
                         DEFAULT_BATTERY_TARGET,
-                    ),
-                    CONF_LOAD_WEIGHT_RECENT: current.get(
-                        CONF_LOAD_WEIGHT_RECENT,
-                        DEFAULT_LOAD_WEIGHT_RECENT,
                     ),
                     CONF_MINIMUM_TARGET_SOC: current.get(
                         CONF_MINIMUM_TARGET_SOC,

@@ -298,13 +298,6 @@ THRESHOLD_RANGES = {
         "unit": "%",
         "icon": "mdi:battery-check",
     },
-    CONF_LOAD_WEIGHT_RECENT: {
-        "min": 0.0,
-        "max": 1.0,
-        "step": 0.05,
-        "unit": "",
-        "icon": "mdi:scale-balance",
-    },
     CONF_EXPORT_MIN_SPREAD: {
         "min": 0.00,
         "max": 0.30,

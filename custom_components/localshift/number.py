@@ -15,37 +15,26 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     CONF_BATTERY_TARGET,
-    CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     # Thermal manager thresholds (Issue #137)
     CONF_COOLING_TRIGGER_TEMP,
-    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
-    CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_HEATING_TRIGGER_TEMP,
-    CONF_LOAD_WEIGHT_RECENT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
-    CONF_SPIKE_PRICE_PERCENTILE,
-    CONF_TAPER_MAX_SETPOINT_OFFSET,
     DEFAULT_BATTERY_TARGET,
-    DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     # Thermal manager defaults
     DEFAULT_COOLING_TRIGGER_TEMP,
-    DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
-    DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_HEATING_TRIGGER_TEMP,
-    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
-    DEFAULT_SPIKE_PRICE_PERCENTILE,
-    DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
     DOMAIN,
     THRESHOLD_RANGES,
 )
 from .coordinator import LocalShiftCoordinator
 
 # Map of (config_key, name, default) for each number entity
+# Simplified per Issue #214 - removed rarely-tuned parameters with sensible defaults
 NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
     (
         CONF_CHEAP_PRICE_PERCENTILE,
@@ -53,23 +42,7 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         DEFAULT_CHEAP_PRICE_PERCENTILE,
     ),
     (CONF_MAX_PRECHARGE_PRICE, "Max Pre-charge Price", DEFAULT_MAX_PRECHARGE_PRICE),
-    (CONF_CHEAP_PRICE_DEADBAND, "Price Deadband", DEFAULT_CHEAP_PRICE_DEADBAND),
-    (
-        CONF_FORECAST_LOOKAHEAD_HOURS,
-        "Forecast Lookahead",
-        DEFAULT_FORECAST_LOOKAHEAD_HOURS,
-    ),
     (CONF_BATTERY_TARGET, "Battery Target", DEFAULT_BATTERY_TARGET),
-    (
-        CONF_LOAD_WEIGHT_RECENT,
-        "Load Weight Recent",
-        DEFAULT_LOAD_WEIGHT_RECENT,
-    ),
-    (
-        CONF_SPIKE_PRICE_PERCENTILE,
-        "Spike Price Percentile",
-        DEFAULT_SPIKE_PRICE_PERCENTILE,
-    ),
     (
         CONF_MINIMUM_TARGET_SOC,
         "Minimum Target SOC",
@@ -85,16 +58,6 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         CONF_HEATING_TRIGGER_TEMP,
         "Heating Trigger Temp",
         DEFAULT_HEATING_TRIGGER_TEMP,
-    ),
-    (
-        CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
-        "Dehumidify Trigger Humidity",
-        DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
-    ),
-    (
-        CONF_TAPER_MAX_SETPOINT_OFFSET,
-        "Solar Taper Max Offset",
-        DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
     ),
 ]
 
@@ -170,7 +133,6 @@ class LocalShiftNumber(NumberEntity):
         thermal_keys = {
             CONF_COOLING_TRIGGER_TEMP,
             CONF_HEATING_TRIGGER_TEMP,
-            CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
         }
 
         if self._conf_key in thermal_keys:
