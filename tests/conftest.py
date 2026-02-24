@@ -9,6 +9,7 @@ For tests that need realistic HA behavior, use:
 - realistic_entity_states: Default entity states for LocalShift
 """
 
+# Import asyncio for sleep mocking
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +33,32 @@ from tests.fixtures.ha_entities import (
     create_unavailable_entity_states,
     create_unknown_entity_states,
 )
+
+# =============================================================================
+# PERFORMANCE FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def mock_battery_sleep():
+    """Mock asyncio.sleep in battery_controller for instant tests.
+
+    This fixture eliminates the 1+ second delays in validate_transition
+    that would otherwise make battery controller tests very slow.
+
+    Usage:
+        @pytest.mark.usefixtures("mock_battery_sleep")
+        async def test_something(battery_controller):
+            # validate_transition will return instantly
+            ...
+    """
+    with patch(
+        "custom_components.localshift.battery_controller.asyncio.sleep",
+        new_callable=AsyncMock,
+    ) as mock:
+        mock.return_value = None
+        yield mock
+
 
 # =============================================================================
 # SIMPLE MOCKS (for basic unit tests)

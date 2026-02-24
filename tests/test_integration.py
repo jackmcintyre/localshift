@@ -352,10 +352,15 @@ class TestErrorHandlingAndRecovery:
         assert result is False
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_validation_timeout_handled(
         self, mock_hass, mock_get_entity_id, integration_data
     ):
-        """Test that validation timeout is handled gracefully."""
+        """Test that validation timeout is handled gracefully.
+
+        Note: With mock_battery_sleep, this test runs instantly but still
+        verifies the timeout logic by checking that mismatched state returns False.
+        """
         from custom_components.localshift.battery_controller import BatteryController
 
         # Create a proper mock for states BEFORE creating the controller
@@ -378,7 +383,7 @@ class TestErrorHandlingAndRecovery:
             timeout=2,  # Short timeout for test
         )
 
-        # Should return False after timeout
+        # Should return False after timeout (instantly with mock)
         assert result is False
 
 
