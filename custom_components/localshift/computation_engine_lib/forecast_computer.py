@@ -794,6 +794,17 @@ class ForecastComputer:
                     min_soc_pct=min_soc_pct,
                 )
 
+                # DEBUG: Log simulation parameters for troubleshooting
+                _LOGGER.info(
+                    "OVERNIGHT_SIM[%02d:%02d]: predicted_soc=%.1f%%, solar_start=%s, soc_at_solar_start=%.1f%%, sim_end=%s",
+                    slot_start.hour,
+                    slot_start.minute,
+                    predicted_soc,
+                    solar_start.strftime("%H:%M"),
+                    soc_at_solar_start,
+                    sim_end.strftime("%H:%M"),
+                )
+
                 # Now simulate from solar start to next DW
                 # ISSUE #137: Pass baseline for grid charging decisions
                 # FIX: Pass dw_end_time for proper DW-period max_soc tracking
