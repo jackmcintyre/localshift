@@ -149,56 +149,71 @@ Check with: `git worktree list`
 - `_reserve/*` branches are temporary worktrees for Cline session isolation
 - These can be cleaned up between sessions if not in use
 
-# ⚠️ MANDATORY: Testing Workflow (test → main Staging)
+# ⚠️ MANDATORY: Development & Deploy Workflow
 
-**All changes flow through `test` branch before reaching `main`.**
+**Cline deploys from worktrees and verifies via logs before opening PRs.**
 
-## Branch Roles
+## Workflow Overview
 
-| Branch | Purpose | Deploy Behavior |
-|--------|---------|-----------------|
-| `test` | Staging/testing | Auto-deploy on push |
-| `main` | Production | Manual deploy only |
-| `issue/*`, `fix/*`, `task/*` | Feature branches | Never deployed directly |
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      DEVELOPMENT FLOW                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   worktree/issue-42  ──deploy──►  HA  ──verify──►  PR ──► main │
+│        │                            │                           │
+│        │                       CHECK LOGS                       │
+│        │                            │                           │
+│        │                     ┌──────┴──────┐                    │
+│        │                     │             │                    │
+│        │                  SUCCESS       FAILURE                 │
+│        │                     │             │                    │
+│        │                     ▼             ▼                    │
+│        │                   PR to       Fix & Redeploy           │
+│        │                   main             │                   │
+│        │                                    └──► (loop)         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Workflow Steps
 
 ### 1. Develop in Worktree
 ```bash
 git worktree add /Users/jackmcintyre/worktrees/issue-42 -b issue/42
-# Make changes, commit, push
+# Make changes
 ```
 
-### 2. Open PR
-Create PR via `gh pr create` (see Pull Request Workflow section)
-
-### 3. Merge to Test for Testing
+### 2. Deploy from Worktree
 ```bash
-git checkout test
-git pull origin test
-git merge --no-ff issue/42
-git push origin test
-# Auto-deploy triggers automatically
+./deploy.sh
+```
+This deploys the current worktree state to Home Assistant.
+
+### 3. Check Logs (MANDATORY)
+**After every deploy, check logs to verify:**
+```bash
+tail -100 /homeassistant/home-assistant.log | grep -i "localshift"
 ```
 
-### 4. Test in Home Assistant
-Verify the changes work correctly in HA
+Look for:
+- No ERROR entries
+- No unexpected WARNING entries
+- Expected log messages appear (if you added logging)
+- Integration loaded successfully
 
-### 5. If Issues Found
-- Fix in the original worktree
-- Push to PR branch
-- Merge to test again:
-  ```bash
-  git checkout test
-  git merge --no-ff issue/42
-  git push origin test
-  ```
-- Retest
+### 4. If Issues Found
+- Fix in the worktree
+- Redeploy: `./deploy.sh`
+- Recheck logs
+- Repeat until successful
 
-### 6. When Satisfied
-Merge PR to main via GitHub (this closes the PR automatically)
+### 5. When Successful
+- Commit changes
+- Open PR to main
+- User merges when satisfied
 
-### 7. Cleanup
+### 6. Cleanup
 ```bash
 git worktree remove /Users/jackmcintyre/worktrees/issue-42
 git branch -d issue/42
@@ -232,34 +247,83 @@ git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
 
 # 2. Delete local branch (if merged)
 git branch -d {branch-name}
-
-# 3. Sync test with main (reset test to main)
-git checkout test
-git fetch origin
-git reset --hard origin/main
-git push origin test --force
 ```
 
-## Flow Diagram
+# Home Assistant Log Access
 
+## Overview
+Cline has direct access to Home Assistant logs for debugging and verification. This enables:
+- Automatic verification after deployments
+- Rapid debugging iteration cycles
+- Testing new features with temporary logging
+
+## Log File Location
+- **Path:** `/homeassistant/home-assistant.log`
+- **Format:** Standard HA log format with timestamps and module prefixes
+
+## When to Check Logs
+
+### After Every Deploy (MANDATORY)
+**ALWAYS check logs after deploying to verify the integration loaded correctly:**
+```bash
+# Check for LocalShift entries (last 100 lines)
+tail -100 /homeassistant/home-assistant.log | grep -i "localshift"
+
+# Check for errors and warnings only
+tail -100 /homeassistant/home-assistant.log | grep -i "localshift" | grep -i "error\|warning"
+
+# Check for specific module
+tail -100 /homeassistant/home-assistant.log | grep "custom_components.localshift.computation_engine"
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      DEVELOPMENT FLOW                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   worktree/issue-42  ──PR──►  test  ──merge──►  main           │
-│        │                        │                   │           │
-│        │                        │                   │           │
-│        │                   AUTO-DEPLOY         MANUAL DEPLOY    │
-│        │                        │                   │           │
-│        │                        ▼                   ▼           │
-│        │                   ┌─────────┐         ┌─────────┐      │
-│        └──────────────────►│   HA    │◄────────│   HA    │      │
-│           (for testing)    │ (test)  │         │ (prod)  │      │
-│                           └─────────┘         └─────────┘      │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+
+### When User Says "check logs"
+Run the appropriate log check based on context:
+- **General check:** `tail -100 /homeassistant/home-assistant.log | grep -i "localshift"`
+- **Errors only:** `tail -200 /homeassistant/home-assistant.log | grep -i "localshift" | grep -i "error\|warning"`
+- **Recent activity:** `tail -50 /homeassistant/home-assistant.log | grep -i "localshift"`
+- **Specific module:** `tail -100 /homeassistant/home-assistant.log | grep "localshift.<module_name>"`
+
+## Debugging Workflow
+
+### Adding Temporary Logging
+When debugging, add `_LOGGER.debug()` or `_LOGGER.info()` statements:
+```python
+_LOGGER.info("DEBUG: variable_name=%s, state=%s", variable_name, state)
 ```
+
+### Testing with Logs
+1. Add logging to code
+2. Deploy: `./deploy.sh`
+3. Check logs: `tail -100 /homeassistant/home-assistant.log | grep -i "localshift"`
+4. Verify behavior
+5. Remove or reduce logging before final commit
+
+### Log Levels
+- `DEBUG` - Detailed diagnostic info (not shown by default)
+- `INFO` - General operational messages
+- `WARNING` - Something unexpected but not breaking
+- `ERROR` - Something failed
+
+## Common Log Patterns
+
+| Pattern | Meaning |
+|---------|---------|
+| `custom_components.localshift` | Any LocalShift log |
+| `ERROR` | Something failed |
+| `WARNING` | Potential issue |
+| `coordinator` | Data refresh issues |
+| `state_machine` | Mode transition issues |
+| `battery_controller` | Battery control issues |
+| `computation_engine` | Calculation issues |
+| `thermal_manager` | HVAC/thermal issues |
+
+## User Commands for Logs
+
+When the user says:
+- "check logs" → Run general log check
+- "check for errors" → Run error-only check
+- "show recent activity" → Show last 20 LocalShift log entries
+- "debug [module]" → Show logs for specific module
 
 # Deploy Script Reference
 
@@ -268,9 +332,7 @@ The `deploy.sh` script deploys LocalShift to Home Assistant.
 ## Usage
 
 ```bash
-./deploy.sh                    # Deploy test branch (default, for testing)
-./deploy.sh --branch main      # Deploy main branch (production)
-./deploy.sh --branch test      # Explicitly deploy test branch
+./deploy.sh                    # Deploy current worktree state (default)
 ./deploy.sh --no-reload        # Deploy without reloading HA integration
 ./deploy.sh --dry-run          # Preview changes without deploying
 ./deploy.sh --watch            # Watch for changes and auto-deploy
@@ -287,26 +349,15 @@ The `deploy.sh` script deploys LocalShift to Home Assistant.
 ## What Deploy Does
 
 1. **Backs up** existing installation to `$HA_CONFIG/backups/`
-2. **Pulls** from the specified branch (test or main)
-3. **Copies** files from `custom_components/localshift/` to HA config
-4. **Reloads** integration via HA API (if token set)
-
-## When to Use Which Branch
-
-| Scenario | Command |
-|----------|---------|
-| Testing a PR | `./deploy.sh` (test branch) |
-| After merging to test | Automatic (auto-deploy) |
-| Production deployment | `./deploy.sh --branch main` |
-| Preview changes | `./deploy.sh --dry-run` |
+2. **Copies** files from current worktree to HA config
+3. **Reloads** integration via HA API (if token set)
 
 ## User Requests for Deploy
 
 When the user says:
-- "deploy" → Run `./deploy.sh` (test branch)
-- "deploy to production" → Run `./deploy.sh --branch main`
-- "deploy main" → Run `./deploy.sh --branch main`
+- "deploy" → Run `./deploy.sh`
 - "preview deploy" → Run `./deploy.sh --dry-run`
+- "watch mode" → Run `./deploy.sh --watch`
 
 # GitHub Issues Workflow
 
@@ -372,7 +423,7 @@ gh issue view {NNN}                           # View specific issue
 
 ### Task Completion Checklist
 1. Make all code changes in the worktree
-2. Run pre-commit hooks to verify code quality
+2. Deploy and verify via logs
 3. Commit changes with appropriate message
 4. **Open a PR using `gh pr create`**
 5. Only then consider the task complete
@@ -393,7 +444,7 @@ Brief description
 - Change 2
 
 ## Testing
-- Test details
+- Deployed and verified via logs
 
 Closes #NNN"
 ```
@@ -417,7 +468,7 @@ Brief description of changes
 - Change 2
 
 ## Testing
-- Test details
+- Deployed and verified via logs
 
 Closes #42
 ```
