@@ -748,7 +748,7 @@ class ThermalManager:
         data: CoordinatorData,
         now: datetime,
         demand_window_start: time,
-        _demand_window_end: time,
+        demand_window_end: time,  # pylint: disable=unused-argument
     ) -> tuple[bool, float]:
         """Determine if pre-conditioning should be active.
 
@@ -756,7 +756,7 @@ class ThermalManager:
             data: CoordinatorData with current state.
             now: Current datetime.
             demand_window_start: Demand window start time.
-            _demand_window_end: Demand window end time (unused, for API consistency).
+            demand_window_end: Demand window end time (unused, for API consistency).
 
         Returns:
             Tuple of (is_active, setpoint_offset).
