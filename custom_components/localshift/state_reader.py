@@ -434,7 +434,7 @@ class StateReader:
                 len(data.climate_unavailable_entities),
             )
 
-        # INFO-level logging for visibility (Issue #193 follow-up)
+        # Summary log at INFO level for visibility
         _LOGGER.info(
             "Climate states read: %d entities (%d controlled), success=%s",
             len(climate_states),
@@ -442,9 +442,9 @@ class StateReader:
             data.climate_read_success,
         )
 
-        # Log each entity's state at INFO level for troubleshooting
+        # Detailed per-entity logging at DEBUG level
         for entity_id, entity_state in climate_states.items():
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Climate entity: %s mode=%s action=%s setpoint=%.1f°C current=%.1f°C controlled=%s",
                 entity_id,
                 entity_state["state"],
