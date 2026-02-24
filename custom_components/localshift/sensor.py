@@ -954,6 +954,10 @@ class LearningStatusSensor(LocalShiftSensorBase):
             "mode_cost_attribution": {
                 k: round(v, 3) for k, v in metrics.mode_cost_attribution.items()
             },
+            # Optimization weights for multi-objective scoring (Issue #170 Phase 4)
+            "optimization_weights": d.optimization_weights,
+            # Active contextual adjustments (Issue #170 Phase 4)
+            "contextual_adjustments_active": d.contextual_adjustments_active,
         }
 
     @property
