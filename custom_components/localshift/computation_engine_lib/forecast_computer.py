@@ -578,10 +578,6 @@ class ForecastComputer:
             max_hours=max_hours,
         )
 
-    # Hysteresis margin for grid charging decisions (Issue #34)
-    # Once grid charging starts, require this much margin above target before stopping
-    GRID_CHARGE_HYSTERESIS_MARGIN_PCT = 5.0
-
     def _calculate_local_effective_cheap_price(
         self,
         slot_start: datetime,

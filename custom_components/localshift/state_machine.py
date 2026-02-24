@@ -93,6 +93,7 @@ class StateMachine:
         # control of the Powerwall and ignore external API commands.
         self._tesla_override_detected: bool = False
         self._tesla_override_detected_at: datetime | None = None
+        self._tesla_override_released_at: datetime | None = None  # Track when Tesla released control
 
     def _detect_tesla_override(self, data: CoordinatorData) -> bool:
         """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
@@ -623,11 +624,33 @@ class StateMachine:
                     else timedelta(0)
                 )
                 _LOGGER.info(
-                    "[TESLA OVERRIDE] Tesla has released control after %s. Resuming normal health checks.",
+                    "[TESLA OVERRIDE] Tesla has released control after %s. "
+                    "Applying %s cooldown before resuming health checks.",
                     duration,
+                    TESLA_OVERRIDE_COOLDOWN,
                 )
                 self._tesla_override_detected = False
+                self._tesla_override_released_at = now  # Track when Tesla released control
                 self._tesla_override_detected_at = None
+
+        # --- Tesla Override Cooldown ---
+        # After Tesla releases control, wait for the cooldown period before resuming
+        # health check corrections. This prevents conflicts during the transition.
+        if self._tesla_override_released_at is not None:
+            time_since_release = now - self._tesla_override_released_at
+            if time_since_release < TESLA_OVERRIDE_COOLDOWN:
+                remaining = (TESLA_OVERRIDE_COOLDOWN - time_since_release).total_seconds()
+                _LOGGER.debug(
+                    "[HEALTH CHECK] Skipping - in Tesla override cooldown (%.0fs remaining)",
+                    remaining,
+                )
+                return
+            else:
+                # Cooldown period has elapsed, clear the timestamp
+                _LOGGER.info(
+                    "[TESLA OVERRIDE] Cooldown period elapsed, resuming normal health checks"
+                )
+                self._tesla_override_released_at = None
 
         # Skip health check during transition grace period
         # This prevents false positives when Tesla API is still propagating

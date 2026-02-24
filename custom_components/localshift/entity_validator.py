@@ -77,16 +77,17 @@ class EntityHealth:
     last_valid_time: datetime | None = None
     error_message: str = ""
     consecutive_failures: int = 0
+    is_broken: bool = False  # Marked broken after FAILURE_THRESHOLD_ERROR failures
 
     @property
     def is_healthy(self) -> bool:
         """Return True if entity is healthy."""
-        return self.status == EntityStatus.OK
+        return self.status == EntityStatus.OK and not self.is_broken
 
     @property
     def is_available(self) -> bool:
         """Return True if entity has a usable value."""
-        return self.status in (EntityStatus.OK, EntityStatus.STALE)
+        return self.status in (EntityStatus.OK, EntityStatus.STALE) and not self.is_broken
 
 
 @dataclass
@@ -278,6 +279,7 @@ class EntityValidator:
             health.status = EntityStatus.MISSING
             health.error_message = f"Entity '{entity_id}' does not exist"
             health.consecutive_failures += 1
+            self._check_failure_thresholds(health, config_key)
             return health
 
         # Check if entity is unavailable or unknown
@@ -285,12 +287,14 @@ class EntityValidator:
             health.status = EntityStatus.UNAVAILABLE
             health.error_message = f"Entity '{entity_id}' is unavailable"
             health.consecutive_failures += 1
+            self._check_failure_thresholds(health, config_key)
             return health
 
         if state.state == "unknown":
             health.status = EntityStatus.UNKNOWN
             health.error_message = f"Entity '{entity_id}' has unknown state"
             health.consecutive_failures += 1
+            self._check_failure_thresholds(health, config_key)
             return health
 
         # Validate the value if we have validation rules
@@ -301,6 +305,7 @@ class EntityValidator:
             health.status = EntityStatus.INVALID_VALUE
             health.error_message = validation.error_message
             health.consecutive_failures += 1
+            self._check_failure_thresholds(health, config_key)
             return health
 
         # Check for staleness
@@ -324,6 +329,37 @@ class EntityValidator:
         health.consecutive_failures = 0
 
         return health
+
+    def _check_failure_thresholds(self, health: EntityHealth, config_key: str) -> None:
+        """Check failure thresholds and escalate status if needed.
+
+        Logs warnings at FAILURE_THRESHOLD_WARNING failures.
+        Marks entity as broken at FAILURE_THRESHOLD_ERROR failures.
+
+        Args:
+            health: EntityHealth to check
+            config_key: Configuration key for logging
+        """
+        # Log warning at threshold
+        if health.consecutive_failures == FAILURE_THRESHOLD_WARNING:
+            _LOGGER.warning(
+                "Entity '%s' (%s) has failed %d times consecutively - monitoring closely",
+                health.entity_id,
+                config_key,
+                health.consecutive_failures,
+            )
+
+        # Mark as broken at error threshold
+        if health.consecutive_failures >= FAILURE_THRESHOLD_ERROR:
+            if not health.is_broken:
+                health.is_broken = True
+                _LOGGER.error(
+                    "Entity '%s' (%s) marked as BROKEN after %d consecutive failures - "
+                    "check entity configuration or sensor availability",
+                    health.entity_id,
+                    config_key,
+                    health.consecutive_failures,
+                )
 
     def _validate_entity_value(
         self, config_key: str, state_value: str, attributes: dict
@@ -552,6 +588,7 @@ class EntityValidator:
                     else None
                 ),
                 "consecutive_failures": health.consecutive_failures,
+                "is_broken": health.is_broken,
                 "error_message": health.error_message if health.error_message else None,
             }
 
@@ -597,11 +634,20 @@ class EntityValidator:
         # Check all required entities
         for config_key, health in self._entity_health.items():
             if health.category == EntityCategory.REQUIRED:
+                # Block if entity is missing, unavailable, or marked as broken
                 if health.status in (EntityStatus.MISSING, EntityStatus.UNAVAILABLE):
                     _LOGGER.warning(
                         "Automation blocked: required entity '%s' is %s",
                         config_key,
                         health.status.value,
+                    )
+                    return False
+                if health.is_broken:
+                    _LOGGER.warning(
+                        "Automation blocked: required entity '%s' is marked as BROKEN "
+                        "(%d consecutive failures)",
+                        config_key,
+                        health.consecutive_failures,
                     )
                     return False
 
