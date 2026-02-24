@@ -26,7 +26,6 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_COOLING_TRIGGER_TEMP,
-    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
     CONF_HEATING_TRIGGER_TEMP,
     CONF_HVAC_SAMPLE_INTERVAL,
     CONF_MIN_SETPOINT_CHANGE_INTERVAL,
@@ -34,7 +33,6 @@ from .const import (
     CONF_PRECONDITION_HOURS_BEFORE_DW,
     CONF_PRECONDITION_TEMP_OFFSET,
     CONF_SOLAR_TAPER_ENABLED,
-    CONF_TAPER_MAX_SETPOINT_OFFSET,
     CONF_TEMP_MODEL_MIN_SAMPLES,
     CONF_THERMAL_HYSTERESIS,
     CONF_THERMAL_MANAGEMENT_ENABLED,
@@ -288,10 +286,8 @@ class ThermalManager:
         return self._get_option(CONF_HEATING_TRIGGER_TEMP, DEFAULT_HEATING_TRIGGER_TEMP)
 
     def get_dehumidify_trigger_humidity(self) -> float:
-        """Get dehumidify trigger humidity threshold."""
-        return self._get_option(
-            CONF_DEHUMIDIFY_TRIGGER_HUMIDITY, DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY
-        )
+        """Get dehumidify trigger humidity threshold (hardcoded - Issue #214)."""
+        return DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY
 
     def get_precondition_hours(self) -> float:
         """Get hours before DW to start pre-conditioning."""
@@ -306,10 +302,8 @@ class ThermalManager:
         )
 
     def get_taper_max_offset(self) -> float:
-        """Get max setpoint offset for solar tapering."""
-        return self._get_option(
-            CONF_TAPER_MAX_SETPOINT_OFFSET, DEFAULT_TAPER_MAX_SETPOINT_OFFSET
-        )
+        """Get max setpoint offset for solar tapering (hardcoded - Issue #214)."""
+        return DEFAULT_TAPER_MAX_SETPOINT_OFFSET
 
     def get_thermal_hysteresis(self) -> float:
         """Get thermal hysteresis (deadband between on/off)."""

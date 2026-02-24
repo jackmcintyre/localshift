@@ -25,7 +25,6 @@ from ..const import (
     CONF_EXPORT_PRICE_MARGIN,
     CONF_HEATING_THRESHOLD,
     CONF_HEATING_TRIGGER_TEMP,
-    CONF_LOAD_WEIGHT_RECENT,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MIN_SETPOINT_CHANGE_INTERVAL,
@@ -71,7 +70,6 @@ from ..const import (
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_HEATING_THRESHOLD,
     DEFAULT_HEATING_TRIGGER_TEMP,
-    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
@@ -435,24 +433,6 @@ def build_options_schema(
                     max=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["max"],
                     step=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["step"],
                     unit_of_measurement=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            # Advanced settings
-            vol.Required(
-                CONF_LOAD_WEIGHT_RECENT,
-                default=values.get(
-                    CONF_LOAD_WEIGHT_RECENT,
-                    DEFAULT_LOAD_WEIGHT_RECENT,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["min"],
-                    max=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["max"],
-                    step=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_LOAD_WEIGHT_RECENT][
                         "unit"
                     ],
                     mode=selector.NumberSelectorMode.SLIDER,

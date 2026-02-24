@@ -34,11 +34,8 @@ from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_GRID_KW,
     CONF_BATTERY_TARGET,
-    CONF_CHEAP_PRICE_DEADBAND,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
-    CONF_FORECAST_LOOKAHEAD_HOURS,
-    CONF_LOAD_WEIGHT_RECENT,
     CONF_SUN_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
@@ -301,11 +298,8 @@ class ComputationEngine:
         self._compute_effective_cheap_price(data, now_dt, before_dw, target_hour)
 
         # ---- Step 8: cheap_charge_stop_price ----
-        deadband = float(
-            self.entry.options.get(
-                CONF_CHEAP_PRICE_DEADBAND, DEFAULT_CHEAP_PRICE_DEADBAND
-            )
-        )
+        # Hardcoded deadband (Issue #214)
+        deadband = DEFAULT_CHEAP_PRICE_DEADBAND
         data.cheap_charge_stop_price = round(data.effective_cheap_price + deadband, 2)
 
         # ---- Step 4: solar_battery_forecast (legacy - for backwards compatibility) ----
@@ -315,11 +309,8 @@ class ComputationEngine:
         )
 
         # ---- Step 9: forecast_spike_within_window ----
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
-        )
+        # Hardcoded lookahead (Issue #214)
+        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
         cutoff = now_dt + timedelta(hours=lookahead)
         data.forecast_spike_within_window = self._scan_forecast_for_spike(
             data.feed_in_forecast, now_dt, cutoff
@@ -1009,10 +1000,8 @@ class ComputationEngine:
         # Get recent 1-hour load for weighted blending
         recent_load_kw = self._recent_load_1hr_kw
 
-        # Get weighting configuration
-        recent_weight = float(
-            self.entry.options.get(CONF_LOAD_WEIGHT_RECENT, DEFAULT_LOAD_WEIGHT_RECENT)
-        )
+        # Get weighting configuration (hardcoded default - Issue #214)
+        recent_weight = DEFAULT_LOAD_WEIGHT_RECENT
         historical_weight = 1.0 - recent_weight
 
         if hourly_avg_kw:

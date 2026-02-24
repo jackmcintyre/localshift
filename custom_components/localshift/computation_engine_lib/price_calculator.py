@@ -13,7 +13,6 @@ from ..const import (
     BATTERY_CAPACITY_KWH,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
-    CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_MAX_PRECHARGE_PRICE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -187,11 +186,8 @@ class PriceCalculator:
         Uses a simple solar/load estimate to break circular dependencies before
         full forecast computation has run.
         """
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
-        )
+        # Hardcoded default (Issue #214)
+        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
         cutoff = now_dt + timedelta(hours=lookahead)
 
         forecast_prices = []
@@ -277,11 +273,8 @@ class PriceCalculator:
         target_hour: int,
     ) -> None:
         """Compute final effective cheap price threshold."""
-        lookahead = float(
-            self.entry.options.get(
-                CONF_FORECAST_LOOKAHEAD_HOURS, DEFAULT_FORECAST_LOOKAHEAD_HOURS
-            )
-        )
+        # Hardcoded default (Issue #214)
+        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
         cutoff = now_dt + timedelta(hours=lookahead)
 
         forecast_prices = []
