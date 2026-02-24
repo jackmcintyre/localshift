@@ -1,6 +1,7 @@
 """Unit tests for BatteryController."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock as AsyncMockClass
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -74,6 +75,7 @@ class TestSetSelfConsumption:
     """Tests for set_self_consumption method."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_self_consumption_success(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -127,6 +129,7 @@ class TestSetSelfConsumption:
         assert result is False
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_self_consumption_preserves_manual_override(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -166,6 +169,7 @@ class TestSetForceCharge:
     """Tests for set_force_charge method."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_charge_success(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -234,6 +238,7 @@ class TestSetBoostCharge:
     """Tests for set_boost_charge method."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_boost_charge_success(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -270,6 +275,7 @@ class TestSetBoostCharge:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_boost_charge_sets_100_reserve(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -313,6 +319,7 @@ class TestSetForceDischarge:
     """Tests for set_force_discharge method."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_discharge_success(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -351,6 +358,7 @@ class TestSetForceDischarge:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_discharge_with_reserve_soc_override(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -386,6 +394,7 @@ class TestSetForceDischarge:
         assert reserve_call[0][2]["value"] == 20
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_discharge_uses_minimum_target_soc(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -420,6 +429,7 @@ class TestSetForceDischarge:
         assert reserve_call[0][2]["value"] == 15
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_discharge_sets_battery_ok_export(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -465,6 +475,7 @@ class TestSetProactiveExport:
     """Tests for set_proactive_export method."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_proactive_export_success(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -502,6 +513,7 @@ class TestSetProactiveExport:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_proactive_export_dynamic_reserve(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -534,6 +546,7 @@ class TestSetProactiveExport:
         assert reserve_call[0][2]["value"] == 55  # 60 - 5
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_proactive_export_minimum_reserve(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -566,6 +579,7 @@ class TestSetProactiveExport:
         assert reserve_call[0][2]["value"] == 4  # max(4, 5-5) = max(4, 0) = 4
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_proactive_export_sets_battery_ok_export(
         self, battery_controller, coordinator_data, mock_hass
     ):
@@ -608,6 +622,7 @@ class TestValidateTransition:
     """Tests for validate_transition method."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_validate_transition_success(self, battery_controller, mock_hass):
         """Test successful validation when state matches."""
 
@@ -634,7 +649,12 @@ class TestValidateTransition:
 
     @pytest.mark.asyncio
     async def test_validate_transition_timeout(self, battery_controller, mock_hass):
-        """Test validation fails after timeout."""
+        """Test validation fails after timeout.
+
+        Note: With mock_battery_sleep, this test runs instantly but still
+        verifies the timeout logic by checking that mismatched state returns False.
+        The mock removes the real-time delay while preserving the loop behavior.
+        """
 
         def mock_get_state(entity_id):
             state = MagicMock()
@@ -646,15 +666,21 @@ class TestValidateTransition:
 
         mock_hass.states.get = mock_get_state
 
-        result = await battery_controller.validate_transition(
-            expected_operation_mode="autonomous",
-            expected_backup_reserve=50,
-            timeout=2,
-        )
+        # Use mock_battery_sleep to make this instant
+        with patch(
+            "custom_components.localshift.battery_controller.asyncio.sleep",
+            new_callable=AsyncMockClass,
+        ):
+            result = await battery_controller.validate_transition(
+                expected_operation_mode="autonomous",
+                expected_backup_reserve=50,
+                timeout=2,
+            )
 
         assert result is False
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_validate_transition_reserve_tolerance(
         self, battery_controller, mock_hass
     ):
@@ -679,6 +705,7 @@ class TestValidateTransition:
         assert result is True
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_validate_transition_succeeds_on_operation_mode_match(
         self, battery_controller, mock_hass
     ):
@@ -710,6 +737,7 @@ class TestValidateTransition:
         assert result is True
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_validate_transition_without_export_mode(
         self, battery_controller, mock_hass
     ):

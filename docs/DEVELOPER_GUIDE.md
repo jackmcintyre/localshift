@@ -456,6 +456,135 @@ After setup, users can configure all settings via **Configure**:
 
 **Note:** All options are stored in `entry.options` (not `entry.data`) so they can be changed without reconfiguring the entire integration. For backward compatibility, the coordinator checks `options` first, then falls back to `data` for existing entries.
 
+## Learning System Internals
+
+The learning system (Issue #170) provides adaptive parameter optimization. This section covers how to extend and debug it.
+
+### Architecture Overview
+
+The learning system consists of four main components:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `DecisionOutcomeTracker` | `decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
+| `ParameterOptimizer` | `parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
+| `PatternAnalyzer` | `pattern_analyzer.py` | Detects systematic biases across dimensions |
+| `OptimizationController` | `optimization_controller.py` | Real-time parameter evaluation |
+
+### Adding New Optimizable Parameters
+
+To add a new parameter that the learning system can adjust:
+
+#### 1. Define the parameter in `const.py`
+
+```python
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class OptimizableParam:
+    """Definition of a parameter that the learning system can adjust."""
+    name: str
+    default: float
+    min_val: float
+    max_val: float
+    step: float
+    description: str
+
+OPTIMIZABLE_PARAMS: dict[str, OptimizableParam] = {
+    # ... existing parameters ...
+    "new_parameter": OptimizableParam(
+        name="new_parameter",
+        default=0.0,
+        min_val=-10.0,
+        max_val=10.0,
+        step=1.0,
+        description="Description of what this parameter does.",
+    ),
+}
+```
+
+#### 2. Apply the parameter in the decision engine
+
+```python
+# In grid_charge_decision.py, proactive_export.py, or forecast_computer.py
+
+def _should_grid_charge_at_slot(self, ...):
+    # Get the adaptive parameter
+    new_param = self._adaptive_params.get("new_parameter", 0.0) if self._adaptive_params else 0.0
+    
+    # Apply it to the decision logic
+    adjusted_value = base_value + new_param
+```
+
+#### 3. Update `ForecastComputer.set_adaptive_params()`
+
+Ensure the new parameter is propagated to the relevant sub-engines:
+
+```python
+def set_adaptive_params(self, params: AdaptiveParameters | None) -> None:
+    self._adaptive_params = params
+    if self._grid_charge_decision:
+        self._grid_charge_decision.set_adaptive_params(params)
+    # Propagate to other engines as needed
+```
+
+### Testing the Feedback Loop
+
+The learning system can be tested using the integration test framework:
+
+```python
+# tests/test_learning_integration.py
+
+async def test_learning_improves_decisions():
+    """Verify that learning improves decision quality over time."""
+    # 1. Create mock coordinator with learning enabled
+    # 2. Simulate 100 decisions with varying outcomes
+    # 3. Verify parameter adjustments are made
+    # 4. Verify later decisions have higher scores
+```
+
+### Debugging Learning Issues
+
+**Parameter not changing:**
+- Check `sensor.localshift_learning_status` — phase should be "tuning" or "optimizing"
+- Verify 50+ decisions have been recorded (warm-up requirement)
+- Check `switch.localshift_enable_learning` is ON
+
+**Unexpected parameter values:**
+- Review `sensor.localshift_decision_history` for recent decisions
+- Check outcome scores — low scores trigger parameter adjustments
+- Use `button.localshift_reset_learning` to start fresh
+
+**Learning stuck in "observing":**
+- Normal during first 2-3 days
+- Verify decisions are being recorded in `decision_history`
+- Check coordinator logs for decision tracking
+
+### Storage Structure
+
+Learning data is persisted in HA Storage under these keys:
+
+```python
+# Storage keys (scoped to entry_id)
+f"localshift.decision_outcomes.{entry_id}"  # DecisionRecord list
+f"localshift.param_optimizer.{entry_id}"    # ParameterOptimizer state
+f"localshift.pattern_analysis.{entry_id}"   # PatternAnalyzer data
+f"localshift.opt_controller.{entry_id}"     # OptimizationController weights
+```
+
+### Safety Mechanisms
+
+The learning system has built-in safety rails:
+
+| Mechanism | Implementation |
+|-----------|----------------|
+| Warm-up period | `min_observations = 50` in ParameterOptimizer |
+| Step limits | Parameters move max 1 step per update |
+| Bounds clamping | All values clamped to `min_val`/`max_val` |
+| Rollback | 3 consecutive days of declining score triggers revert |
+
+---
+
 ## Adding New Battery Modes
 
 To add a new battery mode:

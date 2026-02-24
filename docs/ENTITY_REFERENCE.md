@@ -4,15 +4,15 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **54 entities** grouped under a single "LocalShift" device:
+The integration creates **61 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 20 | `sensor` |
-| Binary Sensors | 11 | `binary_sensor` |
-| Switches | 10 | `switch` |
+| Sensors | 26 | `sensor` |
+| Binary Sensors | 10 | `binary_sensor` |
+| Switches | 11 | `switch` |
 | Numbers | 8 | `number` |
-| Buttons | 5 | `button` |
+| Buttons | 6 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
 
@@ -488,7 +488,99 @@ Added in Issue #94 for detailed diagnostics and troubleshooting.
 
 ---
 
-### 19. sensor.localshift_average_room_temp
+### 19. sensor.localshift_learning_status
+
+**Purpose:** Current learning system status and parameter values.
+
+Added in Issue #170 Phase 5 for learning system observability.
+
+**State:** Current learning phase: `observing`, `tuning`, `optimizing`, or `disabled`
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `update_count` | int | Number of parameter updates made |
+| `last_updated` | string | ISO timestamp of last parameter update |
+| `parameters` | dict | Current parameter values with confidence scores |
+| `optimization_weights` | dict | Objective weights for multi-objective scoring |
+| `active_bias_corrections` | list | Currently active bias corrections from pattern analysis |
+| `contextual_adjustments` | list | Active contextual adjustments |
+
+**Parameters Dict Structure:**
+
+Each parameter entry contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `value` | float | Current parameter value |
+| `confidence` | float | 0.0-1.0 confidence score |
+| `default` | float | Default (zero-offset) value |
+| `range` | string | Min/max bounds |
+
+**Use Case:** Monitor learning system progress and parameter adjustments. Use to verify the system is learning appropriate values.
+
+---
+
+### 20. sensor.localshift_decision_quality
+
+**Purpose:** Rolling decision quality score.
+
+Added in Issue #170 Phase 5 for tracking learning system effectiveness.
+
+**State:** Today's average decision quality as percentage (0-100%)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `total_decisions_today` | int | Count of decisions made today |
+| `avg_score_7d` | float | 7-day rolling average quality (%) |
+| `cost_trend` | string | `improving`, `stable`, or `degrading` |
+| `grid_charge_efficiency` | float | Grid charge efficiency (0-1) |
+| `export_loss_ratio` | float | Ratio of wasted exports (0-1) |
+| `mode_durations_today` | dict | Minutes spent in each mode today |
+| `mode_cost_attribution` | dict | Cost/savings attributed to each mode |
+
+**Use Case:** Track whether the learning system is improving decision quality over time. A rising score and `improving` cost trend indicate effective learning.
+
+---
+
+### 21. sensor.localshift_decision_history
+
+**Purpose:** Recent decision history with outcomes.
+
+Added in Issue #170 Phase 5 for learning system debugging.
+
+**State:** Count of decisions in last 24 hours
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `decisions` | list | Last 20 decisions with context and outcomes |
+| `pattern_report` | dict | Latest pattern analysis summary |
+
+**Decision Entry Structure:**
+
+Each decision entry contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | string | When decision was made |
+| `mode_chosen` | string | Battery mode selected |
+| `previous_mode` | string | Previous battery mode |
+| `soc_at_decision` | float | SOC at decision time |
+| `buy_price` | float | Buy price at decision time |
+| `sell_price` | float | Feed-in price at decision time |
+| `outcome_score` | float | Decision quality score (0-1) |
+| `actual_cost` | float | Actual cost during decision period |
+
+**Use Case:** Debug specific decisions and understand why modes changed. Review `outcome_score` to see which decisions were optimal.
+
+---
+
+### 22. sensor.localshift_average_room_temp
 
 **Purpose:** Average room temperature from configured climate entities.
 
@@ -511,7 +603,7 @@ Added in Issue #63 Phase 6 for real-time thermal control.
 
 ---
 
-### 20. sensor.localshift_realtime_thermal_status
+### 23. sensor.localshift_realtime_thermal_status
 
 **Purpose:** Real-time thermal control status and reason.
 
@@ -798,6 +890,24 @@ Use this to test automation behavior without affecting actual battery state.
 
 ---
 
+### 11. switch.localshift_enable_learning
+
+**Purpose:** Enable the learning system to adjust parameters.
+
+Added in Issue #170 Phase 4 for user control over learning system.
+
+**Default:** OFF
+
+**Behavior:**
+- ON: Learning system can adjust parameters based on outcomes
+- OFF: Learning system observes only, parameters stay at defaults
+
+**Use Case:** Enable after the system has collected enough data (~50 decisions, typically 2-3 days). Disable if you want to pause learning or return to default behavior.
+
+**Note:** When disabled, the system still tracks decisions for observability, but uses default (zero-offset) parameters for all decisions.
+
+---
+
 ## Numbers (Configuration Thresholds)
 
 ### 1. number.localshift_cheap_price_percentile
@@ -959,6 +1069,25 @@ This is the floor SOC during spike discharge and proactive export modes. Protect
 **Effect:** Clears the historical load cache and triggers a forecast regeneration
 
 **Use Case:** Manually refresh forecast data after external changes or for debugging.
+
+---
+
+### 6. button.localshift_reset_learning
+
+**Action:** Reset all learning system data and start fresh.
+
+Added in Issue #170 Phase 5 for user control over learning system state.
+
+**Effect:**
+- Clears all decision records
+- Resets learned parameters to defaults
+- Returns learning status to "observing" phase
+- Clears pattern analysis data
+- Resets optimization weights
+
+**Use Case:** Start fresh after significant household changes, or if the system has learned sub-optimal parameters.
+
+**Warning:** This erases all learned data. The system will need another 2-3 days of observation before parameter optimization resumes.
 
 ---
 

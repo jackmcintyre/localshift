@@ -213,6 +213,152 @@ For specific entity issues:
 
 ---
 
+## Learning System Issues
+
+### Learning Status Stuck on "observing"
+
+**Symptoms:**
+- `sensor.localshift_learning_status` shows `observing` for days
+- Parameters never change from defaults
+
+**Causes:**
+- Not enough decisions recorded (needs 50+)
+- `switch.localshift_enable_learning` is OFF
+- State machine not making mode transitions
+
+**Solutions:**
+1. Check `sensor.localshift_decision_history` count — needs to be 50+
+2. Enable `switch.localshift_enable_learning`
+3. Verify state machine is running — check `sensor.localshift_battery_mode` for changes
+4. Wait 2-3 days for warm-up period to complete
+
+**Expected Timeline:**
+- Days 1-3: Observing phase (collecting data)
+- Day 3+: Tuning phase (parameter adjustments begin)
+- Week 2+: Optimizing phase (full optimization active)
+
+---
+
+### How Do I Reset Learning Data?
+
+**When to Reset:**
+- After significant household changes (new appliances, solar panels, etc.)
+- If learned parameters seem sub-optimal
+- To start fresh after testing
+
+**How to Reset:**
+1. Go to Settings → Devices & Services → LocalShift
+2. Find `button.localshift_reset_learning`
+3. Press the button
+
+**What Gets Reset:**
+- All decision records cleared
+- Learned parameters reset to defaults
+- Pattern analysis data cleared
+- Optimization weights reset
+- Learning status returns to "observing"
+
+**Note:** The system will need another 2-3 days of observation before parameter optimization resumes.
+
+---
+
+### Can I Disable the Learning System?
+
+**Yes.** Use `switch.localshift_enable_learning`:
+
+- **ON**: Learning system can adjust parameters
+- **OFF**: Learning system observes only, parameters stay at defaults
+
+**When Disabled:**
+- Decisions are still tracked for observability
+- All parameters remain at default (zero-offset) values
+- No behavioral changes occur
+
+**When to Disable:**
+- If you prefer manual control over all parameters
+- During testing or troubleshooting
+- If learned behavior is not desired
+
+---
+
+### Decision Quality Score Not Improving
+
+**Symptoms:**
+- `sensor.localshift_decision_quality` shows low or declining scores
+- `cost_trend` attribute shows "degrading"
+
+**Causes:**
+- Unusual price patterns (volatility)
+- Solar forecast inaccuracies
+- Consumption pattern changes
+- Learning parameters not yet optimal
+
+**Solutions:**
+1. Check `sensor.localshift_decision_history` for low-scoring decisions
+2. Review `sensor.localshift_learning_status` parameters — are they sensible?
+3. If parameters are extreme, reset learning and start fresh
+4. Wait for more data — learning improves over time
+
+**What to Monitor:**
+- `avg_score_7d` should trend upward over weeks
+- `grid_charge_efficiency` should improve (closer to 1.0)
+- `export_loss_ratio` should decrease (closer to 0.0)
+
+---
+
+### Learning System Not Persisting Across Restarts
+
+**Symptoms:**
+- Learning status resets to "observing" after Home Assistant restart
+- Decision history is empty after restart
+
+**Causes:**
+- Storage initialization failure
+- Corrupted storage data
+
+**Solutions:**
+1. Check Home Assistant logs for storage errors
+2. Verify `.storage/` directory is writable
+3. Look for errors containing "localshift" and "storage"
+
+**Storage Keys Used:**
+- `localshift.decision_outcomes.{entry_id}`
+- `localshift.param_optimizer.{entry_id}`
+- `localshift.pattern_analysis.{entry_id}`
+- `localshift.opt_controller.{entry_id}`
+
+---
+
+### Parameter Values Seem Incorrect
+
+**Symptoms:**
+- Learned parameters are at extreme values
+- Battery behavior doesn't match expectations
+
+**Causes:**
+- Insufficient data during learning
+- Unusual operating conditions
+- Bias in training data
+
+**Solutions:**
+1. Review parameters in `sensor.localshift_learning_status`
+2. Compare current values to defaults (all defaults are 0.0)
+3. If values are at min/max bounds, consider resetting
+4. Check if the learning switch was enabled prematurely
+
+**Parameter Ranges:**
+
+| Parameter | Range | Default |
+|-----------|-------|---------|
+| `cheap_price_bias` | -5.0 to +5.0 c/kWh | 0.0 |
+| `solar_confidence_factor` | 0.5 to 1.5 | 1.0 |
+| `overnight_drain_safety_margin` | -5.0 to +10.0 % | 0.0 |
+| `grid_charge_soc_headroom` | -5.0 to +10.0 % | 0.0 |
+| `export_threshold_adjustment` | -3.0 to +3.0 c/kWh | 0.0 |
+| `consumption_forecast_bias` | -0.5 to +0.5 kW | 0.0 |
+
+---
+
 ## Getting Help
 
 If issues persist after troubleshooting:

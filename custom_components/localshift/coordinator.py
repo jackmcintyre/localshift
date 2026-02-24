@@ -872,6 +872,34 @@ class LocalShiftCoordinator:
         self._notify_listeners()
         await self.async_evaluate_state_machine()
 
+    async def async_redetermine_thermal_mode(self) -> None:
+        """Re-determine thermal mode after configuration changes.
+
+        Unlocks the daily thermal mode and re-runs the determination logic.
+        Called when thermal-related thresholds (heating/cooling trigger temps,
+        dehumidify trigger humidity) are changed by the user.
+        """
+        if self._thermal_manager is None:
+            return
+
+        if not self._thermal_manager.is_enabled():
+            _LOGGER.debug("Thermal management disabled, skipping re-determination")
+            return
+
+        # Unlock the mode to allow re-determination
+        self.data.daily_mode_locked = False
+        self.data.daily_mode_determined_at = ""
+
+        _LOGGER.info("Thermal mode unlocked for re-determination due to config change")
+
+        # Re-determine mode from current weather forecast
+        await self._determine_thermal_mode_if_needed(is_startup=False)
+
+        # Also recompute and evaluate since thermal mode affects decisions
+        self._compute_derived_values()
+        self._notify_listeners()
+        await self.async_evaluate_state_machine()
+
     def reschedule_daily_summary_timer(self) -> None:
         """Reschedule the daily summary timer with current demand_window_end.
 
