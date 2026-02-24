@@ -1266,6 +1266,9 @@ class ThermalManager:
         if daily_mode not in (ThermalMode.HEAT, ThermalMode.COOL):
             return False, 0.0, f"Mode not applicable: {daily_mode.value}"
 
+        # Always calculate average room temperature (needed for all layers and diagnostics)
+        avg_room_temp = self.calculate_average_room_temp(data)
+
         # Layer 1: Check pre-conditioning (highest priority)
         precon_active, precon_offset = self.evaluate_preconditioning(
             data, now, demand_window_start, demand_window_end
@@ -1287,7 +1290,6 @@ class ThermalManager:
             return True, taper_offset, f"Solar taper ({excess_solar_kw:.1f}kW excess)"
 
         # Layer 3: Real-time control (base layer)
-        avg_room_temp = self.calculate_average_room_temp(data)
         if avg_room_temp is None:
             return False, 0.0, "No room temperature reading"
 
