@@ -625,11 +625,11 @@ class ThermalManager:
                 # Estimate based on temperature differential
                 cooling_trigger = self.get_cooling_trigger_temp()
                 temp_diff = max(0, temperature - cooling_trigger)
-                return min(3.0, temp_diff * 0.3)  # ~0.3 kW per degree over trigger
+                return min(4.0, temp_diff * 0.5)  # ~0.5 kW per degree over trigger
             elif daily_mode == ThermalMode.HEAT:
                 heating_trigger = self.get_heating_trigger_temp()
                 temp_diff = max(0, heating_trigger - temperature)
-                return min(2.5, temp_diff * 0.25)  # ~0.25 kW per degree under trigger
+                return min(3.5, temp_diff * 0.35)  # ~0.35 kW per degree under trigger
 
         return total_power
 
@@ -708,8 +708,8 @@ class ThermalManager:
         # If no learned power, use a default estimate based on typical AC
         if valid_entities == 0:
             # Typical split system AC: 2-4 kW
-            # Use conservative estimate of 2.5 kW
-            total_hvac_power_kw = 2.5
+            # Use estimate of 3.5 kW (observed ~4 kW in user's system)
+            total_hvac_power_kw = 3.5
             _LOGGER.debug(
                 "No learned HVAC power, using default estimate: %.1f kW",
                 total_hvac_power_kw,
