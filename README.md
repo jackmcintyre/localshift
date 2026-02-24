@@ -3,7 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![HA](https://img.shields.io/badge/Home%20Assistant-2025.6+-blue.svg)](https://www.home-assistant.io/)
 
-Automated Tesla Powerwall 2 battery control based on Amber Electric spot pricing, Solcast solar forecasts, and configurable thresholds.
+Automated Tesla Powerwall battery control based on Amber Electric spot pricing, Solcast solar forecasts, and configurable thresholds.
 
 A state machine replaces 18 YAML automations with a single priority-based evaluation that runs every minute and on every relevant state change. No more "stuck state" bugs.
 
