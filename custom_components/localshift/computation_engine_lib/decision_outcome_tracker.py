@@ -552,8 +552,8 @@ class DecisionOutcomeTracker:
             "completed_decisions": [r.to_dict() for r in self._completed_decisions],
         }
         await self._store.async_save(data)
-        _LOGGER.debug(
-            "Saved %d pending + %d completed decision records to storage",
+        _LOGGER.info(
+            "Decision tracker saved: %d pending + %d completed records",
             len(self._pending_decisions),
             len(self._completed_decisions),
         )

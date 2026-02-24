@@ -66,6 +66,9 @@ _LOGGER = logging.getLogger(__name__)
 # How often the coordinator re-evaluates (matches A16/A9 cadence)
 PERIODIC_INTERVAL = timedelta(minutes=1)
 
+# How often to save learning data to storage (prevents data loss on restart)
+LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
+
 # Solcast startup retry configuration
 SOLCAST_STARTUP_RETRY_DELAY = timedelta(seconds=30)
 SOLCAST_MAX_STARTUP_RETRIES = 3
@@ -89,6 +92,7 @@ class LocalShiftCoordinator:
         self._unsub_midnight: CALLBACK_TYPE | None = None
         self._unsub_daily_summary: CALLBACK_TYPE | None = None
         self._unsub_thermal_mode_decision: CALLBACK_TYPE | None = None
+        self._unsub_learning_save: CALLBACK_TYPE | None = None
         self._update_callbacks: list[CALLBACK_TYPE] = []
 
         # Switch state bridge — switches read/write via these methods
@@ -340,6 +344,13 @@ class LocalShiftCoordinator:
             second=0,
         )
 
+        # Periodic learning data save (every 5 minutes) to prevent data loss on restart
+        self._unsub_learning_save = async_track_time_interval(
+            self.hass,
+            self._handle_learning_save,
+            LEARNING_SAVE_INTERVAL,
+        )
+
         # Read initial state and compute
         self._read_all_external_state()
 
@@ -380,13 +391,18 @@ class LocalShiftCoordinator:
         )
 
     async def async_stop(self) -> None:
-        """Stop listening and clean up."""
+        """Stop listening and clean up.
+
+        Saves all learning data to storage before shutdown to prevent data loss.
+        """
+        # Unsubscribe all timers
         for unsub in (
             self._unsub_state,
             self._unsub_timer,
             self._unsub_midnight,
             self._unsub_daily_summary,
             self._unsub_thermal_mode_decision,
+            self._unsub_learning_save,
         ):
             if unsub:
                 unsub()
@@ -395,12 +411,72 @@ class LocalShiftCoordinator:
         self._unsub_midnight = None
         self._unsub_daily_summary = None
         self._unsub_thermal_mode_decision = None
+        self._unsub_learning_save = None
+
+        # Save all learning data to storage before shutdown
+        await self._save_learning_data()
 
         # (backlog-med-004) Clean up historical load cache on shutdown
         if self._computation_engine is not None:
             self._computation_engine.clear_historical_cache()
 
         _LOGGER.info("LocalShift coordinator stopped")
+
+    async def _save_learning_data(self) -> None:
+        """Save all learning system data to storage.
+
+        Called on shutdown and periodically to prevent data loss.
+        """
+        saved_components = []
+
+        # Save decision outcomes
+        if self.decision_tracker is not None:
+            try:
+                await self.decision_tracker.async_save()
+                saved_components.append(
+                    f"decisions:{self.decision_tracker.completed_count}"
+                )
+            except Exception as e:
+                _LOGGER.error("Failed to save decision tracker: %s", e)
+
+        # Save parameter optimizer
+        if self.param_optimizer is not None:
+            try:
+                await self.param_optimizer.async_save()
+                saved_components.append("param_optimizer")
+            except Exception as e:
+                _LOGGER.error("Failed to save parameter optimizer: %s", e)
+
+        # Save pattern analyzer
+        if self.pattern_analyzer is not None:
+            try:
+                await self.pattern_analyzer.async_save()
+                saved_components.append("pattern_analyzer")
+            except Exception as e:
+                _LOGGER.error("Failed to save pattern analyzer: %s", e)
+
+        # Save optimization controller
+        if self.optimization_controller is not None:
+            try:
+                await self.optimization_controller.async_save()
+                saved_components.append("optimization_controller")
+            except Exception as e:
+                _LOGGER.error("Failed to save optimization controller: %s", e)
+
+        if saved_components:
+            _LOGGER.info("Learning data saved: %s", ", ".join(saved_components))
+
+    @callback
+    def _handle_learning_save(self, now: datetime) -> None:
+        """Periodic save of learning data to prevent data loss on restart.
+
+        Fires every 5 minutes to ensure data is persisted even if HA
+        restarts unexpectedly.
+        """
+        self.hass.async_create_task(
+            self._save_learning_data(),
+            "localshift_periodic_learning_save",
+        )
 
     # ------------------------------------------------------------------
     # Entity update subscription (for sensor/binary_sensor entities)
