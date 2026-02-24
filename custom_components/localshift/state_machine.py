@@ -735,6 +735,10 @@ class StateMachine:
         """Record when manual override was set for auto-clear timeout."""
         self._manual_override_set_at = dt_util.now()
 
+    def clear_manual_override_timestamp(self) -> None:
+        """Clear manual override timestamp when returning to automated control."""
+        self._manual_override_set_at = None
+
     @property
     def in_mode_transition(self) -> bool:
         """Check if currently in a mode transition."""
