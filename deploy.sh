@@ -88,10 +88,11 @@ if [ "$DRY_RUN" = true ]; then
     log_warning "DRY RUN MODE - No changes will be made"
     echo ""
     echo "Would perform the following:"
-    echo "  1. Backup: $DEST_DIR -> ${DEST_DIR}.backup.<timestamp>"
+    echo "  1. Backup: $DEST_DIR -> $HA_CONFIG/backups/${COMPONENT_NAME}.backup.<timestamp>"
     echo "  2. Copy: $SOURCE_DIR -> $DEST_DIR"
+    echo "  3. Cleanup backups older than 7 days"
     if [ "$NO_RELOAD" = false ] && [ -n "$HA_TOKEN" ]; then
-        echo "  3. Reload integration via API: $HA_URL"
+        echo "  4. Reload integration via API: $HA_URL"
     fi
     exit 0
 fi
@@ -104,9 +105,23 @@ fi
 
 # Create backup of existing installation
 if [ -d "$DEST_DIR" ]; then
-    BACKUP_DIR="${DEST_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
+    BACKUP_BASE="$HA_CONFIG/backups"
+    mkdir -p "$BACKUP_BASE"
+    BACKUP_DIR="$BACKUP_BASE/${COMPONENT_NAME}.backup.$(date +%Y%m%d_%H%M%S)"
     log_info "Backing up existing installation to: $BACKUP_DIR"
     mv "$DEST_DIR" "$BACKUP_DIR"
+    
+    # Cleanup backups older than 7 days
+    log_info "Cleaning up backups older than 7 days..."
+    OLD_BACKUPS=$(find "$BACKUP_BASE" -name "${COMPONENT_NAME}.backup.*" -type d -mtime +7 2>/dev/null || true)
+    if [ -n "$OLD_BACKUPS" ]; then
+        echo "$OLD_BACKUPS" | while read -r old_backup; do
+            log_info "Removing old backup: $old_backup"
+            rm -rf "$old_backup"
+        done
+    else
+        log_info "No old backups to remove"
+    fi
 fi
 
 # Copy new version
@@ -207,6 +222,6 @@ log_success "Deployment complete!"
 log_info "Version: $(grep '"version"' "$DEST_DIR/manifest.json" | sed 's/.*"version": *"\([^"]*\)".*/\1/')"
 
 # Show backup location if one was created
-if [ -d "${DEST_DIR}.backup."* ] 2>/dev/null; then
-    log_info "Backup saved at: ${DEST_DIR}.backup.*"
+if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
+    log_info "Backup saved at: $BACKUP_DIR"
 fi
