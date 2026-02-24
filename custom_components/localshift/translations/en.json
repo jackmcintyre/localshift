@@ -75,7 +75,8 @@
           "spike_price_percentile": "Spike Price Percentile",
           "battery_target": "Battery Target",
           "minimum_target_soc": "Minimum Target SOC",
-          "load_weight_recent": "Recent Load Weight"
+          "load_weight_recent": "Recent Load Weight",
+          "export_price_margin": "Export Price Margin"
         },
         "data_description": {
           "notify_service": "Notification service for alerts (e.g., notify.mobile_app)",
@@ -88,30 +89,225 @@
           "spike_price_percentile": "Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices)",
           "battery_target": "Target SOC % for demand window (battery reserved for evening peak)",
           "minimum_target_soc": "Minimum SOC % maintained during discharge modes (spike, proactive export)",
-          "load_weight_recent": "Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical)"
+          "load_weight_recent": "Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical)",
+          "export_price_margin": "Minimum profit margin ($/kWh) for battery export when grid import needed to replace"
         }
       }
     }
   },
   "entity": {
     "sensor": {
+      "price_cheap_effective": {
+        "name": "Price Cheap Effective",
+        "description": "Dynamic cheap price threshold adjusted for urgency. Battery will grid charge when prices fall below this level."
+      },
+      "price_cheap_charge_stop": {
+        "name": "Price Cheap Charge Stop",
+        "description": "Price threshold plus deadband where grid charging stops. Prevents rapid cycling on price fluctuations."
+      },
+      "solar_weighted_avg_fit": {
+        "name": "Solar Weighted Avg FIT",
+        "description": "Solar-production-weighted average feed-in tariff. Shows expected export revenue rate for remaining solar today."
+      },
+      "battery_mode": {
+        "name": "Battery Mode",
+        "description": "Current battery automation mode (self_consumption, grid_charging, spike_discharge, etc.). Shows what LocalShift is doing."
+      },
+      "forecast_battery": {
+        "name": "Forecast Battery",
+        "description": "Predicted battery SOC based on solar forecast and consumption profile. Shows expected charge level through the day."
+      },
+      "cost_electricity_net": {
+        "name": "Cost Electricity Net",
+        "description": "Net electricity cost today (import cost minus export revenue). Tracks daily energy expenses."
+      },
+      "decision_log": {
+        "name": "Decision Log",
+        "description": "Recent battery mode change decisions with reasons. Shows why LocalShift changed modes."
+      },
+      "forecast_history": {
+        "name": "Forecast History",
+        "description": "Historical forecast predictions stored for accuracy comparison. Used to improve future predictions."
+      },
+      "forecast_daily": {
+        "name": "Forecast Daily",
+        "description": "Full 24-hour forecast with SOC, solar, and consumption data. Core data for dashboards."
+      },
+      "forecast_prices": {
+        "name": "Forecast Prices",
+        "description": "Buy and sell price forecasts for the next 24 hours. Shows upcoming price movements."
+      },
+      "forecast_grid": {
+        "name": "Forecast Grid",
+        "description": "Forecasted grid import/export amounts. Shows when battery will need grid power or export surplus."
+      },
+      "forecast_diagnostics": {
+        "name": "Forecast Diagnostics",
+        "description": "Technical debug data for forecast system. Shows consumption profiles and weather correlation."
+      },
+      "target_soc_minimum": {
+        "name": "Target SOC Minimum",
+        "description": "Minimum SOC maintained during discharge modes. Battery won't discharge below this level."
+      },
+      "excess_solar": {
+        "name": "Excess Solar",
+        "description": "Forecasted excess solar energy available for discretionary loads. Shows how much solar you can use for EV, pool, etc."
+      },
+      "load_shift_signal": {
+        "name": "Load Shift Signal",
+        "description": "Actionable signal for load-shifting automations (INCREASE_LOAD, REDUCE_LOAD, MAINTAIN_LOAD, HOLD)."
+      },
+      "forecast_accuracy": {
+        "name": "Forecast Accuracy",
+        "description": "Accuracy of past forecast predictions vs actual outcomes. Shows how reliable predictions are."
+      },
+      "integration_status": {
+        "name": "Integration Status",
+        "description": "Overall integration health (ok, degraded, error). Quick indicator if everything is working."
+      },
+      "entity_health": {
+        "name": "Entity Health",
+        "description": "Detailed health status for all tracked entities. Shows which entities are available or have issues."
+      },
+      "daily_thermal_mode": {
+        "name": "Daily Thermal Mode",
+        "description": "Today's thermal operating mode (HEAT, COOL, DRY, OFF). Determined once daily based on weather forecast."
+      },
+      "baseline_load_profile": {
+        "name": "Baseline Load Profile",
+        "description": "Non-HVAC baseline load by hour. Shows your home's base consumption without heating/cooling."
+      },
+      "hvac_load_profile": {
+        "name": "HVAC Load Profile",
+        "description": "Estimated HVAC load by hour. Shows heating/cooling energy consumption patterns."
+      },
+      "average_room_temp": {
+        "name": "Average Room Temperature",
+        "description": "Average temperature from all configured climate entities. Used for thermal control decisions."
+      },
+      "realtime_thermal_status": {
+        "name": "Realtime Thermal Status",
+        "description": "Real-time thermal control status (active/inactive). Shows if pre-conditioning or solar taper is running."
+      },
       "learning_status": {
         "name": "Learning Status",
-        "description": "Current learning system phase (observing, tuning, optimizing)"
+        "description": "Current learning system phase (observing, tuning, optimizing). Shows if the system is learning your patterns."
       },
       "decision_quality": {
         "name": "Decision Quality",
-        "description": "Today's average decision quality score"
+        "description": "Today's average decision quality score as a percentage. Higher is better."
       },
       "learning_decision_history": {
         "name": "Learning Decision History",
-        "description": "Recent mode decisions with outcomes"
+        "description": "Recent mode decisions with outcomes. Shows what the learning system tried and what happened."
       }
     },
-    "button": {
-      "reset_learning": {
-        "name": "Reset Learning Data",
-        "description": "Clear all learning data and restart observation phase"
+    "binary_sensor": {
+      "price_spike_coming": {
+        "name": "Price Spike Coming",
+        "description": "A price spike is forecast within the lookahead window. Prepare for high prices."
+      },
+      "discharge_forced": {
+        "name": "Discharge Forced",
+        "description": "Battery is currently force discharging to export energy at high prices."
+      },
+      "charge_forced": {
+        "name": "Charge Forced",
+        "description": "Battery is currently force charging from the grid at low prices."
+      },
+      "charge_boost": {
+        "name": "Charge Boost",
+        "description": "Battery is boost charging at 5kW rate. Used when time is limited before demand window."
+      },
+      "price_expensive_coming": {
+        "name": "Price Expensive Coming",
+        "description": "An expensive price period is forecast within the lookahead window."
+      },
+      "solar_can_reach_target": {
+        "name": "Solar Can Reach Target",
+        "description": "Solar forecast indicates battery can reach target SOC by demand window without grid charging."
+      },
+      "charge_boost_needed": {
+        "name": "Charge Boost Needed",
+        "description": "Standard 3.3kW charge rate is insufficient; 5kW boost charge is needed to reach target in time."
+      },
+      "demand_window": {
+        "name": "Demand Window",
+        "description": "Evening demand window is active. Battery is held for peak period usage."
+      },
+      "excess_solar_available": {
+        "name": "Excess Solar Available",
+        "description": "Excess solar is available now. Good time to run discretionary loads (EV, pool, appliances)."
+      },
+      "tesla_override_active": {
+        "name": "Tesla Override Active",
+        "description": "Tesla has taken control (Storm Watch, Grid Event, or VPP). LocalShift commands are ignored until event ends."
+      },
+      "preconditioning_active": {
+        "name": "Preconditioning Active",
+        "description": "Pre-conditioning is running to pre-heat or pre-cool home before demand window using battery power."
+      },
+      "solar_taper_active": {
+        "name": "Solar Taper Active",
+        "description": "Solar tapering is active. Adjusting climate setpoints to use excess solar instead of exporting at low FIT."
+      },
+      "thermal_management_enabled": {
+        "name": "Thermal Management Enabled",
+        "description": "Thermal management is configured and active. LocalShift is controlling HVAC for load shifting."
+      }
+    },
+    "switch": {
+      "automation_enabled": {
+        "name": "Automation Enabled",
+        "description": "Master toggle for all LocalShift automation. Turn off to return Powerwall to self-consumption mode."
+      },
+      "spike_discharge_enabled": {
+        "name": "Spike Discharge Enabled",
+        "description": "Allow battery discharge during price spike events. Export energy when prices are highest."
+      },
+      "spike_discharge_conservative": {
+        "name": "Conservative Spike Discharge",
+        "description": "Reserve extra SOC during spike discharge for demand window. Keeps more battery for evening peak."
+      },
+      "dry_run": {
+        "name": "Dry Run",
+        "description": "Simulate mode changes without actually controlling Powerwall. Useful for testing configuration."
+      },
+      "demand_window_block": {
+        "name": "Demand Window Block",
+        "description": "Block grid imports during evening demand window. Hold battery for peak period usage."
+      },
+      "allow_dw_entry_under_target": {
+        "name": "Allow Early DW Entry",
+        "description": "Allow entering demand window below target if solar forecast can reach target during window."
+      },
+      "notify_transitions": {
+        "name": "Notify Mode Transitions",
+        "description": "Send notifications when battery mode changes (e.g., grid charging started, spike discharge activated)."
+      },
+      "notify_daily_summary": {
+        "name": "Notify Daily Summary",
+        "description": "Send daily summary notification with cost savings and battery performance."
+      },
+      "notify_manual_actions": {
+        "name": "Notify Manual Actions",
+        "description": "Send notifications when manual mode buttons are pressed (force charge, force discharge, etc.)."
+      },
+      "notify_alerts": {
+        "name": "Notify Alerts",
+        "description": "Send alert notifications for important events (automation disabled, Tesla override, errors)."
+      },
+      "thermal_management_enabled": {
+        "name": "Thermal Management",
+        "description": "Enable HVAC automation for load shifting. Controls climate entities based on thermal mode."
+      },
+      "solar_taper_enabled": {
+        "name": "Solar Taper",
+        "description": "Adjust climate setpoints during excess solar periods to use surplus energy instead of exporting."
+      },
+      "enable_learning": {
+        "name": "Enable Learning",
+        "description": "Enable active optimization by the learning system. Adjusts parameters based on your usage patterns."
       }
     },
     "number": {
@@ -146,32 +342,52 @@
       "minimum_target_soc": {
         "name": "Minimum Target SOC",
         "description": "Minimum SOC % maintained during discharge modes (spike, proactive export)"
+      },
+      "export_price_margin": {
+        "name": "Export Price Margin",
+        "description": "Minimum profit margin ($/kWh) for battery export when grid import needed to replace"
+      },
+      "cooling_trigger_temp": {
+        "name": "Cooling Trigger Temp",
+        "description": "Temperature threshold (°C) to commit to cooling mode. Above this, daily mode becomes COOL."
+      },
+      "heating_trigger_temp": {
+        "name": "Heating Trigger Temp",
+        "description": "Temperature threshold (°C) to commit to heating mode. Below this, daily mode becomes HEAT."
+      },
+      "dehumidify_trigger_humidity": {
+        "name": "Dehumidify Trigger Humidity",
+        "description": "Humidity threshold (%) to commit to dehumidify mode. Above this, daily mode becomes DRY."
+      },
+      "taper_max_setpoint_offset": {
+        "name": "Solar Taper Max Offset",
+        "description": "Maximum temperature offset (°C) for solar tapering. Limits how much setpoints can be adjusted."
       }
     },
-    "switch": {
-      "automation_enabled": {
-        "name": "Automation Enabled",
-        "description": "Master toggle for all LocalShift automation"
+    "button": {
+      "force_charge": {
+        "name": "Force Charge",
+        "description": "Manually start grid charging the battery at 3.3kW until full or cancelled."
       },
-      "spike_discharge_enabled": {
-        "name": "Spike Discharge Enabled",
-        "description": "Allow battery discharge during price spike events"
+      "force_discharge": {
+        "name": "Force Discharge",
+        "description": "Manually start discharging battery to grid. Useful during high price periods."
       },
-      "spike_discharge_conservative": {
-        "name": "Conservative Spike Discharge",
-        "description": "Reserve extra SOC during spike discharge for demand window"
+      "boost_charge": {
+        "name": "Boost Charge",
+        "description": "Manually start boost charging at 5kW. Faster than standard grid charging."
       },
-      "dry_run": {
-        "name": "Dry Run",
-        "description": "Simulate mode changes without actually controlling Powerwall"
+      "self_consumption": {
+        "name": "Self Consumption",
+        "description": "Return to automated self-consumption mode. Clears manual override."
       },
-      "demand_window_block": {
-        "name": "Demand Window Block",
-        "description": "Block grid imports during evening demand window (hold battery for peak)"
+      "update_forecast": {
+        "name": "Update Forecast",
+        "description": "Force refresh of forecast data and clear historical load cache."
       },
-      "allow_dw_entry_under_target": {
-        "name": "Allow Early DW Entry",
-        "description": "Allow entering demand window below target if solar forecast can reach target during window"
+      "reset_learning": {
+        "name": "Reset Learning Data",
+        "description": "Clear all learning data and restart observation phase. Use if patterns have changed significantly."
       }
     }
   }
