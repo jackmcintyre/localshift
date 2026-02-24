@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **59 entities** grouped under a single "LocalShift" device:
+The integration creates **61 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 24 | `sensor` |
+| Sensors | 26 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 11 | `switch` |
 | Numbers | 8 | `number` |
@@ -577,6 +577,55 @@ Each decision entry contains:
 | `actual_cost` | float | Actual cost during decision period |
 
 **Use Case:** Debug specific decisions and understand why modes changed. Review `outcome_score` to see which decisions were optimal.
+
+---
+
+### 22. sensor.localshift_average_room_temp
+
+**Purpose:** Average room temperature from configured climate entities.
+
+Added in Issue #63 Phase 6 for real-time thermal control.
+
+**State:** Average temperature in °C (e.g., `23.5`)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `thermal_mode` | string | Current daily thermal mode (heat/cool/dry/off) |
+| `activated_today` | bool | Whether thermal control has activated today |
+| `realtime_active` | bool | Whether real-time thermal control is currently active |
+| `reason` | string | Reason for current thermal state |
+| `preconditioning_active` | bool | Whether pre-conditioning is active |
+| `solar_taper_active` | bool | Whether solar tapering is active |
+
+**Use Case:** Monitor average room temperature for thermal automation decisions. Used by the real-time thermal control layer to determine when to turn HVAC on/off.
+
+---
+
+### 23. sensor.localshift_realtime_thermal_status
+
+**Purpose:** Real-time thermal control status and reason.
+
+Added in Issue #63 Phase 6 for visibility into thermal control decisions.
+
+**State:** One of `active` or `inactive`
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `reason` | string | Human-readable reason for current state |
+| `activated_today` | bool | Whether thermal control has activated today |
+| `avg_room_temp` | float | Current average room temperature (°C) |
+| `thermal_mode` | string | Current daily thermal mode |
+| `preconditioning_active` | bool | Whether pre-conditioning is active |
+| `solar_taper_active` | bool | Whether solar tapering is active |
+| `taper_setpoint_offset` | float | Current setpoint offset from solar taper |
+
+**Icon:** Dynamic (air-conditioner when active, air-conditioner-off when inactive)
+
+**Use Case:** Monitor the real-time thermal control layer. Check the `reason` attribute to understand why the system is in its current state.
 
 ---
 

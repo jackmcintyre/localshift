@@ -56,6 +56,9 @@ async def async_setup_entry(
         LearningStatusSensor(coordinator, entry),
         DecisionQualitySensor(coordinator, entry),
         LearningDecisionHistorySensor(coordinator, entry),
+        # Real-time thermal control sensors (Issue #63 Phase 6)
+        AverageRoomTempSensor(coordinator, entry),
+        RealtimeThermalStatusSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1026,3 +1029,81 @@ class LearningDecisionHistorySensor(LocalShiftSensorBase):
         return {
             "decisions": self.coordinator.data.recent_decision_log[-20:],
         }
+
+
+# ---------------------------------------------------------------------------
+# Real-time Thermal Control Sensors (Issue #63 Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class AverageRoomTempSensor(LocalShiftSensorBase):
+    """Average room temperature from configured climate entities.
+
+    Used for real-time thermal control decisions.
+    Shows the current average temperature across all monitored rooms.
+    """
+
+    _attr_unique_id = "localshift_average_room_temp"
+    _attr_name = "Average Room Temperature"
+    _attr_icon = "mdi:thermometer"
+    _attr_native_unit_of_measurement = "°C"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with average room temperature."""
+        temp = self.coordinator.data.avg_room_temp
+        self._attr_native_value = round(temp, 1) if temp is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return temperature details."""
+        d = self.coordinator.data
+        return {
+            "thermal_mode": d.daily_thermal_mode.value,
+            "activated_today": d.thermal_activated_today,
+            "realtime_active": d.realtime_thermal_active,
+            "reason": d.realtime_thermal_reason,
+            "preconditioning_active": d.preconditioning_active,
+            "solar_taper_active": d.solar_taper_active,
+        }
+
+
+class RealtimeThermalStatusSensor(LocalShiftSensorBase):
+    """Real-time thermal control status.
+
+    Shows the current state of the real-time thermal control layer
+    and the reason for the current state.
+    """
+
+    _attr_unique_id = "localshift_realtime_thermal_status"
+    _attr_name = "Realtime Thermal Status"
+    _attr_icon = "mdi:air-conditioner"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with real-time thermal status."""
+        if self.coordinator.data.realtime_thermal_active:
+            self._attr_native_value = "active"
+        else:
+            self._attr_native_value = "inactive"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return detailed status."""
+        d = self.coordinator.data
+        return {
+            "reason": d.realtime_thermal_reason,
+            "activated_today": d.thermal_activated_today,
+            "avg_room_temp": round(d.avg_room_temp, 1) if d.avg_room_temp else None,
+            "thermal_mode": d.daily_thermal_mode.value,
+            "preconditioning_active": d.preconditioning_active,
+            "solar_taper_active": d.solar_taper_active,
+            "taper_setpoint_offset": round(d.taper_setpoint_offset, 1),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        if self._attr_native_value == "active":
+            return "mdi:air-conditioner"
+        else:
+            return "mdi:air-conditioner-off"

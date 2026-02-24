@@ -166,6 +166,13 @@ CONF_PRECONDITION_TEMP_OFFSET = "precondition_temp_offset"
 # Solar tapering settings
 CONF_TAPER_MAX_SETPOINT_OFFSET = "taper_max_setpoint_offset"
 
+# Real-time thermal control settings
+CONF_THERMAL_HYSTERESIS = "thermal_hysteresis"
+CONF_THERMAL_OFF_TIME = "thermal_off_time"
+CONF_THERMAL_OFF_TEMP_MARGIN = "thermal_off_temp_margin"
+CONF_THERMAL_OFF_FORECAST_CLEAR = "thermal_off_forecast_clear"
+CONF_MIN_SETPOINT_CHANGE_INTERVAL = "min_setpoint_change_interval"
+
 # Defaults for thermal manager
 DEFAULT_THERMAL_MANAGEMENT_ENABLED = False
 DEFAULT_SOLAR_TAPER_ENABLED = True
@@ -176,6 +183,13 @@ DEFAULT_THERMAL_MODE_DECISION_TIME = "06:00"
 DEFAULT_PRECONDITION_HOURS_BEFORE_DW = 1.0
 DEFAULT_PRECONDITION_TEMP_OFFSET = 2.0
 DEFAULT_TAPER_MAX_SETPOINT_OFFSET = 3.0
+
+# Real-time thermal control defaults
+DEFAULT_THERMAL_HYSTERESIS = 2.0  # °C - deadband between on/off
+DEFAULT_THERMAL_OFF_TIME = "18:00"  # Earliest time to turn off AC
+DEFAULT_THERMAL_OFF_TEMP_MARGIN = 3.0  # °C - room must be threshold - margin
+DEFAULT_THERMAL_OFF_FORECAST_CLEAR = True  # Require clear forecast to turn off
+DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL = 10  # minutes between setpoint changes
 
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Default Entity IDs
@@ -366,6 +380,28 @@ THRESHOLD_RANGES = {
         "step": 0.5,
         "unit": "°C",
         "icon": "mdi:tune-vertical",
+    },
+    # Real-time thermal control thresholds
+    CONF_THERMAL_HYSTERESIS: {
+        "min": 0.5,
+        "max": 5.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer",
+    },
+    CONF_THERMAL_OFF_TEMP_MARGIN: {
+        "min": 1.0,
+        "max": 6.0,
+        "step": 0.5,
+        "unit": "°C",
+        "icon": "mdi:thermometer-low",
+    },
+    CONF_MIN_SETPOINT_CHANGE_INTERVAL: {
+        "min": 5,
+        "max": 30,
+        "step": 5,
+        "unit": "min",
+        "icon": "mdi:clock-outline",
     },
 }
 

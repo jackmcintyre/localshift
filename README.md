@@ -81,7 +81,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (24)
+### Sensors (26)
 
 | Entity ID | Description |
 |---|---|
@@ -109,6 +109,8 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_learning_status` | Learning system status (observing/tuning/optimizing) |
 | `sensor.localshift_decision_quality` | Today's average decision quality score (%) |
 | `sensor.localshift_learning_decision_history` | Recent mode decisions with outcomes |
+| `sensor.localshift_average_room_temp` | Average room temperature from climate entities |
+| `sensor.localshift_realtime_thermal_status` | Real-time thermal control status (active/inactive) |
 
 ### Binary Sensors (10)
 
