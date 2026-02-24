@@ -28,7 +28,9 @@ def mock_hass():
     hass = MagicMock()
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
-    hass.async_create_task = MagicMock()
+    # async_create_task receives coroutines - use a mock that consumes them
+    # to avoid "coroutine was never awaited" warnings
+    hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
     hass.loop = MagicMock()
     hass.data = {}
     return hass

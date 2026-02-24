@@ -15,7 +15,9 @@ def mock_hass_with_services():
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
     hass.states = MagicMock()
-    hass.async_create_task = MagicMock()
+    # async_create_task receives coroutines - use a mock that consumes them
+    # to avoid "coroutine was never awaited" warnings
+    hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
     return hass
 
 
@@ -223,8 +225,8 @@ class TestHandleStateChange:
         coordinator._state_machine = MagicMock()
         coordinator._state_machine.in_mode_transition = False
 
-        # Mock hass for async_create_task
-        coordinator.hass.async_create_task = MagicMock()
+        # Mock hass for async_create_task - consume coroutines to avoid warnings
+        coordinator.hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
 
         # Create mock event
         event = MagicMock()
@@ -287,8 +289,8 @@ class TestHandlePeriodicTick:
         # Mock state machine
         coordinator._state_machine = MagicMock()
 
-        # Mock hass for async_create_task
-        coordinator.hass.async_create_task = MagicMock()
+        # Mock hass for async_create_task - consume coroutines to avoid warnings
+        coordinator.hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
 
         now = datetime(2026, 2, 16, 12, 0, 0)
         coordinator._handle_periodic_tick(now)
@@ -320,8 +322,8 @@ class TestHandlePeriodicTick:
         # Mock state machine
         coordinator._state_machine = MagicMock()
 
-        # Mock hass for async_create_task
-        coordinator.hass.async_create_task = MagicMock()
+        # Mock hass for async_create_task - consume coroutines to avoid warnings
+        coordinator.hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
 
         now = datetime(2026, 2, 16, 12, 0, 0)
         coordinator._handle_periodic_tick(now)
