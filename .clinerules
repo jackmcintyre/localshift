@@ -249,6 +249,72 @@ git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
 git branch -d {branch-name}
 ```
 
+## ⚠️ MANDATORY: Reserve HA Before Deploying
+
+**The HA instance is a shared resource. Always reserve before deploying.**
+
+### Why This Matters
+
+Multiple agents may work on different tasks simultaneously. Without reservation:
+```
+Agent A deploys → Tests for 10 mins → Agent B deploys → Agent A's code is gone!
+```
+
+### Workflow
+
+```bash
+# 1. Reserve the HA instance
+./deploy.sh --reserve
+
+# 2. Deploy your changes
+./deploy.sh
+
+# 3. Test and verify via logs
+tail -100 /homeassistant/home-assistant.log | grep -i localshift
+
+# 4. Open PR when successful
+
+# 5. Release the reservation
+./deploy.sh --release
+```
+
+### Commands
+
+| Command | Purpose |
+|---------|---------|
+| `./deploy.sh --reserve` | Claim HA instance for exclusive use |
+| `./deploy.sh --release` | Release your reservation |
+| `./deploy.sh --status` | Show who has reserved the instance |
+| `./deploy.sh --force` | Override reservation (emergency use only) |
+
+### Safety Features
+
+| Feature | Purpose |
+|---------|---------|
+| **Auto-expire** | Reservations expire after 30 minutes of inactivity |
+| **PID check** | Detects if reserving process died |
+| **Force override** | `--force` to override stale reservations |
+| **Status check** | `--status` shows current reservation |
+
+### Example Scenarios
+
+**Normal workflow:**
+```bash
+Agent A: ./deploy.sh --reserve   # Claims HA instance
+Agent A: ./deploy.sh             # Deploys (allowed - they reserved)
+Agent A: Tests for 10 mins...
+Agent B: ./deploy.sh             # FAILS: "HA reserved by issue-228 (Agent A)"
+Agent A: Opens PR
+Agent A: ./deploy.sh --release   # Releases reservation
+Agent B: ./deploy.sh --reserve   # Now can claim
+```
+
+**Emergency override:**
+```bash
+Agent B: ./deploy.sh --status    # Shows: reserved by issue-228
+Agent B: ./deploy.sh --force     # Overrides the reservation
+```
+
 # Home Assistant Log Access
 
 ## Overview
@@ -336,6 +402,10 @@ The `deploy.sh` script deploys LocalShift to Home Assistant.
 ./deploy.sh --no-reload        # Deploy without reloading HA integration
 ./deploy.sh --dry-run          # Preview changes without deploying
 ./deploy.sh --watch            # Watch for changes and auto-deploy
+./deploy.sh --reserve          # Reserve HA instance for exclusive use
+./deploy.sh --release          # Release reservation
+./deploy.sh --force            # Force deploy (override reservation)
+./deploy.sh --status           # Show reservation status
 ```
 
 ## Environment Variables
@@ -352,12 +422,28 @@ The `deploy.sh` script deploys LocalShift to Home Assistant.
 2. **Copies** files from current worktree to HA config
 3. **Reloads** integration via HA API (if token set)
 
+## Reservation System
+
+The reservation system prevents multiple agents from overwriting each other's deployments.
+
+| Command | Purpose |
+|---------|---------|
+| `--reserve` | Claim HA instance for exclusive use |
+| `--release` | Release your reservation |
+| `--status` | Show who has reserved the instance |
+| `--force` | Override reservation (emergency use) |
+
+Reservations auto-expire after 30 minutes of inactivity.
+
 ## User Requests for Deploy
 
 When the user says:
 - "deploy" → Run `./deploy.sh`
 - "preview deploy" → Run `./deploy.sh --dry-run`
 - "watch mode" → Run `./deploy.sh --watch`
+- "reserve HA" → Run `./deploy.sh --reserve`
+- "release HA" → Run `./deploy.sh --release`
+- "check reservation" → Run `./deploy.sh --status`
 
 # GitHub Issues Workflow
 
