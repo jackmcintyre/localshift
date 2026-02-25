@@ -611,7 +611,15 @@ class StateMachine:
 
         If drift is detected, we attempt to correct it, unless Tesla
         has taken control (Storm Watch, Grid Event, VPP).
+
+        SKIPPED when manual_override is True - user is in control and
+        health checks would fight against their manual commands.
         """
+        # Skip health check during manual override - user is in control
+        if data.manual_override:
+            _LOGGER.debug("[HEALTH CHECK] Skipping - manual override active")
+            return
+
         now = dt_util.now()
 
         # --- Tesla Override Detection ---
@@ -784,6 +792,23 @@ class StateMachine:
     def clear_manual_override_timestamp(self) -> None:
         """Clear manual override timestamp when returning to automated control."""
         self._manual_override_set_at = None
+
+    def set_commanded_mode(self, mode: BatteryMode) -> None:
+        """Set the commanded mode directly (used by manual button presses).
+
+        This prevents race conditions where the health check might try to
+        "correct" the mode after a button press changes hardware state
+        but before the next evaluation cycle.
+
+        Args:
+            mode: The battery mode to set as commanded.
+        """
+        self._commanded_mode = mode
+        self._mode_desired_since.clear()
+        _LOGGER.info(
+            "Commanded mode set directly to %s (manual button press)",
+            mode.value,
+        )
 
     @property
     def in_mode_transition(self) -> bool:

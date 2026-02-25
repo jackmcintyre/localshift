@@ -28,6 +28,7 @@ from .const import (
     BUTTON_SELF_CONSUMPTION,
     BUTTON_UPDATE_FORECAST,
     DOMAIN,
+    BatteryMode,
 )
 from .coordinator import LocalShiftCoordinator
 
@@ -99,6 +100,8 @@ class ForceChargeButton(LocalShiftButtonBase):
         self.coordinator.data.manual_override = True
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
+            # Update commanded mode to prevent health check "correction"
+            self.coordinator._state_machine.set_commanded_mode(BatteryMode.GRID_CHARGING)
         await self.coordinator.async_set_force_charge()
         if self.coordinator._notification_service is not None:
             await (
@@ -119,6 +122,8 @@ class ForceDischargeButton(LocalShiftButtonBase):
         self.coordinator.data.manual_override = True
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
+            # Update commanded mode to prevent health check "correction"
+            self.coordinator._state_machine.set_commanded_mode(BatteryMode.SPIKE_DISCHARGE)
         await self.coordinator.async_set_force_discharge()
         if self.coordinator._notification_service is not None:
             await (
@@ -139,6 +144,8 @@ class BoostChargeButton(LocalShiftButtonBase):
         self.coordinator.data.manual_override = True
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
+            # Update commanded mode to prevent health check "correction"
+            self.coordinator._state_machine.set_commanded_mode(BatteryMode.BOOST_CHARGING)
         await self.coordinator.async_set_boost_charge()
         if self.coordinator._notification_service is not None:
             await (
@@ -162,6 +169,8 @@ class SelfConsumptionButton(LocalShiftButtonBase):
         self.coordinator.data.manual_override = True
         if self.coordinator._state_machine is not None:
             self.coordinator._state_machine.set_manual_override_timestamp()
+            # Update commanded mode to prevent health check "correction"
+            self.coordinator._state_machine.set_commanded_mode(BatteryMode.SELF_CONSUMPTION)
         await self.coordinator.async_set_self_consumption()
         if self.coordinator._notification_service is not None:
             await (
