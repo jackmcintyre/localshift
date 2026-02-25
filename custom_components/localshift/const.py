@@ -613,6 +613,20 @@ CONF_BACKFILL_SCHEDULE = "backfill_schedule"
 DEFAULT_BACKFILL_SCHEDULE = "02:00"  # Run backfill at 2 AM
 
 # -----------------------------------------------------------------------------
+# Extended History Configuration (Issue #268)
+# -----------------------------------------------------------------------------
+
+CONF_EXTENDED_HISTORY_DAYS = "extended_history_days"
+CONF_SEASONAL_PROFILE_ENABLED = "seasonal_profile_enabled"
+
+DEFAULT_EXTENDED_HISTORY_DAYS = 90  # 90 days for seasonal pattern detection
+DEFAULT_SEASONAL_PROFILE_ENABLED = True
+
+# Extended history lookback limits
+EXTENDED_HISTORY_MIN_DAYS = 30  # Minimum days for meaningful patterns
+EXTENDED_HISTORY_MAX_DAYS = 365  # Maximum days (1 year)
+
+# -----------------------------------------------------------------------------
 # Platforms
 # -----------------------------------------------------------------------------
 
