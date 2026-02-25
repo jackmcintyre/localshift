@@ -168,6 +168,58 @@ class PriceCalculator:
         self._sum_solar_before_target = sum_solar_before_target
         self._get_expected_load_kw = get_expected_load_kw
 
+    def _collect_forecast_prices_and_base(
+        self,
+        general_forecast: list[dict[str, Any]],
+        now_dt: datetime,
+    ) -> tuple[list[float], float, float]:
+        """Collect forecast prices and compute base/max price values.
+
+        Extracts duplicate logic from compute_effective_cheap_price methods.
+
+        Args:
+            general_forecast: List of forecast dictionaries with start_time and per_kwh.
+            now_dt: Current datetime for filtering forecasts.
+
+        Returns:
+            Tuple of (forecast_prices, base_price, max_price).
+        """
+        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
+        cutoff = now_dt + timedelta(hours=lookahead)
+
+        forecast_prices = []
+        for forecast in general_forecast:
+            if not isinstance(forecast, dict):
+                continue
+            start = self._parse_forecast_dt(forecast.get("start_time"))
+            if start is None:
+                continue
+            start_local = dt_util.as_local(start)
+            if start_local >= now_dt and start_local <= cutoff:
+                forecast_prices.append(float(forecast.get("per_kwh", 0)))
+
+        percentile_value = float(
+            self.entry.options.get(
+                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
+            )
+        )
+        if forecast_prices:
+            base = round(self._percentile(forecast_prices, percentile_value), 2)
+        else:
+            base = float(
+                self.entry.options.get(
+                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                )
+            )
+
+        max_price = float(
+            self.entry.options.get(
+                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+            )
+        )
+
+        return forecast_prices, base, max_price
+
     def _calculate_urgency_adjusted_price(
         self,
         data: CoordinatorData,
@@ -226,39 +278,9 @@ class PriceCalculator:
         Uses a simple solar/load estimate to break circular dependencies before
         full forecast computation has run.
         """
-        # Hardcoded default (Issue #214)
-        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
-        cutoff = now_dt + timedelta(hours=lookahead)
-
-        forecast_prices = []
-        for forecast in data.general_forecast:
-            if not isinstance(forecast, dict):
-                continue
-            start = self._parse_forecast_dt(forecast.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                forecast_prices.append(float(forecast.get("per_kwh", 0)))
-
-        percentile_value = float(
-            self.entry.options.get(
-                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
-            )
-        )
-        if forecast_prices:
-            base = round(self._percentile(forecast_prices, percentile_value), 2)
-        else:
-            base = float(
-                self.entry.options.get(
-                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-                )
-            )
-
-        max_price = float(
-            self.entry.options.get(
-                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-            )
+        # Use shared helper for forecast price collection
+        _, base, max_price = self._collect_forecast_prices_and_base(
+            data.general_forecast, now_dt
         )
 
         try:
@@ -293,40 +315,11 @@ class PriceCalculator:
         target_hour: int,
     ) -> None:
         """Compute final effective cheap price threshold."""
-        # Hardcoded default (Issue #214)
-        lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
-        cutoff = now_dt + timedelta(hours=lookahead)
-
-        forecast_prices = []
-        for forecast in data.general_forecast:
-            if not isinstance(forecast, dict):
-                continue
-            start = self._parse_forecast_dt(forecast.get("start_time"))
-            if start is None:
-                continue
-            start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local <= cutoff:
-                forecast_prices.append(float(forecast.get("per_kwh", 0)))
-
-        percentile_value = float(
-            self.entry.options.get(
-                CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
-            )
+        # Use shared helper for forecast price collection
+        _, base, max_price = self._collect_forecast_prices_and_base(
+            data.general_forecast, now_dt
         )
-        if forecast_prices:
-            base = round(self._percentile(forecast_prices, percentile_value), 2)
-        else:
-            base = float(
-                self.entry.options.get(
-                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-                )
-            )
 
-        max_price = float(
-            self.entry.options.get(
-                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
-            )
-        )
         solar_gap = not data.solar_can_reach_target
 
         if not solar_gap or not before_dw or data.target_reached_today:
