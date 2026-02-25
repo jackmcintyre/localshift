@@ -19,73 +19,6 @@ from homeassistant.util import dt as dt_util
 from .utils import parse_forecast_dt
 
 
-def _parse_solar_period(
-    entry: Any,
-    period_duration: timedelta = timedelta(minutes=30),
-) -> tuple[datetime, datetime] | None:
-    """Parse a solar forecast period entry.
-
-    Args:
-        entry: Solcast forecast dict with 'period_start' or 'start' key.
-        period_duration: Duration of the period (default 30 minutes).
-
-    Returns:
-        Tuple of (start_local, end_local) as timezone-aware local datetimes,
-        or None if the entry is invalid.
-    """
-    if not isinstance(entry, dict):
-        return None
-
-    period_start_raw = entry.get("period_start") or entry.get("start")
-    if period_start_raw is None:
-        return None
-
-    start_dt = dt_util.parse_datetime(str(period_start_raw))
-    if not start_dt:
-        return None
-
-    start_local = dt_util.as_local(start_dt)
-    end_local = start_local + period_duration
-    return start_local, end_local
-
-
-def _get_pv_estimate(entry: dict[str, Any]) -> float:
-    """Extract pv_estimate value from a Solcast forecast entry.
-
-    Uses pv_estimate (expected) as primary, with fallbacks to:
-    - estimate (alternative key name)
-    - pv_estimate10 (pessimistic)
-    - estimate10 (alternative pessimistic key)
-
-    Args:
-        entry: Solcast forecast dict.
-
-    Returns:
-        Solar energy in kWh per hour, or 0.0 if not found.
-    """
-    return float(
-        entry.get("pv_estimate")
-        or entry.get("estimate")
-        or entry.get("pv_estimate10")
-        or entry.get("estimate10")
-        or 0.0
-    )
-
-
-def _ensure_local_datetime(dt: datetime) -> datetime:
-    """Ensure a datetime is timezone-aware in local time.
-
-    Args:
-        dt: Datetime to convert (naive or timezone-aware).
-
-    Returns:
-        Timezone-aware local datetime.
-    """
-    if dt.tzinfo is None:
-        return dt_util.as_local(dt_util.as_utc(dt))
-    return dt_util.as_local(dt)
-
-
 def get_solar_for_15min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
@@ -106,7 +39,12 @@ def get_solar_for_15min_slot(
     if not solcast_forecasts:
         return 0.0
 
-    slot_start = _ensure_local_datetime(slot_start)
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
     slot_end = slot_start + timedelta(minutes=15)
     period_duration = timedelta(minutes=30)
     total_solar = 0.0
@@ -134,11 +72,19 @@ def get_solar_for_15min_slot(
     matched_entries = []
 
     for entry in solcast_forecasts:
-        parsed = _parse_solar_period(entry, period_duration)
-        if parsed is None:
+        if not isinstance(entry, dict):
             continue
 
-        start_local, end_local = parsed
+        period_start_raw = entry.get("period_start") or entry.get("start")
+        if period_start_raw is None:
+            continue
+
+        start_dt = dt_util.parse_datetime(str(period_start_raw))
+        if not start_dt:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + period_duration
 
         overlap_start = max(start_local, slot_start)
         overlap_end = min(end_local, slot_end)
@@ -153,7 +99,10 @@ def get_solar_for_15min_slot(
             estimate = entry.get("estimate")
             estimate10 = entry.get("estimate10")
 
-            period_kwh = _get_pv_estimate(entry)
+            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+            period_kwh = float(
+                pv_estimate or estimate or pv_estimate10 or estimate10 or 0.0
+            )
             # pv_estimate is kWh per HOUR, so divide by 3600 seconds
             # NOT by period duration (would give 2x error for 30-min periods)
             overlap_fraction = overlap_seconds / 3600.0
@@ -213,7 +162,12 @@ def get_solar_for_15min_slot_or_none(
     if not solcast_forecasts:
         return None
 
-    slot_start = _ensure_local_datetime(slot_start)
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
     slot_end = slot_start + timedelta(minutes=15)
     period_duration = timedelta(minutes=30)
     total_solar = 0.0
@@ -222,11 +176,19 @@ def get_solar_for_15min_slot_or_none(
     found_match = False
 
     for entry in solcast_forecasts:
-        parsed = _parse_solar_period(entry, period_duration)
-        if parsed is None:
+        if not isinstance(entry, dict):
             continue
 
-        start_local, end_local = parsed
+        period_start_raw = entry.get("period_start") or entry.get("start")
+        if period_start_raw is None:
+            continue
+
+        start_dt = dt_util.parse_datetime(str(period_start_raw))
+        if not start_dt:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + period_duration
 
         overlap_start = max(start_local, slot_start)
         overlap_end = min(end_local, slot_end)
@@ -235,7 +197,14 @@ def get_solar_for_15min_slot_or_none(
         if overlap_seconds > 0:
             found_match = True
 
-            period_kwh = _get_pv_estimate(entry)
+            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+            period_kwh = float(
+                entry.get("pv_estimate")
+                or entry.get("estimate")
+                or entry.get("pv_estimate10")
+                or entry.get("estimate10")
+                or 0.0
+            )
             # pv_estimate is kWh per HOUR, so divide by 3600 seconds
             overlap_fraction = overlap_seconds / 3600.0
             total_solar += period_kwh * overlap_fraction
@@ -266,17 +235,37 @@ def get_solar_for_5min_slot(
     if not solcast_forecasts:
         return 0.0
 
-    slot_start = _ensure_local_datetime(slot_start)
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
     slot_end = slot_start + timedelta(minutes=5)
     period_duration = timedelta(minutes=30)
 
     for entry in solcast_forecasts:
-        parsed = _parse_solar_period(entry, period_duration)
-        if parsed is None:
+        if not isinstance(entry, dict):
             continue
 
-        start_local, end_local = parsed
-        period_kwh = _get_pv_estimate(entry)
+        period_start_raw = entry.get("period_start") or entry.get("start")
+        if period_start_raw is None:
+            continue
+
+        start_dt = dt_util.parse_datetime(str(period_start_raw))
+        if not start_dt:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + period_duration
+        # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+        period_kwh = float(
+            entry.get("pv_estimate")
+            or entry.get("estimate")
+            or entry.get("pv_estimate10")
+            or entry.get("estimate10")
+            or 0.0
+        )
 
         # Containment check: the 5-min slot must be fully inside the 30-min period
         if slot_start >= start_local and slot_end <= end_local:
@@ -294,7 +283,12 @@ def get_solar_for_slot(
     if not solcast_forecasts:
         return 0.0
 
-    slot_start = _ensure_local_datetime(slot_start)
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
     slot_end = slot_start + timedelta(hours=1)
     period_duration = timedelta(minutes=30)
 
@@ -303,24 +297,42 @@ def get_solar_for_slot(
     overlap_hits = 0
 
     for entry in solcast_forecasts:
-        parsed = _parse_solar_period(entry, period_duration)
-        if parsed is None:
+        try:
+            if not isinstance(entry, dict):
+                continue
+
+            period_start_raw = entry.get("period_start") or entry.get("start")
+            if period_start_raw is None:
+                continue
+
+            start_dt = dt_util.parse_datetime(str(period_start_raw))
+            if not start_dt:
+                continue
+
+            start_local = dt_util.as_local(start_dt)
+            parsed_periods += 1
+            end_local = start_local + period_duration
+
+            # overlap between [start_local, end_local) and [slot_start, slot_end)
+            overlap_start = max(start_local, slot_start)
+            overlap_end = min(end_local, slot_end)
+            overlap_seconds = (overlap_end - overlap_start).total_seconds()
+
+            if overlap_seconds > 0:
+                # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+                period_kwh = float(
+                    entry.get("pv_estimate")
+                    or entry.get("estimate")
+                    or entry.get("pv_estimate10")
+                    or entry.get("estimate10")
+                    or 0.0
+                )
+                # pv_estimate is kWh per HOUR, so divide by 3600 seconds
+                overlap_fraction = overlap_seconds / 3600.0
+                total_solar += period_kwh * overlap_fraction
+                overlap_hits += 1
+        except (ValueError, TypeError):
             continue
-
-        start_local, end_local = parsed
-        parsed_periods += 1
-
-        # overlap between [start_local, end_local) and [slot_start, slot_end)
-        overlap_start = max(start_local, slot_start)
-        overlap_end = min(end_local, slot_end)
-        overlap_seconds = (overlap_end - overlap_start).total_seconds()
-
-        if overlap_seconds > 0:
-            period_kwh = _get_pv_estimate(entry)
-            # pv_estimate is kWh per HOUR, so divide by 3600 seconds
-            overlap_fraction = overlap_seconds / 3600.0
-            total_solar += period_kwh * overlap_fraction
-            overlap_hits += 1
 
     return total_solar
 

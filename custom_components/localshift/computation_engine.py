@@ -635,9 +635,9 @@ class ComputationEngine:
         }
         data.forecast_history.append(entry)
 
-        # Keep last 50 entries (Issue #231: reduce attribute size for recorder)
-        if len(data.forecast_history) > 50:
-            data.forecast_history = data.forecast_history[-50:]
+        # Keep last 200 entries (allows 4+ hours of predictions across multiple days)
+        if len(data.forecast_history) > 200:
+            data.forecast_history = data.forecast_history[-200:]
 
     def set_baseline_load(self, baseline_avg_kw: dict[int, float]) -> None:
         """Set the baseline load profile for Issue #137 feedback loop fix.
@@ -1390,9 +1390,9 @@ class ComputationEngine:
         # Update count
         data.forecast_history_count = len(data.forecast_history)
 
-        # Keep last 50 entries (Issue #231: reduce attribute size for recorder)
-        if len(data.forecast_history) > 50:
-            data.forecast_history = data.forecast_history[-50:]
+        # Keep last 200 entries
+        if len(data.forecast_history) > 200:
+            data.forecast_history = data.forecast_history[-200:]
 
     # ========================================================================
     # WEATHER CORRELATION (Issue #61)
