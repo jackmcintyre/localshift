@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **61 entities** grouped under a single "LocalShift" device:
+The integration creates **64 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 26 | `sensor` |
+| Sensors | 29 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 11 | `switch` |
 | Numbers | 8 | `number` |
@@ -639,6 +639,107 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 **Icon:** Dynamic (air-conditioner when active, air-conditioner-off when inactive)
 
 **Use Case:** Monitor the real-time thermal control layer. Check the `reason` attribute to understand why the system is in its current state. Use `climate_read_success` to diagnose why thermal control may not be activating - if `false`, check `climate_missing_entities` and `climate_unavailable_entities` for configuration issues.
+
+---
+
+### 24. sensor.localshift_backfill_status
+
+**Purpose:** Statistics backfill validation status.
+
+Added in Issue #267 for ground-truth validation of decision outcomes against metered statistics from Home Assistant's Statistics API.
+
+**State:** One of the following status strings:
+
+| Status | Meaning |
+|--------|---------|
+| `not_run` | No backfill has been executed yet |
+| `validated` | Decision outcomes match metered statistics |
+| `discrepancies` | Variance detected between estimated and actual |
+| `error` | Error occurred during backfill operation |
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `decisions_validated` | int | Number of decisions validated |
+| `discrepancies_found` | int | Count of discrepancies detected |
+| `total_import_validated_kwh` | float | Total grid import from statistics (kWh) |
+| `total_export_validated_kwh` | float | Total grid export from statistics (kWh) |
+| `total_charge_validated_kwh` | float | Total battery charge from statistics (kWh) |
+| `total_discharge_validated_kwh` | float | Total battery discharge from statistics (kWh) |
+| `avg_import_variance_pct` | float | Average import variance percentage |
+| `avg_export_variance_pct` | float | Average export variance percentage |
+| `last_run` | string | ISO timestamp of last backfill run |
+| `period_start` | string | Start of validation period |
+| `period_end` | string | End of validation period |
+| `errors` | list | List of error messages if any |
+| `comparisons` | list | Detailed comparison records |
+
+**Icon:** Dynamic (check-circle for validated, alert-circle for discrepancies, close-circle for error, database-clock for not_run)
+
+**Use Case:** Validate that the integration's estimated outcomes match actual metered data. Discrepancies may indicate forecast inaccuracies or configuration issues.
+
+---
+
+### 25. sensor.localshift_cost_reconciliation
+
+**Purpose:** Cost reconciliation status against metered data.
+
+Added in Issue #269 to validate cost estimates against actual metered statistics from Home Assistant.
+
+**State:** One of the following status strings:
+
+| Status | Meaning |
+|--------|---------|
+| `not_run` | No reconciliation has been executed yet |
+| `validated` | Estimated costs match actual metered costs |
+| `variance` | Significant variance detected between estimated and actual |
+| `error` | Error occurred during reconciliation |
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `estimated_cost` | float | Estimated cost from integration ($) |
+| `actual_cost` | float | Actual cost from metered statistics ($) |
+| `variance_pct` | float | Variance percentage between estimated and actual |
+| `is_significant` | bool | Whether variance exceeds significance threshold |
+| `period_start` | string | Start of reconciliation period |
+| `period_end` | string | End of reconciliation period |
+| `last_run` | string | ISO timestamp of last reconciliation |
+| `errors` | list | List of error messages if any |
+
+**Icon:** Dynamic (check-circle for validated, alert-circle for variance, close-circle for error, currency-usd-off for not_run)
+
+**Use Case:** Verify cost accumulation accuracy. Significant variance may indicate issues with price data, meter readings, or calculation logic.
+
+---
+
+### 26. sensor.localshift_extended_forecast_accuracy
+
+**Purpose:** Extended forecast accuracy with long-term metrics and bias detection.
+
+Added in Issue #270 for multi-horizon validation of forecast accuracy over 24h, 7d, and 30d periods.
+
+**State Class:** `measurement` — Supports long-term statistics
+
+**State:** 24-hour forecast accuracy percentage (e.g., `94.5`)
+
+**Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `accuracy_24h` | float | 24-hour forecast accuracy (%) |
+| `accuracy_7d` | float | 7-day forecast accuracy (%) |
+| `accuracy_30d` | float | 30-day forecast accuracy (%) |
+| `bias` | float | Systematic prediction bias (positive = over-predict, negative = under-predict) |
+| `mape` | float | Mean Absolute Percentage Error across all horizons |
+| `sample_count` | int | Number of samples used in calculation |
+| `last_updated` | string | ISO timestamp of last update |
+
+**Icon:** chart-timeline-variant
+
+**Use Case:** Track forecast accuracy over multiple time horizons to identify systematic prediction bias. Use `bias` to detect if the system consistently over- or under-predicts, enabling model calibration improvements.
 
 ---
 
