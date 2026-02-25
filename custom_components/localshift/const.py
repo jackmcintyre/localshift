@@ -601,6 +601,18 @@ LEARNING_MIN_OBSERVATIONS = 50
 LEARNING_UPDATE_INTERVAL_HOURS = 24
 
 # -----------------------------------------------------------------------------
+# Statistics Backfiller Configuration (Issue #267)
+# -----------------------------------------------------------------------------
+
+CONF_GRID_IMPORT_ENTITY = "grid_import_entity"
+CONF_GRID_EXPORT_ENTITY = "grid_export_entity"
+CONF_BATTERY_CHARGE_ENTITY = "battery_charge_entity"
+CONF_BATTERY_DISCHARGE_ENTITY = "battery_discharge_entity"
+CONF_BACKFILL_SCHEDULE = "backfill_schedule"
+
+DEFAULT_BACKFILL_SCHEDULE = "02:00"  # Run backfill at 2 AM
+
+# -----------------------------------------------------------------------------
 # Platforms
 # -----------------------------------------------------------------------------
 
