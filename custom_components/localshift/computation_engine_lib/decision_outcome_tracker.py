@@ -415,11 +415,19 @@ class DecisionOutcomeTracker:
             score = score * 0.6 + cost_score * 0.4
 
         # 2. Export Penalty (weight: 20%)
-        # Penalize exporting grid-purchased energy
+        # Penalize exporting grid-purchased energy (Issue #280)
+        # Only penalize if we actually imported grid energy AND exported
+        # Solar-driven export during charging modes is acceptable
         if record.actual_export_kwh and record.actual_export_kwh > 0.1:
+            grid_imported = (
+                record.actual_import_kwh is not None
+                and record.actual_import_kwh > 0.1
+            )
             if record.mode_chosen == BatteryMode.GRID_CHARGING:
-                # Bad: grid charged then exported
-                score -= 0.15
+                if grid_imported:
+                    # Bad: imported from grid then exported
+                    score -= 0.15
+                # else: solar-driven export is acceptable, no penalty
             elif record.mode_chosen in (
                 BatteryMode.PROACTIVE_EXPORT,
                 BatteryMode.SPIKE_DISCHARGE,
@@ -429,16 +437,22 @@ class DecisionOutcomeTracker:
 
         # 3. Target Score (weight: 25%)
         # Did the decision help reach/maintain SOC target?
+        # Issue #281: Use weather-aware target gap thresholds
         if record.battery_target_soc > 0:
             soc_at_end = record.soc_at_decision + (record.actual_soc_change or 0.0)
             target_diff = abs(soc_at_end - record.battery_target_soc)
+
+            # Adjust thresholds based on weather (Issue #281)
+            # On rainy/cloudy days, being far from target is more acceptable
+            is_low_solar_weather = record.weather_condition in ("rainy", "cloudy")
+            far_threshold = 40 if is_low_solar_weather else 20
 
             if target_diff <= 5:
                 score += 0.15  # Close to target
             elif target_diff <= 10:
                 score += 0.05  # Acceptable
-            elif target_diff > 20:
-                score -= 0.10  # Far from target
+            elif target_diff > far_threshold:
+                score -= 0.10  # Far from target (weather-adjusted)
 
         # 4. Cycling Penalty (weight: 15%)
         # Penalize rapid mode changes (< 5 min in previous mode)

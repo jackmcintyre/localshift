@@ -43,6 +43,10 @@ TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)  # Extended cooldown during over
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
 
+    # Minimum time a mode must be active before allowing transition (Issue #279)
+    # This prevents rapid cycling that triggers the learning system's cycling penalty
+    _MIN_MODE_DURATION: timedelta = timedelta(minutes=5)
+
     def __init__(
         self,
         battery_controller: BatteryController,
@@ -74,6 +78,8 @@ class StateMachine:
         self._evaluate_lock = asyncio.Lock()
         self._in_mode_transition: bool = False
         self._manual_override_set_at: datetime | None = None
+        # Track when current mode was established (Issue #279)
+        self._mode_established_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
         # Track grid charging target reserve (clamped for Tesla firmware compatibility)
@@ -310,6 +316,21 @@ class StateMachine:
 
                     return
 
+                # --- Minimum mode duration check (Issue #279) ---
+                # Prevent rapid cycling by requiring current mode to be active for minimum duration
+                # This prevents the learning system's cycling penalty from being triggered
+                if self._mode_established_at is not None:
+                    time_in_current_mode = now - self._mode_established_at
+                    if time_in_current_mode < self._MIN_MODE_DURATION:
+                        _LOGGER.info(
+                            "Mode %s active for %s, need %s minimum — deferring transition to %s",
+                            self._commanded_mode.value,
+                            time_in_current_mode,
+                            self._MIN_MODE_DURATION,
+                            desired.value,
+                        )
+                        return
+
                 # --- Debounce tracking ---
                 # Skip debounce if flag is set (first transition after startup grace)
                 if self._skip_next_debounce:
@@ -545,6 +566,8 @@ class StateMachine:
         if transition_success and not dry_run:
             transition_time = dt_util.now()
             self._last_successful_transition = transition_time
+            # Track when mode was established for minimum duration check (Issue #279)
+            self._mode_established_at = transition_time
             _LOGGER.debug(
                 "Recorded successful transition to %s at %s",
                 target.value,
