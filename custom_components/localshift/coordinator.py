@@ -49,7 +49,6 @@ from .const import (
     SWITCH_DEFAULTS,
 )
 from .coordinator_data import CoordinatorData
-from .forecast_storage import ForecastStorage
 
 if TYPE_CHECKING:
     from .battery_controller import BatteryController
