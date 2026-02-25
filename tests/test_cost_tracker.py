@@ -1,11 +1,12 @@
 """Unit tests for CostTracker."""
 
-from unittest.mock import MagicMock
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.cost_tracker import CostTracker
+from custom_components.localshift.cost_tracker import CostTracker, ReconciliationReport
 
 
 @pytest.fixture
@@ -229,3 +230,104 @@ class TestResetDailyAccumulators:
         assert coordinator_data.operation_mode == "autonomous"
         # Cost should be reset
         assert coordinator_data.grid_import_cost == 0.0
+
+
+# =============================================================================
+# RECONCILIATION REPORT TESTS (Issue #269)
+# =============================================================================
+
+
+class TestReconciliationReport:
+    """Tests for ReconciliationReport dataclass."""
+
+    def test_default_values(self):
+        """Test default values are set correctly."""
+        report = ReconciliationReport()
+        assert report.estimated_cost == 0.0
+        assert report.actual_cost == 0.0
+        assert report.variance_pct == 0.0
+        assert report.is_significant is False
+        assert report.period_start is None
+        assert report.period_end is None
+        assert report.last_run is None
+        assert report.errors == []
+
+    def test_to_dict(self):
+        """Test serialization to dictionary."""
+        now = datetime(2026, 2, 26, 8, 0, 0)
+        report = ReconciliationReport(
+            estimated_cost=10.50,
+            actual_cost=11.00,
+            variance_pct=4.76,
+            is_significant=False,
+            last_run=now,
+        )
+        result = report.to_dict()
+
+        assert result["estimated_cost"] == 10.50
+        assert result["actual_cost"] == 11.00
+        assert result["variance_pct"] == 4.76
+        assert result["is_significant"] is False
+        assert result["last_run"] == "2026-02-26T08:00:00"
+
+    def test_from_dict(self):
+        """Test deserialization from dictionary."""
+        data = {
+            "estimated_cost": 15.0,
+            "actual_cost": 14.0,
+            "variance_pct": 7.14,
+            "is_significant": False,
+            "last_run": "2026-02-26T08:00:00",
+            "errors": [],
+        }
+        report = ReconciliationReport.from_dict(data)
+
+        assert report.estimated_cost == 15.0
+        assert report.actual_cost == 14.0
+        assert report.variance_pct == 7.14
+        assert report.is_significant is False
+        assert report.last_run == datetime(2026, 2, 26, 8, 0, 0)
+
+
+# =============================================================================
+# COST RECONCILIATION TESTS (Issue #269)
+# =============================================================================
+
+
+class TestCostReconciliation:
+    """Tests for cost reconciliation against metered statistics."""
+
+    @pytest.mark.asyncio
+    async def test_reconcile_with_statistics_no_entity(self, cost_tracker):
+        """Test reconciliation when no entity is configured."""
+        report = await cost_tracker.async_reconcile_with_statistics(
+            estimated_cost=10.0,
+            grid_import_entity=None,
+            period_start=datetime.now() - timedelta(days=1),
+            period_end=datetime.now(),
+        )
+
+        assert report is not None
+        assert "No grid import entity configured" in report.errors
+
+    @pytest.mark.asyncio
+    async def test_calculate_variance_pct(self, cost_tracker):
+        """Test variance percentage calculation."""
+        # 10% variance
+        variance = cost_tracker._calculate_variance_pct(10.0, 11.0)
+        assert variance == pytest.approx(-10.0, rel=0.1)
+
+        # 20% variance
+        variance = cost_tracker._calculate_variance_pct(10.0, 12.0)
+        assert variance == pytest.approx(-20.0, rel=0.1)
+
+        # No variance
+        variance = cost_tracker._calculate_variance_pct(10.0, 10.0)
+        assert variance == 0.0
+
+    @pytest.mark.asyncio
+    async def test_calculate_variance_pct_zero_actual(self, cost_tracker):
+        """Test variance calculation when actual is zero."""
+        # Should return 0 to avoid division by zero
+        variance = cost_tracker._calculate_variance_pct(10.0, 0.0)
+        assert variance == 0.0
