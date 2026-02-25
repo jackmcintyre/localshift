@@ -20,7 +20,7 @@ class GridChargeDecisionEngine:
         next_demand_window_start_dt: Callable[[datetime, time], datetime],
         find_solar_start_time: Callable[[datetime, list[dict]], datetime | None],
         simulate_overnight_drain_to_solar: Callable[..., float],
-        simulate_future_soc_with_solar_only: Callable[..., tuple[float, float, bool]],
+        simulate_future_soc_with_solar_only: Callable[..., tuple[float, float, bool, bool]],
     ) -> None:
         """Initialize decision engine with required callbacks."""
         self._next_demand_window_start_dt = next_demand_window_start_dt

@@ -39,7 +39,9 @@ class SocSimulator:
         end_time: datetime,
         min_soc_pct: float = 0.0,
         current_hour: int | None = None,
-    ) -> tuple[float, float, bool]:
+        baseline_avg_kw: dict[int, float] | None = None,
+        dw_end_time: time | None = None,
+    ) -> tuple[float, float, bool, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
         Uses 15-min slots throughout for consistency with main forecast loop.
@@ -47,24 +49,49 @@ class SocSimulator:
         When end_time == dw_start_time, simulation stops at DW start (existing behavior).
         When end_time > dw_start_time, simulation continues through DW period.
 
+        FIX FOR DW SIMULATION: When simulating through DW period, we need to check
+        if SOC reaches target DURING the relevant period (DW), not just at any point
+        during the simulation. Previously, max_soc could peak at midday and then
+        decline before DW, but the simulation would say "target reached" incorrectly.
+
         This helps determine if grid charging is necessary.
+
+        CRITICAL for Issue #137: When baseline_avg_kw is provided, use it instead
+        of historical_avg_kw for load estimation. This prevents the chicken-and-egg
+        feedback loop where:
+        1. HVAC turns on → load increases
+        2. System forecasts higher consumption using historical (with HVAC spikes)
+        3. System triggers grid charging unnecessarily
+        4. Energy wasted instead of using solar surplus
+
+        By using baseline (non-HVAC) load for grid charging decisions, we ensure
+        that discretionary HVAC load doesn't trigger unnecessary grid charging.
 
         Args:
             actual_current_soc: ACTUAL current battery SOC (from real-time data)
             start_slot: Starting slot time
             target_pct: Target SOC percentage
             all_solcast: Full Solcast forecast (today + tomorrow)
-            historical_avg_kw: Historical hourly load profile
+            historical_avg_kw: Historical hourly load profile (fallback)
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
             dw_start_time: Demand window start time
             end_time: End time (exclusive) to simulate until
+            min_soc_pct: Minimum SOC floor
+            current_hour: Current hour for load estimation
+            baseline_avg_kw: Optional baseline (non-HVAC) load profile for #137
+            dw_end_time: Demand window end time (for DW-period max_soc tracking)
 
         Returns:
-            (soc_at_end_pct, max_soc_pct, can_reach_target)
+            (soc_at_end_pct, max_soc_pct, can_reach_target, was_truncated)
         """
         soc = actual_current_soc
         base_slot = start_slot.replace(second=0, microsecond=0)
+
+        # ISSUE #137: Use baseline load for grid charging decisions
+        # When baseline_avg_kw is provided, use it instead of historical_avg_kw
+        # This prevents the feedback loop where HVAC spikes trigger grid charging
+        load_profile = baseline_avg_kw if baseline_avg_kw else historical_avg_kw
 
         # Cap end_time to Solcast horizon to avoid repeated solar lookups outside forecast range.
         solcast_end: datetime | None = None
@@ -84,15 +111,41 @@ class SocSimulator:
                 solcast_end = end_local
 
         sim_end = end_time
+        truncated = False
         if solcast_end is not None and sim_end > solcast_end:
             sim_end = solcast_end
+            truncated = True
 
         if sim_end <= base_slot:
-            return soc, soc, soc >= target_pct
+            return soc, soc, soc >= target_pct, truncated
 
         # Use 15-min slots throughout for consistency
         max_soc = soc
+        max_soc_in_dw = soc  # Track max SOC specifically during DW period
         slot_fraction = 15 / 60.0  # 0.25 hours
+
+        # Determine DW period boundaries for max_soc_in_dw tracking
+        dw_start_dt = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if dw_start_dt <= base_slot:
+            dw_start_dt += timedelta(days=1)
+
+        # Calculate DW end time
+        if dw_end_time is not None:
+            dw_end_dt = base_slot.replace(
+                hour=dw_end_time.hour,
+                minute=dw_end_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if dw_end_dt <= dw_start_dt:
+                dw_end_dt += timedelta(days=1)
+        else:
+            dw_end_dt = dw_start_dt + timedelta(hours=6)  # Default 6-hour DW
 
         slot_time = base_slot
         while slot_time < sim_end:
@@ -102,8 +155,9 @@ class SocSimulator:
             # Get solar and load for this 15-min slot
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
 
+            # ISSUE #137: Use baseline load profile when provided
             load_kw, _ = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
+                load_profile,  # Uses baseline_avg_kw if provided
                 slot_hour,
                 current_hour,
                 current_load_kw,
@@ -125,11 +179,24 @@ class SocSimulator:
 
             max_soc = max(max_soc, soc)
 
+            # Track max_soc specifically during DW period
+            # This is critical for allow_dw_entry_under_target logic
+            if dw_start_dt <= slot_time < dw_end_dt:
+                max_soc_in_dw = max(max_soc_in_dw, soc)
+
             # Fast-path: if we've already reached target, we can stop.
             if max_soc >= target_pct:
-                return soc, max_soc, True
+                return soc, max_soc, True, truncated
 
-        return soc, max_soc, max_soc >= target_pct
+        # FIX: When simulating through DW period (allow_dw_entry_under_target=True),
+        # check if max_soc DURING DW reaches target, not just max_soc during entire simulation.
+        # This prevents false positives where SOC peaks at midday but declines before DW.
+        if end_time > dw_start_dt:
+            # Simulation went through DW period - check DW-specific max_soc
+            can_reach = max_soc_in_dw >= target_pct
+            return soc, max_soc, can_reach, truncated
+
+        return soc, max_soc, max_soc >= target_pct, truncated
 
     def _simulate_overnight_drain_to_solar(
         self,
