@@ -75,13 +75,13 @@ add_processed_error() {
 # GITHUB OPERATIONS
 # ==============================================================================
 
-get_new_issues() {
-    # Fetch issues with draft label
+get_unlabeled_issues() {
+    # Fetch open issues with no labels (excluding draft issues)
+    # These are new issues that need triage/elaboration
     gh issue list --repo "$REPO" \
-        --label "draft" \
         --state open \
-        --json number,title,body,createdAt \
-        --jq '.[]' 2>/dev/null || echo ""
+        --json number,title,body,createdAt,labels \
+        --jq '.[] | select(.labels | length == 0)' 2>/dev/null || echo ""
 }
 
 get_elaborating_issues() {
@@ -294,7 +294,7 @@ Your task:
 2. If you need more information, post a comment with clarifying questions using:
    \`gh issue comment $issue_number --repo $REPO --body "your questions"\`
 3. Then update the label to 'status: elaborating' using:
-   \`gh issue edit $issue_number --repo $REPO --add-label "status: elaborating" --remove-label "draft"\`
+   \`gh issue edit $issue_number --repo $REPO --add-label "status: elaborating"\`
 4. If you have enough detail already, update the label to 'status: ready-to-plan' instead
 
 Be concise and focused on gathering requirements. Ask specific questions that will help create a good implementation plan.
@@ -338,8 +338,8 @@ EOF
 # ISSUE PROCESSING
 # ==============================================================================
 
-process_new_issues() {
-    log "Checking for new issues (label: draft)..."
+process_unlabeled_issues() {
+    log "Checking for unlabeled issues (needs triage)..."
     
     local count=0
     while IFS= read -r issue_json; do
@@ -349,7 +349,7 @@ process_new_issues() {
         local title=$(echo "$issue_json" | jq -r '.title')
         local body=$(echo "$issue_json" | jq -r '.body')
         
-        log "Processing new issue #$number: $title"
+        log "Processing unlabeled issue #$number: $title"
         
         # Build prompt for Cline
         local prompt=$(build_elaboration_prompt "$number" "$title" "$body")
@@ -362,9 +362,9 @@ process_new_issues() {
         fi
         
         ((count++)) || true
-    done < <(get_new_issues)
+    done < <(get_unlabeled_issues)
     
-    log "Processed $count new issues"
+    log "Processed $count unlabeled issues"
 }
 
 process_elaborating_issues() {
@@ -476,8 +476,8 @@ check_ha_logs() {
         return 1
     fi
     
-    # Get last 100 lines and filter for LocalShift errors
-    local errors=$(tail -100 "$HA_LOG_PATH" 2>/dev/null | \
+    # Get last 1000 lines and filter for LocalShift errors
+    local errors=$(tail -1000 "$HA_LOG_PATH" 2>/dev/null | \
         grep -i "localshift" | \
         grep -iE "error|exception|failed" || true)
     
@@ -541,6 +541,122 @@ This issue was automatically created by the polling agent.
 }
 
 # ==============================================================================
+# FORECAST AND DEBUG MONITORING
+# ==============================================================================
+
+check_ha_forecast_debug() {
+    log "Checking Home Assistant logs for forecast/debug anomalies..."
+    
+    if [ ! -f "$HA_LOG_PATH" ]; then
+        warn "HA log file not found: $HA_LOG_PATH"
+        return 1
+    fi
+    
+    # Get last 1000 lines and extract forecast/debug blocks
+    local logs=$(tail -1000 "$HA_LOG_PATH" 2>/dev/null)
+    
+    # Extract forecast computation blocks
+    local forecast_blocks=$(echo "$logs" | \
+        grep -i "localshift" | \
+        grep -iE "forecast|recomputing|mode_decision|debug_mode_source|no_forecast" || true)
+    
+    if [ -z "$forecast_blocks" ]; then
+        log "No forecast/debug blocks found in HA logs"
+        return 0
+    fi
+    
+    log "Found forecast/debug blocks in HA logs"
+    
+    # Check for specific anomaly patterns
+    local anomalies=""
+    
+    # Pattern 1: no_forecast mode (forecast unavailable)
+    local no_forecast=$(echo "$forecast_blocks" | grep -i "no_forecast" || true)
+    if [ -n "$no_forecast" ]; then
+        anomalies="${anomalies}### Forecast Unavailable (no_forecast mode)\n\`\`\`\n${no_forecast}\n\`\`\`\n\n"
+    fi
+    
+    # Pattern 2: Recomputing forecast with reasons
+    local recompute_warnings=$(echo "$forecast_blocks" | \
+        grep -i "recomputing" | \
+        grep -iE "stale|missing|error|failed|gap" || true)
+    if [ -n "$recompute_warnings" ]; then
+        anomalies="${anomalies}### Forecast Recompute Warnings\n\`\`\`\n${recompute_warnings}\n\`\`\`\n\n"
+    fi
+    
+    # Pattern 3: Mode decision issues
+    local mode_issues=$(echo "$forecast_blocks" | \
+        grep -iE "mode.*fallback|fallback.*mode|debug_mode_source.*no" || true)
+    if [ -n "$mode_issues" ]; then
+        anomalies="${anomalies}### Mode Decision Issues (using fallback)\n\`\`\`\n${mode_issues}\n\`\`\`\n\n"
+    fi
+    
+    # Pattern 4: Solcast data issues
+    local solcast_issues=$(echo "$forecast_blocks" | \
+        grep -iE "solcast.*(empty|invalid|missing|error)" || true)
+    if [ -n "$solcast_issues" ]; then
+        anomalies="${anomalies}### Solcast Data Issues\n\`\`\`\n${solcast_issues}\n\`\`\`\n\n"
+    fi
+    
+    # Pattern 5: Time gap issues (forecast data stale)
+    local time_gap_issues=$(echo "$forecast_blocks" | \
+        grep -iE "time.*gap|gap.*second|stale" || true)
+    if [ -n "$time_gap_issues" ]; then
+        anomalies="${anomalies}### Time Gap/Stale Forecast Issues\n\`\`\`\n${time_gap_issues}\n\`\`\`\n\n"
+    fi
+    
+    if [ -z "$anomalies" ]; then
+        log "No forecast/debug anomalies detected"
+        return 0
+    fi
+    
+    log "Found forecast/debug anomalies"
+    
+    # Check if we've already reported these anomalies (use a hash of the content)
+    local anomaly_hash=$(echo "$anomalies" | md5sum | cut -d' ' -f1)
+    local processed=$(get_state "processed_forecast_anomalies")
+    
+    if echo "$processed" | grep -qF "$anomaly_hash"; then
+        log "Skipping already-processed forecast anomaly batch"
+        return 0
+    fi
+    
+    # Create issue for the anomalies
+    local title="LocalShift Forecast/Debug Anomaly Detected"
+    local body="## Forecast/Debug Anomalies Detected in Home Assistant Logs
+
+The following anomalies were automatically detected in the Home Assistant logs:
+
+${anomalies}
+### Context
+This issue was automatically created by the polling agent based on forecast and debug log analysis.
+
+### Diagnostic Data
+The following debug fields may be relevant:
+- \`debug_mode_source\`: Indicates if mode is from forecast or fallback
+- \`debug_forecast_slot_found\`: Whether current time slot found in forecast
+- \`debug_forecast_slot_time\`: Time of matched forecast slot
+- \`debug_first_forecast_slot_time\`: Time of first forecast slot
+- \`debug_time_gap_seconds\`: Seconds between now and first forecast slot
+
+### Next Steps
+1. Check Solcast integration status
+2. Verify forecast data is being received
+3. Check for time synchronization issues
+4. Review mode decision logic"
+
+    if create_issue "$title" "$body" "priority: high"; then
+        # Mark as processed
+        local tmp_file="${STATE_FILE}.tmp"
+        jq --arg hash "$anomaly_hash" \
+            '.processed_forecast_anomalies = (.processed_forecast_anomalies // []) + [$hash]' \
+            "$STATE_FILE" > "$tmp_file" && \
+            mv "$tmp_file" "$STATE_FILE"
+        log "Created issue for forecast/debug anomalies"
+    fi
+}
+
+# ==============================================================================
 # UTILITY FUNCTIONS
 # ==============================================================================
 
@@ -566,12 +682,13 @@ check_dependencies() {
 # Run a single polling cycle (useful for testing)
 run_single_cycle() {
     log "Running single polling cycle..."
-    process_new_issues
+    process_unlabeled_issues
     process_elaborating_issues
     process_ready_to_plan_issues
     
     if [ "$ENABLE_HA_MONITORING" = "true" ]; then
         check_ha_logs
+        check_ha_forecast_debug
     fi
     
     log "Single cycle complete"
