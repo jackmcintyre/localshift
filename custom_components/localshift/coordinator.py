@@ -63,8 +63,16 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# How often the coordinator re-evaluates (matches A16/A9 cadence)
-PERIODIC_INTERVAL = timedelta(minutes=1)
+# Tiered periodic task intervals (Issue #291)
+# FAST: Time-sensitive control tasks (1 minute)
+PERIODIC_INTERVAL_FAST = timedelta(minutes=1)
+# MEDIUM: Learning and monitoring tasks (5 minutes)
+PERIODIC_INTERVAL_MEDIUM = timedelta(minutes=5)
+# SLOW: Slow-changing data tasks (30 minutes)
+PERIODIC_INTERVAL_SLOW = timedelta(minutes=30)
+
+# Legacy interval kept for backward compatibility
+PERIODIC_INTERVAL = PERIODIC_INTERVAL_FAST
 
 # How often to save learning data to storage (prevents data loss on restart)
 LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
@@ -72,6 +80,10 @@ LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
 # Solcast startup retry configuration
 SOLCAST_STARTUP_RETRY_DELAY = timedelta(seconds=30)
 SOLCAST_MAX_STARTUP_RETRIES = 3
+
+# Stale price detection threshold (Issue #291)
+# If price sensor hasn't updated in this time, trigger state machine evaluation
+STALE_PRICE_THRESHOLD = timedelta(minutes=10)
 
 
 class LocalShiftCoordinator:
@@ -88,11 +100,15 @@ class LocalShiftCoordinator:
         self.data = CoordinatorData()
         self._listeners: list[CALLBACK_TYPE] = []
         self._unsub_state: CALLBACK_TYPE | None = None
-        self._unsub_timer: CALLBACK_TYPE | None = None
+        self._unsub_timer: CALLBACK_TYPE | None = None  # Legacy - kept for compatibility
         self._unsub_midnight: CALLBACK_TYPE | None = None
         self._unsub_daily_summary: CALLBACK_TYPE | None = None
         self._unsub_thermal_mode_decision: CALLBACK_TYPE | None = None
         self._unsub_learning_save: CALLBACK_TYPE | None = None
+        # Tiered periodic task timers (Issue #291)
+        self._unsub_timer_fast: CALLBACK_TYPE | None = None
+        self._unsub_timer_medium: CALLBACK_TYPE | None = None
+        self._unsub_timer_slow: CALLBACK_TYPE | None = None
         self._update_callbacks: list[CALLBACK_TYPE] = []
 
         # Switch state bridge — switches read/write via these methods
@@ -310,9 +326,18 @@ class LocalShiftCoordinator:
             self.hass, monitored_entities, self._handle_state_change
         )
 
-        # 1-minute periodic tick (cost accumulation, DW checks, re-evaluation)
-        self._unsub_timer = async_track_time_interval(
-            self.hass, self._handle_periodic_tick, PERIODIC_INTERVAL
+        # Tiered periodic task timers (Issue #291)
+        # FAST: 1-minute - time-sensitive control tasks
+        self._unsub_timer_fast = async_track_time_interval(
+            self.hass, self._handle_fast_tick, PERIODIC_INTERVAL_FAST
+        )
+        # MEDIUM: 5-minute - learning and monitoring tasks
+        self._unsub_timer_medium = async_track_time_interval(
+            self.hass, self._handle_medium_tick, PERIODIC_INTERVAL_MEDIUM
+        )
+        # SLOW: 30-minute - slow-changing data tasks
+        self._unsub_timer_slow = async_track_time_interval(
+            self.hass, self._handle_slow_tick, PERIODIC_INTERVAL_SLOW
         )
 
         # Midnight reset (replaces A12): reset cost accumulators + target flag
@@ -395,14 +420,17 @@ class LocalShiftCoordinator:
 
         Saves all learning data to storage before shutdown to prevent data loss.
         """
-        # Unsubscribe all timers
+        # Unsubscribe all timers (including tiered timers from Issue #291)
         for unsub in (
             self._unsub_state,
-            self._unsub_timer,
+            self._unsub_timer,  # Legacy
             self._unsub_midnight,
             self._unsub_daily_summary,
             self._unsub_thermal_mode_decision,
             self._unsub_learning_save,
+            self._unsub_timer_fast,
+            self._unsub_timer_medium,
+            self._unsub_timer_slow,
         ):
             if unsub:
                 unsub()
@@ -412,6 +440,9 @@ class LocalShiftCoordinator:
         self._unsub_daily_summary = None
         self._unsub_thermal_mode_decision = None
         self._unsub_learning_save = None
+        self._unsub_timer_fast = None
+        self._unsub_timer_medium = None
+        self._unsub_timer_slow = None
 
         # Save all learning data to storage before shutdown
         await self._save_learning_data()
@@ -668,32 +699,96 @@ class LocalShiftCoordinator:
 
     @callback
     def _handle_periodic_tick(self, now: datetime) -> None:
-        """Handle the 1-minute periodic re-evaluation."""
-        # Read raw entity values now — needed for cost accumulation below.
+        """Handle the 1-minute periodic re-evaluation.
+
+        DEPRECATED: This method is kept for backward compatibility.
+        New tiered handlers (_handle_fast_tick, _handle_medium_tick, _handle_slow_tick)
+        are used instead. See async_start() for timer subscriptions.
+        """
+        # Delegate to fast tick for backward compatibility
+        self._handle_fast_tick(now)
+
+    @callback
+    def _handle_fast_tick(self, now: datetime) -> None:
+        """Handle FAST tier periodic tasks (1 minute).
+
+        Time-sensitive control tasks that need minute-level accuracy:
+        - Cost accumulation (power × time needs minute accuracy)
+        - Pre-conditioning (time-sensitive before demand window)
+        - Solar taper (solar changes rapidly with clouds)
+        - Real-time thermal (room temperature comfort needs quick response)
+        - Stale price check (safety net if price sensor stops updating)
+        """
+        # Read raw entity values now — needed for cost accumulation
         self._read_all_external_state()
 
-        # Check entity health periodically
+        # Cost accumulation uses the raw state we just read (sync, no lock needed)
+        self._accumulate_costs()
+
+        # Check for stale price sensor (Issue #291)
+        # If price hasn't updated in 10+ minutes, trigger state machine evaluation
+        stale_price = self._check_stale_price()
+
+        # Thermal control tasks (time-sensitive)
+        if self._thermal_manager is not None:
+            # Evaluate pre-conditioning (Issue #63 Phase 4)
+            self.hass.async_create_task(
+                self._evaluate_preconditioning(),
+                "localshift_preconditioning",
+            )
+
+            # Evaluate solar tapering (Issue #141 Phase 5)
+            self.hass.async_create_task(
+                self._evaluate_solar_taper(),
+                "localshift_solar_taper",
+            )
+
+            # Evaluate real-time thermal control (Issue #63 Phase 6)
+            self.hass.async_create_task(
+                self._evaluate_realtime_thermal(),
+                "localshift_realtime_thermal",
+            )
+
+        # Trigger state machine evaluation if price is stale
+        # This is a safety net - normally state changes trigger evaluation
+        if stale_price:
+            _LOGGER.info("Stale price detected, triggering state machine evaluation")
+            self.hass.async_create_task(
+                self._evaluate_state_machine(),
+                "localshift_evaluate_stale_price",
+            )
+
+    @callback
+    def _handle_medium_tick(self, now: datetime) -> None:
+        """Handle MEDIUM tier periodic tasks (5 minutes).
+
+        Learning and monitoring tasks that don't need minute-level accuracy:
+        - Entity health check
+        - Load data refresh
+        - Decision backfill
+        - Weather learning
+        - HVAC learning
+        - Baseline calculation
+        """
+        # Read raw entity values
+        self._read_all_external_state()
+
+        # Check entity health
         self._check_entity_health()
 
-        # Refresh load data periodically (every ~5 minutes)
-        # This is async so we fire it and forget - it will update the cache
+        # Refresh load data (historical and recent)
         if self._computation_engine is not None:
             load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
             self.hass.async_create_task(
                 self._computation_engine.async_get_recent_load_1hr(load_entity_id),
                 "localshift_fetch_recent_load",
             )
-            # Also refresh historical hourly averages (7-day profile)
-            # This ensures the cache is always populated even after restarts
             self.hass.async_create_task(
                 self._computation_engine.async_get_historical_hourly_averages(
                     load_entity_id
                 ),
                 "localshift_fetch_historical_load",
             )
-
-        # Cost accumulation uses the raw state we just read (sync, no lock needed)
-        self._accumulate_costs()
 
         # Backfill decision outcomes and update performance metrics (Issue #170 Phase 1)
         if self.decision_tracker is not None:
@@ -703,7 +798,7 @@ class LocalShiftCoordinator:
                 limit=20
             )
 
-            # Save decisions if backfill occurred (prevents data loss on restart)
+            # Save decisions if backfill occurred
             if self.decision_tracker.save_pending:
                 self.hass.async_create_task(
                     self.decision_tracker.async_save(),
@@ -712,7 +807,6 @@ class LocalShiftCoordinator:
                 self.decision_tracker.clear_save_pending()
 
             # Run parameter optimization (Issue #170 Phase 2)
-            # Check if we have enough decisions and enough time has passed
             if self.param_optimizer is not None:
                 completed_count = len(self.decision_tracker._completed_decisions)
                 if self.param_optimizer.should_update(completed_count):
@@ -725,14 +819,38 @@ class LocalShiftCoordinator:
                     )
 
         # Learn from current temperature/load for weather correlation
-        # This runs asynchronously and won't block the periodic tick
         if self._computation_engine is not None:
             self.hass.async_create_task(
                 self._computation_engine.async_learn_weather_sample(self.data),
                 "localshift_weather_learning",
             )
-            # Refresh temperature forecast from weather entity (Issue #135)
-            # Uses modern weather.get_forecasts service with 30-min cache
+
+        # Learn HVAC power from climate state changes (Issue #137)
+        if self._thermal_manager is not None:
+            self.hass.async_create_task(
+                self._learn_hvac_power(),
+                "localshift_hvac_learning",
+            )
+            # Sample HVAC power during operation for temperature correlation
+            self._sample_hvac_power_temperature()
+            # Calculate and pass baseline load to computation engine
+            baseline = self._calculate_baseline_load()
+            if baseline and self._computation_engine is not None:
+                self._computation_engine.set_baseline_load(baseline)
+
+        _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
+
+    @callback
+    def _handle_slow_tick(self, now: datetime) -> None:
+        """Handle SLOW tier periodic tasks (30 minutes).
+
+        Slow-changing data tasks:
+        - Weather forecast refresh
+        - Forecast accuracy metrics
+        - Forecast history save
+        """
+        # Refresh temperature forecast from weather entity (Issue #135)
+        if self._computation_engine is not None:
             self.hass.async_create_task(
                 self._refresh_weather_forecast(),
                 "localshift_weather_forecast",
@@ -748,50 +866,45 @@ class LocalShiftCoordinator:
                 "localshift_save_forecast_history",
             )
 
-        # Learn HVAC power from climate state changes (Issue #137)
-        # This separates thermal load from baseline for grid charging decisions
-        if self._thermal_manager is not None:
-            self.hass.async_create_task(
-                self._learn_hvac_power(),
-                "localshift_hvac_learning",
-            )
-            # Sample HVAC power during operation for temperature correlation (Issue #171)
-            # This collects power samples at different outdoor temperatures
-            self._sample_hvac_power_temperature()
-            # Calculate and pass baseline load to computation engine
-            # This completes the Issue #137 feedback loop fix
-            baseline = self._calculate_baseline_load()
-            if baseline and self._computation_engine is not None:
-                self._computation_engine.set_baseline_load(baseline)
+        _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
 
-            # Evaluate pre-conditioning (Issue #63 Phase 4)
-            # Pre-heat or pre-cool before demand window
-            self.hass.async_create_task(
-                self._evaluate_preconditioning(),
-                "localshift_preconditioning",
-            )
+    def _check_stale_price(self) -> bool:
+        """Check if price sensor hasn't updated in STALE_PRICE_THRESHOLD.
 
-            # Evaluate solar tapering (Issue #141 Phase 5)
-            # Consume excess solar by adjusting HVAC setpoints
-            self.hass.async_create_task(
-                self._evaluate_solar_taper(),
-                "localshift_solar_taper",
-            )
+        This is a safety net that triggers state machine evaluation if the
+        price sensor stops updating. Normally, state changes trigger evaluation
+        automatically, but if the sensor becomes stale, we need to catch it.
 
-            # Evaluate real-time thermal control (Issue #63 Phase 6)
-            # Real-time on/off control based on room temperature
-            self.hass.async_create_task(
-                self._evaluate_realtime_thermal(),
-                "localshift_realtime_thermal",
-            )
+        Returns:
+            True if price sensor is stale, False otherwise.
+        """
+        price_entity = self._get_entity_id(CONF_PRICING_GENERAL_PRICE)
+        price_state = self.hass.states.get(price_entity)
 
-        # Derived-value computation and listener notification happen inside the
-        # evaluate lock so that back-to-back periodic ticks don't concurrently
-        # mutate shared data or operate on stale post-transition state.
-        self.hass.async_create_task(
-            self._evaluate_state_machine(),
-            "localshift_evaluate_periodic",
-        )
+        if price_state is None:
+            _LOGGER.debug("Price entity not found: %s", price_entity)
+            return False
+
+        if price_state.state in ("unknown", "unavailable", None, ""):
+            _LOGGER.debug("Price entity state is invalid: %s", price_state.state)
+            return False
+
+        # Check last_updated time
+        if price_state.last_updated:
+            from homeassistant.util import dt as dt_util
+            now = dt_util.now()
+            age = now - price_state.last_updated
+
+            if age > STALE_PRICE_THRESHOLD:
+                _LOGGER.warning(
+                    "Price sensor %s is stale (last updated %s ago). "
+                    "This may indicate an issue with the pricing integration.",
+                    price_entity,
+                    age,
+                )
+                return True
+
+        return False
 
     @callback
     def _handle_midnight_reset(self, now: datetime) -> None:
