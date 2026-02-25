@@ -173,6 +173,51 @@ class PriceCalculator:
         self._sum_solar_before_target = sum_solar_before_target
         self._get_expected_load_kw = get_expected_load_kw
 
+    def _calculate_urgency_adjusted_price(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        target_hour: int,
+        base: float,
+        max_price: float,
+    ) -> float:
+        """Calculate urgency-adjusted cheap price threshold.
+
+        When solar cannot reach target and we're before the target window,
+        applies urgency scaling and forecast floor constraints.
+
+        Args:
+            data: Coordinator data containing general forecast.
+            now_dt: Current datetime.
+            target_hour: Target hour for the calculation window.
+            base: Base price from percentile calculation.
+            max_price: Maximum allowed price from config.
+
+        Returns:
+            Calculated urgency-adjusted price rounded to 2 decimal places.
+        """
+        target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
+        total_window = 8.0
+        urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
+        urgency_price = base + (max_price - base) * urgency
+
+        min_forecast = max_price
+        for forecast in data.general_forecast:
+            start = self._parse_forecast_dt(forecast.get("start_time"))
+            if start is None:
+                continue
+            start_local = dt_util.as_local(start)
+            if start_local >= now_dt and start_local.hour < target_hour:
+                price = float(forecast.get("per_kwh", max_price))
+                if price < min_forecast:
+                    min_forecast = price
+
+        forecast_floor = max(min_forecast + 0.02, base)
+        final = min(urgency_price, max_price)
+        final = max(final, forecast_floor)
+        return round(final, 2)
+
     def compute_effective_cheap_price_preliminary(
         self,
         data: CoordinatorData,
@@ -241,29 +286,9 @@ class PriceCalculator:
         if not solar_gap or not before_dw or data.target_reached_today:
             data.effective_cheap_price = base
         else:
-            target_dt = now_dt.replace(
-                hour=target_hour, minute=0, second=0, microsecond=0
+            data.effective_cheap_price = self._calculate_urgency_adjusted_price(
+                data, now_dt, target_hour, base, max_price
             )
-            hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-            total_window = 8.0
-            urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
-            urgency_price = base + (max_price - base) * urgency
-
-            min_forecast = max_price
-            for forecast in data.general_forecast:
-                start = self._parse_forecast_dt(forecast.get("start_time"))
-                if start is None:
-                    continue
-                start_local = dt_util.as_local(start)
-                if start_local >= now_dt and start_local.hour < target_hour:
-                    price = float(forecast.get("per_kwh", max_price))
-                    if price < min_forecast:
-                        min_forecast = price
-
-            forecast_floor = max(min_forecast + 0.02, base)
-            final = min(urgency_price, max_price)
-            final = max(final, forecast_floor)
-            data.effective_cheap_price = round(final, 2)
 
     def compute_effective_cheap_price(
         self,
@@ -312,29 +337,9 @@ class PriceCalculator:
         if not solar_gap or not before_dw or data.target_reached_today:
             data.effective_cheap_price = base
         else:
-            target_dt = now_dt.replace(
-                hour=target_hour, minute=0, second=0, microsecond=0
+            data.effective_cheap_price = self._calculate_urgency_adjusted_price(
+                data, now_dt, target_hour, base, max_price
             )
-            hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-            total_window = 8.0
-            urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
-            urgency_price = base + (max_price - base) * urgency
-
-            min_forecast = max_price
-            for forecast in data.general_forecast:
-                start = self._parse_forecast_dt(forecast.get("start_time"))
-                if start is None:
-                    continue
-                start_local = dt_util.as_local(start)
-                if start_local >= now_dt and start_local.hour < target_hour:
-                    price = float(forecast.get("per_kwh", max_price))
-                    if price < min_forecast:
-                        min_forecast = price
-
-            forecast_floor = max(min_forecast + 0.02, base)
-            final = min(urgency_price, max_price)
-            final = max(final, forecast_floor)
-            data.effective_cheap_price = round(final, 2)
 
     def compute_solar_weighted_avg_fit(
         self,
