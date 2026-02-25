@@ -196,7 +196,7 @@ invoke_cline() {
     # The --non-interactive flag ensures it runs without user input
     # The --task flag passes the task description
     if command -v cline &> /dev/null; then
-        cline --task "$task" 2>&1 || {
+        cline task --yolo "$task" 2>&1 || {
             error "Cline CLI failed"
             return 1
         }
