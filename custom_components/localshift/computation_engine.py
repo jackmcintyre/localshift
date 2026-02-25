@@ -267,7 +267,7 @@ class ComputationEngine:
             all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
 
             # Simulate solar-only charging through DW period
-            soc_at_end, max_soc, can_reach = (
+            soc_at_end, max_soc, can_reach, _ = (
                 self._forecast_computer._simulate_future_soc_with_solar_only(
                     actual_current_soc=data.soc,
                     start_slot=now_dt,

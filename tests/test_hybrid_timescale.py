@@ -308,7 +308,7 @@ class TestFifteenMinSlots:
         # Simulate 4 hours forward
         end_time = base_time + timedelta(hours=4)
 
-        soc_end, max_soc, can_reach = computer._simulate_future_soc_with_solar_only(
+        soc_end, max_soc, can_reach, _ = computer._simulate_future_soc_with_solar_only(
             actual_current_soc=60.0,
             start_slot=base_time,
             target_pct=80.0,
