@@ -576,34 +576,6 @@ class ForecastComputer:
         price_is_cheap = use_price <= effective_cheap_price
         price_is_very_cheap = use_price <= (effective_cheap_price * 0.8)
 
-        # HYSTERESIS: If currently grid charging, apply stickiness to prevent flip-flopping
-        # Only stop charging if:
-        # 1. Price is no longer cheap, OR
-        # 2. Solar simulation shows STRONG margin above target (target + hysteresis)
-        # NOTE: Hysteresis only applies to the current real-time slot to prevent hardware
-        # flip-flopping. Future forecast slots should always run through solar simulation
-        # for optimal planning.
-        if (
-            is_current_slot
-            and is_currently_grid_charging
-            and price_is_cheap
-            and gap_to_target > 0
-        ):
-            # Continue charging - don't stop just because solar *might* reach target
-            # The forecast could be optimistic; real-time conditions may differ
-            _LOGGER.info(
-                "GRID_CHARGE HYSTERESIS: Continuing at %s (price=$%.2f, SOC=%.1f%%, gap=%.1f%%) - avoiding flip-flop",
-                slot_start.strftime("%H:%M"),
-                use_price,
-                predicted_soc,
-                target_pct,
-                gap_to_target,
-            )
-            # Check if we should boost (very cheap price)
-            if price_is_very_cheap:
-                return True, True
-            return True, False
-
         # SMART FORECAST: Simulate forward with solar only
         # Model: can we reach target using solar only?
         # If yes, do NOT grid charge.
@@ -611,6 +583,10 @@ class ForecastComputer:
         # KEY: When allow_dw_entry_under_target is True, simulate to DW END
         # instead of DW START. This allows solar to continue charging during
         # the DW period and reach target within the DW window.
+        #
+        # ISSUE #292: Solar simulation MUST run BEFORE hysteresis check.
+        # Previously, hysteresis would bypass solar simulation entirely,
+        # causing unnecessary grid charging when solar could reach target.
         sim_start = slot_start
 
         if allow_dw_entry_under_target:
@@ -780,6 +756,28 @@ class ForecastComputer:
                     target_pct,
                 )
                 return False, False
+
+        # HYSTERESIS: If currently grid charging and solar can't reach target,
+        # apply stickiness to prevent flip-flopping. Only applies to current slot.
+        # This is now AFTER solar simulation, so we know solar truly can't reach target.
+        if (
+            is_current_slot
+            and is_currently_grid_charging
+            and price_is_cheap
+            and gap_to_target > 0
+        ):
+            # Continue charging - solar simulation confirmed we need it
+            _LOGGER.info(
+                "GRID_CHARGE HYSTERESIS: Continuing at %s (price=$%.2f, SOC=%.1f%%, target=%d%%) - solar cannot reach target",
+                slot_start.strftime("%H:%M"),
+                use_price,
+                predicted_soc,
+                target_pct,
+            )
+            # Check if we should boost (very cheap price)
+            if price_is_very_cheap:
+                return True, True
+            return True, False
 
         # SAFETY NET: Charge if very cheap (forecast could be wrong)
         # IMPORTANT: only applies when solar *cannot* meet the target before DW.
