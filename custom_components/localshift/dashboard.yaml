@@ -489,19 +489,6 @@ views:
               {% endfor %}
               {% endif %}
 
-          - type: button
-            name: Reset Learning
-            icon: mdi:brain-off
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_reset_learning
-            icon_height: 40px
-            hold_action:
-              action: none
-
-
   # =============================================================================
   # VIEW 2: CONTROLS (Adjust Settings Occasionally)
   # =============================================================================
@@ -591,16 +578,6 @@ views:
               service: button.press
               target:
                 entity_id: button.localshift_update_forecast
-            icon_height: 40px
-
-          - type: button
-            name: Reset Learning
-            icon: mdi:brain-off
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_reset_learning
             icon_height: 40px
 
       # Live System (Tesla Controls)
