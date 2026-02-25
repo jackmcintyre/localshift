@@ -156,10 +156,12 @@ class SelfConsumptionButton(LocalShiftButtonBase):
 
     async def async_press(self) -> None:
         """Handle button press."""
-        # Clear manual override flag and timestamp to return to automated control
-        self.coordinator.data.manual_override = False
+        # Set manual override to prevent state machine from immediately overriding
+        # the user's choice. After manual_override_timeout hours, it will return
+        # to automated control. This matches the behavior of other manual buttons.
+        self.coordinator.data.manual_override = True
         if self.coordinator._state_machine is not None:
-            self.coordinator._state_machine.clear_manual_override_timestamp()
+            self.coordinator._state_machine.set_manual_override_timestamp()
         await self.coordinator.async_set_self_consumption()
         if self.coordinator._notification_service is not None:
             await (
