@@ -53,13 +53,14 @@ main() {
         log "=== $(date '+%Y-%m-%d %H:%M:%S') - Polling cycle started ==="
         
         # Process GitHub issues
-        process_new_issues
+        process_unlabeled_issues
         process_elaborating_issues
         process_ready_to_plan_issues
         
         # Optional: Check HA logs
         if [ "$ENABLE_HA_MONITORING" = "true" ]; then
             check_ha_logs
+            check_ha_forecast_debug
         fi
         
         log "=== Polling cycle complete ==="
