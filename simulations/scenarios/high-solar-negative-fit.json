@@ -1,6 +1,6 @@
 {
   "name": "High Solar with Negative FIT - Replacement Cost Check",
-  "description": "Tests the replacement cost check feature (Issue #70). High solar morning, negative FIT midday, zero solar overnight. Should NOT export overnight when replacement would require expensive grid import. At 20:00 with SOC=46%, FIT=$0.08, grid_import=$0.15 (effective_cheap_price), margin=$0.10. Replacement cost check should block overnight exports.",
+  "description": "Tests the replacement cost check feature (Issue #70). High solar morning, negative FIT midday, zero solar overnight. Should NOT export overnight when replacement would require expensive grid import. At 20:00 with SOC=46%, FIT=$0.08, grid_import=$0.15 (effective_cheap_price), margin=$0.10. Replacement cost check should block overnight exports. NOTE: min_soc=28.1% (not 15.6%) because grid charging triggers at very cheap prices ($0.07-0.08/kWh at 02:00-04:00) when Solcast horizon is truncated (Issue #226 safety net).",
   "input": {
     "test_time": "2026-02-16T20:00:00+11:00",
     "soc": 46.0,
@@ -121,6 +121,6 @@
     "demand_window_block": true
   },
   "expected": {
-    "daily_forecast_min_soc": 15.6
+    "daily_forecast_min_soc": 28.1
   }
 }
