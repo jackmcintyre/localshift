@@ -705,6 +705,126 @@ The integration supports separate weekday and weekend consumption profiles for i
 | `weekday_hourly_profile_kw` | Weekday hourly averages |
 | `weekend_hourly_profile_kw` | Weekend hourly averages |
 
+## Statistics API Integration (Issue #267-#270)
+
+The integration includes a Statistics API integration layer that enables long-term validation of forecast accuracy and decision outcomes using Home Assistant's built-in statistics database.
+
+### Component: StatisticsBackfiller (`statistics_backfiller.py`)
+
+The `StatisticsBackfiller` class provides ground-truth validation by comparing estimated outcomes from the decision log against actual metered statistics from Home Assistant's recorder.
+
+**Key Features:**
+
+| Feature | Description |
+|---------|-------------|
+| **Decision Validation** | Compares estimated vs actual grid import/export |
+| **Variance Tracking** | Calculates percentage variance between estimates and actuals |
+| **Discrepancy Detection** | Flags decisions where variance exceeds 10% |
+| **Multi-Entity Support** | Validates grid import, export, battery charge, and discharge |
+
+**Data Flow:**
+
+```
+Decision Log (estimates)     Home Assistant Recorder (actuals)
+         │                              │
+         │                              │
+         ▼                              ▼
+    ┌─────────────────────────────────────────┐
+    │         StatisticsBackfiller            │
+    │                                         │
+    │  1. Fetch statistics for period         │
+    │  2. Filter decisions by time range      │
+    │  3. Compare estimated vs actual         │
+    │  4. Generate BackfillReport             │
+    └─────────────────────────────────────────┘
+                        │
+                        ▼
+               BackfillReport
+               - decisions_validated
+               - discrepancies_found
+               - variance metrics
+```
+
+### Component: Cost Reconciliation (`cost_tracker.py`)
+
+Extended `CostTracker` with reconciliation methods that validate cost estimates against metered statistics.
+
+**Key Methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `async_reconcile_with_statistics()` | Main reconciliation entry point |
+| `_fetch_statistics_for_period()` | Fetch energy data from HA statistics |
+| `_calculate_variance_pct()` | Compute variance percentage |
+
+**ReconciliationReport Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `estimated_cost` | Cost from integration's accumulation |
+| `actual_cost` | Cost computed from metered statistics |
+| `variance_pct` | Percentage difference |
+| `is_significant` | Whether variance exceeds threshold |
+
+### Component: Extended Forecast Accuracy (`forecast_accuracy.py`)
+
+Extended accuracy tracking with multi-horizon validation and bias detection.
+
+**ExtendedAccuracyMetrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `accuracy_24h` | 24-hour forecast accuracy (%) |
+| `accuracy_7d` | 7-day forecast accuracy (%) |
+| `accuracy_30d` | 30-day forecast accuracy (%) |
+| `bias` | Systematic prediction bias (+ = over-predict, - = under-predict) |
+| `mape` | Mean Absolute Percentage Error |
+
+**Use Cases:**
+
+1. **Model Calibration** - Identify systematic bias to adjust forecast models
+2. **Learning System Feedback** - Feed accuracy metrics into parameter optimization
+3. **Quality Monitoring** - Track forecast quality over time with long-term trends
+
+### Integration with Learning System
+
+The Statistics API integration provides ground-truth data for the learning system:
+
+```
+StatisticsBackfiller ──► Decision Quality Scores
+         │
+         ▼
+Pattern Analyzer ──► Bias Corrections
+         │
+         ▼
+Parameter Optimizer ──► Adjusted Parameters
+```
+
+This creates a closed feedback loop where actual outcomes inform parameter adjustments, enabling continuous improvement of forecast accuracy.
+
+### Configuration
+
+Statistics validation requires entities with `state_class: measurement` or `state_class: total_increasing`. The following sensors now support long-term statistics (Issue #266):
+
+| Sensor | State Class |
+|--------|-------------|
+| `sensor.localshift_forecast_battery` | measurement |
+| `sensor.localshift_forecast_prices` | measurement |
+| `sensor.localshift_forecast_grid` | measurement |
+| `sensor.localshift_forecast_accuracy` | measurement |
+
+### Storage
+
+Backfill reports and reconciliation data are stored in `CoordinatorData` and exposed via sensors:
+
+| Sensor | Data Source |
+|--------|-------------|
+| `sensor.localshift_backfill_status` | `BackfillReport` |
+| `sensor.localshift_cost_reconciliation` | `ReconciliationReport` |
+| `sensor.localshift_extended_forecast_accuracy` | `ExtendedAccuracyMetrics` |
+
+---
+
 ## References
 
 - `FORECAST_DRIVEN_CONTROL.md` - Detailed design for forecast-driven control
