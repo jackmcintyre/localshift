@@ -273,6 +273,15 @@ class EntityValidator:
         health.entity_id = entity_id
         health.last_check = dt_util.now()
 
+        # Skip checking optional entities that are not configured (empty entity_id)
+        # This prevents false "MISSING" errors for optional features
+        if not entity_id and health.category == EntityCategory.OPTIONAL:
+            health.status = EntityStatus.OK
+            health.error_message = ""
+            health.consecutive_failures = 0
+            health.is_broken = False
+            return health
+
         # Check if entity exists
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -321,7 +330,15 @@ class EntityValidator:
                 # Don't increment failures for stale - it still has a value
                 return health
 
-        # Entity is healthy
+        # Entity is healthy - clear broken status if it was previously set
+        if health.is_broken:
+            _LOGGER.info(
+                "Entity '%s' (%s) recovered from BROKEN status - now healthy",
+                health.entity_id,
+                config_key,
+            )
+            health.is_broken = False
+
         health.status = EntityStatus.OK
         health.error_message = ""
         health.last_valid_value = validation.value
@@ -335,6 +352,7 @@ class EntityValidator:
 
         Logs warnings at FAILURE_THRESHOLD_WARNING failures.
         Marks entity as broken at FAILURE_THRESHOLD_ERROR failures.
+        Uses WARNING level for optional entities instead of ERROR.
 
         Args:
             health: EntityHealth to check
@@ -353,7 +371,10 @@ class EntityValidator:
         if health.consecutive_failures >= FAILURE_THRESHOLD_ERROR:
             if not health.is_broken:
                 health.is_broken = True
-                _LOGGER.error(
+                # Use WARNING for optional entities, ERROR for required/recommended
+                log_level = logging.WARNING if health.category == EntityCategory.OPTIONAL else logging.ERROR
+                _LOGGER.log(
+                    log_level,
                     "Entity '%s' (%s) marked as BROKEN after %d consecutive failures - "
                     "check entity configuration or sensor availability",
                     health.entity_id,
@@ -681,3 +702,69 @@ class EntityValidator:
                 defaults[config_key] = None
 
         return defaults
+
+    def reset_broken_status(self, config_key: str | None = None) -> None:
+        """Reset broken status for one or all entities.
+
+        This allows recovery without restart when:
+        - User reconfigures entity via options flow
+        - Entity becomes available again after being broken
+
+        Args:
+            config_key: Specific entity to reset, or None to reset all
+        """
+        if config_key is not None:
+            # Reset specific entity
+            health = self._entity_health.get(config_key)
+            if health is not None and health.is_broken:
+                health.is_broken = False
+                health.consecutive_failures = 0
+                _LOGGER.info(
+                    "Reset broken status for entity '%s' (%s)",
+                    health.entity_id,
+                    config_key,
+                )
+        else:
+            # Reset all broken entities
+            reset_count = 0
+            for key, health in self._entity_health.items():
+                if health.is_broken:
+                    health.is_broken = False
+                    health.consecutive_failures = 0
+                    reset_count += 1
+
+            if reset_count > 0:
+                _LOGGER.info(
+                    "Reset broken status for %d entities",
+                    reset_count,
+                )
+
+    def reset_entity_tracking(self, config_key: str) -> None:
+        """Reset tracking for a specific entity when its ID changes.
+
+        Called when user reconfigures an entity via options flow.
+        Resets the entity health tracking to pick up the new entity ID.
+
+        Args:
+            config_key: Configuration key for the entity
+        """
+        health = self._entity_health.get(config_key)
+        if health is not None:
+            old_entity_id = health.entity_id
+            new_entity_id = self._get_entity_id(config_key)
+
+            # Reset tracking state
+            health.entity_id = new_entity_id
+            health.status = EntityStatus.OK
+            health.error_message = ""
+            health.consecutive_failures = 0
+            health.is_broken = False
+            health.last_valid_value = None
+            health.last_valid_time = None
+
+            _LOGGER.info(
+                "Reset entity tracking for '%s': '%s' -> '%s'",
+                config_key,
+                old_entity_id,
+                new_entity_id,
+            )

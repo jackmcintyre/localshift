@@ -55,5 +55,8 @@ async def _async_options_updated(
     coordinator: LocalShiftCoordinator = entry.runtime_data
     # Reschedule daily summary timer in case demand_window_end changed
     coordinator.reschedule_daily_summary_timer()
+    # Reset entity tracking for any changed entities (e.g., weather_entity)
+    # This clears broken status and allows recovery without restart
+    coordinator.reset_entity_tracking_on_options_change()
     await coordinator.async_recompute_and_evaluate()
     _LOGGER.info("LocalShift options updated, re-evaluating")

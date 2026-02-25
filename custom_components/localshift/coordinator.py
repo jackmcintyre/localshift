@@ -987,6 +987,22 @@ class LocalShiftCoordinator:
         self._notify_listeners()
         await self.async_evaluate_state_machine()
 
+    def reset_entity_tracking_on_options_change(self) -> None:
+        """Reset entity tracking when options change.
+
+        This is called when the user reconfigures the integration via options flow.
+        It resets tracking for entities that may have changed (e.g., weather_entity)
+        to clear broken status and allow recovery without restart.
+        """
+        if self._entity_validator is None:
+            return
+
+        # Reset tracking for weather entity (most commonly reconfigured optional entity)
+        from .const import CONF_WEATHER_ENTITY
+        self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
+
+        _LOGGER.info("Reset entity tracking for options change")
+
     def reschedule_daily_summary_timer(self) -> None:
         """Reschedule the daily summary timer with current demand_window_end.
 
