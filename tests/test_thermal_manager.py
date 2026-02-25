@@ -665,6 +665,7 @@ class TestClimateControl:
     async def test_tracks_original_setpoint(self, thermal_manager, coordinator_data):
         """Climate control tracks original setpoint to prevent ratchet."""
         thermal_manager._get_switch_state = lambda k: k == "thermal_management_enabled"
+        coordinator_data.daily_thermal_mode = ThermalMode.COOL
         coordinator_data.climate_control_entities = ["climate.living_room"]
         coordinator_data.climate_states = {
             "climate.living_room": {
@@ -700,6 +701,7 @@ class TestClimateControl:
         thermal_manager._get_switch_state = lambda k: k == "thermal_management_enabled"
         thermal_manager._original_setpoints = {"climate.living_room": 24.0}
         thermal_manager._current_active_offset = -2.0
+        coordinator_data.daily_thermal_mode = ThermalMode.COOL
         coordinator_data.climate_control_entities = ["climate.living_room"]
 
         await thermal_manager.async_apply_climate_control(
