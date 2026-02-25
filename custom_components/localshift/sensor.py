@@ -252,7 +252,14 @@ class DecisionLogSensor(LocalShiftSensorBase):
 
 
 class ForecastHistorySensor(LocalShiftSensorBase):
-    """Historical forecast predictions for planned vs actual comparison."""
+    """Historical forecast predictions for planned vs actual comparison.
+    
+    NOTE: Each history entry contains ~96 forecast slots, making even a single
+    entry too large for the 16KB recorder limit. This sensor only exposes
+    metadata (count). Full data is available via coordinator for internal use.
+    
+    Issue #231: History data removed from attributes to stay under 16KB limit.
+    """
 
     _attr_unique_id = "localshift_forecast_history"
     _attr_name = "Forecast History"
@@ -264,8 +271,17 @@ class ForecastHistorySensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return forecast history as attributes."""
-        return {"history": self.coordinator.data.forecast_history}
+        """Return forecast history metadata only.
+        
+        History data is NOT exposed as attributes because each entry contains
+        ~96 forecast slots (~8KB per entry), exceeding the 16KB recorder limit.
+        Use coordinator.data.forecast_history for internal access.
+        """
+        history = self.coordinator.data.forecast_history
+        return {
+            "total_entries": len(history),
+            "note": "History data not exposed to stay under 16KB limit. Use coordinator for internal access.",
+        }
 
 
 class DailyForecastSensor(LocalShiftSensorBase):
@@ -273,6 +289,9 @@ class DailyForecastSensor(LocalShiftSensorBase):
 
     This sensor provides the core forecast data for dashboards and history.
     Split from the original monolithic sensor to stay under 16KB limit (Issue #37).
+    
+    NOTE: To stay under 16KB recorder limit, only next 6 hours (24 slots) are exposed
+    as attributes. Full data is available via coordinator for internal use.
     """
 
     _attr_unique_id = "localshift_forecast_daily"
@@ -285,11 +304,16 @@ class DailyForecastSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return daily forecast with descriptive key names for clarity."""
+        """Return daily forecast with descriptive key names for clarity.
+        
+        Only exposes next 6 hours (24 slots) to stay under 16KB recorder limit.
+        Issue #231: Reduced from 96 slots to 24 slots.
+        """
         # Build forecast slots with descriptive keys
-        # Each slot contains the essential time-series data for dashboards
+        # Only include next 3 hours (12 slots) to stay under 16KB limit
+        MAX_SLOTS = 12  # 3 hours at 15-min intervals
         forecast_slots = []
-        for slot in self.coordinator.data.daily_forecast:
+        for slot in self.coordinator.data.daily_forecast[:MAX_SLOTS]:
             ts = slot.get("timestamp", "")
             forecast_slots.append(
                 {
@@ -305,23 +329,24 @@ class DailyForecastSensor(LocalShiftSensorBase):
                 }
             )
 
-        # SOC series for graphing (lightweight format)
+        # SOC series for graphing (next 6 hours only)
         soc_series = []
-        for slot in self.coordinator.data.daily_forecast_soc_15min:
+        for slot in self.coordinator.data.daily_forecast_soc_15min[:MAX_SLOTS]:
             if len(slot) >= 2:
                 soc_series.append({"time": slot[0], "soc": slot[1]})
 
         return {
-            # Core forecast data (96 slots × 8 fields ≈ 8KB)
+            # Core forecast data (24 slots × 8 fields ≈ 2KB)
             "forecast_slots": forecast_slots,
-            # SOC time series for graphing
+            # SOC time series for graphing (next 6 hours)
             "soc_series": soc_series,
             # Summary counts
             "slot_count": len(self.coordinator.data.daily_forecast),
+            "slots_exposed": len(forecast_slots),
             "solcast_today_entries": len(self.coordinator.data.solcast_today),
             "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
-            # Hourly summary for quick reference
-            "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
+            # Note: forecast_hourly removed to stay under 16KB limit (Issue #231)
+            # Full hourly data available via coordinator for internal use
         }
 
 
@@ -330,6 +355,9 @@ class ForecastPricesSensor(LocalShiftSensorBase):
 
     Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
     Provides buy/sell price time series for analysis and dashboards.
+    
+    NOTE: To stay under 16KB recorder limit, only next 6 hours (24 slots) are exposed
+    as attributes. Full data is available via coordinator for internal use.
     """
 
     _attr_unique_id = "localshift_forecast_prices"
@@ -342,12 +370,18 @@ class ForecastPricesSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return price forecast data."""
+        """Return price forecast data.
+        
+        Only exposes next 6 hours (24 slots) to stay under 16KB recorder limit.
+        Issue #231: Reduced from 96 slots to 24 slots.
+        """
         # Build price time series with descriptive keys
+        # Only include next 3 hours (12 slots) to stay under 16KB limit
+        MAX_SLOTS = 12  # 3 hours at 15-min intervals
         buy_prices = []
         sell_prices = []
 
-        for slot in self.coordinator.data.daily_forecast:
+        for slot in self.coordinator.data.daily_forecast[:MAX_SLOTS]:
             ts = slot.get("timestamp", "")
             time_str = ts[11:16] if len(ts) >= 16 else ""
             buy_prices.append(
@@ -368,7 +402,7 @@ class ForecastPricesSensor(LocalShiftSensorBase):
             )
 
         return {
-            # Price time series (96 slots each ≈ 3KB total)
+            # Price time series (24 slots each ≈ 1KB total)
             "buy_prices": buy_prices,
             "sell_prices": sell_prices,
             # Price thresholds
@@ -394,6 +428,9 @@ class ForecastPricesSensor(LocalShiftSensorBase):
             "forecast_proactive_export_revenue": round(
                 self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
             ),
+            # Summary counts
+            "slots_exposed": len(buy_prices),
+            "total_slots": len(self.coordinator.data.daily_forecast),
         }
 
 
@@ -402,6 +439,9 @@ class ForecastGridSensor(LocalShiftSensorBase):
 
     Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
     Provides grid import/export time series for analysis and dashboards.
+    
+    NOTE: To stay under 16KB recorder limit, only next 6 hours (24 slots) are exposed
+    as attributes. Full data is available via coordinator for internal use.
     """
 
     _attr_unique_id = "localshift_forecast_grid"
@@ -418,8 +458,14 @@ class ForecastGridSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return grid interaction forecast data."""
+        """Return grid interaction forecast data.
+        
+        Only exposes next 6 hours (24 slots) to stay under 16KB recorder limit.
+        Issue #231: Reduced from 96 slots to 24 slots.
+        """
         # Build grid interaction time series with descriptive keys
+        # Only include next 3 hours (12 slots) to stay under 16KB limit
+        MAX_SLOTS = 12  # 3 hours at 15-min intervals
         grid_interaction = []
         total_import = 0.0
         total_export = 0.0
@@ -427,8 +473,6 @@ class ForecastGridSensor(LocalShiftSensorBase):
         proactive_export_slots = 0
 
         for slot in self.coordinator.data.daily_forecast:
-            ts = slot.get("timestamp", "")
-            time_str = ts[11:16] if len(ts) >= 16 else ""
             import_kwh = slot.get("grid_import_kwh", 0) or 0
             export_kwh = slot.get("grid_export_kwh", 0) or 0
             is_grid_charge = slot.get("grid_charge", False)
@@ -440,6 +484,15 @@ class ForecastGridSensor(LocalShiftSensorBase):
                 grid_charge_slots += 1
             if is_proactive_export:
                 proactive_export_slots += 1
+
+        # Only expose next 6 hours in detail
+        for slot in self.coordinator.data.daily_forecast[:MAX_SLOTS]:
+            ts = slot.get("timestamp", "")
+            time_str = ts[11:16] if len(ts) >= 16 else ""
+            import_kwh = slot.get("grid_import_kwh", 0) or 0
+            export_kwh = slot.get("grid_export_kwh", 0) or 0
+            is_grid_charge = slot.get("grid_charge", False)
+            is_proactive_export = slot.get("proactive_export", False)
 
             grid_interaction.append(
                 {
@@ -458,13 +511,16 @@ class ForecastGridSensor(LocalShiftSensorBase):
             )
 
         return {
-            # Grid interaction time series (96 slots × 8 fields ≈ 4KB)
+            # Grid interaction time series (24 slots × 8 fields ≈ 1KB)
             "grid_interaction": grid_interaction,
-            # Summary totals
+            # Summary totals (full day)
             "total_grid_import_kwh": round(total_import, 3),
             "total_grid_export_kwh": round(total_export, 3),
             "grid_charge_slots": grid_charge_slots,
             "proactive_export_slots": proactive_export_slots,
+            # Summary counts
+            "slots_exposed": len(grid_interaction),
+            "total_slots": len(self.coordinator.data.daily_forecast),
         }
 
 
