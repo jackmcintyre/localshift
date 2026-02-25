@@ -23,23 +23,28 @@ from ..coordinator_data import CoordinatorData
 from .utils import parse_forecast_dt
 
 
-def get_price_for_slot(
+def _compute_price_slot_data(
     price_forecasts: list[dict[str, Any]],
     slot_start: datetime,
-) -> float:
-    """Get price for a slot from Amber forecast data.
+) -> tuple[list[float], float, datetime | None]:
+    """Compute price data for a time slot.
+
+    This is a shared helper for get_price_for_slot() and get_price_for_slot_or_none()
+    that handles the common logic of finding prices that overlap with a time slot.
 
     Amber mixes 5-min dispatch intervals (near-term) with 30-min extended
-    forecast periods.  The overlap scan below handles both correctly.
+    forecast periods. The overlap scan handles both correctly.
 
-    When no period overlaps the slot (e.g. a 5-min slot that falls in the
-    gap between two non-adjacent 30-min entries), falls back to the most
-    recent entry whose start_time <= slot_start so that prices are never
-    silently zeroed out due to resolution mismatches.
+    Args:
+        price_forecasts: List of price forecast entries from Amber.
+        slot_start: Start time of the slot to check.
+
+    Returns:
+        Tuple of (prices_in_slot, fallback_price, fallback_start):
+        - prices_in_slot: List of prices that overlap with the slot.
+        - fallback_price: Price from the most recent entry at or before slot_start.
+        - fallback_start: Start time of the fallback entry (None if no fallback).
     """
-    if not price_forecasts:
-        return 0.0
-
     # Ensure slot boundaries are timezone-aware local datetimes
     if slot_start.tzinfo is None:
         slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
@@ -81,6 +86,30 @@ def get_price_for_slot(
                 fallback_start = start_local
                 fallback_price = float(entry.get("per_kwh", 0.0))
 
+    return prices_in_slot, fallback_price, fallback_start
+
+
+def get_price_for_slot(
+    price_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+) -> float:
+    """Get price for a slot from Amber forecast data.
+
+    Amber mixes 5-min dispatch intervals (near-term) with 30-min extended
+    forecast periods. The overlap scan handles both correctly.
+
+    When no period overlaps the slot (e.g. a 5-min slot that falls in the
+    gap between two non-adjacent 30-min entries), falls back to the most
+    recent entry whose start_time <= slot_start so that prices are never
+    silently zeroed out due to resolution mismatches.
+    """
+    if not price_forecasts:
+        return 0.0
+
+    prices_in_slot, fallback_price, _ = _compute_price_slot_data(
+        price_forecasts, slot_start
+    )
+
     if prices_in_slot:
         return sum(prices_in_slot) / len(prices_in_slot)
 
@@ -106,43 +135,9 @@ def get_price_for_slot_or_none(
     if not price_forecasts:
         return None
 
-    # Ensure slot boundaries are timezone-aware local datetimes
-    if slot_start.tzinfo is None:
-        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
-    else:
-        slot_start = dt_util.as_local(slot_start)
-
-    slot_end = slot_start + timedelta(minutes=15)
-
-    prices_in_slot: list[float] = []
-    fallback_price: float = 0.0
-    fallback_start: datetime | None = None
-
-    for entry in price_forecasts:
-        if not isinstance(entry, dict):
-            continue
-
-        start_raw = entry.get("start_time")
-        if start_raw is None:
-            continue
-
-        start_dt = parse_forecast_dt(start_raw)
-        if start_dt is None:
-            continue
-
-        start_local = dt_util.as_local(start_dt)
-
-        duration_minutes: int = int(entry.get("duration", 5))
-        end_local = start_local + timedelta(minutes=duration_minutes)
-
-        if start_local < slot_end and end_local > slot_start:
-            price = float(entry.get("per_kwh", 0.0))
-            prices_in_slot.append(price)
-
-        if start_local <= slot_start:
-            if fallback_start is None or start_local > fallback_start:
-                fallback_start = start_local
-                fallback_price = float(entry.get("per_kwh", 0.0))
+    prices_in_slot, fallback_price, fallback_start = _compute_price_slot_data(
+        price_forecasts, slot_start
+    )
 
     if prices_in_slot:
         return sum(prices_in_slot) / len(prices_in_slot)
