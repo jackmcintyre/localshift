@@ -403,7 +403,7 @@ The `deploy.sh` script deploys LocalShift to Home Assistant.
 ./deploy.sh --dry-run          # Preview changes without deploying
 ./deploy.sh --watch            # Watch for changes and auto-deploy
 ./deploy.sh --reserve          # Reserve HA instance for exclusive use
-./deploy.sh --release          # Release reservation
+./deploy.sh --release          | Release reservation
 ./deploy.sh --force            # Force deploy (override reservation)
 ./deploy.sh --status           # Show reservation status
 ```
@@ -609,7 +609,157 @@ When completing an edit that affects documentation:
 2. Prompt user to include /docs/ updates
 3. Include summary of documentation changes in completion message
 
-## Entity Count Synchronization
+---
+
+# ⚠️ MANDATORY: MCP-Based Documentation Validation
+
+**When updating entity documentation, ALWAYS validate against live Home Assistant data using MCP tools.**
+
+## Why MCP Validation?
+
+Documentation can drift from reality when:
+- Entities are added/removed without updating docs
+- Attributes change but docs aren't updated
+- Example data becomes stale or incorrect
+
+MCP tools provide direct access to live HA data for validation.
+
+## Validation Workflow
+
+### Step 1: Fetch Entities from HA
+
+Use `ha_search_entities` to get all LocalShift entities by domain:
+
+```
+ha_search_entities(query="localshift", domain_filter="sensor", limit=50)
+ha_search_entities(query="localshift", domain_filter="binary_sensor", limit=50)
+ha_search_entities(query="localshift", domain_filter="switch", limit=50)
+ha_search_entities(query="localshift", domain_filter="number", limit=50)
+ha_search_entities(query="localshift", domain_filter="button", limit=50)
+```
+
+### Step 2: Get Real State/Attribute Data
+
+Use `ha_get_states` to fetch actual states and attributes:
+
+```
+ha_get_states(entity_ids=["sensor.localshift_battery_mode", "sensor.localshift_forecast_battery", ...])
+```
+
+### Step 3: Compare with Documentation
+
+For each entity in docs:
+1. Verify entity exists in HA
+2. Verify state format matches docs
+3. Verify attributes match documented attributes
+4. Update example data with real values
+
+### Step 4: Update Documentation
+
+When updating `docs/ENTITY_REFERENCE.md`:
+1. Use real state values from HA as examples
+2. Include actual attribute structures
+3. Update entity counts in overview table
+4. Document any missing entities
+
+## Entity Count Validation
+
+### Current Entity Counts (as of 2026-02-26):
+| Category | Count |
+|----------|-------|
+| Sensors | 29 |
+| Binary Sensors | 13 |
+| Switches | 13 |
+| Numbers | 6 |
+| Buttons | 6 |
+| **Total** | **67** |
+
+### Validation Commands
+
+To validate entity counts:
+
+```python
+# Count sensors
+ha_search_entities(query="localshift", domain_filter="sensor", limit=100)
+
+# Count binary sensors
+ha_search_entities(query="localshift", domain_filter="binary_sensor", limit=100)
+
+# Count switches
+ha_search_entities(query="localshift", domain_filter="switch", limit=100)
+
+# Count numbers
+ha_search_entities(query="localshift", domain_filter="number", limit=100)
+
+# Count buttons
+ha_search_entities(query="localshift", domain_filter="button", limit=100)
+```
+
+## Example Data Requirements
+
+When documenting entities, include:
+
+1. **State value** - Real value from HA
+2. **Key attributes** - Actual attribute names and example values
+3. **Data types** - Correct types (string, float, bool, list, dict)
+4. **Units** - Actual unit_of_measurement if applicable
+
+### Example Format:
+
+```markdown
+### 5. sensor.localshift_forecast_battery
+
+**Purpose:** Predicted battery SOC at demand window start.
+
+**State Class:** `measurement`
+
+**State:** Predicted SOC percentage at the demand window start time
+
+**Example Data:**
+```
+State: 88.8
+Attributes:
+  predicted_soc: 88.8
+  solar_before_dw_kwh: 3.5
+  consumption_estimate_kwh: 12.22
+  can_reach_target: false
+  boost_needed: true
+```
+```
+
+## Files to Update When Entities Change
+
+1. **`docs/ENTITY_REFERENCE.md`** - Primary entity documentation
+   - Update overview table with correct counts
+   - Add/remove entity entries with full documentation
+   - Include real example data from HA
+
+2. **`README.md`** - User-facing entity summary
+   - Update section headers with correct counts
+   - Add/remove entity rows in tables
+
+3. **`.clinerules`** - This file
+   - Update "Current Entity Counts" table above
+
+## When to Validate
+
+- **After adding/removing entities** - Validate counts and documentation
+- **After attribute changes** - Validate example data
+- **Periodically** - Validate docs haven't drifted from reality
+- **Before releases** - Ensure documentation is accurate
+
+## MCP Tools Reference
+
+| Tool | Purpose |
+|------|---------|
+| `ha_search_entities` | Find entities by query/domain |
+| `ha_get_states` | Get current state and attributes |
+| `ha_get_state` | Get single entity state |
+| `ha_get_overview` | Get system overview |
+
+---
+
+## Entity Count Synchronization (Legacy - Prefer MCP Validation Above)
 
 When adding or removing entities from the integration, update documentation in multiple places:
 
@@ -635,16 +785,6 @@ Before committing changes that affect entities:
 1. Count entities in `sensor.py`, `binary_sensor.py`, `switch.py`, `number.py`, `button.py`
 2. Verify counts match in all documentation files
 3. Total entities = sensors + binary_sensors + switches + numbers + buttons
-
-### Current Entity Counts (as of 2026-02-26):
-| Category | Count |
-|----------|-------|
-| Sensors | 29 |
-| Binary Sensors | 13 |
-| Switches | 13 |
-| Numbers | 6 |
-| Buttons | 6 |
-| **Total** | **67** |
 
 When these counts change, update:
 - This file (`.clinerules`)
