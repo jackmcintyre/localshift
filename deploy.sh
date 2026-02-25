@@ -14,13 +14,18 @@
 #   ./deploy.sh --no-reload        # Deploy without reloading HA integration
 #   ./deploy.sh --dry-run          # Preview changes without deploying
 #   ./deploy.sh --watch            # Watch for changes and auto-deploy
+#   ./deploy.sh --reserve          # Reserve HA instance for exclusive use
+#   ./deploy.sh --release          # Release reservation
+#   ./deploy.sh --force            # Force deploy (override reservation)
+#   ./deploy.sh --status           # Show reservation status
 #
 # Workflow:
-#   1. Develop in worktree
-#   2. Run ./deploy.sh to deploy current state
+#   1. Reserve HA: ./deploy.sh --reserve
+#   2. Deploy: ./deploy.sh
 #   3. Check logs to verify
 #   4. If issues, fix and redeploy
 #   5. If successful, open PR
+#   6. Release: ./deploy.sh --release
 
 set -e
 
@@ -37,6 +42,10 @@ DEST_DIR="$HA_CONFIG/custom_components/$COMPONENT_NAME"
 NO_RELOAD=false
 DRY_RUN=false
 WATCH_MODE=false
+RESERVE_MODE=false
+RELEASE_MODE=false
+FORCE_MODE=false
+STATUS_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -52,9 +61,25 @@ while [[ $# -gt 0 ]]; do
             WATCH_MODE=true
             shift
             ;;
+        --reserve)
+            RESERVE_MODE=true
+            shift
+            ;;
+        --release)
+            RELEASE_MODE=true
+            shift
+            ;;
+        --force)
+            FORCE_MODE=true
+            shift
+            ;;
+        --status)
+            STATUS_MODE=true
+            shift
+            ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--no-reload] [--dry-run] [--watch]"
+            echo "Usage: $0 [--no-reload] [--dry-run] [--watch] [--reserve] [--release] [--force] [--status]"
             exit 1
             ;;
     esac
@@ -82,6 +107,137 @@ log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error() { echo -e "${RED}✗${NC} $1"; }
 log_deploy() { echo -e "${CYAN}🚀${NC} $1"; }
+log_reserve() { echo -e "${CYAN}🔒${NC} $1"; }
+
+# =============================================================================
+# RESERVATION SYSTEM
+# =============================================================================
+# Prevents multiple agents from overwriting each other's deployments
+
+RESERVE_FILE="$HA_CONFIG/custom_components/localshift.reserve"
+RESERVE_TIMEOUT=1800  # 30 minutes in seconds
+
+# Get current worktree/branch identifier
+get_agent_id() {
+    local branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    local worktree=$(basename "$SCRIPT_DIR")
+    echo "$worktree ($branch)"
+}
+
+# Check if reservation is valid (not expired)
+# Note: We don't check PID because the reserve command exits after creating
+# the reservation - the timestamp-based expiration is sufficient
+is_reservation_valid() {
+    local reserve_file="$1"
+    
+    if [ ! -f "$reserve_file" ]; then
+        return 1
+    fi
+    
+    # Read reservation values
+    local res_agent=""
+    local res_branch=""
+    local res_timestamp=""
+    local res_pid=""
+    
+    while IFS='=' read -r key value; do
+        case $key in
+            AGENT) res_agent="$value" ;;
+            BRANCH) res_branch="$value" ;;
+            TIMESTAMP) res_timestamp="$value" ;;
+            PID) res_pid="$value" ;;
+        esac
+    done < "$reserve_file"
+    
+    # Check expiration (30 minutes of inactivity)
+    local now=$(date +%s)
+    local reserve_time=$(date -d "$res_timestamp" +%s 2>/dev/null || echo "0")
+    
+    if [ $((now - reserve_time)) -gt $RESERVE_TIMEOUT ]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Read reservation info
+get_reservation_info() {
+    local reserve_file="$1"
+    
+    if [ ! -f "$reserve_file" ]; then
+        return 1
+    fi
+    
+    while IFS='=' read -r key value; do
+        case $key in
+            AGENT) RES_INFO_AGENT="$value" ;;
+            BRANCH) RES_INFO_BRANCH="$value" ;;
+            TIMESTAMP) RES_INFO_TIMESTAMP="$value" ;;
+            PID) RES_INFO_PID="$value" ;;
+        esac
+    done < "$reserve_file"
+}
+
+# Create reservation
+create_reservation() {
+    local agent_id=$(get_agent_id)
+    local branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    local timestamp=$(date -Iseconds)
+    local pid=$$
+    
+    # Ensure directory exists
+    mkdir -p "$(dirname "$RESERVE_FILE")"
+    
+    cat > "$RESERVE_FILE" << EOF
+AGENT=$agent_id
+BRANCH=$branch
+TIMESTAMP=$timestamp
+PID=$pid
+EOF
+    
+    log_success "Reservation created: $agent_id"
+    log_info "Expires in 30 minutes of inactivity"
+}
+
+# Check and handle reservation before deploy
+check_reservation() {
+    if [ "$FORCE_MODE" = true ]; then
+        log_warning "Force mode - overriding any existing reservation"
+        rm -f "$RESERVE_FILE"
+        return 0
+    fi
+    
+    if [ -f "$RESERVE_FILE" ]; then
+        if is_reservation_valid "$RESERVE_FILE"; then
+            get_reservation_info "$RESERVE_FILE"
+            local current_agent=$(get_agent_id)
+            
+            # Allow if we're the one who reserved
+            if [ "$RES_INFO_AGENT" = "$current_agent" ]; then
+                log_info "You have an active reservation - proceeding"
+                return 0
+            fi
+            
+            log_error "HA instance is reserved by: $RES_INFO_AGENT"
+            log_error "Branch: $RES_INFO_BRANCH"
+            log_error "Since: $RES_INFO_TIMESTAMP"
+            echo ""
+            log_info "Options:"
+            log_info "  - Wait for them to release: ./deploy.sh --release"
+            log_info "  - Force override: ./deploy.sh --force"
+            exit 1
+        else
+            log_warning "Found expired/stale reservation - removing"
+            rm -f "$RESERVE_FILE"
+        fi
+    fi
+    
+    return 0
+}
+
+# =============================================================================
+# END RESERVATION SYSTEM
+# =============================================================================
 
 # Check prerequisites
 log_info "Checking prerequisites..."
@@ -172,6 +328,80 @@ if [ "$DRY_RUN" = true ]; then
     echo "Current branch: $CURRENT_BRANCH"
     exit 0
 fi
+
+# =============================================================================
+# RESERVATION MODE HANDLERS
+# =============================================================================
+
+# Status mode - show current reservation
+if [ "$STATUS_MODE" = true ]; then
+    if [ -f "$RESERVE_FILE" ] && is_reservation_valid "$RESERVE_FILE"; then
+        get_reservation_info "$RESERVE_FILE"
+        log_reserve "HA Instance Reserved"
+        echo "  Agent: $RES_INFO_AGENT"
+        echo "  Branch: $RES_INFO_BRANCH"
+        echo "  Since: $RES_INFO_TIMESTAMP"
+        echo ""
+        log_info "To release: ./deploy.sh --release"
+    else
+        log_info "HA Instance: NOT RESERVED"
+        echo ""
+        log_info "To reserve: ./deploy.sh --reserve"
+    fi
+    exit 0
+fi
+
+# Release mode
+if [ "$RELEASE_MODE" = true ]; then
+    if [ -f "$RESERVE_FILE" ]; then
+        get_reservation_info "$RESERVE_FILE"
+        current_agent=$(get_agent_id)
+        
+        if [ "$RES_INFO_AGENT" = "$current_agent" ]; then
+            rm -f "$RESERVE_FILE"
+            log_success "Reservation released"
+        elif [ "$FORCE_MODE" = true ]; then
+            rm -f "$RESERVE_FILE"
+            log_warning "Force-released reservation from: $RES_INFO_AGENT"
+        else
+            log_error "Cannot release - reserved by: $RES_INFO_AGENT"
+            log_info "Use --force to override"
+            exit 1
+        fi
+    else
+        log_info "No reservation to release"
+    fi
+    exit 0
+fi
+
+# Reserve mode
+if [ "$RESERVE_MODE" = true ]; then
+    if [ -f "$RESERVE_FILE" ] && is_reservation_valid "$RESERVE_FILE"; then
+        get_reservation_info "$RESERVE_FILE"
+        current_agent=$(get_agent_id)
+        
+        if [ "$RES_INFO_AGENT" = "$current_agent" ]; then
+            log_info "You already have an active reservation"
+            log_info "Since: $RES_INFO_TIMESTAMP"
+        else
+            log_error "Already reserved by: $RES_INFO_AGENT"
+            log_info "Use --force to override"
+            exit 1
+        fi
+    else
+        # Remove stale reservation if exists
+        rm -f "$RESERVE_FILE"
+        create_reservation
+    fi
+    exit 0
+fi
+
+# Normal deploy - check reservation first
+check_reservation
+
+# =============================================================================
+# END RESERVATION MODE HANDLERS
+# =============================================================================
 
 # Create backup of existing installation
 if [ -d "$DEST_DIR" ]; then
