@@ -153,6 +153,10 @@ def get_price_for_slot_or_none(
 class PriceCalculator:
     """Compute price thresholds and solar-weighted FIT metrics."""
 
+    # Hysteresis parameters to prevent threshold oscillation (Issue #282)
+    _THRESHOLD_HYSTERESIS: float = 0.02  # Minimum change (2 cents) to trigger update
+    _SMOOTHING_ALPHA: float = 0.3  # EMA smoothing factor (0 = no smoothing, 1 = instant)
+
     def __init__(
         self,
         entry: ConfigEntry,
@@ -167,6 +171,9 @@ class PriceCalculator:
         self._percentile = percentile_func
         self._sum_solar_before_target = sum_solar_before_target
         self._get_expected_load_kw = get_expected_load_kw
+        # Track smoothed threshold for hysteresis (Issue #282)
+        self._smoothed_effective_cheap_price: float | None = None
+        self._last_raw_effective_cheap_price: float | None = None
 
     def _collect_forecast_prices_and_base(
         self,
@@ -307,6 +314,48 @@ class PriceCalculator:
                 data, now_dt, target_hour, base, max_price
             )
 
+    def _apply_threshold_hysteresis(self, raw_threshold: float) -> float:
+        """Apply hysteresis and smoothing to threshold to prevent oscillation.
+
+        Issue #282: The raw threshold can oscillate rapidly due to:
+        - FIT adjustments changing with feed-in tariff
+        - Urgency calculations changing with time
+        - Forecast updates
+
+        This method applies:
+        1. Hysteresis: Only update if change exceeds minimum threshold
+        2. EMA smoothing: Dampen rapid changes
+
+        Args:
+            raw_threshold: The newly calculated threshold value.
+
+        Returns:
+            The smoothed threshold value.
+        """
+        # First call - initialize with raw value
+        if self._smoothed_effective_cheap_price is None:
+            self._smoothed_effective_cheap_price = raw_threshold
+            self._last_raw_effective_cheap_price = raw_threshold
+            return raw_threshold
+
+        # Check if change exceeds hysteresis threshold
+        change = abs(raw_threshold - self._last_raw_effective_cheap_price)
+        if change < self._THRESHOLD_HYSTERESIS:
+            # Change too small - keep smoothed value
+            return self._smoothed_effective_cheap_price
+
+        # Apply EMA smoothing to the new value
+        smoothed = (
+            self._SMOOTHING_ALPHA * raw_threshold
+            + (1 - self._SMOOTHING_ALPHA) * self._smoothed_effective_cheap_price
+        )
+
+        # Update tracking
+        self._smoothed_effective_cheap_price = round(smoothed, 2)
+        self._last_raw_effective_cheap_price = raw_threshold
+
+        return self._smoothed_effective_cheap_price
+
     def compute_effective_cheap_price(
         self,
         data: CoordinatorData,
@@ -314,7 +363,10 @@ class PriceCalculator:
         before_dw: bool,
         target_hour: int,
     ) -> None:
-        """Compute final effective cheap price threshold."""
+        """Compute final effective cheap price threshold.
+
+        Applies hysteresis and smoothing to prevent rapid oscillation (Issue #282).
+        """
         # Use shared helper for forecast price collection
         _, base, max_price = self._collect_forecast_prices_and_base(
             data.general_forecast, now_dt
@@ -323,11 +375,14 @@ class PriceCalculator:
         solar_gap = not data.solar_can_reach_target
 
         if not solar_gap or not before_dw or data.target_reached_today:
-            data.effective_cheap_price = base
+            raw_threshold = base
         else:
-            data.effective_cheap_price = self._calculate_urgency_adjusted_price(
+            raw_threshold = self._calculate_urgency_adjusted_price(
                 data, now_dt, target_hour, base, max_price
             )
+
+        # Apply hysteresis and smoothing (Issue #282)
+        data.effective_cheap_price = self._apply_threshold_hysteresis(raw_threshold)
 
     def compute_solar_weighted_avg_fit(
         self,
