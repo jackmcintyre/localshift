@@ -53,11 +53,11 @@ class GridChargeDecisionEngine:
     ) -> float:
         """Calculate local effective cheap price for a specific slot.
 
-        Key insight: Urgency pricing should only apply to slots before TODAY's DW.
-        For slots after today's DW (targeting tomorrow's DW), use base price only.
+        Issue #264 Fix: Use the NEXT DW from each slot's perspective, not "today's DW".
+        This ensures that morning slots targeting tomorrow's DW get proper urgency pricing.
 
-        This prevents evening slots from being gated by urgency pricing calculated
-        in the morning for today's target.
+        For example, at 19:00 today (after today's 15:00 DW), morning slots at 08:00 tomorrow
+        should have urgency for tomorrow's 15:00 DW, not be treated as "after today's DW".
 
         Issue #170 Phase 2: Applies cheap_price_bias adaptive parameter.
 
@@ -80,59 +80,75 @@ class GridChargeDecisionEngine:
             bias_cents = self._adaptive_params.get("cheap_price_bias", 0.0)
             # Convert c/kWh to $/kWh and apply to base price
             base_cheap_price = base_cheap_price + (bias_cents / 100.0)
-        # Get today's DW start datetime
-        now_local = dt_util.now()
-        today_dw_start = now_local.replace(
+
+        # Issue #264: Calculate the NEXT DW from this slot's perspective
+        # This is the DW that this slot is charging FOR
+        next_dw_start = slot_start.replace(
             hour=dw_start_time.hour,
             minute=dw_start_time.minute,
             second=0,
             microsecond=0,
         )
+        # If the DW time today is already past (or is this slot's time), use tomorrow's DW
+        if next_dw_start <= slot_start:
+            next_dw_start += timedelta(days=1)
 
-        # Check if slot is before or after TODAY's DW
-        if slot_start < today_dw_start:
-            # Slot is before today's DW - urgency pricing may apply
-            # Calculate hours left until today's DW
-            hours_left = max((today_dw_start - slot_start).total_seconds() / 3600, 0)
+        # Calculate hours left until the next DW from this slot
+        hours_left = max((next_dw_start - slot_start).total_seconds() / 3600, 0)
 
-            # Check if there's a solar gap for today's target
-            # Simplified: if SOC is well below target, apply urgency
-            gap_to_target = target_pct - current_soc
-            solar_gap = gap_to_target > 5  # More than 5% gap = urgency
+        # Check if there's a gap to target
+        gap_to_target = target_pct - current_soc
+        solar_gap = gap_to_target > 5  # More than 5% gap = urgency
 
-            if solar_gap and hours_left < 8:
-                # Apply urgency pricing
-                urgency = max(min(1 - (hours_left / 8.0), 1.0), 0.0)
-                urgency_price = (
-                    base_cheap_price + (max_price - base_cheap_price) * urgency
-                )
+        # Apply urgency pricing if:
+        # 1. There's a significant gap to target (solar can't reach it)
+        # 2. We're within 8 hours of the DW
+        if solar_gap and hours_left < 8:
+            # Apply urgency pricing - raise the threshold to encourage charging
+            urgency = max(min(1 - (hours_left / 8.0), 1.0), 0.0)
+            urgency_price = (
+                base_cheap_price + (max_price - base_cheap_price) * urgency
+            )
 
-                # Find minimum forecast price before today's DW
-                min_forecast = max_price
-                for f in general_forecast:
-                    if not isinstance(f, dict):
-                        continue
-                    start_str = f.get("start_time")
-                    if not start_str:
-                        continue
-                    try:
-                        f_start = datetime.fromisoformat(start_str)
-                        f_local = dt_util.as_local(f_start)
-                    except ValueError:
-                        continue
+            # Find minimum forecast price before the next DW
+            min_forecast = max_price
+            for f in general_forecast:
+                if not isinstance(f, dict):
+                    continue
+                start_str = f.get("start_time")
+                if not start_str:
+                    continue
+                try:
+                    f_start = datetime.fromisoformat(start_str)
+                    f_local = dt_util.as_local(f_start)
+                except ValueError:
+                    continue
 
-                    if f_local >= slot_start and f_local < today_dw_start:
-                        price = float(f.get("per_kwh", max_price))
-                        if price < min_forecast:
-                            min_forecast = price
+                # Look for prices between now and the next DW
+                if f_local >= slot_start and f_local < next_dw_start:
+                    price = float(f.get("per_kwh", max_price))
+                    if price < min_forecast:
+                        min_forecast = price
 
-                forecast_floor = max(min_forecast + 0.02, base_cheap_price)
-                final = min(urgency_price, max_price)
-                final = max(final, forecast_floor)
-                return round(final, 2)
+            # Floor: don't go below the minimum forecast price (plus small margin)
+            # or the base cheap price, whichever is higher
+            forecast_floor = max(min_forecast + 0.02, base_cheap_price)
+            final = min(urgency_price, max_price)
+            final = max(final, forecast_floor)
 
-        # Slot is after today's DW, or no urgency needed
-        # Use base price only - tomorrow has plenty of time for solar
+            _LOGGER.debug(
+                "URGENCY_PRICE: slot=%s, next_dw=%s, hours_left=%.1f, gap=%.1f%%, base=$%.2f, urgency=$%.2f, final=$%.2f",
+                slot_start.strftime("%H:%M"),
+                next_dw_start.strftime("%Y-%m-%d %H:%M"),
+                hours_left,
+                gap_to_target,
+                base_cheap_price,
+                urgency_price,
+                final,
+            )
+            return round(final, 2)
+
+        # No urgency needed - use base price
         return base_cheap_price
 
     def _should_grid_charge_at_slot(
