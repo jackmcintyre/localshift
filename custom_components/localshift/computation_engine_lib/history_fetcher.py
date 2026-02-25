@@ -903,7 +903,6 @@ class HistoryFetcher:
             return combined, combined, source
 
         from homeassistant.components import recorder
-        from homeassistant.components.recorder.statistics import get_statistics
 
         now = dt_util.now()
         start_time = now - timedelta(days=days)

@@ -13,16 +13,17 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.recorder import get_instance
 
 # Import statistics functions - use statistics_during_period which is the correct API
 try:
+    from homeassistant.components import recorder
     from homeassistant.components.recorder.statistics import (
         get_last_statistics,
         statistics_during_period,
     )
 except ImportError:
     # Fallback for older HA versions
+    recorder = None
     get_last_statistics = None
     statistics_during_period = None
 
@@ -342,7 +343,11 @@ class StatisticsBackfiller:
         # Use the recorder's statistics_during_period function
         # This requires the recorder integration to be enabled
         try:
-            stats = await get_instance(self._hass).async_add_executor_job(
+            if recorder is None:
+                _LOGGER.warning("Recorder not available")
+                return []
+            recorder_instance = recorder.get_instance(self._hass)
+            stats = await recorder_instance.async_add_executor_job(
                 statistics_during_period,
                 self._hass,
                 start_time,
