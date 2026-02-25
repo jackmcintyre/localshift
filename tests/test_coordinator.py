@@ -171,8 +171,8 @@ class TestAsyncStart:
 
             # Verify state change subscription
             mock_track_state.assert_called_once()
-            # Verify periodic timer subscription
-            mock_track_time.assert_called_once()
+            # Verify periodic timer subscriptions (periodic tick + learning save)
+            assert mock_track_time.call_count == 2
             # Verify midnight, daily summary, and thermal mode decision subscriptions
             assert mock_track_time_change.call_count == 3
 
