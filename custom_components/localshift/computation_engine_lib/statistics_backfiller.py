@@ -14,10 +14,17 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.recorder import get_instance
-from homeassistant.components.recorder.statistics import (
-    get_last_statistics,
-    get_statistics,
-)
+
+# Import statistics functions - use statistics_during_period which is the correct API
+try:
+    from homeassistant.components.recorder.statistics import (
+        get_last_statistics,
+        statistics_during_period,
+    )
+except ImportError:
+    # Fallback for older HA versions
+    get_last_statistics = None
+    statistics_during_period = None
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -327,11 +334,16 @@ class StatisticsBackfiller:
             end_time.isoformat(),
         )
 
-        # Use the recorder's get_statistics function
+        # Check if statistics functions are available
+        if statistics_during_period is None:
+            _LOGGER.warning("Statistics API not available in this Home Assistant version")
+            return []
+
+        # Use the recorder's statistics_during_period function
         # This requires the recorder integration to be enabled
         try:
             stats = await get_instance(self._hass).async_add_executor_job(
-                get_statistics,
+                statistics_during_period,
                 self._hass,
                 start_time,
                 end_time,

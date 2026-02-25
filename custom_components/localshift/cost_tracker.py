@@ -233,12 +233,16 @@ class CostTracker:
             Total energy in kWh
         """
         try:
-            from homeassistant.components.recorder.statistics import get_statistics
+            from homeassistant.components.recorder.statistics import (
+                statistics_during_period,
+            )
         except ImportError:
+            _LOGGER.debug("statistics_during_period not available")
             return 0.0
 
         try:
-            stats = get_statistics(
+            # Use statistics_during_period which is the correct API
+            stats = statistics_during_period(
                 self.hass,
                 start_time,
                 end_time,
