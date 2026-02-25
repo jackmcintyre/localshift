@@ -167,7 +167,7 @@ views:
               Earned Today
 
               {% set cost = 'sensor.localshift_cost_electricity_net' %}
-              {% set net = states(cost) | float(0) %}
+              {% set net = states(cost) | default(0) | float(0) %}
               {% if net >= 0 %}
               # 💸 ${{ net | round(2) }}
               {% else %}
@@ -176,14 +176,14 @@ views:
               
               ---
               
-              **Import:** ${{ state_attr(cost, 'grid_import_cost') | round(2) }}  
-              **Export:** ${{ state_attr(cost, 'grid_export_revenue') | round(2) }}
+              **Import:** ${{ state_attr(cost, 'grid_import_cost') | default(0) | float(0) | round(2) }}  
+              **Export:** ${{ state_attr(cost, 'grid_export_revenue') | default(0) | float(0) | round(2) }}
           - type: markdown
             content: >
               Forecast Today
 
               {% set forecast = 'sensor.localshift_forecast_prices' %}
-              {% set net = state_attr(forecast, 'forecast_net_cost') | float(0) %}
+              {% set net = state_attr(forecast, 'forecast_net_cost') | default(0) | float(0) %}
               {% if net >= 0 %}
               # 📊 ${{ net | round(2) }}
               {% else %}
@@ -192,8 +192,8 @@ views:
               
               ---
               
-              **Import:** ${{ state_attr(forecast, 'forecast_import_cost') | round(2) }}  
-              **Export:** ${{ state_attr(forecast, 'forecast_export_revenue') | round(2) }}
+              **Import:** ${{ state_attr(forecast, 'forecast_import_cost') | default(0) | float(0) | round(2) }}  
+              **Export:** ${{ state_attr(forecast, 'forecast_export_revenue') | default(0) | float(0) | round(2) }}
 
       # Prices & Alerts
       - type: grid
@@ -249,13 +249,13 @@ views:
           - type: markdown
             content: >
               {% set forecast = 'sensor.localshift_forecast_battery' %}
-              {% set target = states('number.localshift_battery_target') | int(100) %}
-              {% set soc = states('sensor.my_home_percentage_charged') | int(0) %}
+              {% set target = states('number.localshift_battery_target') | default(100) | int(100) %}
+              {% set soc = states('sensor.my_home_percentage_charged') | default(0) | int(0) %}
               {% set can_reach = is_state('binary_sensor.localshift_solar_can_reach_target', 'on') %}
               {% set boost_needed = is_state('binary_sensor.localshift_charge_boost_needed', 'on') %}
-              {% set deficit = state_attr(forecast, 'deficit_kwh') | float(0) %}
-              {% set solar = state_attr(forecast, 'solar_before_dw_kwh') | float(0) %}
-              {% set hours = state_attr(forecast, 'hours_to_target_time') | float(0) %}
+              {% set deficit = state_attr(forecast, 'deficit_kwh') | default(0) | float(0) %}
+              {% set solar = state_attr(forecast, 'solar_before_dw_kwh') | default(0) | float(0) %}
+              {% set hours = state_attr(forecast, 'hours_to_target_time') | default(0) | float(0) %}
               
               **Target:** {{ soc }}% → {{ target }}%  
               **Solar remaining:** {{ solar | round(1) }} kWh  
@@ -455,10 +455,10 @@ views:
           - type: markdown
             content: >
               {%- set status = states('sensor.localshift_learning_status') %}
-              {%- set quality = states('sensor.localshift_decision_quality') | float(0) %}
-              {%- set decisions = state_attr('sensor.localshift_learning_status', 'total_decisions_today') | int(0) %}
-              {%- set trend = state_attr('sensor.localshift_learning_status', 'cost_trend') %}
-              {%- set score_7d = state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | float(0) * 100 %}
+              {%- set quality = states('sensor.localshift_decision_quality') | default(0) | float(0) %}
+              {%- set decisions = state_attr('sensor.localshift_learning_status', 'total_decisions_today') | default(0) | int(0) %}
+              {%- set trend = state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') %}
+              {%- set score_7d = state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | default(0) | float(0) * 100 %}
               
               **{{ decisions }}** decisions today · {{ score_7d | round(0) }}% 7-day avg
               
