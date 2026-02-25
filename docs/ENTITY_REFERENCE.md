@@ -4,14 +4,14 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **61 entities** grouped under a single "LocalShift" device:
+The integration creates **67 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 26 | `sensor` |
-| Binary Sensors | 10 | `binary_sensor` |
-| Switches | 11 | `switch` |
-| Numbers | 8 | `number` |
+| Sensors | 29 | `sensor` |
+| Binary Sensors | 13 | `binary_sensor` |
+| Switches | 13 | `switch` |
+| Numbers | 6 | `number` |
 | Buttons | 6 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
@@ -26,25 +26,19 @@ The integration creates **61 entities** grouped under a single "LocalShift" devi
 
 The effective cheap price is calculated from the base cheap price percentile, then elevated based on how close the demand window is and whether solar can reach the target.
 
-**State:** Current effective cheap price threshold in $/kWh (e.g., `0.15`)
+**State:** Current effective cheap price threshold in $/kWh
+
+**Example Data:**
+```
+State: 0.09
+```
 
 **Attributes:**
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `urgency` | float | 0.0-1.0 urgency factor based on time to demand window |
-| `is_elevated` | bool | True if the effective price is above the base threshold |
-| `base_price` | float | The base cheap price from percentile calculation |
-| `min_forecast_price` | float | Minimum price in forecast window (floor to prevent overpaying) |
-
-**Calculation Logic:**
-
-```
-base_price = percentile(amber_general_forecast, cheap_price_percentile)
-urgency = (time_to_demand_window) / (time_from_start_to_demand_window)
-effective_price = base_price + (max_precharge_price - base_price) * urgency
-effective_price = max(effective_price, min_forecast_price + 0.02)
-```
+| Attribute | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `state_class` | string | Always `measurement` | `measurement` |
+| `unit_of_measurement` | string | Always `$/kWh` | `$/kWh` |
 
 ---
 
@@ -53,6 +47,11 @@ effective_price = max(effective_price, min_forecast_price + 0.02)
 **Purpose:** Upper boundary of the deadband zone.
 
 **State:** Price threshold in $/kWh where charging should stop
+
+**Example Data:**
+```
+State: 0.12
+```
 
 **Calculation:** `effective_cheap_price + cheap_price_deadband`
 
@@ -69,19 +68,16 @@ This creates a hysteresis zone:
 
 **State:** Weighted average FIT in $/kWh
 
+**Example Data:**
+```
+State: -0.0053
+```
+
 **Attributes:**
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `total_solar_remaining_kwh` | float | Estimated solar production remaining today (kWh) |
-
-**Calculation Logic:**
-1. Get Solcast forecast for remaining daylight hours
-2. Get Amber feed-in price forecast for same periods
-3. Weight each period's FIT by its solar production (pv_estimate)
-4. Calculate weighted average: `sum(FIT × solar) / sum(solar)`
-
-This represents the "blended" price you'd get if you exported all remaining solar production.
+| Attribute | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `total_solar_remaining_kwh` | float | Estimated solar production remaining today (kWh) | `3.5` |
 
 ---
 
@@ -101,6 +97,11 @@ This represents the "blended" price you'd get if you exported all remaining sola
 | `demand_block` | Self consumption enforced during demand window |
 | `manual` | Automation disabled, user has manual control |
 
+**Example Data:**
+```
+State: grid_charging
+```
+
 **How to Use:** This is the primary sensor for understanding what the automation is doing. Check this first when debugging.
 
 ---
@@ -111,22 +112,36 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 **State Class:** `measurement` — Supports long-term statistics (Issue #266)
 
-**State:** Predicted SOC percentage at the demand window start time (e.g., `85.5`)
+**State:** Predicted SOC percentage at the demand window start time
+
+**Example Data:**
+```
+State: 88.8
+Attributes:
+  predicted_soc: 88.8
+  solar_before_dw_kwh: 3.5
+  consumption_estimate_kwh: 12.22
+  net_solar_kwh: -8.72
+  deficit_kwh: 8.24
+  can_reach_target: false
+  boost_needed: true
+  hours_to_target_time: 5.8
+  target_reached_today: false
+```
 
 **Attributes:**
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `predicted_soc` | float | Predicted SOC at demand window |
-| `target_soc` | float | Target SOC (from configuration) |
-| `solar_kwh` | float | Total solar energy expected before DW |
-| `consumption_kwh` | float | Estimated consumption before DW |
-| `gap_kwh` | float | kWh gap to reach target |
-| `gap_percent` | float | Percent gap to reach target |
-| `solar_can_reach` | bool | Whether solar alone can fill battery |
+| `solar_before_dw_kwh` | float | Solar energy expected before DW |
+| `consumption_estimate_kwh` | float | Estimated consumption before DW |
+| `net_solar_kwh` | float | Net energy (solar - consumption) |
+| `deficit_kwh` | float | kWh gap to reach target |
+| `can_reach_target` | bool | Whether solar alone can fill battery |
 | `boost_needed` | bool | Whether 5kW boost is needed |
-| `hourly_forecast` | list | Hour-by-hour SOC projections |
-| `time_to_target_hours` | float | Hours until target would be reached |
+| `hours_to_target_time` | float | Hours until demand window |
+| `target_reached_today` | bool | Whether target was reached today |
 
 ---
 
@@ -134,7 +149,17 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 **Purpose:** Net cost for the day (import cost - export revenue).
 
-**State:** Net cost in $ (e.g., `-2.45` — negative means profit)
+**State:** Net cost in $ (negative means profit)
+
+**Example Data:**
+```
+State: 0.76
+Attributes:
+  grid_import_cost: 0.76
+  grid_export_revenue: 0.0
+  battery_savings: 0.37
+  battery_charge_cost: 0.02
+```
 
 **Attributes:**
 
@@ -145,20 +170,25 @@ This represents the "blended" price you'd get if you exported all remaining sola
 | `battery_savings` | float | Value of solar self-consumed ($) |
 | `battery_charge_cost` | float | Cost to charge battery from grid ($) |
 
-**Calculation:**
-```
-net_cost = grid_import_cost - grid_export_revenue
-```
-
-**Note:** Battery savings represents the value of using battery instead of importing from grid (solar that would have exported but was stored instead).
-
 ---
 
 ### 7. sensor.localshift_decision_log
 
 **Purpose:** History of mode changes with human-readable reasons.
 
-**State:** Most recent decision reason (e.g., "price_below_threshold")
+**State:** Most recent decision reason
+
+**Example Data:**
+```
+State: Mode changed: Boost Charging -> Grid Charging
+Attributes:
+  reason: Mode changed: Boost Charging -> Grid Charging
+  soc: 34
+  buy_price: 0.09
+  sell_price: 0.02
+  timestamp: 2026-02-26T09:05:37.417348+11:00
+  history: [...last 10 decisions...]
+```
 
 **Attributes:**
 
@@ -177,7 +207,12 @@ net_cost = grid_import_cost - grid_export_revenue
 
 **Purpose:** Historical forecast predictions for comparison with actuals.
 
-**State:** Count of stored predictions (e.g., `48`)
+**State:** Count of stored predictions
+
+**Example Data:**
+```
+State: 200
+```
 
 **Attributes:**
 
@@ -195,32 +230,33 @@ Split from the original monolithic sensor to stay under Home Assistant's 16KB at
 
 **State:** Count of forecast slots (96 × 15-min slots)
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `forecast_slots` | list | 96 slots with SOC, solar, consumption, prices |
-| `soc_series` | list | SOC time series for graphing `[{time, soc}, ...]` |
-| `slot_count` | int | Total number of forecast slots |
-| `solcast_today_entries` | int | Number of Solcast periods today |
-| `solcast_tomorrow_entries` | int | Number of Solcast periods tomorrow |
-| `forecast_hourly` | list | Hourly summary (24 entries) |
+**Example Data:**
+```
+State: 96
+Attributes:
+  slot_count: 96
+  solcast_today_entries: 48
+  solcast_tomorrow_entries: 48
+  forecast_slots: [...96 slots...]
+  soc_series: [...96 entries...]
+  forecast_hourly: [...24 entries...]
+```
 
 **Forecast Slot Structure:**
 
 Each slot in `forecast_slots` contains:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `time` | string | HH:MM format |
-| `hour` | int | Hour (0-23) |
-| `minute` | int | Minute (0, 15, 30, 45) |
-| `predicted_soc` | float | Predicted battery SOC (%) |
-| `solar_kwh` | float | Solar production (kWh) |
-| `consumption_kwh` | float | Estimated consumption (kWh) |
-| `net_kwh` | float | Net energy (solar - consumption) |
-| `buy_price` | float | Buy price ($/kWh) |
-| `sell_price` | float | Sell price ($/kWh) |
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `time` | string | HH:MM format | `09:05` |
+| `hour` | int | Hour (0-23) | `9` |
+| `minute` | int | Minute (0, 15, 30, 45) | `5` |
+| `predicted_soc` | float | Predicted battery SOC (%) | `33.9` |
+| `solar_kwh` | float | Solar production (kWh) | `0.7259` |
+| `consumption_kwh` | float | Estimated consumption (kWh) | `0.2522` |
+| `net_kwh` | float | Net energy (solar - consumption) | `0.4737` |
+| `buy_price` | float | Buy price ($/kWh) | `0.07` |
+| `sell_price` | float | Sell price ($/kWh) | `0.01` |
 
 ---
 
@@ -234,30 +270,20 @@ Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 
 **State:** Current effective cheap price ($/kWh)
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `buy_prices` | list | 96-slot buy price time series |
-| `sell_prices` | list | 96-slot sell price time series |
-| `effective_cheap_price` | float | Current cheap price threshold |
-| `cheap_charge_stop_price` | float | Stop charging threshold |
-| `forecast_import_cost` | float | Expected import cost (rest of day) |
-| `forecast_export_revenue` | float | Expected export revenue (rest of day) |
-| `forecast_net_cost` | float | Expected net cost (rest of day) |
-| `forecast_grid_charge_cost` | float | Expected grid charging cost |
-| `forecast_proactive_export_revenue` | float | Expected proactive export revenue |
-
-**Price Slot Structure:**
-
-Each slot in `buy_prices` and `sell_prices` contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `time` | string | HH:MM format |
-| `hour` | int | Hour (0-23) |
-| `minute` | int | Minute (0, 15, 30, 45) |
-| `price` | float | Price ($/kWh) |
+**Example Data:**
+```
+State: 0.09
+Attributes:
+  effective_cheap_price: 0.09
+  cheap_charge_stop_price: 0.12
+  forecast_import_cost: 0.92
+  forecast_export_revenue: -0.01
+  forecast_net_cost: 0.93
+  forecast_grid_charge_cost: 0.59
+  forecast_proactive_export_revenue: 0.0
+  buy_prices: [...96 slots...]
+  sell_prices: [...96 slots...]
+```
 
 ---
 
@@ -271,31 +297,27 @@ Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 
 **State:** Total forecast grid import (kWh)
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `grid_interaction` | list | 96-slot grid interaction time series |
-| `total_grid_import_kwh` | float | Total grid import forecast (kWh) |
-| `total_grid_export_kwh` | float | Total grid export forecast (kWh) |
-| `grid_charge_slots` | int | Number of slots with grid charging |
-| `proactive_export_slots` | int | Number of slots with proactive export |
+**Example Data:**
+```
+State: 22.245
+Attributes:
+  total_grid_import_kwh: 22.245
+  total_grid_export_kwh: 1.206
+  grid_charge_slots: 23
+  proactive_export_slots: 0
+  grid_interaction: [...96 slots...]
+```
 
 **Grid Interaction Slot Structure:**
 
-Each slot in `grid_interaction` contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `time` | string | HH:MM format |
-| `hour` | int | Hour (0-23) |
-| `minute` | int | Minute (0, 15, 30, 45) |
-| `grid_import_kwh` | float | Grid import (kWh) |
-| `grid_export_kwh` | float | Grid export (kWh) |
-| `grid_charge` | bool | Grid charging active |
-| `grid_charge_boost` | bool | Boost charging active |
-| `proactive_export` | bool | Proactive export active |
-| `export_amount_kwh` | float | Export amount (kWh) |
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `time` | string | HH:MM format | `09:05` |
+| `grid_import_kwh` | float | Grid import (kWh) | `0.825` |
+| `grid_export_kwh` | float | Grid export (kWh) | `0.0` |
+| `grid_charge` | bool | Grid charging active | `true` |
+| `grid_charge_boost` | bool | Boost charging active | `true` |
+| `proactive_export` | bool | Proactive export active | `false` |
 
 ---
 
@@ -305,47 +327,25 @@ Each slot in `grid_interaction` contains:
 
 Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 
-**State:** Consumption data source (e.g., "profile_hour", "live_load_fallback")
+**State:** Consumption data source (e.g., "statistics", "profile_hour")
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `consumption_source` | string | Source of consumption data |
-| `consumption_statistic_id` | string | HA statistic ID used |
-| `consumption_profile_hours` | int | Hours of profile data available |
-| `consumption_fallback_hours` | int | Hours using fallback data |
-| `consumption_weighting` | float | Recent vs historical weighting |
-| `forecast_consumption_source_counts` | dict | Count by source type |
-| `consumption_hourly_sample_counts` | dict | Samples per hour |
-| `consumption_hourly_profile_kw` | dict | Hourly consumption averages (kW) |
-| `consumption_profile_type` | string | "weekday_weekend" or "combined" |
-| `forecast_profile_selected` | string | Profile used for today |
-| `weekday_sample_counts` | dict | Weekday samples per hour |
-| `weekend_sample_counts` | dict | Weekend samples per hour |
-| `weekday_hourly_profile_kw` | dict | Weekday hourly averages |
-| `weekend_hourly_profile_kw` | dict | Weekend hourly averages |
-| `recent_load_1hr_kw` | float | Recent 1-hour average load |
-| `recent_load_1hr_statistic_id` | string | Statistic ID for recent load |
-| `recent_load_1hr_samples` | int | Samples in recent load calc |
-| `recent_load_1hr_last_error` | string | Last error message |
-| `current_load_kw` | float | Current load (kW) |
-| `debug_forecast_slot_found` | bool | Current slot found in forecast |
-| `debug_forecast_slot_time` | string | Time of matched slot |
-| `debug_first_forecast_slot_time` | string | Time of first forecast slot |
-| `debug_time_gap_seconds` | float | Seconds between now and first slot |
-| `debug_mode_source` | string | "forecast" or "fallback" |
-| `allow_export` | string | Export permission state |
-| `weather_entity_id` | string | Weather entity ID |
-| `weather_temperature_current` | float | Current temperature (°C) |
-| `weather_temperature_forecast` | dict | Hourly temperature forecast |
-| `weather_condition` | string | Current weather condition |
-| `weather_correlation_confidence` | string | low/medium/high |
-| `weather_adjustment_applied` | bool | Weather adjustment used |
-| `weather_learning_enabled` | string | Learning enabled |
-| `weather_cooling_coefficient` | float | Cooling coefficient (kW/°C) |
-| `weather_heating_coefficient` | float | Heating coefficient (kW/°C) |
-| `weather_sample_count` | int | Learning samples collected |
+**Example Data:**
+```
+State: statistics
+Attributes:
+  consumption_source: statistics
+  consumption_statistic_id: sensor.my_home_load_power
+  consumption_profile_hours: 24
+  consumption_weighting: 0.67
+  current_load_kw: 0.791
+  weather_entity_id: weather.crows_nest_hourly
+  weather_temperature_current: 21.6
+  weather_condition: rainy
+  weather_correlation_confidence: medium
+  weather_learning_enabled: true
+  weather_cooling_coefficient: 0.3022
+  weather_sample_count: 5723
+```
 
 ---
 
@@ -353,7 +353,12 @@ Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 
 **Purpose:** Minimum target SOC for discharge modes (base reserve).
 
-**State:** Configured minimum SOC percentage (default 20%)
+**State:** Configured minimum SOC percentage
+
+**Example Data:**
+```
+State: 10.0
+```
 
 **Configuration:** Set via `number.localshift_minimum_target_soc`
 
@@ -361,28 +366,27 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 
 ---
 
-### 14. sensor.localshift_excess_solar_kwh
+### 14. sensor.localshift_excess_solar
 
 **Purpose:** Forecasted excess solar energy available for discretionary loads.
 
 **State:** Total excess solar until battery reaches 100% (kWh)
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `excess_current_hour_kwh` | float | Excess available in the current hour |
-| `excess_next_2h_kwh` | float | Excess available in the next 2 hours |
-| `excess_next_4h_kwh` | float | Excess available in the next 4 hours |
-| `excess_until_battery_full_kwh` | float | Excess until battery reaches 100% |
-| `excess_until_negative_fit_kwh` | float | Excess before negative FIT window starts |
-| `time_until_battery_full_minutes` | int | Minutes until battery is full |
-| `negative_fit_window_start` | datetime | When negative FIT begins (or null) |
-| `negative_fit_window_duration_minutes` | int | Duration of negative FIT period |
-| `can_add_load_now` | bool | **Critical** — Is it safe to add load? |
-| `safe_additional_load_kw` | float | Max kW that can be safely added |
-| `forecast_confidence` | string | low/medium/high |
-| `current_excess_rate_kw` | float | Current excess generation rate |
+**Example Data:**
+```
+State: 0.0
+Attributes:
+  excess_current_hour_kwh: 2.07
+  excess_next_2h_kwh: 3.85
+  excess_next_4h_kwh: 4.6
+  excess_until_battery_full_kwh: 0.0
+  can_add_load_now: false
+  safe_additional_load_kw: 0.0
+  forecast_confidence: high
+  current_excess_rate_kw: 0.26
+  negative_fit_window_start: 2026-02-26T09:30:00+11:00
+  negative_fit_window_duration_minutes: 320
+```
 
 **Use Case:** Automate discretionary loads (AC, pool pump, EV) to consume excess solar that would otherwise export at negative or low FIT prices.
 
@@ -401,17 +405,18 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 | `REDUCE_LOAD` | Risk of grid charging | Turn off discretionary loads |
 | `HOLD` | No signal / initializing | Wait for data |
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `recommended_additional_kw` | float | Suggested load change (+ or -) |
-| `recommended_duration_minutes` | int | How long to maintain the change |
-| `signal_reason` | string | Human-readable explanation |
-| `signal_confidence` | string | low/medium/high |
-| `current_excess_rate_kw` | float | Current excess generation rate |
-| `grid_charge_risk` | bool | Would adding load trigger grid charging? |
-| `safe_additional_load_kw` | float | Max kW that can be safely added |
+**Example Data:**
+```
+State: REDUCE_LOAD
+Attributes:
+  recommended_additional_kw: -1.0
+  recommended_duration_minutes: 60
+  signal_reason: Current load may trigger grid charging
+  signal_confidence: high
+  current_excess_rate_kw: 0.26
+  grid_charge_risk: true
+  safe_additional_load_kw: 0.0
+```
 
 **Icon:** Dynamic based on signal (arrow-up-bold, arrow-down-bold, check-circle, pause-circle)
 
@@ -425,24 +430,25 @@ Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC 
 
 **State Class:** `measurement` — Supports long-term statistics (Issue #266)
 
-**State:** SOC accuracy percentage for 1-hour predictions (e.g., `95.5`)
+**State:** SOC accuracy percentage for 1-hour predictions
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `soc_error_15min` | float | SOC prediction error at 15 minutes (predicted - actual) |
-| `soc_error_1h` | float | SOC prediction error at 1 hour (predicted - actual) |
-| `soc_error_4h` | float | SOC prediction error at 4 hours (predicted - actual) |
-| `soc_accuracy_15min` | float | SOC accuracy percentage at 15 min (100 - abs error) |
-| `soc_accuracy_1h` | float | SOC accuracy percentage at 1 hour (100 - abs error) |
-| `soc_accuracy_4h` | float | SOC accuracy percentage at 4 hours (100 - abs error) |
-| `buy_price_error_1h` | float | Buy price error at 1 hour ($/kWh) |
-| `sell_price_error_1h` | float | Sell price error at 1 hour ($/kWh) |
-| `comparisons_made` | int | Total comparisons since restart |
-| `last_comparison_time` | string | ISO timestamp of last comparison |
-
-**Use Case:** Monitor forecast quality over time. Lower errors indicate better predictions. Use to identify when the forecast model needs adjustment.
+**Example Data:**
+```
+State: 92.9
+Attributes:
+  soc_error_15min: 4.3
+  soc_error_1h: 7.1
+  soc_error_4h: 0.0
+  soc_accuracy_15min: 95.7
+  soc_accuracy_1h: 92.9
+  soc_accuracy_4h: 100.0
+  buy_price_error_1h: -0.03
+  sell_price_error_1h: -0.02
+  comparisons_made: 604
+  last_comparison_time: 2026-02-26T09:08:34+11:00
+  first_prediction_time: 2026-02-22T17:50:14+11:00
+  history_count: 203
+```
 
 ---
 
@@ -460,17 +466,18 @@ Added in Issue #94 to provide a simple status indicator for dashboards.
 | `degraded` | Some optional entities unavailable |
 | `error` | Required entities are unavailable |
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `message` | string | Human-readable status message |
-| `error_count` | int | Number of entity errors |
-| `warning_count` | int | Number of entity warnings |
-| `required_entities_healthy` | bool | Whether all required entities are healthy |
-| `errors` | list | List of error messages |
-| `warnings` | list | List of warning messages |
-| `last_check` | string | ISO timestamp of last health check |
+**Example Data:**
+```
+State: ok
+Attributes:
+  message: All systems operational
+  error_count: 0
+  warning_count: 0
+  required_entities_healthy: true
+  errors: []
+  warnings: []
+  last_check: 2026-02-26T09:08:34+11:00
+```
 
 **Icon:** Dynamic (check-circle for ok, alert-circle for degraded, close-circle for error)
 
@@ -482,21 +489,94 @@ Added in Issue #94 to provide a simple status indicator for dashboards.
 
 Added in Issue #94 for detailed diagnostics and troubleshooting.
 
-**State:** Count of healthy entities (e.g., `12/15`)
+**State:** Count of healthy entities (e.g., `15/16`)
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `entities` | dict | Per-entity health status with details |
-| `errors` | list | List of error messages |
-| `warnings` | list | List of warning messages |
-
-**Use Case:** Troubleshoot entity availability issues. Each entity entry includes status, last seen time, and error details.
+**Example Data:**
+```
+State: 15/16
+Attributes:
+  entities: {...per-entity status...}
+  errors: []
+  warnings: []
+```
 
 ---
 
-### 19. sensor.localshift_learning_status
+### 19. sensor.localshift_daily_thermal_mode
+
+**Purpose:** Current daily thermal mode (HEAT/COOL/DRY/OFF).
+
+Added in Issue #140 for HVAC automation. Determined once per day at thermal_mode_decision_time based on weather forecast. Mode is locked until next day's decision time.
+
+**State:** One of: `off`, `cool`, `heat`, `dry`
+
+**Example Data:**
+```
+State: cool
+Attributes:
+  mode_locked: true
+  determined_at: 2026-02-26T06:00:00+11:00
+  climate_entities:
+    - climate.ali_aircon
+    - climate.james_aircon
+    - climate.living_aircon
+    - climate.study_aircon
+    - climate.master_aircon
+  controlled_entities:
+    - climate.living_aircon
+    - climate.study_aircon
+  learned_hvac_power: {}
+  baseline_load_hours: 24
+```
+
+**Icon:** Dynamic (fire for heat, snowflake for cool, water-off for dry, thermometer-off for off)
+
+---
+
+### 20. sensor.localshift_baseline_load_profile
+
+**Purpose:** Non-HVAC baseline load profile by hour.
+
+Added in Issue #140 for thermal management. Exposes the estimated baseline load (non-HVAC) for each hour, derived from historical data with HVAC samples excluded.
+
+**State:** Average baseline load in kW
+
+**Example Data:**
+```
+State: 0.458
+Attributes:
+  hourly_profile_kw:
+    "0": 0.492
+    "1": 0.39
+    "2": 0.375
+    ...
+  total_hours: 24
+  average_kw: 0.458
+```
+
+---
+
+### 21. sensor.localshift_hvac_load_profile
+
+**Purpose:** HVAC load profile by hour.
+
+Added in Issue #140 for thermal management. Exposes the estimated HVAC load for each hour based on learned power consumption and climate entity state tracking.
+
+**State:** Average HVAC load in kW
+
+**Example Data:**
+```
+State: 0.0
+Attributes:
+  hourly_profile_kw: {...}
+  total_hours: 24
+  average_kw: 0.0
+  learned_power: {}
+```
+
+---
+
+### 22. sensor.localshift_learning_status
 
 **Purpose:** Current learning system status and parameter values.
 
@@ -504,33 +584,29 @@ Added in Issue #170 Phase 5 for learning system observability.
 
 **State:** Current learning phase: `observing`, `tuning`, `optimizing`, or `disabled`
 
-**Attributes:**
+**Example Data:**
+```
+State: observing
+Attributes:
+  total_decisions_today: 15
+  avg_decision_score_today: 0.383
+  avg_decision_score_7d: 0.424
+  cost_trend: stable
+  mode_durations_today:
+    boost_charging: 37.5
+    self_consumption: 91.0
+    grid_charging: 8.5
+  mode_cost_attribution:
+    grid_charging: -0.0
+  optimization_weights: {}
+  contextual_adjustments_active: []
+```
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `update_count` | int | Number of parameter updates made |
-| `last_updated` | string | ISO timestamp of last parameter update |
-| `parameters` | dict | Current parameter values with confidence scores |
-| `optimization_weights` | dict | Objective weights for multi-objective scoring |
-| `active_bias_corrections` | list | Currently active bias corrections from pattern analysis |
-| `contextual_adjustments` | list | Active contextual adjustments |
-
-**Parameters Dict Structure:**
-
-Each parameter entry contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `value` | float | Current parameter value |
-| `confidence` | float | 0.0-1.0 confidence score |
-| `default` | float | Default (zero-offset) value |
-| `range` | string | Min/max bounds |
-
-**Use Case:** Monitor learning system progress and parameter adjustments. Use to verify the system is learning appropriate values.
+**Icon:** Dynamic (brain for optimizing, tune for tuning, eye for observing, brain-off for disabled)
 
 ---
 
-### 20. sensor.localshift_decision_quality
+### 23. sensor.localshift_decision_quality
 
 **Purpose:** Rolling decision quality score.
 
@@ -538,23 +614,23 @@ Added in Issue #170 Phase 5 for tracking learning system effectiveness.
 
 **State:** Today's average decision quality as percentage (0-100%)
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `total_decisions_today` | int | Count of decisions made today |
-| `avg_score_7d` | float | 7-day rolling average quality (%) |
-| `cost_trend` | string | `improving`, `stable`, or `degrading` |
-| `grid_charge_efficiency` | float | Grid charge efficiency (0-1) |
-| `export_loss_ratio` | float | Ratio of wasted exports (0-1) |
-| `mode_durations_today` | dict | Minutes spent in each mode today |
-| `mode_cost_attribution` | dict | Cost/savings attributed to each mode |
-
-**Use Case:** Track whether the learning system is improving decision quality over time. A rising score and `improving` cost trend indicate effective learning.
+**Example Data:**
+```
+State: 38.3
+Attributes:
+  total_decisions_today: 15
+  avg_score_7d: 42.4
+  cost_trend: stable
+  grid_charge_efficiency: 0.0
+  export_loss_ratio: 0.0
+  unnecessary_grid_charge_kwh: 0.0
+  mode_durations_today: {...}
+  mode_cost_attribution: {...}
+```
 
 ---
 
-### 21. sensor.localshift_decision_history
+### 24. sensor.localshift_learning_decision_history
 
 **Purpose:** Recent decision history with outcomes.
 
@@ -562,56 +638,38 @@ Added in Issue #170 Phase 5 for learning system debugging.
 
 **State:** Count of decisions in last 24 hours
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `decisions` | list | Last 20 decisions with context and outcomes |
-| `pattern_report` | dict | Latest pattern analysis summary |
-
-**Decision Entry Structure:**
-
-Each decision entry contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `timestamp` | string | When decision was made |
-| `mode_chosen` | string | Battery mode selected |
-| `previous_mode` | string | Previous battery mode |
-| `soc_at_decision` | float | SOC at decision time |
-| `buy_price` | float | Buy price at decision time |
-| `sell_price` | float | Feed-in price at decision time |
-| `outcome_score` | float | Decision quality score (0-1) |
-| `actual_cost` | float | Actual cost during decision period |
-
-**Use Case:** Debug specific decisions and understand why modes changed. Review `outcome_score` to see which decisions were optimal.
+**Example Data:**
+```
+State: 20
+Attributes:
+  decisions: [...last 20 decisions...]
+```
 
 ---
 
-### 22. sensor.localshift_average_room_temp
+### 25. sensor.localshift_average_room_temperature
 
 **Purpose:** Average room temperature from configured climate entities.
 
 Added in Issue #63 Phase 6 for real-time thermal control.
 
-**State:** Average temperature in °C (e.g., `23.5`)
+**State:** Average temperature in °C
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `thermal_mode` | string | Current daily thermal mode (heat/cool/dry/off) |
-| `activated_today` | bool | Whether thermal control has activated today |
-| `realtime_active` | bool | Whether real-time thermal control is currently active |
-| `reason` | string | Reason for current thermal state |
-| `preconditioning_active` | bool | Whether pre-conditioning is active |
-| `solar_taper_active` | bool | Whether solar tapering is active |
-
-**Use Case:** Monitor average room temperature for thermal automation decisions. Used by the real-time thermal control layer to determine when to turn HVAC on/off.
+**Example Data:**
+```
+State: 24.0
+Attributes:
+  thermal_mode: cool
+  activated_today: false
+  realtime_active: false
+  reason: Waiting to activate (room: 23.9°C)
+  preconditioning_active: false
+  solar_taper_active: false
+```
 
 ---
 
-### 23. sensor.localshift_realtime_thermal_status
+### 26. sensor.localshift_realtime_thermal_status
 
 **Purpose:** Real-time thermal control status and reason.
 
@@ -619,26 +677,91 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** One of `active` or `inactive`
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `reason` | string | Human-readable reason for current state |
-| `activated_today` | bool | Whether thermal control has activated today |
-| `avg_room_temp` | float | Current average room temperature (°C) |
-| `thermal_mode` | string | Current daily thermal mode |
-| `preconditioning_active` | bool | Whether pre-conditioning is active |
-| `solar_taper_active` | bool | Whether solar tapering is active |
-| `taper_setpoint_offset` | float | Current setpoint offset from solar taper |
-| `climate_read_success` | bool | Whether climate entities were read successfully (Issue #193) |
-| `climate_missing_entities` | list | Climate entities not found in HA state machine |
-| `climate_unavailable_entities` | list | Climate entities that are unknown/unavailable |
-| `climate_entities_configured` | list | All configured climate entity IDs |
-| `climate_entities_controlled` | list | Climate entities marked for control |
+**Example Data:**
+```
+State: inactive
+Attributes:
+  reason: Waiting to activate (room: 23.9°C)
+  activated_today: false
+  avg_room_temp: 23.9
+  thermal_mode: cool
+  preconditioning_active: false
+  solar_taper_active: false
+  taper_setpoint_offset: 0.0
+  climate_read_success: true
+  climate_missing_entities: []
+  climate_unavailable_entities: []
+  climate_entities_configured:
+    - climate.ali_aircon
+    - climate.james_aircon
+    - climate.living_aircon
+    - climate.study_aircon
+    - climate.master_aircon
+  climate_entities_controlled:
+    - climate.living_aircon
+    - climate.study_aircon
+```
 
 **Icon:** Dynamic (air-conditioner when active, air-conditioner-off when inactive)
 
-**Use Case:** Monitor the real-time thermal control layer. Check the `reason` attribute to understand why the system is in its current state. Use `climate_read_success` to diagnose why thermal control may not be activating - if `false`, check `climate_missing_entities` and `climate_unavailable_entities` for configuration issues.
+---
+
+### 27. sensor.localshift_backfill_status
+
+**Purpose:** Statistics backfill validation status.
+
+Added in Issue #267. Shows the status of the last backfill operation that validates decision outcomes against metered statistics from Home Assistant.
+
+**State:** One of: `not_run`, `validated`, `discrepancies`, `error`
+
+**Example Data:**
+```
+State: not_run
+```
+
+**Icon:** Dynamic (check-circle for validated, alert-circle for discrepancies, close-circle for error, database-clock for not_run)
+
+---
+
+### 28. sensor.localshift_cost_reconciliation
+
+**Purpose:** Cost reconciliation status.
+
+Added in Issue #269. Shows variance between estimated and actual costs based on metered statistics from Home Assistant.
+
+**State:** One of: `not_run`, `validated`, `variance`, `error`
+
+**Example Data:**
+```
+State: not_run
+```
+
+**Icon:** Dynamic (check-circle for validated, alert-circle for variance, close-circle for error, currency-usd-off for not_run)
+
+---
+
+### 29. sensor.localshift_extended_forecast_accuracy
+
+**Purpose:** Extended forecast accuracy with long-term metrics.
+
+Added in Issue #270. Multi-horizon validation with bias detection. Shows 24h, 7d, and 30d accuracy metrics.
+
+**State Class:** `measurement`
+
+**State:** 24-hour accuracy percentage
+
+**Example Data:**
+```
+State: 100.0
+Attributes:
+  accuracy_24h: 100.0
+  accuracy_7d: 100.0
+  accuracy_30d: 100.0
+  bias: 0.0
+  mape: 0.0
+  sample_count: 0
+  last_updated: null
+```
 
 ---
 
@@ -650,6 +773,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** `on` if within demand window, `off` otherwise
 
+**Example Data:**
+```
+State: off
+```
+
 **Configuration:** Uses `demand_window_start` and `demand_window_end` options (default 15:00-21:00)
 
 ---
@@ -660,12 +788,13 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** `on` if spike detected in forecast, `off` otherwise
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `max_forecast_price` | float | Maximum feed-in price in forecast |
-| `max_buy_forecast_price` | float | Maximum buy price in forecast |
+**Example Data:**
+```
+State: off
+Attributes:
+  max_forecast_price: 0.0
+  max_buy_forecast_price: 0.0
+```
 
 ---
 
@@ -675,6 +804,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** `on` if any price exceeds `max_precharge_price`, `off` otherwise
 
+**Example Data:**
+```
+State: off
+```
+
 ---
 
 ### 4. binary_sensor.localshift_discharge_forced
@@ -682,6 +816,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 **Purpose:** Whether battery is currently force discharging.
 
 **State:** `on` when `operation_mode == autonomous` AND `backup_reserve < 11`
+
+**Example Data:**
+```
+State: off
+```
 
 ---
 
@@ -691,6 +830,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** `on` when `operation_mode == backup`
 
+**Example Data:**
+```
+State: on
+```
+
 ---
 
 ### 6. binary_sensor.localshift_charge_boost
@@ -698,6 +842,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 **Purpose:** Whether battery is currently boost charging at 5kW.
 
 **State:** `on` when `operation_mode == autonomous` AND `backup_reserve > 99`
+
+**Example Data:**
+```
+State: off
+```
 
 ---
 
@@ -707,6 +856,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** `on` if Solcast forecast shows sufficient solar to reach target SOC before DW
 
+**Example Data:**
+```
+State: off
+```
+
 ---
 
 ### 8. binary_sensor.localshift_charge_boost_needed
@@ -714,6 +868,11 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 **Purpose:** Whether 5kW boost charging is needed (3.3kW insufficient).
 
 **State:** `on` if time remaining before DW is insufficient to reach target at 3.3kW
+
+**Example Data:**
+```
+State: off
+```
 
 ---
 
@@ -723,15 +882,16 @@ Added in Issue #63 Phase 6 for visibility into thermal control decisions.
 
 **State:** `on` when excess solar is available and safe to add load, `off` otherwise
 
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `current_excess_kw` | float | Current excess generation rate |
-| `battery_soc` | float | Current battery SOC |
-| `battery_charging` | bool | Whether battery is currently charging |
-| `can_add_load_now` | bool | Whether it's safe to add load |
-| `safe_additional_load_kw` | float | Max kW that can be safely added |
+**Example Data:**
+```
+State: off
+Attributes:
+  current_excess_kw: 0.26
+  battery_soc: 33.9
+  battery_charging: true
+  can_add_load_now: false
+  safe_additional_load_kw: 0.0
+```
 
 **Icon:** Dynamic (solar-power-variant when on, solar-power-variant-outline when off)
 
@@ -745,16 +905,14 @@ Added in Issue #110 to provide visibility into when Tesla has override control.
 
 **State:** `on` when Tesla has control, `off` otherwise
 
-**Behavior:**
-When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_reserve` to 80% and `operation_mode` to `self_consumption`, ignoring external API commands until the event ends. This sensor detects when that override is active.
-
-**Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `operation_mode` | string | Current Powerwall operation mode |
-| `backup_reserve` | float | Current backup reserve percentage |
-| `description` | string | Human-readable status description |
+**Example Data:**
+```
+State: off
+Attributes:
+  operation_mode: autonomous
+  backup_reserve: 10.0
+  description: Tesla is not overriding control
+```
 
 **Icon:** Dynamic (shield-alert when active, shield-check when inactive)
 
@@ -762,18 +920,65 @@ When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_r
 
 ---
 
-### 11. binary_sensor.localshift_forecast_expensive_period
+### 11. binary_sensor.localshift_preconditioning_active
 
-**Purpose:** Whether an expensive period is forecast within lookahead.
+**Purpose:** Whether pre-conditioning is actively adjusting climate setpoints.
 
-**State:** `on` if any price exceeds `max_precharge_price`, `off` otherwise
+Added in Issue #137. Pre-conditioning runs before the demand window to pre-heat or pre-cool the home using battery power instead of grid power during expensive periods.
 
-**Attributes:**
+**State:** `on` when pre-conditioning is active, `off` otherwise
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `max_forecast_price` | float | Maximum feed-in price in forecast |
-| `max_buy_forecast_price` | float | Maximum buy price in forecast |
+**Example Data:**
+```
+State: off
+Attributes:
+  daily_thermal_mode: cool
+  taper_setpoint_offset: 0.0
+```
+
+**Icon:** Dynamic (thermometer-auto when on, thermometer when off)
+
+---
+
+### 12. binary_sensor.localshift_solar_taper_active
+
+**Purpose:** Whether solar tapering is actively adjusting climate setpoints.
+
+Added in Issue #137. Solar tapering increases heating/cooling during excess solar periods to use surplus solar energy that would otherwise be exported at low FIT.
+
+**State:** `on` when solar tapering is active, `off` otherwise
+
+**Example Data:**
+```
+State: off
+Attributes:
+  current_excess_kw: 0.26
+  taper_setpoint_offset: 0.0
+  daily_thermal_mode: cool
+```
+
+**Icon:** Dynamic (solar-power when on, solar-power-outline when off)
+
+---
+
+### 13. binary_sensor.localshift_thermal_management_enabled
+
+**Purpose:** Whether thermal management is enabled and configured.
+
+Added in Issue #137. This reflects the thermal_management_enabled switch state and indicates whether the integration is actively managing HVAC for load shifting.
+
+**State:** `on` when thermal management is enabled, `off` otherwise
+
+**Example Data:**
+```
+State: on
+Attributes:
+  climate_entities:
+    - climate.living_aircon
+    - climate.study_aircon
+  daily_thermal_mode: cool
+  solar_taper_enabled: true
+```
 
 ---
 
@@ -784,6 +989,11 @@ When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_r
 **Purpose:** Master toggle for all automation.
 
 **Default:** ON
+
+**Example Data:**
+```
+State: on
+```
 
 **Behavior:**
 - ON: State machine evaluates and controls battery
@@ -797,6 +1007,11 @@ When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_r
 
 **Default:** ON
 
+**Example Data:**
+```
+State: on
+```
+
 **Behavior:**
 - ON: Spike discharge allowed when price spike detected
 - OFF: No discharge during spikes (even if spike detected)
@@ -809,11 +1024,14 @@ When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_r
 
 **Default:** OFF
 
+**Example Data:**
+```
+State: on
+```
+
 **Behavior:**
 - ON: During spike discharge, calculates a dynamic reserve SOC to ensure battery can survive the spike period without depleting below minimum target SOC
 - OFF: Standard spike discharge with fixed minimum reserve
-
-**Use Case:** Enable during extended spike periods or when you want to ensure battery reserve for overnight/demand window.
 
 ---
 
@@ -823,11 +1041,14 @@ When Tesla activates Storm Watch, Grid Events, or VPP events, they set `backup_r
 
 **Default:** OFF
 
+**Example Data:**
+```
+State: off
+```
+
 **Behavior:**
 - ON: All mode changes logged but not executed
 - OFF: Normal operation, commands sent to Powerwall
-
-Use this to test automation behavior without affecting actual battery state.
 
 ---
 
@@ -836,6 +1057,11 @@ Use this to test automation behavior without affecting actual battery state.
 **Purpose:** Block grid charging during demand window.
 
 **Default:** ON
+
+**Example Data:**
+```
+State: on
+```
 
 **Behavior:**
 - ON: Grid charging blocked during demand window
@@ -849,21 +1075,27 @@ Use this to test automation behavior without affecting actual battery state.
 
 **Default:** OFF
 
+**Example Data:**
+```
+State: on
+```
+
 **Behavior:**
 - ON: Enter demand window mode even if SOC < target, if solar forecast shows target can be reached
 - OFF: Only enter demand window mode when SOC >= target
 
 ---
 
-### 7. switch.localshift_notify_transitions
+### 7. switch.localshift_notify_mode_transitions
 
 **Purpose:** Enable notifications for mode transitions.
 
 **Default:** ON
 
-**Behavior:**
-- ON: Send notification when battery mode changes (grid charging, spike discharge, etc.)
-- OFF: No transition notifications
+**Example Data:**
+```
+State: on
+```
 
 ---
 
@@ -873,9 +1105,10 @@ Use this to test automation behavior without affecting actual battery state.
 
 **Default:** ON
 
-**Behavior:**
-- ON: Send daily energy/cost summary at demand window end
-- OFF: No daily summary notification
+**Example Data:**
+```
+State: on
+```
 
 ---
 
@@ -885,9 +1118,10 @@ Use this to test automation behavior without affecting actual battery state.
 
 **Default:** ON
 
-**Behavior:**
-- ON: Send notification when manual control buttons are pressed
-- OFF: No manual action notifications
+**Example Data:**
+```
+State: on
+```
 
 ---
 
@@ -897,13 +1131,52 @@ Use this to test automation behavior without affecting actual battery state.
 
 **Default:** ON
 
-**Behavior:**
-- ON: Send alert notifications (automation disabled, health check failures, etc.)
-- OFF: No alert notifications
+**Example Data:**
+```
+State: on
+```
 
 ---
 
-### 11. switch.localshift_enable_learning
+### 11. switch.localshift_thermal_management
+
+**Purpose:** Enable thermal management for HVAC load shifting.
+
+Added in Issue #137 for temperature-based automation.
+
+**Default:** OFF
+
+**Example Data:**
+```
+State: on
+```
+
+**Behavior:**
+- ON: Thermal management active, climate entities controlled based on daily thermal mode
+- OFF: No thermal automation, climate entities not controlled
+
+---
+
+### 12. switch.localshift_solar_taper
+
+**Purpose:** Enable solar tapering for climate setpoint adjustment.
+
+Added in Issue #137. When enabled, increases heating/cooling during excess solar periods.
+
+**Default:** ON
+
+**Example Data:**
+```
+State: on
+```
+
+**Behavior:**
+- ON: Adjusts climate setpoints during excess solar to use surplus energy
+- OFF: No solar tapering, setpoints unchanged
+
+---
+
+### 13. switch.localshift_enable_learning
 
 **Purpose:** Enable the learning system to adjust parameters.
 
@@ -911,13 +1184,16 @@ Added in Issue #170 Phase 4 for user control over learning system.
 
 **Default:** OFF
 
+**Example Data:**
+```
+State: on
+```
+
 **Behavior:**
 - ON: Learning system can adjust parameters based on outcomes
 - OFF: Learning system observes only, parameters stay at defaults
 
 **Use Case:** Enable after the system has collected enough data (~50 decisions, typically 2-3 days). Disable if you want to pause learning or return to default behavior.
-
-**Note:** When disabled, the system still tracks decisions for observability, but uses default (zero-offset) parameters for all decisions.
 
 ---
 
@@ -933,7 +1209,10 @@ Added in Issue #170 Phase 4 for user control over learning system.
 | Default | 25% |
 | Unit | % |
 
-**Example:** 25th percentile means the bottom 25% of prices are considered "cheap".
+**Example Data:**
+```
+State: 25.0
+```
 
 ---
 
@@ -947,37 +1226,14 @@ Added in Issue #170 Phase 4 for user control over learning system.
 | Default | $0.20/kWh |
 | Unit | $/kWh |
 
-Used as the ceiling for effective cheap price when approaching demand window with low SOC.
+**Example Data:**
+```
+State: 0.18
+```
 
 ---
 
-### 3. number.localshift_cheap_price_deadband
-
-**Purpose:** Hysteresis band to prevent rapid charge/stop cycling.
-
-| Property | Value |
-|----------|-------|
-| Range | $0.00-$0.10/kWh |
-| Default | $0.03/kWh |
-| Unit | $/kWh |
-
-**Calculation:** `stop_price = effective_cheap_price + deadband`
-
----
-
-### 4. number.localshift_forecast_lookahead_hours
-
-**Purpose:** How far ahead to scan for spikes and expensive periods.
-
-| Property | Value |
-|----------|-------|
-| Range | 1-8 hours |
-| Default | 2 hours |
-| Unit | hours |
-
----
-
-### 5. number.localshift_battery_target
+### 3. number.localshift_battery_target
 
 **Purpose:** Target SOC for demand window.
 
@@ -987,39 +1243,14 @@ Used as the ceiling for effective cheap price when approaching demand window wit
 | Default | 100% |
 | Unit | % |
 
-The battery aims to reach this SOC by the demand window start time.
+**Example Data:**
+```
+State: 95.0
+```
 
 ---
 
-### 6. number.localshift_load_weight_recent
-
-**Purpose:** Weight given to recent vs historical consumption data.
-
-| Property | Value |
-|----------|-------|
-| Range | 0.0-1.0 |
-| Default | 0.67 (2/3) |
-| Unit | (ratio) |
-
-**Calculation:** `weighted_avg = recent × weight + historical × (1 - weight)`
-
----
-
-### 7. number.localshift_spike_price_percentile
-
-**Purpose:** Price percentile threshold for spike discharge activation.
-
-| Property | Value |
-|----------|-------|
-| Range | 50-95% |
-| Default | 75% |
-| Unit | % |
-
-**Example:** 75th percentile means spike discharge only activates when feed-in price is in the top 25% of forecast prices.
-
----
-
-### 8. number.localshift_minimum_target_soc
+### 4. number.localshift_minimum_target_soc
 
 **Purpose:** Minimum SOC maintained during discharge modes.
 
@@ -1029,7 +1260,52 @@ The battery aims to reach this SOC by the demand window start time.
 | Default | 20% |
 | Unit | % |
 
-This is the floor SOC during spike discharge and proactive export modes. Protects battery health and ensures reserve capacity.
+**Example Data:**
+```
+State: 10.0
+```
+
+---
+
+### 5. number.localshift_cooling_trigger_temp
+
+**Purpose:** Temperature threshold for committing to cooling mode.
+
+Added in Issue #137 for thermal management.
+
+| Property | Value |
+|----------|-------|
+| Range | 20.0-35.0°C |
+| Default | 28.0°C |
+| Unit | °C |
+
+**Example Data:**
+```
+State: 23.0
+```
+
+If the day's maximum forecast temperature exceeds this value, the system commits to COOL mode.
+
+---
+
+### 6. number.localshift_heating_trigger_temp
+
+**Purpose:** Temperature threshold for committing to heating mode.
+
+Added in Issue #137 for thermal management.
+
+| Property | Value |
+|----------|-------|
+| Range | 5.0-20.0°C |
+| Default | 15.0°C |
+| Unit | °C |
+
+**Example Data:**
+```
+State: 12.0
+```
+
+If the day's minimum forecast temperature is below this value, the system commits to HEAT mode.
 
 ---
 
@@ -1042,6 +1318,11 @@ This is the floor SOC during spike discharge and proactive export modes. Protect
 **Effect:** Sets Powerwall to `backup` operation mode with reserve=10%
 
 **Use Case:** Manually charge from grid at slow rate.
+
+**Example Data:**
+```
+State: 2026-02-24T02:32:04+00:00 (last pressed)
+```
 
 ---
 
@@ -1085,7 +1366,7 @@ This is the floor SOC during spike discharge and proactive export modes. Protect
 
 ---
 
-### 6. button.localshift_reset_learning
+### 6. button.localshift_reset_learning_data
 
 **Action:** Reset all learning system data and start fresh.
 
@@ -1136,16 +1417,16 @@ Buttons trigger manual actions
 1. **Start with `sensor.localshift_battery_mode`** — This tells you what the automation thinks it should be doing.
 
 2. **Check binary sensors** — They show the conditions being evaluated:
-   - `demand_window_active` — Are we in peak hours?
-   - `forecast_spike_within_window` — Is a spike coming?
+   - `demand_window` — Are we in peak hours?
+   - `price_spike_coming` — Is a spike coming?
    - `solar_can_reach_target` — Can solar fill the battery?
    - `excess_solar_available` — Is there excess solar for load shifting?
 
 3. **Look at attributes** — Many sensors have extra diagnostic attributes:
-   - `effective_cheap_price` shows urgency calculation
-   - `net_electricity_cost_today` shows cost breakdown
-   - `solar_battery_forecast` shows predicted SOC
-   - `excess_solar_kwh` shows detailed excess calculations
+   - `forecast_prices` shows price thresholds
+   - `cost_electricity_net` shows cost breakdown
+   - `forecast_battery` shows predicted SOC
+   - `excess_solar` shows detailed excess calculations
 
 4. **Use decision log** — `sensor.localshift_decision_log` shows the last 10 mode changes with reasons.
 
@@ -1154,3 +1435,5 @@ Buttons trigger manual actions
 6. **Monitor load shift signal** — Use `sensor.localshift_load_shift_signal` for simple automation triggers.
 
 7. **Check forecast diagnostics** — `sensor.localshift_forecast_diagnostics` contains debug fields and consumption profile information for troubleshooting forecast accuracy.
+
+8. **Monitor thermal status** — Use `sensor.localshift_realtime_thermal_status` to understand why thermal control is or isn't active.

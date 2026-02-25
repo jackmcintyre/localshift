@@ -636,15 +636,15 @@ Before committing changes that affect entities:
 2. Verify counts match in all documentation files
 3. Total entities = sensors + binary_sensors + switches + numbers + buttons
 
-### Current Entity Counts (as of 2026-02-24):
+### Current Entity Counts (as of 2026-02-26):
 | Category | Count |
 |----------|-------|
-| Sensors | 24 |
-| Binary Sensors | 10 |
-| Switches | 11 |
-| Numbers | 8 |
+| Sensors | 29 |
+| Binary Sensors | 13 |
+| Switches | 13 |
+| Numbers | 6 |
 | Buttons | 6 |
-| **Total** | **59** |
+| **Total** | **67** |
 
 When these counts change, update:
 - This file (`.clinerules`)
