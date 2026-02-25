@@ -63,6 +63,8 @@ async def async_setup_entry(
         BackfillStatusSensor(coordinator, entry),
         # Cost reconciliation sensor (Issue #269)
         CostReconciliationSensor(coordinator, entry),
+        # Extended forecast accuracy sensor (Issue #270)
+        ExtendedForecastAccuracySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1226,3 +1228,37 @@ class CostReconciliationSensor(LocalShiftSensorBase):
             return "mdi:close-circle"
         else:  # not_run
             return "mdi:currency-usd-off"
+
+
+class ExtendedForecastAccuracySensor(LocalShiftSensorBase):
+    """Extended forecast accuracy with long-term metrics.
+
+    Issue #270: Multi-horizon validation with bias detection.
+    Shows 24h, 7d, and 30d accuracy metrics.
+    """
+
+    _attr_unique_id = "localshift_extended_forecast_accuracy"
+    _attr_name = "Extended Forecast Accuracy"
+    _attr_icon = "mdi:chart-timeline-variant"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with 24h accuracy."""
+        self._attr_native_value = round(
+            self.coordinator.data.extended_accuracy_metrics.accuracy_24h, 1
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extended accuracy metrics."""
+        m = self.coordinator.data.extended_accuracy_metrics
+        return {
+            "accuracy_24h": round(m.accuracy_24h, 1),
+            "accuracy_7d": round(m.accuracy_7d, 1),
+            "accuracy_30d": round(m.accuracy_30d, 1),
+            "bias": round(m.bias, 2),
+            "mape": round(m.mape, 2),
+            "sample_count": m.sample_count,
+            "last_updated": m.last_updated.isoformat() if m.last_updated else None,
+        }

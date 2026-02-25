@@ -8,6 +8,7 @@ from typing import Any
 
 from .const import BatteryMode, ThermalMode
 from .computation_engine_lib.statistics_backfiller import BackfillReport
+from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 
 
 @dataclass
@@ -473,4 +474,9 @@ class CoordinatorData:
     # --- Cost reconciliation (Issue #269) ---
     reconciliation_report: ReconciliationReport | None = (
         None  # Last cost reconciliation report
+    )
+
+    # --- Extended forecast accuracy (Issue #270) ---
+    extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
+        default_factory=ExtendedAccuracyMetrics
     )
