@@ -25,3 +25,11 @@ repos:
     rev: v1.1.408
     hooks:
       - id: pyright
+
+  - repo: local
+    hooks:
+      - id: jscpd
+        name: Duplicate Code Check
+        entry: npx jscpd custom_components/ --min-lines 20 --min-tokens 50 --reporters console
+        language: system
+        pass_filenames: false

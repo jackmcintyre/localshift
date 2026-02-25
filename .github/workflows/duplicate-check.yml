@@ -1,0 +1,16 @@
+name: Duplicate Code Check
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+
+      - name: Run jscpd
+        run: npx jscpd custom_components/ --min-lines 20 --min-tokens 50 --reporters console
