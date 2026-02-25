@@ -352,7 +352,7 @@ class GridChargeDecisionEngine:
 
                 # Now simulate from solar start to next DW
                 # Use effective_target_pct for simulation (includes headroom)
-                soc_at_end, max_soc, can_reach_with_solar_only = (
+                soc_at_end, max_soc, can_reach_with_solar_only, _ = (
                     self._simulate_future_soc_with_solar_only(
                         actual_current_soc=max(min_soc_pct, adjusted_soc_at_solar),
                         start_slot=solar_start,  # Start from solar, not from now
@@ -405,7 +405,7 @@ class GridChargeDecisionEngine:
         else:
             # Daylight slot - use simulation with adaptive parameters
             # Use effective_target_pct for simulation (includes headroom)
-            soc_at_end, max_soc, can_reach_with_solar_only = (
+            soc_at_end, max_soc, can_reach_with_solar_only, _ = (
                 self._simulate_future_soc_with_solar_only(
                     actual_current_soc=predicted_soc,
                     start_slot=sim_start,
