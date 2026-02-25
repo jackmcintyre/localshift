@@ -601,6 +601,32 @@ LEARNING_MIN_OBSERVATIONS = 50
 LEARNING_UPDATE_INTERVAL_HOURS = 24
 
 # -----------------------------------------------------------------------------
+# Statistics Backfiller Configuration (Issue #267)
+# -----------------------------------------------------------------------------
+
+CONF_GRID_IMPORT_ENTITY = "grid_import_entity"
+CONF_GRID_EXPORT_ENTITY = "grid_export_entity"
+CONF_BATTERY_CHARGE_ENTITY = "battery_charge_entity"
+CONF_BATTERY_DISCHARGE_ENTITY = "battery_discharge_entity"
+CONF_BACKFILL_SCHEDULE = "backfill_schedule"
+
+DEFAULT_BACKFILL_SCHEDULE = "02:00"  # Run backfill at 2 AM
+
+# -----------------------------------------------------------------------------
+# Extended History Configuration (Issue #268)
+# -----------------------------------------------------------------------------
+
+CONF_EXTENDED_HISTORY_DAYS = "extended_history_days"
+CONF_SEASONAL_PROFILE_ENABLED = "seasonal_profile_enabled"
+
+DEFAULT_EXTENDED_HISTORY_DAYS = 90  # 90 days for seasonal pattern detection
+DEFAULT_SEASONAL_PROFILE_ENABLED = True
+
+# Extended history lookback limits
+EXTENDED_HISTORY_MIN_DAYS = 30  # Minimum days for meaningful patterns
+EXTENDED_HISTORY_MAX_DAYS = 365  # Maximum days (1 year)
+
+# -----------------------------------------------------------------------------
 # Platforms
 # -----------------------------------------------------------------------------
 

@@ -59,6 +59,12 @@ async def async_setup_entry(
         # Real-time thermal control sensors (Issue #63 Phase 6)
         AverageRoomTempSensor(coordinator, entry),
         RealtimeThermalStatusSensor(coordinator, entry),
+        # Statistics backfiller sensor (Issue #267)
+        BackfillStatusSensor(coordinator, entry),
+        # Cost reconciliation sensor (Issue #269)
+        CostReconciliationSensor(coordinator, entry),
+        # Extended forecast accuracy sensor (Issue #270)
+        ExtendedForecastAccuracySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -186,6 +192,7 @@ class SolarBatteryForecastSensor(LocalShiftSensorBase):
     _attr_name = "Forecast Battery"
     _attr_icon = "mdi:chart-line"
     _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         forecast = self.coordinator.data.solar_battery_forecast
@@ -335,6 +342,7 @@ class ForecastPricesSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_prices"
     _attr_name = "Forecast Prices"
     _attr_icon = "mdi:currency-usd"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         """Update with current effective cheap price."""
@@ -407,6 +415,7 @@ class ForecastGridSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_grid"
     _attr_name = "Forecast Grid"
     _attr_icon = "mdi:transmission-tower"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         """Update with total forecast grid import."""
@@ -687,6 +696,7 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
     _attr_name = "Forecast Accuracy"
     _attr_icon = "mdi:target"
     _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         """Update with overall accuracy percentage."""
@@ -1117,3 +1127,138 @@ class RealtimeThermalStatusSensor(LocalShiftSensorBase):
             return "mdi:air-conditioner"
         else:
             return "mdi:air-conditioner-off"
+
+
+# ---------------------------------------------------------------------------
+# Statistics Backfiller Sensor (Issue #267)
+# ---------------------------------------------------------------------------
+
+
+class BackfillStatusSensor(LocalShiftSensorBase):
+    """Statistics backfill validation status.
+
+    Shows the status of the last backfill operation that validates
+    decision outcomes against metered statistics from Home Assistant.
+    """
+
+    _attr_unique_id = "localshift_backfill_status"
+    _attr_name = "Backfill Status"
+    _attr_icon = "mdi:database-check"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with backfill status."""
+        report = self.coordinator.data.backfill_report
+        if report is None:
+            self._attr_native_value = "not_run"
+        elif report.errors:
+            self._attr_native_value = "error"
+        elif report.discrepancies_found > 0:
+            self._attr_native_value = "discrepancies"
+        else:
+            self._attr_native_value = "validated"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return backfill report details."""
+        report = self.coordinator.data.backfill_report
+        if report is None:
+            return {
+                "status": "No backfill has been run yet",
+                "last_run": None,
+            }
+        return report.to_dict()
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "validated":
+            return "mdi:check-circle"
+        elif status == "discrepancies":
+            return "mdi:alert-circle"
+        elif status == "error":
+            return "mdi:close-circle"
+        else:  # not_run
+            return "mdi:database-clock"
+
+
+class CostReconciliationSensor(LocalShiftSensorBase):
+    """Cost reconciliation status.
+
+    Issue #269: Shows variance between estimated and actual costs
+    based on metered statistics from Home Assistant.
+    """
+
+    _attr_unique_id = "localshift_cost_reconciliation"
+    _attr_name = "Cost Reconciliation"
+    _attr_icon = "mdi:currency-usd"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with reconciliation status."""
+        report = self.coordinator.data.reconciliation_report
+        if report is None:
+            self._attr_native_value = "not_run"
+        elif report.errors:
+            self._attr_native_value = "error"
+        elif report.is_significant:
+            self._attr_native_value = "variance"
+        else:
+            self._attr_native_value = "validated"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return reconciliation report details."""
+        report = self.coordinator.data.reconciliation_report
+        if report is None:
+            return {
+                "status": "No reconciliation has been run yet",
+                "last_run": None,
+            }
+        return report.to_dict()
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "validated":
+            return "mdi:check-circle"
+        elif status == "variance":
+            return "mdi:alert-circle"
+        elif status == "error":
+            return "mdi:close-circle"
+        else:  # not_run
+            return "mdi:currency-usd-off"
+
+
+class ExtendedForecastAccuracySensor(LocalShiftSensorBase):
+    """Extended forecast accuracy with long-term metrics.
+
+    Issue #270: Multi-horizon validation with bias detection.
+    Shows 24h, 7d, and 30d accuracy metrics.
+    """
+
+    _attr_unique_id = "localshift_extended_forecast_accuracy"
+    _attr_name = "Extended Forecast Accuracy"
+    _attr_icon = "mdi:chart-timeline-variant"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with 24h accuracy."""
+        self._attr_native_value = round(
+            self.coordinator.data.extended_accuracy_metrics.accuracy_24h, 1
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extended accuracy metrics."""
+        m = self.coordinator.data.extended_accuracy_metrics
+        return {
+            "accuracy_24h": round(m.accuracy_24h, 1),
+            "accuracy_7d": round(m.accuracy_7d, 1),
+            "accuracy_30d": round(m.accuracy_30d, 1),
+            "bias": round(m.bias, 2),
+            "mape": round(m.mape, 2),
+            "sample_count": m.sample_count,
+            "last_updated": m.last_updated.isoformat() if m.last_updated else None,
+        }

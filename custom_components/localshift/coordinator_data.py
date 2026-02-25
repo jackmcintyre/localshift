@@ -7,6 +7,75 @@ from datetime import datetime
 from typing import Any
 
 from .const import BatteryMode, ThermalMode
+from .computation_engine_lib.statistics_backfiller import BackfillReport
+from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
+
+
+@dataclass
+class ReconciliationReport:
+    """Cost reconciliation report comparing estimated vs actual costs.
+
+    Issue #269: Validates cost estimates against metered statistics.
+    """
+
+    timestamp: datetime
+    period_start: datetime
+    period_end: datetime
+
+    # Import cost comparison
+    estimated_import_cost: float = 0.0
+    actual_import_cost: float = 0.0
+    import_variance_pct: float = 0.0
+
+    # Export revenue comparison
+    estimated_export_revenue: float = 0.0
+    actual_export_revenue: float = 0.0
+    export_variance_pct: float = 0.0
+
+    # Overall metrics
+    total_variance_pct: float = 0.0
+    is_significant: bool = False  # True if variance > 10%
+    significance_threshold: float = 10.0  # Percentage threshold
+
+    # Error tracking
+    errors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "period_start": self.period_start.isoformat(),
+            "period_end": self.period_end.isoformat(),
+            "estimated_import_cost": self.estimated_import_cost,
+            "actual_import_cost": self.actual_import_cost,
+            "import_variance_pct": self.import_variance_pct,
+            "estimated_export_revenue": self.estimated_export_revenue,
+            "actual_export_revenue": self.actual_export_revenue,
+            "export_variance_pct": self.export_variance_pct,
+            "total_variance_pct": self.total_variance_pct,
+            "is_significant": self.is_significant,
+            "significance_threshold": self.significance_threshold,
+            "errors": self.errors,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReconciliationReport:
+        """Create from dictionary (deserialization)."""
+        return cls(
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            period_start=datetime.fromisoformat(data["period_start"]),
+            period_end=datetime.fromisoformat(data["period_end"]),
+            estimated_import_cost=data.get("estimated_import_cost", 0.0),
+            actual_import_cost=data.get("actual_import_cost", 0.0),
+            import_variance_pct=data.get("import_variance_pct", 0.0),
+            estimated_export_revenue=data.get("estimated_export_revenue", 0.0),
+            actual_export_revenue=data.get("actual_export_revenue", 0.0),
+            export_variance_pct=data.get("export_variance_pct", 0.0),
+            total_variance_pct=data.get("total_variance_pct", 0.0),
+            is_significant=data.get("is_significant", False),
+            significance_threshold=data.get("significance_threshold", 10.0),
+            errors=data.get("errors", []),
+        )
 
 
 @dataclass
@@ -398,3 +467,16 @@ class CoordinatorData:
     contextual_adjustments_active: list[dict[str, Any]] = field(
         default_factory=list
     )  # Active contextual adjustments
+
+    # --- Statistics backfiller (Issue #267) ---
+    backfill_report: BackfillReport | None = None  # Last backfill validation report
+
+    # --- Cost reconciliation (Issue #269) ---
+    reconciliation_report: ReconciliationReport | None = (
+        None  # Last cost reconciliation report
+    )
+
+    # --- Extended forecast accuracy (Issue #270) ---
+    extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
+        default_factory=ExtendedAccuracyMetrics
+    )
