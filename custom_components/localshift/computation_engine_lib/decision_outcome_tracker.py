@@ -415,11 +415,19 @@ class DecisionOutcomeTracker:
             score = score * 0.6 + cost_score * 0.4
 
         # 2. Export Penalty (weight: 20%)
-        # Penalize exporting grid-purchased energy
+        # Penalize exporting grid-purchased energy (Issue #280)
+        # Only penalize if we actually imported grid energy AND exported
+        # Solar-driven export during charging modes is acceptable
         if record.actual_export_kwh and record.actual_export_kwh > 0.1:
+            grid_imported = (
+                record.actual_import_kwh is not None
+                and record.actual_import_kwh > 0.1
+            )
             if record.mode_chosen == BatteryMode.GRID_CHARGING:
-                # Bad: grid charged then exported
-                score -= 0.15
+                if grid_imported:
+                    # Bad: imported from grid then exported
+                    score -= 0.15
+                # else: solar-driven export is acceptable, no penalty
             elif record.mode_chosen in (
                 BatteryMode.PROACTIVE_EXPORT,
                 BatteryMode.SPIKE_DISCHARGE,
