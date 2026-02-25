@@ -109,6 +109,8 @@ This represents the "blended" price you'd get if you exported all remaining sola
 
 **Purpose:** Predicted battery SOC at demand window start.
 
+**State Class:** `measurement` — Supports long-term statistics (Issue #266)
+
 **State:** Predicted SOC percentage at the demand window start time (e.g., `85.5`)
 
 **Attributes:**
@@ -228,6 +230,8 @@ Each slot in `forecast_slots` contains:
 
 Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 
+**State Class:** `measurement` — Supports long-term statistics (Issue #266)
+
 **State:** Current effective cheap price ($/kWh)
 
 **Attributes:**
@@ -262,6 +266,8 @@ Each slot in `buy_prices` and `sell_prices` contains:
 **Purpose:** Grid interaction forecast data for history collection.
 
 Split from `forecast_daily` to stay under 16KB limit (Issue #37).
+
+**State Class:** `measurement` — Supports long-term statistics (Issue #266)
 
 **State:** Total forecast grid import (kWh)
 
@@ -416,6 +422,8 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 **Purpose:** Compares past forecast predictions with actual outcomes to track accuracy.
 
 Added in Issue #37 Phase 2 to monitor how well the forecast system predicts SOC and prices.
+
+**State Class:** `measurement` — Supports long-term statistics (Issue #266)
 
 **State:** SOC accuracy percentage for 1-hour predictions (e.g., `95.5`)
 

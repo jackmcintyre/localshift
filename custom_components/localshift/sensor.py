@@ -186,6 +186,7 @@ class SolarBatteryForecastSensor(LocalShiftSensorBase):
     _attr_name = "Forecast Battery"
     _attr_icon = "mdi:chart-line"
     _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         forecast = self.coordinator.data.solar_battery_forecast
@@ -335,6 +336,7 @@ class ForecastPricesSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_prices"
     _attr_name = "Forecast Prices"
     _attr_icon = "mdi:currency-usd"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         """Update with current effective cheap price."""
@@ -407,6 +409,7 @@ class ForecastGridSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_grid"
     _attr_name = "Forecast Grid"
     _attr_icon = "mdi:transmission-tower"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         """Update with total forecast grid import."""
@@ -687,6 +690,7 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
     _attr_name = "Forecast Accuracy"
     _attr_icon = "mdi:target"
     _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
         """Update with overall accuracy percentage."""
