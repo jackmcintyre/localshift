@@ -7,11 +7,13 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from ..coordinator_data import CoordinatorData
+# Avoid circular import - only import for type hints
+if TYPE_CHECKING:
+    from ..coordinator_data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 
