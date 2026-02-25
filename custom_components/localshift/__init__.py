@@ -34,6 +34,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -
     # Listen for options updates
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
+    # Register service to get full forecast data (Issue #231)
+    async def handle_get_full_forecast(call):
+        """Return full 96-slot forecast data from storage."""
+        return coordinator.get_full_forecast()
+
+    hass.services.async_register(
+        "localshift",
+        "get_full_forecast",
+        handle_get_full_forecast,
+    )
+
     _LOGGER.info("LocalShift integration set up successfully")
     return True
 

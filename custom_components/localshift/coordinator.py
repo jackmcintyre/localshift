@@ -121,6 +121,9 @@ class LocalShiftCoordinator:
         # Optimization controller for learning system (Issue #170 Phase 4)
         self.optimization_controller: OptimizationController | None = None
 
+        # Forecast storage for full 96-slot data (Issue #231)
+        self.forecast_storage: ForecastStorage | None = None
+
         # Pattern analysis tracking
         self._last_pattern_analysis: datetime | None = None
         self._days_since_pattern_analysis: int = 0
@@ -370,6 +373,10 @@ class LocalShiftCoordinator:
         # Initialize forecast history storage and load persisted history (Issue #131)
         await self._computation_engine.async_initialize_forecast_history_storage()
         await self._computation_engine.async_load_forecast_history(self.data)
+
+        # Initialize forecast storage for full 96-slot data (Issue #231)
+        self.forecast_storage = ForecastStorage(self.hass, self.entry)
+        await self.forecast_storage.async_load()
 
         # Wait for Solcast data to be ready before computing forecasts
         # This prevents errors when Solcast hasn't initialized yet
@@ -923,6 +930,101 @@ class LocalShiftCoordinator:
         """Compute all derived sensor/binary_sensor values from raw state."""
         if self._computation_engine is not None:
             self._computation_engine.compute_derived_values(self.data)
+            # Save full forecast data to storage (Issue #231)
+            self._save_forecast_to_storage()
+
+    def _save_forecast_to_storage(self) -> None:
+        """Save full forecast data to HA Storage (Issue #231).
+
+        This stores the complete 96-slot forecast data in HA's Storage API,
+        which has no size limit, while sensors only expose 12 slots to stay
+        under the 16KB recorder limit.
+        """
+        if self.forecast_storage is None:
+            return
+
+        # Build the full forecast data structure
+        forecast_data = {
+            "forecast_slots": [],
+            "soc_series": [],
+            "grid_interaction": [],
+            "buy_prices": [],
+            "sell_prices": [],
+            "slot_count": len(self.data.daily_forecast),
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        # Extract full forecast slots
+        for slot in self.data.daily_forecast:
+            ts = slot.get("timestamp", "")
+            forecast_data["forecast_slots"].append({
+                "time": ts[11:16] if len(ts) >= 16 else "",
+                "timestamp": ts,
+                "predicted_soc": slot.get("predicted_soc"),
+                "solar_kwh": slot.get("solar_kwh"),
+                "consumption_kwh": slot.get("consumption_kwh"),
+                "net_kwh": slot.get("net_kwh"),
+                "buy_price": slot.get("buy_price"),
+                "sell_price": slot.get("sell_price"),
+                "grid_charge": slot.get("grid_charge", False),
+                "grid_charge_boost": slot.get("grid_charge_boost", False),
+                "proactive_export": slot.get("proactive_export", False),
+            })
+
+        # Extract SOC series
+        for slot in self.data.daily_forecast_soc_15min:
+            if len(slot) >= 2:
+                forecast_data["soc_series"].append({
+                    "time": slot[0],
+                    "soc": slot[1],
+                })
+
+        # Extract grid interaction
+        for slot in self.data.daily_forecast:
+            ts = slot.get("timestamp", "")
+            forecast_data["grid_interaction"].append({
+                "time": ts[11:16] if len(ts) >= 16 else "",
+                "grid_import_kwh": slot.get("grid_import_kwh", 0),
+                "grid_export_kwh": slot.get("grid_export_kwh", 0),
+                "grid_charge": slot.get("grid_charge", False),
+                "grid_charge_boost": slot.get("grid_charge_boost", False),
+                "proactive_export": slot.get("proactive_export", False),
+            })
+
+        # Extract prices
+        for slot in self.data.daily_forecast:
+            ts = slot.get("timestamp", "")
+            forecast_data["buy_prices"].append({
+                "time": ts[11:16] if len(ts) >= 16 else "",
+                "price": slot.get("buy_price"),
+            })
+            forecast_data["sell_prices"].append({
+                "time": ts[11:16] if len(ts) >= 16 else "",
+                "price": slot.get("sell_price"),
+            })
+
+        # Save asynchronously
+        self.hass.async_create_task(
+            self.forecast_storage.async_save(forecast_data),
+            "localshift_save_forecast_storage",
+        )
+
+    def get_full_forecast(self) -> dict[str, Any]:
+        """Get the full 96-slot forecast data from storage.
+
+        This is the public API for retrieving complete forecast data
+        that exceeds the 16KB recorder limit for entity attributes.
+
+        Returns:
+            Dictionary with full forecast data including:
+            - forecast_slots: List of all 96 forecast slots
+            - soc_series: Full SOC time series for graphing
+            - grid_interaction: Full grid interaction data
+            - buy_prices/sell_prices: Full price time series
+        """
+        if self.forecast_storage is None:
+            return {}
+        return self.forecast_storage.get_data()
 
     # ------------------------------------------------------------------
     # Cost tracking
