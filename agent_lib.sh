@@ -76,9 +76,9 @@ add_processed_error() {
 # ==============================================================================
 
 get_new_issues() {
-    # Fetch issues with status: proposed label
+    # Fetch issues with draft label
     gh issue list --repo "$REPO" \
-        --label "status: proposed" \
+        --label "draft" \
         --state open \
         --json number,title,body,createdAt \
         --jq '.[]' 2>/dev/null || echo ""
@@ -163,7 +163,7 @@ update_label() {
 create_issue() {
     local title="$1"
     local body="$2"
-    local labels="${3:-status: proposed}"
+    local labels="${3:-draft}"
     
     if [ "$DRY_RUN" = "true" ]; then
         log "[DRY RUN] Would create issue: $title"
@@ -183,27 +183,96 @@ create_issue() {
 
 invoke_cline() {
     local task="$1"
+    local timeout="${CLINE_TIMEOUT:-600}"  # Default 10 minutes
+    
+    log "=========================================="
+    log "=== CLINE INVOCATION START ==="
+    log "=========================================="
+    log "Task length: ${#task} characters"
+    log "Working directory: $(pwd)"
+    log "Timeout: ${timeout}s"
+    log "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+    log ""
+    log "--- TASK CONTENT ---"
+    log "$task"
+    log "--- END TASK CONTENT ---"
+    log ""
     
     if [ "$DRY_RUN" = "true" ]; then
-        log "[DRY RUN] Would invoke Cline with task:"
-        log "$task"
+        log "[DRY RUN] Would invoke Cline with task above"
+        log "=== CLINE INVOCATION END (DRY RUN) ==="
         return 0
     fi
     
-    log "Invoking Cline CLI..."
-    
-    # Use cline CLI with the task
-    # The --non-interactive flag ensures it runs without user input
-    # The --task flag passes the task description
-    if command -v cline &> /dev/null; then
-        cline task --yolo "$task" 2>&1 || {
-            error "Cline CLI failed"
-            return 1
-        }
-    else
+    # Check if cline is available
+    if ! command -v cline &> /dev/null; then
         error "Cline CLI not found. Please install it first."
         return 1
     fi
+    
+    log "Executing: cline task --yolo --verbose"
+    log ""
+    
+    # Track start time
+    local start_time=$(date +%s)
+    local last_heartbeat_time=$(date +%s)
+    local task_id=""
+    
+    # Create temporary files for output and exit code
+    local output_file=$(mktemp)
+    local exit_code_file=$(mktemp)
+    trap "rm -f '$output_file' '$exit_code_file'" RETURN
+    
+    # Run cline and capture output with exit code
+    # Use --verbose for progress, pass task as positional argument
+    # Note: We use a background process with monitoring for heartbeat
+    (
+        cline task --yolo --verbose "$task" 2>&1
+        echo $? > "$exit_code_file"
+    ) | tee "$output_file" | while IFS= read -r line; do
+        local current_time=$(date +%s)
+        local elapsed=$((current_time - start_time))
+        
+        # Log each line with elapsed time
+        log "[cline +${elapsed}s] $line"
+        
+        # Extract task ID if present (format: "Task started: 1771997016374")
+        if echo "$line" | grep -q "Task started:"; then
+            task_id=$(echo "$line" | grep -oE '[0-9]+' | tail -1)
+            log "[heartbeat] Captured task ID: $task_id"
+        fi
+        
+        # Heartbeat every 30 seconds
+        if [ $((current_time - last_heartbeat_time)) -ge 30 ]; then
+            log "[heartbeat] Cline still running after ${elapsed}s..."
+            last_heartbeat_time=$current_time
+        fi
+    done
+    
+    # Read exit code from file
+    local exit_code=1
+    if [ -f "$exit_code_file" ]; then
+        exit_code=$(cat "$exit_code_file")
+    fi
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    log ""
+    log "=========================================="
+    if [ $exit_code -eq 0 ]; then
+        log "=== CLINE INVOCATION END (success) ==="
+        log "Duration: ${duration}s"
+        if [ -n "$task_id" ]; then
+            log "Task ID: $task_id (resume with: cline -T $task_id)"
+        fi
+    else
+        log "=== CLINE INVOCATION END (failed, exit code: $exit_code) ==="
+        log "Duration: ${duration}s"
+        error "Cline CLI failed with exit code $exit_code"
+    fi
+    log "=========================================="
+    
+    return $exit_code
 }
 
 build_elaboration_prompt() {
@@ -225,7 +294,7 @@ Your task:
 2. If you need more information, post a comment with clarifying questions using:
    \`gh issue comment $issue_number --repo $REPO --body "your questions"\`
 3. Then update the label to 'status: elaborating' using:
-   \`gh issue edit $issue_number --repo $REPO --add-label "status: elaborating" --remove-label "status: proposed"\`
+   \`gh issue edit $issue_number --repo $REPO --add-label "status: elaborating" --remove-label "draft"\`
 4. If you have enough detail already, update the label to 'status: ready-to-plan' instead
 
 Be concise and focused on gathering requirements. Ask specific questions that will help create a good implementation plan.
@@ -270,7 +339,7 @@ EOF
 # ==============================================================================
 
 process_new_issues() {
-    log "Checking for new issues (status: proposed)..."
+    log "Checking for new issues (label: draft)..."
     
     local count=0
     while IFS= read -r issue_json; do
@@ -461,7 +530,7 @@ This issue was automatically created by the polling agent.
 2. Determine the root cause
 3. Implement a fix"
 
-        if create_issue "$title" "$body" "status: proposed,priority: high"; then
+        if create_issue "$title" "$body" "draft,priority: high"; then
             # Mark as processed
             add_processed_error "$pattern"
             ((count++)) || true
