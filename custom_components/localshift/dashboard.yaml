@@ -649,10 +649,6 @@ views:
             entity: number.localshift_max_pre_charge_price
             name: Max Pre-charge
 
-          - type: tile
-            entity: number.localshift_price_deadband
-            name: Deadband
-
           - type: markdown
             content: >
               **Current Effective:** ${{ states('sensor.localshift_price_cheap_effective') }}/kWh  
@@ -666,17 +662,8 @@ views:
             heading_style: title
 
           - type: tile
-            entity: number.localshift_forecast_lookahead
-            name: Lookahead
-
-          - type: tile
             entity: number.localshift_battery_target
             name: Battery Target
-
-          - type: tile
-            entity: number.localshift_load_weight_recent
-            name: Load Weight
-            icon: mdi:scale-balance
 
       # Thermal Management
       - type: grid
@@ -702,14 +689,6 @@ views:
           - type: tile
             entity: number.localshift_heating_trigger_temp
             name: Heating Trigger
-
-          - type: tile
-            entity: number.localshift_dehumidify_trigger_humidity
-            name: Dehumidify Trigger
-
-          - type: tile
-            entity: number.localshift_solar_taper_max_offset
-            name: Taper Max Offset
 
           - type: markdown
             content: >
@@ -806,10 +785,6 @@ views:
               Cheap Price Percentile: {{ states('number.localshift_cheap_price_percentile') }}%
               
               Max Pre-charge Price: ${{ states('number.localshift_max_pre_charge_price') }}/kWh
-              
-              Price Deadband: {{ states('number.localshift_price_deadband') }}
-              
-              Forecast Lookahead: {{ states('number.localshift_forecast_lookahead') }}h
               
               Battery Target: {{ states('number.localshift_battery_target') }}%
               
@@ -973,10 +948,6 @@ views:
               Cooling Trigger Temp: {{ states('number.localshift_cooling_trigger_temp') }}°C
               
               Heating Trigger Temp: {{ states('number.localshift_heating_trigger_temp') }}°C
-              
-              Dehumidify Trigger Humidity: {{ states('number.localshift_dehumidify_trigger_humidity') }}%
-              
-              Solar Taper Max Offset: {{ states('number.localshift_solar_taper_max_offset') }}°C
               
               === LEARNED HVAC POWER ===
               
