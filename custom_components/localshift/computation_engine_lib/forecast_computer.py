@@ -1518,7 +1518,9 @@ class ForecastComputer:
         # Each slot makes independent decisions, but we need to track total planned
         # import to avoid scheduling more charging than needed across multiple windows.
         cumulative_grid_import_kwh = 0.0
-        max_grid_import_kwh = max(0, (target_pct - current_soc) / 100 * BATTERY_CAPACITY_KWH * 1.05)  # 5% buffer
+        max_grid_import_kwh = max(
+            0, (target_pct - current_soc) / 100 * BATTERY_CAPACITY_KWH * 1.05
+        )  # 5% buffer
 
         for slot_idx in range(TOTAL_SLOTS):
             slot_start = base_slot + timedelta(minutes=15 * slot_idx)
