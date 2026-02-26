@@ -49,7 +49,7 @@ class ModeDecisionEngine:
 
         data.debug_mode_source = "forecast"
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Mode decision at %s: slot_time=%s, grid_charge=%s, grid_charge_boost=%s, grid_import_kwh=%.3f, proactive_export=%s, soc=%.1f%%",
             now_dt.strftime("%H:%M"),
             forecast_entry.get("timestamp", "unknown")[-14:-9],
