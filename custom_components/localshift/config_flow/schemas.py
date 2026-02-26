@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.helpers import selector
 import voluptuous as vol
+
+from homeassistant.helpers import selector
 
 from ..const import (
     CONF_BACKFILL_SCHEDULE,
