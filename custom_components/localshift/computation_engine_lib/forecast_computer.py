@@ -1934,6 +1934,162 @@ class ForecastComputer:
         )
 
         # ========================================================================
+        # Pass 4 (Issue #332): Verify target SOC at DW start, fill gap if needed
+        #
+        # The fixed budget in Pass 2 doesn't account for discharge between
+        # charging slots and the demand window. This pass verifies that the
+        # predicted SOC at DW start meets the target, and schedules additional
+        # cheap slots if needed.
+        # ========================================================================
+
+        # Find the slot index for demand window start
+        # The slot that CONTAINS the DW start time, not necessarily aligned to it
+        dw_start_slot_idx = None
+        dw_start_datetime = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        # If DW start is earlier than base_slot, it's tomorrow's DW
+        if dw_start_datetime <= base_slot:
+            dw_start_datetime += timedelta(days=1)
+
+        for slot_idx in range(TOTAL_SLOTS):
+            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+            slot_end = slot_start + timedelta(minutes=15)
+            # Check if DW start falls within this slot
+            if slot_start <= dw_start_datetime < slot_end:
+                dw_start_slot_idx = slot_idx
+                break
+
+        _LOGGER.info(
+            "Pass 4: DW start time=%s, dw_start_datetime=%s, dw_start_slot_idx=%s",
+            dw_start_time.strftime("%H:%M"),
+            dw_start_datetime.strftime("%Y-%m-%d %H:%M"),
+            dw_start_slot_idx if dw_start_slot_idx is not None else "None",
+        )
+
+        # If DW is today, verify target will be met
+        if dw_start_slot_idx is not None:
+            # Simulate SOC trajectory with scheduled grid charges to find SOC at DW start
+            sim_soc = current_soc
+            for slot_idx in range(dw_start_slot_idx):
+                slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+                slot_hour = slot_start.hour
+
+                # Get solar and load for this slot
+                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+                slot_temp = temperature_by_hour.get(
+                    (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
+                )
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    data.load_power_kw,
+                    recent_load_kw,
+                    slot_temp,
+                )
+
+                # Add HVAC prediction
+                daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
+                if isinstance(daily_thermal_mode, str):
+                    pass
+                elif daily_thermal_mode is not None:
+                    daily_thermal_mode = str(daily_thermal_mode)
+
+                hvac_kw = self._predict_hvac_load_for_slot(
+                    slot_hour=slot_hour,
+                    temperature=slot_temp,
+                    daily_thermal_mode=daily_thermal_mode,
+                )
+                total_load_kw = load_kw + hvac_kw
+
+                consumption_kwh = total_load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
+
+                # Calculate battery delta from solar
+                max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+                if net_kwh >= 0:
+                    battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
+                else:
+                    battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
+
+                # Add grid charging if scheduled
+                if slot_idx in scheduled_grid_charges:
+                    scheduled = scheduled_grid_charges[slot_idx]
+                    if scheduled["should_boost"]:
+                        charge_rate = CHARGE_RATE_BOOST_KW
+                    else:
+                        charge_rate = CHARGE_RATE_GRID_KW
+
+                    max_charge_kwh = charge_rate * slot_fraction
+                    current_battery_kwh = sim_soc / 100 * BATTERY_CAPACITY_KWH
+                    space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
+                    grid_charge_amount = min(max_charge_kwh * 0.92, space_remaining_kwh)
+                    battery_delta_kwh += grid_charge_amount
+
+                # Update SOC
+                sim_soc += battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
+                sim_soc = max(export_min_soc_pct, min(100.0, sim_soc))
+
+            predicted_soc_at_dw = sim_soc
+
+            # Check if we're below target
+            if predicted_soc_at_dw < target_pct:
+                gap_pct = target_pct - predicted_soc_at_dw
+                gap_kwh = gap_pct / 100 * BATTERY_CAPACITY_KWH
+
+                _LOGGER.info(
+                    "Pass 4: Predicted SOC at DW start (%.1f%%) below target (%.1f%%). Gap: %.2f kWh. Scheduling additional slots.",
+                    predicted_soc_at_dw,
+                    target_pct,
+                    gap_kwh,
+                )
+
+                # Find remaining candidates not already scheduled
+                remaining_candidates = [
+                    c
+                    for c in grid_charge_candidates
+                    if c["slot_idx"] not in scheduled_grid_charges
+                    and c["slot_idx"] < dw_start_slot_idx  # Only slots before DW
+                ]
+
+                # Sort by price (cheapest first)
+                remaining_candidates.sort(key=lambda x: x["price"])
+
+                # Schedule until gap is filled
+                additional_scheduled = 0
+                for candidate in remaining_candidates:
+                    if gap_kwh <= 0:
+                        break
+
+                    slot_idx = candidate["slot_idx"]
+                    charge_amount = candidate["charge_amount_kwh"]
+
+                    # Schedule this slot
+                    scheduled_grid_charges[slot_idx] = {
+                        "should_boost": candidate["should_boost"],
+                        "charge_amount_kwh": charge_amount,
+                        "price": candidate["price"],
+                    }
+                    gap_kwh -= charge_amount
+                    additional_scheduled += 1
+
+                if additional_scheduled > 0:
+                    _LOGGER.info(
+                        "Pass 4: Scheduled %d additional grid charge slot(s) to fill gap",
+                        additional_scheduled,
+                    )
+            else:
+                _LOGGER.info(
+                    "Pass 4: Predicted SOC at DW start (%.1f%%) meets target (%.1f%%). No additional slots needed.",
+                    predicted_soc_at_dw,
+                    target_pct,
+                )
+
+        # ========================================================================
         # Pass 3: Build the forecast with scheduled grid charges
         # ========================================================================
 
