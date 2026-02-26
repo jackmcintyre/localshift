@@ -35,13 +35,8 @@ from .const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
-    CONF_TESLEMETRY_BACKUP_RESERVE,
-    CONF_TESLEMETRY_BATTERY_POWER,
-    CONF_TESLEMETRY_GRID_POWER,
     CONF_TESLEMETRY_LOAD_POWER,
-    CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
-    CONF_TESLEMETRY_SOLAR_POWER,
     CONF_THERMAL_MODE_DECISION_TIME,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
@@ -292,22 +287,27 @@ class LocalShiftCoordinator:
         # Collect all external entity IDs to watch
         # NOTE: We don't watch CONF_TESLEMETRY_ALLOW_EXPORT because we change it
         # programmatically and don't want to trigger re-evaluation loops
+        #
+        # Issue #284: Only monitor entities that affect mode decisions:
+        # - Price entities: trigger mode decisions when prices change
+        # - Solcast entities: trigger forecast recomputation when solar forecast changes
+        # - SOC: triggers target stop when battery reaches target
+        #
+        # NOT monitored (handled by periodic tick instead):
+        # - GRID/BATTERY/SOLAR/LOAD_POWER: only used for cost tracking (1-min tick)
+        # - OPERATION_MODE/BACKUP_RESERVE: outputs, health-checked in 1-min tick
         monitored_entities = [
-            self._get_entity_id(CONF_TESLEMETRY_OPERATION_MODE),
-            self._get_entity_id(CONF_TESLEMETRY_BACKUP_RESERVE),
-            self._get_entity_id(CONF_TESLEMETRY_SOC),
-            self._get_entity_id(CONF_TESLEMETRY_GRID_POWER),
-            self._get_entity_id(CONF_TESLEMETRY_BATTERY_POWER),
-            self._get_entity_id(CONF_TESLEMETRY_SOLAR_POWER),
-            self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER),
-            # NOT monitoring allow_export - changes programmatically
+            # Price entities - trigger mode decisions on price changes
             self._get_entity_id(CONF_PRICING_GENERAL_PRICE),
             self._get_entity_id(CONF_PRICING_FEED_IN_PRICE),
             self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
             self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE),
+            # Solcast entities - trigger forecast recomputation
             self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
             self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
+            # SOC - trigger target stop when battery reaches target
+            self._get_entity_id(CONF_TESLEMETRY_SOC),
         ]
 
         # Add climate entities for real-time thermal control (Issue #63 Phase 6)
