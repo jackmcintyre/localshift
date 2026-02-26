@@ -267,18 +267,19 @@ class ThermalManager:
     # ------------------------------------------------------------------
 
     def is_enabled(self) -> bool:
-        """Check if thermal management is enabled."""
-        return self._get_switch_state(
-            CONF_THERMAL_MANAGEMENT_ENABLED
-        ) or self._get_option(
-            CONF_THERMAL_MANAGEMENT_ENABLED, DEFAULT_THERMAL_MANAGEMENT_ENABLED
-        )
+        """Check if thermal management is enabled.
+        
+        The switch state is the authoritative source, initialized from
+        SWITCH_DEFAULTS and persisted when toggled by the user.
+        """
+        return self._get_switch_state(CONF_THERMAL_MANAGEMENT_ENABLED)
 
     def is_solar_taper_enabled(self) -> bool:
-        """Check if solar tapering is enabled."""
-        return self._get_switch_state(CONF_SOLAR_TAPER_ENABLED) or self._get_option(
-            CONF_SOLAR_TAPER_ENABLED, DEFAULT_SOLAR_TAPER_ENABLED
-        )
+        """Check if solar tapering is enabled.
+        
+        The switch state is the authoritative source.
+        """
+        return self._get_switch_state(CONF_SOLAR_TAPER_ENABLED)
 
     def get_cooling_trigger_temp(self) -> float:
         """Get cooling trigger temperature threshold."""
