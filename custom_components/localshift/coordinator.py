@@ -587,6 +587,7 @@ class LocalShiftCoordinator:
         """Check if Solcast forecast data is available and valid.
 
         Returns True if Solcast data is ready, False otherwise.
+        Also updates forecast_ready and forecast_status in CoordinatorData (Issue #319).
         """
         # Check if today's forecast has valid data
         today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)
@@ -594,6 +595,8 @@ class LocalShiftCoordinator:
 
         if today_state is None:
             _LOGGER.debug("Solcast today entity not found: %s", today_entity)
+            self.data.forecast_ready = False
+            self.data.forecast_status = "stale"
             return False
 
         if today_state.state in ("unknown", "unavailable", None, ""):
@@ -601,23 +604,41 @@ class LocalShiftCoordinator:
                 "Solcast today entity state is %s, waiting for data",
                 today_state.state,
             )
+            self.data.forecast_ready = False
+            self.data.forecast_status = "stale"
             return False
 
         # Check if the forecast attribute has actual forecast data
         forecast_data = today_state.attributes.get("detailedForecast")
         if not forecast_data or not isinstance(forecast_data, list):
             _LOGGER.debug("Solcast today forecast attribute is empty or invalid")
+            self.data.forecast_ready = False
+            self.data.forecast_status = "partial"
             return False
 
         # Check if we have at least some forecast entries
         if len(forecast_data) == 0:
             _LOGGER.debug("Solcast today forecast has no entries")
+            self.data.forecast_ready = False
+            self.data.forecast_status = "partial"
             return False
+
+        # Check if we have enough entries for meaningful forecasting (at least 4 hours = 8 entries)
+        if len(forecast_data) < 8:
+            _LOGGER.debug(
+                "Solcast today forecast has only %d entries (need 8+ for full forecast)",
+                len(forecast_data),
+            )
+            self.data.forecast_ready = True  # Partial but usable
+            self.data.forecast_status = "partial"
+            return True
 
         _LOGGER.info(
             "Solcast forecast data is ready (%d entries for today)",
             len(forecast_data),
         )
+        self.data.forecast_ready = True
+        self.data.forecast_status = "ready"
         return True
 
     async def _wait_for_solcast_and_compute(self) -> None:

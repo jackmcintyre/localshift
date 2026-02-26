@@ -154,6 +154,9 @@ def coordinator_data():
     data.daily_forecast = []
     data.daily_forecast_soc_15min = []
     data.forecast_consumption_source_counts = {}
+    # Issue #319: Mark forecast as ready for tests
+    data.forecast_ready = True
+    data.forecast_status = "ready"
     return data
 
 

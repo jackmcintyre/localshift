@@ -65,6 +65,8 @@ async def async_setup_entry(
         CostReconciliationSensor(coordinator, entry),
         # Extended forecast accuracy sensor (Issue #270)
         ExtendedForecastAccuracySensor(coordinator, entry),
+        # Forecast status sensor (Issue #319)
+        ForecastStatusSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1262,3 +1264,54 @@ class ExtendedForecastAccuracySensor(LocalShiftSensorBase):
             "sample_count": m.sample_count,
             "last_updated": m.last_updated.isoformat() if m.last_updated else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# Forecast Status Sensor (Issue #319)
+# ---------------------------------------------------------------------------
+
+
+class ForecastStatusSensor(LocalShiftSensorBase):
+    """Forecast data readiness status.
+
+    Issue #319: Shows whether Solcast forecast data is available and valid.
+    Prevents premature grid charging decisions when forecast data is not ready.
+
+    States:
+    - "ready": Solcast data is available and sufficient for forecasting
+    - "partial": Solcast data is available but incomplete (fewer than 8 entries)
+    - "stale": Solcast entity not found or state is unknown/unavailable
+    - "initializing": Initial state before first check
+    """
+
+    _attr_unique_id = "localshift_forecast_status"
+    _attr_name = "Forecast Status"
+    _attr_icon = "mdi:weather-sunny"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with forecast status."""
+        self._attr_native_value = self.coordinator.data.forecast_status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return forecast status details."""
+        d = self.coordinator.data
+        return {
+            "forecast_ready": d.forecast_ready,
+            "solcast_today_entries": len(d.solcast_today),
+            "solcast_tomorrow_entries": len(d.solcast_tomorrow),
+            "debug_mode_source": d.debug_mode_source,
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "ready":
+            return "mdi:check-circle"
+        elif status == "partial":
+            return "mdi:alert-circle"
+        elif status == "stale":
+            return "mdi:close-circle"
+        else:  # initializing
+            return "mdi:weather-sunny-alert"
