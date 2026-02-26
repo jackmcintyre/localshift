@@ -302,8 +302,12 @@ class CoordinatorData:
     optimal_charge_end: datetime | None = None  # Latest optimal charging slot
 
     # Debug/diagnostic fields for dashboard troubleshooting
-    forecast_ready: bool = False  # True when Solcast data is available and valid (Issue #319)
-    forecast_status: str = "initializing"  # "ready", "partial", "stale", "initializing" (Issue #319)
+    forecast_ready: bool = (
+        False  # True when Solcast data is available and valid (Issue #319)
+    )
+    forecast_status: str = (
+        "initializing"  # "ready", "partial", "stale", "initializing" (Issue #319)
+    )
     debug_forecast_slot_found: bool = (
         False  # True if current time slot found in forecast
     )
