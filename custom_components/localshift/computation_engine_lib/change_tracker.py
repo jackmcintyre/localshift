@@ -27,7 +27,9 @@ class ForecastChangeTracker:
 
         # Change thresholds (hardcoded, no config needed)
         self._SOC_THRESHOLD = 1.0  # 1% SOC change
-        self._MAX_FORECAST_AGE = timedelta(minutes=10)  # Backup timer (increased from 1 min)
+        self._MAX_FORECAST_AGE = timedelta(
+            minutes=10
+        )  # Backup timer (increased from 1 min)
 
     def should_recompute_forecast(
         self,

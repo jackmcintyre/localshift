@@ -569,9 +569,12 @@ class TestSolarTaper:
         self, thermal_manager, coordinator_data
     ):
         """Solar taper active with sufficient excess and INCREASE_LOAD signal."""
-        thermal_manager._get_switch_state = lambda k: k in (
-            "thermal_management_enabled",
-            "solar_taper_enabled",
+        thermal_manager._get_switch_state = lambda k: (
+            k
+            in (
+                "thermal_management_enabled",
+                "solar_taper_enabled",
+            )
         )
         coordinator_data.daily_thermal_mode = ThermalMode.COOL
 
@@ -586,9 +589,12 @@ class TestSolarTaper:
 
     def test_taper_scales_with_excess(self, thermal_manager, coordinator_data):
         """Solar taper offset scales with excess solar amount."""
-        thermal_manager._get_switch_state = lambda k: k in (
-            "thermal_management_enabled",
-            "solar_taper_enabled",
+        thermal_manager._get_switch_state = lambda k: (
+            k
+            in (
+                "thermal_management_enabled",
+                "solar_taper_enabled",
+            )
         )
         coordinator_data.daily_thermal_mode = ThermalMode.COOL
 
@@ -620,9 +626,12 @@ class TestSolarTaper:
 
     def test_taper_heat_mode_positive_offset(self, thermal_manager, coordinator_data):
         """Solar taper in HEAT mode uses positive offset (raise setpoint)."""
-        thermal_manager._get_switch_state = lambda k: k in (
-            "thermal_management_enabled",
-            "solar_taper_enabled",
+        thermal_manager._get_switch_state = lambda k: (
+            k
+            in (
+                "thermal_management_enabled",
+                "solar_taper_enabled",
+            )
         )
         coordinator_data.daily_thermal_mode = ThermalMode.HEAT
 
@@ -738,7 +747,7 @@ class TestConfigurationAccessors:
 
     def test_is_enabled_switch_is_authoritative(self, thermal_manager):
         """is_enabled only checks switch state, not config options.
-        
+
         This verifies the fix for the bug where config options could
         override the switch state, causing thermal management to run
         even when disabled via the UI switch.

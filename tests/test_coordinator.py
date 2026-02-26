@@ -1,6 +1,6 @@
 """Unit tests for coordinator."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -227,7 +227,9 @@ class TestHandleStateChange:
         coordinator._state_machine.in_mode_transition = False
 
         # Mock hass for async_create_task - consume coroutines to avoid warnings
-        coordinator.hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
+        coordinator.hass.async_create_task = MagicMock(
+            side_effect=lambda coro, name=None: None
+        )
 
         # Create mock event
         event = MagicMock()
@@ -294,15 +296,16 @@ class TestHandlePeriodicTick:
         coordinator._last_price_update = datetime(2026, 2, 16, 11, 0, 0)
 
         # Mock hass.states.get to return a proper state with last_updated (timezone-aware)
-        from datetime import timezone
         mock_state = MagicMock()
-        mock_state.last_updated = datetime(2026, 2, 16, 11, 59, 0, tzinfo=timezone.utc)
+        mock_state.last_updated = datetime(2026, 2, 16, 11, 59, 0, tzinfo=UTC)
         coordinator.hass.states.get = MagicMock(return_value=mock_state)
 
         # Mock hass for async_create_task - consume coroutines to avoid warnings
-        coordinator.hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
+        coordinator.hass.async_create_task = MagicMock(
+            side_effect=lambda coro, name=None: None
+        )
 
-        now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC)
         coordinator._handle_periodic_tick(now)
 
         # Verify state was read
@@ -312,7 +315,6 @@ class TestHandlePeriodicTick:
         self, coordinator, coordinator_data
     ):
         """Test that periodic tick accumulates costs."""
-        from datetime import timezone as tz
 
         coordinator.data = coordinator_data
 
@@ -335,17 +337,19 @@ class TestHandlePeriodicTick:
         coordinator._state_machine = MagicMock()
 
         # Mock price update time to avoid MagicMock comparison with timedelta
-        coordinator._last_price_update = datetime(2026, 2, 16, 11, 0, 0, tzinfo=tz.utc)
+        coordinator._last_price_update = datetime(2026, 2, 16, 11, 0, 0, tzinfo=UTC)
 
         # Mock hass.states.get to return a proper state with last_updated (timezone-aware)
         mock_state = MagicMock()
-        mock_state.last_updated = datetime(2026, 2, 16, 11, 59, 0, tzinfo=tz.utc)
+        mock_state.last_updated = datetime(2026, 2, 16, 11, 59, 0, tzinfo=UTC)
         coordinator.hass.states.get = MagicMock(return_value=mock_state)
 
         # Mock hass for async_create_task - consume coroutines to avoid warnings
-        coordinator.hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
+        coordinator.hass.async_create_task = MagicMock(
+            side_effect=lambda coro, name=None: None
+        )
 
-        now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=tz.utc)
+        now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC)
         coordinator._handle_periodic_tick(now)
 
         # Verify costs were accumulated

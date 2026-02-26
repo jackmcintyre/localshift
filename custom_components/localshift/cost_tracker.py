@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -198,7 +198,6 @@ class CostTracker:
         """
         try:
             from homeassistant.components import recorder
-            from homeassistant.components.recorder import statistics
         except ImportError:
             _LOGGER.warning("Recorder not available for statistics fetch")
             return None

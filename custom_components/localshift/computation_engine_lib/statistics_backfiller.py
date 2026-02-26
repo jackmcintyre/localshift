@@ -77,7 +77,9 @@ class BackfillReport:
             "avg_charge_variance_pct": self.avg_charge_variance_pct,
             "avg_discharge_variance_pct": self.avg_discharge_variance_pct,
             "last_run": self.last_run.isoformat() if self.last_run else None,
-            "period_start": self.period_start.isoformat() if self.period_start else None,
+            "period_start": self.period_start.isoformat()
+            if self.period_start
+            else None,
             "period_end": self.period_end.isoformat() if self.period_end else None,
             "errors": self.errors,
             "comparisons": self.comparisons[:10],  # Limit for storage
@@ -113,7 +115,9 @@ class BackfillReport:
             total_import_validated_kwh=data.get("total_import_validated_kwh", 0.0),
             total_export_validated_kwh=data.get("total_export_validated_kwh", 0.0),
             total_charge_validated_kwh=data.get("total_charge_validated_kwh", 0.0),
-            total_discharge_validated_kwh=data.get("total_discharge_validated_kwh", 0.0),
+            total_discharge_validated_kwh=data.get(
+                "total_discharge_validated_kwh", 0.0
+            ),
             avg_import_variance_pct=data.get("avg_import_variance_pct", 0.0),
             avg_export_variance_pct=data.get("avg_export_variance_pct", 0.0),
             avg_charge_variance_pct=data.get("avg_charge_variance_pct", 0.0),
@@ -212,7 +216,9 @@ class StatisticsBackfiller:
         report.decisions_validated = len(period_decisions)
 
         if not period_decisions:
-            _LOGGER.info("No decisions found in period %s to %s", period_start, period_end)
+            _LOGGER.info(
+                "No decisions found in period %s to %s", period_start, period_end
+            )
             self._last_report = report
             return report
 
@@ -336,7 +342,9 @@ class StatisticsBackfiller:
 
         # Check if statistics functions are available
         if statistics_during_period is None:
-            _LOGGER.warning("Statistics API not available in this Home Assistant version")
+            _LOGGER.warning(
+                "Statistics API not available in this Home Assistant version"
+            )
             return []
 
         # Use the recorder's statistics_during_period function
@@ -496,12 +504,20 @@ class StatisticsBackfiller:
             # Check for state_class attribute
             state_class = state.attributes.get("state_class")
             if state_class in ("measurement", "total", "total_increasing"):
-                _LOGGER.debug("Entity %s supports statistics (state_class=%s)", entity_id, state_class)
+                _LOGGER.debug(
+                    "Entity %s supports statistics (state_class=%s)",
+                    entity_id,
+                    state_class,
+                )
                 return True
 
-            _LOGGER.debug("Entity %s does not support statistics (no state_class)", entity_id)
+            _LOGGER.debug(
+                "Entity %s does not support statistics (no state_class)", entity_id
+            )
             return False
 
         except Exception as err:
-            _LOGGER.warning("Error checking statistics support for %s: %s", entity_id, err)
+            _LOGGER.warning(
+                "Error checking statistics support for %s: %s", entity_id, err
+            )
             return False

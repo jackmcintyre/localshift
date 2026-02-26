@@ -20,7 +20,9 @@ class GridChargeDecisionEngine:
         next_demand_window_start_dt: Callable[[datetime, time], datetime],
         find_solar_start_time: Callable[[datetime, list[dict]], datetime | None],
         simulate_overnight_drain_to_solar: Callable[..., float],
-        simulate_future_soc_with_solar_only: Callable[..., tuple[float, float, bool, bool]],
+        simulate_future_soc_with_solar_only: Callable[
+            ..., tuple[float, float, bool, bool]
+        ],
     ) -> None:
         """Initialize decision engine with required callbacks."""
         self._next_demand_window_start_dt = next_demand_window_start_dt
@@ -106,9 +108,7 @@ class GridChargeDecisionEngine:
         if solar_gap and hours_left < 8:
             # Apply urgency pricing - raise the threshold to encourage charging
             urgency = max(min(1 - (hours_left / 8.0), 1.0), 0.0)
-            urgency_price = (
-                base_cheap_price + (max_price - base_cheap_price) * urgency
-            )
+            urgency_price = base_cheap_price + (max_price - base_cheap_price) * urgency
 
             # Find minimum forecast price before the next DW
             min_forecast = max_price

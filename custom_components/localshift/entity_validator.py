@@ -87,7 +87,9 @@ class EntityHealth:
     @property
     def is_available(self) -> bool:
         """Return True if entity has a usable value."""
-        return self.status in (EntityStatus.OK, EntityStatus.STALE) and not self.is_broken
+        return (
+            self.status in (EntityStatus.OK, EntityStatus.STALE) and not self.is_broken
+        )
 
 
 @dataclass
@@ -372,7 +374,11 @@ class EntityValidator:
             if not health.is_broken:
                 health.is_broken = True
                 # Use WARNING for optional entities, ERROR for required/recommended
-                log_level = logging.WARNING if health.category == EntityCategory.OPTIONAL else logging.ERROR
+                log_level = (
+                    logging.WARNING
+                    if health.category == EntityCategory.OPTIONAL
+                    else logging.ERROR
+                )
                 _LOGGER.log(
                     log_level,
                     "Entity '%s' (%s) marked as BROKEN after %d consecutive failures - "
@@ -727,7 +733,7 @@ class EntityValidator:
         else:
             # Reset all broken entities
             reset_count = 0
-            for key, health in self._entity_health.items():
+            for _key, health in self._entity_health.items():
                 if health.is_broken:
                     health.is_broken = False
                     health.consecutive_failures = 0
