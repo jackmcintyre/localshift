@@ -216,6 +216,7 @@ class CoordinatorData:
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False
+    prices_available: bool = True  # False when price entities are unavailable (Issue #330)
     general_forecast: list[dict[str, Any]] = field(default_factory=list)
     feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
     solcast_today: list[dict[str, Any]] = field(default_factory=list)

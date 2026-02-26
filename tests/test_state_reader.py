@@ -480,3 +480,123 @@ class TestReadAllExternalState:
         assert coordinator_data.general_price == 0.0
         assert coordinator_data.feed_in_price == 0.0
         assert coordinator_data.price_spike is False
+
+
+class TestPriceAvailability:
+    """Tests for price availability tracking (Issue #330)."""
+
+    def test_prices_available_when_both_available(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test prices_available is True when both prices are available."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "0.25"
+            elif "feed_in_price" in entity_id:
+                state.state = "0.08"
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.prices_available is True
+        assert coordinator_data.general_price == 0.25
+        assert coordinator_data.feed_in_price == 0.08
+
+    def test_prices_unavailable_when_general_price_missing(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test prices_available is False when general_price is unavailable."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "unavailable"  # Simulate unavailable
+            elif "feed_in_price" in entity_id:
+                state.state = "0.08"
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.prices_available is False
+        assert coordinator_data.general_price == 0.0  # Falls back to 0
+        assert coordinator_data.feed_in_price == 0.08
+
+    def test_prices_unavailable_when_feed_in_price_missing(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test prices_available is False when feed_in_price is unavailable."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "0.25"
+            elif "feed_in_price" in entity_id:
+                state.state = "unknown"  # Simulate unknown
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.prices_available is False
+        assert coordinator_data.general_price == 0.25
+        assert coordinator_data.feed_in_price == 0.0  # Falls back to 0
+
+    def test_prices_unavailable_when_both_missing(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test prices_available is False when both prices are unavailable."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "unavailable"
+            elif "feed_in_price" in entity_id:
+                state.state = "unavailable"
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.prices_available is False
+        assert coordinator_data.general_price == 0.0
+        assert coordinator_data.feed_in_price == 0.0
+
+    def test_prices_available_with_zero_prices(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test prices_available is True even when prices are legitimately $0."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "0"  # Legitimate $0 price
+            elif "feed_in_price" in entity_id:
+                state.state = "0"  # Legitimate $0 price
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        # Both prices are $0 but entities are available
+        assert coordinator_data.prices_available is True
+        assert coordinator_data.general_price == 0.0
+        assert coordinator_data.feed_in_price == 0.0

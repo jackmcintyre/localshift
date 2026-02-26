@@ -217,16 +217,21 @@ class StateReader:
         )
 
         # Pricing - read prices with unavailable detection
-        # Log warning if price entities are unavailable (helps diagnose $0 vs unavailable)
+        # Issue #330: Track price availability to prevent incorrect mode decisions
         general_price_entity = self._get_entity_id(CONF_PRICING_GENERAL_PRICE)
         feed_in_price_entity = self._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
 
         general_price_raw = self._read_float_optional(general_price_entity)
         feed_in_price_raw = self._read_float_optional(feed_in_price_entity)
 
+        # Track if prices are available (Issue #330)
+        # If either price is unavailable, we should not make grid charging decisions
+        data.prices_available = general_price_raw is not None and feed_in_price_raw is not None
+
         if general_price_raw is None:
             _LOGGER.warning(
-                "General price entity '%s' is unavailable - treating as $0. Check entity configuration.",
+                "General price entity '%s' is unavailable - prices_available=False. "
+                "Grid charging decisions will be deferred. Check entity configuration.",
                 general_price_entity,
             )
             data.general_price = 0.0
@@ -235,12 +240,20 @@ class StateReader:
 
         if feed_in_price_raw is None:
             _LOGGER.warning(
-                "Feed-in price entity '%s' is unavailable - treating as $0. Check entity configuration.",
+                "Feed-in price entity '%s' is unavailable - prices_available=False. "
+                "Grid charging decisions will be deferred. Check entity configuration.",
                 feed_in_price_entity,
             )
             data.feed_in_price = 0.0
         else:
             data.feed_in_price = feed_in_price_raw
+
+        if data.prices_available:
+            _LOGGER.debug(
+                "Price entities available: buy=$%.3f/kWh, sell=$%.3f/kWh",
+                data.general_price,
+                data.feed_in_price,
+            )
         data.price_spike = self._read_bool(
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
         )

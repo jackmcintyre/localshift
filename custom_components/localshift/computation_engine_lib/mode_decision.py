@@ -52,6 +52,18 @@ class ModeDecisionEngine:
             data.active_mode = BatteryMode.SELF_CONSUMPTION
             return
 
+        # Issue #330: Defer grid charging decisions when price data is unavailable
+        # This prevents BOOST mode from being triggered when prices are "unavailable"
+        # which would otherwise be treated as $0 and incorrectly trigger cheap charging.
+        if not data.prices_available:
+            data.debug_mode_source = "prices_unavailable"
+            _LOGGER.warning(
+                "Price data unavailable (prices_available=False), defaulting to self-consumption - "
+                "deferring grid charging decisions until price data is available"
+            )
+            data.active_mode = BatteryMode.SELF_CONSUMPTION
+            return
+
         data.proactive_export_active = False
 
         current_hour = now_dt.hour
