@@ -184,10 +184,6 @@ class SocSimulator:
             if dw_start_dt <= slot_time < dw_end_dt:
                 max_soc_in_dw = max(max_soc_in_dw, soc)
 
-            # Fast-path: if we've already reached target, we can stop.
-            if max_soc >= target_pct:
-                return soc, max_soc, True, truncated
-
         # FIX: When simulating through DW period (allow_dw_entry_under_target=True),
         # check if max_soc DURING DW reaches target, not just max_soc during entire simulation.
         # This prevents false positives where SOC peaks at midday but declines before DW.

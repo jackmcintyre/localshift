@@ -199,6 +199,9 @@ class ThermalManager:
         self._user_override_until: datetime | None = None
         self._user_override_reason: str = ""
 
+        # Adaptive ramp: track if we're in ramp mode to adapt to user changes
+        self._in_dw_ramp: bool = False
+
     # ------------------------------------------------------------------
     # Initialization and Storage
     # ------------------------------------------------------------------
@@ -415,6 +418,21 @@ class ThermalManager:
             if last_setpoint is not None and current_setpoint is not None:
                 setpoint_diff = abs(current_setpoint - last_setpoint)
                 if setpoint_diff > 0.5:
+                    # During DW ramp: adapt to user change instead of suspending
+                    if self._in_dw_ramp:
+                        _LOGGER.info(
+                            "User adjusted setpoint during DW ramp: %.1f°C -> %.1f°C on %s. Adapting to new setpoint.",
+                            last_setpoint,
+                            current_setpoint,
+                            entity_id,
+                        )
+                        # Update original setpoint to the new user value
+                        self._original_setpoints[entity_id] = current_setpoint
+                        self._last_applied_setpoint[entity_id] = current_setpoint
+                        # Don't suspend control - continue with adapted baseline
+                        continue
+
+                    # Outside DW ramp: suspend control as before
                     cooldown_minutes = self.get_user_override_cooldown()
                     self._user_override_until = now + timedelta(minutes=cooldown_minutes)
                     self._user_override_reason = (
@@ -1614,9 +1632,11 @@ class ThermalManager:
     ) -> bool:
         """Determine if thermal control should activate.
 
-        Uses hysteresis to prevent rapid on/off cycling:
-        - For COOL: Turn on when room > trigger + hysteresis
-        - For HEAT: Turn on when room < trigger - hysteresis
+        For initial activation: use trigger temp directly (no hysteresis).
+        Hysteresis is only used for turn-off decisions to prevent cycling.
+
+        This allows the AC to turn on when room meets the trigger temp,
+        rather than waiting for trigger + hysteresis.
 
         Args:
             avg_room_temp: Current average room temperature.
@@ -1628,34 +1648,28 @@ class ThermalManager:
         if daily_mode == ThermalMode.OFF:
             return False
 
-        hysteresis = self.get_thermal_hysteresis()
-
         if daily_mode == ThermalMode.COOL:
             trigger = self.get_cooling_trigger_temp()
-            # Turn on when room is significantly above trigger
-            should_on = avg_room_temp > trigger + hysteresis
+            # Turn on when room exceeds trigger (no hysteresis for activation)
+            should_on = avg_room_temp > trigger
             if should_on:
                 _LOGGER.debug(
-                    "Turn-on check (COOL): room=%.1f°C > trigger+hyst(%.1f+%.1f=%.1f°C) = %s",
+                    "Turn-on check (COOL): room=%.1f°C > trigger %.1f°C = %s",
                     avg_room_temp,
                     trigger,
-                    hysteresis,
-                    trigger + hysteresis,
                     should_on,
                 )
             return should_on
 
         elif daily_mode == ThermalMode.HEAT:
             trigger = self.get_heating_trigger_temp()
-            # Turn on when room is significantly below trigger
-            should_on = avg_room_temp < trigger - hysteresis
+            # Turn on when room is below trigger (no hysteresis for activation)
+            should_on = avg_room_temp < trigger
             if should_on:
                 _LOGGER.debug(
-                    "Turn-on check (HEAT): room=%.1f°C < trigger-hyst(%.1f-%.1f=%.1f°C) = %s",
+                    "Turn-on check (HEAT): room=%.1f°C < trigger %.1f°C = %s",
                     avg_room_temp,
                     trigger,
-                    hysteresis,
-                    trigger - hysteresis,
                     should_on,
                 )
             return should_on
@@ -1837,6 +1851,11 @@ class ThermalManager:
                 return True, 0.0, "Rate limited (keeping current)"
             return False, 0.0, "Rate limited"
 
+        # Check if we're in the demand window (for ramp calculation)
+        dw_start_dt = datetime.combine(now.date(), demand_window_start)
+        dw_end_dt = datetime.combine(now.date(), demand_window_end)
+        in_demand_window = dw_start_dt <= now < dw_end_dt
+
         # Determine if we should turn on or off
         if not self._thermal_activated_today:
             # Not yet activated today - check if we should turn on
@@ -1845,20 +1864,9 @@ class ThermalManager:
                 self._thermal_activated_at = now
                 self._last_setpoint_change = now
 
-                # Calculate offset based on mode
-                precondition_offset = self.get_precondition_temp_offset()
-                if daily_mode == ThermalMode.COOL:
-                    return (
-                        True,
-                        -precondition_offset,
-                        f"Activated: room {avg_room_temp:.1f}°C",
-                    )
-                else:
-                    return (
-                        True,
-                        precondition_offset,
-                        f"Activated: room {avg_room_temp:.1f}°C",
-                    )
+                # Real-time activation: use 0 offset (just turn on at user's setpoint)
+                # Offset only applies during pre-conditioning or solar taper
+                return True, 0.0, f"Activated: room {avg_room_temp:.1f}°C"
             else:
                 return False, 0.0, f"Waiting to activate (room: {avg_room_temp:.1f}°C)"
         else:
@@ -1870,12 +1878,123 @@ class ThermalManager:
                 self._last_setpoint_change = now
                 return False, 0.0, f"Deactivated: {reason}"
             else:
-                # Stay active with normal offset
-                precondition_offset = self.get_precondition_temp_offset()
-                if daily_mode == ThermalMode.COOL:
-                    return True, -precondition_offset, f"Active: {reason}"
+                # Check if in demand window - apply ramp
+                if in_demand_window:
+                    # Set ramp mode flag for adaptive user override handling
+                    self._in_dw_ramp = True
+
+                    # Calculate DW ramp offset (adaptive to conditions)
+                    ramp_offset = self._calculate_dw_ramp_offset(
+                        now=now,
+                        dw_start=dw_start_dt,
+                        dw_end=dw_end_dt,
+                        avg_room_temp=avg_room_temp,
+                        daily_mode=daily_mode,
+                        battery_soc=data.battery_soc,
+                    )
+                    if daily_mode == ThermalMode.COOL:
+                        # Positive offset = warmer setpoint = less cooling
+                        return True, ramp_offset, f"DW ramp: {reason}"
+                    else:
+                        # Negative offset = cooler setpoint = less heating
+                        return True, -ramp_offset, f"DW ramp: {reason}"
                 else:
-                    return True, precondition_offset, f"Active: {reason}"
+                    # Clear ramp mode flag when outside DW
+                    self._in_dw_ramp = False
+
+                    # Outside DW - maintain current state with 0 offset
+                    return True, 0.0, f"Active: {reason}"
+
+    def _calculate_dw_ramp_offset(
+        self,
+        now: datetime,
+        dw_start: datetime,
+        dw_end: datetime,
+        avg_room_temp: float,
+        daily_mode: ThermalMode,
+        battery_soc: float,
+    ) -> float:
+        """Calculate setpoint offset for demand window ramp.
+
+        Gradually increases setpoint during the demand window to conserve
+        battery while maintaining comfort. The ramp is adaptive to:
+        - Battery SOC: Low SOC = faster ramp (conserve more)
+        - Room temp: Already warm = slower ramp (comfort)
+        - Progress through DW: Linear increase
+
+        Args:
+            now: Current datetime.
+            dw_start: Demand window start datetime.
+            dw_end: Demand window end datetime.
+            avg_room_temp: Current average room temperature.
+            daily_mode: Current daily thermal mode.
+            battery_soc: Current battery state of charge (%).
+
+        Returns:
+            Setpoint offset in °C (positive = warmer = less cooling).
+        """
+        # Default max ramp offset (can be made configurable later)
+        max_offset = 3.0  # °C
+
+        # Calculate progress through DW (0.0 to 1.0)
+        dw_duration_seconds = (dw_end - dw_start).total_seconds()
+        if dw_duration_seconds <= 0:
+            return 0.0
+
+        elapsed_seconds = (now - dw_start).total_seconds()
+        progress = max(0.0, min(1.0, elapsed_seconds / dw_duration_seconds))
+
+        # Base ramp: linear increase through DW
+        base_offset = max_offset * progress
+
+        # Adjustments based on conditions
+        adjustments = 0.0
+
+        # 1. Battery SOC adjustment: low SOC = ramp faster (conserve more)
+        if battery_soc < 30:
+            adjustments += 0.5  # Add 0.5°C when battery low
+            _LOGGER.debug(
+                "DW ramp: low SOC (%.0f%%), adding +0.5°C offset",
+                battery_soc,
+            )
+        elif battery_soc < 50:
+            adjustments += 0.25
+            _LOGGER.debug(
+                "DW ramp: moderate SOC (%.0f%%), adding +0.25°C offset",
+                battery_soc,
+            )
+
+        # 2. Room temp adjustment: if already warm, don't ramp as fast
+        cooling_trigger = self.get_cooling_trigger_temp()
+        if daily_mode == ThermalMode.COOL:
+            if avg_room_temp > cooling_trigger + 2:
+                adjustments -= 0.5  # Reduce ramp if room already warm
+                _LOGGER.debug(
+                    "DW ramp: room warm (%.1f°C), reducing offset by -0.5°C",
+                    avg_room_temp,
+                )
+            elif avg_room_temp > cooling_trigger:
+                adjustments -= 0.25
+                _LOGGER.debug(
+                    "DW ramp: room slightly warm (%.1f°C), reducing offset by -0.25°C",
+                    avg_room_temp,
+                )
+
+        # Calculate final offset
+        final_offset = base_offset + adjustments
+
+        # Clamp to reasonable range (0 to max + 1)
+        final_offset = max(0.0, min(max_offset + 1.0, final_offset))
+
+        _LOGGER.info(
+            "DW ramp: progress=%.0f%%, base=%.1f°C, adjustments=%.1f°C, final=%.1f°C",
+            progress * 100,
+            base_offset,
+            adjustments,
+            final_offset,
+        )
+
+        return final_offset
 
     def reset_daily_thermal_state(self) -> None:
         """Reset daily thermal control state at midnight.
