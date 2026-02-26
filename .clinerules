@@ -496,8 +496,13 @@ gh issue view {NNN}                           # View specific issue
 - Review priorities (critical > high > medium > low)
 
 ## Commit Workflow
-- After completing changes, run pre-commit hooks to verify code quality
-- AFTER pre-commit passes, ask the user to commit rather than auto-committing
+- After completing changes, run lint checks to verify code quality:
+  ```bash
+  uv run ruff check custom_components/localshift
+  uv run ruff format --check custom_components/localshift
+  ```
+- Fix any issues found before proceeding
+- AFTER lint checks pass, ask the user to commit rather than auto-committing
 - Wait for user confirmation before running git commit
 - Reference the issue number in commit messages: `Fixes #NNN` or `Closes #NNN`
 
