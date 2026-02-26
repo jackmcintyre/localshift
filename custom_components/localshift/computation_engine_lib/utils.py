@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.util import dt as dt_util
 
@@ -20,6 +21,75 @@ def parse_forecast_dt(dt_str: str | None) -> datetime | None:
         return dt_util.parse_datetime(str(dt_str))
     except (ValueError, TypeError):
         return None
+
+
+def parse_slot_time(time_str: str, ha_timezone: str) -> datetime | None:
+    """Parse Amber timestamp and convert to HA local timezone.
+
+    Handles both UTC (+00:00) and local timezone timestamps from Amber.
+    - Amber (100H General Forecast) uses UTC timestamps.
+    - Amber Express uses local Sydney time timestamps.
+
+    This function ensures consistent timezone handling by always converting
+    to the Home Assistant configured timezone.
+
+    Args:
+        time_str: ISO timestamp with timezone (e.g., "2026-02-26T14:25:01+00:00")
+        ha_timezone: HA configured timezone (e.g., "Australia/Sydney")
+
+    Returns:
+        datetime in HA local timezone, or None if parsing fails.
+    """
+    if not time_str:
+        return None
+
+    try:
+        # Parse the ISO timestamp (includes timezone info)
+        dt = datetime.fromisoformat(str(time_str))
+
+        # If the datetime is naive (no timezone), assume it's in HA's timezone
+        if dt.tzinfo is None:
+            local_tz = ZoneInfo(ha_timezone)
+            return dt.replace(tzinfo=local_tz)
+
+        # Convert to HA local timezone
+        local_tz = ZoneInfo(ha_timezone)
+        return dt.astimezone(local_tz)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_slot_duration_minutes(entry: dict[str, Any]) -> int | None:
+    """Get the duration of a forecast slot in minutes.
+
+    Calculates duration from the entry's duration field, or by computing
+    the difference between end_time and start_time.
+
+    Args:
+        entry: Forecast entry dict with 'duration', 'start_time', and/or 'end_time'
+
+    Returns:
+        Duration in minutes, or None if it cannot be determined.
+    """
+    # Check for explicit duration field
+    duration = entry.get("duration")
+    if duration is not None:
+        return int(duration)
+
+    # Calculate from start_time and end_time
+    start_str = entry.get("start_time")
+    end_str = entry.get("end_time")
+
+    if start_str and end_str:
+        try:
+            start_dt = datetime.fromisoformat(str(start_str))
+            end_dt = datetime.fromisoformat(str(end_str))
+            delta_seconds = (end_dt - start_dt).total_seconds()
+            return int(delta_seconds / 60)
+        except (ValueError, TypeError):
+            pass
+
+    return None
 
 
 def percentile(prices: list[float], percentile_value: float) -> float:

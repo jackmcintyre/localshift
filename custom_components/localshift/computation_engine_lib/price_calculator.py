@@ -117,6 +117,89 @@ def get_price_for_slot(
     return fallback_price
 
 
+def get_price_for_slot_with_source(
+    price_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+) -> tuple[float, str]:
+    """Get price for a slot along with price source metadata.
+
+    Issue #327: Returns the price source ("5min" or "30min") to support
+    hybrid timescale forecasting.
+
+    Args:
+        price_forecasts: List of price forecast entries from Amber.
+        slot_start: Start time of the slot to check.
+
+    Returns:
+        Tuple of (price, price_source):
+        - price: Price in $/kWh for the slot.
+        - price_source: "5min" if from 5-min data, "30min" if from 30-min data,
+                       "unknown" if no data found.
+    """
+    if not price_forecasts:
+        return 0.0, "unknown"
+
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
+    slot_end = slot_start + timedelta(minutes=15)
+
+    # Track prices and their sources
+    prices_5min: list[float] = []
+    prices_30min: list[float] = []
+    fallback_price: float = 0.0
+    fallback_source: str = "unknown"
+    fallback_start: datetime | None = None
+
+    for entry in price_forecasts:
+        if not isinstance(entry, dict):
+            continue
+
+        start_raw = entry.get("start_time")
+        if start_raw is None:
+            continue
+
+        start_dt = parse_forecast_dt(start_raw)
+        if start_dt is None:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        duration_minutes: int = int(entry.get("duration", 5))
+        end_local = start_local + timedelta(minutes=duration_minutes)
+        price = float(entry.get("per_kwh", 0.0))
+
+        # Determine source based on duration
+        source = "5min" if duration_minutes <= 5 else "30min"
+
+        if start_local < slot_end and end_local > slot_start:
+            # Price overlaps with slot
+            if source == "5min":
+                prices_5min.append(price)
+            else:
+                prices_30min.append(price)
+
+        # Track most-recent entry for fallback
+        if start_local <= slot_start:
+            if fallback_start is None or start_local > fallback_start:
+                fallback_start = start_local
+                fallback_price = price
+                fallback_source = source
+
+    # Prefer 5-min data if available (more precise for near-term)
+    if prices_5min:
+        return sum(prices_5min) / len(prices_5min), "5min"
+
+    # Fall back to 30-min data
+    if prices_30min:
+        return sum(prices_30min) / len(prices_30min), "30min"
+
+    # No overlapping data - use fallback
+    return fallback_price, fallback_source
+
+
 def get_price_for_slot_or_none(
     price_forecasts: list[dict[str, Any]],
     slot_start: datetime,

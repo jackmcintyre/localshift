@@ -298,19 +298,34 @@ class DailyForecastSensor(LocalShiftSensorBase):
         # Build forecast slots with descriptive keys
         # Each slot contains the essential time-series data for dashboards
         forecast_slots = []
+        slot_intervals = {"5min": 0, "30min": 0, "15min": 0}
+
         for slot in self.coordinator.data.daily_forecast:
             ts = slot.get("timestamp", "")
+            interval = slot.get("slot_interval_minutes", 15)
+            price_source = slot.get("price_source", "unknown")
+
+            # Track slot interval counts
+            if interval == 5:
+                slot_intervals["5min"] += 1
+            elif interval == 30:
+                slot_intervals["30min"] += 1
+            else:
+                slot_intervals["15min"] += 1
+
             forecast_slots.append(
                 {
                     "time": ts[11:16] if len(ts) >= 16 else "",  # "HH:MM"
                     "hour": slot.get("hour", 0),
                     "minute": slot.get("minute", 0),
+                    "slot_interval_minutes": interval,
                     "predicted_soc": slot.get("predicted_soc"),
                     "solar_kwh": slot.get("solar_kwh"),
                     "consumption_kwh": slot.get("consumption_kwh"),
                     "net_kwh": slot.get("net_kwh"),
                     "buy_price": slot.get("buy_price"),
                     "sell_price": slot.get("sell_price"),
+                    "price_source": price_source,
                 }
             )
 
@@ -321,12 +336,13 @@ class DailyForecastSensor(LocalShiftSensorBase):
                 soc_series.append({"time": slot[0], "soc": slot[1]})
 
         return {
-            # Core forecast data (96 slots × 8 fields ≈ 8KB)
+            # Core forecast data (96 slots × 10 fields ≈ 10KB)
             "forecast_slots": forecast_slots,
             # SOC time series for graphing
             "soc_series": soc_series,
             # Summary counts
             "slot_count": len(self.coordinator.data.daily_forecast),
+            "slot_intervals": slot_intervals,
             "solcast_today_entries": len(self.coordinator.data.solcast_today),
             "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
             # Hourly summary for quick reference
@@ -831,7 +847,7 @@ class DailyThermalModeSensor(LocalShiftSensorBase):
         d = self.coordinator.data
         # Get learning status from thermal manager
         learning_status = self.coordinator._thermal_manager.get_learning_status()
-        
+
         return {
             "mode_locked": d.daily_mode_locked,
             "determined_at": d.daily_mode_determined_at,
@@ -844,11 +860,17 @@ class DailyThermalModeSensor(LocalShiftSensorBase):
             "hvac_learning_message": learning_status.get("message", ""),
             "hvac_learning_progress_pct": learning_status.get("progress_pct", 0),
             "hvac_learning_total_samples": learning_status.get("total_samples", 0),
-            "hvac_learning_high_confidence": learning_status.get("high_confidence_entities", 0),
-            "hvac_learning_medium_confidence": learning_status.get("medium_confidence_entities", 0),
+            "hvac_learning_high_confidence": learning_status.get(
+                "high_confidence_entities", 0
+            ),
+            "hvac_learning_medium_confidence": learning_status.get(
+                "medium_confidence_entities", 0
+            ),
             "hvac_learning_last_change": learning_status.get("last_hvac_state_change"),
             "hvac_learning_can_learn_now": learning_status.get("can_learn_now", False),
-            "outdoor_temp_entity_configured": learning_status.get("outdoor_temp_entity_configured", False),
+            "outdoor_temp_entity_configured": learning_status.get(
+                "outdoor_temp_entity_configured", False
+            ),
         }
 
     @property
