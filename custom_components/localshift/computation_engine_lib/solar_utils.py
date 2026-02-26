@@ -275,6 +275,97 @@ def get_solar_for_5min_slot(
     return 0.0
 
 
+def get_solar_for_30min_slot(
+    solcast_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+) -> float:
+    """Get solar forecast (kWh) for a 30-minute slot from Solcast 30-min periods.
+
+    Uses direct lookup: the 30-min slot should exactly match a Solcast period.
+    NO INTERPOLATION - uses actual data only.
+
+    Args:
+        solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
+        slot_start: Start of the 30-minute slot (timezone-aware or naive local).
+
+    Returns:
+        Solar energy in kWh for the 30-minute slot, or 0.0 if no data found.
+    """
+    if not solcast_forecasts:
+        return 0.0
+
+    # Ensure slot boundaries are timezone-aware local datetimes
+    if slot_start.tzinfo is None:
+        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
+    else:
+        slot_start = dt_util.as_local(slot_start)
+
+    slot_end = slot_start + timedelta(minutes=30)
+    period_duration = timedelta(minutes=30)
+
+    for entry in solcast_forecasts:
+        if not isinstance(entry, dict):
+            continue
+
+        period_start_raw = entry.get("period_start") or entry.get("start")
+        if period_start_raw is None:
+            continue
+
+        start_dt = dt_util.parse_datetime(str(period_start_raw))
+        if not start_dt:
+            continue
+
+        start_local = dt_util.as_local(start_dt)
+        end_local = start_local + period_duration
+
+        # Direct match: slot must exactly match the Solcast period
+        if slot_start == start_local and slot_end == end_local:
+            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+            period_kwh = float(
+                entry.get("pv_estimate")
+                or entry.get("estimate")
+                or entry.get("pv_estimate10")
+                or entry.get("estimate10")
+                or 0.0
+            )
+            # pv_estimate is kWh per HOUR, so 30 min = 30/60 = 0.5 of an hour
+            return period_kwh * 0.5
+
+    return 0.0
+
+
+def get_solar_for_slot_by_interval(
+    solcast_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+    interval_minutes: int,
+) -> float:
+    """Get solar forecast (kWh) for a slot with variable duration.
+
+    Dispatches to the appropriate function based on interval_minutes.
+    Issue #327: Supports hybrid 5-min/30-min timescale.
+
+    Args:
+        solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
+        slot_start: Start of the slot (timezone-aware or naive local).
+        interval_minutes: Slot duration in minutes (5, 15, or 30).
+
+    Returns:
+        Solar energy in kWh for the slot, or 0.0 if no data found.
+    """
+    if interval_minutes == 5:
+        return get_solar_for_5min_slot(solcast_forecasts, slot_start)
+    elif interval_minutes == 15:
+        return get_solar_for_15min_slot(solcast_forecasts, slot_start)
+    elif interval_minutes == 30:
+        return get_solar_for_30min_slot(solcast_forecasts, slot_start)
+    else:
+        _LOGGER.warning(
+            "Unsupported slot interval %d minutes, defaulting to 15-min",
+            interval_minutes,
+        )
+        return get_solar_for_15min_slot(solcast_forecasts, slot_start)
+
+
 def get_solar_for_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
