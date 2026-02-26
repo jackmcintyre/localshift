@@ -25,7 +25,7 @@ DEFAULT_ENTITY_IDS: dict[str, str] = {
     "solcast_forecast_today": "sensor.solcast_forecast_today",
     "solcast_forecast_tomorrow": "sensor.solcast_forecast_tomorrow",
     "sun_entity": "sun.sun",
-    "weather_entity": "weather.home",
+    "weather_entity": "",  # No default - user must configure
 }
 
 # Default option values
@@ -40,7 +40,7 @@ DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4
 DEFAULT_LOAD_WEIGHT_RECENT = 0.7
 DEFAULT_MINIMUM_TARGET_SOC = 20.0
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = True
-DEFAULT_WEATHER_ENTITY = "weather.home"
+DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
 DEFAULT_WEATHER_LEARNING_ENABLED = False
 DEFAULT_COOLING_THRESHOLD = 28.0
 DEFAULT_HEATING_THRESHOLD = 18.0

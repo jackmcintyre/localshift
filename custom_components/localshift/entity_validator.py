@@ -317,15 +317,16 @@ class EntityValidator:
             self._check_failure_thresholds(health, config_key)
             return health
 
-        # Check for staleness
+        # Check for staleness using entity's actual last_updated time
+        # (not our internal last_valid_time which tracks when we last validated it)
         staleness_threshold = STALENESS_THRESHOLDS.get(config_key)
-        if staleness_threshold and health.last_valid_time:
-            time_since_valid = dt_util.now() - health.last_valid_time
-            if time_since_valid > staleness_threshold:
+        if staleness_threshold:
+            time_since_update = dt_util.now() - state.last_updated
+            if time_since_update > staleness_threshold:
                 health.status = EntityStatus.STALE
                 health.error_message = (
                     f"Entity '{entity_id}' data is stale "
-                    f"({time_since_valid.total_seconds():.0f}s old)"
+                    f"({time_since_update.total_seconds():.0f}s old)"
                 )
                 # Don't increment failures for stale - it still has a value
                 return health
