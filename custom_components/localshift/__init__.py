@@ -19,8 +19,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Use string annotation for compatibility with older HA versions
-LocalShiftConfigEntry = ConfigEntry["LocalShiftCoordinator"]
+# Type alias for type checking only - use ConfigEntry at runtime
+if TYPE_CHECKING:
+    LocalShiftConfigEntry = ConfigEntry[LocalShiftCoordinator]
+else:
+    LocalShiftConfigEntry = ConfigEntry
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -> bool:
