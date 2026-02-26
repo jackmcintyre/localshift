@@ -7,17 +7,20 @@ solar forecasts, and demand window timing.
 from __future__ import annotations
 
 import logging
-from typing import TypeAlias
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import PLATFORMS
-from .coordinator import LocalShiftCoordinator
+
+if TYPE_CHECKING:
+    from .coordinator import LocalShiftCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-LocalShiftConfigEntry: TypeAlias = ConfigEntry[LocalShiftCoordinator]
+# Use string annotation for compatibility with older HA versions
+LocalShiftConfigEntry = ConfigEntry["LocalShiftCoordinator"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -> bool:

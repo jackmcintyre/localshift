@@ -727,7 +727,7 @@ class EntityValidator:
         else:
             # Reset all broken entities
             reset_count = 0
-            for key, health in self._entity_health.items():
+            for _key, health in self._entity_health.items():
                 if health.is_broken:
                     health.is_broken = False
                     health.consecutive_failures = 0
