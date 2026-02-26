@@ -293,8 +293,6 @@ def get_solar_for_slot(
     period_duration = timedelta(minutes=30)
 
     total_solar = 0.0
-    parsed_periods = 0
-    overlap_hits = 0
 
     for entry in solcast_forecasts:
         try:
@@ -310,7 +308,6 @@ def get_solar_for_slot(
                 continue
 
             start_local = dt_util.as_local(start_dt)
-            parsed_periods += 1
             end_local = start_local + period_duration
 
             # overlap between [start_local, end_local) and [slot_start, slot_end)
@@ -330,7 +327,6 @@ def get_solar_for_slot(
                 # pv_estimate is kWh per HOUR, so divide by 3600 seconds
                 overlap_fraction = overlap_seconds / 3600.0
                 total_solar += period_kwh * overlap_fraction
-                overlap_hits += 1
         except (ValueError, TypeError):
             continue
 
