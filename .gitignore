@@ -37,4 +37,8 @@ htmlcov/
 # Cline planning files
 *_plan.md
 
+# Snapshots
+charging_plan_snapshot_*.md
+snapshots/
+
 **.log

@@ -744,6 +744,40 @@ views:
               
               Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
               
+              === ENTITY HEALTH ===
+              
+              Integration Status: {{ states('sensor.localshift_integration_status') }}
+              
+              Entity Health: {{ states('sensor.localshift_entity_health') }}
+              
+              {% set entities = state_attr('sensor.localshift_entity_health', 'entities') | default({}) %}
+              {% set errors = state_attr('sensor.localshift_entity_health', 'errors') | default([]) %}
+              {% set warnings = state_attr('sensor.localshift_entity_health', 'warnings') | default([]) %}
+              
+              Errors: {{ errors | length }}
+              {% for error in errors %}
+                - {{ error }}
+              {% endfor %}
+              
+              Warnings: {{ warnings | length }}
+              {% for warning in warnings %}
+                - {{ warning }}
+              {% endfor %}
+              
+              Stale Entities:
+              {% for name, info in entities.items() %}
+              {%- if info.status == 'stale' %}
+                - {{ info.entity_id }}: {{ info.error_message | default('stale') }}
+              {%- endif %}
+              {%- endfor %}
+              
+              Missing Entities:
+              {% for name, info in entities.items() %}
+              {%- if info.status == 'missing' %}
+                - {{ info.entity_id }}: {{ info.error_message | default('missing') }}
+              {%- endif %}
+              {%- endfor %}
+              
               === INTERNAL STATE FLAGS ===
               
               Manual Override: {{ states('switch.localshift_automation_enabled') == 'off' }}
@@ -996,6 +1030,62 @@ views:
               Mode Cost Attribution: {{ state_attr('sensor.localshift_learning_status', 'mode_cost_attribution') | default({}) }}
               
               Decision History Count: {{ states('sensor.localshift_learning_decision_history') }}
+              
+              === BINARY SENSORS SUMMARY ===
+              
+              Price Spike Coming: {{ states('binary_sensor.localshift_price_spike_coming') }}
+              
+              Discharge Forced: {{ states('binary_sensor.localshift_discharge_forced') }}
+              
+              Charge Forced: {{ states('binary_sensor.localshift_charge_forced') }}
+              
+              Charge Boost: {{ states('binary_sensor.localshift_charge_boost') }}
+              
+              Price Expensive Coming: {{ states('binary_sensor.localshift_price_expensive_coming') }}
+              
+              Solar Can Reach Target: {{ states('binary_sensor.localshift_solar_can_reach_target') }}
+              
+              Charge Boost Needed: {{ states('binary_sensor.localshift_charge_boost_needed') }}
+              
+              Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
+              
+              Excess Solar Available: {{ states('binary_sensor.localshift_excess_solar_available') }}
+              
+              Tesla Override Active: {{ states('binary_sensor.localshift_tesla_override_active') }}
+              
+              Preconditioning Active: {{ states('binary_sensor.localshift_preconditioning_active') }}
+              
+              Solar Taper Active: {{ states('binary_sensor.localshift_solar_taper_active') }}
+              
+              Thermal Management Enabled: {{ states('binary_sensor.localshift_thermal_management_enabled') }}
+              
+              === SWITCHES SUMMARY ===
+              
+              Automation Enabled: {{ states('switch.localshift_automation_enabled') }}
+              
+              Spike Discharge Enabled: {{ states('switch.localshift_spike_discharge_enabled') }}
+              
+              Spike Discharge Conservative: {{ states('switch.localshift_spike_discharge_conservative') }}
+              
+              Dry Run: {{ states('switch.localshift_dry_run') }}
+              
+              Demand Window Block: {{ states('switch.localshift_demand_window_block') }}
+              
+              Allow DW Entry Under Target: {{ states('switch.localshift_allow_dw_entry_under_target') }}
+              
+              Notify Mode Transitions: {{ states('switch.localshift_notify_mode_transitions') }}
+              
+              Notify Daily Summary: {{ states('switch.localshift_notify_daily_summary') }}
+              
+              Notify Manual Actions: {{ states('switch.localshift_notify_manual_actions') }}
+              
+              Notify Alerts: {{ states('switch.localshift_notify_alerts') }}
+              
+              Thermal Management: {{ states('switch.localshift_thermal_management') }}
+              
+              Solar Taper: {{ states('switch.localshift_solar_taper') }}
+              
+              Enable Learning: {{ states('switch.localshift_enable_learning') }}
               
               === END OF DEBUG SUMMARY ===
               ```
