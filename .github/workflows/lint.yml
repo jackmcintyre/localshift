@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff==0.9.10 vulture bandit pyright
+          pip install ruff==0.8.0 vulture bandit pyright
 
       - name: Run ruff linting
         run: ruff check custom_components/localshift
