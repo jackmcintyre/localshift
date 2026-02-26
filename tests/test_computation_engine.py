@@ -407,7 +407,7 @@ class TestForecastChangeTracker:
             soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
         )
 
-        # Move time forward by 11 minutes (beyond 10-minute threshold)
+        # Move time forward by 11 minutes (exceeds 10-minute threshold)
         later_dt = now_dt + timedelta(minutes=11)
         should_recompute, reason = tracker.should_recompute_forecast(
             soc=50.0, price=0.25, feed_in_price=0.08, now_dt=later_dt

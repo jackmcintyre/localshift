@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "localshift"
 version = "0.1.0"
 description = "LocalShift battery automation for Home Assistant"
-requires-python = ">=3.11"
+requires-python = ">=3.13.2"
 dependencies = []
 
 [project.optional-dependencies]
@@ -20,7 +20,7 @@ include = ["custom_components.localshift*"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
@@ -39,7 +39,7 @@ paths = ["custom_components/localshift"]
 exclude = ["tests/"]
 
 [tool.pyright]
-pythonVersion = "3.11"
+pythonVersion = "3.13"
 typeCheckingMode = "basic"
 include = ["custom_components/localshift"]
 exclude = [
@@ -63,11 +63,11 @@ asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = [
-    "homeassistant>=2024.3.3",
+    "homeassistant>=2026.2.3",
     "pytest-asyncio>=1.3.0",
-    "pytest-xdist>=3.0.0",
-    "bandit>=1.7.0",
-    "safety>=3.0.0",
+    "pytest-xdist>=3.8.0",
+    "bandit>=1.9.4",
+    "safety>=3.7.0",
     "vulture>=2.14",
     "ruff>=0.15.2",
 ]

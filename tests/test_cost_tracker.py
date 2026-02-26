@@ -290,6 +290,11 @@ class TestReconciliationReport:
             "actual_import_cost": 14.0,
             "import_variance_pct": 7.14,
             "is_significant": False,
+            "estimated_export_revenue": 5.0,
+            "actual_export_revenue": 4.5,
+            "export_variance_pct": 11.11,
+            "total_variance_pct": 8.0,
+            "significance_threshold": 10.0,
             "errors": [],
         }
         report = ReconciliationReport.from_dict(data)
@@ -297,8 +302,12 @@ class TestReconciliationReport:
         assert report.estimated_import_cost == 15.0
         assert report.actual_import_cost == 14.0
         assert report.import_variance_pct == 7.14
+        assert report.estimated_export_revenue == 5.0
+        assert report.actual_export_revenue == 4.5
+        assert report.export_variance_pct == 11.11
+        assert report.total_variance_pct == 8.0
         assert report.is_significant is False
-        assert report.timestamp == now
+        assert report.timestamp == datetime(2026, 2, 26, 8, 0, 0)
 
 
 # =============================================================================
