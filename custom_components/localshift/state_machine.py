@@ -99,7 +99,9 @@ class StateMachine:
         # control of the Powerwall and ignore external API commands.
         self._tesla_override_detected: bool = False
         self._tesla_override_detected_at: datetime | None = None
-        self._tesla_override_released_at: datetime | None = None  # Track when Tesla released control
+        self._tesla_override_released_at: datetime | None = (
+            None  # Track when Tesla released control
+        )
 
     def _detect_tesla_override(self, data: CoordinatorData) -> bool:
         """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
@@ -653,7 +655,9 @@ class StateMachine:
                     TESLA_OVERRIDE_COOLDOWN,
                 )
                 self._tesla_override_detected = False
-                self._tesla_override_released_at = now  # Track when Tesla released control
+                self._tesla_override_released_at = (
+                    now  # Track when Tesla released control
+                )
                 self._tesla_override_detected_at = None
 
         # --- Tesla Override Cooldown ---
@@ -662,7 +666,9 @@ class StateMachine:
         if self._tesla_override_released_at is not None:
             time_since_release = now - self._tesla_override_released_at
             if time_since_release < TESLA_OVERRIDE_COOLDOWN:
-                remaining = (TESLA_OVERRIDE_COOLDOWN - time_since_release).total_seconds()
+                remaining = (
+                    TESLA_OVERRIDE_COOLDOWN - time_since_release
+                ).total_seconds()
                 _LOGGER.debug(
                     "[HEALTH CHECK] Skipping - in Tesla override cooldown (%.0fs remaining)",
                     remaining,

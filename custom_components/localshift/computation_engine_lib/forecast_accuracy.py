@@ -40,7 +40,9 @@ class ExtendedAccuracyMetrics:
             "bias": self.bias,
             "mape": self.mape,
             "sample_count": self.sample_count,
-            "last_updated": self.last_updated.isoformat() if self.last_updated else None,
+            "last_updated": self.last_updated.isoformat()
+            if self.last_updated
+            else None,
         }
 
     @classmethod

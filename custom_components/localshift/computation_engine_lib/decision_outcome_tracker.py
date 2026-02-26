@@ -420,8 +420,7 @@ class DecisionOutcomeTracker:
         # Solar-driven export during charging modes is acceptable
         if record.actual_export_kwh and record.actual_export_kwh > 0.1:
             grid_imported = (
-                record.actual_import_kwh is not None
-                and record.actual_import_kwh > 0.1
+                record.actual_import_kwh is not None and record.actual_import_kwh > 0.1
             )
             if record.mode_chosen == BatteryMode.GRID_CHARGING:
                 if grid_imported:
@@ -621,7 +620,9 @@ class DecisionOutcomeTracker:
                 else:
                     # Decision timed out while HA was down - mark as completed
                     # with partial outcome (we don't have the actual data)
-                    record.duration_minutes = MAX_DECISION_DURATION.total_seconds() / 60.0
+                    record.duration_minutes = (
+                        MAX_DECISION_DURATION.total_seconds() / 60.0
+                    )
                     record.outcome_score = 0.5  # Neutral score (unknown outcome)
                     self._completed_decisions.append(record)
                     _LOGGER.info(

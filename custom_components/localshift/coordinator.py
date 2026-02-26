@@ -999,6 +999,7 @@ class LocalShiftCoordinator:
 
         # Reset tracking for weather entity (most commonly reconfigured optional entity)
         from .const import CONF_WEATHER_ENTITY
+
         self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
 
         _LOGGER.info("Reset entity tracking for options change")
