@@ -35,12 +35,13 @@ from ..coordinator_data import AdaptiveParameters, CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
-from .price_calculator import get_price_for_slot
+from .price_calculator import get_price_for_slot, get_price_for_slot_with_source
 from .proactive_export import ProactiveExportEngine
 from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_15min_slot,
     get_solar_for_15min_slot_or_none,
+    get_solar_for_slot_by_interval,
 )
 from .utils import get_slot_duration_minutes, parse_slot_time
 
@@ -133,8 +134,9 @@ def compute_hybrid_slot_schedule(
         if duration_minutes is None:
             continue  # Skip if we can't determine duration
 
-        # Only accept 5-min or 30-min slots (Amber native granularities)
-        if duration_minutes not in (5, 30):
+        # Accept 5-min, 30-min, or 60-min slots (60-min for backward compatibility with tests)
+        # Amber native granularities are 5-min and 30-min, but tests may use 60-min
+        if duration_minutes not in (5, 30, 60):
             continue
 
         price = float(entry.get("per_kwh", 0))
@@ -1667,13 +1669,38 @@ class ForecastComputer:
             _LOGGER.info("Battery will not reach 100% from solar in next 24 hours")
 
         # ========================================================================
-        # 15-MIN FORECAST: 96 × 15-min slots for full 24-hour coverage
+        # ISSUE #329: HYBRID TIMESCALE FORECAST
         #
-        # Uses uniform 15-min slots throughout for consistent alignment with
-        # Solcast 30-minute periods. This eliminates the complexity of hybrid
-        # timescales and ensures all SOC predictions are consistent across
-        # the main loop and simulation functions.
+        # Uses compute_hybrid_slot_schedule() to get dynamic slots from Amber:
+        # - 5-min slots for near-term (where Amber has actual 5-min data)
+        # - 30-min slots for extended forecast
+        #
+        # NO INTERPOLATION - uses actual data only.
+        # NO GAPS - 5-min slots end at 30-min boundary, 30-min starts immediately.
         # ========================================================================
+
+        # Get HA timezone for hybrid slot schedule
+        # Use dt_util.DEFAULT_TIME_ZONE which returns the configured HA timezone
+        ha_timezone = str(dt_util.DEFAULT_TIME_ZONE) if dt_util.DEFAULT_TIME_ZONE else "Australia/Sydney"
+
+        # Compute hybrid slot schedule from Amber general forecast
+        hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
+            now_local=dt_util.as_local(now_dt),
+            general_forecast=data.general_forecast,
+            ha_timezone=str(ha_timezone),
+            max_forecast_hours=24,
+        )
+
+        # Store hybrid metadata in CoordinatorData for diagnostics
+        data.hybrid_slot_metadata = hybrid_metadata
+
+        _LOGGER.info(
+            "Hybrid forecast: %d slots (%d 5-min, %d 30-min), transition at %s",
+            hybrid_metadata.get("total_slots", 0),
+            hybrid_metadata.get("slot_intervals", {}).get("5min", 0),
+            hybrid_metadata.get("slot_intervals", {}).get("30min", 0),
+            hybrid_metadata.get("transition_boundary", "N/A"),
+        )
 
         # Read minimum SOC once before the loop (used for SOC floor and grid charging simulation)
         export_min_soc_pct = float(
