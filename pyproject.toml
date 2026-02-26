@@ -22,9 +22,6 @@ include = ["custom_components.localshift*"]
 line-length = 88
 target-version = "py311"
 
-[tool.ruff.isort]
-known-first-party = ["homeassistant"]
-
 [tool.ruff.lint]
 select = [
   "F",
@@ -32,6 +29,9 @@ select = [
   "B",
   "UP",
 ]
+
+[tool.ruff.lint.isort]
+known-first-party = ["homeassistant"]
 
 [tool.ruff.lint.per-file-ignores]
 "custom_components/localshift/*.py" = ["D"]
