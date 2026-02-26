@@ -415,7 +415,6 @@ class WeatherCorrelation:
                         )
 
                 if isinstance(forecast_data, list):
-                    parsed_count = 0
                     parse_failed_count = 0
                     skipped_no_datetime = 0
                     filtered_count = 0
@@ -477,7 +476,6 @@ class WeatherCorrelation:
                                         forecast_time,
                                         forecast_time.tzinfo,
                                     )
-                            parsed_count += 1
                         except (ValueError, TypeError) as e:
                             parse_failed_count += 1
                             if parse_failed_count <= 3:
