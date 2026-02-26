@@ -1255,6 +1255,14 @@ class ThermalManager:
         if not self.is_enabled():
             return False, 0.0
 
+        # Check for user override - suspend control if user manually changed settings
+        if self._user_override_until is not None and now < self._user_override_until:
+            _LOGGER.debug(
+                "Pre-conditioning suspended due to user override: %s",
+                self._user_override_reason,
+            )
+            return False, 0.0
+
         daily_mode = data.daily_thermal_mode
         if daily_mode not in (ThermalMode.HEAT, ThermalMode.COOL):
             return False, 0.0
@@ -1309,6 +1317,15 @@ class ThermalManager:
             Tuple of (is_active, setpoint_offset).
         """
         if not self.is_enabled() or not self.is_solar_taper_enabled():
+            return False, 0.0
+
+        # Check for user override - suspend control if user manually changed settings
+        now = datetime.now()
+        if self._user_override_until is not None and now < self._user_override_until:
+            _LOGGER.debug(
+                "Solar taper suspended due to user override: %s",
+                self._user_override_reason,
+            )
             return False, 0.0
 
         daily_mode = data.daily_thermal_mode
