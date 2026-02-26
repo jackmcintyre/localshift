@@ -25,8 +25,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short
-        continue-on-error: true
 
       - name: Run tests with coverage
         run: uv run pytest tests/ --cov=custom_components/localshift --cov-report=xml --cov-report=term-missing
-        continue-on-error: true
