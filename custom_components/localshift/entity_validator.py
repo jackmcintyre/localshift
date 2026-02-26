@@ -571,17 +571,6 @@ class EntityValidator:
         """Get list of current warning messages."""
         return self._cached_warnings.copy()
 
-    def get_entity_health(self, config_key: str) -> EntityHealth | None:
-        """Get health status for a specific entity.
-
-        Args:
-            config_key: Configuration key for the entity
-
-        Returns:
-            EntityHealth or None if not tracked
-        """
-        return self._entity_health.get(config_key)
-
     def get_health_summary(self) -> dict[str, Any]:
         """Get a summary of entity health for sensors and diagnostics.
 
@@ -673,35 +662,6 @@ class EntityValidator:
                     return False
 
         return True
-
-    def get_safe_defaults(self) -> dict[str, Any]:
-        """Get safe default values for missing/unavailable entities.
-
-        Returns:
-            Dictionary of config_key -> safe default value
-        """
-        defaults = {}
-
-        for config_key, health in self._entity_health.items():
-            if health.is_healthy:
-                continue
-
-            # Provide safe defaults based on entity type
-            config = ENTITY_CONFIG.get(config_key, {})
-            expected_type = config.get("expected_type")
-
-            if expected_type in ((int, float), int, float):
-                defaults[config_key] = 0.0
-            elif expected_type == str:
-                defaults[config_key] = ""
-            elif expected_type == bool:
-                defaults[config_key] = False
-            elif expected_type == list:
-                defaults[config_key] = []
-            else:
-                defaults[config_key] = None
-
-        return defaults
 
     def reset_broken_status(self, config_key: str | None = None) -> None:
         """Reset broken status for one or all entities.

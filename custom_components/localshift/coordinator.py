@@ -1211,11 +1211,6 @@ class LocalShiftCoordinator:
             self._computation_engine.clear_historical_cache()
             _LOGGER.info("Historical load cache cleared")
 
-    async def async_send_notification(self, title: str, message: str) -> None:
-        """Send a notification via the notification service."""
-        if self._notification_service is not None:
-            await self._notification_service.send_notification(title, message)
-
     async def _refresh_weather_forecast(self) -> None:
         """Refresh temperature forecast from weather entity.
 
