@@ -29,6 +29,7 @@ TRANSITION_TIMEOUTS = {
     "self_consumption": 10,
 }
 
+
 class BatteryController:
     """Controls Tesla Powerwall battery modes."""
 

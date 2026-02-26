@@ -18,12 +18,10 @@ from homeassistant.helpers.recorder import get_instance
 # Import statistics functions - use statistics_during_period which is the correct API
 try:
     from homeassistant.components.recorder.statistics import (
-        get_last_statistics,
         statistics_during_period,
     )
 except ImportError:
     # Fallback for older HA versions
-    get_last_statistics = None
     statistics_during_period = None
 
 _LOGGER = logging.getLogger(__name__)
