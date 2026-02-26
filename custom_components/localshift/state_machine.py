@@ -263,6 +263,9 @@ class StateMachine:
                 # --- No change needed ---
                 if desired == self._commanded_mode:
                     self._mode_desired_since.clear()
+                    # Reset skip_next_debounce flag to prevent it persisting
+                    # incorrectly across evaluation cycles (Issue #340)
+                    self._skip_next_debounce = False
 
                     # --- SOC-based charge target enforcement ---
                     # For BOOST_CHARGING: Always uses autonomous+100, so SOC monitoring stops at target.
