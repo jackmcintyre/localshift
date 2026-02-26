@@ -30,6 +30,9 @@ select = [
   "UP",
 ]
 
+[tool.ruff.lint.isort]
+known-third-party = ["homeassistant"]
+
 [tool.ruff.lint.per-file-ignores]
 "custom_components/localshift/*.py" = ["D"]
 
