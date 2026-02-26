@@ -321,8 +321,13 @@ class EntityValidator:
 
         # Check for staleness using entity's actual last_updated time
         # (not our internal last_valid_time which tracks when we last validated it)
+        #
+        # IMPORTANT: Skip staleness check for select entities (Issue #342)
+        # Select entities only update last_updated when the VALUE changes, not periodically.
+        # If a battery stays in "autonomous" mode for hours, the entity is still valid -
+        # the data is NOT stale, it's just unchanged.
         staleness_threshold = STALENESS_THRESHOLDS.get(config_key)
-        if staleness_threshold:
+        if staleness_threshold and not entity_id.startswith("select."):
             time_since_update = dt_util.now() - state.last_updated
             if time_since_update > staleness_threshold:
                 health.status = EntityStatus.STALE
