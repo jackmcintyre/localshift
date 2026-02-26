@@ -36,6 +36,7 @@ known-third-party = ["homeassistant"]
 [tool.ruff.lint.per-file-ignores]
 "custom_components/localshift/*.py" = ["D"]
 "custom_components/localshift/config_flow/schemas.py" = ["I001"]
+"custom_components/localshift/coordinator_data.py" = ["I001"]
 
 [tool.vulture]
 min_confidence = 80
