@@ -205,13 +205,13 @@ class ExtendedForecastAccuracyEngine:
     async def compute_extended_accuracy(
         self,
         data: CoordinatorData,
-        history_fetcher: Any | None = None,
+        _history_fetcher: Any | None = None,
     ) -> ExtendedAccuracyMetrics:
         """Compute extended accuracy metrics from historical data.
 
         Args:
             data: Current coordinator data
-            history_fetcher: Optional history fetcher for statistics
+            history_fetcher: Optional history fetcher for statistics (unused, kept for future use)
 
         Returns:
             ExtendedAccuracyMetrics with computed values
