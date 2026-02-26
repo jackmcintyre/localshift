@@ -831,7 +831,7 @@ class ForecastComputer:
         self,
         feed_in_forecast: list[dict],
         start_time: datetime,
-        hours: int = 24,
+        hours: int = 24
     ) -> float:
         """Delegate _calculate_max_fit_price to extracted helper module."""
         return self._fit_analyzer._calculate_max_fit_price(
@@ -1300,6 +1300,8 @@ class ForecastComputer:
         decisions instead of historical_avg_kw. This prevents the feedback loop
         where HVAC spikes trigger unnecessary grid charging.
 
+        Issue #324: Price-optimized grid charging - schedules cheapest slots first.
+
         Args:
             data: CoordinatorData with current state
             now_dt: Current datetime
@@ -1402,10 +1404,6 @@ class ForecastComputer:
         dw_end_time = self._parse_time_option(
             CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
         )
-
-        # Note: today_dw_start was previously used for the #132 fix but has been
-        # superseded by the #139 fix which uses "next DW from slot" perspective.
-        # The local_effective_cheap_price calculation still uses today's DW for urgency pricing.
 
         # ========================================================================
         # CALCULATE FORECASTED EXCESS AND MINIMUM SOC FOR PROACTIVE EXPORT
@@ -1522,6 +1520,21 @@ class ForecastComputer:
             0, (target_pct - current_soc) / 100 * BATTERY_CAPACITY_KWH * 1.05
         )  # 5% buffer
 
+        # ========================================================================
+        # ISSUE #324: Price-optimized grid charging
+        # Two-pass algorithm to schedule cheapest slots first:
+        # Pass 1: Collect all candidate slots that need grid charging
+        # Pass 2: Sort by price and mark which slots should charge
+        # ========================================================================
+        
+        # Pass 1: Collect candidates for grid charging
+        # We process chronologically to get correct SOC simulation,
+        # but defer the actual scheduling decision.
+        grid_charge_candidates: list[dict] = []
+        
+        # Track SOC for candidate evaluation (solar-only simulation)
+        candidate_soc = current_soc
+
         for slot_idx in range(TOTAL_SLOTS):
             slot_start = base_slot + timedelta(minutes=15 * slot_idx)
             is_first_slot = slot_idx == 0
@@ -1530,37 +1543,23 @@ class ForecastComputer:
             slot_minute = slot_start.minute
             slot_time = slot_start.time()
 
-            # SOC at the start of this slot for any decision-making.
-            # For the first slot, use actual SOC. For later slots, use the rolling forecast SOC.
-            soc_at_slot_start = current_soc if is_first_slot else predicted_soc
+            # SOC at the start of this slot
+            soc_at_slot_start = current_soc if is_first_slot else candidate_soc
 
-            # Check if we're in demand window (zero grid import constraint)
+            # Check if we're in demand window
             in_demand_window = dw_start_time <= slot_time < dw_end_time
 
-            # Get solar forecast scaled to this 15-min slot's duration.
-            # Enable debug logging for: first slot, 6-hour marks, and afternoon slots (14-18)
-            debug_this_slot = (
-                is_first_slot
-                or (slot_minute == 0 and slot_hour % 6 == 0)
-                or (14 <= slot_hour <= 18)
-            )
-
-            # Use _or_none variant to detect missing forecast data vs genuine zero
+            # Get solar forecast
             solar_kwh_or_none = get_solar_for_15min_slot_or_none(
                 all_solcast, slot_start
             )
             if solar_kwh_or_none is None:
-                # No forecast data for this slot - track for diagnostics
                 missing_solar_slots.append(slot_start.strftime("%H:%M"))
-                solar_kwh = 0.0  # Graceful degradation
+                solar_kwh = 0.0
             else:
                 solar_kwh = solar_kwh_or_none
 
-            # Debug logging for solar data
-            if debug_this_slot:
-                get_solar_for_15min_slot(all_solcast, slot_start, debug_log=True)
-
-            # Get expected consumption scaled to this slot's duration.
+            # Get expected consumption
             slot_temp = temperature_by_hour.get(
                 (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
             )
@@ -1580,12 +1579,10 @@ class ForecastComputer:
                 consumption_source_counts.get(load_source, 0) + 1
             )
 
-            # Issue #152: Add HVAC prediction to total load forecast
-            # Grid charging decisions use baseline only (passed via baseline_avg_kw),
-            # but SOC forecast needs total = baseline + predicted_hvac
+            # Issue #152: Add HVAC prediction
             daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
             if isinstance(daily_thermal_mode, str):
-                pass  # Already a string
+                pass
             elif daily_thermal_mode is not None:
                 daily_thermal_mode = str(daily_thermal_mode)
 
@@ -1595,73 +1592,34 @@ class ForecastComputer:
                 daily_thermal_mode=daily_thermal_mode,
             )
 
-            # Total load = baseline + HVAC prediction
-            # Grid charging decisions use baseline only (Issue #137 via baseline_avg_kw param)
-            # SOC forecast uses total to account for thermal load
             total_load_kw = baseline_kw + hvac_kw
 
-            # Log HVAC contribution when significant
             if hvac_kw > 0.1:
-                _LOGGER.debug(
-                    "HVAC_PREDICTION[%02d:%02d]: baseline=%.2f kW, hvac=%.2f kW, total=%.2f kW, mode=%s",
-                    slot_hour,
-                    slot_minute,
-                    baseline_kw,
-                    hvac_kw,
-                    total_load_kw,
-                    daily_thermal_mode or "off",
-                )
-                # Track HVAC prediction in source for diagnostics
                 load_source = f"{load_source}+hvac"
 
             consumption_kwh = total_load_kw * slot_fraction
-
-            # Calculate raw net energy for this slot
             net_kwh = solar_kwh - consumption_kwh
 
-            # Get slot price for logging/analysis
+            # Get slot price
             _slot_price = get_price_for_slot(data.general_forecast, slot_start)
 
-            # Determine if we should grid charge using single source of truth
+            # Determine if we should grid charge
             gap_to_target = max(target_pct - soc_at_slot_start, 0)
 
-            # FIX #139: A slot is eligible for pre-DW grid charging if it's before
-            # the NEXT DW from that slot's perspective. This allows overnight and
-            # morning charging for tomorrow's target while still preventing charging
-            # when solar CAN reach the target.
-            #
-            # The solar simulation (below) will determine if charging is actually needed.
-            # For evening slots after today's DW, the simulation checks:
-            # - Overnight drain → solar tomorrow → tomorrow's DW
-            # - If solar can reach target, no charging (saves money)
-            # - If solar can't reach target, charging is needed
-            #
-            # The "today_dw_start" comparison from #132 fix was too aggressive - it
-            # blocked ALL overnight/morning charging for tomorrow's target.
             next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
             is_before_dw = slot_start < next_dw_start
-
-            # is_daylight is kept for the method signature but no longer used as a gate.
-            # Grid charging decisions are independent of solar availability.
             is_daylight = solar_kwh > 0.05
 
-            # Scale charge-rate caps to this slot's duration
             max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
             max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction
 
-            # Use single source of truth for grid charging decision
-            # Get allow_dw_entry_under_target from data (set by computation_engine)
             allow_dw_entry_under_target = getattr(
                 data, "allow_dw_entry_under_target", False
             )
 
-            # HYSTERESIS: Use actual charging state from Teslemetry for stickiness
-            # This prevents flip-flopping when forecast is optimistic but real conditions differ
             is_currently_grid_charging = getattr(data, "force_charge_active", False)
 
-            # FIX #132: Calculate LOCAL effective cheap price for this slot
-            # The global effective_cheap_price is based on TODAY's DW urgency.
-            # For slots after today's DW (targeting tomorrow), use base price only.
+            # Calculate local effective cheap price
             max_price = float(
                 self.entry.options.get(
                     CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
@@ -1673,8 +1631,6 @@ class ForecastComputer:
                 )
             )
 
-            # Calculate base cheap price from percentile of forecast prices
-            # This is the "no urgency" baseline
             forecast_prices = []
             for f in data.general_forecast:
                 if not isinstance(f, dict):
@@ -1697,7 +1653,6 @@ class ForecastComputer:
             else:
                 base_cheap_price = data.effective_cheap_price
 
-            # Calculate slot-local effective cheap price (urgency only for today's DW)
             local_effective_cheap_price = self._calculate_local_effective_cheap_price(
                 slot_start=slot_start,
                 general_forecast=data.general_forecast,
@@ -1733,75 +1688,165 @@ class ForecastComputer:
                 baseline_avg_kw=baseline_avg_kw,
             )
 
-            # Issue #283: Check if we've already planned enough grid import
-            # This prevents multiple charging windows from over-scheduling
-            if should_grid_charge and cumulative_grid_import_kwh >= max_grid_import_kwh:
-                _LOGGER.info(
-                    "GRID_CHARGE_SKIP[%02d:%02d]: cumulative %.2f kWh >= max %.2f kWh (target already covered)",
-                    slot_hour,
-                    slot_minute,
-                    cumulative_grid_import_kwh,
-                    max_grid_import_kwh,
-                )
-                should_grid_charge = False
-                should_boost = False
+            # If this slot should grid charge, add to candidates
+            if should_grid_charge:
+                # Calculate charge amount
+                if should_boost:
+                    charge_rate = CHARGE_RATE_BOOST_KW
+                else:
+                    charge_rate = CHARGE_RATE_GRID_KW
+                
+                max_charge_kwh = charge_rate * slot_fraction
+                current_battery_kwh = soc_at_slot_start / 100 * BATTERY_CAPACITY_KWH
+                space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
+                grid_charge_amount = min(max_charge_kwh * 0.92, space_remaining_kwh)
+                
+                grid_charge_candidates.append({
+                    "slot_idx": slot_idx,
+                    "slot_start": slot_start,
+                    "price": _slot_price,
+                    "should_boost": should_boost,
+                    "charge_amount_kwh": grid_charge_amount,
+                    "soc_at_slot_start": soc_at_slot_start,
+                })
 
-            # Debug logging for charging decision
-            _LOGGER.debug(
-                "GRID_CHARGE[15min]: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d -> charge=%s boost=%s",
+            # Update candidate SOC (solar-only simulation for next slot)
+            if net_kwh >= 0:
+                battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
+            else:
+                battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
+            
+            if is_first_slot:
+                new_candidate_soc = current_soc
+            else:
+                new_candidate_soc = candidate_soc + (
+                    battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
+                )
+            
+            # Apply minimum SOC floor
+            if not is_first_slot and new_candidate_soc < export_min_soc_pct:
+                new_candidate_soc = export_min_soc_pct
+            
+            candidate_soc = max(0.0, min(100.0, new_candidate_soc))
+
+        # ========================================================================
+        # Pass 2: Sort candidates by price and schedule cheapest first
+        # ========================================================================
+        
+        # Sort by price (cheapest first)
+        grid_charge_candidates.sort(key=lambda x: x["price"])
+        
+        # Track which slots are scheduled for grid charging
+        scheduled_grid_charges: dict[int, dict] = {}
+        scheduled_cumulative_kwh = 0.0
+        
+        for candidate in grid_charge_candidates:
+            if scheduled_cumulative_kwh >= max_grid_import_kwh:
+                # Budget exhausted
+                break
+            
+            slot_idx = candidate["slot_idx"]
+            charge_amount = candidate["charge_amount_kwh"]
+            
+            # Schedule this slot
+            scheduled_grid_charges[slot_idx] = {
+                "should_boost": candidate["should_boost"],
+                "charge_amount_kwh": charge_amount,
+                "price": candidate["price"],
+            }
+            scheduled_cumulative_kwh += charge_amount
+        
+        _LOGGER.info(
+            "Price-optimized grid charging: %d candidates, %d scheduled (%.2f kWh of %.2f kWh max)",
+            len(grid_charge_candidates),
+            len(scheduled_grid_charges),
+            scheduled_cumulative_kwh,
+            max_grid_import_kwh,
+        )
+
+        # ========================================================================
+        # Pass 3: Build the forecast with scheduled grid charges
+        # ========================================================================
+        
+        predicted_soc = current_soc
+
+        for slot_idx in range(TOTAL_SLOTS):
+            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+            is_first_slot = slot_idx == 0
+
+            slot_hour = slot_start.hour
+            slot_minute = slot_start.minute
+            slot_time = slot_start.time()
+
+            # SOC at the start of this slot
+            soc_at_slot_start = current_soc if is_first_slot else predicted_soc
+
+            # Check if we're in demand window
+            in_demand_window = dw_start_time <= slot_time < dw_end_time
+
+            # Get solar forecast
+            solar_kwh_or_none = get_solar_for_15min_slot_or_none(
+                all_solcast, slot_start
+            )
+            if solar_kwh_or_none is None:
+                solar_kwh = 0.0
+            else:
+                solar_kwh = solar_kwh_or_none
+
+            # Get expected consumption
+            slot_temp = temperature_by_hour.get(
+                (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
+            )
+            baseline_kw, load_source = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
                 slot_hour,
-                slot_minute,
-                in_demand_window,
-                is_before_dw,
-                soc_at_slot_start,
-                target_pct,
-                gap_to_target,
-                should_grid_charge,
-                should_boost,
+                current_hour,
+                data.load_power_kw,
+                recent_load_kw,
+                slot_temp,
             )
 
-            # Determine boost / urgency upgrade for grid charging rate
-            # Issue #299: Smart boost - only use boost when actually needed
-            next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
-            hours_to_dw = (next_dw_start - slot_start).total_seconds() / 3600
+            daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
+            if isinstance(daily_thermal_mode, str):
+                pass
+            elif daily_thermal_mode is not None:
+                daily_thermal_mode = str(daily_thermal_mode)
 
-            if should_boost:
-                # Very cheap price triggers boost (existing logic)
-                max_grid_charge_kwh = CHARGE_RATE_BOOST_KW * slot_fraction
-            elif should_grid_charge:
-                # Smart boost: Calculate if boost is actually needed
-                # Energy deficit in kWh
-                deficit_kwh = gap_to_target / 100 * BATTERY_CAPACITY_KWH
+            hvac_kw = self._predict_hvac_load_for_slot(
+                slot_hour=slot_hour,
+                temperature=slot_temp,
+                daily_thermal_mode=daily_thermal_mode,
+            )
 
-                # Calculate regular charging capacity before DW
-                # 15-min slots remaining, each slot can charge at 3.3kW rate
-                slots_remaining = max(0, int(hours_to_dw * 4))  # 4 slots per hour
-                # Regular charge capacity with 92% efficiency
-                regular_charge_capacity_kwh = (
-                    slots_remaining * CHARGE_RATE_GRID_KW * slot_fraction * 0.92
-                )
+            total_load_kw = baseline_kw + hvac_kw
 
-                # Use boost only if regular charging can't meet the deficit
-                if deficit_kwh > regular_charge_capacity_kwh:
-                    _LOGGER.info(
-                        "SMART_BOOST[%02d:%02d]: deficit=%.2f kWh > regular capacity=%.2f kWh (slots=%d) -> BOOST",
-                        slot_hour,
-                        slot_minute,
-                        deficit_kwh,
-                        regular_charge_capacity_kwh,
-                        slots_remaining,
-                    )
+            if hvac_kw > 0.1:
+                load_source = f"{load_source}+hvac"
+
+            consumption_kwh = total_load_kw * slot_fraction
+            net_kwh = solar_kwh - consumption_kwh
+
+            _slot_price = get_price_for_slot(data.general_forecast, slot_start)
+
+            gap_to_target = max(target_pct - soc_at_slot_start, 0)
+
+            max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+            max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction
+
+            # Check if this slot is scheduled for grid charging
+            if slot_idx in scheduled_grid_charges:
+                scheduled = scheduled_grid_charges[slot_idx]
+                should_grid_charge = True
+                should_boost = scheduled["should_boost"]
+                
+                # Determine charge rate
+                if should_boost:
                     max_grid_charge_kwh = CHARGE_RATE_BOOST_KW * slot_fraction
                 else:
-                    _LOGGER.debug(
-                        "SMART_BOOST[%02d:%02d]: deficit=%.2f kWh <= regular capacity=%.2f kWh (slots=%d) -> REGULAR",
-                        slot_hour,
-                        slot_minute,
-                        deficit_kwh,
-                        regular_charge_capacity_kwh,
-                        slots_remaining,
-                    )
                     max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction
+            else:
+                should_grid_charge = False
+                should_boost = False
 
             # Check if battery will be at or above 100% after solar charging
             battery_at_or_above_cap = (
@@ -1814,7 +1859,7 @@ class ForecastComputer:
             else:
                 battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
 
-            # Step 2: Add grid charging if needed (INDEPENDENT of solar!)
+            # Step 2: Add grid charging if scheduled
             if should_grid_charge:
                 current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
                 space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
@@ -1823,16 +1868,12 @@ class ForecastComputer:
                 )
                 battery_delta_kwh += grid_charge_amount
                 grid_import_kwh = grid_charge_amount / 0.92
-                # Issue #283: Track cumulative grid import
-                cumulative_grid_import_kwh += grid_import_kwh
             else:
                 grid_import_kwh = 0.0
 
-            # Step 3: Check for proactive export (before updating SOC).
-            # Calculate elapsed minutes from base_slot for hybrid timescale comparisons
+            # Step 3: Check for proactive export
             elapsed_minutes = (slot_start - base_slot).total_seconds() / 60
 
-            # Get export price margin from config (Issue #70)
             export_price_margin = float(
                 self.entry.options.get(
                     CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN
@@ -1868,40 +1909,23 @@ class ForecastComputer:
                 )
             )
 
-            # Apply proactive export if needed (discharge battery)
+            # Apply proactive export if needed
             if should_proactive_export:
                 export_discharge_kwh = proactive_export_amount / 0.95
                 battery_delta_kwh -= export_discharge_kwh
                 grid_export_kwh = proactive_export_amount
                 remaining_export_budget -= proactive_export_amount
-
-                _LOGGER.debug(
-                    "PROACTIVE_EXPORT: %02d:%02d amount=%.3f kWh, remaining budget=%.3f kWh",
-                    slot_hour,
-                    slot_minute,
-                    proactive_export_amount,
-                    remaining_export_budget,
-                )
             else:
-                # Step 3a: Calculate normal grid export
+                # Calculate normal grid export
                 if net_kwh >= 0:
                     if battery_at_or_above_cap:
-                        # Battery full: all solar net goes to grid
                         grid_export_kwh = net_kwh
                     else:
-                        # Battery has space.  Only the rate-limited portion (net
-                        # solar above the battery's max charge rate) goes to grid.
-                        # The * 0.92 charging efficiency loss is heat, NOT grid export.
                         grid_export_kwh = max(0.0, net_kwh - max_solar_charge_kwh)
                 else:
-                    # Negative net: battery discharges to cover load deficit.
-                    # The discharge_kwh = load_deficit / 0.95 (efficiency), but the
-                    # 5% difference is thermal loss, not grid export.  In self-
-                    # consumption mode there is no grid export during discharge.
                     grid_export_kwh = 0.0
 
-            # Update rolling SOC prediction.
-            # First slot: preserve current SOC (no time-based delta applied).
+            # Update rolling SOC prediction
             if is_first_slot:
                 new_predicted_soc = current_soc
             else:
@@ -1909,8 +1933,7 @@ class ForecastComputer:
                     battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
                 )
 
-            # Minimum SOC floor: if battery would discharge below configured minimum,
-            # the inverter stops discharging and load must come from the grid instead.
+            # Minimum SOC floor
             if (
                 not is_first_slot
                 and not should_grid_charge
@@ -1921,15 +1944,10 @@ class ForecastComputer:
                 grid_import_kwh += passive_grid_import_kwh
                 new_predicted_soc = export_min_soc_pct
 
-                # (backlog-high-022) Apply solar charging at minimum SOC:
-                # If there's solar excess after load, charge the battery above minimum.
-                # This prevents SOC from staying flat at minimum when solar > load.
                 if net_kwh > 0 and not in_demand_window:
-                    # Solar exceeds load - charge battery with excess
                     excess_kwh = net_kwh
                     charge_delta = min(excess_kwh, max_solar_charge_kwh) * 0.92
                     new_predicted_soc += charge_delta / BATTERY_CAPACITY_KWH * 100
-                    # Reduce grid import since solar is covering load
                     grid_import_kwh = max(0, grid_import_kwh - consumption_kwh / 0.92)
 
             predicted_soc = max(0.0, min(100.0, new_predicted_soc))
@@ -1990,10 +2008,6 @@ class ForecastComputer:
         # ========================================================================
         # CALCULATE FORECAST COSTS (rest of today)
         # ========================================================================
-        # Calculate expected costs for the remainder of today (until midnight)
-        # This includes: grid import cost, grid export revenue, and breakdown by type
-
-        # Find end of today (midnight)
         end_of_today = now_dt.replace(hour=23, minute=59, second=59, microsecond=0)
 
         forecast_import_cost = 0.0
@@ -2011,7 +2025,6 @@ class ForecastComputer:
             except ValueError:
                 continue
 
-            # Only include slots from now until end of today
             if slot_dt > end_of_today:
                 break
 
@@ -2022,19 +2035,15 @@ class ForecastComputer:
             is_grid_charge = slot.get("grid_charge", False)
             is_proactive_export = slot.get("proactive_export", False)
 
-            # Accumulate costs
             forecast_import_cost += grid_import_kwh * buy_price
             forecast_export_revenue += grid_export_kwh * sell_price
 
-            # Track grid charge cost separately (energy used to charge battery from grid)
             if is_grid_charge:
                 forecast_grid_charge_cost += grid_import_kwh * buy_price
 
-            # Track proactive export revenue separately
             if is_proactive_export:
                 forecast_proactive_export_revenue += grid_export_kwh * sell_price
 
-        # Store forecast cost totals in data object
         data.forecast_import_cost = round(forecast_import_cost, 2)
         data.forecast_export_revenue = round(forecast_export_revenue, 2)
         data.forecast_net_cost = round(
