@@ -886,7 +886,6 @@ class HistoryFetcher:
             return combined, combined, source
 
         from homeassistant.components import recorder
-        from homeassistant.components.recorder.statistics import get_statistics
 
         now = dt_util.now()
         start_time = now - timedelta(days=days)
@@ -917,7 +916,9 @@ class HistoryFetcher:
                 )
                 return weekday_avg, weekend_avg, "statistics"
             else:
-                _LOGGER.warning("No extended statistics data returned for %s", entity_id)
+                _LOGGER.warning(
+                    "No extended statistics data returned for %s", entity_id
+                )
                 return {}, {}, "no_data"
 
         except Exception as e:
@@ -1070,7 +1071,9 @@ class HistoryFetcher:
             return False
 
         except Exception as e:
-            _LOGGER.warning("Error checking statistics support for %s: %s", entity_id, e)
+            _LOGGER.warning(
+                "Error checking statistics support for %s: %s", entity_id, e
+            )
             return False
 
     def detect_seasonal_profile(
@@ -1156,14 +1159,10 @@ class HistoryFetcher:
 
         # Calculate seasonal averages
         summer_avg = {
-            hour: sum(vals) / len(vals)
-            for hour, vals in summer_by_hour.items()
-            if vals
+            hour: sum(vals) / len(vals) for hour, vals in summer_by_hour.items() if vals
         }
         winter_avg = {
-            hour: sum(vals) / len(vals)
-            for hour, vals in winter_by_hour.items()
-            if vals
+            hour: sum(vals) / len(vals) for hour, vals in winter_by_hour.items() if vals
         }
 
         # Find peak hours (top 3 hours by consumption)
@@ -1175,9 +1174,9 @@ class HistoryFetcher:
             if summer_val or winter_val:
                 all_hourly[hour] = (summer_val + winter_val) / 2
 
-        peak_hours = sorted(all_hourly.keys(), key=lambda h: all_hourly[h], reverse=True)[
-            :3
-        ]
+        peak_hours = sorted(
+            all_hourly.keys(), key=lambda h: all_hourly[h], reverse=True
+        )[:3]
 
         # Detect trend
         trend = "stable"

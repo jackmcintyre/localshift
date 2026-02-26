@@ -29,10 +29,6 @@ TRANSITION_TIMEOUTS = {
     "self_consumption": 10,
 }
 
-# Maximum retries for failed transitions
-MAX_TRANSITION_RETRIES = 2
-RETRY_DELAY_SECONDS = 2
-
 
 class BatteryController:
     """Controls Tesla Powerwall battery modes."""

@@ -153,7 +153,9 @@ class PriceCalculator:
 
     # Hysteresis parameters to prevent threshold oscillation (Issue #282)
     _THRESHOLD_HYSTERESIS: float = 0.02  # Minimum change (2 cents) to trigger update
-    _SMOOTHING_ALPHA: float = 0.3  # EMA smoothing factor (0 = no smoothing, 1 = instant)
+    _SMOOTHING_ALPHA: float = (
+        0.3  # EMA smoothing factor (0 = no smoothing, 1 = instant)
+    )
 
     def __init__(
         self,
@@ -429,4 +431,3 @@ class PriceCalculator:
         else:
             data.solar_weighted_avg_fit = 0.0
         data.solar_remaining_kwh = round(total_solar, 2)
-

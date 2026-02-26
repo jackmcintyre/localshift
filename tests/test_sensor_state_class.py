@@ -3,15 +3,16 @@
 Issue #266: Add state_class to forecast sensors for statistics support.
 """
 
-import pytest
-from homeassistant.components.sensor import SensorStateClass
 from unittest.mock import Mock
 
+import pytest
+from homeassistant.components.sensor import SensorStateClass
+
 from custom_components.localshift.sensor import (
-    SolarBatteryForecastSensor,
     ForecastAccuracySensor,
     ForecastGridSensor,
     ForecastPricesSensor,
+    SolarBatteryForecastSensor,
 )
 
 

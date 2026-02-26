@@ -1,11 +1,14 @@
 """Unit tests for CostTracker."""
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.coordinator_data import CoordinatorData, ReconciliationReport
+from custom_components.localshift.coordinator_data import (
+    CoordinatorData,
+    ReconciliationReport,
+)
 from custom_components.localshift.cost_tracker import CostTracker
 
 
@@ -281,7 +284,6 @@ class TestReconciliationReport:
 
     def test_from_dict(self):
         """Test deserialization from dictionary."""
-        now = datetime(2026, 2, 26, 8, 0, 0)
         data = {
             "timestamp": "2026-02-26T08:00:00",
             "period_start": "2026-02-26T08:00:00",

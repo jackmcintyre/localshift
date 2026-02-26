@@ -240,7 +240,7 @@ class TestStatisticsBackfiller:
         comparisons = backfiller._validate_decisions(
             decisions,
             actual_import_kwh=18.0,  # Matches estimates
-            actual_export_kwh=8.0,   # Matches estimates
+            actual_export_kwh=8.0,  # Matches estimates
         )
 
         assert len(comparisons) == 1  # Single comparison record
@@ -261,7 +261,7 @@ class TestStatisticsBackfiller:
         comparisons = backfiller._validate_decisions(
             decisions,
             actual_import_kwh=12.0,  # 20% higher than estimate
-            actual_export_kwh=4.0,   # 20% lower than estimate
+            actual_export_kwh=4.0,  # 20% lower than estimate
         )
 
         assert comparisons[0]["import_variance_pct"] == pytest.approx(-16.67, rel=0.1)

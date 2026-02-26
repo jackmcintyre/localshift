@@ -87,7 +87,9 @@ class EntityHealth:
     @property
     def is_available(self) -> bool:
         """Return True if entity has a usable value."""
-        return self.status in (EntityStatus.OK, EntityStatus.STALE) and not self.is_broken
+        return (
+            self.status in (EntityStatus.OK, EntityStatus.STALE) and not self.is_broken
+        )
 
 
 @dataclass
@@ -317,15 +319,16 @@ class EntityValidator:
             self._check_failure_thresholds(health, config_key)
             return health
 
-        # Check for staleness
+        # Check for staleness using entity's actual last_updated time
+        # (not our internal last_valid_time which tracks when we last validated it)
         staleness_threshold = STALENESS_THRESHOLDS.get(config_key)
-        if staleness_threshold and health.last_valid_time:
-            time_since_valid = dt_util.now() - health.last_valid_time
-            if time_since_valid > staleness_threshold:
+        if staleness_threshold:
+            time_since_update = dt_util.now() - state.last_updated
+            if time_since_update > staleness_threshold:
                 health.status = EntityStatus.STALE
                 health.error_message = (
                     f"Entity '{entity_id}' data is stale "
-                    f"({time_since_valid.total_seconds():.0f}s old)"
+                    f"({time_since_update.total_seconds():.0f}s old)"
                 )
                 # Don't increment failures for stale - it still has a value
                 return health
@@ -372,7 +375,11 @@ class EntityValidator:
             if not health.is_broken:
                 health.is_broken = True
                 # Use WARNING for optional entities, ERROR for required/recommended
-                log_level = logging.WARNING if health.category == EntityCategory.OPTIONAL else logging.ERROR
+                log_level = (
+                    logging.WARNING
+                    if health.category == EntityCategory.OPTIONAL
+                    else logging.ERROR
+                )
                 _LOGGER.log(
                     log_level,
                     "Entity '%s' (%s) marked as BROKEN after %d consecutive failures - "
@@ -687,7 +694,7 @@ class EntityValidator:
         else:
             # Reset all broken entities
             reset_count = 0
-            for key, health in self._entity_health.items():
+            for _key, health in self._entity_health.items():
                 if health.is_broken:
                     health.is_broken = False
                     health.consecutive_failures = 0

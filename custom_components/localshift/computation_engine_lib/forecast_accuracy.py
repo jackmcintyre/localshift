@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -42,7 +40,9 @@ class ExtendedAccuracyMetrics:
             "bias": self.bias,
             "mape": self.mape,
             "sample_count": self.sample_count,
-            "last_updated": self.last_updated.isoformat() if self.last_updated else None,
+            "last_updated": self.last_updated.isoformat()
+            if self.last_updated
+            else None,
         }
 
     @classmethod
@@ -205,13 +205,13 @@ class ExtendedForecastAccuracyEngine:
     async def compute_extended_accuracy(
         self,
         data: CoordinatorData,
-        history_fetcher: Any | None = None,
+        _history_fetcher: Any | None = None,
     ) -> ExtendedAccuracyMetrics:
         """Compute extended accuracy metrics from historical data.
 
         Args:
             data: Current coordinator data
-            history_fetcher: Optional history fetcher for statistics
+            history_fetcher: Optional history fetcher for statistics (unused, kept for future use)
 
         Returns:
             ExtendedAccuracyMetrics with computed values

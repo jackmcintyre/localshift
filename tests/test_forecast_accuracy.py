@@ -14,7 +14,6 @@ from custom_components.localshift.computation_engine_lib.forecast_accuracy impor
     ForecastAccuracyEngine,
 )
 
-
 # =============================================================================
 # EXTENDED ACCURACY METRICS TESTS
 # =============================================================================
