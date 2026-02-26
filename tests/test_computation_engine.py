@@ -398,7 +398,7 @@ class TestForecastChangeTracker:
         assert reason == "no_change"
 
     def test_should_recompute_age_timeout(self):
-        """Forecast age > 1 minute should trigger recompute."""
+        """Forecast age > 10 minutes should trigger recompute."""
         tracker = ForecastChangeTracker()
         now_dt = datetime(2026, 2, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
 
@@ -407,8 +407,8 @@ class TestForecastChangeTracker:
             soc=50.0, price=0.25, feed_in_price=0.08, now_dt=now_dt
         )
 
-        # Move time forward by 2 minutes
-        later_dt = now_dt + timedelta(minutes=2)
+        # Move time forward by 11 minutes (beyond 10-minute threshold)
+        later_dt = now_dt + timedelta(minutes=11)
         should_recompute, reason = tracker.should_recompute_forecast(
             soc=50.0, price=0.25, feed_in_price=0.08, now_dt=later_dt
         )

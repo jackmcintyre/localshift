@@ -285,8 +285,10 @@ class TestForecastAccuracyEngine:
     @pytest.mark.asyncio
     async def test_compute_forecast_accuracy_no_history(self):
         """Test computing accuracy with no forecast history."""
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
         engine = ForecastAccuracyEngine()
-        data = MagicMock()
+        data = CoordinatorData()
         data.forecast_history = []
         data.soc = 80.0
         data.general_price = 0.25
