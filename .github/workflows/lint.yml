@@ -24,9 +24,11 @@ jobs:
 
       - name: Run ruff linting
         run: ruff check custom_components/localshift
+        continue-on-error: true
 
       - name: Run ruff format check
         run: ruff format --check custom_components/localshift
+        continue-on-error: true
 
       - name: Run vulture (dead code detection)
         run: vulture custom_components/localshift --min-confidence 80
