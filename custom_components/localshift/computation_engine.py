@@ -1506,33 +1506,6 @@ class ComputationEngine:
             _LOGGER.warning("Failed to refresh weather forecast: %s", e)
             return None
 
-    def get_weather_adjusted_load(
-        self, hour: int, base_load_kw: float
-    ) -> tuple[float, str]:
-        """Get weather-adjusted load prediction for a given hour.
-
-        Args:
-            hour: Hour of day (0-23)
-            base_load_kw: Base load estimate from historical profile
-
-        Returns:
-            Tuple of (adjusted_load_kw, adjustment_source)
-        """
-        if self._weather_correlation is None:
-            return base_load_kw, "no_weather_correlation"
-
-        weather_learning_enabled = self.entry.options.get(
-            CONF_WEATHER_LEARNING_ENABLED, DEFAULT_WEATHER_LEARNING_ENABLED
-        )
-
-        if not weather_learning_enabled:
-            return base_load_kw, "weather_learning_disabled"
-
-        # Get temperature forecast for this hour
-        # This would need to be passed from the caller or fetched from weather entity
-        # For now, return base load - integration will be completed in forecast_computer
-        return base_load_kw, "weather_integration_pending"
-
     @property
     def weather_correlation(self) -> WeatherCorrelation | None:
         """Get the weather correlation instance for external access."""
@@ -1549,21 +1522,6 @@ class ComputationEngine:
     ) -> None:
         """Analyze feed-in forecast for spike window details."""
         self._spike_analyzer.analyze_spike(data, now_dt)
-
-    def _calculate_spike_reserve_soc(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-        spike_end: datetime,
-        spike_percentile: float,
-    ) -> float:
-        """Calculate reserve SOC needed to survive spike period."""
-        return self._spike_analyzer.calculate_spike_reserve_soc(
-            data=data,
-            now_dt=now_dt,
-            spike_end=spike_end,
-            _spike_percentile=spike_percentile,
-        )
 
     # ========================================================================
     # EXCESS SOLAR LOAD SHIFTING (backlog-high-017)

@@ -833,23 +833,6 @@ class HistoryFetcher:
         """
         return self._historical_load_cache
 
-    def get_consumption_source(self, hourly_avg_kw: dict[int, float]) -> str:
-        """Get consumption source for diagnostics."""
-        return self._historical_load_source if hourly_avg_kw else "live_load_fallback"
-
-    def get_sample_counts(self) -> dict[int, int]:
-        """Get sample counts for diagnostics."""
-        return dict(self._historical_load_sample_counts)
-
-    def get_recent_load_info(self) -> tuple[float, str, int, str]:
-        """Get recent load info for diagnostics."""
-        return (
-            self._recent_load_1hr_kw,
-            self._recent_load_1hr_statistic_id,
-            self._recent_load_1hr_samples,
-            self._recent_load_1hr_last_error,
-        )
-
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
         # Clear combined profile

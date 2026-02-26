@@ -11,10 +11,8 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
-    CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
-    DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MAX_PRECHARGE_PRICE,
@@ -433,9 +431,3 @@ class PriceCalculator:
         else:
             data.solar_weighted_avg_fit = 0.0
         data.solar_remaining_kwh = round(total_solar, 2)
-
-    def get_target_soc(self) -> float:
-        """Return configured battery target SOC percentage."""
-        return float(
-            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
