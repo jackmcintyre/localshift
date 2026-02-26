@@ -106,6 +106,7 @@ CONF_TESLEMETRY_BATTERY_POWER = "teslemetry_battery_power"
 CONF_TESLEMETRY_SOLAR_POWER = "teslemetry_solar_power"
 CONF_TESLEMETRY_LOAD_POWER = "teslemetry_load_power"
 CONF_TESLEMETRY_ALLOW_EXPORT = "teslemetry_allow_export"
+CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID = "teslemetry_allow_charging_from_grid"
 
 # Pricing entities
 CONF_PRICING_GENERAL_PRICE = "pricing_general_price"
@@ -219,6 +220,7 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_SOLAR_POWER: "sensor.my_home_solar_power",
     CONF_TESLEMETRY_LOAD_POWER: "sensor.my_home_load_power",
     CONF_TESLEMETRY_ALLOW_EXPORT: "select.my_home_allow_export",
+    CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID: "switch.my_home_allow_charging_from_grid",
     CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
     CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
     CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",

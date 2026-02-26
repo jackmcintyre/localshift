@@ -578,31 +578,37 @@ class StateMachine:
 
         return transition_success
 
-    def _get_expected_state_for_mode(self, mode: BatteryMode) -> tuple[str, int, str]:
+    def _get_expected_state_for_mode(
+        self, mode: BatteryMode
+    ) -> tuple[str, int, str, bool]:
         """Get the expected hardware state for a given mode.
 
         Returns:
-            Tuple of (operation_mode, backup_reserve, export_mode)
+            Tuple of (operation_mode, backup_reserve, export_mode, grid_charging_allowed)
         """
         if mode == BatteryMode.SELF_CONSUMPTION:
-            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
+            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY, False)
         elif mode == BatteryMode.DEMAND_BLOCK:
-            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY)
+            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY, False)
         elif mode == BatteryMode.GRID_CHARGING:
             # Grid charging uses backup mode for 3.3 kW rate.
             # Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
             # The actual reserve is tracked in _grid_charging_reserve.
-            return ("backup", -1, TESLEMETRY_EXPORT_PV_ONLY)  # reserve is dynamic
+            # Grid charging must be enabled for this mode.
+            return ("backup", -1, TESLEMETRY_EXPORT_PV_ONLY, True)  # reserve is dynamic
         elif mode == BatteryMode.BOOST_CHARGING:
-            return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY)
+            # Boost charging needs grid charging enabled for fast charging
+            return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY, True)
         elif mode == BatteryMode.SPIKE_DISCHARGE:
-            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK)
+            # Discharge modes don't need grid charging
+            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK, False)
         elif mode == BatteryMode.PROACTIVE_EXPORT:
             # Reserve is dynamic (max(4, SOC-5)), so use 10 as expected for health check
             # The actual reserve will be set based on current SOC
-            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK)
+            # Export modes don't need grid charging
+            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK, False)
         else:  # MANUAL or unknown
-            return ("", -1, "")
+            return ("", -1, "", False)
 
     async def _perform_health_check(self, data: CoordinatorData) -> None:
         """Verify hardware state matches commanded mode.
@@ -702,7 +708,7 @@ class StateMachine:
                 )
                 return
 
-        expected_op, expected_reserve, expected_export = (
+        expected_op, expected_reserve, expected_export, expected_grid_charging = (
             self._get_expected_state_for_mode(self._commanded_mode)
         )
 
@@ -729,6 +735,7 @@ class StateMachine:
             expected_operation_mode=expected_op,
             expected_backup_reserve=expected_reserve,
             expected_export_mode=expected_export,
+            expected_grid_charging_allowed=expected_grid_charging,
         )
 
         if not is_valid:

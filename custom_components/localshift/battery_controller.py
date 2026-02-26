@@ -144,6 +144,49 @@ class BatteryController:
             )
             return False
 
+    async def _set_grid_charging_allowed(self, allowed: bool) -> bool:
+        """Set whether grid charging is allowed.
+
+        Controls the switch.my_home_allow_charging_from_grid entity.
+        This must be OFF in self-consumption mode to prevent unwanted grid charging.
+        This must be ON in force_charge/boost_charge modes to enable grid charging.
+
+        Args:
+            allowed: True to allow grid charging, False to disable.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        entity_id = self._get_entity_id("teslemetry_allow_charging_from_grid")
+        start_time = time.monotonic()
+        service = "turn_on" if allowed else "turn_off"
+        _LOGGER.info(
+            "[TRANSITION] Setting grid charging allowed: %s → %s", entity_id, allowed
+        )
+
+        try:
+            await self.hass.services.async_call(
+                "switch",
+                service,
+                {"entity_id": entity_id},
+                blocking=True,
+            )
+            elapsed = time.monotonic() - start_time
+            _LOGGER.info(
+                "[TRANSITION] Grid charging allowed set to %s in %.2fs", allowed, elapsed
+            )
+            return True
+        except Exception as e:
+            elapsed = time.monotonic() - start_time
+            _LOGGER.error(
+                "[TRANSITION] Failed to set grid charging allowed to %s after %.2fs: %s",
+                allowed,
+                elapsed,
+                e,
+                exc_info=True,
+            )
+            return False
+
     async def set_self_consumption(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
@@ -160,6 +203,14 @@ class BatteryController:
             return True
 
         _LOGGER.info("Setting battery to self consumption mode")
+
+        # Disable grid charging first - this is critical for self-consumption mode
+        # Without this, the battery will charge from grid even in self-consumption mode
+        if not await self._set_grid_charging_allowed(False):
+            _LOGGER.error(
+                "Aborting self_consumption mode: Failed to disable grid charging"
+            )
+            return False
 
         # Set allow_export to pv_only first (don't allow battery to export)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
@@ -183,6 +234,7 @@ class BatteryController:
             expected_operation_mode="self_consumption",
             expected_backup_reserve=10,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            expected_grid_charging_allowed=False,
             timeout=10,
         ):
             _LOGGER.error("Self consumption mode validation failed")
@@ -265,13 +317,19 @@ class BatteryController:
         initial_state = self._get_hardware_state_snapshot()
         transition_start = time.monotonic()
         _LOGGER.info(
-            "[TRANSITION] Starting force charge mode (target=%.0f%%, reserve=%d%%) | Initial state: op=%s, reserve=%s, export=%s",
+            "[TRANSITION] Starting force charge mode (target=%.0f%%, reserve=%d%%) | Initial state: op=%s, reserve=%s, export=%s, grid_charging=%s",
             target_soc,
             reserve,
             initial_state["operation_mode"],
             initial_state["backup_reserve"],
             initial_state["export_mode"],
+            initial_state.get("grid_charging_allowed", "unknown"),
         )
+
+        # Enable grid charging first - required for force charge mode
+        if not await self._set_grid_charging_allowed(True):
+            _LOGGER.error("Aborting force charge mode: Failed to enable grid charging")
+            return False
 
         # Set allow_export to pv_only first (don't allow battery to export)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
@@ -321,17 +379,26 @@ class BatteryController:
         """Capture current hardware state for diagnostic logging.
 
         Returns:
-            Dict with operation_mode, backup_reserve, and export_mode.
+            Dict with operation_mode, backup_reserve, export_mode, and grid_charging_allowed.
         """
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
+        grid_charging_entity = self._get_entity_id("teslemetry_allow_charging_from_grid")
 
         return {
             "operation_mode": self._read_str(operation_mode_entity),
             "backup_reserve": self._read_float(backup_reserve_entity, -1),
             "export_mode": self._read_str(export_mode_entity),
+            "grid_charging_allowed": self._read_bool(grid_charging_entity),
         }
+
+    def _read_bool(self, entity_id: str, default: bool = False) -> bool:
+        """Read a boolean value from an entity's state (switch on/off)."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return default
+        return state.state == "on"
 
     async def set_boost_charge(
         self, data: CoordinatorData, dry_run: bool = False
@@ -352,11 +419,17 @@ class BatteryController:
         initial_state = self._get_hardware_state_snapshot()
         transition_start = time.monotonic()
         _LOGGER.info(
-            "[TRANSITION] Starting boost charge mode | Initial state: op=%s, reserve=%s, export=%s",
+            "[TRANSITION] Starting boost charge mode | Initial state: op=%s, reserve=%s, export=%s, grid_charging=%s",
             initial_state["operation_mode"],
             initial_state["backup_reserve"],
             initial_state["export_mode"],
+            initial_state.get("grid_charging_allowed", "unknown"),
         )
+
+        # Enable grid charging first - required for boost charge mode
+        if not await self._set_grid_charging_allowed(True):
+            _LOGGER.error("Aborting boost charge mode: Failed to enable grid charging")
+            return False
 
         # Set allow_export to pv_only first (don't allow battery to export)
         if not await self._set_export_mode(TESLEMETRY_EXPORT_PV_ONLY):
@@ -592,6 +665,7 @@ class BatteryController:
         expected_operation_mode: str,
         expected_backup_reserve: float | int,
         expected_export_mode: str | None = None,
+        expected_grid_charging_allowed: bool | None = None,
         timeout: int = 10,
     ) -> bool:
         """Validate that hardware state matches expected values after transition.
@@ -600,6 +674,7 @@ class BatteryController:
             expected_operation_mode: Expected Teslemetry operation mode
             expected_backup_reserve: Expected backup reserve percentage
             expected_export_mode: Optional expected allow_export mode
+            expected_grid_charging_allowed: Optional expected grid charging switch state
             timeout: Maximum seconds to wait for validation (default: 10)
 
         Returns:
@@ -607,16 +682,18 @@ class BatteryController:
         """
         validation_start = time.monotonic()
         _LOGGER.info(
-            "[VALIDATION] Starting validation: op=%s, reserve=%s, export=%s, timeout=%ds",
+            "[VALIDATION] Starting validation: op=%s, reserve=%s, export=%s, grid_charging=%s, timeout=%ds",
             expected_operation_mode,
             expected_backup_reserve,
             expected_export_mode,
+            expected_grid_charging_allowed,
             timeout,
         )
 
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
+        grid_charging_entity = self._get_entity_id("teslemetry_allow_charging_from_grid")
 
         first_failure_logged = False
         last_operation_mode = None
@@ -629,6 +706,11 @@ class BatteryController:
             current_backup_reserve = self._read_float(backup_reserve_entity, -1)
             current_export_mode = (
                 self._read_str(export_mode_entity) if expected_export_mode else None
+            )
+            current_grid_charging = (
+                self._read_bool(grid_charging_entity)
+                if expected_grid_charging_allowed is not None
+                else None
             )
 
             # Track operation mode changes for diagnostics
@@ -643,12 +725,13 @@ class BatteryController:
                 last_operation_mode = current_operation_mode
 
             _LOGGER.debug(
-                "Validation attempt %d/%d: operation_mode=%s, backup_reserve=%s, export_mode=%s",
+                "Validation attempt %d/%d: operation_mode=%s, backup_reserve=%s, export_mode=%s, grid_charging=%s",
                 attempt + 1,
                 timeout,
                 current_operation_mode,
                 current_backup_reserve,
                 current_export_mode,
+                current_grid_charging,
             )
 
             # Check if state matches expectations
@@ -659,8 +742,18 @@ class BatteryController:
                 if expected_export_mode
                 else True
             )
+            matches_grid_charging = (
+                current_grid_charging == expected_grid_charging_allowed
+                if expected_grid_charging_allowed is not None
+                else True
+            )
 
-            if matches_operation and matches_reserve and matches_export:
+            if (
+                matches_operation
+                and matches_reserve
+                and matches_export
+                and matches_grid_charging
+            ):
                 elapsed = time.monotonic() - validation_start
                 _LOGGER.info(
                     "[VALIDATION] SUCCESS after %.1fs (attempt %d/%d)",
@@ -674,15 +767,17 @@ class BatteryController:
             if not first_failure_logged:
                 _LOGGER.warning(
                     "[VALIDATION] State mismatch at attempt %d: "
-                    "expected (op=%s, reserve=%s, export=%s), "
-                    "actual (op=%s, reserve=%s, export=%s)",
+                    "expected (op=%s, reserve=%s, export=%s, grid_charging=%s), "
+                    "actual (op=%s, reserve=%s, export=%s, grid_charging=%s)",
                     attempt + 1,
                     expected_operation_mode,
                     expected_backup_reserve,
                     expected_export_mode,
+                    expected_grid_charging_allowed,
                     current_operation_mode,
                     current_backup_reserve,
                     current_export_mode,
+                    current_grid_charging,
                 )
                 first_failure_logged = True
 
@@ -706,13 +801,14 @@ class BatteryController:
 
         _LOGGER.error(
             "[VALIDATION] FAILED after %.1fs (%d attempts): "
-            "expected (op=%s, reserve=%s, export=%s), "
+            "expected (op=%s, reserve=%s, export=%s, grid_charging=%s), "
             "actual (op=%s)",
             elapsed,
             timeout,
             expected_operation_mode,
             expected_backup_reserve,
             expected_export_mode,
+            expected_grid_charging_allowed,
             final_operation_mode,
         )
         return False
@@ -722,6 +818,7 @@ class BatteryController:
         expected_operation_mode: str,
         expected_backup_reserve: float | int,
         expected_export_mode: str | None = None,
+        expected_grid_charging_allowed: bool | None = None,
     ) -> bool:
         """Verify current hardware state matches expected values.
 
@@ -731,6 +828,7 @@ class BatteryController:
             expected_operation_mode: Expected Teslemetry operation mode
             expected_backup_reserve: Expected backup reserve percentage
             expected_export_mode: Optional expected allow_export mode
+            expected_grid_charging_allowed: Optional expected grid charging switch state
 
         Returns:
             True if state matches expectations, False otherwise.
@@ -738,12 +836,18 @@ class BatteryController:
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
+        grid_charging_entity = self._get_entity_id("teslemetry_allow_charging_from_grid")
 
         # Read current hardware state
         current_operation_mode = self._read_str(operation_mode_entity)
         current_backup_reserve = self._read_float(backup_reserve_entity, -1)
         current_export_mode = (
             self._read_str(export_mode_entity) if expected_export_mode else None
+        )
+        current_grid_charging = (
+            self._read_bool(grid_charging_entity)
+            if expected_grid_charging_allowed is not None
+            else None
         )
 
         # Check if state matches expectations
@@ -754,32 +858,46 @@ class BatteryController:
             if expected_export_mode
             else True
         )
+        matches_grid_charging = (
+            current_grid_charging == expected_grid_charging_allowed
+            if expected_grid_charging_allowed is not None
+            else True
+        )
 
         # DIAGNOSTIC: Always log at INFO level for visibility
         _LOGGER.info(
-            "Health check verify: expected=(op=%s, reserve=%s, export=%s), actual=(op=%s, reserve=%s, export=%s), match=%s",
+            "Health check verify: expected=(op=%s, reserve=%s, export=%s, grid_charging=%s), actual=(op=%s, reserve=%s, export=%s, grid_charging=%s), match=%s",
             expected_operation_mode,
             expected_backup_reserve,
             expected_export_mode,
+            expected_grid_charging_allowed,
             current_operation_mode,
             current_backup_reserve,
             current_export_mode,
-            matches_operation and matches_reserve and matches_export,
+            current_grid_charging,
+            matches_operation and matches_reserve and matches_export and matches_grid_charging,
         )
 
-        if matches_operation and matches_reserve and matches_export:
+        if (
+            matches_operation
+            and matches_reserve
+            and matches_export
+            and matches_grid_charging
+        ):
             return True
 
         # State mismatch detected
         _LOGGER.warning(
             "State mismatch detected: "
-            "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s), "
-            "actual (operation_mode=%s, backup_reserve=%s, export_mode=%s)",
+            "expected (operation_mode=%s, backup_reserve=%s, export_mode=%s, grid_charging=%s), "
+            "actual (operation_mode=%s, backup_reserve=%s, export_mode=%s, grid_charging=%s)",
             expected_operation_mode,
             expected_backup_reserve,
             expected_export_mode,
+            expected_grid_charging_allowed,
             current_operation_mode,
             current_backup_reserve,
             current_export_mode,
+            current_grid_charging,
         )
         return False
