@@ -23,6 +23,7 @@ from .const import (
     BUTTON_FORCE_CHARGE,
     BUTTON_FORCE_DISCHARGE,
     BUTTON_ICONS,
+    BUTTON_LEARN_HVAC_POWER,
     BUTTON_NAMES,
     BUTTON_RESET_LEARNING,
     BUTTON_SELF_CONSUMPTION,
@@ -50,6 +51,7 @@ async def async_setup_entry(
         SelfConsumptionButton(coordinator, entry),
         UpdateForecastButton(coordinator, entry),
         ResetLearningDataButton(coordinator, entry),
+        LearnHVACPowerButton(coordinator, entry),
     ]
 
     _LOGGER.info("Setting up %d LocalShift button entities", len(entities))
@@ -248,5 +250,76 @@ class ResetLearningDataButton(LocalShiftButtonBase):
             await (
                 self.coordinator._notification_service.send_manual_action_notification(
                     "Reset Learning Data", self.coordinator.data
+                )
+            )
+
+
+class LearnHVACPowerButton(LocalShiftButtonBase):
+    """Proactively learn HVAC power consumption.
+
+    Runs each controlled climate entity briefly to measure its power
+    consumption. This provides immediate learning instead of waiting
+    for natural HVAC operation cycles.
+
+    The learning process:
+    1. Measures baseline load
+    2. Turns on each climate entity in cool/heat mode
+    3. Waits for power to stabilize
+    4. Records the power delta
+    5. Restores original state
+    """
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, BUTTON_LEARN_HVAC_POWER)
+
+    async def async_press(self) -> None:
+        """Handle button press - run HVAC power learning."""
+        _LOGGER.info("Starting HVAC power learning")
+
+        # Get thermal manager
+        thermal_manager = getattr(self.coordinator, "_thermal_manager", None)
+        if thermal_manager is None:
+            _LOGGER.warning("Thermal manager not available for HVAC learning")
+            return
+
+        # Check if thermal management is enabled
+        if not thermal_manager.is_enabled():
+            _LOGGER.warning("Thermal management is disabled - cannot learn HVAC power")
+            return
+
+        # Get control entities and load entity
+        control_entities = self.coordinator.data.climate_control_entities
+        load_entity_id = self.coordinator._get_entity_id("teslemetry_load_power")
+
+        if not control_entities:
+            _LOGGER.warning("No controlled climate entities configured for learning")
+            return
+
+        if not load_entity_id:
+            _LOGGER.warning("No load power entity configured for learning")
+            return
+
+        # Run the learning process
+        result = await thermal_manager.async_learn_hvac_power_now(
+            control_entities=control_entities,
+            load_entity_id=load_entity_id,
+        )
+
+        if result.get("success"):
+            _LOGGER.info(
+                "HVAC power learning complete: %d/%d entities learned",
+                result.get("entities_learned", 0),
+                result.get("entities_total", 0),
+            )
+        else:
+            _LOGGER.warning(
+                "HVAC power learning failed: %s",
+                result.get("error", "Unknown error"),
+            )
+
+        if self.coordinator._notification_service is not None:
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    "Learn HVAC Power", self.coordinator.data
                 )
             )

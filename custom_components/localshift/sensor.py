@@ -827,8 +827,11 @@ class DailyThermalModeSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return mode details."""
+        """Return mode details and HVAC learning status."""
         d = self.coordinator.data
+        # Get learning status from thermal manager
+        learning_status = self.coordinator._thermal_manager.get_learning_status()
+        
         return {
             "mode_locked": d.daily_mode_locked,
             "determined_at": d.daily_mode_determined_at,
@@ -836,6 +839,16 @@ class DailyThermalModeSensor(LocalShiftSensorBase):
             "controlled_entities": d.climate_control_entities,
             "learned_hvac_power": d.learned_hvac_power,
             "baseline_load_hours": len(d.baseline_load_kw),
+            # HVAC Learning Status (improved visibility)
+            "hvac_learning_status": learning_status.get("status", "Unknown"),
+            "hvac_learning_message": learning_status.get("message", ""),
+            "hvac_learning_progress_pct": learning_status.get("progress_pct", 0),
+            "hvac_learning_total_samples": learning_status.get("total_samples", 0),
+            "hvac_learning_high_confidence": learning_status.get("high_confidence_entities", 0),
+            "hvac_learning_medium_confidence": learning_status.get("medium_confidence_entities", 0),
+            "hvac_learning_last_change": learning_status.get("last_hvac_state_change"),
+            "hvac_learning_can_learn_now": learning_status.get("can_learn_now", False),
+            "outdoor_temp_entity_configured": learning_status.get("outdoor_temp_entity_configured", False),
         }
 
     @property

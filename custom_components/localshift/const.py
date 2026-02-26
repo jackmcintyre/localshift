@@ -494,6 +494,7 @@ BUTTON_BOOST_CHARGE = "boost_charge"
 BUTTON_SELF_CONSUMPTION = "self_consumption"
 BUTTON_UPDATE_FORECAST = "update_forecast"
 BUTTON_RESET_LEARNING = "reset_learning"
+BUTTON_LEARN_HVAC_POWER = "learn_hvac_power"
 
 BUTTON_ICONS = {
     BUTTON_FORCE_CHARGE: "mdi:battery-charging",
@@ -502,6 +503,7 @@ BUTTON_ICONS = {
     BUTTON_SELF_CONSUMPTION: "mdi:battery-sync",
     BUTTON_UPDATE_FORECAST: "mdi:refresh",
     BUTTON_RESET_LEARNING: "mdi:brain-off",
+    BUTTON_LEARN_HVAC_POWER: "mdi:air-conditioner",
 }
 
 BUTTON_NAMES = {
@@ -511,6 +513,7 @@ BUTTON_NAMES = {
     BUTTON_SELF_CONSUMPTION: "Self Consumption",
     BUTTON_UPDATE_FORECAST: "Update Forecast",
     BUTTON_RESET_LEARNING: "Reset Learning Data",
+    BUTTON_LEARN_HVAC_POWER: "Learn HVAC Power",
 }
 
 # -----------------------------------------------------------------------------

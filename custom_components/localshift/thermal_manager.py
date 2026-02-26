@@ -1144,6 +1144,382 @@ class ThermalManager:
             for entity_id, power in self._learned_power.items()
         }
 
+    def get_learning_status(self) -> dict[str, Any]:
+        """Get human-readable learning status for diagnostics.
+
+        Returns:
+            Dict with learning status, progress, and guidance.
+        """
+        # Count entities by confidence level
+        total_entities = len(self._learned_power)
+        high_confidence = sum(
+            1 for p in self._learned_power.values() if p.confidence == "high"
+        )
+        medium_confidence = sum(
+            1 for p in self._learned_power.values() if p.confidence == "medium"
+        )
+        low_confidence = sum(
+            1 for p in self._learned_power.values() if p.confidence == "low"
+        )
+
+        # Calculate total samples across all entities
+        total_samples = sum(p.sample_count for p in self._learned_power.values())
+
+        # Determine status message
+        if total_entities == 0:
+            status = "No HVAC operation detected"
+            message = "Learning requires climate activity. Use 'Learn HVAC Power' button or wait for natural HVAC operation."
+            progress_pct = 0
+        elif high_confidence >= 1:
+            status = "Learning complete"
+            message = f"Learned power for {total_entities} entities with high confidence."
+            progress_pct = 100
+        elif medium_confidence >= 1:
+            status = "Learning in progress"
+            samples_needed = max(0, 20 - max(p.sample_count for p in self._learned_power.values()))
+            message = f"Collected {total_samples} samples. Need ~{samples_needed} more for high confidence."
+            progress_pct = min(90, 50 + (total_samples * 2))
+        elif low_confidence >= 1:
+            status = "Learning started"
+            samples_needed = max(0, 5 - min(p.sample_count for p in self._learned_power.values()))
+            message = f"Collected {total_samples} samples. Need ~{samples_needed} more for medium confidence."
+            progress_pct = min(50, total_samples * 10)
+        else:
+            status = "Unknown state"
+            message = "Learning status unclear."
+            progress_pct = 0
+
+        # Get last state change timestamp
+        last_change = None
+        for state in self._prev_climate_states.values():
+            if state.timestamp:
+                if last_change is None or state.timestamp > last_change:
+                    last_change = state.timestamp
+
+        return {
+            "status": status,
+            "message": message,
+            "progress_pct": progress_pct,
+            "total_entities": total_entities,
+            "high_confidence_entities": high_confidence,
+            "medium_confidence_entities": medium_confidence,
+            "low_confidence_entities": low_confidence,
+            "total_samples": total_samples,
+            "last_hvac_state_change": last_change.isoformat() if last_change else None,
+            "outdoor_temp_entity_configured": bool(self.get_outdoor_temp_entity()),
+            "can_learn_now": self._can_perform_learning(),
+        }
+
+    def _can_perform_learning(self) -> bool:
+        """Check if proactive learning can be performed.
+
+        Returns:
+            True if learning can be performed now.
+        """
+        # Need thermal management enabled
+        if not self.is_enabled():
+            return False
+
+        # Need controlled entities configured
+        # Note: We can't check data.climate_control_entities here, so we check if any entities exist
+        if not self._learned_power and not self._prev_climate_states:
+            # No entities tracked yet - might still be possible
+            pass
+
+        return True
+
+    async def async_learn_hvac_power_now(
+        self,
+        control_entities: list[str],
+        load_entity_id: str,
+    ) -> dict[str, Any]:
+        """Proactively learn HVAC power by running climate entities.
+
+        This method runs each controlled climate entity briefly to measure
+        its power consumption. It measures until power stabilizes.
+
+        Args:
+            control_entities: List of climate entity IDs to learn.
+            load_entity_id: Entity ID for total load measurement.
+
+        Returns:
+            Dict with learning results for each entity.
+        """
+        import asyncio
+
+        if not self.is_enabled():
+            return {
+                "success": False,
+                "error": "Thermal management is disabled",
+                "results": {},
+            }
+
+        if not control_entities:
+            return {
+                "success": False,
+                "error": "No controlled climate entities configured",
+                "results": {},
+            }
+
+        results: dict[str, dict[str, Any]] = {}
+        outdoor_temp = self.get_outdoor_temperature()
+
+        _LOGGER.info(
+            "Starting proactive HVAC power learning for %d entities",
+            len(control_entities),
+        )
+
+        for entity_id in control_entities:
+            try:
+                result = await self._learn_single_entity(
+                    entity_id=entity_id,
+                    load_entity_id=load_entity_id,
+                    outdoor_temp=outdoor_temp,
+                )
+                results[entity_id] = result
+            except Exception as err:
+                _LOGGER.error("Failed to learn %s: %s", entity_id, err)
+                results[entity_id] = {
+                    "success": False,
+                    "error": str(err),
+                }
+
+            # Brief pause between entities
+            await asyncio.sleep(2)
+
+        # Save learned data
+        await self._async_save_learned_power()
+
+        # Count successes
+        successes = sum(1 for r in results.values() if r.get("success"))
+
+        return {
+            "success": successes > 0,
+            "entities_learned": successes,
+            "entities_total": len(control_entities),
+            "results": results,
+        }
+
+    async def _learn_single_entity(
+        self,
+        entity_id: str,
+        load_entity_id: str,
+        outdoor_temp: float | None,
+    ) -> dict[str, Any]:
+        """Learn power for a single climate entity.
+
+        Measures power until it stabilizes (variance < 5% over 3 readings).
+
+        Args:
+            entity_id: Climate entity to learn.
+            load_entity_id: Entity for load measurement.
+            outdoor_temp: Current outdoor temperature (optional).
+
+        Returns:
+            Dict with learning result.
+        """
+        import asyncio
+
+        # Get current state
+        climate_state = self.hass.states.get(entity_id)
+        if climate_state is None:
+            return {"success": False, "error": f"Entity {entity_id} not found"}
+
+        # Store original state
+        original_mode = climate_state.state
+        original_attrs = dict(climate_state.attributes)
+        original_setpoint = original_attrs.get("temperature", 22.0)
+
+        # Get baseline load before starting
+        load_state = self.hass.states.get(load_entity_id)
+        if load_state is None:
+            return {"success": False, "error": f"Load entity {load_entity_id} not found"}
+
+        try:
+            baseline_load = float(load_state.state)
+        except (ValueError, TypeError):
+            return {"success": False, "error": f"Invalid load value from {load_entity_id}"}
+
+        _LOGGER.info(
+            "Learning %s: baseline load = %.2f kW, outdoor temp = %s",
+            entity_id,
+            baseline_load,
+            f"{outdoor_temp:.1f}°C" if outdoor_temp else "N/A",
+        )
+
+        # Determine mode to test (cool if warm, heat if cold)
+        if outdoor_temp is not None:
+            if outdoor_temp > 25:
+                test_mode = "cool"
+                test_setpoint = max(16.0, original_setpoint - 3)  # Cool aggressively
+            elif outdoor_temp < 18:
+                test_mode = "heat"
+                test_setpoint = min(28.0, original_setpoint + 3)  # Heat aggressively
+            else:
+                # Mild temp - default to cool
+                test_mode = "cool"
+                test_setpoint = max(16.0, original_setpoint - 3)
+        else:
+            # No outdoor temp - default to cool
+            test_mode = "cool"
+            test_setpoint = max(16.0, original_setpoint - 3)
+
+        try:
+            # Turn on climate in test mode
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": entity_id, "hvac_mode": test_mode},
+                blocking=True,
+            )
+
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": entity_id, "temperature": test_setpoint},
+                blocking=True,
+            )
+
+            _LOGGER.info(
+                "Turned on %s in %s mode at %.1f°C",
+                entity_id,
+                test_mode,
+                test_setpoint,
+            )
+
+            # Wait for compressor to start (typically 30-60 seconds)
+            await asyncio.sleep(45)
+
+            # Measure power until stable
+            readings: list[float] = []
+            stable_count = 0
+            max_iterations = 12  # Max 2 minutes of measurement
+
+            for i in range(max_iterations):
+                await asyncio.sleep(10)  # Wait 10 seconds between readings
+
+                load_state = self.hass.states.get(load_entity_id)
+                if load_state is None:
+                    continue
+
+                try:
+                    current_load = float(load_state.state)
+                except (ValueError, TypeError):
+                    continue
+
+                readings.append(current_load)
+                _LOGGER.debug(
+                    "Reading %d for %s: %.2f kW",
+                    i + 1,
+                    entity_id,
+                    current_load,
+                )
+
+                # Check for stability (need at least 3 readings)
+                if len(readings) >= 3:
+                    recent = readings[-3:]
+                    avg = sum(recent) / len(recent)
+                    variance = max(abs(r - avg) / avg for r in recent) if avg > 0 else 1.0
+
+                    if variance < 0.05:  # Less than 5% variance
+                        stable_count += 1
+                        if stable_count >= 2:
+                            _LOGGER.info(
+                                "Power stable for %s after %d readings",
+                                entity_id,
+                                len(readings),
+                            )
+                            break
+                    else:
+                        stable_count = 0
+
+            # Calculate power delta
+            if len(readings) >= 3:
+                # Use average of stable readings
+                stable_readings = readings[-3:] if stable_count >= 2 else readings[-2:]
+                avg_load = sum(stable_readings) / len(stable_readings)
+                power_delta = avg_load - baseline_load
+
+                # Validate result
+                if 0.5 <= power_delta <= 10.0:
+                    # Get or create learned power entry
+                    if entity_id not in self._learned_power:
+                        self._learned_power[entity_id] = LearnedHVACPower(
+                            entity_id=entity_id
+                        )
+
+                    power = self._learned_power[entity_id]
+
+                    # Update based on mode
+                    if test_mode == "cool":
+                        power.cooling_power_kw = power_delta
+                        if outdoor_temp is not None:
+                            power.cooling_samples.append((outdoor_temp, power_delta))
+                    else:
+                        power.heating_power_kw = power_delta
+                        if outdoor_temp is not None:
+                            power.heating_samples.append((outdoor_temp, power_delta))
+
+                    power.sample_count += 1
+                    power.confidence = self._calculate_confidence(power.sample_count)
+
+                    _LOGGER.info(
+                        "Learned %s power for %s: %.2f kW (confidence: %s)",
+                        test_mode,
+                        entity_id,
+                        power_delta,
+                        power.confidence,
+                    )
+
+                    return {
+                        "success": True,
+                        "mode": test_mode,
+                        "power_kw": round(power_delta, 2),
+                        "confidence": power.confidence,
+                        "readings_count": len(readings),
+                        "outdoor_temp": outdoor_temp,
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Power delta {power_delta:.2f} kW out of valid range (0.5-10 kW)",
+                        "baseline_kw": baseline_load,
+                        "avg_load_kw": avg_load,
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Insufficient readings ({len(readings)}) for stable measurement",
+                }
+
+        finally:
+            # Always restore original state
+            try:
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {"entity_id": entity_id, "temperature": original_setpoint},
+                    blocking=False,
+                )
+
+                # Turn off or restore original mode
+                if original_mode in ("off", "auto"):
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_hvac_mode",
+                        {"entity_id": entity_id, "hvac_mode": original_mode},
+                        blocking=False,
+                    )
+
+                _LOGGER.info(
+                    "Restored %s to original state: %s at %.1f°C",
+                    entity_id,
+                    original_mode,
+                    original_setpoint,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to restore %s state: %s", entity_id, err)
+
     def estimate_baseline_from_historical(
         self,
         historical_avg_kw: dict[int, float],
