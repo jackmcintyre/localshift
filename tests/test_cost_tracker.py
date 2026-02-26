@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.cost_tracker import CostTracker, ReconciliationReport
+from custom_components.localshift.coordinator_data import CoordinatorData, ReconciliationReport
+from custom_components.localshift.cost_tracker import CostTracker
 
 
 @pytest.fixture
