@@ -126,7 +126,7 @@ CONF_SUN_ENTITY = "sun_entity"
 
 # Weather entity (for temperature-based consumption prediction)
 CONF_WEATHER_ENTITY = "weather_entity"
-DEFAULT_WEATHER_ENTITY = "weather.home"
+DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
 
 # Temperature thresholds for degree-day model
 CONF_COOLING_THRESHOLD = "cooling_threshold"
