@@ -69,6 +69,10 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
     data.forecast_history = []
     data.target_reached_today = input_data.get("target_reached_today", False)
 
+    # Issue #319: Mark forecast as ready for tests (tests have forecast data)
+    data.forecast_ready = True
+    data.forecast_status = "ready"
+
     return data
 
 

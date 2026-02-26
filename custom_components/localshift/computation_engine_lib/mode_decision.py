@@ -33,6 +33,25 @@ class ModeDecisionEngine:
             data.active_mode = BatteryMode.SELF_CONSUMPTION
             return
 
+        # Always respect manual override - user is in control
+        if data.manual_override:
+            data.active_mode = BatteryMode.MANUAL
+            data.debug_mode_source = "manual_override"
+            return
+
+        # Issue #319: Defer grid charging decisions when forecast data is not ready
+        # This prevents BOOST mode from being triggered at startup when Solcast
+        # data hasn't been received yet.
+        if not data.forecast_ready:
+            data.debug_mode_source = "forecast_not_ready"
+            _LOGGER.info(
+                "Forecast not ready (status=%s), defaulting to self-consumption - "
+                "deferring grid charging decisions until forecast data is available",
+                data.forecast_status,
+            )
+            data.active_mode = BatteryMode.SELF_CONSUMPTION
+            return
+
         data.proactive_export_active = False
 
         current_hour = now_dt.hour
