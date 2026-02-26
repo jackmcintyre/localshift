@@ -1740,12 +1740,47 @@ class ForecastComputer:
             )
 
             # Determine boost / urgency upgrade for grid charging rate
+            # Issue #299: Smart boost - only use boost when actually needed
             next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
             hours_to_dw = (next_dw_start - slot_start).total_seconds() / 3600
+
             if should_boost:
+                # Very cheap price triggers boost (existing logic)
                 max_grid_charge_kwh = CHARGE_RATE_BOOST_KW * slot_fraction
-            elif should_grid_charge and hours_to_dw < 2:
-                max_grid_charge_kwh = CHARGE_RATE_BOOST_KW * slot_fraction
+            elif should_grid_charge:
+                # Smart boost: Calculate if boost is actually needed
+                # Energy deficit in kWh
+                deficit_kwh = gap_to_target / 100 * BATTERY_CAPACITY_KWH
+
+                # Calculate regular charging capacity before DW
+                # 15-min slots remaining, each slot can charge at 3.3kW rate
+                slots_remaining = max(0, int(hours_to_dw * 4))  # 4 slots per hour
+                # Regular charge capacity with 92% efficiency
+                regular_charge_capacity_kwh = (
+                    slots_remaining * CHARGE_RATE_GRID_KW * slot_fraction * 0.92
+                )
+
+                # Use boost only if regular charging can't meet the deficit
+                if deficit_kwh > regular_charge_capacity_kwh:
+                    _LOGGER.info(
+                        "SMART_BOOST[%02d:%02d]: deficit=%.2f kWh > regular capacity=%.2f kWh (slots=%d) -> BOOST",
+                        slot_hour,
+                        slot_minute,
+                        deficit_kwh,
+                        regular_charge_capacity_kwh,
+                        slots_remaining,
+                    )
+                    max_grid_charge_kwh = CHARGE_RATE_BOOST_KW * slot_fraction
+                else:
+                    _LOGGER.debug(
+                        "SMART_BOOST[%02d:%02d]: deficit=%.2f kWh <= regular capacity=%.2f kWh (slots=%d) -> REGULAR",
+                        slot_hour,
+                        slot_minute,
+                        deficit_kwh,
+                        regular_charge_capacity_kwh,
+                        slots_remaining,
+                    )
+                    max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction
 
             # Check if battery will be at or above 100% after solar charging
             battery_at_or_above_cap = (
