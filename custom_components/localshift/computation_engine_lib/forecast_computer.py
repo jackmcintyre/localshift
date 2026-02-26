@@ -1514,6 +1514,12 @@ class ForecastComputer:
         remaining_export_budget = export_budget_kwh
         slot_fraction = 15 / 60.0  # 0.25 hours
 
+        # Issue #283: Cumulative grid import tracking to prevent overcharging
+        # Each slot makes independent decisions, but we need to track total planned
+        # import to avoid scheduling more charging than needed across multiple windows.
+        cumulative_grid_import_kwh = 0.0
+        max_grid_import_kwh = max(0, (target_pct - current_soc) / 100 * BATTERY_CAPACITY_KWH * 1.05)  # 5% buffer
+
         for slot_idx in range(TOTAL_SLOTS):
             slot_start = base_slot + timedelta(minutes=15 * slot_idx)
             is_first_slot = slot_idx == 0
@@ -1725,6 +1731,19 @@ class ForecastComputer:
                 baseline_avg_kw=baseline_avg_kw,
             )
 
+            # Issue #283: Check if we've already planned enough grid import
+            # This prevents multiple charging windows from over-scheduling
+            if should_grid_charge and cumulative_grid_import_kwh >= max_grid_import_kwh:
+                _LOGGER.info(
+                    "GRID_CHARGE_SKIP[%02d:%02d]: cumulative %.2f kWh >= max %.2f kWh (target already covered)",
+                    slot_hour,
+                    slot_minute,
+                    cumulative_grid_import_kwh,
+                    max_grid_import_kwh,
+                )
+                should_grid_charge = False
+                should_boost = False
+
             # Debug logging for charging decision
             _LOGGER.debug(
                 "GRID_CHARGE[15min]: %02d:%02d in_dw=%s before_dw=%s soc=%.1f<%d gap=%d -> charge=%s boost=%s",
@@ -1802,6 +1821,8 @@ class ForecastComputer:
                 )
                 battery_delta_kwh += grid_charge_amount
                 grid_import_kwh = grid_charge_amount / 0.92
+                # Issue #283: Track cumulative grid import
+                cumulative_grid_import_kwh += grid_import_kwh
             else:
                 grid_import_kwh = 0.0
 
