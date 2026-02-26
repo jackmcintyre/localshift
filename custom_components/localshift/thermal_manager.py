@@ -47,11 +47,9 @@ from .const import (
     DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
     DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
     DEFAULT_PRECONDITION_TEMP_OFFSET,
-    DEFAULT_SOLAR_TAPER_ENABLED,
     DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
     DEFAULT_TEMP_MODEL_MIN_SAMPLES,
     DEFAULT_THERMAL_HYSTERESIS,
-    DEFAULT_THERMAL_MANAGEMENT_ENABLED,
     DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
     DEFAULT_THERMAL_OFF_TEMP_MARGIN,
     DEFAULT_THERMAL_OFF_TIME,
@@ -194,7 +192,9 @@ class ThermalManager:
         self._last_avg_room_temp: float | None = None
 
         # User override detection
-        self._last_applied_mode: dict[str, str] = {}  # entity_id -> "cool", "heat", "off"
+        self._last_applied_mode: dict[
+            str, str
+        ] = {}  # entity_id -> "cool", "heat", "off"
         self._last_applied_setpoint: dict[str, float] = {}  # entity_id -> temp
         self._user_override_until: datetime | None = None
         self._user_override_reason: str = ""
@@ -230,7 +230,9 @@ class ThermalManager:
                     ),
                     temp_model_r2=power_data.get("temp_model_r2", 0.0),
                     temp_model_samples=power_data.get("temp_model_samples", 0),
-                    temp_model_confidence=power_data.get("temp_model_confidence", "low"),
+                    temp_model_confidence=power_data.get(
+                        "temp_model_confidence", "low"
+                    ),
                 )
             _LOGGER.info(
                 "Loaded learned HVAC power for %d entities",
@@ -268,7 +270,7 @@ class ThermalManager:
 
     def is_enabled(self) -> bool:
         """Check if thermal management is enabled.
-        
+
         The switch state is the authoritative source, initialized from
         SWITCH_DEFAULTS and persisted when toggled by the user.
         """
@@ -276,7 +278,7 @@ class ThermalManager:
 
     def is_solar_taper_enabled(self) -> bool:
         """Check if solar tapering is enabled.
-        
+
         The switch state is the authoritative source.
         """
         return self._get_switch_state(CONF_SOLAR_TAPER_ENABLED)
@@ -435,10 +437,10 @@ class ThermalManager:
 
                     # Outside DW ramp: suspend control as before
                     cooldown_minutes = self.get_user_override_cooldown()
-                    self._user_override_until = now + timedelta(minutes=cooldown_minutes)
-                    self._user_override_reason = (
-                        f"Setpoint changed from {last_setpoint:.1f}°C to {current_setpoint:.1f}°C on {entity_id}"
+                    self._user_override_until = now + timedelta(
+                        minutes=cooldown_minutes
                     )
+                    self._user_override_reason = f"Setpoint changed from {last_setpoint:.1f}°C to {current_setpoint:.1f}°C on {entity_id}"
                     _LOGGER.info(
                         "User override detected: %s. Suspending thermal control for %d minutes",
                         self._user_override_reason,
@@ -887,9 +889,7 @@ class ThermalManager:
             ):
                 self._fit_temperature_model(power, mode="heating")
 
-    def _fit_temperature_model(
-        self, power: LearnedHVACPower, mode: str
-    ) -> None:
+    def _fit_temperature_model(self, power: LearnedHVACPower, mode: str) -> None:
         """Fit temperature correlation model from samples.
 
         Uses simple linear regression to fit:
@@ -957,7 +957,9 @@ class ThermalManager:
         else:
             # For heating, coefficient is positive when power increases as temp drops
             power.heating_power_at_15c = intercept + slope * reference_temp
-            power.heating_temp_coefficient = -slope  # Negative because temp delta is inverted
+            power.heating_temp_coefficient = (
+                -slope
+            )  # Negative because temp delta is inverted
             _LOGGER.info(
                 "Fitted heating model for %s: power=%.2f + %.3f×(15-T), R²=%.2f, n=%d",
                 power.entity_id,
@@ -1468,9 +1470,7 @@ class ThermalManager:
                             entity_id,
                         )
                     except Exception as err:
-                        _LOGGER.warning(
-                            "Failed to turn off %s: %s", entity_id, err
-                        )
+                        _LOGGER.warning("Failed to turn off %s: %s", entity_id, err)
 
                     # Restore original setpoint
                     if entity_id in self._original_setpoints:

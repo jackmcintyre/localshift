@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -42,7 +40,9 @@ class ExtendedAccuracyMetrics:
             "bias": self.bias,
             "mape": self.mape,
             "sample_count": self.sample_count,
-            "last_updated": self.last_updated.isoformat() if self.last_updated else None,
+            "last_updated": self.last_updated.isoformat()
+            if self.last_updated
+            else None,
         }
 
     @classmethod

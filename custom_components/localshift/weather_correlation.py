@@ -799,4 +799,3 @@ class WeatherCorrelation:
             HourlyTemperatureCoefficients or None if not available
         """
         return self._data.hourly_coefficients.get(hour)
-

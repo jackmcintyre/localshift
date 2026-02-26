@@ -100,7 +100,9 @@ class LocalShiftCoordinator:
         self.data = CoordinatorData()
         self._listeners: list[CALLBACK_TYPE] = []
         self._unsub_state: CALLBACK_TYPE | None = None
-        self._unsub_timer: CALLBACK_TYPE | None = None  # Legacy - kept for compatibility
+        self._unsub_timer: CALLBACK_TYPE | None = (
+            None  # Legacy - kept for compatibility
+        )
         self._unsub_midnight: CALLBACK_TYPE | None = None
         self._unsub_daily_summary: CALLBACK_TYPE | None = None
         self._unsub_thermal_mode_decision: CALLBACK_TYPE | None = None
@@ -892,6 +894,7 @@ class LocalShiftCoordinator:
         # Check last_updated time
         if price_state.last_updated:
             from homeassistant.util import dt as dt_util
+
             now = dt_util.now()
             age = now - price_state.last_updated
 
@@ -1112,6 +1115,7 @@ class LocalShiftCoordinator:
 
         # Reset tracking for weather entity (most commonly reconfigured optional entity)
         from .const import CONF_WEATHER_ENTITY
+
         self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
 
         _LOGGER.info("Reset entity tracking for options change")
