@@ -157,6 +157,8 @@ def coordinator_data():
     # Issue #319: Mark forecast as ready for tests
     data.forecast_ready = True
     data.forecast_status = "ready"
+    # Issue #349: Mark automation as ready for tests
+    data.automation_ready = True
     return data
 
 
