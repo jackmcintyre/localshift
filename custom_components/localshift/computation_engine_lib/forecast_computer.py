@@ -2204,8 +2204,10 @@ class ForecastComputer:
                     and c["slot_idx"] < dw_start_slot_idx  # Only slots before DW
                 ]
 
-                # Sort by price (cheapest first)
-                remaining_candidates.sort(key=lambda x: x["price"])
+                # Issue #344: Sort by (price ASC, slot_idx DESC) - cheapest first,
+                # but prefer LATER slots when prices are equal (just-in-time charging).
+                # This allows solar to contribute during earlier hours.
+                remaining_candidates.sort(key=lambda x: (x["price"], -x["slot_idx"]))
 
                 # Schedule until gap is filled
                 additional_scheduled = 0
