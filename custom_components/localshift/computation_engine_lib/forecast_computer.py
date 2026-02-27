@@ -61,6 +61,7 @@ def compute_hybrid_slot_schedule(
     general_forecast: list[dict],
     ha_timezone: str,
     max_forecast_hours: int = 24,
+    current_spot_price: float | None = None,
 ) -> tuple[list[dict], dict]:
     """Build hybrid slot schedule: ALL 5-min slots, then 30-min.
 
@@ -71,11 +72,15 @@ def compute_hybrid_slot_schedule(
     NO INTERPOLATION - use actual data only.
     NO GAPS - 5-min slots end at 30-min boundary, 30-min starts immediately.
 
+    Issue #367: Uses current_spot_price for synthetic slot when available,
+    instead of estimating from the first forecast slot's price.
+
     Args:
         now_local: Current datetime in HA local timezone
         general_forecast: List of Amber price forecast entries with start_time, end_time, duration
         ha_timezone: HA configured timezone (e.g., "Australia/Sydney")
         max_forecast_hours: Maximum hours to forecast (default 24)
+        current_spot_price: Optional real-time spot price from Amber's general_price entity
 
     Returns:
         Tuple of (slots, metadata) where:
@@ -83,7 +88,7 @@ def compute_hybrid_slot_schedule(
             - start: datetime of slot start
             - interval_minutes: 5 or 30
             - price: price in $/kWh
-            - price_source: "5min" or "30min"
+            - price_source: "5min", "30min", or "spot" (for current slot)
         - metadata: Dict with:
             - timezone: HA timezone
             - slot_intervals: {"5min": count, "30min": count}
@@ -207,33 +212,51 @@ def compute_hybrid_slot_schedule(
     slots.sort(key=lambda x: x["start"])
 
     # Step 6.5: Ensure there's a slot covering "now"
-    # If Amber's first slot is AFTER now, we need a synthetic current slot
+    # If Amber's first slot is AFTER now, we need a current slot
     # This can happen when Amber's forecast starts a few minutes in the future
+    # Issue #367: Use real-time spot price from Amber when available
     _LOGGER.info(
-        "HYBRID_SLOTS: slots=%d, first_slot=%s, now_local=%s, comparison=%s",
+        "HYBRID_SLOTS: slots=%d, first_slot=%s, now_local=%s, comparison=%s, spot_price=%s",
         len(slots),
         slots[0]["start"].strftime("%H:%M:%S") if slots else "N/A",
         now_local.strftime("%H:%M:%S"),
         "first > now" if slots and slots[0]["start"] > now_local else "first <= now",
+        f"${current_spot_price:.4f}" if current_spot_price is not None else "N/A",
     )
     if slots and slots[0]["start"] > now_local:
-        # Create a synthetic slot at the current 5-minute boundary
+        # Create a slot at the current 5-minute boundary
         current_5min = (now_local.minute // 5) * 5
         synthetic_start = now_local.replace(
             minute=current_5min, second=0, microsecond=0
         )
-        # Use the first real slot's price as estimate (or 0 if no slots)
-        estimated_price = slots[0]["price"] if slots else 0.0
+        # Issue #367: Prefer real-time spot price over estimated price
+        # Use spot price if available, otherwise fall back to first slot's price
+        if current_spot_price is not None and current_spot_price > 0:
+            slot_price = current_spot_price
+            price_source = "spot"  # Real-time data from Amber
+            _LOGGER.info(
+                "Using real-time spot price $%.4f for current slot (Issue #367)",
+                slot_price,
+            )
+        else:
+            # Fallback: use first real slot's price as estimate
+            slot_price = slots[0]["price"] if slots else 0.0
+            price_source = "synthetic"  # Estimated price
+            _LOGGER.info(
+                "Spot price unavailable, using estimated price $%.4f from first forecast slot",
+                slot_price,
+            )
         synthetic_slot = {
             "start": synthetic_start,
             "interval_minutes": 5,
-            "price": estimated_price,
-            "price_source": "synthetic",  # Mark as synthetic for debugging
+            "price": slot_price,
+            "price_source": price_source,
         }
         slots.insert(0, synthetic_slot)
         _LOGGER.info(
-            "Created synthetic slot at %s (Amber first slot was at %s, gap=%.0fs)",
+            "Created current slot at %s with price_source=%s (Amber first slot was at %s, gap=%.0fs)",
             synthetic_start.strftime("%H:%M:%S"),
+            price_source,
             slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
             (slots[1]["start"] - synthetic_start).total_seconds() if len(slots) > 1 else 0,
         )
@@ -1740,11 +1763,13 @@ class ForecastComputer:
         )
 
         # Compute hybrid slot schedule from Amber general forecast
+        # Issue #367: Pass current spot price for accurate current slot pricing
         hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
             now_local=dt_util.as_local(now_dt),
             general_forecast=data.general_forecast,
             ha_timezone=str(ha_timezone),
             max_forecast_hours=24,
+            current_spot_price=data.general_price,  # Real-time spot price from Amber
         )
 
         # Store hybrid metadata in CoordinatorData for diagnostics
@@ -2481,7 +2506,7 @@ class ForecastComputer:
                     "minute": slot_minute,
                     "timestamp": slot_start.isoformat(),
                     "slot_interval_minutes": interval_minutes,  # Issue #351: Variable duration
-                    "price_source": price_source,  # Issue #351: "5min" or "30min"
+                    "price_source": price_source,  # Issue #351: "5min", "30min", or "spot"
                     "predicted_soc": round(predicted_soc, 1),
                     "solar_kwh": round(solar_kwh, 4),
                     "consumption_kwh": round(consumption_kwh, 4),
