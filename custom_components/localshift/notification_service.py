@@ -228,14 +228,41 @@ class NotificationService:
             BatteryMode.GRID_CHARGING,
             BatteryMode.BOOST_CHARGING,
         ):
-            return (
-                f"{dry_run_prefix}{NOTIFICATION_PREFIX}Charging Stopped",
-                f"Grid price rose to ${data.general_price:.2f}/kWh "
-                f"(above stop threshold "
-                f"${data.cheap_charge_stop_price:.2f}/kWh). "
-                f"Battery at {data.soc:.0f}%. "
-                f"Returning to self consumption.",
-            )
+            # Determine the actual reason for stopping grid charging
+            # Issue #352: Don't assume price rose - check actual conditions
+            price_above_stop = data.general_price > data.cheap_charge_stop_price
+            price_above_effective = data.general_price > data.effective_cheap_price
+
+            if price_above_stop:
+                # Price genuinely rose above stop threshold
+                return (
+                    f"{dry_run_prefix}{NOTIFICATION_PREFIX}Charging Stopped",
+                    f"Grid price rose to ${data.general_price:.2f}/kWh "
+                    f"(above stop threshold "
+                    f"${data.cheap_charge_stop_price:.2f}/kWh). "
+                    f"Battery at {data.soc:.0f}%. "
+                    f"Returning to self consumption.",
+                )
+            elif price_above_effective:
+                # Price above effective threshold but not stop threshold
+                return (
+                    f"{dry_run_prefix}{NOTIFICATION_PREFIX}Charging Stopped",
+                    f"Grid price at ${data.general_price:.2f}/kWh "
+                    f"(above effective threshold "
+                    f"${data.effective_cheap_price:.2f}/kWh). "
+                    f"Battery at {data.soc:.0f}%. "
+                    f"Returning to self consumption.",
+                )
+            else:
+                # Price is still cheap - stopped for other reasons
+                # (forecast complete, SOC target reached, solar sufficient, etc.)
+                return (
+                    f"{dry_run_prefix}{NOTIFICATION_PREFIX}Charging Complete",
+                    f"Grid price at ${data.general_price:.2f}/kWh "
+                    f"(still below threshold ${data.effective_cheap_price:.2f}/kWh). "
+                    f"Battery at {data.soc:.0f}%. "
+                    f"Scheduled charging complete or solar sufficient.",
+                )
         if old_mode == BatteryMode.DEMAND_BLOCK:
             return (
                 f"{dry_run_prefix}{NOTIFICATION_PREFIX}Demand Window Ended",
@@ -442,10 +469,26 @@ class NotificationService:
                 BatteryMode.GRID_CHARGING,
                 BatteryMode.BOOST_CHARGING,
             ):
-                return (
-                    f"Charging ended -- price ${data.general_price:.2f}/kWh "
-                    f"(above ${data.cheap_charge_stop_price:.2f}/kWh)"
-                )
+                # Issue #352: Check actual price vs threshold for accurate reason
+                price_above_stop = data.general_price > data.cheap_charge_stop_price
+                price_above_effective = data.general_price > data.effective_cheap_price
+
+                if price_above_stop:
+                    return (
+                        f"Charging ended -- price ${data.general_price:.2f}/kWh "
+                        f"(above stop threshold ${data.cheap_charge_stop_price:.2f}/kWh)"
+                    )
+                elif price_above_effective:
+                    return (
+                        f"Charging ended -- price ${data.general_price:.2f}/kWh "
+                        f"(above effective threshold ${data.effective_cheap_price:.2f}/kWh)"
+                    )
+                else:
+                    # Price still cheap - stopped for other reasons
+                    return (
+                        f"Charging complete -- price ${data.general_price:.2f}/kWh "
+                        f"(still below threshold). SOC at {data.soc:.0f}%"
+                    )
             if old_mode == BatteryMode.SPIKE_DISCHARGE:
                 return "Price spike cleared"
             if old_mode == BatteryMode.PROACTIVE_EXPORT:
