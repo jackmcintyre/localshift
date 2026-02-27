@@ -133,6 +133,8 @@ def coordinator_data():
     data.decision_log = []
     data.daily_forecast = []
     data.daily_forecast_soc_15min = []
+    # Issue #349: Mark automation as ready for tests
+    data.automation_ready = True
     return data
 
 
