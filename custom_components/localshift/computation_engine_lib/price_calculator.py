@@ -496,7 +496,7 @@ class PriceCalculator:
                 continue
             period_start_local = dt_util.as_local(period_start)
             if period_start_local >= now_dt and period_start_local.hour <= target_hour:
-                solar_kwh_val = float(period.get("pv_estimate10", 0))
+                solar_kwh_val = float(period.get("pv_estimate", 0))
                 if solar_kwh_val <= 0:
                     continue
 
