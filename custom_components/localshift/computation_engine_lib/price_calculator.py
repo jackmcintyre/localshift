@@ -378,9 +378,9 @@ class PriceCalculator:
         )
 
         try:
-            solar_kwh = self._sum_solar_before_target(
-                data.solcast_today, now_dt, target_hour
-            )
+            # Include tomorrow's forecast when target is tomorrow morning
+            all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+            solar_kwh = self._sum_solar_before_target(all_solcast, now_dt, target_hour)
         except (AttributeError, TypeError):
             solar_kwh = 0.0
 
@@ -487,7 +487,10 @@ class PriceCalculator:
         weighted_sum = 0.0
         total_solar = 0.0
 
-        for period in data.solcast_today:
+        # Include tomorrow's forecast when target is tomorrow morning
+        all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+
+        for period in all_solcast:
             period_start = self._parse_forecast_dt(period.get("period_start"))
             if period_start is None:
                 continue
