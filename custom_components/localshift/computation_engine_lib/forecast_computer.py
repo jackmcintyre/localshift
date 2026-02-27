@@ -1900,10 +1900,14 @@ class ForecastComputer:
 
         # ========================================================================
         # Pass 2: Sort candidates by price and schedule cheapest first
+        # Issue #344: When prices are equal, prefer LATER slots to maximize
+        # solar contribution during earlier hours (just-in-time charging).
         # ========================================================================
 
-        # Sort by price (cheapest first)
-        grid_charge_candidates.sort(key=lambda x: x["price"])
+        # Sort by (price ASC, slot_idx DESC) - cheapest first, but later slots
+        # preferred when prices are equal. This allows solar to contribute during
+        # morning hours before grid charging kicks in.
+        grid_charge_candidates.sort(key=lambda x: (x["price"], -x["slot_idx"]))
 
         # Track which slots are scheduled for grid charging
         scheduled_grid_charges: dict[int, dict] = {}
