@@ -2372,22 +2372,44 @@ class ForecastComputer:
                 predicted_soc + (net_kwh / BATTERY_CAPACITY_KWH * 100)
             ) >= 100.0
 
-            # Step 1: Calculate base battery delta from solar/load
+            # Step 1: Calculate solar contribution FIRST (Issue #370)
+            # Solar contribution must be calculated before grid charge decision
             if net_kwh >= 0:
-                battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
+                solar_battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
             else:
-                battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
+                solar_battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
 
-            # Step 2: Add grid charging if scheduled
+            # Step 2: Add grid charging if scheduled (Issue #370 fix)
+            # Grid charge amount accounts for concurrent solar to prevent overshoot
             if should_grid_charge:
-                current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
-                space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
-                grid_charge_amount = min(
-                    max_grid_charge_kwh * 0.92, space_remaining_kwh
+                # Project SOC after solar contribution during this slot
+                projected_soc_after_solar = predicted_soc + (
+                    solar_battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
                 )
-                battery_delta_kwh += grid_charge_amount
-                grid_import_kwh = grid_charge_amount / 0.92
+                projected_battery_kwh = projected_soc_after_solar / 100 * BATTERY_CAPACITY_KWH
+
+                # Grid only fills remaining space AFTER solar
+                space_remaining_kwh = max(target_kwh - projected_battery_kwh, 0)
+
+                if space_remaining_kwh > 0:
+                    grid_charge_amount = min(
+                        max_grid_charge_kwh * 0.92, space_remaining_kwh
+                    )
+                    battery_delta_kwh = solar_battery_delta_kwh + grid_charge_amount
+                    grid_import_kwh = grid_charge_amount / 0.92
+                else:
+                    # Solar alone reaches target - skip grid charge (Issue #370)
+                    _LOGGER.info(
+                        "Skip grid charge at %s: solar will reach target (SOC %.1f%% -> %.1f%%)",
+                        slot_start.strftime("%H:%M"),
+                        predicted_soc,
+                        projected_soc_after_solar,
+                    )
+                    should_grid_charge = False
+                    battery_delta_kwh = solar_battery_delta_kwh
+                    grid_import_kwh = 0.0
             else:
+                battery_delta_kwh = solar_battery_delta_kwh
                 grid_import_kwh = 0.0
 
             # Step 3: Check for proactive export
