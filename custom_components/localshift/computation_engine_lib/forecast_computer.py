@@ -12,6 +12,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
+    BOOST_CHARGE_MAX_SOC,
     CHARGE_RATE_BOOST_KW,
     CHARGE_RATE_GRID_KW,
     CHARGE_RATE_SOLAR_KW,
@@ -948,13 +949,25 @@ class ForecastComputer:
                 target_pct,
             )
             # Check if we should boost (very cheap price)
+            # Issue #309: Skip boost if SOC >= 80% (Powerwall throttles charge rate)
             if price_is_very_cheap:
+                if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                    return True, False  # Continue at normal rate
                 return True, True
             return True, False
 
         # SAFETY NET: Charge if very cheap (forecast could be wrong)
         # IMPORTANT: only applies when solar *cannot* meet the target before DW.
+        # Issue #309: Skip boost charging if SOC >= 80% (Powerwall throttles charge rate)
         if price_is_very_cheap:
+            if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                _LOGGER.info(
+                    "Grid charge: VERY CHEAP price $%.2f at %s (safety net) - SOC %.1f%% >= 80%%, using normal rate instead of boost",
+                    slot_price,
+                    slot_start.strftime("%H:%M"),
+                    predicted_soc,
+                )
+                return True, False  # Grid charge at normal rate, not boost
             _LOGGER.info(
                 "Grid charge: VERY CHEAP price $%.2f at %s (safety net)",
                 slot_price,
