@@ -62,6 +62,8 @@ class TestFullStateMachineFlow:
         integration_data.soc = 40.0
         integration_data.general_price = 0.10  # Cheap price
         integration_data.feed_in_price = 0.05
+        # Issue #341: Set effective_cheap_price so live price validation passes
+        integration_data.effective_cheap_price = 0.15  # Price threshold
 
         # Mock forecast with grid charging flag
         test_time = dt_aware(2026, 2, 16, 10, 0, 0)
