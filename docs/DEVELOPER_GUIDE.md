@@ -640,6 +640,48 @@ def _get_expected_state_for_mode(self, mode):
 
 ## Testing
 
+### Running Tests
+
+Tests must be run using `uv run pytest` because the `homeassistant` package is only installed in the uv virtual environment:
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/test_computation_engine.py
+
+# Run with verbose output
+uv run pytest -v
+
+# Run specific test
+uv run pytest tests/test_computation_engine.py::test_compute_derived_values
+```
+
+**Common Mistakes:**
+
+```bash
+# ❌ WRONG - Uses system Python, homeassistant not available
+pytest
+
+# ❌ WRONG - Same issue
+python -m pytest
+
+# ✅ CORRECT - Uses uv virtual environment with homeassistant
+uv run pytest
+```
+
+If you run tests without `uv run`, you'll see a helpful error message:
+
+```
+ERROR: Tests must be run with 'uv run pytest', not 'pytest' directly.
+
+  Correct:   uv run pytest
+  Incorrect: pytest or python -m pytest
+
+The homeassistant package is only installed in the uv virtual environment.
+```
+
 ### Manual Testing
 
 1. **Dry Run Mode**: Enable `switch.localshift_dry_run` to test without affecting the battery.

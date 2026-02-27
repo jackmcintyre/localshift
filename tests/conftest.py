@@ -9,6 +9,33 @@ For tests that need realistic HA behavior, use:
 - realistic_entity_states: Default entity states for LocalShift
 """
 
+# =============================================================================
+# ENVIRONMENT VALIDATION (Issue #372)
+# =============================================================================
+# Tests must be run with 'uv run pytest' because homeassistant is only
+# installed in the uv virtual environment. This check provides a helpful
+# error message instead of a confusing import error.
+
+import sys
+
+try:
+    import homeassistant  # noqa: F401
+except ImportError:
+    print(
+        "\n"
+        "ERROR: Tests must be run with 'uv run pytest', not 'pytest' directly.\n"
+        "\n"
+        "  Correct:   uv run pytest\n"
+        "  Incorrect: pytest or python -m pytest\n"
+        "\n"
+        "The homeassistant package is only installed in the uv virtual environment.\n"
+    )
+    sys.exit(1)
+
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
 # Import asyncio for sleep mocking
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
