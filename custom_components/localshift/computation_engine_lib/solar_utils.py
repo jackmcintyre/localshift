@@ -222,8 +222,14 @@ def get_solar_for_5min_slot(
 ) -> float:
     """Get solar forecast (kWh) for a 5-minute slot from Solcast 30-min periods.
 
-    Uses containment check: returns 1/6 of the period kWh because a 5-minute
-    slot is exactly 5/30 = 1/6 of the 30-minute Solcast period.
+    Uses overlap-weighted accumulation: sums contributions from all Solcast periods
+    that overlap the slot, weighted by the overlap fraction.
+
+    This correctly handles 5-min slots that straddle two Solcast 30-min periods
+    (e.g., a slot at 15:55-16:00 overlaps both 15:30-16:00 and 16:00-16:30).
+
+    IMPORTANT: Solcast's pv_estimate values represent average power (kWh per hour),
+    NOT energy per period. So we divide overlap_seconds by 3600 (seconds per hour).
 
     Args:
         solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
@@ -243,6 +249,7 @@ def get_solar_for_5min_slot(
 
     slot_end = slot_start + timedelta(minutes=5)
     period_duration = timedelta(minutes=30)
+    total_solar = 0.0
 
     for entry in solcast_forecasts:
         if not isinstance(entry, dict):
@@ -258,21 +265,26 @@ def get_solar_for_5min_slot(
 
         start_local = dt_util.as_local(start_dt)
         end_local = start_local + period_duration
-        # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
-        period_kwh = float(
-            entry.get("pv_estimate")
-            or entry.get("estimate")
-            or entry.get("pv_estimate10")
-            or entry.get("estimate10")
-            or 0.0
-        )
 
-        # Containment check: the 5-min slot must be fully inside the 30-min period
-        if slot_start >= start_local and slot_end <= end_local:
-            # pv_estimate is kWh per HOUR, so 5 min = 5/60 = 1/12 of an hour
-            return period_kwh * (5.0 / 60.0)
+        # Calculate overlap between slot and Solcast period
+        overlap_start = max(start_local, slot_start)
+        overlap_end = min(end_local, slot_end)
+        overlap_seconds = (overlap_end - overlap_start).total_seconds()
 
-    return 0.0
+        if overlap_seconds > 0:
+            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
+            period_kwh = float(
+                entry.get("pv_estimate")
+                or entry.get("estimate")
+                or entry.get("pv_estimate10")
+                or entry.get("estimate10")
+                or 0.0
+            )
+            # pv_estimate is kWh per HOUR, so divide by 3600 seconds
+            overlap_fraction = overlap_seconds / 3600.0
+            total_solar += period_kwh * overlap_fraction
+
+    return total_solar
 
 
 def get_solar_for_30min_slot(
