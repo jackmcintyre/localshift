@@ -274,21 +274,23 @@ class TestExpectedStateForMode:
 
     def test_self_consumption_expected_state(self, state_machine):
         """SELF_CONSUMPTION should expect pv_only export mode."""
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.SELF_CONSUMPTION
         )
         assert op == "self_consumption"
         assert reserve == 10
         assert export == TESLEMETRY_EXPORT_PV_ONLY
+        assert grid_charging == False
 
     def test_demand_block_expected_state(self, state_machine):
         """DEMAND_BLOCK should expect pv_only export mode."""
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.DEMAND_BLOCK
         )
         assert op == "self_consumption"
         assert reserve == 10
         assert export == TESLEMETRY_EXPORT_PV_ONLY
+        assert grid_charging == False
 
     def test_grid_charging_expected_state(self, state_machine):
         """GRID_CHARGING should expect backup mode with dynamic reserve.
@@ -297,48 +299,53 @@ class TestExpectedStateForMode:
         Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
         The actual reserve is tracked in _grid_charging_reserve.
         """
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.GRID_CHARGING
         )
         assert op == "backup"
         assert reserve == -1  # Dynamic, tracked in _grid_charging_reserve
         assert export == TESLEMETRY_EXPORT_PV_ONLY
+        assert grid_charging == True
 
     def test_boost_charging_expected_state(self, state_machine):
         """BOOST_CHARGING should expect 100% reserve."""
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.BOOST_CHARGING
         )
         assert op == "autonomous"
         assert reserve == 100
         assert export == TESLEMETRY_EXPORT_PV_ONLY
+        assert grid_charging == True
 
     def test_spike_discharge_expected_state(self, state_machine):
         """SPIKE_DISCHARGE should expect battery_ok export mode."""
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.SPIKE_DISCHARGE
         )
         assert op == "autonomous"
         assert reserve == 10
         assert export == TESLEMETRY_EXPORT_BATTERY_OK
+        assert grid_charging == False
 
     def test_proactive_export_expected_state(self, state_machine):
         """PROACTIVE_EXPORT should expect battery_ok export mode (backlog-high-020)."""
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.PROACTIVE_EXPORT
         )
         assert op == "autonomous"
         assert reserve == 10  # Default for health check, actual is dynamic
         assert export == TESLEMETRY_EXPORT_BATTERY_OK
+        assert grid_charging == False
 
     def test_manual_expected_state_empty(self, state_machine):
         """MANUAL mode should return empty expected state (skip validation)."""
-        op, reserve, export = state_machine._get_expected_state_for_mode(
+        op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.MANUAL
         )
         assert op == ""
         assert reserve == -1
         assert export == ""
+        assert grid_charging == False
 
 
 # =============================================================================
