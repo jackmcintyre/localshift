@@ -117,6 +117,10 @@ def compute_hybrid_slot_schedule(
         if slot_start is None:
             continue
 
+        # Skip past slots (only skip if strictly before now)
+        if slot_start < now_local:
+            continue
+
         # Determine duration from entry or calculate from gap to next
         duration_minutes = get_slot_duration_minutes(entry)
         if duration_minutes is None:
@@ -129,12 +133,6 @@ def compute_hybrid_slot_schedule(
 
         if duration_minutes is None:
             continue  # Skip if we can't determine duration
-
-        # Skip slots that have already ENDED (keep the slot that covers "now")
-        # A slot covers "now" if: slot_start <= now < slot_end
-        slot_end = slot_start + timedelta(minutes=duration_minutes)
-        if slot_end <= now_local:
-            continue
 
         # Accept 5-min, 30-min, or 60-min slots (60-min for backward compatibility with tests)
         # Amber native granularities are 5-min and 30-min, but tests may use 60-min
@@ -211,16 +209,14 @@ def compute_hybrid_slot_schedule(
     # Step 6.5: Ensure there's a slot covering "now"
     # If Amber's first slot is AFTER now, we need a synthetic current slot
     # This can happen when Amber's forecast starts a few minutes in the future
-    first_slot_time = slots[0]["start"] if slots else None
-    needs_synthetic = first_slot_time and first_slot_time > now_local
     _LOGGER.info(
-        "SYNTHETIC_SLOT_CHECK: slots=%d, first_slot=%s, now=%s, needs_synthetic=%s",
+        "HYBRID_SLOTS: slots=%d, first_slot=%s, now_local=%s, comparison=%s",
         len(slots),
-        first_slot_time.strftime("%H:%M:%S") if first_slot_time else "N/A",
+        slots[0]["start"].strftime("%H:%M:%S") if slots else "N/A",
         now_local.strftime("%H:%M:%S"),
-        "YES" if needs_synthetic else "NO",
+        "first > now" if slots and slots[0]["start"] > now_local else "first <= now",
     )
-    if needs_synthetic:
+    if slots and slots[0]["start"] > now_local:
         # Create a synthetic slot at the current 5-minute boundary
         current_5min = (now_local.minute // 5) * 5
         synthetic_start = now_local.replace(
