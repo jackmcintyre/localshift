@@ -76,6 +76,11 @@ BACKUP_RESERVE_MAX_VALID = (
     80  # Maximum reserve that Tesla firmware accepts in backup mode
 )
 
+# Issue #309: Maximum SOC for boost charging
+# Powerwall throttles charge rate above 80%, making boost charging inefficient.
+# When SOC >= 80%, use normal grid charging (3.3kW) instead of boost (5kW).
+BOOST_CHARGE_MAX_SOC = 80.0
+
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
 
