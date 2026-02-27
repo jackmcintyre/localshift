@@ -1,9 +1,15 @@
-"""Unit tests for 15-minute slot duration functionality."""
+"""Unit tests for hybrid timescale slot functionality.
 
-from datetime import datetime, timedelta
-from unittest.mock import Mock
+This module contains two test classes:
+1. TestFifteenMinSlots - Tests for legacy 15-min uniform slots (old approach)
+2. TestHybridTimescaleSchedule - Tests for hybrid 5/30-min slots (Issue #339)
+"""
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.computation_engine_lib.forecast_computer import (
     TOTAL_SLOTS,
@@ -405,3 +411,264 @@ class TestFifteenMinSlots:
 
         # Energy should be reasonable
         assert energy > 0
+
+
+class TestHybridTimescaleSchedule:
+    """Test hybrid timescale slot functionality (Issue #339).
+
+    The hybrid timescale uses native Amber data granularities:
+    - 5-minute slots for near-term (from Amber ~45-60 min): High resolution for immediate decisions
+    - 30-minute slots for extended forecast: Solcast-aligned for forecast accuracy
+
+    This provides better temporal resolution for export decisions while maintaining
+    alignment with Solcast 30-minute forecast periods.
+
+    Note: The actual compute_hybrid_slot_schedule function requires Amber price forecast
+    data. These tests verify the function behavior with mocked Amber data.
+    """
+
+    @pytest.fixture
+    def mock_entry(self):
+        """Create mock config entry."""
+        entry = Mock()
+        entry.options = {
+            "battery_target": 80.0,
+            "demand_window_start": "15:00:00",
+            "demand_window_end": "21:00:00",
+            "minimum_target_soc": 5.0,
+            "load_weight_recent": 0.3,
+        }
+        return entry
+
+    @pytest.fixture
+    def computer(self, mock_entry):
+        """Create forecast computer instance."""
+        return ForecastComputer(
+            entry=mock_entry,
+            get_entity_id_func=lambda x: f"sensor.{x}",
+            get_historical_func=lambda entity_id: {},
+        )
+
+    @pytest.fixture
+    def mock_amber_forecast_5min_then_30min(self):
+        """Create mock Amber forecast with 5-min slots then 30-min slots.
+
+        This simulates real Amber data:
+        - First 12 periods: 5-minute intervals (1 hour)
+        - Remaining periods: 30-minute intervals (23 hours)
+        """
+        # Use timezone-aware datetime
+        tz = dt_util.get_time_zone("Australia/Sydney")
+        now = datetime(2024, 6, 15, 8, 0, 0, tzinfo=tz)
+        forecast = []
+
+        # 5-minute slots for first hour (12 slots)
+        for i in range(12):
+            start = now + timedelta(minutes=5 * i)
+            end = start + timedelta(minutes=5)
+            forecast.append({
+                "start_time": start.isoformat(),
+                "end_time": end.isoformat(),
+                "duration": 5,
+                "price": 0.15 + (i * 0.01),  # Varying price
+            })
+
+        # 30-minute slots for remaining 23 hours (46 slots)
+        for i in range(46):
+            start = now + timedelta(minutes=60 + 30 * i)
+            end = start + timedelta(minutes=30)
+            forecast.append({
+                "start_time": start.isoformat(),
+                "end_time": end.isoformat(),
+                "duration": 30,
+                "price": 0.10 + (i * 0.005),  # Varying price
+            })
+
+        return forecast
+
+    @pytest.fixture
+    def tz_aware_now(self):
+        """Return timezone-aware now for Australia/Sydney."""
+        tz = dt_util.get_time_zone("Australia/Sydney")
+        return datetime(2024, 6, 15, 8, 0, 0, tzinfo=tz)
+
+    # =========================================================================
+    # Slot Duration Tests with Mocked Amber Data
+    # =========================================================================
+
+    def test_slot_durations_from_amber_data(self, mock_amber_forecast_5min_then_30min, tz_aware_now):
+        """Verify slot durations match Amber data (5-min then 30-min)."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=mock_amber_forecast_5min_then_30min,
+            ha_timezone="Australia/Sydney",
+        )
+
+        # Should have both 5-min and 30-min slots
+        assert metadata["slot_intervals"]["5min"] == 12, (
+            f"Expected 12 5-min slots, got {metadata['slot_intervals']['5min']}"
+        )
+        assert metadata["slot_intervals"]["30min"] == 46, (
+            f"Expected 46 30-min slots, got {metadata['slot_intervals']['30min']}"
+        )
+
+    def test_metadata_structure(self, mock_amber_forecast_5min_then_30min, tz_aware_now):
+        """Verify metadata has correct structure."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=mock_amber_forecast_5min_then_30min,
+            ha_timezone="Australia/Sydney",
+        )
+
+        # Verify metadata structure
+        assert "timezone" in metadata
+        assert "slot_intervals" in metadata
+        assert "5min" in metadata["slot_intervals"]
+        assert "30min" in metadata["slot_intervals"]
+        assert "transition_boundary" in metadata
+        assert "total_slots" in metadata
+
+    def test_slot_structure(self, mock_amber_forecast_5min_then_30min, tz_aware_now):
+        """Verify each slot has required fields."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=mock_amber_forecast_5min_then_30min,
+            ha_timezone="Australia/Sydney",
+        )
+
+        # Verify each slot has required fields
+        for slot in slots:
+            assert "start" in slot, "Slot missing 'start' field"
+            assert "interval_minutes" in slot, "Slot missing 'interval_minutes' field"
+            assert "price" in slot, "Slot missing 'price' field"
+            assert "price_source" in slot, "Slot missing 'price_source' field"
+            assert slot["interval_minutes"] in [5, 30], (
+                f"Invalid interval_minutes: {slot['interval_minutes']}"
+            )
+            assert slot["price_source"] in ["5min", "30min"], (
+                f"Invalid price_source: {slot['price_source']}"
+            )
+
+    def test_transition_boundary(self, mock_amber_forecast_5min_then_30min, tz_aware_now):
+        """Verify transition boundary is correctly identified."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=mock_amber_forecast_5min_then_30min,
+            ha_timezone="Australia/Sydney",
+        )
+
+        # Transition should occur at 60 minutes (after 12 x 5-min slots)
+        if metadata["transition_boundary"]:
+            # Verify 5-min slots come before 30-min slots
+            found_30min = False
+            for slot in slots:
+                if slot["interval_minutes"] == 30:
+                    found_30min = True
+                elif found_30min and slot["interval_minutes"] == 5:
+                    pytest.fail("5-min slot found after 30-min slot")
+
+    def test_empty_forecast_handling(self, tz_aware_now):
+        """Verify empty forecast returns empty slots."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=[],
+            ha_timezone="Australia/Sydney",
+        )
+
+        assert slots == []
+        assert metadata["total_slots"] == 0
+
+    def test_30min_only_forecast(self, tz_aware_now):
+        """Verify forecast with only 30-min data works correctly."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        forecast = []
+
+        # Only 30-minute slots (timezone-aware)
+        for i in range(48):
+            start = tz_aware_now + timedelta(minutes=30 * i)
+            end = start + timedelta(minutes=30)
+            forecast.append({
+                "start_time": start.isoformat(),
+                "end_time": end.isoformat(),
+                "duration": 30,
+                "price": 0.15,
+            })
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=forecast,
+            ha_timezone="Australia/Sydney",
+        )
+
+        # Should have only 30-min slots
+        assert metadata["slot_intervals"]["5min"] == 0
+        assert metadata["slot_intervals"]["30min"] == 48
+
+    def test_continuous_coverage_no_gaps(self, mock_amber_forecast_5min_then_30min, tz_aware_now):
+        """Verify slots have continuous coverage with no gaps."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=mock_amber_forecast_5min_then_30min,
+            ha_timezone="Australia/Sydney",
+        )
+
+        # Verify continuous coverage
+        for i in range(1, len(slots)):
+            prev_end = slots[i - 1]["start"] + timedelta(minutes=slots[i - 1]["interval_minutes"])
+            curr_start = slots[i]["start"]
+            assert prev_end == curr_start, (
+                f"Gap between slot {i-1} and {i}: {prev_end} != {curr_start}"
+            )
+
+    # =========================================================================
+    # Price Source Tests
+    # =========================================================================
+
+    def test_price_source_matches_interval(self, mock_amber_forecast_5min_then_30min, tz_aware_now):
+        """Verify price_source matches actual interval."""
+        from custom_components.localshift.computation_engine_lib.forecast_computer import (
+            compute_hybrid_slot_schedule,
+        )
+
+        slots, metadata = compute_hybrid_slot_schedule(
+            now_local=tz_aware_now,
+            general_forecast=mock_amber_forecast_5min_then_30min,
+            ha_timezone="Australia/Sydney",
+        )
+
+        for slot in slots:
+            if slot["interval_minutes"] == 5:
+                assert slot["price_source"] == "5min", (
+                    f"5-min slot has wrong price_source: {slot['price_source']}"
+                )
+            else:
+                assert slot["price_source"] == "30min", (
+                    f"30-min slot has wrong price_source: {slot['price_source']}"
+                )

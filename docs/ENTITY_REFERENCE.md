@@ -228,17 +228,28 @@ State: 200
 
 Split from the original monolithic sensor to stay under Home Assistant's 16KB attribute limit (Issue #37). Related sensors: `forecast_prices`, `forecast_grid`, `forecast_diagnostics`.
 
-**State:** Count of forecast slots (96 × 15-min slots)
+**State:** Count of forecast slots (hybrid 5/30-min or uniform 15-min slots)
+
+**Slot Intervals (Issue #339):**
+
+The forecast uses hybrid timescale slots when Amber 5-minute data is available:
+- **5-min slots**: Near-term (first ~60 minutes) - High resolution for immediate decisions
+- **30-min slots**: Extended forecast - Aligned with Solcast forecast periods
+- **15-min slots**: Fallback when Amber data unavailable
 
 **Example Data:**
 ```
-State: 96
+State: 58
 Attributes:
-  slot_count: 96
+  slot_count: 58
+  slot_intervals:
+    5min: 12
+    30min: 46
+    15min: 0
   solcast_today_entries: 48
   solcast_tomorrow_entries: 48
-  forecast_slots: [...96 slots...]
-  soc_series: [...96 entries...]
+  forecast_slots: [...58 slots...]
+  soc_series: [...58 entries...]
   forecast_hourly: [...24 entries...]
 ```
 
