@@ -235,6 +235,9 @@ class CoordinatorData:
     boost_charge_needed: bool = False
     demand_window_active: bool = False
 
+    # Battery preservation (Issue #350)
+    preserve_soc: float | None = None  # SOC to preserve when charging needed
+
     # Extra attributes for binary sensors
     max_forecast_price: float = 0.0
     max_buy_forecast_price: float = 0.0  # Max buy price (general_forecast) for display
