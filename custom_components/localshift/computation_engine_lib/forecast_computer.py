@@ -847,6 +847,8 @@ class ForecastComputer:
                         slot_start.minute,
                     )
                     if price_is_very_cheap:
+                        if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                            return True, False
                         return True, True
                     return False, False
 
@@ -883,7 +885,10 @@ class ForecastComputer:
                     slot_start.minute,
                 )
                 # Only grid charge if price is very cheap (safety net for extreme cases)
+                # Issue #309: Skip boost if SOC >= 80%
                 if price_is_very_cheap:
+                    if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                        return True, False
                     return True, True
                 return False, False
         else:
@@ -917,6 +922,8 @@ class ForecastComputer:
                     slot_start.minute,
                 )
                 if price_is_very_cheap:
+                    if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                        return True, False
                     return True, True
                 return False, False
 

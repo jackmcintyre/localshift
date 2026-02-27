@@ -870,6 +870,112 @@ class TestShouldGridChargeAtSlot:
         assert should_charge is True
         assert should_boost is True
 
+    def test_should_grid_charge_boost_limited_at_80_percent_soc(
+        self, mock_entry, mock_get_entity_id
+    ):
+        """Should use normal grid charging (not boost) when SOC >= 80%.
+
+        Issue #309: Powerwall throttles charge rate above 80% SOC, making
+        boost charging (5kW autonomous mode) inefficient. When SOC >= 80%,
+        use normal grid charging (3.3kW backup mode) instead.
+        """
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 100,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {10: 0.5})
+
+        slot_start = dt_aware(2026, 2, 16, 10, 0, 0)
+
+        # Create solcast that shows no solar can reach target
+        all_solcast = [
+            {"period_start": "2026-02-16T10:00:00+11:00", "pv_estimate10": 0.0},
+        ]
+
+        # Test at SOC = 80% (exactly at threshold)
+        should_charge, should_boost = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.08,  # Very cheap (< 0.15 * 0.8 = 0.12)
+            predicted_soc=80.0,  # Exactly at threshold
+            target_pct=100.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,
+            in_demand_window=False,
+            gap_to_target=20.0,
+            is_daylight=False,
+            all_solcast=all_solcast,
+            historical_avg_kw={10: 0.5},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.08,
+            min_soc_pct=10.0,
+        )
+
+        # Should grid charge but NOT boost (SOC >= 80%)
+        assert should_charge is True
+        assert should_boost is False, "Boost should be disabled at 80% SOC"
+
+        # Test at SOC = 85% (above threshold)
+        should_charge2, should_boost2 = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.08,
+            predicted_soc=85.0,  # Above threshold
+            target_pct=100.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,
+            in_demand_window=False,
+            gap_to_target=15.0,
+            is_daylight=False,
+            all_solcast=all_solcast,
+            historical_avg_kw={10: 0.5},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.08,
+            min_soc_pct=10.0,
+        )
+
+        # Should grid charge but NOT boost
+        assert should_charge2 is True
+        assert should_boost2 is False, "Boost should be disabled above 80% SOC"
+
+        # Test at SOC = 75% (below threshold) - boost should be allowed
+        should_charge3, should_boost3 = computer._should_grid_charge_at_slot(
+            slot_start=slot_start,
+            solar_kwh=0.0,
+            slot_price=0.08,
+            predicted_soc=75.0,  # Below threshold
+            target_pct=100.0,
+            effective_cheap_price=0.15,
+            is_before_dw=True,
+            in_demand_window=False,
+            gap_to_target=25.0,
+            is_daylight=False,
+            all_solcast=all_solcast,
+            historical_avg_kw={10: 0.5},
+            current_load_kw=0.5,
+            recent_load_kw=0.5,
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            allow_dw_entry_under_target=False,
+            general_price_current=0.08,
+            min_soc_pct=10.0,
+        )
+
+        # Should grid charge WITH boost (SOC < 80%)
+        assert should_charge3 is True
+        assert should_boost3 is True, "Boost should be enabled below 80% SOC"
+
 
 # =============================================================================
 # REPLACEMENT COST CHECK TESTS (Issue #70)
