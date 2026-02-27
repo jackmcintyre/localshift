@@ -978,6 +978,170 @@ class TestShouldGridChargeAtSlot:
 
 
 # =============================================================================
+# PASS 3 BOOST DISABLE TESTS (Issue #353)
+# =============================================================================
+
+
+class TestPass3BoostDisable:
+    """Tests for Pass 3 boost disabling when SOC reaches 80% during forecast.
+
+    Issue #353: Pass 1 schedules boost based on solar-only SOC simulation,
+    but Pass 3 has the actual predicted SOC including grid charging from
+    previous slots. When SOC >= 80%, boost should be disabled.
+    """
+
+    def test_compute_forecast_disables_boost_at_80_percent(
+        self, mock_entry, mock_get_entity_id
+    ):
+        """Test that compute_forecast disables boost when SOC reaches 80%.
+
+        This tests the Pass 3 fix where boost is re-evaluated against the
+        actual predicted SOC (including grid charging) rather than the
+        solar-only SOC from Pass 1.
+        """
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 100,
+            "minimum_target_soc": 10,
+            "demand_window_start": "18:00:00",
+            "demand_window_end": "22:00:00",
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {6: 0.5, 7: 0.5})
+
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 70.0  # Start at 70% SOC
+        data.load_power_kw = 0.5
+        data.general_price = 0.08  # Very cheap price
+        data.feed_in_price = 0.05
+        data.effective_cheap_price = 0.15
+
+        # Create general forecast with very cheap prices for multiple slots
+        # This will trigger boost charging in Pass 1
+        general_forecast = []
+        for hour in range(6, 12):  # 06:00 to 12:00
+            for minute in range(0, 60, 5):
+                general_forecast.append(
+                    {
+                        "start_time": f"2026-02-16T{hour:02d}:{minute:02d}:00+11:00",
+                        "end_time": f"2026-02-16T{hour:02d}:{minute + 5:02d}:00+11:00",
+                        "per_kwh": 0.08,  # Very cheap
+                    }
+                )
+        data.general_forecast = general_forecast
+        data.feed_in_forecast = []
+
+        # No solar (overnight/early morning scenario)
+        data.solcast_today = []
+        data.solcast_tomorrow = []
+
+        now_dt = dt_aware(2026, 2, 16, 6, 0, 0)
+
+        daily_forecast, _, _ = computer.compute_forecast(
+            data=data,
+            now_dt=now_dt,
+            historical_avg_kw={6: 0.5, 7: 0.5, 8: 0.5, 9: 0.5, 10: 0.5, 11: 0.5},
+            recent_load_kw=0.5,
+            historical_load_source="test",
+            historical_load_sample_counts={6: 100},
+        )
+
+        # Find slots where grid charging occurred
+        grid_charge_slots = [
+            slot for slot in daily_forecast if slot.get("grid_charge", False)
+        ]
+
+        # There should be some grid charging slots
+        assert len(grid_charge_slots) > 0, "Should have grid charging slots"
+
+        # Check that boost is disabled when SOC >= 80%
+        # The first few slots should have boost=True (SOC < 80%)
+        # Later slots should have boost=False (SOC >= 80%)
+        non_boost_slots = [s for s in grid_charge_slots if not s.get("grid_charge_boost", False)]
+
+        # With starting SOC of 70% and boost charging at ~1.25 kWh per 15-min slot,
+        # after ~8 slots (2 hours) of boost, SOC should reach 80%+
+        # So we expect some boost slots and some non-boost slots
+        assert len(non_boost_slots) > 0, (
+            "Should have non-boost slots when SOC reaches 80%+"
+        )
+
+        # Verify that non-boost slots have SOC >= 80%
+        for slot in non_boost_slots:
+            assert slot.get("predicted_soc", 0) >= 80.0, (
+                f"Non-boost slot at {slot.get('hour'):02d}:{slot.get('minute'):02d} "
+                f"should have SOC >= 80%, got {slot.get('predicted_soc')}"
+            )
+
+    def test_compute_forecast_boost_allowed_below_80_percent(
+        self, mock_entry, mock_get_entity_id
+    ):
+        """Test that compute_forecast allows boost when SOC < 80%."""
+        entry = mock_entry
+        entry.options = {
+            "load_weight_recent": 0.7,
+            "battery_target": 100,
+            "minimum_target_soc": 10,
+            "demand_window_start": "18:00:00",
+            "demand_window_end": "22:00:00",
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {6: 0.5})
+
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 50.0  # Start at 50% SOC (well below 80%)
+        data.load_power_kw = 0.5
+        data.general_price = 0.08  # Very cheap price
+        data.feed_in_price = 0.05
+        data.effective_cheap_price = 0.15
+
+        # Create general forecast with very cheap prices
+        general_forecast = []
+        for minute in range(0, 60, 5):
+            general_forecast.append(
+                {
+                    "start_time": f"2026-02-16T06:{minute:02d}:00+11:00",
+                    "end_time": f"2026-02-16T06:{minute + 5:02d}:00+11:00",
+                    "per_kwh": 0.08,
+                }
+            )
+        data.general_forecast = general_forecast
+        data.feed_in_forecast = []
+        data.solcast_today = []
+        data.solcast_tomorrow = []
+
+        now_dt = dt_aware(2026, 2, 16, 6, 0, 0)
+
+        daily_forecast, _, _ = computer.compute_forecast(
+            data=data,
+            now_dt=now_dt,
+            historical_avg_kw={6: 0.5},
+            recent_load_kw=0.5,
+            historical_load_source="test",
+            historical_load_sample_counts={6: 100},
+        )
+
+        # Find the first grid charging slot
+        first_grid_slot = None
+        for slot in daily_forecast:
+            if slot.get("grid_charge", False):
+                first_grid_slot = slot
+                break
+
+        # First slot should have boost enabled (SOC 50% < 80%)
+        if first_grid_slot is not None:
+            assert first_grid_slot.get("grid_charge_boost", False) is True, (
+                f"First grid charge slot should have boost enabled at SOC "
+                f"{first_grid_slot.get('predicted_soc')}%"
+            )
+
+
+# =============================================================================
 # REPLACEMENT COST CHECK TESTS (Issue #70)
 # =============================================================================
 

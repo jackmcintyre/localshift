@@ -36,7 +36,7 @@ from ..coordinator_data import AdaptiveParameters, CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
-from .price_calculator import get_price_for_slot, get_price_for_slot_with_source
+from .price_calculator import get_price_for_slot
 from .proactive_export import ProactiveExportEngine
 from .soc_simulator import SocSimulator
 from .solar_utils import (
@@ -2314,6 +2314,18 @@ class ForecastComputer:
                 scheduled = scheduled_grid_charges[slot_idx]
                 should_grid_charge = True
                 should_boost = scheduled["should_boost"]
+
+                # Issue #309: Disable boost if SOC >= 80% (Powerwall throttles charge rate)
+                # The scheduled boost was determined in Pass 1 using solar-only SOC simulation,
+                # but here we have the actual predicted SOC including grid charging from
+                # previous slots. Re-evaluate boost decision against actual SOC.
+                if should_boost and predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                    should_boost = False
+                    _LOGGER.info(
+                        "Forecast: Disabling boost at %s - SOC %.1f%% >= 80%% (was scheduled from Pass 1)",
+                        slot_start.strftime("%H:%M"),
+                        predicted_soc,
+                    )
 
                 # Determine charge rate
                 if should_boost:
