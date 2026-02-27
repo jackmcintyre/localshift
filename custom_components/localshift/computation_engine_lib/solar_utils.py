@@ -453,9 +453,9 @@ def sum_solar_before_target(
     now_dt: datetime,
     target_hour: int,
 ) -> float:
-    """Sum pessimistic solar kWh (pv_estimate10) from now until target_hour.
+    """Sum expected solar kWh (pv_estimate) from now until target_hour.
 
-    NOTE: pv_estimate10 values represent average power (kWh per hour),
+    NOTE: pv_estimate values represent average power (kWh per hour),
     NOT energy per period. We need to multiply by the time fraction.
     """
     target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
@@ -467,8 +467,8 @@ def sum_solar_before_target(
             continue
         ps_local = dt_util.as_local(period_start)
         period_end = ps_local + period_duration
-        # pv_estimate10 is kWh per HOUR (average power)
-        kwh_per_hour = float(period.get("pv_estimate10", 0))
+        # pv_estimate is kWh per HOUR (average power)
+        kwh_per_hour = float(period.get("pv_estimate", 0))
 
         if ps_local >= target_dt:
             # Period starts at or after target — skip
