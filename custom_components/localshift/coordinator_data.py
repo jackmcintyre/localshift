@@ -216,7 +216,9 @@ class CoordinatorData:
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False
-    prices_available: bool = True  # False when price entities are unavailable (Issue #330)
+    prices_available: bool = (
+        True  # False when price entities are unavailable (Issue #330)
+    )
     general_forecast: list[dict[str, Any]] = field(default_factory=list)
     feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
     solcast_today: list[dict[str, Any]] = field(default_factory=list)
@@ -492,3 +494,13 @@ class CoordinatorData:
     hybrid_slot_metadata: dict[str, Any] = field(
         default_factory=dict
     )  # slot_intervals, transition_boundary, total_slots
+
+    # --- Startup ready state (Issue #349) ---
+    # Tracks whether all required inputs are valid before making automation decisions
+    automation_ready: bool = False  # True when all required inputs are valid
+    automation_ready_status: dict[str, bool] = field(
+        default_factory=dict
+    )  # input_name -> is_valid
+    automation_ready_missing: list[str] = field(
+        default_factory=list
+    )  # List of missing/invalid inputs

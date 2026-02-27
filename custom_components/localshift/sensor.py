@@ -67,6 +67,8 @@ async def async_setup_entry(
         ExtendedForecastAccuracySensor(coordinator, entry),
         # Forecast status sensor (Issue #319)
         ForecastStatusSensor(coordinator, entry),
+        # Automation ready sensor (Issue #349)
+        AutomationReadySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1350,3 +1352,54 @@ class ForecastStatusSensor(LocalShiftSensorBase):
             return "mdi:close-circle"
         else:  # initializing
             return "mdi:weather-sunny-alert"
+
+
+# ---------------------------------------------------------------------------
+# Automation Ready Sensor (Issue #349)
+# ---------------------------------------------------------------------------
+
+
+class AutomationReadySensor(LocalShiftSensorBase):
+    """Automation ready status.
+
+    Issue #349: Shows whether all required inputs are valid for automation.
+    Prevents incorrect mode inference at startup when entities haven't populated.
+
+    States:
+    - "ready": All required inputs are valid
+    - "not_ready": One or more inputs are missing/invalid
+    """
+
+    _attr_unique_id = "localshift_automation_ready"
+    _attr_name = "Automation Ready"
+    _attr_icon = "mdi:check-decagram"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with automation ready status."""
+        if self.coordinator.data.automation_ready:
+            self._attr_native_value = "ready"
+        else:
+            self._attr_native_value = "not_ready"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return detailed status."""
+        d = self.coordinator.data
+        return {
+            "automation_ready": d.automation_ready,
+            "status_checks": d.automation_ready_status,
+            "missing_inputs": d.automation_ready_missing,
+            "soc": d.soc,
+            "operation_mode": d.operation_mode,
+            "backup_reserve": d.backup_reserve,
+            "prices_available": d.prices_available,
+            "forecast_status": d.forecast_status,
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        if self._attr_native_value == "ready":
+            return "mdi:check-decagram"
+        else:
+            return "mdi:decagram-outline"

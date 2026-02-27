@@ -1172,16 +1172,22 @@ class ThermalManager:
             progress_pct = 0
         elif high_confidence >= 1:
             status = "Learning complete"
-            message = f"Learned power for {total_entities} entities with high confidence."
+            message = (
+                f"Learned power for {total_entities} entities with high confidence."
+            )
             progress_pct = 100
         elif medium_confidence >= 1:
             status = "Learning in progress"
-            samples_needed = max(0, 20 - max(p.sample_count for p in self._learned_power.values()))
+            samples_needed = max(
+                0, 20 - max(p.sample_count for p in self._learned_power.values())
+            )
             message = f"Collected {total_samples} samples. Need ~{samples_needed} more for high confidence."
             progress_pct = min(90, 50 + (total_samples * 2))
         elif low_confidence >= 1:
             status = "Learning started"
-            samples_needed = max(0, 5 - min(p.sample_count for p in self._learned_power.values()))
+            samples_needed = max(
+                0, 5 - min(p.sample_count for p in self._learned_power.values())
+            )
             message = f"Collected {total_samples} samples. Need ~{samples_needed} more for medium confidence."
             progress_pct = min(50, total_samples * 10)
         else:
@@ -1333,12 +1339,18 @@ class ThermalManager:
         # Get baseline load before starting
         load_state = self.hass.states.get(load_entity_id)
         if load_state is None:
-            return {"success": False, "error": f"Load entity {load_entity_id} not found"}
+            return {
+                "success": False,
+                "error": f"Load entity {load_entity_id} not found",
+            }
 
         try:
             baseline_load = float(load_state.state)
         except (ValueError, TypeError):
-            return {"success": False, "error": f"Invalid load value from {load_entity_id}"}
+            return {
+                "success": False,
+                "error": f"Invalid load value from {load_entity_id}",
+            }
 
         _LOGGER.info(
             "Learning %s: baseline load = %.2f kW, outdoor temp = %s",
@@ -1419,7 +1431,9 @@ class ThermalManager:
                 if len(readings) >= 3:
                     recent = readings[-3:]
                     avg = sum(recent) / len(recent)
-                    variance = max(abs(r - avg) / avg for r in recent) if avg > 0 else 1.0
+                    variance = (
+                        max(abs(r - avg) / avg for r in recent) if avg > 0 else 1.0
+                    )
 
                     if variance < 0.05:  # Less than 5% variance
                         stable_count += 1
