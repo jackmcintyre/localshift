@@ -35,12 +35,11 @@ from ..coordinator_data import AdaptiveParameters, CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
-from .price_calculator import get_price_for_slot, get_price_for_slot_with_source
+from .price_calculator import get_price_for_slot
 from .proactive_export import ProactiveExportEngine
 from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_15min_slot,
-    get_solar_for_15min_slot_or_none,
     get_solar_for_slot_by_interval,
 )
 from .utils import get_slot_duration_minutes, parse_slot_time
@@ -1815,8 +1814,8 @@ class ForecastComputer:
         )  # 5% buffer
 
         # ========================================================================
-        # ISSUE #324: Price-optimized grid charging
-        # Two-pass algorithm to schedule cheapest slots first:
+        # ISSUE #351: Hybrid timescale grid charging
+        # Uses hybrid_slots (5-min and 30-min) instead of fixed 15-min slots.
         # Pass 1: Collect all candidate slots that need grid charging
         # Pass 2: Sort by price and mark which slots should charge
         # ========================================================================
@@ -1829,8 +1828,10 @@ class ForecastComputer:
         # Track SOC for candidate evaluation (solar-only simulation)
         candidate_soc = current_soc
 
-        for slot_idx in range(TOTAL_SLOTS):
-            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+        for slot_idx, slot in enumerate(hybrid_slots):
+            slot_start = slot["start"]
+            interval_minutes = slot["interval_minutes"]
+            slot_fraction = interval_minutes / 60.0
             is_first_slot = slot_idx == 0
 
             slot_hour = slot_start.hour
@@ -1843,15 +1844,10 @@ class ForecastComputer:
             # Check if we're in demand window
             in_demand_window = dw_start_time <= slot_time < dw_end_time
 
-            # Get solar forecast
-            solar_kwh_or_none = get_solar_for_15min_slot_or_none(
-                all_solcast, slot_start
+            # Get solar forecast using variable-duration function
+            solar_kwh = get_solar_for_slot_by_interval(
+                all_solcast, slot_start, interval_minutes
             )
-            if solar_kwh_or_none is None:
-                missing_solar_slots.append(slot_start.strftime("%H:%M"))
-                solar_kwh = 0.0
-            else:
-                solar_kwh = solar_kwh_or_none
 
             # Get expected consumption
             slot_temp = temperature_by_hour.get(
@@ -1894,8 +1890,9 @@ class ForecastComputer:
             consumption_kwh = total_load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
-            # Get slot price
-            _slot_price = get_price_for_slot(data.general_forecast, slot_start)
+            # Get slot price from hybrid slot (already computed)
+            _slot_price = slot["price"]
+            _price_source = slot["price_source"]
 
             # Determine if we should grid charge
             gap_to_target = max(target_pct - soc_at_slot_start, 0)
@@ -2221,13 +2218,16 @@ class ForecastComputer:
                 )
 
         # ========================================================================
-        # Pass 3: Build the forecast with scheduled grid charges
+        # Pass 3: Build the forecast with scheduled grid charges (hybrid timescale)
         # ========================================================================
 
         predicted_soc = current_soc
 
-        for slot_idx in range(TOTAL_SLOTS):
-            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+        for slot_idx, slot in enumerate(hybrid_slots):
+            slot_start = slot["start"]
+            interval_minutes = slot["interval_minutes"]
+            slot_fraction = interval_minutes / 60.0
+            price_source = slot["price_source"]
             is_first_slot = slot_idx == 0
 
             slot_hour = slot_start.hour
@@ -2240,14 +2240,10 @@ class ForecastComputer:
             # Check if we're in demand window
             in_demand_window = dw_start_time <= slot_time < dw_end_time
 
-            # Get solar forecast
-            solar_kwh_or_none = get_solar_for_15min_slot_or_none(
-                all_solcast, slot_start
+            # Get solar forecast using variable-duration function
+            solar_kwh = get_solar_for_slot_by_interval(
+                all_solcast, slot_start, interval_minutes
             )
-            if solar_kwh_or_none is None:
-                solar_kwh = 0.0
-            else:
-                solar_kwh = solar_kwh_or_none
 
             # Get expected consumption
             slot_temp = temperature_by_hour.get(
@@ -2282,7 +2278,8 @@ class ForecastComputer:
             consumption_kwh = total_load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
-            _slot_price = get_price_for_slot(data.general_forecast, slot_start)
+            # Get slot price from hybrid slot (already computed)
+            _slot_price = slot["price"]
 
             gap_to_target = max(target_pct - soc_at_slot_start, 0)
 
@@ -2417,7 +2414,8 @@ class ForecastComputer:
                     "hour": slot_hour,
                     "minute": slot_minute,
                     "timestamp": slot_start.isoformat(),
-                    "slot_interval_minutes": 15,
+                    "slot_interval_minutes": interval_minutes,  # Issue #351: Variable duration
+                    "price_source": price_source,  # Issue #351: "5min" or "30min"
                     "predicted_soc": round(predicted_soc, 1),
                     "solar_kwh": round(solar_kwh, 4),
                     "consumption_kwh": round(consumption_kwh, 4),

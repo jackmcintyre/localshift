@@ -42,6 +42,21 @@ def integration_data():
     # Issue #319: Mark forecast as ready for integration tests
     data.forecast_ready = True
     data.forecast_status = "ready"
+    # Issue #351: Provide general_forecast for hybrid timescale
+    # Create 24 hours of 30-min slots starting from a base time
+    base_time = dt_aware(2026, 2, 16, 0, 0, 0)
+    data.general_forecast = []
+    for i in range(48):  # 48 x 30-min slots = 24 hours
+        start = base_time + timedelta(minutes=i * 30)
+        end = start + timedelta(minutes=30)
+        data.general_forecast.append({
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "per_kwh": 0.25,  # Default price
+        })
+    data.feed_in_forecast = []
+    data.solcast_today = []
+    data.solcast_tomorrow = []
     return data
 
 
@@ -528,13 +543,18 @@ class TestDemandWindowIntegration:
                 side_effect=mock_switch_state
             )
 
+            # Set up the forecast directly
+            integration_data.daily_forecast = [forecast_entry]
+
             # Mock forecast entry lookup
             with patch.object(
                 computation_engine,
                 "_get_forecast_entry_for_now",
                 return_value=forecast_entry,
             ):
-                computation_engine.compute_derived_values(integration_data)
+                # Issue #351: Mock forecast computation to avoid hybrid timescale changes
+                with patch.object(computation_engine, "_compute_daily_15min_forecast"):
+                    computation_engine.compute_derived_values(integration_data)
 
         # Should be in DEMAND_BLOCK, not GRID_CHARGING
         assert integration_data.active_mode == BatteryMode.DEMAND_BLOCK
