@@ -249,9 +249,11 @@ git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
 git branch -d {branch-name}
 ```
 
-## ⚠️ MANDATORY: Reserve HA Before Deploying
+## ⚠️ MANDATORY: Reserve HA Before Deploying (Strict Mode - #336)
 
-**The HA instance is a shared resource. Always reserve before deploying.**
+**The HA instance is a shared resource. Reservation is REQUIRED before deploying.**
+
+**As of #336, the deploy script enforces strict mode - you MUST reserve before deploying.**
 
 ### Why This Matters
 
@@ -260,13 +262,13 @@ Multiple agents may work on different tasks simultaneously. Without reservation:
 Agent A deploys → Tests for 10 mins → Agent B deploys → Agent A's code is gone!
 ```
 
-### Workflow
+### Workflow (REQUIRED)
 
 ```bash
-# 1. Reserve the HA instance
+# 1. Reserve the HA instance (REQUIRED)
 ./deploy.sh --reserve
 
-# 2. Deploy your changes
+# 2. Deploy your changes (will FAIL without reservation)
 ./deploy.sh
 
 # 3. Test and verify via logs
@@ -276,6 +278,20 @@ tail -100 /homeassistant/home-assistant.log | grep -i localshift
 
 # 5. Release the reservation
 ./deploy.sh --release
+```
+
+### Before #336 (Old Behavior)
+```bash
+./deploy.sh              # ✅ Succeeds (no reservation required)
+# Agent B could overwrite Agent A's work!
+```
+
+### After #336 (Strict Mode)
+```bash
+./deploy.sh              # ❌ BLOCKED - No active reservation found
+./deploy.sh --reserve    # ✅ Creates reservation
+./deploy.sh              # ✅ Works - you have a reservation
+./deploy.sh --release    # ✅ Release when done
 ```
 
 ### Commands

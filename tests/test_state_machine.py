@@ -814,3 +814,115 @@ class TestReentrantCallPrevention:
 
         state_machine._in_mode_transition = False
         assert state_machine.in_mode_transition == False
+
+
+# =============================================================================
+# SKIP DEBOUNCE FLAG RESET TESTS (Issue #340)
+# =============================================================================
+
+
+class TestSkipDebounceFlagReset:
+    """Tests for _skip_next_debounce flag reset behavior.
+
+    Issue #340: The _skip_next_debounce flag was not being reset when
+    desired == commanded, causing it to persist incorrectly across
+    evaluation cycles and skip debounce on later transitions.
+    """
+
+    def test_skip_debounce_reset_when_no_change_needed(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """_skip_next_debounce should be reset when no transition is needed.
+
+        This prevents the flag from persisting and incorrectly skipping
+        debounce on a later transition.
+        """
+        # Simulate startup grace ending with skip_next_debounce set
+        state_machine._startup_grace_until = dt_aware(2020, 1, 1, 0, 0, 0)  # Expired
+        state_machine._skip_next_debounce = True  # Would be set by grace period ending
+
+        # Mode matches - no transition needed
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # Flag should be reset to False
+        assert state_machine._skip_next_debounce == False
+
+    def test_skip_debounce_not_persisting_across_evaluations(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Debounce should NOT be skipped on transitions after a 'no change' evaluation.
+
+        This is the core regression test for Issue #340:
+        1. Startup grace ends, skip_next_debounce = True
+        2. First evaluation: desired == commanded, no transition
+        3. Second evaluation: desired != commanded, should NOT skip debounce
+        """
+        # Step 1: Simulate startup grace ending
+        state_machine._startup_grace_until = dt_aware(2020, 1, 1, 0, 0, 0)  # Expired
+
+        # Step 2: First evaluation - no change needed
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 27, 9, 26, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # Flag should be reset
+        assert state_machine._skip_next_debounce == False
+
+        # Step 3: Second evaluation - transition needed (PROACTIVE_EXPORT has 2-min debounce)
+        coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
+
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            # First call starts debounce
+            mock_now.return_value = dt_aware(2026, 2, 27, 9, 30, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # Should NOT have transitioned yet - debounce should be active
+        mock_battery_controller.set_proactive_export.assert_not_called()
+
+        # Should have started debounce timer
+        assert BatteryMode.PROACTIVE_EXPORT in state_machine._mode_desired_since
+
+    def test_skip_debounce_works_for_actual_first_transition(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Skip debounce should work correctly for the actual first transition.
+
+        When startup grace ends and there IS a mismatch, debounce should be skipped.
+        """
+        # Simulate startup grace ending
+        state_machine._startup_grace_until = dt_aware(2020, 1, 1, 0, 0, 0)  # Expired
+
+        # Hardware is in SELF_CONSUMPTION but desired is different
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = BatteryMode.SPIKE_DISCHARGE  # Immediate mode
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # Should have transitioned immediately (skip_next_debounce was True)
+        mock_battery_controller.set_force_discharge.assert_called_once()
+
+        # Flag should now be False
+        assert state_machine._skip_next_debounce == False

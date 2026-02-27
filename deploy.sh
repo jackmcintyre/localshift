@@ -10,22 +10,25 @@
 #   3. HA_URL env var set for API endpoint (optional, default: http://homeassistant:8123)
 #
 # Usage:
-#   ./deploy.sh                    # Deploy current worktree state
+#   ./deploy.sh --reserve          # Reserve HA instance (REQUIRED before deploy)
+#   ./deploy.sh                    # Deploy current worktree state (requires reservation)
+#   ./deploy.sh --release          # Release reservation when done
+#   ./deploy.sh --status           # Show reservation status
+#   ./deploy.sh --force            # Force deploy (override reservation - emergency only)
 #   ./deploy.sh --no-reload        # Deploy without reloading HA integration
 #   ./deploy.sh --dry-run          # Preview changes without deploying
 #   ./deploy.sh --watch            # Watch for changes and auto-deploy
-#   ./deploy.sh --reserve          # Reserve HA instance for exclusive use
-#   ./deploy.sh --release          # Release reservation
-#   ./deploy.sh --force            # Force deploy (override reservation)
-#   ./deploy.sh --status           # Show reservation status
 #
-# Workflow:
+# ⚠️  REQUIRED WORKFLOW (strict mode enabled):
 #   1. Reserve HA: ./deploy.sh --reserve
-#   2. Deploy: ./deploy.sh
+#   2. Deploy:     ./deploy.sh
 #   3. Check logs to verify
 #   4. If issues, fix and redeploy
 #   5. If successful, open PR
-#   6. Release: ./deploy.sh --release
+#   6. Release:    ./deploy.sh --release
+#
+# The reservation system prevents multiple agents from overwriting each other's work.
+# Deploy will FAIL if you don't have an active reservation.
 
 set -e
 
@@ -200,6 +203,7 @@ EOF
 }
 
 # Check and handle reservation before deploy
+# STRICT MODE: Requires an active reservation before deploying
 check_reservation() {
     if [ "$FORCE_MODE" = true ]; then
         log_warning "Force mode - overriding any existing reservation"
@@ -232,7 +236,19 @@ check_reservation() {
         fi
     fi
     
-    return 0
+    # STRICT MODE: No valid reservation found - require one
+    log_error "DEPLOYMENT BLOCKED: No active reservation found"
+    echo ""
+    log_info "The HA instance must be reserved before deploying."
+    log_info "This prevents multiple agents from overwriting each other's work."
+    echo ""
+    log_info "Required workflow:"
+    log_info "  1. Reserve: ./deploy.sh --reserve"
+    log_info "  2. Deploy:  ./deploy.sh"
+    log_info "  3. Release: ./deploy.sh --release (when done)"
+    echo ""
+    log_info "To override (emergency): ./deploy.sh --force"
+    exit 1
 }
 
 # =============================================================================
