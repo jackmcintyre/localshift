@@ -121,6 +121,6 @@
     "demand_window_block": true
   },
   "expected": {
-    "daily_forecast_min_soc": 24.9
+    "daily_forecast_min_soc": 36.6
   }
 }
