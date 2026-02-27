@@ -8,6 +8,7 @@ from typing import Any
 
 from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 from .computation_engine_lib.statistics_backfiller import BackfillReport
+from .charging_schedule import ChargingSchedule
 from .const import BatteryMode, ThermalMode
 
 
@@ -507,3 +508,9 @@ class CoordinatorData:
     automation_ready_missing: list[str] = field(
         default_factory=list
     )  # List of missing/invalid inputs
+
+    # --- Optimization engine (Issue #363) ---
+    # Shadow mode optimization results for comparison with rule-based decisions
+    optimized_schedule: ChargingSchedule | None = (
+        None  # Optimal charging schedule from optimization engine
+    )

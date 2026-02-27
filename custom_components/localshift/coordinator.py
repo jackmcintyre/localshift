@@ -22,6 +22,7 @@ from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTrac
 from .computation_engine_lib.optimization_controller import OptimizationController
 from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
 from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
+from .optimization_engine import OptimizationEngine
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_CLIMATE_CONTROL_ENTITIES,
@@ -132,6 +133,9 @@ class LocalShiftCoordinator:
 
         # Optimization controller for learning system (Issue #170 Phase 4)
         self.optimization_controller: OptimizationController | None = None
+
+        # Optimization engine for grid charging (Issue #363)
+        self._optimization_engine: OptimizationEngine | None = None
 
         # Pattern analysis tracking
         self._last_pattern_analysis: datetime | None = None
@@ -275,6 +279,14 @@ class LocalShiftCoordinator:
 
             learning_enabled = self.get_switch_state(SWITCH_ENABLE_LEARNING)
             self.optimization_controller.set_learning_enabled(learning_enabled)
+
+        # Initialize optimization engine for grid charging (Issue #363)
+        # Runs in shadow mode - computes optimal schedule but doesn't apply it
+        self._optimization_engine = OptimizationEngine(
+            shadow_mode=True,
+            solver="highs",
+            time_limit_seconds=10.0,
+        )
 
         # Wire the decision tracker to the state machine
         self._state_machine._decision_tracker = self.decision_tracker
@@ -876,6 +888,7 @@ class LocalShiftCoordinator:
         - Weather forecast refresh
         - Forecast accuracy metrics
         - Forecast history save
+        - Optimization engine (shadow mode)
         """
         # Refresh temperature forecast from weather entity (Issue #135)
         if self._computation_engine is not None:
@@ -894,7 +907,39 @@ class LocalShiftCoordinator:
                 "localshift_save_forecast_history",
             )
 
+        # Run optimization engine in shadow mode (Issue #363)
+        # Computes optimal charging schedule and logs comparison vs rule-based
+        if self._optimization_engine is not None:
+            if self._optimization_engine.should_run_optimization(now):
+                self.hass.async_create_task(
+                    self._run_shadow_optimization(now),
+                    "localshift_shadow_optimization",
+                )
+
         _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
+
+    async def _run_shadow_optimization(self, now: datetime) -> None:
+        """Run optimization engine in shadow mode and store results.
+
+        Issue #363: Computes optimal charging schedule and compares
+        with rule-based decisions. Results are logged but not applied.
+        """
+        if self._optimization_engine is None:
+            return
+
+        try:
+            schedule = self._optimization_engine.run_optimization(self.data, now)
+            if schedule is not None:
+                # Store schedule in coordinator data for diagnostics
+                self.data.optimized_schedule = schedule
+                _LOGGER.info(
+                    "Shadow optimization complete: cost=$%.2f, grid_charge=%.1f kWh, solve_time=%.2fs",
+                    schedule.total_cost,
+                    schedule.total_grid_charge_kwh,
+                    schedule.solve_time_seconds,
+                )
+        except Exception as e:
+            _LOGGER.error("Shadow optimization failed: %s", e, exc_info=True)
 
     def _check_stale_price(self) -> bool:
         """Check if price sensor hasn't updated in STALE_PRICE_THRESHOLD.
