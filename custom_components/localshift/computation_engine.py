@@ -451,8 +451,10 @@ class ComputationEngine:
                 )
 
                 # Solar forecast: pessimistic estimate between now and DW
+                # Include tomorrow's forecast when target is tomorrow morning
+                all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
                 solar_kwh = self._sum_solar_before_target(
-                    data.solcast_today, now_dt, target_hour
+                    all_solcast, now_dt, target_hour
                 )
 
                 # Hours remaining until DW start
@@ -499,8 +501,10 @@ class ComputationEngine:
                 )
 
                 # Solar forecast: pessimistic estimate between now and DW
+                # Include tomorrow's forecast when target is tomorrow morning
+                all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
                 solar_kwh = self._sum_solar_before_target(
-                    data.solcast_today, now_dt, target_hour
+                    all_solcast, now_dt, target_hour
                 )
 
                 # Consumption estimate: current load extrapolated
