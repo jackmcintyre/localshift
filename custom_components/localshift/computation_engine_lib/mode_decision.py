@@ -14,6 +14,9 @@ _LOGGER = logging.getLogger(__name__)
 # Threshold for "very cheap" price (80% of effective cheap price)
 VERY_CHEAP_PRICE_FACTOR = 0.8
 
+# Buffer below current SOC for preservation (Issue #350)
+PRESERVE_BUFFER_PERCENT = 5.0
+
 
 class ModeDecisionEngine:
     """Compute active battery mode and maintain decision logs."""
@@ -277,6 +280,65 @@ class ModeDecisionEngine:
                 data.manual_override,
             )
             data.active_mode = BatteryMode.SELF_CONSUMPTION
+
+        # Issue #350: Battery preservation when charging is needed
+        # If solar cannot reach the target, we need to preserve the battery
+        # to avoid discharging energy that will need to be replaced via grid charging.
+        # This is determined by solar_can_reach_target which uses solar-only simulation.
+        self._compute_preserve_soc(data, now_dt)
+
+    def _compute_preserve_soc(self, data: CoordinatorData, now_dt: datetime) -> None:
+        """Compute battery preservation SOC when charging is needed.
+
+        Issue #350: When solar cannot reach the target, we need to preserve
+        the battery charge instead of discharging freely. This is achieved
+        by setting a raised backup reserve that prevents discharge below
+        the current SOC (minus a small buffer).
+
+        Args:
+            data: CoordinatorData to update with preserve_soc
+            now_dt: Current datetime
+        """
+        # Reset preserve_soc by default
+        data.preserve_soc = None
+
+        # Only preserve when in SELF_CONSUMPTION mode (not actively charging/discharging)
+        if data.active_mode != BatteryMode.SELF_CONSUMPTION:
+            return
+
+        # Don't preserve during demand window (handled by DEMAND_BLOCK mode)
+        if data.demand_window_active:
+            return
+
+        # Check if charging is needed to meet the target
+        # solar_can_reach_target is True if solar alone can reach the target
+        charging_needed = not data.solar_can_reach_target
+
+        if charging_needed:
+            # Preserve current SOC (minus buffer) to avoid discharging
+            # energy that will need to be replaced via grid charging
+            preserve_level = max(
+                data.backup_reserve,  # Don't go below existing reserve
+                data.soc - PRESERVE_BUFFER_PERCENT,  # Current SOC minus buffer
+            )
+            data.preserve_soc = preserve_level
+
+            _LOGGER.info(
+                "BATTERY_PRESERVE: Charging needed for target, preserving SOC at %.1f%% "
+                "(current=%.1f%%, buffer=%.1f%%, solar_can_reach=%s)",
+                preserve_level,
+                data.soc,
+                PRESERVE_BUFFER_PERCENT,
+                data.solar_can_reach_target,
+            )
+        else:
+            # Solar can reach target - no preservation needed
+            _LOGGER.debug(
+                "BATTERY_PRESERVE: Solar can reach target, no preservation needed "
+                "(solar_can_reach=%s, SOC=%.1f%%)",
+                data.solar_can_reach_target,
+                data.soc,
+            )
 
     def add_to_decision_log(
         self,

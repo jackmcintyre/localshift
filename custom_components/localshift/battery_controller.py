@@ -192,17 +192,32 @@ class BatteryController:
     ) -> bool:
         """Set battery to self consumption mode (reserve=10, self_consumption).
 
+        Issue #350: When preserve_soc is set, use that as the backup reserve
+        instead of the default 10%. This prevents battery discharge when
+        charging is needed to meet a demand window target.
+
         Returns:
             True if successful, False otherwise.
         """
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
 
+        # Determine backup reserve: use preserve_soc if set, otherwise default to 10%
+        reserve = data.preserve_soc if data.preserve_soc is not None else 10
+
         if dry_run:
-            _LOGGER.info("DRY RUN: set_self_consumption")
+            _LOGGER.info(
+                "DRY RUN: set_self_consumption (reserve=%s, preserve_soc=%s)",
+                reserve,
+                data.preserve_soc,
+            )
             return True
 
-        _LOGGER.info("Setting battery to self consumption mode")
+        _LOGGER.info(
+            "Setting battery to self consumption mode (reserve=%s, preserve_soc=%s)",
+            reserve,
+            data.preserve_soc,
+        )
 
         # Disable grid charging first - this is critical for self-consumption mode
         # Without this, the battery will charge from grid even in self-consumption mode
@@ -223,7 +238,7 @@ class BatteryController:
             )
             return False
 
-        if not await self._set_backup_reserve(10):
+        if not await self._set_backup_reserve(reserve):
             _LOGGER.error(
                 "Aborting self_consumption mode: Failed to set backup reserve"
             )
@@ -232,7 +247,7 @@ class BatteryController:
         # Validate transition completed successfully
         if not await self.validate_transition(
             expected_operation_mode="self_consumption",
-            expected_backup_reserve=10,
+            expected_backup_reserve=reserve,
             expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
             expected_grid_charging_allowed=False,
             timeout=10,
@@ -241,7 +256,8 @@ class BatteryController:
             return False
 
         _LOGGER.info(
-            "Successfully completed self_consumption mode transition with validation"
+            "Successfully completed self_consumption mode transition with validation (reserve=%s)",
+            reserve,
         )
         return True
 
