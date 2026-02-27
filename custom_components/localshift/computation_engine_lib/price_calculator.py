@@ -120,15 +120,19 @@ def get_price_for_slot(
 def get_price_for_slot_with_source(
     price_forecasts: list[dict[str, Any]],
     slot_start: datetime,
+    interval_minutes: int = 15,
 ) -> tuple[float, str]:
     """Get price for a slot along with price source metadata.
 
     Issue #327: Returns the price source ("5min" or "30min") to support
     hybrid timescale forecasting.
 
+    Issue #329: Supports variable slot durations (5, 15, or 30 minutes).
+
     Args:
         price_forecasts: List of price forecast entries from Amber.
         slot_start: Start time of the slot to check.
+        interval_minutes: Slot duration in minutes (default 15).
 
     Returns:
         Tuple of (price, price_source):
@@ -145,7 +149,7 @@ def get_price_for_slot_with_source(
     else:
         slot_start = dt_util.as_local(slot_start)
 
-    slot_end = slot_start + timedelta(minutes=15)
+    slot_end = slot_start + timedelta(minutes=interval_minutes)
 
     # Track prices and their sources
     prices_5min: list[float] = []
