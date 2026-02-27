@@ -117,10 +117,6 @@ def compute_hybrid_slot_schedule(
         if slot_start is None:
             continue
 
-        # Skip past slots (only skip if strictly before now)
-        if slot_start < now_local:
-            continue
-
         # Determine duration from entry or calculate from gap to next
         duration_minutes = get_slot_duration_minutes(entry)
         if duration_minutes is None:
@@ -133,6 +129,12 @@ def compute_hybrid_slot_schedule(
 
         if duration_minutes is None:
             continue  # Skip if we can't determine duration
+
+        # Skip slots that have already ENDED (keep the slot that covers "now")
+        # A slot covers "now" if: slot_start <= now < slot_end
+        slot_end = slot_start + timedelta(minutes=duration_minutes)
+        if slot_end <= now_local:
+            continue
 
         # Accept 5-min, 30-min, or 60-min slots (60-min for backward compatibility with tests)
         # Amber native granularities are 5-min and 30-min, but tests may use 60-min
@@ -205,6 +207,40 @@ def compute_hybrid_slot_schedule(
 
     # Step 6: Sort final slots by start time
     slots.sort(key=lambda x: x["start"])
+
+    # Step 6.5: Ensure there's a slot covering "now"
+    # If Amber's first slot is AFTER now, we need a synthetic current slot
+    # This can happen when Amber's forecast starts a few minutes in the future
+    first_slot_time = slots[0]["start"] if slots else None
+    needs_synthetic = first_slot_time and first_slot_time > now_local
+    _LOGGER.info(
+        "SYNTHETIC_SLOT_CHECK: slots=%d, first_slot=%s, now=%s, needs_synthetic=%s",
+        len(slots),
+        first_slot_time.strftime("%H:%M:%S") if first_slot_time else "N/A",
+        now_local.strftime("%H:%M:%S"),
+        "YES" if needs_synthetic else "NO",
+    )
+    if needs_synthetic:
+        # Create a synthetic slot at the current 5-minute boundary
+        current_5min = (now_local.minute // 5) * 5
+        synthetic_start = now_local.replace(
+            minute=current_5min, second=0, microsecond=0
+        )
+        # Use the first real slot's price as estimate (or 0 if no slots)
+        estimated_price = slots[0]["price"] if slots else 0.0
+        synthetic_slot = {
+            "start": synthetic_start,
+            "interval_minutes": 5,
+            "price": estimated_price,
+            "price_source": "synthetic",  # Mark as synthetic for debugging
+        }
+        slots.insert(0, synthetic_slot)
+        _LOGGER.info(
+            "Created synthetic slot at %s (Amber first slot was at %s, gap=%.0fs)",
+            synthetic_start.strftime("%H:%M:%S"),
+            slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
+            (slots[1]["start"] - synthetic_start).total_seconds() if len(slots) > 1 else 0,
+        )
 
     # Step 7: Calculate counts and metadata
     # Note: 60-min slots are counted as 30-min for backward compatibility
