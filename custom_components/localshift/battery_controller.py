@@ -151,6 +151,9 @@ class BatteryController:
         This must be OFF in self-consumption mode to prevent unwanted grid charging.
         This must be ON in force_charge/boost_charge modes to enable grid charging.
 
+        Issue #375: Added retry logic with verification to ensure the switch
+        state actually changes, as Teslemetry/Tesla API may have propagation delays.
+
         Args:
             allowed: True to allow grid charging, False to disable.
 
@@ -158,36 +161,76 @@ class BatteryController:
             True if successful, False otherwise.
         """
         entity_id = self._get_entity_id("teslemetry_allow_charging_from_grid")
-        start_time = time.monotonic()
         service = "turn_on" if allowed else "turn_off"
-        _LOGGER.info(
-            "[TRANSITION] Setting grid charging allowed: %s → %s", entity_id, allowed
-        )
 
-        try:
-            await self.hass.services.async_call(
-                "switch",
-                service,
-                {"entity_id": entity_id},
-                blocking=True,
-            )
-            elapsed = time.monotonic() - start_time
+        # Issue #375: Retry logic with verification
+        max_retries = 3
+        retry_delay = 2.0  # seconds between retries
+
+        for attempt in range(max_retries):
+            start_time = time.monotonic()
             _LOGGER.info(
-                "[TRANSITION] Grid charging allowed set to %s in %.2fs",
+                "[TRANSITION] Setting grid charging allowed: %s → %s (attempt %d/%d)",
+                entity_id,
                 allowed,
-                elapsed,
+                attempt + 1,
+                max_retries,
             )
-            return True
-        except Exception as e:
-            elapsed = time.monotonic() - start_time
-            _LOGGER.error(
-                "[TRANSITION] Failed to set grid charging allowed to %s after %.2fs: %s",
-                allowed,
-                elapsed,
-                e,
-                exc_info=True,
-            )
-            return False
+
+            try:
+                await self.hass.services.async_call(
+                    "switch",
+                    service,
+                    {"entity_id": entity_id},
+                    blocking=True,
+                )
+                elapsed = time.monotonic() - start_time
+
+                # Verify the state actually changed
+                await asyncio.sleep(1.0)  # Wait for state to propagate
+                actual_state = self._read_bool(entity_id)
+
+                if actual_state == allowed:
+                    _LOGGER.info(
+                        "[TRANSITION] Grid charging allowed set to %s in %.2fs (verified)",
+                        allowed,
+                        elapsed,
+                    )
+                    return True
+                else:
+                    _LOGGER.warning(
+                        "[TRANSITION] Grid charging switch not reflected after %.2fs: "
+                        "expected=%s, actual=%s (attempt %d/%d)",
+                        elapsed,
+                        allowed,
+                        actual_state,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    # Continue to retry
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay)
+
+            except Exception as e:
+                elapsed = time.monotonic() - start_time
+                _LOGGER.error(
+                    "[TRANSITION] Failed to set grid charging allowed to %s after %.2fs: %s (attempt %d/%d)",
+                    allowed,
+                    elapsed,
+                    e,
+                    attempt + 1,
+                    max_retries,
+                    exc_info=True,
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+
+        _LOGGER.error(
+            "[TRANSITION] Grid charging allowed FAILED after %d attempts: expected=%s",
+            max_retries,
+            allowed,
+        )
+        return False
 
     async def set_self_consumption(
         self, data: CoordinatorData, dry_run: bool = False
@@ -810,21 +853,48 @@ class BatteryController:
                     "Operation mode matched, waiting for reserve/export to sync..."
                 )
 
-        # Final check: if operation mode is correct, consider it a success
-        # Tesla may lag in updating reserve, but the mode command went through
+        # Final check: operation_mode fallback is ONLY allowed when grid_charging is not critical
+        # Issue #375: grid_charging must be validated - it's critical for self_consumption mode
         final_operation_mode = self._read_str(operation_mode_entity)
+        final_grid_charging = (
+            self._read_bool(grid_charging_entity)
+            if expected_grid_charging_allowed is not None
+            else None
+        )
         elapsed = time.monotonic() - validation_start
+
+        # Check if grid_charging matches (only if it was explicitly expected)
+        grid_charging_matches = (
+            final_grid_charging == expected_grid_charging_allowed
+            if expected_grid_charging_allowed is not None
+            else True
+        )
+
         if final_operation_mode == expected_operation_mode:
-            _LOGGER.info(
-                "[VALIDATION] ACCEPTED via operation_mode match after %.1fs (reserve/export may lag)",
-                elapsed,
-            )
-            return True
+            if grid_charging_matches:
+                # Operation mode AND grid_charging both match - accept with warning about reserve/export
+                _LOGGER.info(
+                    "[VALIDATION] ACCEPTED via operation_mode + grid_charging match after %.1fs (reserve/export may lag)",
+                    elapsed,
+                )
+                return True
+            else:
+                # Operation mode matches but grid_charging doesn't - this is a FAILURE
+                # Grid charging control is critical for preventing unwanted grid charging
+                _LOGGER.error(
+                    "[VALIDATION] FAILED after %.1fs: operation_mode matched but grid_charging MISMATCH "
+                    "(expected=%s, actual=%s). Grid charging control is critical for %s mode.",
+                    elapsed,
+                    expected_grid_charging_allowed,
+                    final_grid_charging,
+                    expected_operation_mode,
+                )
+                return False
 
         _LOGGER.error(
             "[VALIDATION] FAILED after %.1fs (%d attempts): "
             "expected (op=%s, reserve=%s, export=%s, grid_charging=%s), "
-            "actual (op=%s)",
+            "actual (op=%s, grid_charging=%s)",
             elapsed,
             timeout,
             expected_operation_mode,
@@ -832,6 +902,7 @@ class BatteryController:
             expected_export_mode,
             expected_grid_charging_allowed,
             final_operation_mode,
+            final_grid_charging,
         )
         return False
 
