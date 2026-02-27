@@ -77,6 +77,8 @@ class TestSetSelfConsumption:
 
         # Mock state reads for validation
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "self_consumption"
@@ -135,6 +137,8 @@ class TestSetSelfConsumption:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "self_consumption"
@@ -173,6 +177,8 @@ class TestSetForceCharge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "backup"
@@ -238,6 +244,8 @@ class TestSetBoostCharge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -275,6 +283,8 @@ class TestSetBoostCharge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -319,6 +329,8 @@ class TestSetForceDischarge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -358,6 +370,8 @@ class TestSetForceDischarge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -394,6 +408,8 @@ class TestSetForceDischarge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -429,6 +445,8 @@ class TestSetForceDischarge:
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -476,6 +494,8 @@ class TestSetProactiveExport:
         coordinator_data.soc = 50.0
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -514,6 +534,8 @@ class TestSetProactiveExport:
         coordinator_data.soc = 60.0
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -547,6 +569,8 @@ class TestSetProactiveExport:
         coordinator_data.soc = 5.0  # Low SOC
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
@@ -580,6 +604,8 @@ class TestSetProactiveExport:
         coordinator_data.soc = 50.0
 
         def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
             state = MagicMock()
             if "operation_mode" in entity_id:
                 state.state = "autonomous"

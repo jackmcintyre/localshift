@@ -487,3 +487,8 @@ class CoordinatorData:
     extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
         default_factory=ExtendedAccuracyMetrics
     )
+
+    # --- Hybrid timescale metadata (Issue #329) ---
+    hybrid_slot_metadata: dict[str, Any] = field(
+        default_factory=dict
+    )  # slot_intervals, transition_boundary, total_slots

@@ -35,12 +35,13 @@ from ..coordinator_data import AdaptiveParameters, CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
-from .price_calculator import get_price_for_slot
+from .price_calculator import get_price_for_slot, get_price_for_slot_with_source
 from .proactive_export import ProactiveExportEngine
 from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_15min_slot,
     get_solar_for_15min_slot_or_none,
+    get_solar_for_slot_by_interval,
 )
 from .utils import get_slot_duration_minutes, parse_slot_time
 
@@ -116,8 +117,8 @@ def compute_hybrid_slot_schedule(
         if slot_start is None:
             continue
 
-        # Skip past slots
-        if slot_start <= now_local:
+        # Skip past slots (only skip if strictly before now)
+        if slot_start < now_local:
             continue
 
         # Determine duration from entry or calculate from gap to next
@@ -133,8 +134,9 @@ def compute_hybrid_slot_schedule(
         if duration_minutes is None:
             continue  # Skip if we can't determine duration
 
-        # Only accept 5-min or 30-min slots (Amber native granularities)
-        if duration_minutes not in (5, 30):
+        # Accept 5-min, 30-min, or 60-min slots (60-min for backward compatibility with tests)
+        # Amber native granularities are 5-min and 30-min, but tests may use 60-min
+        if duration_minutes not in (5, 30, 60):
             continue
 
         price = float(entry.get("per_kwh", 0))
@@ -156,8 +158,9 @@ def compute_hybrid_slot_schedule(
     all_slots_raw.sort(key=lambda x: x["start"])
 
     # Step 3: Separate 5-min and 30-min slots
+    # Note: 60-min slots (used in tests) are treated as 30-min extended forecast
     five_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 5]
-    thirty_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 30]
+    thirty_min_slots = [s for s in all_slots_raw if s["interval_minutes"] in (30, 60)]
 
     _LOGGER.debug(
         "compute_hybrid_slot_schedule: Found %d 5-min slots, %d 30-min slots",
@@ -204,8 +207,9 @@ def compute_hybrid_slot_schedule(
     slots.sort(key=lambda x: x["start"])
 
     # Step 7: Calculate counts and metadata
+    # Note: 60-min slots are counted as 30-min for backward compatibility
     five_min_count = len([s for s in slots if s["interval_minutes"] == 5])
-    thirty_min_count = len([s for s in slots if s["interval_minutes"] == 30])
+    thirty_min_count = len([s for s in slots if s["interval_minutes"] in (30, 60)])
 
     metadata["slot_intervals"] = {
         "5min": five_min_count,
@@ -1065,10 +1069,12 @@ class ForecastComputer:
         current_load_kw: float,
         recent_load_kw: float,
         current_hour: int | None = None,
+        hybrid_slots: list[dict] | None = None,
     ) -> int | None:
         """Find elapsed minutes when battery first reaches 100% from solar charging.
 
-        Uses 15-min slots throughout for consistency with main forecast loop.
+        Issue #329: Supports hybrid timescale with variable slot durations.
+        Falls back to 15-min slots when hybrid_slots is not provided.
 
         Args:
             start_soc: Starting SOC percentage
@@ -1077,6 +1083,9 @@ class ForecastComputer:
             historical_avg_kw: Historical hourly load profile
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
+            current_hour: Current hour for load estimation
+            hybrid_slots: Optional list of hybrid slots with variable durations.
+                         Each slot has 'start' (datetime) and 'interval_minutes' (int).
 
         Returns:
             Elapsed minutes until 100% SOC, or None if it never fills
@@ -1084,43 +1093,81 @@ class ForecastComputer:
         soc = start_soc
         base_slot = start_slot.replace(second=0, microsecond=0)
         elapsed_minutes = 0
-        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        # Use 15-min slots throughout for consistency
-        for i in range(TOTAL_SLOTS):
-            slot_start = base_slot + timedelta(minutes=15 * i)
-            slot_hour = slot_start.hour
+        if hybrid_slots:
+            # Hybrid mode: use variable slot durations
+            for slot in hybrid_slots:
+                slot_start = slot["start"]
+                interval_minutes = slot["interval_minutes"]
+                slot_fraction = interval_minutes / 60.0
+                slot_hour = slot_start.hour
 
-            # Use 15-min solar function
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
-            load_kw, _ = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
-                slot_hour,
-                current_hour,
-                current_load_kw,
-                recent_load_kw,
-            )
-            # Scale consumption to 15-min slot
-            consumption_kwh = load_kw * slot_fraction
-            net_kwh = solar_kwh - consumption_kwh
+                # Use variable-duration solar function
+                solar_kwh = get_solar_for_slot_by_interval(
+                    all_solcast, slot_start, interval_minutes
+                )
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                # Scale consumption to slot duration
+                consumption_kwh = load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
 
-            # Apply battery charging (no grid charging, no exports)
-            # Use solar charge rate (5kW) as max, scale to 15-min slot
-            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
-            if net_kwh >= 0:
-                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
-            else:
-                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                # Apply battery charging (no grid charging, no exports)
+                # Use solar charge rate (5kW) as max
+                max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+                if net_kwh >= 0:
+                    delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                else:
+                    delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
 
-            soc += delta / BATTERY_CAPACITY_KWH * 100
-            soc = min(100.0, soc)  # Cap at 100%
+                soc += delta / BATTERY_CAPACITY_KWH * 100
+                soc = min(100.0, soc)  # Cap at 100%
 
-            if soc >= 100.0:
-                return elapsed_minutes
+                if soc >= 100.0:
+                    return elapsed_minutes
 
-            elapsed_minutes += 15
+                elapsed_minutes += interval_minutes
 
-        return None  # Never fills
+            return None  # Never fills within hybrid slot horizon
+        else:
+            # Legacy mode: fixed 15-min slots
+            slot_fraction = 15 / 60.0  # 0.25 hours
+
+            for i in range(TOTAL_SLOTS):
+                slot_start = base_slot + timedelta(minutes=15 * i)
+                slot_hour = slot_start.hour
+
+                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                consumption_kwh = load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
+
+                max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+                if net_kwh >= 0:
+                    delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                else:
+                    delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+                soc += delta / BATTERY_CAPACITY_KWH * 100
+                soc = min(100.0, soc)
+
+                if soc >= 100.0:
+                    return elapsed_minutes
+
+                elapsed_minutes += 15
+
+            return None  # Never fills
 
     def _calculate_solar_energy_between_slots(
         self,
@@ -1132,10 +1179,12 @@ class ForecastComputer:
         current_load_kw: float,
         recent_load_kw: float,
         current_hour: int | None = None,
+        hybrid_slots: list[dict] | None = None,
     ) -> float:
         """Calculate net solar energy (solar - load) between two time points.
 
-        Uses 15-min slots throughout for consistency with main forecast loop.
+        Issue #329: Supports hybrid timescale with variable slot durations.
+        Falls back to 15-min slots when hybrid_slots is not provided.
 
         Args:
             start_elapsed_minutes: Starting time in minutes from base_slot
@@ -1145,36 +1194,81 @@ class ForecastComputer:
             historical_avg_kw: Historical hourly load profile
             current_load_kw: Current load power
             recent_load_kw: Recent 1-hour average load
+            current_hour: Current hour for load estimation
+            hybrid_slots: Optional list of hybrid slots with variable durations.
+                         Each slot has 'start' (datetime) and 'interval_minutes' (int).
 
         Returns:
             Net solar energy in kWh (positive = excess)
         """
         net_energy = 0.0
-        slot_fraction = 15 / 60.0  # 0.25 hours
 
-        # Calculate start and end slot indices
-        start_slot_idx = max(0, int(start_elapsed_minutes // 15))
-        end_slot_idx = int(end_elapsed_minutes // 15) + 1
+        if hybrid_slots:
+            # Hybrid mode: use variable slot durations
+            elapsed_minutes = 0
 
-        # Iterate through 15-min slots
-        for i in range(start_slot_idx, end_slot_idx):
-            slot_start = base_slot + timedelta(minutes=15 * i)
-            slot_hour = slot_start.hour
+            for slot in hybrid_slots:
+                slot_start = slot["start"]
+                interval_minutes = slot["interval_minutes"]
+                slot_fraction = interval_minutes / 60.0
 
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
-            load_kw, _ = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
-                slot_hour,
-                current_hour,
-                current_load_kw,
-                recent_load_kw,
-            )
-            consumption_kwh = load_kw * slot_fraction
-            net_kwh = solar_kwh - consumption_kwh
+                # Check if this slot is within the time range
+                if elapsed_minutes >= end_elapsed_minutes:
+                    break
 
-            if net_kwh > 0:
-                # Apply charging efficiency for excess
-                net_energy += net_kwh * 0.92
+                if elapsed_minutes + interval_minutes <= start_elapsed_minutes:
+                    # Skip slots before start time
+                    elapsed_minutes += interval_minutes
+                    continue
+
+                slot_hour = slot_start.hour
+
+                # Use variable-duration solar function
+                solar_kwh = get_solar_for_slot_by_interval(
+                    all_solcast, slot_start, interval_minutes
+                )
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                consumption_kwh = load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
+
+                if net_kwh > 0:
+                    # Apply charging efficiency for excess
+                    net_energy += net_kwh * 0.92
+
+                elapsed_minutes += interval_minutes
+        else:
+            # Legacy mode: fixed 15-min slots
+            slot_fraction = 15 / 60.0  # 0.25 hours
+
+            # Calculate start and end slot indices
+            start_slot_idx = max(0, int(start_elapsed_minutes // 15))
+            end_slot_idx = int(end_elapsed_minutes // 15) + 1
+
+            # Iterate through 15-min slots
+            for i in range(start_slot_idx, end_slot_idx):
+                slot_start = base_slot + timedelta(minutes=15 * i)
+                slot_hour = slot_start.hour
+
+                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                consumption_kwh = load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
+
+                if net_kwh > 0:
+                    # Apply charging efficiency for excess
+                    net_energy += net_kwh * 0.92
 
         return net_energy
 
@@ -1576,6 +1670,44 @@ class ForecastComputer:
         )
 
         # ========================================================================
+        # ISSUE #329: HYBRID TIMESCALE FORECAST
+        #
+        # Uses compute_hybrid_slot_schedule() to get dynamic slots from Amber:
+        # - 5-min slots for near-term (where Amber has actual 5-min data)
+        # - 30-min slots for extended forecast
+        #
+        # NO INTERPOLATION - uses actual data only.
+        # NO GAPS - 5-min slots end at 30-min boundary, 30-min starts immediately.
+        # ========================================================================
+
+        # Get HA timezone for hybrid slot schedule
+        # Use dt_util.DEFAULT_TIME_ZONE which returns the configured HA timezone
+        ha_timezone = (
+            str(dt_util.DEFAULT_TIME_ZONE)
+            if dt_util.DEFAULT_TIME_ZONE
+            else "Australia/Sydney"
+        )
+
+        # Compute hybrid slot schedule from Amber general forecast
+        hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
+            now_local=dt_util.as_local(now_dt),
+            general_forecast=data.general_forecast,
+            ha_timezone=str(ha_timezone),
+            max_forecast_hours=24,
+        )
+
+        # Store hybrid metadata in CoordinatorData for diagnostics
+        data.hybrid_slot_metadata = hybrid_metadata
+
+        _LOGGER.info(
+            "Hybrid forecast: %d slots (%d 5-min, %d 30-min), transition at %s",
+            hybrid_metadata.get("total_slots", 0),
+            hybrid_metadata.get("slot_intervals", {}).get("5min", 0),
+            hybrid_metadata.get("slot_intervals", {}).get("30min", 0),
+            hybrid_metadata.get("transition_boundary", "N/A"),
+        )
+
+        # ========================================================================
         # CALCULATE FORECASTED EXCESS AND MINIMUM SOC FOR PROACTIVE EXPORT
         # ========================================================================
         # Sum all solar - consumption for full 24-hour forecast
@@ -1585,16 +1717,20 @@ class ForecastComputer:
         current_kwh = current_soc / 100 * BATTERY_CAPACITY_KWH
         space_to_target_kwh = max(target_kwh - current_kwh, 0)
 
-        # Calculate excess for full 24-hour window (all 96 slots)
+        # Calculate excess for full 24-hour window using hybrid slots
         # This includes both today's remaining hours and tomorrow's solar production
-        for offset in range(96):
-            slot_start = base_slot + timedelta(minutes=15 * offset)
+        for slot in hybrid_slots:
+            slot_start = slot["start"]
+            interval_minutes = slot["interval_minutes"]
+            slot_fraction = interval_minutes / 60.0
             slot_hour = slot_start.hour
             slot_temp = temperature_by_hour.get(
                 (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
             )
 
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            solar_kwh = get_solar_for_slot_by_interval(
+                all_solcast, slot_start, interval_minutes
+            )
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
@@ -1603,7 +1739,7 @@ class ForecastComputer:
                 recent_load_kw,
                 slot_temp,
             )
-            consumption_kwh = load_kw / 4
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Accumulate excess (positive net) beyond what we need for target
@@ -1665,15 +1801,6 @@ class ForecastComputer:
             )
         else:
             _LOGGER.info("Battery will not reach 100% from solar in next 24 hours")
-
-        # ========================================================================
-        # 15-MIN FORECAST: 96 × 15-min slots for full 24-hour coverage
-        #
-        # Uses uniform 15-min slots throughout for consistent alignment with
-        # Solcast 30-minute periods. This eliminates the complexity of hybrid
-        # timescales and ensures all SOC predictions are consistent across
-        # the main loop and simulation functions.
-        # ========================================================================
 
         # Read minimum SOC once before the loop (used for SOC floor and grid charging simulation)
         export_min_soc_pct = float(

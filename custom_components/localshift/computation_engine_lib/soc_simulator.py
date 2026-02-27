@@ -13,7 +13,7 @@ from ..const import (
     CHARGE_RATE_SOLAR_KW,
 )
 from .price_calculator import get_price_for_slot
-from .solar_utils import get_solar_for_15min_slot
+from .solar_utils import get_solar_for_15min_slot, get_solar_for_slot_by_interval
 
 
 class SocSimulator:
@@ -41,10 +41,12 @@ class SocSimulator:
         current_hour: int | None = None,
         baseline_avg_kw: dict[int, float] | None = None,
         dw_end_time: time | None = None,
+        hybrid_slots: list[dict] | None = None,
     ) -> tuple[float, float, bool, bool]:
         """Simulate future SOC trajectory with solar only (no grid charging).
 
-        Uses 15-min slots throughout for consistency with main forecast loop.
+        Issue #329: Supports hybrid timescale with variable slot durations.
+        Falls back to 15-min slots when hybrid_slots is not provided.
 
         When end_time == dw_start_time, simulation stops at DW start (existing behavior).
         When end_time > dw_start_time, simulation continues through DW period.
@@ -81,6 +83,8 @@ class SocSimulator:
             current_hour: Current hour for load estimation
             baseline_avg_kw: Optional baseline (non-HVAC) load profile for #137
             dw_end_time: Demand window end time (for DW-period max_soc tracking)
+            hybrid_slots: Optional list of hybrid slots with variable durations.
+                         Each slot has 'start' (datetime) and 'interval_minutes' (int).
 
         Returns:
             (soc_at_end_pct, max_soc_pct, can_reach_target, was_truncated)
@@ -119,10 +123,8 @@ class SocSimulator:
         if sim_end <= base_slot:
             return soc, soc, soc >= target_pct, truncated
 
-        # Use 15-min slots throughout for consistency
         max_soc = soc
         max_soc_in_dw = soc  # Track max SOC specifically during DW period
-        slot_fraction = 15 / 60.0  # 0.25 hours
 
         # Determine DW period boundaries for max_soc_in_dw tracking
         dw_start_dt = base_slot.replace(
@@ -147,42 +149,91 @@ class SocSimulator:
         else:
             dw_end_dt = dw_start_dt + timedelta(hours=6)  # Default 6-hour DW
 
-        slot_time = base_slot
-        while slot_time < sim_end:
-            slot_time += timedelta(minutes=15)
-            slot_hour = slot_time.hour
+        if hybrid_slots:
+            # Hybrid mode: use variable slot durations
+            for slot in hybrid_slots:
+                slot_start = slot["start"]
+                interval_minutes = slot["interval_minutes"]
+                slot_fraction = interval_minutes / 60.0
 
-            # Get solar and load for this 15-min slot
-            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+                # Stop if we've reached the end time
+                if slot_start >= sim_end:
+                    break
 
-            # ISSUE #137: Use baseline load profile when provided
-            load_kw, _ = self._estimate_hourly_consumption_kw(
-                load_profile,  # Uses baseline_avg_kw if provided
-                slot_hour,
-                current_hour,
-                current_load_kw,
-                recent_load_kw,
-            )
-            consumption_kwh = load_kw * slot_fraction
-            net_kwh = solar_kwh - consumption_kwh
+                slot_hour = slot_start.hour
 
-            # Apply battery delta (no grid charging)
-            # Use solar charge rate (5kW) as max
-            max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
-            if net_kwh >= 0:
-                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
-            else:
-                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                # Use variable-duration solar function
+                solar_kwh = get_solar_for_slot_by_interval(
+                    all_solcast, slot_start, interval_minutes
+                )
 
-            soc += delta / BATTERY_CAPACITY_KWH * 100
-            soc = max(min_soc_pct, min(100.0, soc))
+                # ISSUE #137: Use baseline load profile when provided
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    load_profile,  # Uses baseline_avg_kw if provided
+                    slot_hour,
+                    current_hour,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                consumption_kwh = load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
 
-            max_soc = max(max_soc, soc)
+                # Apply battery delta (no grid charging)
+                # Use solar charge rate (5kW) as max
+                max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+                if net_kwh >= 0:
+                    delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                else:
+                    delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
 
-            # Track max_soc specifically during DW period
-            # This is critical for allow_dw_entry_under_target logic
-            if dw_start_dt <= slot_time < dw_end_dt:
-                max_soc_in_dw = max(max_soc_in_dw, soc)
+                soc += delta / BATTERY_CAPACITY_KWH * 100
+                soc = max(min_soc_pct, min(100.0, soc))
+
+                max_soc = max(max_soc, soc)
+
+                # Track max_soc specifically during DW period
+                if dw_start_dt <= slot_start < dw_end_dt:
+                    max_soc_in_dw = max(max_soc_in_dw, soc)
+        else:
+            # Legacy mode: fixed 15-min slots
+            slot_fraction = 15 / 60.0  # 0.25 hours
+
+            slot_time = base_slot
+            while slot_time < sim_end:
+                slot_time += timedelta(minutes=15)
+                slot_hour = slot_time.hour
+
+                # Get solar and load for this 15-min slot
+                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
+
+                # ISSUE #137: Use baseline load profile when provided
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    load_profile,  # Uses baseline_avg_kw if provided
+                    slot_hour,
+                    current_hour,
+                    current_load_kw,
+                    recent_load_kw,
+                )
+                consumption_kwh = load_kw * slot_fraction
+                net_kwh = solar_kwh - consumption_kwh
+
+                # Apply battery delta (no grid charging)
+                # Use solar charge rate (5kW) as max
+                max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+                if net_kwh >= 0:
+                    delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                else:
+                    delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+
+                soc += delta / BATTERY_CAPACITY_KWH * 100
+                soc = max(min_soc_pct, min(100.0, soc))
+
+                max_soc = max(max_soc, soc)
+
+                # Track max_soc specifically during DW period
+                # This is critical for allow_dw_entry_under_target logic
+                if dw_start_dt <= slot_time < dw_end_dt:
+                    max_soc_in_dw = max(max_soc_in_dw, soc)
 
         # FIX: When simulating through DW period (allow_dw_entry_under_target=True),
         # check if max_soc DURING DW reaches target, not just max_soc during entire simulation.

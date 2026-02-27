@@ -298,6 +298,7 @@ class TestExpectedStateForMode:
         Grid charging uses backup mode for 3.3 kW charging.
         Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
         The actual reserve is tracked in _grid_charging_reserve.
+        Grid charging must be enabled for this mode.
         """
         op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.GRID_CHARGING
@@ -308,7 +309,7 @@ class TestExpectedStateForMode:
         assert grid_charging == True
 
     def test_boost_charging_expected_state(self, state_machine):
-        """BOOST_CHARGING should expect 100% reserve."""
+        """BOOST_CHARGING should expect 100% reserve and grid charging enabled."""
         op, reserve, export, grid_charging = state_machine._get_expected_state_for_mode(
             BatteryMode.BOOST_CHARGING
         )
