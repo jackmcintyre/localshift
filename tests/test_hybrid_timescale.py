@@ -405,3 +405,119 @@ class TestFifteenMinSlots:
 
         # Energy should be reasonable
         assert energy > 0
+
+
+class TestThirtyMinSlotMisalignment:
+    """Test 30-min slot solar retrieval with misaligned periods.
+
+    Issue #361: Amber 30-min slots may not exactly align with Solcast 30-min periods.
+    The get_solar_for_30min_slot function must use overlap-based accumulation,
+    not exact match, to handle these cases.
+    """
+
+    def test_30min_slot_exact_match(self):
+        """When slot exactly matches Solcast period, returns correct energy."""
+        from custom_components.localshift.computation_engine_lib.solar_utils import (
+            get_solar_for_30min_slot,
+        )
+
+        # Solcast period at 08:00-08:30 with 4 kW average power
+        solcast = [
+            {
+                "period_start": "2024-06-15T08:00:00",
+                "pv_estimate": 4.0,  # 4 kWh per hour
+            }
+        ]
+
+        # Slot exactly matches 08:00-08:30
+        slot_start = datetime(2024, 6, 15, 8, 0, 0)
+        result = get_solar_for_30min_slot(solcast, slot_start)
+
+        # 4 kW * 0.5 hour = 2.0 kWh
+        assert abs(result - 2.0) < 0.001, f"Expected 2.0 kWh, got {result}"
+
+    def test_30min_slot_offset_by_5min(self):
+        """When slot is offset by 5 minutes, still returns correct energy.
+
+        This is the key bug fix: Amber slot at 08:05-08:35 should still get
+        solar from Solcast period 08:00-08:30 using overlap calculation.
+        """
+        from custom_components.localshift.computation_engine_lib.solar_utils import (
+            get_solar_for_30min_slot,
+        )
+
+        # Solcast period at 08:00-08:30 with 4 kW average power
+        solcast = [
+            {
+                "period_start": "2024-06-15T08:00:00",
+                "pv_estimate": 4.0,  # 4 kWh per hour
+            }
+        ]
+
+        # Slot offset by 5 minutes: 08:05-08:35
+        # Overlaps 08:00-08:30 by 25 minutes (08:05-08:30)
+        slot_start = datetime(2024, 6, 15, 8, 5, 0)
+        result = get_solar_for_30min_slot(solcast, slot_start)
+
+        # 25 min overlap = 25/60 hour * 4 kW = 1.667 kWh
+        expected = 4.0 * (25.0 / 60.0)
+        assert abs(result - expected) < 0.01, f"Expected {expected} kWh, got {result}"
+
+    def test_30min_slot_straddling_two_periods(self):
+        """When slot straddles two Solcast periods, sums both contributions."""
+        from custom_components.localshift.computation_engine_lib.solar_utils import (
+            get_solar_for_30min_slot,
+        )
+
+        # Two Solcast periods: 08:00-08:30 (4 kW) and 08:30-09:00 (5 kW)
+        solcast = [
+            {
+                "period_start": "2024-06-15T08:00:00",
+                "pv_estimate": 4.0,
+            },
+            {
+                "period_start": "2024-06-15T08:30:00",
+                "pv_estimate": 5.0,
+            },
+        ]
+
+        # Slot 08:15-08:45 overlaps both periods
+        # - 15 min overlap with 08:00-08:30 (4 kW)
+        # - 15 min overlap with 08:30-09:00 (5 kW)
+        slot_start = datetime(2024, 6, 15, 8, 15, 0)
+        result = get_solar_for_30min_slot(solcast, slot_start)
+
+        # Expected: 4 * (15/60) + 5 * (15/60) = 1.0 + 1.25 = 2.25 kWh
+        expected = 4.0 * 0.25 + 5.0 * 0.25
+        assert abs(result - expected) < 0.01, f"Expected {expected} kWh, got {result}"
+
+    def test_30min_slot_no_overlap_returns_zero(self):
+        """When slot has no overlap with any period, returns 0.0."""
+        from custom_components.localshift.computation_engine_lib.solar_utils import (
+            get_solar_for_30min_slot,
+        )
+
+        # Solcast period at 08:00-08:30
+        solcast = [
+            {
+                "period_start": "2024-06-15T08:00:00",
+                "pv_estimate": 4.0,
+            }
+        ]
+
+        # Slot at 10:00-10:30 (no overlap)
+        slot_start = datetime(2024, 6, 15, 10, 0, 0)
+        result = get_solar_for_30min_slot(solcast, slot_start)
+
+        assert result == 0.0, f"Expected 0.0 kWh for no overlap, got {result}"
+
+    def test_30min_slot_empty_forecast_returns_zero(self):
+        """When forecast list is empty, returns 0.0."""
+        from custom_components.localshift.computation_engine_lib.solar_utils import (
+            get_solar_for_30min_slot,
+        )
+
+        slot_start = datetime(2024, 6, 15, 8, 0, 0)
+        result = get_solar_for_30min_slot([], slot_start)
+
+        assert result == 0.0
