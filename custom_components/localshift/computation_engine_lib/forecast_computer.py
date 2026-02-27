@@ -36,250 +36,17 @@ from ..coordinator_data import AdaptiveParameters, CoordinatorData
 from .excess_solar import ExcessSolarEngine
 from .fit_analyzer import FitAnalyzer
 from .grid_charge_decision import GridChargeDecisionEngine
+from .load_forecaster import LoadForecaster
 from .price_calculator import get_price_for_slot
 from .proactive_export import ProactiveExportEngine
+from .slot_schedule import TOTAL_SLOTS, compute_hybrid_slot_schedule
 from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_15min_slot,
     get_solar_for_slot_by_interval,
 )
-from .utils import get_slot_duration_minutes, parse_slot_time
 
 _LOGGER = logging.getLogger(__name__)
-
-# Forecast slot constants
-# 15-min slots throughout for consistent alignment with Solcast 30-minute periods
-TOTAL_SLOTS = 96  # 24 hours × 4 slots/hour
-
-# Hybrid timescale constants (Issue #327)
-# Maximum number of 5-minute slots to use from Amber near-term forecast
-MAX_5MIN_FORECAST_HOURS = 1  # Amber typically provides ~45-60 min of 5-min data
-
-
-def compute_hybrid_slot_schedule(
-    now_local: datetime,
-    general_forecast: list[dict],
-    ha_timezone: str,
-    max_forecast_hours: int = 24,
-    current_spot_price: float | None = None,
-) -> tuple[list[dict], dict]:
-    """Build hybrid slot schedule: ALL 5-min slots, then 30-min.
-
-    Issue #327: Uses native data granularities without interpolation.
-    - Amber provides 5-min near-term (~45-60 min), then 30-min extended forecast
-    - This function identifies 5-min slots and switches to 30-min at boundary
-
-    NO INTERPOLATION - use actual data only.
-    NO GAPS - 5-min slots end at 30-min boundary, 30-min starts immediately.
-
-    Issue #367: Uses current_spot_price for synthetic slot when available,
-    instead of estimating from the first forecast slot's price.
-
-    Args:
-        now_local: Current datetime in HA local timezone
-        general_forecast: List of Amber price forecast entries with start_time, end_time, duration
-        ha_timezone: HA configured timezone (e.g., "Australia/Sydney")
-        max_forecast_hours: Maximum hours to forecast (default 24)
-        current_spot_price: Optional real-time spot price from Amber's general_price entity
-
-    Returns:
-        Tuple of (slots, metadata) where:
-        - slots: List of slot dicts with:
-            - start: datetime of slot start
-            - interval_minutes: 5 or 30
-            - price: price in $/kWh
-            - price_source: "5min", "30min", or "spot" (for current slot)
-        - metadata: Dict with:
-            - timezone: HA timezone
-            - slot_intervals: {"5min": count, "30min": count}
-            - transition_boundary: Time when 5-min switches to 30-min (or None)
-            - total_slots: Total number of slots
-    """
-    slots: list[dict] = []
-    metadata: dict = {
-        "timezone": ha_timezone,
-        "slot_intervals": {"5min": 0, "30min": 0},
-        "transition_boundary": None,
-        "total_slots": 0,
-    }
-
-    if not general_forecast:
-        _LOGGER.warning("compute_hybrid_slot_schedule: Empty general_forecast")
-        return slots, metadata
-
-    # Step 1: Parse all forecast entries and convert to local timezone
-    all_slots_raw: list[dict] = []
-    for entry in general_forecast:
-        if not isinstance(entry, dict):
-            continue
-
-        start_time_str = entry.get("start_time")
-        if not start_time_str:
-            continue
-
-        # Parse and convert to local timezone using our new utility
-        slot_start = parse_slot_time(start_time_str, ha_timezone)
-        if slot_start is None:
-            continue
-
-        # Skip past slots (only skip if strictly before now)
-        if slot_start < now_local:
-            continue
-
-        # Determine duration from entry or calculate from gap to next
-        duration_minutes = get_slot_duration_minutes(entry)
-        if duration_minutes is None:
-            # Try to calculate from end_time
-            end_time_str = entry.get("end_time")
-            if end_time_str:
-                slot_end = parse_slot_time(end_time_str, ha_timezone)
-                if slot_end:
-                    duration_minutes = int((slot_end - slot_start).total_seconds() / 60)
-
-        if duration_minutes is None:
-            continue  # Skip if we can't determine duration
-
-        # Accept 5-min, 30-min, or 60-min slots (60-min for backward compatibility with tests)
-        # Amber native granularities are 5-min and 30-min, but tests may use 60-min
-        if duration_minutes not in (5, 30, 60):
-            continue
-
-        price = float(entry.get("per_kwh", 0))
-
-        all_slots_raw.append(
-            {
-                "start": slot_start,
-                "interval_minutes": duration_minutes,
-                "price": price,
-                "price_source": "5min" if duration_minutes == 5 else "30min",
-            }
-        )
-
-    if not all_slots_raw:
-        _LOGGER.warning("compute_hybrid_slot_schedule: No valid slots after parsing")
-        return slots, metadata
-
-    # Step 2: Sort by start time
-    all_slots_raw.sort(key=lambda x: x["start"])
-
-    # Step 3: Separate 5-min and 30-min slots
-    # Note: 60-min slots (used in tests) are treated as 30-min extended forecast
-    five_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 5]
-    thirty_min_slots = [s for s in all_slots_raw if s["interval_minutes"] in (30, 60)]
-
-    _LOGGER.debug(
-        "compute_hybrid_slot_schedule: Found %d 5-min slots, %d 30-min slots",
-        len(five_min_slots),
-        len(thirty_min_slots),
-    )
-
-    # Step 4: Add ALL 5-min slots (no minimum, no maximum)
-    slots.extend(five_min_slots)
-
-    # Step 5: Find first 30-min slot at or after last 5-min slot ends
-    cutoff_time = now_local + timedelta(hours=max_forecast_hours)
-
-    if five_min_slots:
-        last_5min_end = five_min_slots[-1]["start"] + timedelta(minutes=5)
-
-        # Find 30-min slot that starts at or after this time
-        transition_boundary = None
-        for slot in thirty_min_slots:
-            if slot["start"] >= last_5min_end:
-                # Found the transition point
-                transition_boundary = slot["start"]
-                # Add this and all subsequent 30-min slots within forecast window
-                idx = thirty_min_slots.index(slot)
-                for s in thirty_min_slots[idx:]:
-                    if s["start"] < cutoff_time:
-                        slots.append(s)
-                break
-
-        metadata["transition_boundary"] = (
-            transition_boundary.strftime("%H:%M") if transition_boundary else None
-        )
-    else:
-        # No 5-min data, use 30-min only
-        for slot in thirty_min_slots:
-            if slot["start"] < cutoff_time:
-                slots.append(slot)
-        if thirty_min_slots:
-            metadata["transition_boundary"] = thirty_min_slots[0]["start"].strftime(
-                "%H:%M"
-            )
-
-    # Step 6: Sort final slots by start time
-    slots.sort(key=lambda x: x["start"])
-
-    # Step 6.5: Ensure there's a slot covering "now"
-    # If Amber's first slot is AFTER now, we need a current slot
-    # This can happen when Amber's forecast starts a few minutes in the future
-    # Issue #367: Use real-time spot price from Amber when available
-    _LOGGER.info(
-        "HYBRID_SLOTS: slots=%d, first_slot=%s, now_local=%s, comparison=%s, spot_price=%s",
-        len(slots),
-        slots[0]["start"].strftime("%H:%M:%S") if slots else "N/A",
-        now_local.strftime("%H:%M:%S"),
-        "first > now" if slots and slots[0]["start"] > now_local else "first <= now",
-        f"${current_spot_price:.4f}" if current_spot_price is not None else "N/A",
-    )
-    if slots and slots[0]["start"] > now_local:
-        # Create a slot at the current 5-minute boundary
-        current_5min = (now_local.minute // 5) * 5
-        synthetic_start = now_local.replace(
-            minute=current_5min, second=0, microsecond=0
-        )
-        # Issue #367: Prefer real-time spot price over estimated price
-        # Use spot price if available, otherwise fall back to first slot's price
-        if current_spot_price is not None and current_spot_price > 0:
-            slot_price = current_spot_price
-            price_source = "spot"  # Real-time data from Amber
-            _LOGGER.info(
-                "Using real-time spot price $%.4f for current slot (Issue #367)",
-                slot_price,
-            )
-        else:
-            # Fallback: use first real slot's price as estimate
-            slot_price = slots[0]["price"] if slots else 0.0
-            price_source = "synthetic"  # Estimated price
-            _LOGGER.info(
-                "Spot price unavailable, using estimated price $%.4f from first forecast slot",
-                slot_price,
-            )
-        synthetic_slot = {
-            "start": synthetic_start,
-            "interval_minutes": 5,
-            "price": slot_price,
-            "price_source": price_source,
-        }
-        slots.insert(0, synthetic_slot)
-        _LOGGER.info(
-            "Created current slot at %s with price_source=%s (Amber first slot was at %s, gap=%.0fs)",
-            synthetic_start.strftime("%H:%M:%S"),
-            price_source,
-            slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
-            (slots[1]["start"] - synthetic_start).total_seconds() if len(slots) > 1 else 0,
-        )
-
-    # Step 7: Calculate counts and metadata
-    # Note: 60-min slots are counted as 30-min for backward compatibility
-    five_min_count = len([s for s in slots if s["interval_minutes"] == 5])
-    thirty_min_count = len([s for s in slots if s["interval_minutes"] in (30, 60)])
-
-    metadata["slot_intervals"] = {
-        "5min": five_min_count,
-        "30min": thirty_min_count,
-    }
-    metadata["total_slots"] = len(slots)
-
-    _LOGGER.info(
-        "Hybrid slot schedule: %d 5-min slots, %d 30-min slots, transition at %s",
-        five_min_count,
-        thirty_min_count,
-        metadata["transition_boundary"] or "N/A",
-    )
-
-    return slots, metadata
 
 
 class ForecastComputer:
@@ -318,6 +85,11 @@ class ForecastComputer:
         )
 
         # Extracted helper modules (issue #145)
+        self._load_forecaster = LoadForecaster(
+            entry=entry,
+            weather_correlation=weather_correlation,
+            thermal_manager=thermal_manager,
+        )
         self._fit_analyzer = FitAnalyzer()
         self._soc_simulator = SocSimulator(self._estimate_hourly_consumption_kw)
         self._grid_charge_decision = GridChargeDecisionEngine(
@@ -341,6 +113,7 @@ class ForecastComputer:
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
         self._weather_correlation = weather_correlation
+        self._load_forecaster.set_weather_correlation(weather_correlation)
 
     def set_thermal_manager(self, thermal_manager: Any | None) -> None:
         """Set or clear ThermalManager dependency at runtime.
@@ -350,6 +123,7 @@ class ForecastComputer:
                            or None to disable HVAC prediction.
         """
         self._thermal_manager = thermal_manager
+        self._load_forecaster.set_thermal_manager(thermal_manager)
 
     def set_adaptive_params(self, adaptive_params: AdaptiveParameters | None) -> None:
         """Set adaptive parameters from the learning system (Issue #170 Phase 2).
@@ -364,6 +138,7 @@ class ForecastComputer:
         """
         self._adaptive_params = adaptive_params
         # Propagate to sub-engines
+        self._load_forecaster.set_adaptive_params(adaptive_params)
         self._grid_charge_decision.set_adaptive_params(adaptive_params)
         self._proactive_export.set_adaptive_params(adaptive_params)
 
@@ -1052,6 +827,194 @@ class ForecastComputer:
 
         # Not cheap, no urgent need: Wait
         return False, False
+
+    def _verify_dw_target_and_fill_gap(
+        self,
+        base_slot: datetime,
+        current_soc: float,
+        target_pct: float,
+        target_kwh: float,
+        dw_start_time: time,
+        export_min_soc_pct: float,
+        grid_charge_candidates: list[dict],
+        scheduled_grid_charges: dict[int, dict],
+        all_solcast: list[dict],
+        historical_avg_kw: dict[int, float],
+        current_hour: int,
+        data: CoordinatorData,
+        temperature_by_hour: dict,
+        slot_fraction: float,
+    ) -> dict[int, dict]:
+        """Verify target SOC at DW start and fill gap if needed.
+
+        Issue #332: The fixed budget in Pass 2 doesn't account for discharge
+        between charging slots and the demand window. This method verifies that
+        the predicted SOC at DW start meets the target, and schedules additional
+        cheap slots if needed.
+
+        Args:
+            base_slot: Base datetime for slot calculations
+            current_soc: Current battery SOC percentage
+            target_pct: Target SOC percentage
+            target_kwh: Target SOC in kWh
+            dw_start_time: Demand window start time
+            export_min_soc_pct: Minimum SOC floor
+            grid_charge_candidates: List of candidate slots from Pass 1
+            scheduled_grid_charges: Dict of already scheduled slots from Pass 2
+            all_solcast: Full Solcast forecast
+            historical_avg_kw: Historical hourly load profile
+            current_hour: Current hour for load estimation
+            data: CoordinatorData with current state
+            temperature_by_hour: Temperature forecasts keyed by (year, month, day, hour)
+            slot_fraction: Slot duration as fraction of hour (0.25 for 15-min)
+
+        Returns:
+            Updated scheduled_grid_charges dict with any additional slots
+        """
+        # Find the slot index for demand window start
+        dw_start_slot_idx = None
+        dw_start_datetime = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        # If DW start is earlier than base_slot, it's tomorrow's DW
+        if dw_start_datetime <= base_slot:
+            dw_start_datetime += timedelta(days=1)
+
+        for slot_idx in range(TOTAL_SLOTS):
+            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+            slot_end = slot_start + timedelta(minutes=15)
+            if slot_start <= dw_start_datetime < slot_end:
+                dw_start_slot_idx = slot_idx
+                break
+
+        _LOGGER.info(
+            "Pass 4: DW start time=%s, dw_start_datetime=%s, dw_start_slot_idx=%s",
+            dw_start_time.strftime("%H:%M"),
+            dw_start_datetime.strftime("%Y-%m-%d %H:%M"),
+            dw_start_slot_idx if dw_start_slot_idx is not None else "None",
+        )
+
+        # If DW is today, verify target will be met
+        if dw_start_slot_idx is None:
+            return scheduled_grid_charges
+
+        # Simulate SOC trajectory with scheduled grid charges to find SOC at DW start
+        sim_soc = current_soc
+        for slot_idx in range(dw_start_slot_idx):
+            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
+            slot_hour = slot_start.hour
+
+            solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
+            slot_temp = temperature_by_hour.get(
+                (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
+            )
+            load_kw, _ = self._estimate_hourly_consumption_kw(
+                historical_avg_kw,
+                slot_hour,
+                current_hour,
+                data.load_power_kw,
+                0.0,  # recent_load_kw not needed here
+                slot_temp,
+            )
+
+            daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
+            if isinstance(daily_thermal_mode, str):
+                pass
+            elif daily_thermal_mode is not None:
+                daily_thermal_mode = str(daily_thermal_mode)
+
+            hvac_kw = self._predict_hvac_load_for_slot(
+                slot_hour=slot_hour,
+                temperature=slot_temp,
+                daily_thermal_mode=daily_thermal_mode,
+            )
+            total_load_kw = load_kw + hvac_kw
+
+            consumption_kwh = total_load_kw * slot_fraction
+            net_kwh = solar_kwh - consumption_kwh
+
+            max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
+            if net_kwh >= 0:
+                battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
+            else:
+                battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
+
+            # Add grid charging if scheduled
+            if slot_idx in scheduled_grid_charges:
+                scheduled = scheduled_grid_charges[slot_idx]
+                if scheduled["should_boost"]:
+                    charge_rate = CHARGE_RATE_BOOST_KW
+                else:
+                    charge_rate = CHARGE_RATE_GRID_KW
+
+                max_charge_kwh = charge_rate * slot_fraction
+                current_battery_kwh = sim_soc / 100 * BATTERY_CAPACITY_KWH
+                space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
+                grid_charge_amount = min(max_charge_kwh * 0.92, space_remaining_kwh)
+                battery_delta_kwh += grid_charge_amount
+
+            sim_soc += battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
+            sim_soc = max(export_min_soc_pct, min(100.0, sim_soc))
+
+        predicted_soc_at_dw = sim_soc
+
+        # Check if we're below target
+        if predicted_soc_at_dw >= target_pct:
+            _LOGGER.info(
+                "Pass 4: Predicted SOC at DW start (%.1f%%) meets target (%.1f%%). No additional slots needed.",
+                predicted_soc_at_dw,
+                target_pct,
+            )
+            return scheduled_grid_charges
+
+        gap_pct = target_pct - predicted_soc_at_dw
+        gap_kwh = gap_pct / 100 * BATTERY_CAPACITY_KWH
+
+        _LOGGER.info(
+            "Pass 4: Predicted SOC at DW start (%.1f%%) below target (%.1f%%). Gap: %.2f kWh. Scheduling additional slots.",
+            predicted_soc_at_dw,
+            target_pct,
+            gap_kwh,
+        )
+
+        # Find remaining candidates not already scheduled
+        remaining_candidates = [
+            c
+            for c in grid_charge_candidates
+            if c["slot_idx"] not in scheduled_grid_charges
+            and c["slot_idx"] < dw_start_slot_idx
+        ]
+
+        # Issue #344: Sort by (price ASC, slot_idx DESC)
+        remaining_candidates.sort(key=lambda x: (x["price"], -x["slot_idx"]))
+
+        # Schedule until gap is filled
+        additional_scheduled = 0
+        for candidate in remaining_candidates:
+            if gap_kwh <= 0:
+                break
+
+            slot_idx = candidate["slot_idx"]
+            charge_amount = candidate["charge_amount_kwh"]
+
+            scheduled_grid_charges[slot_idx] = {
+                "should_boost": candidate["should_boost"],
+                "charge_amount_kwh": charge_amount,
+                "price": candidate["price"],
+            }
+            gap_kwh -= charge_amount
+            additional_scheduled += 1
+
+        if additional_scheduled > 0:
+            _LOGGER.info(
+                "Pass 4: Scheduled %d additional grid charge slot(s) to fill gap",
+                additional_scheduled,
+            )
+
+        return scheduled_grid_charges
 
     def _calculate_average_fit_price(
         self, feed_in_forecast: list[dict], start_time: datetime, hours: int = 24
@@ -1763,13 +1726,11 @@ class ForecastComputer:
         )
 
         # Compute hybrid slot schedule from Amber general forecast
-        # Issue #367: Pass current spot price for accurate current slot pricing
         hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
             now_local=dt_util.as_local(now_dt),
             general_forecast=data.general_forecast,
             ha_timezone=str(ha_timezone),
             max_forecast_hours=24,
-            current_spot_price=data.general_price,  # Real-time spot price from Amber
         )
 
         # Store hybrid metadata in CoordinatorData for diagnostics
@@ -2140,161 +2101,23 @@ class ForecastComputer:
 
         # ========================================================================
         # Pass 4 (Issue #332): Verify target SOC at DW start, fill gap if needed
-        #
-        # The fixed budget in Pass 2 doesn't account for discharge between
-        # charging slots and the demand window. This pass verifies that the
-        # predicted SOC at DW start meets the target, and schedules additional
-        # cheap slots if needed.
         # ========================================================================
-
-        # Find the slot index for demand window start
-        # The slot that CONTAINS the DW start time, not necessarily aligned to it
-        dw_start_slot_idx = None
-        dw_start_datetime = base_slot.replace(
-            hour=dw_start_time.hour,
-            minute=dw_start_time.minute,
-            second=0,
-            microsecond=0,
+        scheduled_grid_charges = self._verify_dw_target_and_fill_gap(
+            base_slot=base_slot,
+            current_soc=current_soc,
+            target_pct=target_pct,
+            target_kwh=target_kwh,
+            dw_start_time=dw_start_time,
+            export_min_soc_pct=export_min_soc_pct,
+            grid_charge_candidates=grid_charge_candidates,
+            scheduled_grid_charges=scheduled_grid_charges,
+            all_solcast=all_solcast,
+            historical_avg_kw=historical_avg_kw,
+            current_hour=current_hour,
+            data=data,
+            temperature_by_hour=temperature_by_hour,
+            slot_fraction=slot_fraction,
         )
-        # If DW start is earlier than base_slot, it's tomorrow's DW
-        if dw_start_datetime <= base_slot:
-            dw_start_datetime += timedelta(days=1)
-
-        for slot_idx in range(TOTAL_SLOTS):
-            slot_start = base_slot + timedelta(minutes=15 * slot_idx)
-            slot_end = slot_start + timedelta(minutes=15)
-            # Check if DW start falls within this slot
-            if slot_start <= dw_start_datetime < slot_end:
-                dw_start_slot_idx = slot_idx
-                break
-
-        _LOGGER.info(
-            "Pass 4: DW start time=%s, dw_start_datetime=%s, dw_start_slot_idx=%s",
-            dw_start_time.strftime("%H:%M"),
-            dw_start_datetime.strftime("%Y-%m-%d %H:%M"),
-            dw_start_slot_idx if dw_start_slot_idx is not None else "None",
-        )
-
-        # If DW is today, verify target will be met
-        if dw_start_slot_idx is not None:
-            # Simulate SOC trajectory with scheduled grid charges to find SOC at DW start
-            sim_soc = current_soc
-            for slot_idx in range(dw_start_slot_idx):
-                slot_start = base_slot + timedelta(minutes=15 * slot_idx)
-                slot_hour = slot_start.hour
-
-                # Get solar and load for this slot
-                solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
-                slot_temp = temperature_by_hour.get(
-                    (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
-                )
-                load_kw, _ = self._estimate_hourly_consumption_kw(
-                    historical_avg_kw,
-                    slot_hour,
-                    current_hour,
-                    data.load_power_kw,
-                    recent_load_kw,
-                    slot_temp,
-                )
-
-                # Add HVAC prediction
-                daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
-                if isinstance(daily_thermal_mode, str):
-                    pass
-                elif daily_thermal_mode is not None:
-                    daily_thermal_mode = str(daily_thermal_mode)
-
-                hvac_kw = self._predict_hvac_load_for_slot(
-                    slot_hour=slot_hour,
-                    temperature=slot_temp,
-                    daily_thermal_mode=daily_thermal_mode,
-                )
-                total_load_kw = load_kw + hvac_kw
-
-                consumption_kwh = total_load_kw * slot_fraction
-                net_kwh = solar_kwh - consumption_kwh
-
-                # Calculate battery delta from solar
-                max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
-                if net_kwh >= 0:
-                    battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
-                else:
-                    battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
-
-                # Add grid charging if scheduled
-                if slot_idx in scheduled_grid_charges:
-                    scheduled = scheduled_grid_charges[slot_idx]
-                    if scheduled["should_boost"]:
-                        charge_rate = CHARGE_RATE_BOOST_KW
-                    else:
-                        charge_rate = CHARGE_RATE_GRID_KW
-
-                    max_charge_kwh = charge_rate * slot_fraction
-                    current_battery_kwh = sim_soc / 100 * BATTERY_CAPACITY_KWH
-                    space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
-                    grid_charge_amount = min(max_charge_kwh * 0.92, space_remaining_kwh)
-                    battery_delta_kwh += grid_charge_amount
-
-                # Update SOC
-                sim_soc += battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
-                sim_soc = max(export_min_soc_pct, min(100.0, sim_soc))
-
-            predicted_soc_at_dw = sim_soc
-
-            # Check if we're below target
-            if predicted_soc_at_dw < target_pct:
-                gap_pct = target_pct - predicted_soc_at_dw
-                gap_kwh = gap_pct / 100 * BATTERY_CAPACITY_KWH
-
-                _LOGGER.info(
-                    "Pass 4: Predicted SOC at DW start (%.1f%%) below target (%.1f%%). Gap: %.2f kWh. Scheduling additional slots.",
-                    predicted_soc_at_dw,
-                    target_pct,
-                    gap_kwh,
-                )
-
-                # Find remaining candidates not already scheduled
-                remaining_candidates = [
-                    c
-                    for c in grid_charge_candidates
-                    if c["slot_idx"] not in scheduled_grid_charges
-                    and c["slot_idx"] < dw_start_slot_idx  # Only slots before DW
-                ]
-
-                # Issue #344: Sort by (price ASC, slot_idx DESC) - cheapest first,
-                # but prefer LATER slots when prices are equal (just-in-time charging).
-                # This allows solar to contribute during earlier hours.
-                remaining_candidates.sort(key=lambda x: (x["price"], -x["slot_idx"]))
-
-                # Schedule until gap is filled
-                additional_scheduled = 0
-                for candidate in remaining_candidates:
-                    if gap_kwh <= 0:
-                        break
-
-                    slot_idx = candidate["slot_idx"]
-                    charge_amount = candidate["charge_amount_kwh"]
-
-                    # Schedule this slot
-                    scheduled_grid_charges[slot_idx] = {
-                        "should_boost": candidate["should_boost"],
-                        "charge_amount_kwh": charge_amount,
-                        "price": candidate["price"],
-                    }
-                    gap_kwh -= charge_amount
-                    additional_scheduled += 1
-
-                if additional_scheduled > 0:
-                    _LOGGER.info(
-                        "Pass 4: Scheduled %d additional grid charge slot(s) to fill gap",
-                        additional_scheduled,
-                    )
-            else:
-                _LOGGER.info(
-                    "Pass 4: Predicted SOC at DW start (%.1f%%) meets target (%.1f%%). No additional slots needed.",
-                    predicted_soc_at_dw,
-                    target_pct,
-                )
 
         # ========================================================================
         # Pass 3: Build the forecast with scheduled grid charges (hybrid timescale)
@@ -2397,44 +2220,22 @@ class ForecastComputer:
                 predicted_soc + (net_kwh / BATTERY_CAPACITY_KWH * 100)
             ) >= 100.0
 
-            # Step 1: Calculate solar contribution FIRST (Issue #370)
-            # Solar contribution must be calculated before grid charge decision
+            # Step 1: Calculate base battery delta from solar/load
             if net_kwh >= 0:
-                solar_battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
+                battery_delta_kwh = min(net_kwh, max_solar_charge_kwh) * 0.92
             else:
-                solar_battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
+                battery_delta_kwh = max(net_kwh, -max_solar_charge_kwh) / 0.95
 
-            # Step 2: Add grid charging if scheduled (Issue #370 fix)
-            # Grid charge amount accounts for concurrent solar to prevent overshoot
+            # Step 2: Add grid charging if scheduled
             if should_grid_charge:
-                # Project SOC after solar contribution during this slot
-                projected_soc_after_solar = predicted_soc + (
-                    solar_battery_delta_kwh / BATTERY_CAPACITY_KWH * 100
+                current_battery_kwh = predicted_soc / 100 * BATTERY_CAPACITY_KWH
+                space_remaining_kwh = max(target_kwh - current_battery_kwh, 0)
+                grid_charge_amount = min(
+                    max_grid_charge_kwh * 0.92, space_remaining_kwh
                 )
-                projected_battery_kwh = projected_soc_after_solar / 100 * BATTERY_CAPACITY_KWH
-
-                # Grid only fills remaining space AFTER solar
-                space_remaining_kwh = max(target_kwh - projected_battery_kwh, 0)
-
-                if space_remaining_kwh > 0:
-                    grid_charge_amount = min(
-                        max_grid_charge_kwh * 0.92, space_remaining_kwh
-                    )
-                    battery_delta_kwh = solar_battery_delta_kwh + grid_charge_amount
-                    grid_import_kwh = grid_charge_amount / 0.92
-                else:
-                    # Solar alone reaches target - skip grid charge (Issue #370)
-                    _LOGGER.info(
-                        "Skip grid charge at %s: solar will reach target (SOC %.1f%% -> %.1f%%)",
-                        slot_start.strftime("%H:%M"),
-                        predicted_soc,
-                        projected_soc_after_solar,
-                    )
-                    should_grid_charge = False
-                    battery_delta_kwh = solar_battery_delta_kwh
-                    grid_import_kwh = 0.0
+                battery_delta_kwh += grid_charge_amount
+                grid_import_kwh = grid_charge_amount / 0.92
             else:
-                battery_delta_kwh = solar_battery_delta_kwh
                 grid_import_kwh = 0.0
 
             # Step 3: Check for proactive export
@@ -2528,7 +2329,7 @@ class ForecastComputer:
                     "minute": slot_minute,
                     "timestamp": slot_start.isoformat(),
                     "slot_interval_minutes": interval_minutes,  # Issue #351: Variable duration
-                    "price_source": price_source,  # Issue #351: "5min", "30min", or "spot"
+                    "price_source": price_source,  # Issue #351: "5min" or "30min"
                     "predicted_soc": round(predicted_soc, 1),
                     "solar_kwh": round(solar_kwh, 4),
                     "consumption_kwh": round(consumption_kwh, 4),
