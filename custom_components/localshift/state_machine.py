@@ -84,6 +84,9 @@ class StateMachine:
         self._proactive_export_reserve: float | None = None
         # Track grid charging target reserve (clamped for Tesla firmware compatibility)
         self._grid_charging_reserve: int | None = None
+        # Track self_consumption reserve (preserve_soc when set, otherwise 10)
+        # Issue #375: Health check was using hardcoded 10, causing false mismatches
+        self._self_consumption_reserve: float | None = None
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
@@ -483,7 +486,14 @@ class StateMachine:
                     await self._battery_controller.set_self_consumption(data, dry_run)
                 )
                 if transition_success:
-                    _LOGGER.info("Self consumption mode transition completed")
+                    # Track the reserve for health checks (preserve_soc when set, otherwise 10)
+                    self._self_consumption_reserve = (
+                        data.preserve_soc if data.preserve_soc is not None else 10
+                    )
+                    _LOGGER.info(
+                        "Self consumption mode transition completed (reserve=%.1f)",
+                        self._self_consumption_reserve,
+                    )
                 else:
                     _LOGGER.error("Self consumption mode transition FAILED")
 
@@ -493,7 +503,14 @@ class StateMachine:
                     await self._battery_controller.set_self_consumption(data, dry_run)
                 )
                 if transition_success:
-                    _LOGGER.info("Demand block mode transition completed")
+                    # Track the reserve for health checks (preserve_soc when set, otherwise 10)
+                    self._self_consumption_reserve = (
+                        data.preserve_soc if data.preserve_soc is not None else 10
+                    )
+                    _LOGGER.info(
+                        "Demand block mode transition completed (reserve=%.1f)",
+                        self._self_consumption_reserve,
+                    )
                 else:
                     _LOGGER.error("Demand block mode transition FAILED")
 
@@ -606,9 +623,21 @@ class StateMachine:
             Tuple of (operation_mode, backup_reserve, export_mode, grid_charging_allowed)
         """
         if mode == BatteryMode.SELF_CONSUMPTION:
-            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY, False)
+            # Use tracked reserve (preserve_soc when set, otherwise 10)
+            reserve = (
+                int(self._self_consumption_reserve)
+                if self._self_consumption_reserve is not None
+                else 10
+            )
+            return ("self_consumption", reserve, TESLEMETRY_EXPORT_PV_ONLY, False)
         elif mode == BatteryMode.DEMAND_BLOCK:
-            return ("self_consumption", 10, TESLEMETRY_EXPORT_PV_ONLY, False)
+            # Demand block uses same reserve tracking as self_consumption
+            reserve = (
+                int(self._self_consumption_reserve)
+                if self._self_consumption_reserve is not None
+                else 10
+            )
+            return ("self_consumption", reserve, TESLEMETRY_EXPORT_PV_ONLY, False)
         elif mode == BatteryMode.GRID_CHARGING:
             # Grid charging uses backup mode for 3.3 kW rate.
             # Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
