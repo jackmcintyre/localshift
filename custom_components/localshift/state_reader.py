@@ -226,7 +226,9 @@ class StateReader:
 
         # Track if prices are available (Issue #330)
         # If either price is unavailable, we should not make grid charging decisions
-        data.prices_available = general_price_raw is not None and feed_in_price_raw is not None
+        data.prices_available = (
+            general_price_raw is not None and feed_in_price_raw is not None
+        )
 
         if general_price_raw is None:
             _LOGGER.warning(
@@ -455,17 +457,85 @@ class StateReader:
             data.climate_read_success,
         )
 
-        # Detailed per-entity logging at DEBUG level
-        for entity_id, entity_state in climate_states.items():
-            _LOGGER.debug(
-                "Climate entity: %s mode=%s action=%s setpoint=%.1f°C current=%.1f°C controlled=%s",
-                entity_id,
-                entity_state["state"],
-                entity_state["hvac_action"],
-                entity_state["setpoint"],
-                entity_state["current_temperature"] or 0.0,
-                entity_state["is_controlled"],
+    def check_automation_ready(
+        self, data: CoordinatorData
+    ) -> tuple[bool, dict[str, bool], list[str]]:
+        """Check if all required inputs are valid for automation decisions.
+
+        This validates that the system has all necessary data before making
+        mode transition decisions. At startup, entities may not be fully
+        populated, leading to incorrect mode inference.
+
+        Issue #349: Prevents boost_charging inference from stale hardware state.
+
+        Args:
+            data: CoordinatorData with current state values.
+
+        Returns:
+            Tuple of (is_ready, status_dict, missing_list):
+            - is_ready: True if all required inputs are valid
+            - status_dict: Dict of input_name -> is_valid
+            - missing_list: List of missing/invalid input names
+        """
+        status: dict[str, bool] = {}
+        missing: list[str] = []
+
+        # 1. SOC must be valid (> 0 and not None)
+        # SOC of 0 indicates the entity hasn't populated yet
+        soc_valid = data.soc is not None and data.soc > 0
+        status["soc"] = soc_valid
+        if not soc_valid:
+            missing.append(f"SOC (current: {data.soc})")
+
+        # 2. Prices must be available (Issue #330 already tracks this)
+        # This checks if price entities are not unavailable
+        prices_valid = data.prices_available
+        status["prices_available"] = prices_valid
+        if not prices_valid:
+            missing.append("Price entities unavailable")
+
+        # 3. Operation mode must be populated (not empty string)
+        # Empty string indicates Teslemetry hasn't provided data yet
+        operation_mode_valid = bool(
+            data.operation_mode
+        ) and data.operation_mode not in ("unknown", "unavailable")
+        status["operation_mode"] = operation_mode_valid
+        if not operation_mode_valid:
+            missing.append(f"Operation mode (current: '{data.operation_mode}')")
+
+        # 4. Backup reserve must be valid (>= 0)
+        # Negative or None indicates data not yet populated
+        backup_reserve_valid = (
+            data.backup_reserve is not None and data.backup_reserve >= 0
+        )
+        status["backup_reserve"] = backup_reserve_valid
+        if not backup_reserve_valid:
+            missing.append(f"Backup reserve (current: {data.backup_reserve})")
+
+        # 5. Solcast forecast should be ready (Issue #319 already tracks this)
+        # We allow partial forecasts but not stale/unavailable
+        forecast_valid = data.forecast_ready or data.forecast_status == "partial"
+        status["forecast"] = forecast_valid
+        if not forecast_valid:
+            missing.append(f"Solcast forecast (status: {data.forecast_status})")
+
+        # Overall ready state: all required inputs must be valid
+        is_ready = all(status.values())
+
+        # Update CoordinatorData with results
+        data.automation_ready = is_ready
+        data.automation_ready_status = status
+        data.automation_ready_missing = missing
+
+        if not is_ready:
+            _LOGGER.warning(
+                "Automation not ready - missing inputs: %s",
+                ", ".join(missing) if missing else "none",
             )
+        else:
+            _LOGGER.info("Automation ready - all required inputs valid")
+
+        return is_ready, status, missing
 
     def _read_float_attr(self, state: Any, attr: str, default: float = 0.0) -> float:
         """Read a float value from a state's attributes.

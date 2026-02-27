@@ -381,6 +381,11 @@ class LocalShiftCoordinator:
         # Read initial state and compute
         self._read_all_external_state()
 
+        # Issue #349: Check if automation is ready before proceeding
+        # This validates that all required inputs are populated
+        if self._state_reader is not None:
+            self._state_reader.check_automation_ready(self.data)
+
         # Fetch historical load data in background (runs in thread pool, won't block)
         load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
         await self._computation_engine.async_get_historical_hourly_averages(

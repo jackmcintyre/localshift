@@ -212,6 +212,22 @@ class StateMachine:
                         _LOGGER.debug("State machine in startup grace period, skipping")
                         return
                     self._startup_grace_until = None
+
+                    # Issue #349: Check if automation is ready before inferring mode
+                    # At startup, entities may not be populated, leading to incorrect mode inference
+                    if not data.automation_ready:
+                        _LOGGER.warning(
+                            "Startup grace ended but automation not ready - missing: %s. "
+                            "Staying in SELF_CONSUMPTION mode until inputs are valid.",
+                            ", ".join(data.automation_ready_missing)
+                            if data.automation_ready_missing
+                            else "unknown",
+                        )
+                        # Stay in SELF_CONSUMPTION mode - don't infer from potentially stale hardware state
+                        self._commanded_mode = BatteryMode.SELF_CONSUMPTION
+                        self._skip_next_debounce = True
+                        return
+
                     self._commanded_mode = self.infer_current_hardware_mode(data)
                     # Skip debounce on first transition after startup to quickly
                     # correct any mismatch between hardware state and desired mode

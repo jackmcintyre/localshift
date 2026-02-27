@@ -173,7 +173,9 @@ class BatteryController:
             )
             elapsed = time.monotonic() - start_time
             _LOGGER.info(
-                "[TRANSITION] Grid charging allowed set to %s in %.2fs", allowed, elapsed
+                "[TRANSITION] Grid charging allowed set to %s in %.2fs",
+                allowed,
+                elapsed,
             )
             return True
         except Exception as e:
@@ -400,7 +402,9 @@ class BatteryController:
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
-        grid_charging_entity = self._get_entity_id("teslemetry_allow_charging_from_grid")
+        grid_charging_entity = self._get_entity_id(
+            "teslemetry_allow_charging_from_grid"
+        )
 
         return {
             "operation_mode": self._read_str(operation_mode_entity),
@@ -709,7 +713,9 @@ class BatteryController:
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
-        grid_charging_entity = self._get_entity_id("teslemetry_allow_charging_from_grid")
+        grid_charging_entity = self._get_entity_id(
+            "teslemetry_allow_charging_from_grid"
+        )
 
         first_failure_logged = False
         last_operation_mode = None
@@ -852,7 +858,9 @@ class BatteryController:
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
         export_mode_entity = self._get_entity_id("teslemetry_allow_export")
-        grid_charging_entity = self._get_entity_id("teslemetry_allow_charging_from_grid")
+        grid_charging_entity = self._get_entity_id(
+            "teslemetry_allow_charging_from_grid"
+        )
 
         # Read current hardware state
         current_operation_mode = self._read_str(operation_mode_entity)
@@ -891,7 +899,10 @@ class BatteryController:
             current_backup_reserve,
             current_export_mode,
             current_grid_charging,
-            matches_operation and matches_reserve and matches_export and matches_grid_charging,
+            matches_operation
+            and matches_reserve
+            and matches_export
+            and matches_grid_charging,
         )
 
         if (
