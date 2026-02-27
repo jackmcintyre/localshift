@@ -1829,9 +1829,47 @@ class ForecastComputer:
         slot_fraction = 15 / 60.0  # 0.25 hours
 
         # Issue #283: Maximum grid import budget to prevent overcharging
-        max_grid_import_kwh = max(
-            0, (target_pct - current_soc) / 100 * BATTERY_CAPACITY_KWH * 1.05
-        )  # 5% buffer
+        # Issue #XXX: Use solar-simulation-based budget instead of simple gap calculation.
+        # Simulate SOC at DW with solar only to determine actual grid charging need.
+        dw_start_datetime = base_slot.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if dw_start_datetime <= base_slot:
+            dw_start_datetime += timedelta(days=1)
+
+        solar_only_soc_at_dw, _, solar_can_reach_target, _ = (
+            self._simulate_future_soc_with_solar_only(
+                actual_current_soc=current_soc,
+                start_slot=base_slot,
+                target_pct=target_pct,
+                all_solcast=all_solcast,
+                historical_avg_kw=historical_avg_kw,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
+                dw_start_time=dw_start_time,
+                end_time=dw_start_datetime,
+                min_soc_pct=export_min_soc_pct,
+                current_hour=current_hour,
+                baseline_avg_kw=baseline_avg_kw,
+                dw_end_time=dw_end_time,
+            )
+        )
+        # Budget = gap between target and what solar alone achieves
+        # If solar reaches target, budget = 0 (no grid charging needed)
+        solar_only_kwh_at_dw = solar_only_soc_at_dw / 100 * BATTERY_CAPACITY_KWH
+        gap_kwh = max(0, target_kwh - solar_only_kwh_at_dw)
+        max_grid_import_kwh = gap_kwh * 1.05  # 5% buffer
+
+        _LOGGER.info(
+            "Grid charge budget: solar-only SOC at DW = %.1f%%, target = %.1f%%, gap = %.2f kWh, max grid import = %.2f kWh",
+            solar_only_soc_at_dw,
+            target_pct,
+            gap_kwh,
+            max_grid_import_kwh,
+        )
 
         # ========================================================================
         # ISSUE #351: Hybrid timescale grid charging
@@ -2233,11 +2271,52 @@ class ForecastComputer:
                         additional_scheduled,
                     )
             else:
-                _LOGGER.info(
-                    "Pass 4: Predicted SOC at DW start (%.1f%%) meets target (%.1f%%). No additional slots needed.",
-                    predicted_soc_at_dw,
-                    target_pct,
-                )
+                # Pass 4 is now symmetric: handle both under-target and over-target
+                # Issue #XXX: Remove overshoot - if SOC exceeds target, remove expensive slots
+                overshoot_tolerance_pct = 5.0  # Allow 5% overshoot before removing slots
+                if predicted_soc_at_dw > target_pct + overshoot_tolerance_pct:
+                    overshoot_pct = predicted_soc_at_dw - target_pct
+                    overshoot_kwh = overshoot_pct / 100 * BATTERY_CAPACITY_KWH
+
+                    _LOGGER.info(
+                        "Pass 4: Predicted SOC at DW start (%.1f%%) exceeds target (%.1f%%) by %.1f%%. Overshoot: %.2f kWh. Removing expensive slots.",
+                        predicted_soc_at_dw,
+                        target_pct,
+                        overshoot_pct,
+                        overshoot_kwh,
+                    )
+
+                    # Get scheduled slots sorted by price DESC (most expensive first)
+                    scheduled_slots = [
+                        (slot_idx, scheduled_grid_charges[slot_idx])
+                        for slot_idx in scheduled_grid_charges
+                        if slot_idx < dw_start_slot_idx  # Only slots before DW
+                    ]
+                    # Sort by price descending (remove most expensive first)
+                    scheduled_slots.sort(key=lambda x: -x[1]["price"])
+
+                    # Remove slots until overshoot is eliminated
+                    removed_count = 0
+                    for slot_idx, scheduled in scheduled_slots:
+                        if overshoot_kwh <= 0:
+                            break
+
+                        charge_amount = scheduled["charge_amount_kwh"]
+                        del scheduled_grid_charges[slot_idx]
+                        overshoot_kwh -= charge_amount
+                        removed_count += 1
+
+                    if removed_count > 0:
+                        _LOGGER.info(
+                            "Pass 4: Removed %d expensive grid charge slot(s) to eliminate overshoot",
+                            removed_count,
+                        )
+                else:
+                    _LOGGER.info(
+                        "Pass 4: Predicted SOC at DW start (%.1f%%) within tolerance of target (%.1f%%). No adjustment needed.",
+                        predicted_soc_at_dw,
+                        target_pct,
+                    )
 
         # ========================================================================
         # Pass 3: Build the forecast with scheduled grid charges (hybrid timescale)
