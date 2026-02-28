@@ -837,9 +837,24 @@ class StateMachine:
                     self._commanded_mode.value,
                 )
 
-            # Send notification about health check correction
+            # Collect mismatch details for intelligent notification filtering
+            # Issue #394: Skip notification if only grid_charging flipped (Tesla cloud sync)
+            grid_charging_entity = self._battery_controller._get_entity_id(  # noqa: SLF001
+                "teslemetry_allow_charging_from_grid"
+            )
+            actual_grid_charging = self._battery_controller._read_bool(  # noqa: SLF001
+                grid_charging_entity
+            )
+
+            mismatch_details = {
+                "operation_mode": data.operation_mode != expected_op,
+                "backup_reserve": abs((data.backup_reserve or 0) - expected_reserve) >= 1,
+                "grid_charging_allowed": actual_grid_charging != expected_grid_charging,
+            }
+
+            # Send notification about health check correction (may be suppressed)
             await self._notification_service.send_health_correction_notification(
-                self._commanded_mode, data
+                self._commanded_mode, data, mismatch_details
             )
 
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
