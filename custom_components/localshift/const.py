@@ -492,32 +492,44 @@ SWITCH_NAMES = {
 }
 
 # -----------------------------------------------------------------------------
-# Button Keys (manual mode controls)
+# Select Keys (battery mode selection)
 # -----------------------------------------------------------------------------
 
-BUTTON_FORCE_CHARGE = "force_charge"
-BUTTON_FORCE_DISCHARGE = "force_discharge"
-BUTTON_BOOST_CHARGE = "boost_charge"
-BUTTON_SELF_CONSUMPTION = "self_consumption"
+SELECT_BATTERY_MODE = "battery_mode"
+
+SELECT_OPTIONS = {
+    SELECT_BATTERY_MODE: [
+        "self_consumption",
+        "grid_charging",
+        "boost_charging",
+        "spike_discharge",
+        "proactive_export",
+    ],
+}
+
+SELECT_ICONS = {
+    SELECT_BATTERY_MODE: "mdi:battery-sync",
+}
+
+SELECT_NAMES = {
+    SELECT_BATTERY_MODE: "Battery Mode",
+}
+
+# -----------------------------------------------------------------------------
+# Button Keys (utility controls - mode control moved to select entity)
+# -----------------------------------------------------------------------------
+
 BUTTON_UPDATE_FORECAST = "update_forecast"
 BUTTON_RESET_LEARNING = "reset_learning"
 BUTTON_LEARN_HVAC_POWER = "learn_hvac_power"
 
 BUTTON_ICONS = {
-    BUTTON_FORCE_CHARGE: "mdi:battery-charging",
-    BUTTON_FORCE_DISCHARGE: "mdi:battery-arrow-down",
-    BUTTON_BOOST_CHARGE: "mdi:battery-charging-high",
-    BUTTON_SELF_CONSUMPTION: "mdi:battery-sync",
     BUTTON_UPDATE_FORECAST: "mdi:refresh",
     BUTTON_RESET_LEARNING: "mdi:brain-off",
     BUTTON_LEARN_HVAC_POWER: "mdi:air-conditioner",
 }
 
 BUTTON_NAMES = {
-    BUTTON_FORCE_CHARGE: "Force Charge",
-    BUTTON_FORCE_DISCHARGE: "Force Discharge",
-    BUTTON_BOOST_CHARGE: "Boost Charge",
-    BUTTON_SELF_CONSUMPTION: "Self Consumption",
     BUTTON_UPDATE_FORECAST: "Update Forecast",
     BUTTON_RESET_LEARNING: "Reset Learning Data",
     BUTTON_LEARN_HVAC_POWER: "Learn HVAC Power",
@@ -635,4 +647,4 @@ EXTENDED_HISTORY_MAX_DAYS = 365  # Maximum days (1 year)
 # Platforms
 # -----------------------------------------------------------------------------
 
-PLATFORMS = ["sensor", "binary_sensor", "number", "switch", "button"]
+PLATFORMS = ["sensor", "binary_sensor", "number", "switch", "button", "select"]

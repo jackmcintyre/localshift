@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_THERMAL_MODE_DECISION_TIME,
     SWITCH_DEFAULTS,
+    BatteryMode,
 )
 from .coordinator_data import CoordinatorData
 
@@ -1185,37 +1186,70 @@ class LocalShiftCoordinator:
             )
 
     # ------------------------------------------------------------------
-    # Button handlers (delegated to battery_controller)
+    # Battery mode control (for select entity - Issue #382)
     # ------------------------------------------------------------------
 
+    async def async_set_battery_mode(self, mode: BatteryMode) -> bool:
+        """Set battery to a specific mode.
+
+        Used by the select entity for manual mode control.
+        Returns True if successful, False otherwise.
+
+        Args:
+            mode: The BatteryMode to set.
+
+        Returns:
+            True if the mode was set successfully, False otherwise.
+        """
+        if self._battery_controller is None:
+            _LOGGER.error("Battery controller not available")
+            return False
+
+        dry_run = self.get_switch_state("dry_run")
+        success = False
+
+        if mode == BatteryMode.SELF_CONSUMPTION:
+            success = await self._battery_controller.set_self_consumption(self.data, dry_run)
+        elif mode == BatteryMode.GRID_CHARGING:
+            battery_target = float(
+                self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+            )
+            success = await self._battery_controller.set_force_charge(
+                self.data, dry_run, target_soc=battery_target
+            )
+        elif mode == BatteryMode.BOOST_CHARGING:
+            success = await self._battery_controller.set_boost_charge(self.data, dry_run)
+        elif mode == BatteryMode.SPIKE_DISCHARGE:
+            # Check if conservative mode is enabled and use spike_reserve_soc if available
+            reserve_soc = (
+                self.data.spike_reserve_soc if self.data.spike_in_conservative_mode else None
+            )
+            success = await self._battery_controller.set_force_discharge(
+                self.data, dry_run, reserve_soc=reserve_soc
+            )
+        elif mode == BatteryMode.PROACTIVE_EXPORT:
+            success = await self._battery_controller.set_proactive_export(self.data, dry_run)
+        else:
+            _LOGGER.warning("Unsupported battery mode: %s", mode)
+            return False
+
+        if success:
+            _LOGGER.info("Battery mode set to %s (dry_run=%s)", mode.value, dry_run)
+            # Update commanded mode in state machine
+            if self._state_machine is not None:
+                self._state_machine.set_commanded_mode(mode)
+        else:
+            _LOGGER.error("Failed to set battery mode to %s", mode.value)
+
+        return success
+
     async def async_set_self_consumption(self) -> None:
-        """Set battery to self consumption mode."""
+        """Set battery to self consumption mode.
+
+        Used by automation switch when automation is disabled.
+        """
         if self._battery_controller is not None:
             await self._battery_controller.set_self_consumption(self.data, False)
-
-    async def async_set_force_charge(self) -> None:
-        """Set battery to force charge mode."""
-        if self._battery_controller is not None:
-            await self._battery_controller.set_force_charge(self.data, False)
-
-    async def async_set_boost_charge(self) -> None:
-        """Set battery to boost charge mode."""
-        if self._battery_controller is not None:
-            await self._battery_controller.set_boost_charge(self.data, False)
-
-    async def async_set_force_discharge(self) -> None:
-        """Set battery to force discharge mode."""
-        if self._battery_controller is not None:
-            await self._battery_controller.set_force_discharge(self.data, False)
-
-    async def async_set_manual_override(self) -> None:
-        """Set manual override mode."""
-        self.data.manual_override = True
-        if self._state_machine is not None:
-            self._state_machine.set_manual_override_timestamp()
-        if self._battery_controller is not None:
-            # Don't issue any commands in manual override
-            _LOGGER.info("Manual override activated - user controls battery")
 
     # ------------------------------------------------------------------
     # Helper methods

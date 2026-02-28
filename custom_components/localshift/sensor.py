@@ -29,7 +29,7 @@ async def async_setup_entry(
         EffectiveCheapPriceSensor(coordinator, entry),
         CheapChargeStopPriceSensor(coordinator, entry),
         SolarWeightedAvgFITSensor(coordinator, entry),
-        ActiveModeSensor(coordinator, entry),
+        # ActiveModeSensor removed - replaced by select entity (Issue #382)
         SolarBatteryForecastSensor(coordinator, entry),
         NetElectricityCostSensor(coordinator, entry),
         DecisionLogSensor(coordinator, entry),
@@ -176,17 +176,6 @@ class SolarWeightedAvgFITSensor(LocalShiftSensorBase):
                 self.coordinator.data.solar_remaining_kwh, 2
             ),
         }
-
-
-class ActiveModeSensor(LocalShiftSensorBase):
-    """Current battery automation mode."""
-
-    _attr_unique_id = "localshift_battery_mode"
-    _attr_name = "Battery Mode"
-    _attr_icon = "mdi:battery-sync"
-
-    def _update_from_coordinator(self) -> None:
-        self._attr_native_value = self.coordinator.data.active_mode.value
 
 
 class SolarBatteryForecastSensor(LocalShiftSensorBase):
