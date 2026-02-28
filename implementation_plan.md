@@ -448,3 +448,49 @@ Introduce an optional, tightly gated active-control mode where optimizer decisio
 ### Mitigations
 - Centralized gate + fallback.
 - Conservative rollout (opt-in, default off, explicit diagnostics).
+
+## Phase G — Detailed Plan (Stabilization, Docs, Release)
+
+### Goal
+Harden the optimizer rollout for maintainability and safe release by closing edge cases, validating performance in realistic operation, and finalizing documentation/release artifacts.
+
+### Scope
+- Stabilize runtime behavior after pilot feedback.
+- Complete documentation updates across architecture, troubleshooting, and entity-facing references.
+- Establish release checklist and rollback guidance.
+
+### Tasks
+1. **Stability hardening**
+   - Resolve pilot-discovered defects in gating, comparison, and solver edge handling.
+   - Improve defensive handling for malformed data and partial forecast inputs.
+2. **Performance tuning**
+   - Benchmark solve and comparison runtime under representative horizons and bin counts.
+   - Tune defaults to keep coordinator cycles predictable.
+3. **Regression expansion**
+   - Add regression tests for previously observed failures and boundary conditions.
+   - Maintain deterministic snapshots for core planning outputs.
+4. **Documentation completion**
+   - Update `docs/ARCHITECTURE.md` with optimizer subsystem and runtime-mode flow.
+   - Update `docs/FORECAST_DRIVEN_CONTROL.md` for ownership boundary between legacy and optimizer plans.
+   - Update `docs/TROUBLESHOOTING.md` with safety-block/fallback diagnostics.
+   - Update entity/reference docs if new optimizer-facing telemetry entities are introduced.
+5. **Release readiness**
+   - Produce rollout notes including config defaults, migration guidance, known limitations, and rollback procedure.
+
+### Deliverables
+- Stabilized optimizer feature set with validated runtime envelope.
+- Full documentation set aligned with implemented behavior.
+- Release checklist and rollout/rollback notes.
+
+### Acceptance Criteria
+- No open high-severity defects in shadow/assist/active flows.
+- Performance remains acceptable under expected HA deployment conditions.
+- Documentation allows operators to enable, monitor, and disable optimizer confidently.
+
+### Risks
+- Last-minute scope creep delaying release.
+- Drift between implementation behavior and published docs.
+
+### Mitigations
+- Freeze scope after pilot-critical fixes.
+- Make documentation updates part of release gate criteria.
