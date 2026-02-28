@@ -328,17 +328,38 @@ class NotificationService:
         )
 
     async def send_health_correction_notification(
-        self, mode: BatteryMode, data: CoordinatorData
+        self,
+        mode: BatteryMode,
+        data: CoordinatorData,
+        mismatch_details: dict | None = None,
     ) -> None:
         """Notify when health check corrects hardware drift.
 
         Args:
             mode: The commanded mode that was corrected
             data: Current coordinator data
+            mismatch_details: Dict with what mismatched (operation_mode, backup_reserve,
+                            grid_charging_allowed). Used to suppress notifications for
+                            expected Tesla cloud sync behavior (Issue #394).
         """
         # Check if alert notifications are enabled
         if not self._is_notification_enabled(SWITCH_NOTIFY_ALERTS):
             _LOGGER.debug("Alert notifications disabled, skipping health correction")
+            return
+
+        # Issue #394: Suppress notification for Tesla cloud grid_charging sync
+        # Tesla's cloud resets allow_charging_from_grid to True every ~60 minutes.
+        # This is expected behavior - the health check corrects it within seconds.
+        # Only suppress if:
+        # 1. Mode is SELF_CONSUMPTION or DEMAND_BLOCK (where grid_charging should be False)
+        # 2. ONLY grid_charging_allowed mismatched (not operation_mode or backup_reserve)
+        if mismatch_details is not None and self._is_tesla_grid_charging_sync(
+            mode, mismatch_details
+        ):
+            _LOGGER.info(
+                "[HEALTH CHECK] Skipping notification - Tesla cloud sync for grid_charging "
+                "(expected behavior, corrected automatically)"
+            )
             return
 
         dry_run_prefix = self._get_dry_run_prefix()
@@ -349,6 +370,35 @@ class NotificationService:
         )
 
         await self.send_notification(title, message)
+
+    def _is_tesla_grid_charging_sync(
+        self, mode: BatteryMode, mismatch_details: dict
+    ) -> bool:
+        """Check if this is Tesla's periodic grid_charging reset (Issue #394).
+
+        Tesla's cloud resets allow_charging_from_grid to True approximately every
+        60 minutes. This is expected behavior in SELF_CONSUMPTION and DEMAND_BLOCK
+        modes where grid_charging should be False.
+
+        Args:
+            mode: The commanded mode
+            mismatch_details: Dict with what mismatched
+
+        Returns:
+            True if this is just Tesla's grid_charging sync (should suppress notification)
+        """
+        # Only suppress for modes where grid_charging should be False
+        if mode not in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
+            return False
+
+        # Check if ONLY grid_charging_allowed mismatched
+        only_grid_charging_mismatched = (
+            mismatch_details.get("grid_charging_allowed", False)
+            and not mismatch_details.get("operation_mode", False)
+            and not mismatch_details.get("backup_reserve", False)
+        )
+
+        return only_grid_charging_mismatched
 
     async def send_transition_failed_notification(
         self, target_mode: BatteryMode, data: CoordinatorData
