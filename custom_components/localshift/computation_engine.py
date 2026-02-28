@@ -144,9 +144,6 @@ class ComputationEngine:
         # Baseline load profile for Issue #137 (set by coordinator)
         self._baseline_avg_kw: dict[int, float] = {}
 
-        # Thermal manager for HVAC-aware load forecasting (Issue #152)
-        self._thermal_manager: Any = None
-
     # ========================================================================
     # MAIN ENTRY POINT
     # ========================================================================
@@ -660,21 +657,6 @@ class ComputationEngine:
                 len(baseline_avg_kw),
                 sum(baseline_avg_kw.values()) / len(baseline_avg_kw),
             )
-
-    def set_thermal_manager(self, thermal_manager: Any | None) -> None:
-        """Set the thermal manager for HVAC-aware load forecasting (Issue #152).
-
-        Called by coordinator to provide the thermal manager instance.
-        This enables HVAC load prediction in the forecast.
-
-        Args:
-            thermal_manager: ThermalManager instance, or None to disable.
-        """
-        self._thermal_manager = thermal_manager
-        # Propagate to forecast computer
-        self._forecast_computer.set_thermal_manager(thermal_manager)
-        if thermal_manager:
-            _LOGGER.info("Thermal manager set for HVAC-aware load forecasting")
 
     def _compute_daily_15min_forecast(
         self,

@@ -16,16 +16,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
-    # Thermal manager thresholds (Issue #137)
-    CONF_COOLING_TRIGGER_TEMP,
-    CONF_HEATING_TRIGGER_TEMP,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
-    # Thermal manager defaults
-    DEFAULT_COOLING_TRIGGER_TEMP,
-    DEFAULT_HEATING_TRIGGER_TEMP,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DOMAIN,
@@ -47,17 +41,6 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         CONF_MINIMUM_TARGET_SOC,
         "Minimum Target SOC",
         DEFAULT_MINIMUM_TARGET_SOC,
-    ),
-    # Thermal manager thresholds (Issue #137)
-    (
-        CONF_COOLING_TRIGGER_TEMP,
-        "Cooling Trigger Temp",
-        DEFAULT_COOLING_TRIGGER_TEMP,
-    ),
-    (
-        CONF_HEATING_TRIGGER_TEMP,
-        "Heating Trigger Temp",
-        DEFAULT_HEATING_TRIGGER_TEMP,
     ),
 ]
 
@@ -129,16 +112,6 @@ class LocalShiftNumber(NumberEntity):
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         self.async_write_ha_state()
 
-        # Check if this is a thermal-related threshold that requires mode re-determination
-        thermal_keys = {
-            CONF_COOLING_TRIGGER_TEMP,
-            CONF_HEATING_TRIGGER_TEMP,
-        }
-
-        if self._conf_key in thermal_keys:
-            # Thermal thresholds affect daily mode determination - re-run it
-            await self.coordinator.async_redetermine_thermal_mode()
-        else:
-            # Trigger immediate re-evaluation with new threshold values
-            # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
-            await self.coordinator.async_recompute_and_evaluate()
+        # Trigger immediate re-evaluation with new threshold values
+        # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
+        await self.coordinator.async_recompute_and_evaluate()

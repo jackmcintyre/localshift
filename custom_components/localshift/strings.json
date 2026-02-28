@@ -169,25 +169,9 @@
         "name": "Entity Health",
         "description": "Detailed health status for all tracked entities. Shows which entities are available or have issues."
       },
-      "daily_thermal_mode": {
-        "name": "Daily Thermal Mode",
-        "description": "Today's thermal operating mode (HEAT, COOL, DRY, OFF). Determined once daily based on weather forecast."
-      },
       "baseline_load_profile": {
         "name": "Baseline Load Profile",
         "description": "Non-HVAC baseline load by hour. Shows your home's base consumption without heating/cooling."
-      },
-      "hvac_load_profile": {
-        "name": "HVAC Load Profile",
-        "description": "Estimated HVAC load by hour. Shows heating/cooling energy consumption patterns."
-      },
-      "average_room_temp": {
-        "name": "Average Room Temperature",
-        "description": "Average temperature from all configured climate entities. Used for thermal control decisions."
-      },
-      "realtime_thermal_status": {
-        "name": "Realtime Thermal Status",
-        "description": "Real-time thermal control status (active/inactive). Shows if pre-conditioning or solar taper is running."
       },
       "learning_status": {
         "name": "Learning Status",
@@ -242,18 +226,6 @@
       "tesla_override_active": {
         "name": "Tesla Override Active",
         "description": "Tesla has taken control (Storm Watch, Grid Event, or VPP). LocalShift commands are ignored until event ends."
-      },
-      "preconditioning_active": {
-        "name": "Preconditioning Active",
-        "description": "Pre-conditioning is running to pre-heat or pre-cool home before demand window using battery power."
-      },
-      "solar_taper_active": {
-        "name": "Solar Taper Active",
-        "description": "Solar tapering is active. Adjusting climate setpoints to use excess solar instead of exporting at low FIT."
-      },
-      "thermal_management_enabled": {
-        "name": "Thermal Management Enabled",
-        "description": "Thermal management is configured and active. LocalShift is controlling HVAC for load shifting."
       }
     },
     "switch": {
@@ -297,14 +269,6 @@
         "name": "Notify Alerts",
         "description": "Send alert notifications for important events (automation disabled, Tesla override, errors)."
       },
-      "thermal_management_enabled": {
-        "name": "Thermal Management",
-        "description": "Enable HVAC automation for load shifting. Controls climate entities based on thermal mode."
-      },
-      "solar_taper_enabled": {
-        "name": "Solar Taper",
-        "description": "Adjust climate setpoints during excess solar periods to use surplus energy instead of exporting."
-      },
       "enable_learning": {
         "name": "Enable Learning",
         "description": "Enable active optimization by the learning system. Adjusts parameters based on your usage patterns."
@@ -346,22 +310,6 @@
       "export_price_margin": {
         "name": "Export Price Margin",
         "description": "Minimum profit margin ($/kWh) for battery export when grid import needed to replace"
-      },
-      "cooling_trigger_temp": {
-        "name": "Cooling Trigger Temp",
-        "description": "Temperature threshold (°C) to commit to cooling mode. Above this, daily mode becomes COOL."
-      },
-      "heating_trigger_temp": {
-        "name": "Heating Trigger Temp",
-        "description": "Temperature threshold (°C) to commit to heating mode. Below this, daily mode becomes HEAT."
-      },
-      "dehumidify_trigger_humidity": {
-        "name": "Dehumidify Trigger Humidity",
-        "description": "Humidity threshold (%) to commit to dehumidify mode. Above this, daily mode becomes DRY."
-      },
-      "taper_max_setpoint_offset": {
-        "name": "Solar Taper Max Offset",
-        "description": "Maximum temperature offset (°C) for solar tapering. Limits how much setpoints can be adjusted."
       }
     },
     "button": {
@@ -372,10 +320,6 @@
       "reset_learning": {
         "name": "Reset Learning Data",
         "description": "Clear all learning data and restart observation phase. Use if patterns have changed significantly."
-      },
-      "learn_hvac_power": {
-        "name": "Learn HVAC Power",
-        "description": "Proactively learn HVAC power consumption by running each climate entity briefly."
       }
     },
     "select": {
