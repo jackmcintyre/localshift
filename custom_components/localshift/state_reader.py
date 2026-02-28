@@ -9,8 +9,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_CLIMATE_CONTROL_ENTITIES,
-    CONF_CLIMATE_ENTITIES,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -290,9 +288,6 @@ class StateReader:
         # Weather
         self._read_weather_state(data)
 
-        # Climate entities (Thermal Manager - Issue #137, #63)
-        self._read_climate_states(data)
-
     def _read_weather_state(self, data: CoordinatorData) -> None:
         """Read weather entity current state (temperature and condition).
 
@@ -349,112 +344,6 @@ class StateReader:
             weather_entity,
             data.weather_temperature_current,
             data.weather_condition,
-        )
-
-    def _read_climate_states(self, data: CoordinatorData) -> None:
-        """Read current state of all configured climate entities.
-
-        Populates climate-related fields in CoordinatorData for use by
-        the thermal manager system (Issue #137, #63).
-
-        For each climate entity, reads:
-        - state: The HVAC mode ("off", "cool", "heat", "dry", "auto")
-        - hvac_action: Current action ("off", "cooling", "heating", "drying", "idle")
-        - temperature: Target setpoint
-        - current_temperature: Room temperature from entity
-
-        Args:
-            data: CoordinatorData instance to populate with climate data.
-        """
-        # Get configured climate entities from options (preferred) or data (fallback)
-        climate_entities = self.entry.options.get(
-            CONF_CLIMATE_ENTITIES, []
-        ) or self.entry.data.get(CONF_CLIMATE_ENTITIES, [])
-
-        control_entities = self.entry.options.get(
-            CONF_CLIMATE_CONTROL_ENTITIES, []
-        ) or self.entry.data.get(CONF_CLIMATE_CONTROL_ENTITIES, [])
-
-        # Store the entity lists in coordinator data
-        data.climate_entities = climate_entities if climate_entities else []
-        data.climate_control_entities = control_entities if control_entities else []
-
-        # Initialize diagnostic fields (Issue #193)
-        data.climate_missing_entities = []
-        data.climate_unavailable_entities = []
-        data.climate_read_success = False
-
-        if not data.climate_entities:
-            _LOGGER.info("No climate entities configured for thermal manager")
-            data.climate_states = {}
-            return
-
-        climate_states: dict[str, dict[str, Any]] = {}
-
-        for entity_id in data.climate_entities:
-            state = self.hass.states.get(entity_id)
-            if state is None:
-                _LOGGER.warning(
-                    "Climate entity '%s' not found in Home Assistant state machine. "
-                    "Check the entity ID in integration configuration.",
-                    entity_id,
-                )
-                data.climate_missing_entities.append(entity_id)
-                continue
-
-            if state.state in ("unknown", "unavailable"):
-                _LOGGER.warning(
-                    "Climate entity '%s' is %s. Thermal control may not function correctly.",
-                    entity_id,
-                    state.state,
-                )
-                data.climate_unavailable_entities.append(entity_id)
-                continue
-
-            # Build climate state dict for this entity
-            entity_state: dict[str, Any] = {
-                "entity_id": entity_id,
-                "state": state.state,  # HVAC mode: off, cool, heat, dry, auto
-                "hvac_action": state.attributes.get("hvac_action", "unknown"),
-                "setpoint": self._read_float_attr(state, "temperature"),
-                "current_temperature": self._read_float_attr(
-                    state, "current_temperature"
-                ),
-                "is_controlled": entity_id in data.climate_control_entities,
-                "friendly_name": state.attributes.get("friendly_name", entity_id),
-            }
-
-            climate_states[entity_id] = entity_state
-
-            _LOGGER.debug(
-                "Climate state: %s mode=%s action=%s setpoint=%.1f°C current=%.1f°C controlled=%s",
-                entity_id,
-                entity_state["state"],
-                entity_state["hvac_action"],
-                entity_state["setpoint"],
-                entity_state["current_temperature"] or 0.0,
-                entity_state["is_controlled"],
-            )
-
-        data.climate_states = climate_states
-
-        # Set success flag if at least one climate entity was read successfully (Issue #193)
-        data.climate_read_success = len(climate_states) > 0
-
-        if data.climate_missing_entities or data.climate_unavailable_entities:
-            _LOGGER.warning(
-                "Climate entity read issues: %d missing, %d unavailable. "
-                "Thermal control may not function correctly.",
-                len(data.climate_missing_entities),
-                len(data.climate_unavailable_entities),
-            )
-
-        # Summary log at INFO level for visibility
-        _LOGGER.info(
-            "Climate states read: %d entities (%d controlled), success=%s",
-            len(climate_states),
-            len(data.climate_control_entities),
-            data.climate_read_success,
         )
 
     def check_automation_ready(
