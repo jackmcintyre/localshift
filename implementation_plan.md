@@ -1,174 +1,191 @@
 # Implementation Plan
 
 [Overview]
-Refactor the main forecast loop in `compute_forecast()` to use hybrid timescale slots (5-min and 30-min) instead of fixed 15-min slots.
+Implement a phased migration from the legacy multi-pass forecasting planner to a deterministic DP-based optimizer that first runs in shadow/assist modes, then (optionally) in active control mode with strong safety gates.
 
-The hybrid timescale foundation is complete (`compute_hybrid_slot_schedule()`, `get_price_for_slot_with_source()`, `get_solar_for_slot_by_interval()`), but the main forecast loop still iterates over 96 fixed 15-min slots. This plan addresses the gap to complete Issue #351.
+The current forecasting/control system is functionally rich but difficult to reason about because planning behavior emerges from multiple interacting passes, forecast-time heuristics, and runtime state-machine follow-up behavior. The immediate goal is not a one-shot rewrite, but an incremental replacement strategy that preserves operational safety, keeps Home Assistant custom-component constraints in mind (single-process Python execution, no heavy external solver dependency, predictable coordinator cycle time), and continuously validates outcomes against the incumbent planner.
+
+The implementation should treat the optimizer as a first-class planning subsystem with clear contracts: normalized slot inputs, explicit action vocabulary, deterministic state transitions, objective term accounting, and cycle-level comparison telemetry. Rollout must remain reversible at every stage via config feature flags and control mode settings. Existing forecast-driven architecture and coordinator lifecycle remain the integration backbone; the optimizer integrates through a narrow adapter boundary (shadow runner and comparator) to avoid broad coupling.
+
+At phase level, the feature should proceed as: **Phase A (scaffold baseline) → Phase B (input/config parity) → Phase C (real DP solve) → Phase D (comparison/analytics hardening) → Phase E (assist UX) → Phase F (active control pilot) → Phase G (stabilization/docs/release)**. This ordering prioritizes correctness and observability before behavior change.
 
 [Types]
-No new types required. The existing `hybrid_slots` structure from `compute_hybrid_slot_schedule()` is already defined:
+The type changes establish explicit planner-domain contracts that make decision logic inspectable and testable.
 
-```python
-# Each slot in hybrid_slots:
-{
-    "start": datetime,           # Slot start time
-    "interval_minutes": int,     # 5 or 30
-    "price": float,              # Price in $/kWh
-    "price_source": str,         # "5min" or "30min"
-}
+### Core Planning Types
+- `custom_components/localshift/computation_engine_lib/optimizer_dp.py`
+  - `PlannerAction (StrEnum)`
+    - Values: `hold`, `charge_grid_normal`, `charge_grid_boost`, `export_proactive`
+    - Validation: must map 1:1 to compat flags (`grid_charge`, `grid_charge_boost`, `proactive_export`).
+  - `PlannerReasonCode (StrEnum)`
+    - Action-classification taxonomy for diagnostics and future learning.
+    - Must remain serializable as strings for state attributes.
+  - `SlotContext (dataclass)`
+    - Required fields: `slot_index: int`, `timestamp_iso: str`, `slot_interval_minutes: int`, `buy_price: float`, `sell_price: float`, `solar_kwh: float`, `consumption_kwh: float`.
+    - Optional flags: `is_demand_window_entry`, `is_demand_window_slot`, `price_source`.
+    - Constraints: `slot_interval_minutes > 0`, non-null numeric values, chronological sequence preserved externally.
+  - `OptimizerConfig (dataclass)`
+    - Encodes battery constraints, efficiencies, objective penalties, and SOC discretization (`soc_bins`).
+    - Constraints: min/max SOC bounds coherent; rates and capacity > 0; bins sufficiently granular for target precision.
+  - `ObjectiveTerms (dataclass)`
+    - Per-step objective decomposition with `net_cost` property and `to_dict()` serialization.
+  - `PlannedSlotDecision (dataclass)`
+    - Output contract per slot; includes action, reason, SOC projection, import/export quantities.
+  - `OptimizerInputs (dataclass)` and `OptimizerResult (dataclass)`
+    - Horizon-level in/out envelopes; `OptimizerResult` must support success/failure status and detailed diagnostics.
 
-# Metadata:
-{
-    "timezone": str,
-    "slot_intervals": {"5min": int, "30min": int},
-    "transition_boundary": str | None,
-    "total_slots": int,
-}
-```
+### Comparison Types
+- `custom_components/localshift/computation_engine_lib/planner_comparator.py`
+  - `MismatchType (StrEnum)`
+    - Includes action, quantity, target-attainment, and profitability mismatch classes.
+  - `SlotMismatch (dataclass)` and `PlannerComparisonRecord (dataclass)`
+    - Serializable cycle-level delta record for shadow/assist observability.
+
+### Coordinator Data Contract Extensions
+- `custom_components/localshift/coordinator_data.py`
+  - Shadow fields already introduced (`optimizer_shadow_result`, `optimizer_shadow_decisions`, `optimizer_shadow_summary`, `optimizer_comparison`) remain canonical integration points.
+  - Future phases may add status fields such as `optimizer_runtime_mode`, `optimizer_last_apply_status`, `optimizer_safety_block_reason` for active-mode governance.
 
 [Files]
-Single file modification required:
+The file plan focuses on preserving existing planner behavior while layering optimizer capability by phase.
 
-- **`custom_components/localshift/computation_engine_lib/forecast_computer.py`**
-  - Modify `compute_forecast()` method (lines ~900-1500)
-  - Replace fixed `TOTAL_SLOTS = 96` iteration with `hybrid_slots` iteration
-  - Update Pass 1, Pass 2, Pass 3, Pass 4 to use variable slot durations
-  - Add `slot_interval_minutes` and `price_source` to output dictionary
+### New files to create
+- `worktrees/issue-403/implementation_plan.md`
+  - Phase-level implementation blueprint (this document).
+- `worktrees/issue-403/docs/OPTIMIZER_DP_ROLLOUT.md` (Phase E/F)
+  - Operator/developer rollout and safety checklist.
+- `worktrees/issue-403/tests/test_optimizer_dp_solve.py` (Phase C)
+  - DP solve correctness and invariants.
+- `worktrees/issue-403/tests/test_optimizer_shadow_runner_integration.py` (Phase B/D)
+  - Adapter/parity and serialization tests.
+- `worktrees/issue-403/tests/test_optimizer_active_mode.py` (Phase F)
+  - Active-mode guardrail behavior.
+
+### Existing files to modify
+- `custom_components/localshift/computation_engine_lib/optimizer_dp.py`
+  - Phase C core DP implementation replacing scaffold `_solve()` stub.
+- `custom_components/localshift/computation_engine_lib/optimizer_shadow_runner.py`
+  - Phase B config parity mapping; Phase D richer metrics; Phase F apply-path branching.
+- `custom_components/localshift/computation_engine_lib/planner_comparator.py`
+  - Phase D mismatch taxonomy completion and quantity/profitability logic.
+- `custom_components/localshift/computation_engine_lib/forecast_computer.py`
+  - Maintain deterministic slot identity and ensure compatibility mapping remains stable.
+- `custom_components/localshift/coordinator.py`
+  - Phase E/F mode-aware execution, telemetry updates, safety fallback handling.
+- `custom_components/localshift/coordinator_data.py`
+  - Phase E/F additional runtime and safety fields.
+- `custom_components/localshift/const.py`
+  - Phase E/F control-mode lifecycle constants and defaults.
+- `custom_components/localshift/sensor.py` and `custom_components/localshift/binary_sensor.py` (Phase E)
+  - Expose optimizer status/comparison metrics for debugging and operator trust.
+- `docs/ARCHITECTURE.md`
+  - Add optimizer subsystem architecture and rollout state.
+- `docs/FORECAST_DRIVEN_CONTROL.md`
+  - Clarify legacy-plan vs optimizer-plan interaction and eventual control ownership.
+- `docs/TROUBLESHOOTING.md`
+  - Add optimizer-specific diagnostics and fallback procedures.
+
+### Files not to change in early phases
+- `custom_components/localshift/state_machine.py`
+  - Keep transition machinery stable until active-mode pilot.
+- `custom_components/localshift/battery_controller.py`
+  - Reuse existing actuation surface; no direct optimizer coupling initially.
 
 [Functions]
-Single function modification:
+Function-level work should progress from adapter completeness to deterministic solve and finally active-control integration.
 
-- **`ForecastComputer.compute_forecast()`** (forecast_computer.py)
-  - **Current behavior**: Iterates `for slot_idx in range(TOTAL_SLOTS)` with fixed 15-min slots
-  - **Required changes**:
-    1. Replace `for slot_idx in range(TOTAL_SLOTS)` with `for slot in hybrid_slots`
-    2. Use `slot["start"]` instead of `base_slot + timedelta(minutes=15 * slot_idx)`
-    3. Use `slot["interval_minutes"]` for time calculations
-    4. Use `slot["price"]` and `slot["price_source"]` from hybrid slots
-    5. Use `get_solar_for_slot_by_interval()` with variable duration
-    6. Update `slot_fraction = slot["interval_minutes"] / 60.0`
-    7. Add `slot_interval_minutes` and `price_source` to output dict
+### New functions (planned)
+- `custom_components/localshift/computation_engine_lib/optimizer_dp.py`
+  - `_build_soc_grid(config: OptimizerConfig) -> list[float]`
+  - `_map_soc_to_bin(soc_pct: float, grid: list[float]) -> int`
+  - `_enumerate_actions(state, slot, config) -> list[PlannerAction]` (or expand `feasible_actions`)
+  - `_forward_transition(...) -> TransitionResult` (optional internal dataclass)
+  - `_backtrack_optimal_path(dp_tables, inputs) -> list[PlannedSlotDecision]`
+- `custom_components/localshift/computation_engine_lib/optimizer_shadow_runner.py`
+  - `_compute_legacy_slot_costs(legacy_slots) -> tuple[...]` for tighter net-cost parity.
+  - `_derive_runtime_apply_plan(...)` (Phase F active path only).
 
-  - **Pass 1 (Grid charge candidates)**: Refactor to iterate over hybrid_slots
-  - **Pass 2 (Price optimization)**: Update slot indexing for scheduled_grid_charges
-  - **Pass 3 (Build forecast)**: Use hybrid_slots for output generation
-  - **Pass 4 (DW verification)**: Update to work with variable slots
+### Modified functions (exact)
+- `DPPlanner._solve(self, inputs: OptimizerInputs) -> OptimizerResult`
+  - Replace HOLD-only stub with deterministic DP over `(slot_index, soc_bin)`.
+- `DPPlanner.transition(...)`
+  - Enforce SOC/rate/efficiency clipping and demand-window constraints correctly.
+- `DPPlanner.stage_cost(...)`
+  - Align import/export sign semantics and cycle penalty with project conventions.
+- `PlannerComparator._compare_slot(...)`
+  - Extend beyond action mismatch to quantity/profitability/target classes.
+- `run_shadow_optimizer(...)`
+  - Respect `optimizer_control_mode` lifecycle (`shadow`/`assist` now; `active` in gated phase).
+- `LocalShiftCoordinator._compute_derived_values()` integration path
+  - Maintain ordering guarantees and non-disruptive listener behavior while adding mode-aware optimizer outputs.
+
+### Removed functions
+- None planned in phase-level rollout; deprecations should be additive and reversible until post-active stabilization.
 
 [Classes]
-No class modifications required.
+Class evolution focuses on making optimizer internals production-grade while minimizing external coupling.
+
+### New classes (planned)
+- `DPTransitionTrace` (optional, `optimizer_dp.py`)
+  - Purpose: compact debug trace for selected states/actions in comparison diagnostics.
+- `OptimizerSafetyGate` (optional, `optimizer_shadow_runner.py` or separate module)
+  - Purpose: centralized active-mode admission checks (feature enabled, mode active, forecast freshness, slot alignment).
+
+### Modified classes
+- `DPPlanner`
+  - From scaffold/no-op to full solver with deterministic tie-breaking and bounded complexity.
+- `PlannerComparator`
+  - From action-only mismatch detector to multi-dimensional plan delta analyzer.
+- `LocalShiftCoordinator`
+  - Add explicit optimizer runtime-mode orchestration while keeping existing state-machine interface unchanged.
+- `CoordinatorData`
+  - Expand optimizer telemetry and runtime status fields.
+
+### Removed classes
+- None in planned feature scope.
 
 [Dependencies]
-No new dependencies. All required functions already exist:
-- `compute_hybrid_slot_schedule()` - Already implemented
-- `get_price_for_slot_with_source()` - Already implemented
-- `get_solar_for_slot_by_interval()` - Already implemented
+The feature should remain dependency-light and compatible with Home Assistant custom-component constraints.
+
+No new external runtime dependencies are required for phase-level implementation. The DP solver should be implemented in pure Python using existing stdlib and project tooling, avoiding heavy optimization libraries (e.g., OR-Tools, SciPy) to keep deployment simple and deterministic in HA environments.
+
+Development/testing continues with existing toolchain from `pyproject.toml` (`pytest`, `pytest-asyncio`, `pytest-xdist`, `ruff`, `homeassistant`). If benchmarking support is needed, use optional internal timing helpers rather than new packages.
 
 [Testing]
-Existing tests should pass with minimal changes:
+Testing must prove safety, parity visibility, and deterministic behavior before any active-control use.
 
-1. **`tests/test_hybrid_timescale.py`** - 11 tests already pass
-2. **`tests/test_forecast_computer.py`** - May need updates for new output fields
-3. **`tests/test_scenarios.py`** - Scenario tests should pass
+### Test strategy by phase
+- Phase B (adapter parity)
+  - Validate slot mapping completeness, timestamp/interval alignment, and serialization stability.
+- Phase C (DP core)
+  - Unit tests for feasibility, transition clipping, stage cost sign correctness, and backtracking determinism.
+  - Scenario tests with representative solar/price patterns including negative FIT windows and demand-window constraints.
+- Phase D (comparison)
+  - Verify mismatch classification counts and top mismatch ranking behavior.
+- Phase E (assist)
+  - Validate diagnostics payloads and sensor attributes remain bounded/serializable.
+- Phase F (active pilot)
+  - Guardrail tests ensuring instant fallback to legacy behavior on any optimizer failure or safety gate miss.
 
-Key test considerations:
-- Mock data must include `duration` field in price forecasts
-- Output dict now includes `slot_interval_minutes` and `price_source`
-- Grid charging logic must work with 5-min and 30-min slots
+### Required regression policy
+- Continue running existing suite to detect unrelated baseline failures separately.
+- Maintain dedicated optimizer test subset for quick iteration.
+- Require deterministic snapshot-style assertions for core plan outputs on fixed inputs.
 
 [Implementation Order]
-Sequential implementation to minimize risk:
+Implement in strict phase order: complete plan parity and observability first, then solver correctness, then controlled activation.
 
-1. **Step 1: Update Pass 3 (Build forecast output)**
-   - This is the simplest change - just output the hybrid slot data
-   - Add `slot_interval_minutes` and `price_source` to output dict
-   - Verify sensor shows correct values
-
-2. **Step 2: Update Pass 1 (Grid charge candidates)**
-   - Refactor candidate collection to iterate over hybrid_slots
-   - Use variable slot durations for solar/load calculations
-   - Verify grid charging decisions work correctly
-
-3. **Step 3: Update Pass 2 (Price optimization)**
-   - Update scheduled_grid_charges to use hybrid slot indexing
-   - Handle variable slot durations in price sorting
-
-4. **Step 4: Update Pass 4 (DW verification)**
-   - Update DW start slot finding for variable slots
-   - Verify gap filling works with hybrid timescale
-
-5. **Step 5: Run full test suite**
-   - Fix any test failures
-   - Update test mocks if needed
-
-6. **Step 6: Deploy and verify**
-   - Check logs for errors
-   - Verify sensor output shows correct `slot_intervals`
-   - Verify `price_source` is "5min" or "30min" (not "unknown")
-
-[Key Implementation Details]
-
-### Slot Iteration Pattern Change
-
-**Before (fixed 15-min):**
-```python
-for slot_idx in range(TOTAL_SLOTS):
-    slot_start = base_slot + timedelta(minutes=15 * slot_idx)
-    slot_fraction = 15 / 60.0
-    # ... calculations
-```
-
-**After (hybrid):**
-```python
-for slot in hybrid_slots:
-    slot_start = slot["start"]
-    interval_minutes = slot["interval_minutes"]
-    slot_fraction = interval_minutes / 60.0
-    price = slot["price"]
-    price_source = slot["price_source"]
-    # ... calculations
-```
-
-### Grid Charging with Variable Slots
-
-Grid charging rate calculations must scale to slot duration:
-```python
-max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction  # Scales with duration
-```
-
-### Solar Retrieval Change
-
-**Before:**
-```python
-solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
-```
-
-**After:**
-```python
-solar_kwh = get_solar_for_slot_by_interval(all_solcast, slot_start, interval_minutes)
-```
-
-### Output Dictionary Update
-
-Add new fields to each slot in `daily_forecast`:
-```python
-{
-    # ... existing fields
-    "slot_interval_minutes": interval_minutes,  # 5 or 30
-    "price_source": price_source,               # "5min" or "30min"
-}
-```
-
-[Risk Assessment]
-
-**Low Risk:**
-- Output format change (additive - new fields)
-- Solar retrieval function already tested
-
-**Medium Risk:**
-- Grid charging logic with variable slots
-- Price optimization with variable slots
-
-**Mitigation:**
-- Implement in order (Pass 3 first for quick validation)
-- Run tests after each step
-- Deploy incrementally
+1. **Phase A — Baseline stabilization (already scaffolded)**
+   - Confirm current shadow modules and deterministic slot identity are stable.
+2. **Phase B — Input/config parity completion**
+   - Map all relevant options and constraints into `OptimizerConfig`; verify no hidden defaults drift.
+3. **Phase C — DP solver implementation**
+   - Implement full `_solve()` with SOC discretization, action feasibility, transition/cost recursion, and backtracking.
+4. **Phase D — Comparator hardening**
+   - Expand mismatch taxonomy and delta metrics; ensure high-signal diagnostics for debugging.
+5. **Phase E — Assist-mode operator visibility**
+   - Surface optimizer summaries/comparison in entities/diagnostics/docs for trust-building.
+6. **Phase F — Active-mode pilot (gated)**
+   - Introduce strict safety gate and reversible runtime switch; begin with conservative rollout controls.
+7. **Phase G — Stabilization and documentation**
+   - Tune performance, close edge cases, update architecture/troubleshooting/entity docs, finalize release notes.
