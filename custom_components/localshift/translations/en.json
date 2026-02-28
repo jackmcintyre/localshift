@@ -365,22 +365,6 @@
       }
     },
     "button": {
-      "force_charge": {
-        "name": "Force Charge",
-        "description": "Manually start grid charging the battery at 3.3kW until full or cancelled."
-      },
-      "force_discharge": {
-        "name": "Force Discharge",
-        "description": "Manually start discharging battery to grid. Useful during high price periods."
-      },
-      "boost_charge": {
-        "name": "Boost Charge",
-        "description": "Manually start boost charging at 5kW. Faster than standard grid charging."
-      },
-      "self_consumption": {
-        "name": "Self Consumption",
-        "description": "Return to automated self-consumption mode. Clears manual override."
-      },
       "update_forecast": {
         "name": "Update Forecast",
         "description": "Force refresh of forecast data and clear historical load cache."
@@ -388,6 +372,16 @@
       "reset_learning": {
         "name": "Reset Learning Data",
         "description": "Clear all learning data and restart observation phase. Use if patterns have changed significantly."
+      },
+      "learn_hvac_power": {
+        "name": "Learn HVAC Power",
+        "description": "Proactively learn HVAC power consumption by running each climate entity briefly."
+      }
+    },
+    "select": {
+      "battery_mode": {
+        "name": "Battery Mode",
+        "description": "Select battery operating mode. Changing this disables automation and applies manual control."
       }
     }
   }
