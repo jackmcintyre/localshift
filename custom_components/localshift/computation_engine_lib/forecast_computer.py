@@ -2257,7 +2257,9 @@ class ForecastComputer:
             max_grid_charge_kwh = CHARGE_RATE_GRID_KW * slot_fraction
 
             # Check if this slot is scheduled for grid charging
-            if slot_idx in scheduled_grid_charges:
+            # Issue #381: Only grid charge if target not yet met (gap_to_target > 0)
+            # This ensures forecast display matches runtime control behavior
+            if slot_idx in scheduled_grid_charges and gap_to_target > 0:
                 scheduled = scheduled_grid_charges[slot_idx]
                 should_grid_charge = True
                 should_boost = scheduled["should_boost"]
