@@ -212,6 +212,11 @@ Lock down the existing scaffolded optimizer path as a stable, deterministic foun
    - Repeat fixed-input planner runs and assert stable decision ordering and reason histograms.
 4. **Baseline test enforcement**
    - Keep scaffold test suite green and mandatory for subsequent phase PRs.
+   - Add explicit tests for no-actuation behavior (mock battery/state-machine entry points and assert zero calls).
+   - Add replay determinism test with serialized snapshot equality across repeated runs.
+   - Add shadow-failure test to verify graceful fallback (legacy remains authoritative, telemetry captures error state).
+5. **Runtime baseline instrumentation**
+   - Capture shadow runner timing on a reference horizon fixture and assert p95 runtime budget (target: `<= 200 ms` for a 48-slot fixture in CI).
 
 ### Deliverables
 - Stable scaffold modules (already present) treated as immutable baseline.
@@ -222,6 +227,10 @@ Lock down the existing scaffolded optimizer path as a stable, deterministic foun
 - Shadow mode produces only telemetry mutations (`optimizer_shadow_*`, `optimizer_comparison`).
 - No runtime control behavior changes when optimizer flag is enabled in `shadow` mode.
 - Forecast slot identity fields are present and unique by index.
+- Determinism: fixed-input replay across 20 runs produces byte-for-byte identical serialized decisions and reason histograms.
+- Non-invasive guarantee: shadow execution makes zero calls to battery/state-machine actuation paths (test-enforced).
+- Runtime baseline: shadow path meets p95 timing budget (`<= 200 ms`) on reference 48-slot fixture.
+- Fail-safe behavior: shadow exceptions never block coordinator completion and never replace legacy authoritative outputs.
 
 ### Risks
 - Silent drift in scaffold contracts as future phases evolve.
