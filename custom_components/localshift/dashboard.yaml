@@ -131,7 +131,7 @@ views:
 
           - type: markdown
             content: >
-              {% set mode = states('sensor.localshift_battery_mode') %}
+              {% set mode = states('select.localshift_battery_mode') %}
               {% set soc = states('sensor.my_home_percentage_charged') | int(0) %}
               {% set target = states('number.localshift_battery_target') | int(100) %}
               
@@ -684,7 +684,7 @@ views:
               
               === CURRENT STATE ===
               
-              Mode: {{ states('sensor.localshift_battery_mode') }}
+              Mode: {{ states('select.localshift_battery_mode') }}
               
               SOC: {{ states('sensor.my_home_percentage_charged') }}%
               
@@ -748,11 +748,11 @@ views:
               
               Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
               
-              Force Discharge Active: {{ states('sensor.localshift_battery_mode') == 'force_discharge' }}
+              Force Discharge Active: {{ states('select.localshift_battery_mode') == 'force_discharge' }}
               
-              Force Charge Active: {{ states('sensor.localshift_battery_mode') == 'force_charge' }}
+              Force Charge Active: {{ states('select.localshift_battery_mode') == 'force_charge' }}
               
-              Boost Charge Active: {{ states('sensor.localshift_battery_mode') == 'boost_charging' }}
+              Boost Charge Active: {{ states('select.localshift_battery_mode') == 'boost_charging' }}
               
               Solar Can Reach Target: {{ states('binary_sensor.localshift_solar_can_reach_target') }}
               
@@ -1057,7 +1057,7 @@ views:
           - type: logbook
             target:
               entity_id:
-                - sensor.localshift_battery_mode
+                - select.localshift_battery_mode
 
       - cards:
         - type: markdown
