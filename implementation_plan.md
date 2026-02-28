@@ -365,3 +365,42 @@ Upgrade plan comparison from basic action mismatch detection to high-signal, dec
 ### Mitigations
 - Use explicit significance thresholds and bounded top-N reporting.
 - Include clear `reason_detail` strings for each mismatch category.
+
+## Phase E — Detailed Plan (Assist-Mode UX & Observability)
+
+### Goal
+Make optimizer behavior understandable and actionable to operators by exposing reliable assist-mode telemetry, diagnostics, and documentation before active control is considered.
+
+### Scope
+- Expand sensor/diagnostics visibility for shadow and assist modes.
+- Surface cycle-level summaries, mismatch trends, and failure reasons.
+- Document interpretation guidance for operators.
+
+### Tasks
+1. **Assist-mode summaries**
+   - Add concise `optimizer_shadow_summary` fields for solve status, timing, slot count, and key deltas.
+2. **Diagnostics integration**
+   - Extend diagnostics output with optimizer runtime details and recent comparison snapshots.
+3. **Entity surface updates**
+   - Add/extend sensor attributes to expose actionable optimizer stats without overwhelming payload size.
+4. **Operator documentation**
+   - Add `docs/OPTIMIZER_DP_ROLLOUT.md` with mode definitions (`shadow`, `assist`, future `active`), troubleshooting, and interpretation examples.
+   - Update `docs/ARCHITECTURE.md` and `docs/TROUBLESHOOTING.md` with optimizer sections.
+5. **Tests**
+   - Validate telemetry field presence, serialization stability, and bounded attribute payloads.
+
+### Deliverables
+- Assist-mode observability surface across sensors/diagnostics/docs.
+- Rollout guide for interpreting comparison outputs.
+
+### Acceptance Criteria
+- Operators can identify why optimizer differs from legacy in a given cycle using UI-visible data.
+- Diagnostic payloads remain stable and bounded.
+- Assist mode remains non-invasive (no control actuation path).
+
+### Risks
+- Attribute payload bloat causing truncation or degraded UX.
+
+### Mitigations
+- Keep top-N mismatch lists bounded.
+- Provide condensed summaries plus “details in diagnostics” structure.
