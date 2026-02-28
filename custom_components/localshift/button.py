@@ -1,11 +1,11 @@
 """Button platform for the LocalShift integration.
 
-Provides manual mode control buttons:
-- Force Charge
-- Force Discharge
-- Boost Charge (5kW)
-- Return to Self Consumption
+Provides utility buttons:
 - Update Forecast
+- Reset Learning Data
+- Learn HVAC Power
+
+Issue #382: Mode control buttons removed - replaced by select entity.
 """
 
 from __future__ import annotations
@@ -19,17 +19,12 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    BUTTON_BOOST_CHARGE,
-    BUTTON_FORCE_CHARGE,
-    BUTTON_FORCE_DISCHARGE,
     BUTTON_ICONS,
     BUTTON_LEARN_HVAC_POWER,
     BUTTON_NAMES,
     BUTTON_RESET_LEARNING,
-    BUTTON_SELF_CONSUMPTION,
     BUTTON_UPDATE_FORECAST,
     DOMAIN,
-    BatteryMode,
 )
 from .coordinator import LocalShiftCoordinator
 
@@ -45,10 +40,6 @@ async def async_setup_entry(
     coordinator: LocalShiftCoordinator = entry.runtime_data
 
     entities = [
-        ForceChargeButton(coordinator, entry),
-        ForceDischargeButton(coordinator, entry),
-        BoostChargeButton(coordinator, entry),
-        SelfConsumptionButton(coordinator, entry),
         UpdateForecastButton(coordinator, entry),
         ResetLearningDataButton(coordinator, entry),
         LearnHVACPowerButton(coordinator, entry),
@@ -62,7 +53,7 @@ async def async_setup_entry(
 
 
 class LocalShiftButtonBase(ButtonEntity):
-    """Base class for manual mode buttons."""
+    """Base class for utility buttons."""
 
     _attr_has_entity_name = True
 
@@ -89,105 +80,6 @@ class LocalShiftButtonBase(ButtonEntity):
             model="Solar Battery Automation",
             sw_version="0.0.2",
         )
-
-
-class ForceChargeButton(LocalShiftButtonBase):
-    """Manually force charge the battery."""
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, BUTTON_FORCE_CHARGE)
-
-    async def async_press(self) -> None:
-        """Handle button press."""
-        self.coordinator.data.manual_override = True
-        if self.coordinator._state_machine is not None:
-            self.coordinator._state_machine.set_manual_override_timestamp()
-            # Update commanded mode to prevent health check "correction"
-            self.coordinator._state_machine.set_commanded_mode(
-                BatteryMode.GRID_CHARGING
-            )
-        await self.coordinator.async_set_force_charge()
-        if self.coordinator._notification_service is not None:
-            await (
-                self.coordinator._notification_service.send_manual_action_notification(
-                    "Manual Force Charge", self.coordinator.data
-                )
-            )
-
-
-class ForceDischargeButton(LocalShiftButtonBase):
-    """Manually force discharge the battery."""
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, BUTTON_FORCE_DISCHARGE)
-
-    async def async_press(self) -> None:
-        """Handle button press."""
-        self.coordinator.data.manual_override = True
-        if self.coordinator._state_machine is not None:
-            self.coordinator._state_machine.set_manual_override_timestamp()
-            # Update commanded mode to prevent health check "correction"
-            self.coordinator._state_machine.set_commanded_mode(
-                BatteryMode.SPIKE_DISCHARGE
-            )
-        await self.coordinator.async_set_force_discharge()
-        if self.coordinator._notification_service is not None:
-            await (
-                self.coordinator._notification_service.send_manual_action_notification(
-                    "Manual Force Discharge", self.coordinator.data
-                )
-            )
-
-
-class BoostChargeButton(LocalShiftButtonBase):
-    """Manually boost charge the battery at 5kW."""
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, BUTTON_BOOST_CHARGE)
-
-    async def async_press(self) -> None:
-        """Handle button press."""
-        self.coordinator.data.manual_override = True
-        if self.coordinator._state_machine is not None:
-            self.coordinator._state_machine.set_manual_override_timestamp()
-            # Update commanded mode to prevent health check "correction"
-            self.coordinator._state_machine.set_commanded_mode(
-                BatteryMode.BOOST_CHARGING
-            )
-        await self.coordinator.async_set_boost_charge()
-        if self.coordinator._notification_service is not None:
-            await (
-                self.coordinator._notification_service.send_manual_action_notification(
-                    "Manual Boost Charge", self.coordinator.data
-                )
-            )
-
-
-class SelfConsumptionButton(LocalShiftButtonBase):
-    """Return to normal self consumption mode."""
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, BUTTON_SELF_CONSUMPTION)
-
-    async def async_press(self) -> None:
-        """Handle button press."""
-        # Set manual override to prevent state machine from immediately overriding
-        # the user's choice. After manual_override_timeout hours, it will return
-        # to automated control. This matches the behavior of other manual buttons.
-        self.coordinator.data.manual_override = True
-        if self.coordinator._state_machine is not None:
-            self.coordinator._state_machine.set_manual_override_timestamp()
-            # Update commanded mode to prevent health check "correction"
-            self.coordinator._state_machine.set_commanded_mode(
-                BatteryMode.SELF_CONSUMPTION
-            )
-        await self.coordinator.async_set_self_consumption()
-        if self.coordinator._notification_service is not None:
-            await (
-                self.coordinator._notification_service.send_manual_action_notification(
-                    "Manual Self Consumption", self.coordinator.data
-                )
-            )
 
 
 class UpdateForecastButton(LocalShiftButtonBase):
