@@ -15,34 +15,22 @@ from ..const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
-    CONF_CLIMATE_CONTROL_ENTITIES,
-    CONF_CLIMATE_ENTITIES,
-    CONF_COOLING_THRESHOLD,
-    CONF_COOLING_TRIGGER_TEMP,
-    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
-    CONF_HEATING_THRESHOLD,
-    CONF_HEATING_TRIGGER_TEMP,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
-    CONF_MIN_SETPOINT_CHANGE_INTERVAL,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
-    CONF_PRECONDITION_HOURS_BEFORE_DW,
-    CONF_PRECONDITION_TEMP_OFFSET,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
     CONF_PRICING_GENERAL_PRICE,
     CONF_PRICING_PRICE_SPIKE,
-    CONF_SOLAR_TAPER_ENABLED,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_SPIKE_PRICE_PERCENTILE,
     CONF_SUN_ENTITY,
-    CONF_TAPER_MAX_SETPOINT_OFFSET,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -50,41 +38,19 @@ from ..const import (
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
-    CONF_THERMAL_HYSTERESIS,
-    CONF_THERMAL_MANAGEMENT_ENABLED,
-    CONF_THERMAL_MODE_DECISION_TIME,
-    CONF_THERMAL_OFF_FORECAST_CLEAR,
-    CONF_THERMAL_OFF_TEMP_MARGIN,
-    CONF_THERMAL_OFF_TIME,
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
-    DEFAULT_COOLING_THRESHOLD,
-    DEFAULT_COOLING_TRIGGER_TEMP,
-    DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
     DEFAULT_EXPORT_PRICE_MARGIN,
-    DEFAULT_HEATING_THRESHOLD,
-    DEFAULT_HEATING_TRIGGER_TEMP,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
-    DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
     DEFAULT_MINIMUM_TARGET_SOC,
-    DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
-    DEFAULT_PRECONDITION_TEMP_OFFSET,
-    DEFAULT_SOLAR_TAPER_ENABLED,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
-    DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
-    DEFAULT_THERMAL_HYSTERESIS,
-    DEFAULT_THERMAL_MANAGEMENT_ENABLED,
-    DEFAULT_THERMAL_MODE_DECISION_TIME,
-    DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
-    DEFAULT_THERMAL_OFF_TEMP_MARGIN,
-    DEFAULT_THERMAL_OFF_TIME,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     THRESHOLD_RANGES,
@@ -460,40 +426,6 @@ def build_options_schema(
                     DEFAULT_WEATHER_LEARNING_ENABLED,
                 ),
             ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_COOLING_THRESHOLD,
-                default=values.get(
-                    CONF_COOLING_THRESHOLD,
-                    DEFAULT_COOLING_THRESHOLD,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD]["min"],
-                    max=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD]["max"],
-                    step=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_COOLING_THRESHOLD][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_HEATING_THRESHOLD,
-                default=values.get(
-                    CONF_HEATING_THRESHOLD,
-                    DEFAULT_HEATING_THRESHOLD,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD]["min"],
-                    max=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD]["max"],
-                    step=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_HEATING_THRESHOLD][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
             # Export price margin for arbitrage
             vol.Optional(
                 CONF_EXPORT_PRICE_MARGIN,
@@ -510,216 +442,6 @@ def build_options_schema(
                         "unit"
                     ],
                     mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            # Thermal Manager settings (Issue #137, #63)
-            vol.Optional(
-                CONF_THERMAL_MANAGEMENT_ENABLED,
-                default=values.get(
-                    CONF_THERMAL_MANAGEMENT_ENABLED,
-                    DEFAULT_THERMAL_MANAGEMENT_ENABLED,
-                ),
-            ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_CLIMATE_ENTITIES,
-                default=values.get(CONF_CLIMATE_ENTITIES, []),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=climate_entities,
-                    multiple=True,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                CONF_CLIMATE_CONTROL_ENTITIES,
-                default=values.get(CONF_CLIMATE_CONTROL_ENTITIES, []),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=climate_entities,
-                    multiple=True,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                CONF_COOLING_TRIGGER_TEMP,
-                default=values.get(
-                    CONF_COOLING_TRIGGER_TEMP,
-                    DEFAULT_COOLING_TRIGGER_TEMP,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP]["min"],
-                    max=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP]["max"],
-                    step=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_COOLING_TRIGGER_TEMP][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_HEATING_TRIGGER_TEMP,
-                default=values.get(
-                    CONF_HEATING_TRIGGER_TEMP,
-                    DEFAULT_HEATING_TRIGGER_TEMP,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP]["min"],
-                    max=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP]["max"],
-                    step=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_HEATING_TRIGGER_TEMP][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
-                default=values.get(
-                    CONF_DEHUMIDIFY_TRIGGER_HUMIDITY,
-                    DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_DEHUMIDIFY_TRIGGER_HUMIDITY]["min"],
-                    max=THRESHOLD_RANGES[CONF_DEHUMIDIFY_TRIGGER_HUMIDITY]["max"],
-                    step=THRESHOLD_RANGES[CONF_DEHUMIDIFY_TRIGGER_HUMIDITY]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[
-                        CONF_DEHUMIDIFY_TRIGGER_HUMIDITY
-                    ]["unit"],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_SOLAR_TAPER_ENABLED,
-                default=values.get(
-                    CONF_SOLAR_TAPER_ENABLED,
-                    DEFAULT_SOLAR_TAPER_ENABLED,
-                ),
-            ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_PRECONDITION_HOURS_BEFORE_DW,
-                default=values.get(
-                    CONF_PRECONDITION_HOURS_BEFORE_DW,
-                    DEFAULT_PRECONDITION_HOURS_BEFORE_DW,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_PRECONDITION_HOURS_BEFORE_DW]["min"],
-                    max=THRESHOLD_RANGES[CONF_PRECONDITION_HOURS_BEFORE_DW]["max"],
-                    step=THRESHOLD_RANGES[CONF_PRECONDITION_HOURS_BEFORE_DW]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[
-                        CONF_PRECONDITION_HOURS_BEFORE_DW
-                    ]["unit"],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_PRECONDITION_TEMP_OFFSET,
-                default=values.get(
-                    CONF_PRECONDITION_TEMP_OFFSET,
-                    DEFAULT_PRECONDITION_TEMP_OFFSET,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET]["min"],
-                    max=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET]["max"],
-                    step=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_PRECONDITION_TEMP_OFFSET][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_TAPER_MAX_SETPOINT_OFFSET,
-                default=values.get(
-                    CONF_TAPER_MAX_SETPOINT_OFFSET,
-                    DEFAULT_TAPER_MAX_SETPOINT_OFFSET,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_TAPER_MAX_SETPOINT_OFFSET]["min"],
-                    max=THRESHOLD_RANGES[CONF_TAPER_MAX_SETPOINT_OFFSET]["max"],
-                    step=THRESHOLD_RANGES[CONF_TAPER_MAX_SETPOINT_OFFSET]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[
-                        CONF_TAPER_MAX_SETPOINT_OFFSET
-                    ]["unit"],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_THERMAL_MODE_DECISION_TIME,
-                default=values.get(
-                    CONF_THERMAL_MODE_DECISION_TIME,
-                    DEFAULT_THERMAL_MODE_DECISION_TIME,
-                ),
-            ): selector.TimeSelector(),
-            # Real-time thermal control settings
-            vol.Optional(
-                CONF_THERMAL_HYSTERESIS,
-                default=values.get(
-                    CONF_THERMAL_HYSTERESIS,
-                    DEFAULT_THERMAL_HYSTERESIS,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS]["min"],
-                    max=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS]["max"],
-                    step=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_THERMAL_HYSTERESIS][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_THERMAL_OFF_TIME,
-                default=values.get(
-                    CONF_THERMAL_OFF_TIME,
-                    DEFAULT_THERMAL_OFF_TIME,
-                ),
-            ): selector.TimeSelector(),
-            vol.Optional(
-                CONF_THERMAL_OFF_TEMP_MARGIN,
-                default=values.get(
-                    CONF_THERMAL_OFF_TEMP_MARGIN,
-                    DEFAULT_THERMAL_OFF_TEMP_MARGIN,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN]["min"],
-                    max=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN]["max"],
-                    step=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_THERMAL_OFF_TEMP_MARGIN][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Optional(
-                CONF_THERMAL_OFF_FORECAST_CLEAR,
-                default=values.get(
-                    CONF_THERMAL_OFF_FORECAST_CLEAR,
-                    DEFAULT_THERMAL_OFF_FORECAST_CLEAR,
-                ),
-            ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_MIN_SETPOINT_CHANGE_INTERVAL,
-                default=values.get(
-                    CONF_MIN_SETPOINT_CHANGE_INTERVAL,
-                    DEFAULT_MIN_SETPOINT_CHANGE_INTERVAL,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_MIN_SETPOINT_CHANGE_INTERVAL]["min"],
-                    max=THRESHOLD_RANGES[CONF_MIN_SETPOINT_CHANGE_INTERVAL]["max"],
-                    step=THRESHOLD_RANGES[CONF_MIN_SETPOINT_CHANGE_INTERVAL]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[
-                        CONF_MIN_SETPOINT_CHANGE_INTERVAL
-                    ]["unit"],
-                    mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
         }

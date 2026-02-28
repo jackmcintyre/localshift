@@ -24,8 +24,6 @@ from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
 from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
 from .const import (
     CONF_BATTERY_TARGET,
-    CONF_CLIMATE_CONTROL_ENTITIES,
-    CONF_CLIMATE_ENTITIES,
     CONF_DEMAND_WINDOW_END,
     CONF_NOTIFY_SERVICE,
     CONF_PRICING_FEED_IN_FORECAST,
@@ -37,10 +35,8 @@ from .const import (
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_TESLEMETRY_LOAD_POWER,
     CONF_TESLEMETRY_SOC,
-    CONF_THERMAL_MODE_DECISION_TIME,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
-    DEFAULT_THERMAL_MODE_DECISION_TIME,
     SWITCH_DEFAULTS,
     BatteryMode,
 )
@@ -54,7 +50,6 @@ if TYPE_CHECKING:
     from .notification_service import NotificationService
     from .state_machine import StateMachine
     from .state_reader import StateReader
-    from .thermal_manager import ThermalManager
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,7 +96,6 @@ class LocalShiftCoordinator:
         )
         self._unsub_midnight: CALLBACK_TYPE | None = None
         self._unsub_daily_summary: CALLBACK_TYPE | None = None
-        self._unsub_thermal_mode_decision: CALLBACK_TYPE | None = None
         self._unsub_learning_save: CALLBACK_TYPE | None = None
         # Tiered periodic task timers (Issue #291)
         self._unsub_timer_fast: CALLBACK_TYPE | None = None
@@ -120,7 +114,6 @@ class LocalShiftCoordinator:
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
         self._entity_validator: EntityValidator | None = None
-        self._thermal_manager: ThermalManager | None = None
 
         # Decision outcome tracker for learning system (Issue #170 Phase 1)
         self.decision_tracker: DecisionOutcomeTracker | None = None
@@ -229,20 +222,6 @@ class LocalShiftCoordinator:
             decision_tracker=None,  # Will be set after tracker is initialized
         )
 
-        # Initialize ThermalManager for HVAC-aware load correlation (Issue #137)
-        from .thermal_manager import ThermalManager
-
-        self._thermal_manager = ThermalManager(
-            self.hass,
-            self.entry,
-            self._get_entity_id,
-            self.get_switch_state,
-            self.get_option,
-        )
-
-        # Load persisted HVAC power data from storage
-        await self._thermal_manager.async_initialize()
-
         # Initialize decision outcome tracker for learning system (Issue #170 Phase 1)
         self.decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
         await self.decision_tracker.async_load()
@@ -311,19 +290,6 @@ class LocalShiftCoordinator:
             self._get_entity_id(CONF_TESLEMETRY_SOC),
         ]
 
-        # Add climate entities for real-time thermal control (Issue #63 Phase 6)
-        # These trigger re-evaluation when room temperature or setpoints change
-        climate_entities = self.entry.options.get(
-            CONF_CLIMATE_ENTITIES, []
-        ) or self.entry.data.get(CONF_CLIMATE_ENTITIES, [])
-        control_entities = self.entry.options.get(
-            CONF_CLIMATE_CONTROL_ENTITIES, []
-        ) or self.entry.data.get(CONF_CLIMATE_CONTROL_ENTITIES, [])
-
-        # Combine all climate entities (monitored + controlled)
-        all_climate_entities = list(set(climate_entities + control_entities))
-        monitored_entities.extend(all_climate_entities)
-
         # Subscribe to state changes
         self._unsub_state = async_track_state_change_event(
             self.hass, monitored_entities, self._handle_state_change
@@ -357,18 +323,6 @@ class LocalShiftCoordinator:
             self._handle_daily_summary,
             hour=dw_end.hour,
             minute=dw_end.minute,
-            second=0,
-        )
-
-        # Daily thermal mode determination (Issue #140): fires at decision time
-        decision_time = self._parse_time_option(
-            CONF_THERMAL_MODE_DECISION_TIME, DEFAULT_THERMAL_MODE_DECISION_TIME
-        )
-        self._unsub_thermal_mode_decision = async_track_time_change(
-            self.hass,
-            self._handle_thermal_mode_decision,
-            hour=decision_time.hour,
-            minute=decision_time.minute,
             second=0,
         )
 
@@ -407,10 +361,8 @@ class LocalShiftCoordinator:
         # This prevents errors when Solcast hasn't initialized yet
         await self._wait_for_solcast_and_compute()
 
-        # Refresh weather forecast and determine thermal mode if needed (startup catch-up)
-        # This handles the case where HA restarts after the daily decision time
+        # Refresh weather forecast (startup catch-up)
         await self._refresh_weather_forecast()
-        await self._determine_thermal_mode_if_needed(is_startup=True)
 
         # Startup grace: wait 30 s for entities to populate before acting
         self._state_machine.set_startup_grace(30)
@@ -434,7 +386,6 @@ class LocalShiftCoordinator:
             self._unsub_timer,  # Legacy
             self._unsub_midnight,
             self._unsub_daily_summary,
-            self._unsub_thermal_mode_decision,
             self._unsub_learning_save,
             self._unsub_timer_fast,
             self._unsub_timer_medium,
@@ -446,7 +397,6 @@ class LocalShiftCoordinator:
         self._unsub_timer = None
         self._unsub_midnight = None
         self._unsub_daily_summary = None
-        self._unsub_thermal_mode_decision = None
         self._unsub_learning_save = None
         self._unsub_timer_fast = None
         self._unsub_timer_medium = None
@@ -743,9 +693,6 @@ class LocalShiftCoordinator:
 
         Time-sensitive control tasks that need minute-level accuracy:
         - Cost accumulation (power × time needs minute accuracy)
-        - Pre-conditioning (time-sensitive before demand window)
-        - Solar taper (solar changes rapidly with clouds)
-        - Real-time thermal (room temperature comfort needs quick response)
         - Stale price check (safety net if price sensor stops updating)
         """
         # Read raw entity values now — needed for cost accumulation
@@ -757,26 +704,6 @@ class LocalShiftCoordinator:
         # Check for stale price sensor (Issue #291)
         # If price hasn't updated in 10+ minutes, trigger state machine evaluation
         stale_price = self._check_stale_price()
-
-        # Thermal control tasks (time-sensitive)
-        if self._thermal_manager is not None:
-            # Evaluate pre-conditioning (Issue #63 Phase 4)
-            self.hass.async_create_task(
-                self._evaluate_preconditioning(),
-                "localshift_preconditioning",
-            )
-
-            # Evaluate solar tapering (Issue #141 Phase 5)
-            self.hass.async_create_task(
-                self._evaluate_solar_taper(),
-                "localshift_solar_taper",
-            )
-
-            # Evaluate real-time thermal control (Issue #63 Phase 6)
-            self.hass.async_create_task(
-                self._evaluate_realtime_thermal(),
-                "localshift_realtime_thermal",
-            )
 
         # Trigger state machine evaluation if price is stale
         # This is a safety net - normally state changes trigger evaluation
@@ -796,7 +723,6 @@ class LocalShiftCoordinator:
         - Load data refresh
         - Decision backfill
         - Weather learning
-        - HVAC learning
         - Baseline calculation
         """
         # Read raw entity values
@@ -853,19 +779,6 @@ class LocalShiftCoordinator:
                 self._computation_engine.async_learn_weather_sample(self.data),
                 "localshift_weather_learning",
             )
-
-        # Learn HVAC power from climate state changes (Issue #137)
-        if self._thermal_manager is not None:
-            self.hass.async_create_task(
-                self._learn_hvac_power(),
-                "localshift_hvac_learning",
-            )
-            # Sample HVAC power during operation for temperature correlation
-            self._sample_hvac_power_temperature()
-            # Calculate and pass baseline load to computation engine
-            baseline = self._calculate_baseline_load()
-            if baseline and self._computation_engine is not None:
-                self._computation_engine.set_baseline_load(baseline)
 
         _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
 
@@ -941,21 +854,12 @@ class LocalShiftCoordinator:
         """Reset daily cost accumulators and target flag at midnight.
 
         Replaces YAML A12 (localshift_reset_target_reached).
-        Also unlocks daily thermal mode for re-determination.
         """
         self.data.grid_import_cost = 0.0
         self.data.grid_export_revenue = 0.0
         self.data.battery_savings = 0.0
         self.data.battery_charge_cost = 0.0
         self.data.target_reached_today = False
-
-        # Unlock daily thermal mode for new decision at decision time
-        self.data.daily_mode_locked = False
-        self.data.daily_mode_determined_at = ""
-
-        # Reset daily thermal control state (real-time control)
-        if self._thermal_manager is not None:
-            self._thermal_manager.reset_daily_thermal_state()
 
         # Save decision outcomes to storage (Issue #170 Phase 1)
         if self.decision_tracker is not None:
@@ -994,7 +898,7 @@ class LocalShiftCoordinator:
 
         self._notify_listeners()
         _LOGGER.info(
-            "Midnight reset: cost accumulators, target flag, and thermal mode unlocked"
+            "Midnight reset: cost accumulators and target flag"
         )
 
     @callback
@@ -1012,50 +916,6 @@ class LocalShiftCoordinator:
             self._send_daily_summary(),
             "localshift_daily_summary",
         )
-
-    @callback
-    def _handle_thermal_mode_decision(self, now: datetime) -> None:
-        """Determine daily thermal mode from weather forecast.
-
-        Fires at thermal_mode_decision_time (default 06:00) to decide
-        today's HVAC operating mode: HEAT, COOL, DRY, or OFF.
-
-        The mode is locked until the next day's decision time.
-        """
-        if self._thermal_manager is None:
-            return
-
-        if not self._thermal_manager.is_enabled():
-            _LOGGER.debug("Thermal management disabled, skipping mode decision")
-            return
-
-        # Get weather temperature forecast
-        temp_forecast = self.data.weather_temperature_forecast
-
-        # Get current humidity if available
-        humidity = None
-        from .const import CONF_WEATHER_ENTITY
-
-        weather_entity = self._get_entity_id(CONF_WEATHER_ENTITY)
-        weather_state = self.hass.states.get(weather_entity)
-        if weather_state is not None:
-            humidity = weather_state.attributes.get("humidity")
-
-        # Determine mode from forecast
-        mode = self._thermal_manager.determine_daily_mode(temp_forecast, humidity)
-
-        # Update coordinator data
-        self.data.daily_thermal_mode = mode
-        self.data.daily_mode_locked = True
-        self.data.daily_mode_determined_at = now.isoformat()
-
-        _LOGGER.info(
-            "Daily thermal mode determined: %s (locked until tomorrow)",
-            mode.value,
-        )
-
-        # Notify listeners of the mode change
-        self._notify_listeners()
 
     # ------------------------------------------------------------------
     # Computation
@@ -1098,34 +958,6 @@ class LocalShiftCoordinator:
         Called by switch and number platforms when configuration changes.
         Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
         """
-        self._compute_derived_values()
-        self._notify_listeners()
-        await self.async_evaluate_state_machine()
-
-    async def async_redetermine_thermal_mode(self) -> None:
-        """Re-determine thermal mode after configuration changes.
-
-        Unlocks the daily thermal mode and re-runs the determination logic.
-        Called when thermal-related thresholds (heating/cooling trigger temps,
-        dehumidify trigger humidity) are changed by the user.
-        """
-        if self._thermal_manager is None:
-            return
-
-        if not self._thermal_manager.is_enabled():
-            _LOGGER.debug("Thermal management disabled, skipping re-determination")
-            return
-
-        # Unlock the mode to allow re-determination
-        self.data.daily_mode_locked = False
-        self.data.daily_mode_determined_at = ""
-
-        _LOGGER.info("Thermal mode unlocked for re-determination due to config change")
-
-        # Re-determine mode from current weather forecast
-        await self._determine_thermal_mode_if_needed(is_startup=False)
-
-        # Also recompute and evaluate since thermal mode affects decisions
         self._compute_derived_values()
         self._notify_listeners()
         await self.async_evaluate_state_machine()
@@ -1312,193 +1144,6 @@ class LocalShiftCoordinator:
                 len(self.data.weather_temperature_forecast),
             )
 
-    async def _learn_hvac_power(self) -> None:
-        """Learn HVAC power from climate state changes.
-
-        This is the key method that solves Issue #137 by learning how much
-        power the HVAC system uses when it changes state. This learned power
-        is then used to separate HVAC load from baseline consumption.
-        """
-        if self._thermal_manager is None:
-            return
-
-        # Get current load power for learning
-        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-        load_state = self.hass.states.get(load_entity_id)
-        current_load_kw = 0.0
-        if load_state is not None:
-            try:
-                current_load_kw = float(load_state.state) / 1000.0  # W to kW
-            except (ValueError, TypeError):
-                pass
-
-        # Learn from current state (synchronous method)
-        self._thermal_manager.learn_hvac_power(
-            data=self.data,
-            current_load_kw=current_load_kw,
-            timestamp=datetime.now(),
-        )
-
-        # Update coordinator data with learned HVAC power summary
-        self.data.learned_hvac_power = self._thermal_manager.get_learned_power_summary()
-
-        _LOGGER.debug(
-            "HVAC learning: total load = %.2f kW, learned entities = %d",
-            current_load_kw,
-            len(self.data.learned_hvac_power),
-        )
-
-    def _sample_hvac_power_temperature(self) -> None:
-        """Sample HVAC power during operation for temperature correlation.
-
-        This is called periodically (every minute) to collect power samples
-        at different outdoor temperatures. This enables learning how HVAC
-        power consumption varies with temperature (Issue #171).
-
-        The sampling respects the configured sample_interval to avoid
-        excessive data collection.
-        """
-        if self._thermal_manager is None:
-            return
-
-        # Check if we should sample based on configured interval
-        sample_interval = self._thermal_manager.get_sample_interval()
-        # Simple approach: sample every Nth tick (N = sample_interval)
-        # This is approximate since ticks are 1 minute apart
-        from datetime import datetime
-
-        current_minute = datetime.now().minute
-        if sample_interval > 1 and current_minute % sample_interval != 0:
-            return
-
-        # Get outdoor temperature from configured entity
-        outdoor_temp = self._thermal_manager.get_outdoor_temperature()
-
-        if outdoor_temp is None:
-            _LOGGER.debug("No outdoor temperature available for HVAC sampling")
-            return
-
-        # Get current load power
-        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-        load_state = self.hass.states.get(load_entity_id)
-        current_load_kw = 0.0
-        if load_state is not None:
-            try:
-                current_load_kw = float(load_state.state) / 1000.0  # W to kW
-            except (ValueError, TypeError):
-                pass
-
-        # Sample HVAC power during operation (synchronous method)
-        self._thermal_manager.sample_hvac_power_during_operation(
-            data=self.data,
-            current_load_kw=current_load_kw,
-            outdoor_temp=outdoor_temp,
-            timestamp=datetime.now(),
-        )
-
-        _LOGGER.debug(
-            "HVAC temperature sampling: outdoor_temp=%.1f°C, load=%.2f kW",
-            outdoor_temp,
-            current_load_kw,
-        )
-
-    def _calculate_baseline_load(self) -> dict[int, float]:
-        """Calculate baseline load profile for Issue #137 feedback loop fix.
-
-        This estimates the non-HVAC baseline consumption by subtracting
-        learned HVAC power from historical averages. This baseline is then
-        used for grid charging decisions, preventing unnecessary charging
-        when HVAC is running.
-
-        Returns:
-            Dict of hour -> baseline load in kW, or empty dict if unavailable.
-        """
-        if self._thermal_manager is None:
-            return {}
-
-        if not self._thermal_manager.is_enabled():
-            return {}
-
-        if self._computation_engine is None:
-            return {}
-
-        # Get historical hourly averages
-        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-        hourly_avg_kw = self._computation_engine._get_historical_hourly_averages(
-            load_entity_id
-        )
-
-        if not hourly_avg_kw:
-            return {}
-
-        # Get daily thermal mode
-        daily_mode = self.data.daily_thermal_mode
-
-        # Estimate baseline from historical
-        baseline = self._thermal_manager.estimate_baseline_from_historical(
-            historical_avg_kw=hourly_avg_kw,
-            daily_mode=daily_mode,
-        )
-
-        # Store in coordinator data for diagnostics
-        self.data.baseline_load_kw = baseline
-
-        if baseline:
-            _LOGGER.info(
-                "Baseline load calculated: %d hours, avg=%.2f kW",
-                len(baseline),
-                sum(baseline.values()) / len(baseline),
-            )
-
-        return baseline
-
-    async def _evaluate_preconditioning(self) -> None:
-        """Evaluate pre-conditioning before demand window.
-
-        Pre-heats or pre-cools the home before the demand window starts,
-        using battery power to shift thermal load away from peak pricing.
-
-        Issue #63 Phase 4.
-        """
-        if self._thermal_manager is None:
-            return
-
-        if not self._thermal_manager.is_enabled():
-            # Clear state when disabled
-            self.data.preconditioning_active = False
-            return
-
-        # Get demand window times
-        from .const import CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
-
-        dw_start = self._parse_time_option(
-            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
-        )
-        dw_end = self._parse_time_option(
-            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
-        )
-
-        # Evaluate pre-conditioning
-        is_active, setpoint_offset = self._thermal_manager.evaluate_preconditioning(
-            data=self.data,
-            now=datetime.now(),
-            demand_window_start=dw_start,
-            demand_window_end=dw_end,
-        )
-
-        # Update CoordinatorData with state
-        self.data.preconditioning_active = is_active
-
-        if is_active and setpoint_offset != 0.0:
-            _LOGGER.info(
-                "Pre-conditioning active: offset=%.1f°C",
-                setpoint_offset,
-            )
-            # Apply setpoint adjustment to controlled climate entities
-            await self._thermal_manager.async_apply_climate_control(
-                self.data, setpoint_offset
-            )
-
     async def _run_pattern_analysis(self) -> None:
         """Run weekly pattern analysis to generate bias corrections.
 
@@ -1565,208 +1210,3 @@ class LocalShiftCoordinator:
             self.data.contextual_adjustments_active = (
                 self.optimization_controller.get_active_adjustments()
             )
-
-    async def _evaluate_solar_taper(self) -> None:
-        """Evaluate solar tapering to consume excess solar.
-
-        Adjusts HVAC setpoints to consume excess solar generation
-        instead of exporting to grid at low FIT prices.
-
-        Issue #141 Phase 5.
-        """
-        if self._thermal_manager is None:
-            return
-
-        if not self._thermal_manager.is_enabled():
-            # Clear state when disabled
-            self.data.solar_taper_active = False
-            self.data.taper_setpoint_offset = 0.0
-            return
-
-        if not self._thermal_manager.is_solar_taper_enabled():
-            # Clear state when solar taper disabled
-            self.data.solar_taper_active = False
-            self.data.taper_setpoint_offset = 0.0
-            return
-
-        # Get excess solar and load shift signal
-        excess_solar_kw = self.data.current_excess_rate_kw
-        load_shift_signal = self.data.load_shift_signal
-
-        # Evaluate solar taper
-        is_active, setpoint_offset = self._thermal_manager.evaluate_solar_taper(
-            data=self.data,
-            excess_solar_kw=excess_solar_kw,
-            load_shift_signal=load_shift_signal,
-        )
-
-        # Update CoordinatorData with state
-        self.data.solar_taper_active = is_active
-        self.data.taper_setpoint_offset = setpoint_offset if is_active else 0.0
-
-        if is_active and setpoint_offset != 0.0:
-            _LOGGER.info(
-                "Solar taper active: excess=%.2f kW, offset=%.1f°C",
-                excess_solar_kw,
-                setpoint_offset,
-            )
-            # Apply setpoint adjustment to controlled climate entities
-            await self._thermal_manager.async_apply_climate_control(
-                self.data, setpoint_offset
-            )
-
-    async def _evaluate_realtime_thermal(self) -> None:
-        """Evaluate real-time thermal control based on room temperature.
-
-        This is the base layer of thermal control that turns HVAC on/off
-        based on actual room temperature readings. It stacks with:
-        1. Pre-conditioning (highest priority - before demand window)
-        2. Solar tapering (second priority - excess solar consumption)
-        3. Real-time control (this method - base on/off layer)
-
-        Issue #63 Phase 6.
-        """
-        if self._thermal_manager is None:
-            return
-
-        if not self._thermal_manager.is_enabled():
-            # Clear state when disabled
-            self.data.realtime_thermal_active = False
-            self.data.realtime_thermal_reason = "Disabled"
-            return
-
-        # Get demand window times
-        from .const import (
-            CONF_DEMAND_WINDOW_START,
-            DEFAULT_DEMAND_WINDOW_START,
-        )
-
-        dw_start = self._parse_time_option(
-            CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
-        )
-        dw_end = self._parse_time_option(
-            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
-        )
-
-        # Get excess solar and load shift signal
-        excess_solar_kw = self.data.current_excess_rate_kw
-        load_shift_signal = self.data.load_shift_signal
-
-        # Get temperature forecast for turn-off decisions
-        temp_forecast = self.data.weather_temperature_forecast
-
-        # Evaluate real-time thermal control
-        is_active, setpoint_offset, reason = (
-            self._thermal_manager.evaluate_realtime_thermal(
-                data=self.data,
-                now=datetime.now(),
-                demand_window_start=dw_start,
-                demand_window_end=dw_end,
-                excess_solar_kw=excess_solar_kw,
-                load_shift_signal=load_shift_signal,
-                temperature_forecast=temp_forecast if temp_forecast else None,
-            )
-        )
-
-        # Update CoordinatorData with state
-        self.data.realtime_thermal_active = is_active
-        self.data.realtime_thermal_reason = reason
-
-        # Update thermal status for sensors
-        status = self._thermal_manager.get_realtime_thermal_status()
-        self.data.avg_room_temp = status.get("avg_room_temp")
-        self.data.thermal_activated_today = status.get("activated_today", False)
-
-        # Apply setpoint adjustment if active (only if not already applied by higher priority layers)
-        # The evaluate_realtime_thermal method handles priority stacking internally
-        if is_active and setpoint_offset != 0.0:
-            _LOGGER.info(
-                "Real-time thermal control: %s, offset=%.1f°C",
-                reason,
-                setpoint_offset,
-            )
-            await self._thermal_manager.async_apply_climate_control(
-                self.data, setpoint_offset
-            )
-        elif not is_active and self.data.realtime_thermal_active:
-            # Just deactivated - restore original setpoints
-            await self._thermal_manager.async_apply_climate_control(self.data, 0.0)
-
-    async def _determine_thermal_mode_if_needed(self, is_startup: bool = False) -> None:
-        """Determine thermal mode if needed (startup catch-up or normal decision).
-
-        This handles the case where HA restarts after the daily decision time.
-        At startup, if we're past the decision time and the mode isn't locked,
-        we determine the mode from the current weather forecast.
-
-        Args:
-            is_startup: If True, this is a startup catch-up call. Logs differently.
-        """
-        if self._thermal_manager is None:
-            return
-
-        if not self._thermal_manager.is_enabled():
-            _LOGGER.debug("Thermal management disabled, skipping mode determination")
-            return
-
-        # If mode is already locked, no need to determine
-        if self.data.daily_mode_locked:
-            _LOGGER.debug(
-                "Thermal mode already locked: %s", self.data.daily_thermal_mode.value
-            )
-            return
-
-        now = datetime.now()
-        decision_time = self._parse_time_option(
-            CONF_THERMAL_MODE_DECISION_TIME, DEFAULT_THERMAL_MODE_DECISION_TIME
-        )
-        decision_dt = datetime.combine(now.date(), decision_time)
-
-        # Only determine if we're past decision time
-        if now < decision_dt:
-            _LOGGER.debug(
-                "Before decision time (%s), skipping mode determination",
-                decision_time.strftime("%H:%M"),
-            )
-            return
-
-        # Get weather temperature forecast
-        temp_forecast = self.data.weather_temperature_forecast
-
-        if not temp_forecast:
-            _LOGGER.warning(
-                "No weather forecast available for thermal mode determination"
-            )
-            return
-
-        # Get current humidity if available
-        humidity = None
-        from .const import CONF_WEATHER_ENTITY
-
-        weather_entity = self._get_entity_id(CONF_WEATHER_ENTITY)
-        weather_state = self.hass.states.get(weather_entity)
-        if weather_state is not None:
-            humidity = weather_state.attributes.get("humidity")
-
-        # Determine mode from forecast
-        mode = self._thermal_manager.determine_daily_mode(temp_forecast, humidity)
-
-        # Update coordinator data
-        self.data.daily_thermal_mode = mode
-        self.data.daily_mode_locked = True
-        self.data.daily_mode_determined_at = now.isoformat()
-
-        if is_startup:
-            _LOGGER.info(
-                "Startup thermal mode determined: %s (catch-up after restart, past %s)",
-                mode.value,
-                decision_time.strftime("%H:%M"),
-            )
-        else:
-            _LOGGER.info(
-                "Thermal mode determined: %s (locked until tomorrow)",
-                mode.value,
-            )
-
-        # Notify listeners of the mode change
-        self._notify_listeners()

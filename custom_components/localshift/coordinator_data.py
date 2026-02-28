@@ -8,7 +8,7 @@ from typing import Any
 
 from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 from .computation_engine_lib.statistics_backfiller import BackfillReport
-from .const import BatteryMode, ThermalMode
+from .const import BatteryMode
 
 
 @dataclass
@@ -353,7 +353,7 @@ class CoordinatorData:
     load_shift_reason: str = ""  # Human-readable explanation
     load_shift_confidence: str = "low"  # low/medium/high
     grid_charge_risk: bool = False  # Would adding load trigger grid charging?
-    current_excess_rate_kw: float = 0.0  # Current excess generation rate (real-time)
+    current_excess_rate_kw: float = 0.0  # Current excess generation rate (Real-time)
 
     # Weather correlation fields (Issue #61)
     weather_entity_id: str = ""  # Configured weather entity
@@ -401,57 +401,6 @@ class CoordinatorData:
     )  # Per-entity health status
     last_entity_check: str = ""  # ISO timestamp of last health check
     required_entities_healthy: bool = True  # Are all required entities available?
-
-    # Thermal Manager fields (Issue #137, #63)
-    # Daily mode determination
-    thermal_management_enabled: bool = False  # Master switch for thermal management
-    daily_thermal_mode: ThermalMode = ThermalMode.OFF  # HEAT, COOL, DRY, or OFF
-    daily_mode_locked: bool = False  # Mode locked after decision time
-    daily_mode_determined_at: str = ""  # ISO timestamp of mode decision
-
-    # Climate entity states (all monitored entities)
-    climate_entities: list[str] = field(
-        default_factory=list
-    )  # All configured climate entities
-    climate_control_entities: list[str] = field(
-        default_factory=list
-    )  # Subset to control
-    climate_states: dict[str, Any] = field(
-        default_factory=dict
-    )  # entity_id -> state dict
-
-    # Learned HVAC power consumption
-    learned_hvac_power: dict[str, Any] = field(
-        default_factory=dict
-    )  # entity_id -> power data
-
-    # Separated load profiles (for solving #137 feedback loop)
-    baseline_load_kw: dict[int, float] = field(
-        default_factory=dict
-    )  # Non-HVAC load by hour
-    hvac_load_kw: dict[int, float] = field(default_factory=dict)  # HVAC load by hour
-
-    # Control signals
-    preconditioning_active: bool = False
-    solar_taper_active: bool = False
-    taper_setpoint_offset: float = 0.0  # Degrees to adjust setpoint
-
-    # Real-time thermal control (Issue #63 Phase 6)
-    realtime_thermal_active: bool = False  # Whether real-time control is active
-    realtime_thermal_reason: str = ""  # Reason for current state
-    avg_room_temp: float | None = None  # Current average room temperature
-    thermal_activated_today: bool = False  # Has thermal control activated today
-
-    # Climate entity read diagnostics (Issue #193)
-    climate_read_success: bool = (
-        False  # Whether climate entities were read successfully
-    )
-    climate_missing_entities: list[str] = field(
-        default_factory=list
-    )  # Entities not found in HA state machine
-    climate_unavailable_entities: list[str] = field(
-        default_factory=list
-    )  # Entities that are unknown/unavailable
 
     # --- Learning system (Issue #170 Phase 1) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)

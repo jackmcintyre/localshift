@@ -64,7 +64,6 @@ class ForecastComputer:
         ]
         | None = None,
         weather_correlation: Any | None = None,
-        thermal_manager: Any | None = None,
     ) -> None:
         """Initialize forecast computer.
 
@@ -74,14 +73,12 @@ class ForecastComputer:
             get_historical_func: Function to get historical hourly averages (combined profile)
             get_profile_for_day_func: Optional function to get day-aware profile (issue-60)
             weather_correlation: Optional WeatherCorrelation instance for temperature-based adjustments
-            thermal_manager: Optional ThermalManager instance for HVAC-aware load forecasting (Issue #152)
         """
         self.entry = entry
         self._get_entity_id = get_entity_id_func
         self._get_historical_hourly_averages = get_historical_func
         self._get_profile_for_day = get_profile_for_day_func
         self._weather_correlation = weather_correlation
-        self._thermal_manager = thermal_manager
         self._adaptive_params = (
             None  # Issue #170 Phase 2: Adaptive parameters from learning
         )
@@ -90,7 +87,6 @@ class ForecastComputer:
         self._load_forecaster = LoadForecaster(
             entry=entry,
             weather_correlation=weather_correlation,
-            thermal_manager=thermal_manager,
         )
         self._fit_analyzer = FitAnalyzer()
         self._soc_simulator = SocSimulator(self._estimate_hourly_consumption_kw)
@@ -117,16 +113,6 @@ class ForecastComputer:
         self._weather_correlation = weather_correlation
         self._load_forecaster.set_weather_correlation(weather_correlation)
 
-    def set_thermal_manager(self, thermal_manager: Any | None) -> None:
-        """Set or clear ThermalManager dependency at runtime.
-
-        Args:
-            thermal_manager: ThermalManager instance for HVAC-aware load forecasting,
-                           or None to disable HVAC prediction.
-        """
-        self._thermal_manager = thermal_manager
-        self._load_forecaster.set_thermal_manager(thermal_manager)
-
     def set_adaptive_params(self, adaptive_params: AdaptiveParameters | None) -> None:
         """Set adaptive parameters from the learning system (Issue #170 Phase 2).
 
@@ -143,57 +129,6 @@ class ForecastComputer:
         self._load_forecaster.set_adaptive_params(adaptive_params)
         self._grid_charge_decision.set_adaptive_params(adaptive_params)
         self._proactive_export.set_adaptive_params(adaptive_params)
-
-    def _predict_hvac_load_for_slot(
-        self,
-        slot_hour: int,
-        temperature: float | None,
-        daily_thermal_mode: str | None,
-    ) -> float:
-        """Predict HVAC load for a given slot.
-
-        Uses the thermal manager's learned HVAC power data and the daily
-        thermal mode to predict how much HVAC load to expect.
-
-        Args:
-            slot_hour: Hour of day (0-23)
-            temperature: Forecasted temperature in °C, or None
-            daily_thermal_mode: Current daily thermal mode ("off", "cool", "heat", "dry")
-
-        Returns:
-            Predicted HVAC load in kW, or 0.0 if unavailable.
-        """
-        if self._thermal_manager is None:
-            return 0.0
-
-        if daily_thermal_mode is None or daily_thermal_mode == "off":
-            return 0.0
-
-        # Import ThermalMode for comparison
-        try:
-            from ..const import ThermalMode
-
-            mode = ThermalMode(daily_thermal_mode)
-        except (ValueError, ImportError):
-            return 0.0
-
-        # Use temperature if available, otherwise use a default estimate
-        temp = temperature if temperature is not None else 25.0
-
-        try:
-            hvac_kw = self._thermal_manager.predict_hvac_load(
-                hour=slot_hour,
-                temperature=temp,
-                daily_mode=mode,
-            )
-            return max(0.0, hvac_kw)
-        except Exception as err:
-            _LOGGER.debug(
-                "HVAC prediction failed for hour %d: %s",
-                slot_hour,
-                err,
-            )
-            return 0.0
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -988,20 +923,7 @@ class ForecastComputer:
                 slot_temp,
             )
 
-            daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
-            if isinstance(daily_thermal_mode, str):
-                pass
-            elif daily_thermal_mode is not None:
-                daily_thermal_mode = str(daily_thermal_mode)
-
-            hvac_kw = self._predict_hvac_load_for_slot(
-                slot_hour=slot_hour,
-                temperature=slot_temp,
-                daily_thermal_mode=daily_thermal_mode,
-            )
-            total_load_kw = load_kw + hvac_kw
-
-            consumption_kwh = total_load_kw * slot_fraction
+            consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             max_solar_charge_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
@@ -1975,25 +1897,7 @@ class ForecastComputer:
                 consumption_source_counts.get(load_source, 0) + 1
             )
 
-            # Issue #152: Add HVAC prediction
-            daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
-            if isinstance(daily_thermal_mode, str):
-                pass
-            elif daily_thermal_mode is not None:
-                daily_thermal_mode = str(daily_thermal_mode)
-
-            hvac_kw = self._predict_hvac_load_for_slot(
-                slot_hour=slot_hour,
-                temperature=slot_temp,
-                daily_thermal_mode=daily_thermal_mode,
-            )
-
-            total_load_kw = baseline_kw + hvac_kw
-
-            if hvac_kw > 0.1:
-                load_source = f"{load_source}+hvac"
-
-            consumption_kwh = total_load_kw * slot_fraction
+            consumption_kwh = baseline_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Get slot price from hybrid slot (already computed)
@@ -2228,24 +2132,7 @@ class ForecastComputer:
                 slot_temp,
             )
 
-            daily_thermal_mode = getattr(data, "daily_thermal_mode", None)
-            if isinstance(daily_thermal_mode, str):
-                pass
-            elif daily_thermal_mode is not None:
-                daily_thermal_mode = str(daily_thermal_mode)
-
-            hvac_kw = self._predict_hvac_load_for_slot(
-                slot_hour=slot_hour,
-                temperature=slot_temp,
-                daily_thermal_mode=daily_thermal_mode,
-            )
-
-            total_load_kw = baseline_kw + hvac_kw
-
-            if hvac_kw > 0.1:
-                load_source = f"{load_source}+hvac"
-
-            consumption_kwh = total_load_kw * slot_fraction
+            consumption_kwh = baseline_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
             # Get slot price from hybrid slot (already computed)

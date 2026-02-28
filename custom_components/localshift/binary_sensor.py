@@ -35,10 +35,6 @@ async def async_setup_entry(
         ExcessSolarAvailableSensor(coordinator, entry),
         # Tesla Override Detection sensor
         TeslaOverrideActiveSensor(coordinator, entry),
-        # Thermal management sensors (Issue #137)
-        PreconditioningActiveSensor(coordinator, entry),
-        SolarTaperActiveSensor(coordinator, entry),
-        ThermalManagementEnabledSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -274,104 +270,4 @@ class TeslaOverrideActiveSensor(LocalShiftBinarySensorBase):
             "description": "Tesla has taken control (Storm Watch, Grid Event, or VPP active)"
             if self._attr_is_on
             else "Tesla is not overriding control",
-        }
-
-
-# ---------------------------------------------------------------------------
-# Thermal Management Binary Sensors (Issue #137)
-# ---------------------------------------------------------------------------
-
-
-class PreconditioningActiveSensor(LocalShiftBinarySensorBase):
-    """Whether pre-conditioning is actively adjusting climate setpoints.
-
-    Pre-conditioning runs before the demand window to pre-heat or pre-cool
-    the home using battery power instead of grid power during expensive periods.
-    """
-
-    _attr_unique_id = "localshift_preconditioning_active"
-    _attr_name = "Preconditioning Active"
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on state."""
-        return "mdi:thermometer-auto" if self._attr_is_on else "mdi:thermometer"
-
-    def _update_from_coordinator(self) -> None:
-        """Update state from coordinator data."""
-        self._attr_is_on = getattr(
-            self.coordinator.data, "preconditioning_active", False
-        )
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return pre-conditioning details."""
-        d = self.coordinator.data
-        return {
-            "daily_thermal_mode": getattr(d, "daily_thermal_mode", "off"),
-            "taper_setpoint_offset": getattr(d, "taper_setpoint_offset", 0.0),
-        }
-
-
-class SolarTaperActiveSensor(LocalShiftBinarySensorBase):
-    """Whether solar tapering is actively adjusting climate setpoints.
-
-    Solar tapering increases heating/cooling during excess solar periods
-    to use surplus solar energy that would otherwise be exported at low FIT.
-    """
-
-    _attr_unique_id = "localshift_solar_taper_active"
-    _attr_name = "Solar Taper Active"
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on state."""
-        return "mdi:solar-power" if self._attr_is_on else "mdi:solar-power-outline"
-
-    def _update_from_coordinator(self) -> None:
-        """Update state from coordinator data."""
-        self._attr_is_on = getattr(self.coordinator.data, "solar_taper_active", False)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return solar taper details."""
-        d = self.coordinator.data
-        return {
-            "current_excess_kw": round(d.current_excess_rate_kw, 2),
-            "taper_setpoint_offset": getattr(d, "taper_setpoint_offset", 0.0),
-            "daily_thermal_mode": getattr(d, "daily_thermal_mode", "off"),
-        }
-
-
-class ThermalManagementEnabledSensor(LocalShiftBinarySensorBase):
-    """Whether thermal management is enabled and configured.
-
-    This reflects the thermal_management_enabled switch state and indicates
-    whether the integration is actively managing HVAC for load shifting.
-    """
-
-    _attr_unique_id = "localshift_thermal_management_enabled"
-    _attr_name = "Thermal Management Enabled"
-    _attr_icon = "mdi:air-conditioner"
-
-    def _update_from_coordinator(self) -> None:
-        """Update state from thermal manager."""
-        if self.coordinator._thermal_manager is not None:
-            self._attr_is_on = self.coordinator._thermal_manager.is_enabled()
-        else:
-            self._attr_is_on = False
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return thermal management configuration."""
-        d = self.coordinator.data
-        climate_entities = getattr(d, "climate_control_entities", [])
-        return {
-            "climate_entities": climate_entities,
-            "daily_thermal_mode": getattr(d, "daily_thermal_mode", "off"),
-            "solar_taper_enabled": (
-                self.coordinator._thermal_manager.is_solar_taper_enabled()
-                if self.coordinator._thermal_manager
-                else False
-            ),
         }

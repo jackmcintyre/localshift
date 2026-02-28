@@ -4,16 +4,16 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **64 entities** grouped under a single "LocalShift" device:
+The integration creates **52 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 29 | `sensor` |
-| Binary Sensors | 13 | `binary_sensor` |
-| Switches | 13 | `switch` |
-| Numbers | 6 | `number` |
+| Sensors | 24 | `sensor` |
+| Binary Sensors | 10 | `binary_sensor` |
+| Switches | 11 | `switch` |
+| Numbers | 4 | `number` |
 | Selects | 1 | `select` |
-| Buttons | 3 | `button` |
+| Buttons | 2 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
 
@@ -503,81 +503,7 @@ Attributes:
 
 ---
 
-### 19. sensor.localshift_daily_thermal_mode
-
-**Purpose:** Current daily thermal mode (HEAT/COOL/DRY/OFF).
-
-Added in Issue #140 for HVAC automation. Determined once per day at thermal_mode_decision_time based on weather forecast. Mode is locked until next day's decision time.
-
-**State:** One of: `off`, `cool`, `heat`, `dry`
-
-**Example Data:**
-```
-State: cool
-Attributes:
-  mode_locked: true
-  determined_at: 2026-02-26T06:00:00+11:00
-  climate_entities:
-    - climate.ali_aircon
-    - climate.james_aircon
-    - climate.living_aircon
-    - climate.study_aircon
-    - climate.master_aircon
-  controlled_entities:
-    - climate.living_aircon
-    - climate.study_aircon
-  learned_hvac_power: {}
-  baseline_load_hours: 24
-```
-
-**Icon:** Dynamic (fire for heat, snowflake for cool, water-off for dry, thermometer-off for off)
-
----
-
-### 20. sensor.localshift_baseline_load_profile
-
-**Purpose:** Non-HVAC baseline load profile by hour.
-
-Added in Issue #140 for thermal management. Exposes the estimated baseline load (non-HVAC) for each hour, derived from historical data with HVAC samples excluded.
-
-**State:** Average baseline load in kW
-
-**Example Data:**
-```
-State: 0.458
-Attributes:
-  hourly_profile_kw:
-    "0": 0.492
-    "1": 0.39
-    "2": 0.375
-    ...
-  total_hours: 24
-  average_kw: 0.458
-```
-
----
-
-### 21. sensor.localshift_hvac_load_profile
-
-**Purpose:** HVAC load profile by hour.
-
-Added in Issue #140 for thermal management. Exposes the estimated HVAC load for each hour based on learned power consumption and climate entity state tracking.
-
-**State:** Average HVAC load in kW
-
-**Example Data:**
-```
-State: 0.0
-Attributes:
-  hourly_profile_kw: {...}
-  total_hours: 24
-  average_kw: 0.0
-  learned_power: {}
-```
-
----
-
-### 22. sensor.localshift_learning_status
+### 19. sensor.localshift_learning_status
 
 **Purpose:** Current learning system status and parameter values.
 
@@ -607,7 +533,7 @@ Attributes:
 
 ---
 
-### 23. sensor.localshift_decision_quality
+### 20. sensor.localshift_decision_quality
 
 **Purpose:** Rolling decision quality score.
 
@@ -631,7 +557,7 @@ Attributes:
 
 ---
 
-### 24. sensor.localshift_learning_decision_history
+### 21. sensor.localshift_learning_decision_history
 
 **Purpose:** Recent decision history with outcomes.
 
@@ -648,66 +574,7 @@ Attributes:
 
 ---
 
-### 25. sensor.localshift_average_room_temperature
-
-**Purpose:** Average room temperature from configured climate entities.
-
-Added in Issue #63 Phase 6 for real-time thermal control.
-
-**State:** Average temperature in °C
-
-**Example Data:**
-```
-State: 24.0
-Attributes:
-  thermal_mode: cool
-  activated_today: false
-  realtime_active: false
-  reason: Waiting to activate (room: 23.9°C)
-  preconditioning_active: false
-  solar_taper_active: false
-```
-
----
-
-### 26. sensor.localshift_realtime_thermal_status
-
-**Purpose:** Real-time thermal control status and reason.
-
-Added in Issue #63 Phase 6 for visibility into thermal control decisions.
-
-**State:** One of `active` or `inactive`
-
-**Example Data:**
-```
-State: inactive
-Attributes:
-  reason: Waiting to activate (room: 23.9°C)
-  activated_today: false
-  avg_room_temp: 23.9
-  thermal_mode: cool
-  preconditioning_active: false
-  solar_taper_active: false
-  taper_setpoint_offset: 0.0
-  climate_read_success: true
-  climate_missing_entities: []
-  climate_unavailable_entities: []
-  climate_entities_configured:
-    - climate.ali_aircon
-    - climate.james_aircon
-    - climate.living_aircon
-    - climate.study_aircon
-    - climate.master_aircon
-  climate_entities_controlled:
-    - climate.living_aircon
-    - climate.study_aircon
-```
-
-**Icon:** Dynamic (air-conditioner when active, air-conditioner-off when inactive)
-
----
-
-### 27. sensor.localshift_backfill_status
+### 22. sensor.localshift_backfill_status
 
 **Purpose:** Statistics backfill validation status.
 
@@ -724,7 +591,7 @@ State: not_run
 
 ---
 
-### 28. sensor.localshift_cost_reconciliation
+### 23. sensor.localshift_cost_reconciliation
 
 **Purpose:** Cost reconciliation status.
 
@@ -741,7 +608,7 @@ State: not_run
 
 ---
 
-### 29. sensor.localshift_extended_forecast_accuracy
+### 24. sensor.localshift_extended_forecast_accuracy
 
 **Purpose:** Extended forecast accuracy with long-term metrics.
 
@@ -921,68 +788,6 @@ Attributes:
 
 ---
 
-### 11. binary_sensor.localshift_preconditioning_active
-
-**Purpose:** Whether pre-conditioning is actively adjusting climate setpoints.
-
-Added in Issue #137. Pre-conditioning runs before the demand window to pre-heat or pre-cool the home using battery power instead of grid power during expensive periods.
-
-**State:** `on` when pre-conditioning is active, `off` otherwise
-
-**Example Data:**
-```
-State: off
-Attributes:
-  daily_thermal_mode: cool
-  taper_setpoint_offset: 0.0
-```
-
-**Icon:** Dynamic (thermometer-auto when on, thermometer when off)
-
----
-
-### 12. binary_sensor.localshift_solar_taper_active
-
-**Purpose:** Whether solar tapering is actively adjusting climate setpoints.
-
-Added in Issue #137. Solar tapering increases heating/cooling during excess solar periods to use surplus solar energy that would otherwise be exported at low FIT.
-
-**State:** `on` when solar tapering is active, `off` otherwise
-
-**Example Data:**
-```
-State: off
-Attributes:
-  current_excess_kw: 0.26
-  taper_setpoint_offset: 0.0
-  daily_thermal_mode: cool
-```
-
-**Icon:** Dynamic (solar-power when on, solar-power-outline when off)
-
----
-
-### 13. binary_sensor.localshift_thermal_management_enabled
-
-**Purpose:** Whether thermal management is enabled and configured.
-
-Added in Issue #137. This reflects the thermal_management_enabled switch state and indicates whether the integration is actively managing HVAC for load shifting.
-
-**State:** `on` when thermal management is enabled, `off` otherwise
-
-**Example Data:**
-```
-State: on
-Attributes:
-  climate_entities:
-    - climate.living_aircon
-    - climate.study_aircon
-  daily_thermal_mode: cool
-  solar_taper_enabled: true
-```
-
----
-
 ## Switches
 
 ### 1. switch.localshift_automation_enabled
@@ -1139,45 +944,7 @@ State: on
 
 ---
 
-### 11. switch.localshift_thermal_management
-
-**Purpose:** Enable thermal management for HVAC load shifting.
-
-Added in Issue #137 for temperature-based automation.
-
-**Default:** OFF
-
-**Example Data:**
-```
-State: on
-```
-
-**Behavior:**
-- ON: Thermal management active, climate entities controlled based on daily thermal mode
-- OFF: No thermal automation, climate entities not controlled
-
----
-
-### 12. switch.localshift_solar_taper
-
-**Purpose:** Enable solar tapering for climate setpoint adjustment.
-
-Added in Issue #137. When enabled, increases heating/cooling during excess solar periods.
-
-**Default:** ON
-
-**Example Data:**
-```
-State: on
-```
-
-**Behavior:**
-- ON: Adjusts climate setpoints during excess solar to use surplus energy
-- OFF: No solar tapering, setpoints unchanged
-
----
-
-### 13. switch.localshift_enable_learning
+### 11. switch.localshift_enable_learning
 
 **Purpose:** Enable the learning system to adjust parameters.
 
@@ -1268,48 +1035,6 @@ State: 10.0
 
 ---
 
-### 5. number.localshift_cooling_trigger_temp
-
-**Purpose:** Temperature threshold for committing to cooling mode.
-
-Added in Issue #137 for thermal management.
-
-| Property | Value |
-|----------|-------|
-| Range | 20.0-35.0°C |
-| Default | 28.0°C |
-| Unit | °C |
-
-**Example Data:**
-```
-State: 23.0
-```
-
-If the day's maximum forecast temperature exceeds this value, the system commits to COOL mode.
-
----
-
-### 6. number.localshift_heating_trigger_temp
-
-**Purpose:** Temperature threshold for committing to heating mode.
-
-Added in Issue #137 for thermal management.
-
-| Property | Value |
-|----------|-------|
-| Range | 5.0-20.0°C |
-| Default | 15.0°C |
-| Unit | °C |
-
-**Example Data:**
-```
-State: 12.0
-```
-
-If the day's minimum forecast temperature is below this value, the system commits to HEAT mode.
-
----
-
 ## Selects (Mode Control)
 
 ### 1. select.localshift_battery_mode
@@ -1378,25 +1103,6 @@ Added in Issue #170 Phase 5 for user control over learning system state.
 
 ---
 
-### 3. button.localshift_learn_hvac_power
-
-**Action:** Proactively learn HVAC power consumption.
-
-Added in Issue #171 for proactive HVAC power learning.
-
-**Effect:**
-- Measures baseline load
-- Turns on each climate entity in cool/heat mode
-- Waits for power to stabilize
-- Records the power delta
-- Restores original state
-
-**Use Case:** Learn HVAC power consumption immediately instead of waiting for natural HVAC operation cycles. Provides faster learning for thermal management features.
-
-**Note:** Requires thermal management to be enabled and climate control entities to be configured.
-
----
-
 ## Entity Relationships
 
 ```
@@ -1448,5 +1154,3 @@ Buttons trigger utility actions
 6. **Monitor load shift signal** — Use `sensor.localshift_load_shift_signal` for simple automation triggers.
 
 7. **Check forecast diagnostics** — `sensor.localshift_forecast_diagnostics` contains debug fields and consumption profile information for troubleshooting forecast accuracy.
-
-8. **Monitor thermal status** — Use `sensor.localshift_realtime_thermal_status` to understand why thermal control is or isn't active.
