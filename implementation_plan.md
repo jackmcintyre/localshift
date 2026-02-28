@@ -272,3 +272,53 @@ Ensure the optimizer receives the same effective planning inputs and constraints
 ### Mitigations
 - Add strict adapter validation with explicit error messages.
 - Add a “parity completeness” diagnostic key to shadow summary.
+
+## Phase C — Detailed Plan (DP Solver Implementation)
+
+### Goal
+Replace scaffold no-op planning with a deterministic dynamic-programming solve that optimizes cost under battery and demand-window constraints.
+
+### Scope
+- Implement full `_solve()` in `DPPlanner`.
+- Add SOC discretization grid and stable tie-breaking rules.
+- Formalize action feasibility and transition clipping behavior.
+- Ensure objective decomposition is traceable per slot.
+
+### Tasks
+1. **State-space design**
+   - Define DP state as `(slot_idx, soc_bin)`.
+   - Build SOC grid from `min_soc_pct` to `max_soc_pct` with `soc_bins` precision.
+2. **Action evaluation loop**
+   - Enumerate feasible actions per state.
+   - Compute transition (`next_soc`, import/export kWh) with rate and efficiency constraints.
+   - Compute stage objective terms (`import_cost`, `export_revenue`, `cycle_penalty`).
+3. **Terminal objective enforcement**
+   - Apply demand-window shortfall penalty using `terminal_cost` semantics.
+   - Ensure target boundary timing matches parity rules from Phase B.
+4. **Backtracking and decision reconstruction**
+   - Reconstruct optimal action path and populate `PlannedSlotDecision` list in chronological order.
+   - Populate aggregate result fields and reason histograms.
+5. **Determinism and complexity controls**
+   - Implement deterministic tie-break ordering for equal-cost candidates.
+   - Keep solve time bounded for coordinator cycle compatibility.
+6. **Tests**
+   - Add solver correctness tests for representative scenarios and edge conditions.
+
+### Deliverables
+- Fully implemented `DPPlanner._solve()` with deterministic outputs.
+- New solver tests in `tests/test_optimizer_dp_solve.py`.
+- Baseline performance data (solve-time envelope) documented.
+
+### Acceptance Criteria
+- Same fixed inputs always produce identical full decision sequences.
+- Result contains one decision per input slot with valid SOC/import/export bounds.
+- Solve times remain operationally acceptable for HA custom-component runtime.
+
+### Risks
+- State explosion from high bin count and long horizons.
+- Numerical artifacts around SOC discretization boundaries.
+
+### Mitigations
+- Start with conservative bin count and benchmark iteratively.
+- Use explicit clipping + rounding policy at transitions.
+- Add targeted tests for near-boundary SOC behavior.
