@@ -216,14 +216,49 @@ class ComputationEngine:
         # Pass current charging state for hysteresis (Issue #34)
         self._compute_daily_15min_forecast(data, now_dt)
 
-        # ---- Step 5: solar_can_reach_target (derived from detailed forecast) ----
-        # Derive from detailed forecast - single source of truth
-        dw_entry = self._get_forecast_at_demand_window(data, target_hour)
-        if dw_entry:
-            data.solar_can_reach_target = dw_entry["predicted_soc"] >= target_pct
+        # ---- Step 5: solar_can_reach_target (solar-only simulation) ----
+        # Use dedicated solar-only simulation to break circular dependency.
+        # The forecast-derived check includes grid charging effects, which creates
+        # a circular dependency: forecast depends on effective_cheap_price which
+        # depends on solar_can_reach_target which depends on forecast.
+        # Fix #399: Use solar-only simulation (same pattern as #392).
+        if before_dw:
+            # Get all Solcast forecasts
+            all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+
+            # Get historical averages and recent load for simulation
+            load_entity_id = self._get_entity_id("teslemetry_load_power")
+            hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+            recent_load_kw = self._recent_load_1hr_kw
+
+            # Simulate to DW start (not through DW - that's solar_can_reach_target_in_dw)
+            sim_end = self._forecast_computer._next_demand_window_start_dt(now_dt, dw_start_time)
+
+            soc_at_end, max_soc, can_reach_solar_only, _ = (
+                self._forecast_computer._simulate_future_soc_with_solar_only(
+                    actual_current_soc=data.soc,
+                    start_slot=now_dt,
+                    target_pct=target_pct,
+                    all_solcast=all_solcast,
+                    historical_avg_kw=hourly_avg_kw,
+                    current_load_kw=data.load_power_kw,
+                    recent_load_kw=recent_load_kw,
+                    dw_start_time=dw_start_time,
+                    end_time=sim_end,
+                )
+            )
+            data.solar_can_reach_target = can_reach_solar_only
+
+            _LOGGER.info(
+                "Solar-only simulation for solar_can_reach_target: current SOC=%.1f%%, target=%d%%, "
+                "sim_end=%s, can_reach=%s",
+                data.soc,
+                target_pct,
+                sim_end.strftime("%H:%M"),
+                can_reach_solar_only,
+            )
         else:
-            # Fallback if forecast doesn't span to DW (e.g., late in day)
-            # Use current SOC as a conservative estimate
+            # After DW start: use current SOC as conservative estimate
             data.solar_can_reach_target = data.soc >= target_pct
 
         # ---- Step 6: boost_charge_needed ----
