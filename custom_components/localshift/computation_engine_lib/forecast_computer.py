@@ -28,9 +28,9 @@ from ..const import (
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
-    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
 )
@@ -2285,6 +2285,9 @@ class ForecastComputer:
                     "hour": slot_hour,
                     "minute": slot_minute,
                     "timestamp": slot_start.isoformat(),
+                    # Deterministic slot identity (#403): stable keys for planner comparison
+                    "slot_index": slot_idx,
+                    "timestamp_iso": slot_start.isoformat(),
                     "slot_interval_minutes": interval_minutes,  # Issue #351: Variable duration
                     "price_source": price_source,  # Issue #351: "5min" or "30min"
                     "predicted_soc": round(predicted_soc, 1),
