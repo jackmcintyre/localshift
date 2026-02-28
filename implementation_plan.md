@@ -322,3 +322,46 @@ Replace scaffold no-op planning with a deterministic dynamic-programming solve t
 - Start with conservative bin count and benchmark iteratively.
 - Use explicit clipping + rounding policy at transitions.
 - Add targeted tests for near-boundary SOC behavior.
+
+## Phase D — Detailed Plan (Comparator & Analytics Hardening)
+
+### Goal
+Upgrade plan comparison from basic action mismatch detection to high-signal, decision-useful diagnostics that explain optimizer vs legacy divergence.
+
+### Scope
+- Expand mismatch classification coverage.
+- Add quantity/profitability/target-attainment deltas.
+- Improve top-mismatch ranking and summarization.
+- Ensure comparison payloads remain compact and UI-safe.
+
+### Tasks
+1. **Mismatch taxonomy completion**
+   - Implement `IMPORT_QUANTITY_MISMATCH`, `EXPORT_QUANTITY_MISMATCH`, `TARGET_ATTAINMENT_MISMATCH`, and `PROFITABILITY_MISMATCH` paths.
+2. **Delta computation rigor**
+   - Normalize per-slot and aggregate import/export/net-cost deltas.
+   - Ensure threshold constants are documented and tested.
+3. **Ranking/triage quality**
+   - Rank mismatches by configurable significance score (e.g., absolute projected cost impact + action severity).
+4. **Summary rollups**
+   - Add concise cycle summaries for sensor/diagnostics rendering.
+5. **Performance and payload control**
+   - Keep `top_mismatches` bounded and serialization deterministic.
+6. **Tests**
+   - Add comparator-focused tests for each mismatch type and threshold edge.
+
+### Deliverables
+- Enhanced `PlannerComparator` logic and robust mismatch record generation.
+- Comparator test coverage proving classification correctness.
+- Stable diagnostics-ready comparison payload schema.
+
+### Acceptance Criteria
+- Comparator can explain materially different plans without manual log inspection.
+- All mismatch classes are reachable under controlled test scenarios.
+- Comparison payload size remains bounded and stable for HA state attributes.
+
+### Risks
+- Overly noisy mismatch reporting reducing operator confidence.
+
+### Mitigations
+- Use explicit significance thresholds and bounded top-N reporting.
+- Include clear `reason_detail` strings for each mismatch category.
