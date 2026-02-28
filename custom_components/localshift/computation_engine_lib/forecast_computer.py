@@ -785,6 +785,60 @@ class ForecastComputer:
                 )
                 return False, False
 
+            # ====================================================================
+            # ISSUE #384: PRE-CHARGE LOGIC
+            # Start regular grid charging earlier when solar is close but short.
+            # Instead of waiting for a single boost charge, use multiple regular
+            # charge slots to gently fill the gap.
+            # ====================================================================
+
+            # Calculate the SOC gap after solar simulation
+            soc_gap_after_solar = target_pct - max_soc  # How short solar falls
+
+            # Only pre-charge if:
+            # 1. Solar falls short but within manageable range (0-20% gap)
+            # 2. Price is cheap (not requiring very cheap for boost)
+            # 3. We're within the calculated slot window before DW
+            PRE_CHARGE_MAX_GAP_PCT = 20.0  # Max gap to consider pre-charging
+
+            if 0 < soc_gap_after_solar <= PRE_CHARGE_MAX_GAP_PCT and price_is_cheap:
+                # Calculate how many slots we need to fill the gap
+                gap_kwh = soc_gap_after_solar / 100 * BATTERY_CAPACITY_KWH
+
+                # Effective charge rate (after efficiency losses)
+                effective_charge_rate_kw = CHARGE_RATE_GRID_KW * 0.92  # ~3.04 kW
+
+                # kWh we can add per slot (varies by slot duration)
+                # For hybrid slots, use 15-min as baseline (0.25 hours)
+                baseline_slot_hours = 0.25
+                kwh_per_slot = effective_charge_rate_kw * baseline_slot_hours
+
+                # Slots needed (with 1-slot buffer for safety)
+                slots_needed = (
+                    int((gap_kwh / kwh_per_slot) + 0.5) + 1
+                )  # Round up + buffer
+
+                # Calculate slots remaining until DW start
+                next_dw_start = self._next_demand_window_start_dt(
+                    slot_start, dw_start_time
+                )
+                minutes_to_dw = (next_dw_start - slot_start).total_seconds() / 60
+                slots_to_dw = int(minutes_to_dw / 15)  # 15-min slot equivalents
+
+                # Start pre-charging when we're within the needed slot window
+                if slots_to_dw <= slots_needed + 1:
+                    _LOGGER.info(
+                        "PRE_CHARGE[%02d:%02d]: Starting regular charge (solar max=%.1f%%, gap=%.1f%%, slots_needed=%d, slots_to_dw=%d, price=$%.3f)",
+                        slot_start.hour,
+                        slot_start.minute,
+                        max_soc,
+                        soc_gap_after_solar,
+                        slots_needed,
+                        slots_to_dw,
+                        use_price,
+                    )
+                    return True, False  # Regular charge, not boost
+
         # HYSTERESIS: If currently grid charging and solar can't reach target,
         # apply stickiness to prevent flip-flopping. Only applies to current slot.
         # This is now AFTER solar simulation, so we know solar truly can't reach target.
