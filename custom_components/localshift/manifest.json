@@ -8,6 +8,6 @@
   "integration_type": "device",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/jackmcintyre/ha-solar-battery-automation/issues",
-  "requirements": [],
+  "requirements": ["pulp>=2.7.0"],
   "version": "0.1.0"
 }
