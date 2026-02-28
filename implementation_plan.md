@@ -404,3 +404,47 @@ Make optimizer behavior understandable and actionable to operators by exposing r
 ### Mitigations
 - Keep top-N mismatch lists bounded.
 - Provide condensed summaries plus “details in diagnostics” structure.
+
+## Phase F — Detailed Plan (Active-Control Pilot)
+
+### Goal
+Introduce an optional, tightly gated active-control mode where optimizer decisions can drive runtime behavior with immediate fallback protections.
+
+### Scope
+- Add active-mode admission/safety gate logic.
+- Define integration path from optimizer decisions to existing control surfaces.
+- Preserve legacy planner as authoritative fallback.
+- Pilot with conservative activation controls and rich failure telemetry.
+
+### Tasks
+1. **Safety gate implementation**
+   - Validate prerequisites each cycle: feature enabled, control mode active, solve success, slot alignment valid, forecast freshness acceptable.
+   - Block active path on any failed gate and emit explicit reason.
+2. **Apply-path design**
+   - Map `PlannedSlotDecision.action` to existing mode/actuation interfaces without bypassing safety conventions.
+   - Ensure unsupported/ambiguous actions fall back to legacy decisions.
+3. **Fallback policy**
+   - On optimizer error, timeout, or invalid payload: revert immediately to legacy control for current cycle.
+   - Keep fallback sticky for cooldown window if repeated optimizer failures occur.
+4. **Pilot controls**
+   - Add/confirm explicit active-mode setting and guard rails (off by default).
+   - Support staged rollout criteria (e.g., minimum recent shadow success rate before enabling active).
+5. **Tests**
+   - Add active-mode tests for admission success, blocked conditions, and fallback behavior.
+
+### Deliverables
+- Active-mode pilot implementation behind strict gate.
+- Runtime status fields indicating apply success/failure and safety-block reason.
+- Active-mode test coverage for safety-critical branches.
+
+### Acceptance Criteria
+- Active mode can be toggled on only when configured and safe.
+- Any optimizer failure path defaults to legacy control within same cycle.
+- No unsafe battery-control commands are issued from malformed optimizer outputs.
+
+### Risks
+- Misapplied optimizer action causing undesired battery behavior.
+
+### Mitigations
+- Centralized gate + fallback.
+- Conservative rollout (opt-in, default off, explicit diagnostics).
