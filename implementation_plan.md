@@ -189,3 +189,43 @@ Implement in strict phase order: complete plan parity and observability first, t
    - Introduce strict safety gate and reversible runtime switch; begin with conservative rollout controls.
 7. **Phase G — Stabilization and documentation**
    - Tune performance, close edge cases, update architecture/troubleshooting/entity docs, finalize release notes.
+
+## Phase A — Detailed Plan (Scaffold Baseline)
+
+### Goal
+Lock down the existing scaffolded optimizer path as a stable, deterministic foundation before adding behavioral complexity.
+
+### Scope
+- Confirm all scaffold artifacts are present and internally consistent.
+- Ensure the shadow path is strictly side-effect free.
+- Validate deterministic slot identity in forecast output.
+- Establish baseline observability payloads used by later phases.
+
+### Tasks
+1. **Scaffold audit**
+   - Verify `optimizer_dp.py`, `optimizer_shadow_runner.py`, `planner_comparator.py` are imported and reachable from runtime path.
+   - Verify no direct battery-control call sites exist in shadow modules.
+2. **Data contract validation**
+   - Verify `CoordinatorData` shadow fields are always initialized and serialization-safe.
+   - Verify `forecast_computer.py` emits `slot_index` + `timestamp_iso` for every slot.
+3. **Determinism checks**
+   - Repeat fixed-input planner runs and assert stable decision ordering and reason histograms.
+4. **Baseline test enforcement**
+   - Keep scaffold test suite green and mandatory for subsequent phase PRs.
+
+### Deliverables
+- Stable scaffold modules (already present) treated as immutable baseline.
+- Documented baseline constraints in this plan.
+- Passing baseline tests (`tests/test_optimizer_scaffold.py`).
+
+### Acceptance Criteria
+- Shadow mode produces only telemetry mutations (`optimizer_shadow_*`, `optimizer_comparison`).
+- No runtime control behavior changes when optimizer flag is enabled in `shadow` mode.
+- Forecast slot identity fields are present and unique by index.
+
+### Risks
+- Silent drift in scaffold contracts as future phases evolve.
+
+### Mitigations
+- Add CI guard tests around schema/serialization fields.
+- Treat Phase A contracts as backward-compat guarantees.
