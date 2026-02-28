@@ -115,7 +115,7 @@ views:
             heading_style: title
 
           - type: tile
-            entity: sensor.localshift_battery_mode
+            entity: select.localshift_battery_mode
             name: Mode
 
           - type: gauge
@@ -326,44 +326,18 @@ views:
             heading: Quick Actions
             heading_style: title
 
-          - type: button
-            name: Self Consumption
-            icon: mdi:battery-sync
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_self_consumption
-            icon_height: 40px
+          - type: tile
+            entity: select.localshift_battery_mode
+            name: Battery Mode
 
           - type: button
-            name: Force Charge
-            icon: mdi:battery-charging
+            name: Update Forecast
+            icon: mdi:refresh
             tap_action:
               action: call-service
               service: button.press
               target:
-                entity_id: button.localshift_force_charge
-            icon_height: 40px
-
-          - type: button
-            name: Boost Charge
-            icon: mdi:battery-charging-high
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_boost_charge
-            icon_height: 40px
-
-          - type: button
-            name: Force Discharge
-            icon: mdi:flash-alert
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_force_discharge
+                entity_id: button.localshift_update_forecast
             icon_height: 40px
 
       # Thermal Status
@@ -530,45 +504,9 @@ views:
             heading: Manual Actions
             heading_style: title
 
-          - type: button
-            name: Self Consumption
-            icon: mdi:battery-sync
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_self_consumption
-            icon_height: 40px
-
-          - type: button
-            name: Force Charge
-            icon: mdi:battery-charging
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_force_charge
-            icon_height: 40px
-
-          - type: button
-            name: Boost Charge
-            icon: mdi:battery-charging-high
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_boost_charge
-            icon_height: 40px
-
-          - type: button
-            name: Force Discharge
-            icon: mdi:flash-alert
-            tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_force_discharge
-            icon_height: 40px
+          - type: tile
+            entity: select.localshift_battery_mode
+            name: Battery Mode
 
           - type: button
             name: Update Forecast
@@ -578,6 +516,26 @@ views:
               service: button.press
               target:
                 entity_id: button.localshift_update_forecast
+            icon_height: 40px
+
+          - type: button
+            name: Reset Learning
+            icon: mdi:brain
+            tap_action:
+              action: call-service
+              service: button.press
+              target:
+                entity_id: button.localshift_reset_learning
+            icon_height: 40px
+
+          - type: button
+            name: Learn HVAC Power
+            icon: mdi:air-conditioner
+            tap_action:
+              action: call-service
+              service: button.press
+              target:
+                entity_id: button.localshift_learn_hvac_power
             icon_height: 40px
 
       # Live System (Tesla Controls)
