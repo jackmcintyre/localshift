@@ -4,7 +4,7 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **67 entities** grouped under a single "LocalShift" device:
+The integration creates **64 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
@@ -12,7 +12,8 @@ The integration creates **67 entities** grouped under a single "LocalShift" devi
 | Binary Sensors | 13 | `binary_sensor` |
 | Switches | 13 | `switch` |
 | Numbers | 6 | `number` |
-| Buttons | 6 | `button` |
+| Selects | 1 | `select` |
+| Buttons | 3 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
 
@@ -1309,15 +1310,47 @@ If the day's minimum forecast temperature is below this value, the system commit
 
 ---
 
-## Buttons (Manual Controls)
+## Selects (Mode Control)
 
-### 1. button.localshift_force_charge
+### 1. select.localshift_battery_mode
 
-**Action:** Start force charging at 3.3kW (backup mode).
+**Purpose:** Select battery operating mode for manual control.
 
-**Effect:** Sets Powerwall to `backup` operation mode with reserve=10%
+Added in Issue #382 to replace manual control buttons with a single select entity.
 
-**Use Case:** Manually charge from grid at slow rate.
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `self_consumption` | Default — battery powers house, grid used as needed |
+| `grid_charging` | Force charging from grid at 3.3kW (backup mode) |
+| `boost_charging` | Force charging at 5kW (autonomous + reserve=100%) |
+| `spike_discharge` | Force discharging to export during price spikes |
+| `proactive_export` | Exporting battery before negative FIT periods |
+
+**Behavior:**
+- When automation is enabled: Select shows current automated mode (read-only display)
+- When user changes select: Automation automatically disables, user's choice is honored
+- When automation is re-enabled: System takes control of select immediately
+
+**Example Data:**
+```
+State: grid_charging
+```
+
+**Use Case:** Manual control of battery mode. Select a mode to disable automation and apply that mode to the battery. Re-enable automation to return to automated control.
+
+---
+
+## Buttons (Utility Controls)
+
+### 1. button.localshift_update_forecast
+
+**Action:** Force forecast update and clear historical load cache.
+
+**Effect:** Clears the historical load cache and triggers a forecast regeneration
+
+**Use Case:** Manually refresh forecast data after external changes or for debugging.
 
 **Example Data:**
 ```
@@ -1326,47 +1359,7 @@ State: 2026-02-24T02:32:04+00:00 (last pressed)
 
 ---
 
-### 2. button.localshift_force_discharge
-
-**Action:** Start force discharging to export to grid.
-
-**Effect:** Sets Powerwall to `autonomous` mode with reserve=10% and allow_export=battery_ok
-
-**Use Case:** Manually export battery during high feed-in prices.
-
----
-
-### 3. button.localshift_boost_charge
-
-**Action:** Start boost charging at 5kW.
-
-**Effect:** Sets Powerwall to `autonomous` mode with reserve=100%
-
-**Use Case:** Fast charge from grid when time is short before demand window.
-
----
-
-### 4. button.localshift_self_consumption
-
-**Action:** Clear manual override, return to automation control.
-
-**Effect:** Clears manual override flag, resumes state machine evaluation
-
-**Use Case:** Exit manual control mode after using any of the above buttons.
-
----
-
-### 5. button.localshift_update_forecast
-
-**Action:** Force forecast update and clear historical load cache.
-
-**Effect:** Clears the historical load cache and triggers a forecast regeneration
-
-**Use Case:** Manually refresh forecast data after external changes or for debugging.
-
----
-
-### 6. button.localshift_reset_learning_data
+### 2. button.localshift_reset_learning_data
 
 **Action:** Reset all learning system data and start fresh.
 
@@ -1382,6 +1375,25 @@ Added in Issue #170 Phase 5 for user control over learning system state.
 **Use Case:** Start fresh after significant household changes, or if the system has learned sub-optimal parameters.
 
 **Warning:** This erases all learned data. The system will need another 2-3 days of observation before parameter optimization resumes.
+
+---
+
+### 3. button.localshift_learn_hvac_power
+
+**Action:** Proactively learn HVAC power consumption.
+
+Added in Issue #171 for proactive HVAC power learning.
+
+**Effect:**
+- Measures baseline load
+- Turns on each climate entity in cool/heat mode
+- Waits for power to stabilize
+- Records the power delta
+- Restores original state
+
+**Use Case:** Learn HVAC power consumption immediately instead of waiting for natural HVAC operation cycles. Provides faster learning for thermal management features.
+
+**Note:** Requires thermal management to be enabled and climate control entities to be configured.
 
 ---
 
@@ -1407,7 +1419,8 @@ External Inputs (Teslemetry/Amber/Solcast)
 
 Sensors/Binary Sensors display computed values
 Switches/Numbers control configuration
-Buttons trigger manual actions
+Selects provide manual mode control
+Buttons trigger utility actions
 ```
 
 ---

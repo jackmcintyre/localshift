@@ -685,15 +685,16 @@ When updating `docs/ENTITY_REFERENCE.md`:
 
 ## Entity Count Validation
 
-### Current Entity Counts (as of 2026-02-26):
+### Current Entity Counts (as of 2026-02-28):
 | Category | Count |
 |----------|-------|
 | Sensors | 29 |
 | Binary Sensors | 13 |
 | Switches | 13 |
 | Numbers | 6 |
-| Buttons | 6 |
-| **Total** | **67** |
+| Selects | 1 |
+| Buttons | 3 |
+| **Total** | **64** |
 
 ### Validation Commands
 

@@ -128,7 +128,9 @@ class BatteryModeSelect(SelectEntity):
             # Persist the switch state
             option_key = f"switch_state_{SWITCH_AUTOMATION_ENABLED}"
             new_options = {**self._entry.options, option_key: False}
-            self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+            self.hass.config_entries.async_update_entry(
+                self._entry, options=new_options
+            )
 
         # Convert option string to BatteryMode
         try:
@@ -155,8 +157,10 @@ class BatteryModeSelect(SelectEntity):
 
         # Send notification about manual mode change
         if self.coordinator._notification_service is not None:
-            await self.coordinator._notification_service.send_manual_action_notification(
-                f"Manual {target_mode.display_name}", self.coordinator.data
+            await (
+                self.coordinator._notification_service.send_manual_action_notification(
+                    f"Manual {target_mode.display_name}", self.coordinator.data
+                )
             )
 
         # Update the entity state

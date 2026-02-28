@@ -1209,7 +1209,9 @@ class LocalShiftCoordinator:
         success = False
 
         if mode == BatteryMode.SELF_CONSUMPTION:
-            success = await self._battery_controller.set_self_consumption(self.data, dry_run)
+            success = await self._battery_controller.set_self_consumption(
+                self.data, dry_run
+            )
         elif mode == BatteryMode.GRID_CHARGING:
             battery_target = float(
                 self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
@@ -1218,17 +1220,23 @@ class LocalShiftCoordinator:
                 self.data, dry_run, target_soc=battery_target
             )
         elif mode == BatteryMode.BOOST_CHARGING:
-            success = await self._battery_controller.set_boost_charge(self.data, dry_run)
+            success = await self._battery_controller.set_boost_charge(
+                self.data, dry_run
+            )
         elif mode == BatteryMode.SPIKE_DISCHARGE:
             # Check if conservative mode is enabled and use spike_reserve_soc if available
             reserve_soc = (
-                self.data.spike_reserve_soc if self.data.spike_in_conservative_mode else None
+                self.data.spike_reserve_soc
+                if self.data.spike_in_conservative_mode
+                else None
             )
             success = await self._battery_controller.set_force_discharge(
                 self.data, dry_run, reserve_soc=reserve_soc
             )
         elif mode == BatteryMode.PROACTIVE_EXPORT:
-            success = await self._battery_controller.set_proactive_export(self.data, dry_run)
+            success = await self._battery_controller.set_proactive_export(
+                self.data, dry_run
+            )
         else:
             _LOGGER.warning("Unsupported battery mode: %s", mode)
             return False

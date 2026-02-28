@@ -157,16 +157,19 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `number.localshift_spike_price_percentile` | Price percentile for spike discharge activation |
 | `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes |
 
-### Buttons (6)
+### Selects (1)
 
 | Entity ID | Description |
 |---|---|
-| `button.localshift_force_charge` | Manually force charge (backup mode, 3.3kW) |
-| `button.localshift_force_discharge` | Manually force discharge (autonomous, reserve=0) |
-| `button.localshift_boost_charge` | Manually boost charge at 5kW |
-| `button.localshift_self_consumption` | Clear manual override, return to automation |
+| `select.localshift_battery_mode` | Select battery operating mode (self_consumption, grid_charging, boost_charging, spike_discharge, proactive_export). Changing this disables automation and applies manual control. |
+
+### Buttons (3)
+
+| Entity ID | Description |
+|---|---|
 | `button.localshift_update_forecast` | Force forecast update and clear historical load cache |
 | `button.localshift_reset_learning` | Reset learning system data and restart observation |
+| `button.localshift_learn_hvac_power` | Proactively learn HVAC power consumption by running each climate entity briefly |
 
 ## Dashboard
 

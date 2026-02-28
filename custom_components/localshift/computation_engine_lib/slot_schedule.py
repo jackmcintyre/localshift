@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
 
 from .utils import get_slot_duration_minutes, parse_slot_time
 
@@ -198,7 +197,9 @@ def compute_hybrid_slot_schedule(
             "Created synthetic slot at %s (Amber first slot was at %s, gap=%.0fs)",
             synthetic_start.strftime("%H:%M:%S"),
             slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
-            (slots[1]["start"] - synthetic_start).total_seconds() if len(slots) > 1 else 0,
+            (slots[1]["start"] - synthetic_start).total_seconds()
+            if len(slots) > 1
+            else 0,
         )
 
     # Step 7: Calculate counts and metadata
