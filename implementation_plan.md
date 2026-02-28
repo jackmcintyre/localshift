@@ -229,3 +229,46 @@ Lock down the existing scaffolded optimizer path as a stable, deterministic foun
 ### Mitigations
 - Add CI guard tests around schema/serialization fields.
 - Treat Phase A contracts as backward-compat guarantees.
+
+## Phase B — Detailed Plan (Input/Config Parity)
+
+### Goal
+Ensure the optimizer receives the same effective planning inputs and constraints as the legacy planner so comparisons are meaningful.
+
+### Scope
+- Complete `OptimizerConfig` mapping from integration options and constants.
+- Align slot context fields and semantics with legacy `daily_forecast` payload.
+- Normalize demand-window context and target semantics.
+- Validate pricing and energy sign conventions.
+
+### Tasks
+1. **Config mapping matrix**
+   - Create explicit mapping table: option/const → optimizer config field.
+   - Cover battery capacity, charge/boost/discharge rates, efficiencies, SOC bounds, target SOC, penalties, and bin granularity.
+2. **Slot context parity**
+   - Guarantee `slot_index`, `timestamp_iso`, `slot_interval_minutes`, `buy_price`, `sell_price`, `solar_kwh`, `consumption_kwh` are populated and typed.
+   - Ensure compatibility with hybrid slot cadence (5-min/30-min).
+3. **Demand-window alignment**
+   - Map and persist demand-window entry/slot flags for each slot.
+   - Verify target shortfall is computed against the same boundary as legacy logic.
+4. **Telemetry parity checks**
+   - Compare legacy aggregate import/export/net-cost calculations against optimizer serialization model.
+5. **Tests**
+   - Add adapter-focused tests validating mapping completeness and fallback defaults.
+
+### Deliverables
+- Completed config-to-optimizer mapping implementation in shadow runner.
+- Adapter parity tests in `tests/test_optimizer_shadow_runner_integration.py`.
+- Documented mapping table in this plan section (or companion rollout doc).
+
+### Acceptance Criteria
+- Every required optimizer input field is populated for every cycle.
+- Unknown/missing optional values fail safe (no crashes; explicit defaults logged).
+- Legacy and optimizer comparisons are based on aligned slot identity and equivalent constraint context.
+
+### Risks
+- Hidden legacy assumptions not represented in optimizer inputs.
+
+### Mitigations
+- Add strict adapter validation with explicit error messages.
+- Add a “parity completeness” diagnostic key to shadow summary.
