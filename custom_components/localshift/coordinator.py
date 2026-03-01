@@ -926,6 +926,36 @@ class LocalShiftCoordinator:
         if self._computation_engine is not None:
             self._computation_engine.compute_derived_values(self.data)
 
+        # Run shadow optimizer after legacy forecast is computed (Issue #403 Phase 1)
+        # This is non-invasive - it only populates shadow_* fields in CoordinatorData
+        self._run_shadow_optimizer()
+
+    def _run_shadow_optimizer(self) -> None:
+        """Run the DP optimizer in shadow mode for comparison telemetry.
+
+        Phase 1 (Issue #403): Shadow mode only - populates optimizer_shadow_*
+        fields in CoordinatorData without affecting control decisions.
+        """
+        from .computation_engine_lib.optimizer_shadow_runner import run_shadow_optimizer
+
+        # Get optimizer config from options
+        config_options = {
+            "optimizer_enabled": self.get_option("optimizer_enabled", False),
+        }
+
+        # Run shadow optimizer - mutates data.optimizer_shadow_* fields in-place
+        try:
+            run_shadow_optimizer(self.data, config_options)
+        except Exception as e:
+            # Shadow failures must never block coordinator completion
+            _LOGGER.warning("Shadow optimizer failed (non-blocking): %s", e)
+            # Ensure summary reflects the error state
+            self.data.optimizer_shadow_summary = {
+                "enabled": config_options["optimizer_enabled"],
+                "success": False,
+                "error_message": str(e),
+            }
+
     # ------------------------------------------------------------------
     # Cost tracking
     # ------------------------------------------------------------------

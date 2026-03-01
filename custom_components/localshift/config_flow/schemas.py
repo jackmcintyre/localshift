@@ -13,6 +13,8 @@ from homeassistant.helpers import selector
 
 from ..const import (
     CONF_BATTERY_TARGET,
+    CONF_OPTIMIZER_ENABLED,
+    DEFAULT_OPTIMIZER_ENABLED,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_DEMAND_WINDOW_END,
@@ -444,5 +446,13 @@ def build_options_schema(
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
+            # DP Optimizer (Issue #403) - shadow mode only for now
+            vol.Optional(
+                CONF_OPTIMIZER_ENABLED,
+                default=values.get(
+                    CONF_OPTIMIZER_ENABLED,
+                    DEFAULT_OPTIMIZER_ENABLED,
+                ),
+            ): selector.BooleanSelector(),
         }
     )

@@ -62,6 +62,9 @@ async def async_setup_entry(
         ForecastStatusSensor(coordinator, entry),
         # Automation ready sensor (Issue #349)
         AutomationReadySensor(coordinator, entry),
+        # Optimizer shadow telemetry sensors (Issue #403)
+        OptimizerShadowPlanSensor(coordinator, entry),
+        OptimizerShadowSummarySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1155,3 +1158,103 @@ class AutomationReadySensor(LocalShiftSensorBase):
             return "mdi:check-decagram"
         else:
             return "mdi:decagram-outline"
+
+
+# ---------------------------------------------------------------------------
+# Optimizer Shadow Telemetry Sensors (Issue #403 Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class OptimizerShadowPlanSensor(LocalShiftSensorBase):
+    """DP optimizer shadow plan for comparison.
+
+    Issue #403: Shows the plan computed by the DP optimizer in shadow mode.
+    Used for A/B comparison with the legacy planner before switching control.
+    """
+
+    _attr_unique_id = "localshift_optimizer_shadow_plan"
+    _attr_name = "Optimizer Shadow Plan"
+    _attr_icon = "mdi:shadow"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with shadow plan summary."""
+        summary = self.coordinator.data.optimizer_shadow_summary
+        if summary is None:
+            self._attr_native_value = "disabled"
+        elif not summary.get("success", False):
+            self._attr_native_value = "error"
+        else:
+            self._attr_native_value = "computed"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return shadow plan details."""
+        d = self.coordinator.data
+        # Use the decisions list which contains per-slot shadow decisions
+        decisions = d.optimizer_shadow_decisions or []
+        summary = d.optimizer_shadow_summary or {}
+
+        return {
+            "enabled": summary.get("enabled", False),
+            "success": summary.get("success", False),
+            "error_message": summary.get("error_message"),
+            "decisions": decisions,
+            "total_slots": len(decisions),
+            "computed_at": summary.get("computed_at"),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "computed":
+            return "mdi:shadow"
+        elif status == "error":
+            return "mdi:shadow-off"
+        else:  # disabled
+            return "mdi:shadow-off"
+
+
+class OptimizerShadowSummarySensor(LocalShiftSensorBase):
+    """DP optimizer shadow run summary.
+
+    Issue #403: Shows aggregate metrics from the shadow optimizer run.
+    Includes timing, success/failure, and comparison statistics.
+    """
+
+    _attr_unique_id = "localshift_optimizer_shadow_summary"
+    _attr_name = "Optimizer Shadow Summary"
+    _attr_icon = "mdi:chart-box-outline"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with shadow run summary."""
+        summary = self.coordinator.data.optimizer_shadow_summary
+        if summary is None:
+            self._attr_native_value = "disabled"
+        elif summary.get("success", False):
+            self._attr_native_value = "success"
+        else:
+            self._attr_native_value = "failed"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return shadow run summary details."""
+        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        return {
+            "enabled": summary.get("enabled", False),
+            "success": summary.get("success", False),
+            "error_message": summary.get("error_message"),
+            "computed_at": summary.get("computed_at"),
+            "config_options": summary.get("config_options", {}),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "success":
+            return "mdi:check-circle-outline"
+        elif status == "failed":
+            return "mdi:alert-circle-outline"
+        else:  # disabled
+            return "mdi:minus-circle-outline"
