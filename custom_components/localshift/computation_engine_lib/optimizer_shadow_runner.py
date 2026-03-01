@@ -125,7 +125,7 @@ def _run(
 
     # 1. Build OptimizerInputs from coordinator data
     optimizer_config = _build_optimizer_config(data, config_options)
-    slots = _build_slot_contexts(data)
+    slots, parity_info = _build_slot_contexts(data)
 
     if not slots:
         _LOGGER.debug("Shadow optimizer: no slots available, skipping cycle %s", cycle_id)
@@ -136,8 +136,17 @@ def _run(
             "success": False,
             "error_message": "no_slots_available",
             "cycle_id": cycle_id,
+            "parity_completeness_pct": 0.0,
         }
         return
+
+    # 1b. Validate slot alignment (Phase B #403)
+    alignment = _validate_slot_alignment(data.daily_forecast, slots)
+    if not alignment["valid"]:
+        _LOGGER.warning(
+            "Shadow optimizer slot alignment issues: %s",
+            alignment["issues"],
+        )
 
     inputs = OptimizerInputs(
         cycle_id=cycle_id,
@@ -154,7 +163,9 @@ def _run(
     data.optimizer_shadow_decisions = [
         _serialize_decision(d) for d in result.decisions
     ]
-    data.optimizer_shadow_summary = _build_summary(result, cycle_id, cycle_timestamp_iso)
+    data.optimizer_shadow_summary = _build_summary(
+        result, cycle_id, cycle_timestamp_iso, parity_info, alignment
+    )
 
     _LOGGER.debug(
         "Shadow optimizer cycle %s complete: success=%s slots=%d solve=%.3fs net_cost=%.4f",
@@ -199,29 +210,71 @@ def _build_optimizer_config(
     """
     Build OptimizerConfig from coordinator data and config options.
 
-    MVP: uses defaults + battery target from config.
-    TODO (#403 Phase B): Wire in all user-configurable thresholds.
+    Phase B (#403): Complete mapping of all config fields from user settings.
+    Uses safe defaults for tunable parameters that will be exposed in Phase C.
     """
     from ..const import (  # noqa: PLC0415
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
         CONF_BATTERY_TARGET,
+        CONF_MINIMUM_TARGET_SOC,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_MINIMUM_TARGET_SOC,
     )
 
+    # User-configurable target SOC for demand window
     target_soc = float(
         config_options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
     )
+
+    # User-configurable minimum SOC (floor for discharge modes)
+    min_soc = float(
+        config_options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+    )
+
     return OptimizerConfig(
+        # --- Battery hardware constraints ---
         battery_capacity_kwh=BATTERY_CAPACITY_KWH,
-        charge_rate_kw=CHARGE_RATE_GRID_KW,
-        boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,
-        demand_window_target_soc_pct=target_soc,
+        charge_rate_kw=CHARGE_RATE_GRID_KW,          # 3.3 kW normal grid charge
+        boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,   # 5.0 kW boost charge
+        discharge_rate_kw=CHARGE_RATE_BOOST_KW,      # 5.0 kW (Powerwall symmetric)
+
+        # --- Efficiency defaults (Powerwall typical) ---
+        # TODO (#403 Phase C): Consider exposing via config if needed
+        charge_efficiency=0.95,
+        discharge_efficiency=0.95,
+
+        # --- SOC constraints ---
+        min_soc_pct=min_soc,                         # User-configured minimum
+        max_soc_pct=100.0,                           # Hard ceiling
+
+        # --- Demand window target ---
+        demand_window_target_soc_pct=target_soc,     # User-configured target
+
+        # --- Objective weights (conservative defaults) ---
+        # TODO (#403 Phase C): Expose for tuning if comparison analytics suggest
+        target_shortfall_penalty_per_pct=1.0,
+        cycle_penalty_per_kwh=0.005,
+
+        # --- SOC discretization ---
+        soc_bins=50,
     )
 
 
-def _build_slot_contexts(data: Any) -> list[SlotContext]:
+# Track parity completeness for diagnostics
+_PARITY_FIELDS = [
+    "buy_price",
+    "sell_price",
+    "solar_kwh",
+    "consumption_kwh",
+    "slot_interval_minutes",
+    "is_demand_window_entry",
+    "is_demand_window_slot",
+]
+
+
+def _build_slot_contexts(data: Any) -> tuple[list[SlotContext], dict[str, Any]]:
     """
     Convert legacy daily_forecast slots to SlotContext list.
 
@@ -234,8 +287,16 @@ def _build_slot_contexts(data: Any) -> list[SlotContext]:
       - slot_interval_minutes (added by #403 deterministic identity work)
 
     Missing fields are defaulted safely.
+
+    Returns:
+        (contexts, parity_info) tuple where:
+        - contexts: list of SlotContext objects
+        - parity_info: dict with completeness diagnostics
     """
     contexts: list[SlotContext] = []
+    total_fields = 0
+    populated_fields = 0
+    defaulted_fields: dict[str, int] = {}
 
     for idx, slot in enumerate(data.daily_forecast):
         # Timestamp — use slot_index-derived ISO if present, else from slot
@@ -247,21 +308,138 @@ def _build_slot_contexts(data: Any) -> list[SlotContext]:
 
         slot_minutes = int(slot.get("slot_interval_minutes", 30))
 
+        # Track buy_price completeness
+        buy_price, defaulted = _get_slot_field(slot, "buy_price", "general_price", 0.0)
+        if defaulted:
+            defaulted_fields["buy_price"] = defaulted_fields.get("buy_price", 0) + 1
+        total_fields += 1
+        if not defaulted:
+            populated_fields += 1
+
+        # Track sell_price completeness
+        sell_price, defaulted = _get_slot_field(slot, "sell_price", "feed_in_price", 0.0)
+        if defaulted:
+            defaulted_fields["sell_price"] = defaulted_fields.get("sell_price", 0) + 1
+        total_fields += 1
+        if not defaulted:
+            populated_fields += 1
+
+        # Track solar_kwh completeness
+        solar_kwh, defaulted = _get_slot_field(slot, "solar_kwh", "pv_estimate", 0.0)
+        if defaulted:
+            defaulted_fields["solar_kwh"] = defaulted_fields.get("solar_kwh", 0) + 1
+        total_fields += 1
+        if not defaulted:
+            populated_fields += 1
+
+        # Track consumption_kwh completeness
+        consumption_kwh, defaulted = _get_slot_field(slot, "consumption_kwh", "estimated_consumption_kwh", 0.0)
+        if defaulted:
+            defaulted_fields["consumption_kwh"] = defaulted_fields.get("consumption_kwh", 0) + 1
+        total_fields += 1
+        if not defaulted:
+            populated_fields += 1
+
         ctx = SlotContext(
             slot_index=idx,
             timestamp_iso=str(timestamp_iso),
             slot_interval_minutes=slot_minutes,
-            buy_price=float(slot.get("buy_price", slot.get("general_price", 0.0))),
-            sell_price=float(slot.get("sell_price", slot.get("feed_in_price", 0.0))),
-            solar_kwh=float(slot.get("solar_kwh", slot.get("pv_estimate", 0.0))),
-            consumption_kwh=float(slot.get("consumption_kwh", slot.get("estimated_consumption_kwh", 0.0))),
+            buy_price=buy_price,
+            sell_price=sell_price,
+            solar_kwh=solar_kwh,
+            consumption_kwh=consumption_kwh,
             is_demand_window_entry=bool(slot.get("is_demand_window_entry", False)),
             is_demand_window_slot=bool(slot.get("is_demand_window", False)),
             price_source=str(slot.get("price_source", slot.get("slot_type", "legacy"))),
         )
         contexts.append(ctx)
 
-    return contexts
+    # Calculate completeness percentage
+    completeness_pct = (populated_fields / total_fields * 100) if total_fields > 0 else 0.0
+
+    parity_info = {
+        "total_slots": len(contexts),
+        "total_fields_checked": total_fields,
+        "populated_fields": populated_fields,
+        "defaulted_fields": defaulted_fields,
+        "completeness_pct": round(completeness_pct, 1),
+    }
+
+    return contexts, parity_info
+
+
+def _get_slot_field(
+    slot: dict[str, Any],
+    primary_key: str,
+    fallback_key: str,
+    default: float,
+) -> tuple[float, bool]:
+    """
+    Get a field value from slot dict with fallback and default.
+
+    Returns:
+        (value, was_defaulted) tuple
+    """
+    if primary_key in slot:
+        return float(slot[primary_key]), False
+    if fallback_key in slot:
+        return float(slot[fallback_key]), False
+    return default, True
+
+
+def _validate_slot_alignment(
+    legacy_slots: list[dict[str, Any]],
+    contexts: list[SlotContext],
+) -> dict[str, Any]:
+    """
+    Validate alignment between legacy slots and SlotContexts.
+
+    Phase B (#403): Ensures 1:1 mapping and flag mismatches for debugging.
+
+    Returns:
+        Dict with validation results including any alignment issues.
+    """
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    # Check count alignment
+    if len(legacy_slots) != len(contexts):
+        issues.append(
+            f"slot_count_mismatch: legacy={len(legacy_slots)} contexts={len(contexts)}"
+        )
+        return {
+            "valid": False,
+            "issues": issues,
+            "warnings": warnings,
+        }
+
+    # Check per-slot alignment
+    for idx, (legacy, ctx) in enumerate(zip(legacy_slots, contexts, strict=True)):
+        # Check slot_index
+        if ctx.slot_index != idx:
+            issues.append(f"slot_{idx}: index_mismatch ctx.slot_index={ctx.slot_index}")
+
+        # Check timestamp presence (warning only if missing)
+        if not ctx.timestamp_iso:
+            warnings.append(f"slot_{idx}: missing_timestamp")
+
+        # Check for negative prices (may indicate data issues)
+        if ctx.buy_price < 0:
+            warnings.append(f"slot_{idx}: negative_buy_price={ctx.buy_price}")
+
+        # Check for slot_interval_minutes consistency
+        legacy_minutes = legacy.get("slot_interval_minutes", 30)
+        if ctx.slot_interval_minutes != legacy_minutes:
+            issues.append(
+                f"slot_{idx}: interval_mismatch legacy={legacy_minutes} ctx={ctx.slot_interval_minutes}"
+            )
+
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "warnings": warnings,
+        "slots_checked": len(contexts),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -315,9 +493,11 @@ def _build_summary(
     result: OptimizerResult,
     cycle_id: str,
     cycle_timestamp_iso: str,
+    parity_info: dict[str, Any] | None = None,
+    alignment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the compact optimizer_shadow_summary dict for the diagnostics sensor."""
-    return {
+    summary = {
         "enabled": True,
         "shadow_mode": True,
         "planner_version": result.planner_version,
@@ -333,6 +513,21 @@ def _build_summary(
         "reason_code_histogram": result.reason_code_histogram,
         "error_message": result.error_message,
     }
+
+    # Add parity completeness diagnostics (Phase B #403)
+    if parity_info:
+        summary["parity_completeness_pct"] = parity_info.get("completeness_pct", 0.0)
+        summary["parity_defaulted_fields"] = parity_info.get("defaulted_fields", {})
+
+    # Add alignment validation results (Phase B #403)
+    if alignment:
+        summary["alignment_valid"] = alignment.get("valid", False)
+        if alignment.get("issues"):
+            summary["alignment_issues"] = alignment["issues"]
+        if alignment.get("warnings"):
+            summary["alignment_warnings"] = alignment["warnings"]
+
+    return summary
 
 
 def _make_cycle_id() -> str:
