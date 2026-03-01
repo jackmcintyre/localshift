@@ -253,12 +253,17 @@ def _build_optimizer_config(
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
+        CHARGE_RATE_SOLAR_KW,
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
+        CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
+        CONF_OPTIMIZATION_MODE,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
+        DEFAULT_OPTIMIZATION_MODE,
     )
 
     # User-configurable target SOC for demand window
@@ -274,15 +279,31 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
     )
 
+    optimization_mode = str(
+        config_options.get(CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE)
+    )
+
+    effective_cheap_price = float(getattr(data, "effective_cheap_price", 0.10))
+    self_consumption_value_per_kwh = float(
+        getattr(data, "general_price", effective_cheap_price)
+    )
+    if self_consumption_value_per_kwh <= 0.0:
+        self_consumption_value_per_kwh = max(0.10, effective_cheap_price)
+
+    export_price_margin = float(
+        config_options.get(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
+    )
+
     return OptimizerConfig(
         # --- Battery hardware constraints ---
         battery_capacity_kwh=BATTERY_CAPACITY_KWH,
         charge_rate_kw=CHARGE_RATE_GRID_KW,  # 3.3 kW normal grid charge
         boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW boost charge
+        solar_charge_rate_kw=CHARGE_RATE_SOLAR_KW,  # 5.0 kW solar->battery cap
         discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
         # --- Efficiency defaults (Powerwall typical) ---
         # TODO (#403 Phase C): Consider exposing via config if needed
-        charge_efficiency=0.95,
+        charge_efficiency=0.92,
         discharge_efficiency=0.95,
         # --- SOC constraints ---
         min_soc_pct=min_soc,  # User-configured minimum
@@ -296,6 +317,11 @@ def _build_optimizer_config(
         cycle_penalty_per_kwh=0.005,
         # --- SOC discretization ---
         soc_bins=50,
+        # --- Optimization mode ---
+        optimization_mode=optimization_mode,
+        self_consumption_value_per_kwh=self_consumption_value_per_kwh,
+        effective_cheap_price=effective_cheap_price,
+        export_price_margin=export_price_margin,
     )
 
 

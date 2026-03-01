@@ -32,6 +32,8 @@ def mock_coordinator_data():
     class MockData:
         def __init__(self):
             self.soc = 65.0
+            self.general_price = 0.26
+            self.effective_cheap_price = 0.12
             self.daily_forecast = [
                 {
                     "timestamp_iso": "2025-01-15T06:00:00Z",
@@ -81,6 +83,7 @@ def config_options():
     return {
         "battery_target": 80.0,
         "minimum_target_soc": 15.0,
+        "export_price_margin": 0.10,
     }
 
 
@@ -102,6 +105,7 @@ class TestBuildOptimizerConfig:
         config = _build_optimizer_config(mock_coordinator_data, config_options)
         assert config.charge_rate_kw == 3.3  # CHARGE_RATE_GRID_KW
         assert config.boost_charge_rate_kw == 5.0  # CHARGE_RATE_BOOST_KW
+        assert config.solar_charge_rate_kw == 5.0  # CHARGE_RATE_SOLAR_KW
 
     def test_config_maps_user_target_soc(self, mock_coordinator_data, config_options):
         """Verify user-configured target SOC is mapped."""
@@ -122,7 +126,7 @@ class TestBuildOptimizerConfig:
     def test_config_efficiency_defaults(self, mock_coordinator_data, config_options):
         """Verify efficiency defaults are set."""
         config = _build_optimizer_config(mock_coordinator_data, config_options)
-        assert config.charge_efficiency == 0.95
+        assert config.charge_efficiency == 0.92
         assert config.discharge_efficiency == 0.95
 
     def test_config_objective_weights_default(
@@ -149,6 +153,21 @@ class TestBuildOptimizerConfig:
             {"allow_dw_entry_under_target": True},
         )
         assert config.allow_dw_entry_under_target is True
+
+    def test_config_maps_optimization_mode(self, mock_coordinator_data, config_options):
+        """Verify optimization mode is mapped from options."""
+        config_options["optimization_mode"] = "arbitrage"
+        config = _build_optimizer_config(mock_coordinator_data, config_options)
+        assert config.optimization_mode == "arbitrage"
+
+    def test_config_maps_self_consumption_inputs(
+        self, mock_coordinator_data, config_options
+    ):
+        """Verify self-consumption economic inputs are mapped."""
+        config = _build_optimizer_config(mock_coordinator_data, config_options)
+        assert config.effective_cheap_price == pytest.approx(0.12)
+        assert config.self_consumption_value_per_kwh == pytest.approx(0.26)
+        assert config.export_price_margin == pytest.approx(0.10)
 
 
 # ---------------------------------------------------------------------------

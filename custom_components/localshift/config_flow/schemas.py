@@ -22,6 +22,7 @@ from ..const import (
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
+    CONF_OPTIMIZATION_MODE,
     CONF_OPTIMIZER_CONTROL_MODE,
     CONF_OPTIMIZER_ENABLED,
     CONF_PRICING_FEED_IN_FORECAST,
@@ -52,11 +53,13 @@ from ..const import (
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
+    DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_OPTIMIZER_CONTROL_MODE,
     DEFAULT_OPTIMIZER_ENABLED,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
+    OPTIMIZATION_MODE_OPTIONS,
     OPTIMIZER_CONTROL_MODES,
     THRESHOLD_RANGES,
 )
@@ -467,6 +470,20 @@ def build_options_schema(
                 selector.SelectSelectorConfig(
                     options=OPTIMIZER_CONTROL_MODES,
                     translation_key="optimizer_control_mode",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            # Optimization mode (Issue #406)
+            vol.Optional(
+                CONF_OPTIMIZATION_MODE,
+                default=values.get(
+                    CONF_OPTIMIZATION_MODE,
+                    DEFAULT_OPTIMIZATION_MODE,
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=OPTIMIZATION_MODE_OPTIONS,
+                    translation_key="optimization_mode",
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),

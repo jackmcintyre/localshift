@@ -676,21 +676,37 @@ def test_dp_planner_projected_totals(default_config, multi_slots):
 # ---------------------------------------------------------------------------
 
 
-def test_dp_planner_states_explored(default_config, multi_slots):
+def test_dp_planner_states_explored():
     """States explored should be positive for non-empty input."""
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        soc_bins=20,
+        optimization_mode="arbitrage",
+    )
+    multi_slots = [
+        SlotContext(
+            slot_index=i,
+            timestamp_iso=f"2026-01-03T{(i // 2):02d}:{(i % 2) * 30:02d}:00",
+            slot_interval_minutes=30,
+            buy_price=0.10 + 0.01 * (i % 10),
+            sell_price=0.06,
+            solar_kwh=max(0.0, 2.5 - abs(i - 24) * 0.1),
+            consumption_kwh=0.35,
+        )
+        for i in range(48)
+    ]
     inputs = OptimizerInputs(
         cycle_id="states-test",
         initial_soc_pct=50.0,
         slots=multi_slots,
-        config=default_config,
+        config=config,
     )
     result = DPPlanner().plan(inputs)
     assert result.success
     assert result.states_explored > 0
-    # Should explore roughly n_slots * n_bins * n_actions states
-    expected_min = (
-        len(multi_slots) * default_config.soc_bins * 2
-    )  # At least 2 actions each
+    # Should explore roughly n_slots * n_bins * n_actions states.
+    expected_min = len(multi_slots) * config.soc_bins * 2
     assert result.states_explored >= expected_min
 
 
