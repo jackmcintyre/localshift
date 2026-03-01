@@ -887,7 +887,13 @@ The integration includes a DP (Dynamic Programming) optimizer subsystem that com
    - Ranks mismatches by significance score
    - Stores comparison in `optimizer_comparison`
 
-### CoordinatorData Shadow Fields
+4. **Active Mode** (when enabled)
+   - `OptimizerSafetyGate.admit()` validates all prerequisites
+   - On success: `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
+   - On failure: falls back to legacy control for this cycle
+   - Tracks `optimizer_fallback_count` for cooldown logic
+
+### CoordinatorData Optimizer Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -895,6 +901,10 @@ The integration includes a DP (Dynamic Programming) optimizer subsystem that com
 | `optimizer_shadow_decisions` | `list[dict]` | Per-slot decisions from optimizer |
 | `optimizer_shadow_summary` | `dict` | Compact summary for diagnostics sensor |
 | `optimizer_comparison` | `dict` | Legacy vs optimizer comparison record |
+| `optimizer_apply_plan` | `list[dict]` | Apply plan derived from optimizer for active mode execution |
+| `optimizer_last_apply_status` | `dict` | Active-mode apply status (success/failure/block_reason) |
+| `optimizer_last_apply_timestamp` | `str` | ISO timestamp of last successful active-mode apply |
+| `optimizer_fallback_count` | `int` | Number of consecutive fallback-to-legacy cycles |
 
 ### Optimizer Sensors
 
@@ -908,9 +918,9 @@ The integration includes a DP (Dynamic Programming) optimizer subsystem that com
 
 | Mode | Control Behavior | Status |
 |------|------------------|--------|
-| `shadow` | Legacy planner controls | Current |
-| `assist` | Legacy planner controls, optimizer recommends | Future |
-| `active` | Optimizer controls | Future (gated) |
+| `shadow` | Legacy planner controls | ✅ Supported |
+| `assist` | Legacy planner controls, optimizer recommends | ✅ Supported |
+| `active` | Optimizer controls (with safety gate) | ✅ Supported |
 
 ### Phase Rollout Status
 
@@ -921,16 +931,23 @@ The integration includes a DP (Dynamic Programming) optimizer subsystem that com
 | C | DP solver implementation | ✅ Complete |
 | D | Comparator hardening | ✅ Complete |
 | E | Assist-mode UX | ✅ Complete |
-| F | Active-control pilot | 🔒 Future |
-| G | Stabilization/release | 🔒 Future |
+| F | Active-control pilot | ✅ Complete |
+| G | Stabilization/release | 🔄 In Progress |
 
-### Safety Guarantees (Shadow Mode)
+### Safety Guarantees
 
+**Shadow/Assist Mode:**
 - Optimizer runs in **isolation** — no battery control commands issued
 - Legacy planner remains **authoritative** for all control decisions
 - Shadow exceptions are **caught and logged** — never block coordinator
-- Comparison failures recorded in `optimizer_shadow_summary.error_message`
-- Feature can be **disabled** via configuration at any time
+
+**Active Mode:**
+- All shadow/assist guarantees apply
+- **Safety gate** validates prerequisites each cycle: feature enabled, control mode active, solve success, slot alignment valid, forecast freshness acceptable
+- Any failed gate triggers immediate **fallback to legacy control**
+- **Cooldown period** after repeated failures prevents rapid re-attempts
+- Unsupported/ambiguous optimizer actions fall back to legacy decisions
+- Feature can be **disabled** at any time via configuration
 
 ### Related Documentation
 

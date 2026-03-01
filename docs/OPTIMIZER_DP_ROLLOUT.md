@@ -12,9 +12,9 @@ The DP optimizer is a deterministic planning subsystem that computes optimal bat
 |------|-------------|------------------|
 | `shadow` | Optimizer runs but legacy planner controls | Legacy decisions applied |
 | `assist` | Optimizer provides recommendations | Legacy decisions applied |
-| `active` | Optimizer controls battery (future) | Optimizer decisions applied |
+| `active` | Optimizer controls battery (with safety gate) | Optimizer decisions applied |
 
-**Current Status**: Shadow/Assist mode only. The optimizer does NOT control the battery.
+**Current Status**: All modes supported. In shadow/assist mode, the optimizer does NOT control the battery. In active mode, optimizer controls the battery with safety gates.
 
 ## Enabling the Optimizer
 
@@ -131,7 +131,24 @@ Active mode should only be enabled after:
 4. Zero comparison failures
 5. Understanding mismatch patterns
 
-Active mode is a **future feature** and is not yet available.
+### What happens when active mode is enabled?
+
+When active mode is enabled:
+1. The safety gate checks all prerequisites each cycle
+2. If all checks pass, optimizer decisions are applied
+3. If any check fails, it falls back to legacy control immediately
+4. Repeated failures trigger a cooldown period before re-attempting
+5. You can always disable active mode or the optimizer entirely
+
+### What's the safety gate?
+
+The safety gate validates:
+- Optimizer is enabled
+- Control mode is set to "active"
+- Last solve was successful
+- Slot alignment is valid
+- Forecast data is fresh (within 30 minutes)
+- Not in cooldown period after recent failures
 
 ## Related Sensors
 

@@ -524,6 +524,56 @@ if not await self._set_backup_reserve(reserve):
 | Proactive export | Not possible | Follows same pattern |
 | Test coverage | Complex | Simpler |
 
+## Legacy Planner vs Optimizer Ownership
+
+The DP optimizer (Issue #403) runs alongside the legacy planner. This section clarifies ownership boundaries.
+
+### Control Modes
+
+| Mode | Legacy Planner | Optimizer | Battery Control |
+|------|---------------|-----------|-----------------|
+| `shadow` | Authoritative | Runs for comparison | Legacy |
+| `assist` | Authoritative | Provides recommendations | Legacy |
+| `active` | Fallback | Primary decision-maker | Optimizer |
+
+### Decision Flow
+
+```
+Coordinator Cycle:
+1. Legacy Planner (ForecastComputer) → produces daily_forecast
+2. Shadow Optimizer (DPPlanner) → produces optimizer_shadow_decisions
+3. Planner Comparator → produces optimizer_comparison
+4. [if active mode] Safety Gate → validates optimizer can control
+5. [if active mode] Apply Plan → maps optimizer actions to battery modes
+6. [fallback] Legacy active_mode → used if optimizer fails any check
+```
+
+### When Optimizer Controls (Active Mode)
+
+In active mode, the optimizer makes control decisions but:
+
+1. **Safety gate validates** all prerequisites before applying
+2. **Fallback to legacy** occurs if:
+   - Optimizer is disabled
+   - Control mode is not "active"
+   - Last solve failed
+   - Slot alignment is invalid
+   - No decisions available
+   - In cooldown after repeated failures
+
+3. **Legacy remains authoritative** for all non-optimizer paths:
+   - Manual overrides
+   - Button handlers (force charge, etc.)
+   - State machine transitions
+   - Error recovery
+
+### Ownership During Transitions
+
+- **Shadow → Assist**: No control behavior change; more logging
+- **Assist → Active**: Optimizer begins controlling; legacy on fallback
+- **Active → Shadow/Assist**: Legacy regains full control immediately
+- **Active → Disabled**: Optimizer stops; legacy controls
+
 ## Risks and Mitigations
 
 | Risk | Mitigation |
