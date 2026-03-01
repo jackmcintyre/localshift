@@ -157,11 +157,14 @@ class OptimizerConfig:
     boost_charge_rate_kw: float = 5.0
     """Maximum battery charge rate in boost mode in kW."""
 
+    solar_charge_rate_kw: float = 5.0
+    """Maximum solar-to-battery charge rate in kW (Powerwall 3 inverter limit)."""
+
     discharge_rate_kw: float = 5.0
     """Maximum battery discharge rate in kW."""
 
-    charge_efficiency: float = 0.95
-    """Round-trip charging efficiency (0–1)."""
+    charge_efficiency: float = 0.92
+    """Charging efficiency (energy lost going into battery)."""
 
     discharge_efficiency: float = 0.95
     """Round-trip discharging efficiency (0–1)."""
@@ -855,7 +858,20 @@ class DPPlanner:
             # Battery absorbs surplus or supplies deficit from solar/consumption balance
             # Net positive = charge from solar surplus
             # Net negative = discharge to meet consumption
-            delta_soc = (net_kwh / capacity_kwh) * 100.0
+            # Apply solar charge rate limit and efficiency (aligns with legacy soc_simulator.py)
+            max_transfer_kwh = config.solar_charge_rate_kw * slot_hours
+            if net_kwh >= 0:
+                # Solar surplus → charge battery (lose efficiency)
+                effective_kwh = (
+                    min(net_kwh, max_transfer_kwh) * config.charge_efficiency
+                )
+                delta_soc = (effective_kwh / capacity_kwh) * 100.0
+            else:
+                # Consumption deficit → discharge battery (lose efficiency)
+                effective_kwh = (
+                    max(net_kwh, -max_transfer_kwh) / config.discharge_efficiency
+                )
+                delta_soc = (effective_kwh / capacity_kwh) * 100.0
             next_soc = soc_pct + delta_soc
             # Clip to valid range
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))

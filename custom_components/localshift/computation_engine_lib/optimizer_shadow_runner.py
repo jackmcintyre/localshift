@@ -253,6 +253,7 @@ def _build_optimizer_config(
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
+        CHARGE_RATE_SOLAR_KW,
         CONF_BATTERY_TARGET,
         CONF_MINIMUM_TARGET_SOC,
         DEFAULT_BATTERY_TARGET,
@@ -272,10 +273,11 @@ def _build_optimizer_config(
         battery_capacity_kwh=BATTERY_CAPACITY_KWH,
         charge_rate_kw=CHARGE_RATE_GRID_KW,  # 3.3 kW normal grid charge
         boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW boost charge
+        solar_charge_rate_kw=CHARGE_RATE_SOLAR_KW,  # 5.0 kW solar->battery cap
         discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
         # --- Efficiency defaults (Powerwall typical) ---
         # TODO (#403 Phase C): Consider exposing via config if needed
-        charge_efficiency=0.95,
+        charge_efficiency=0.92,
         discharge_efficiency=0.95,
         # --- SOC constraints ---
         min_soc_pct=min_soc,  # User-configured minimum
