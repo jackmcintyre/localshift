@@ -43,6 +43,7 @@ async def async_get_config_entry_diagnostics(
         "configuration": _get_safe_configuration(entry),
         "recent_errors": _get_recent_errors(coordinator),
         "learning_system": _get_learning_system_status(coordinator),
+        "optimizer": _get_optimizer_status(coordinator),
     }
 
     return diagnostics
@@ -324,5 +325,113 @@ def _get_learning_system_status(coordinator: Any) -> dict[str, Any]:
         }
     else:
         status["decision_tracker"] = None
+
+    return status
+
+
+def _get_optimizer_status(coordinator: Any) -> dict[str, Any]:
+    """Get DP optimizer shadow mode status and comparison metrics.
+
+    Issue #403 Phase E: Provides optimizer diagnostics for troubleshooting
+    and operator trust-building during shadow/assist modes.
+
+    Args:
+        coordinator: LocalShift coordinator instance
+
+    Returns:
+        Dictionary with optimizer status and recent comparison data
+    """
+    if coordinator is None:
+        return {"status": "not_loaded"}
+
+    status: dict[str, Any] = {"status": "unknown"}
+
+    if not hasattr(coordinator, "data") or coordinator.data is None:
+        return {"status": "no_data"}
+
+    data = coordinator.data
+
+    shadow_summary = getattr(data, "optimizer_shadow_summary", None) or {}
+    comparison = getattr(data, "optimizer_comparison", None) or {}
+
+    enabled = shadow_summary.get("enabled", False)
+    status["enabled"] = enabled
+
+    if not enabled:
+        status["status"] = "disabled"
+        status["message"] = "Optimizer not enabled in configuration"
+        return status
+
+    status["shadow_mode"] = shadow_summary.get("shadow_mode", True)
+    status["planner_version"] = shadow_summary.get("planner_version")
+    status["last_cycle_success"] = shadow_summary.get("success", False)
+    status["last_cycle_time"] = shadow_summary.get("cycle_timestamp_iso")
+    status["last_cycle_id"] = shadow_summary.get("cycle_id")
+    status["solve_time_seconds"] = shadow_summary.get("solve_time_seconds")
+    status["error_message"] = shadow_summary.get("error_message")
+
+    parity_pct = shadow_summary.get("parity_completeness_pct")
+    if parity_pct is not None:
+        status["parity_completeness_pct"] = parity_pct
+
+    alignment_valid = shadow_summary.get("alignment_valid")
+    if alignment_valid is not None:
+        status["alignment_valid"] = alignment_valid
+        if shadow_summary.get("alignment_issues"):
+            status["alignment_issues"] = shadow_summary["alignment_issues"][:3]
+
+    if shadow_summary.get("success", False):
+        status["projected_net_cost"] = shadow_summary.get("projected_net_cost")
+        status["projected_import_kwh"] = shadow_summary.get("projected_import_kwh")
+        status["projected_export_kwh"] = shadow_summary.get("projected_export_kwh")
+        status["total_slots"] = shadow_summary.get("total_slots")
+        status["terminal_shortfall_pct"] = shadow_summary.get("terminal_shortfall_pct")
+        status["reason_code_histogram"] = shadow_summary.get(
+            "reason_code_histogram", {}
+        )
+
+    if comparison:
+        status["comparison"] = {
+            "succeeded": comparison.get("comparison_succeeded", True),
+            "mismatch_count": comparison.get("mismatch_count", 0),
+            "net_cost_delta": comparison.get("net_cost_delta"),
+            "import_kwh_delta": comparison.get("import_kwh_delta"),
+            "export_kwh_delta": comparison.get("export_kwh_delta"),
+            "legacy_meets_dw_target": comparison.get("legacy_meets_dw_target"),
+            "optimizer_meets_dw_target": comparison.get("optimizer_meets_dw_target"),
+            "mismatch_by_type": comparison.get("mismatch_by_type", {}),
+            "comparison_time_ms": comparison.get("comparison_time_ms"),
+        }
+
+        top_mismatches = comparison.get("top_mismatches", [])
+        if top_mismatches:
+            status["comparison"]["top_3_mismatches"] = [
+                {
+                    "slot_index": m.get("slot_index"),
+                    "mismatch_type": m.get("mismatch_type"),
+                    "legacy_action": m.get("legacy_action"),
+                    "optimizer_action": m.get("optimizer_action"),
+                    "reason_detail": m.get("reason_detail"),
+                    "net_cost_delta": m.get("legacy_net_cost", 0)
+                    - m.get("optimizer_net_cost", 0),
+                }
+                for m in top_mismatches[:3]
+            ]
+
+        summary = comparison.get("summary", {})
+        if summary:
+            status["comparison"]["summary"] = {
+                "total_mismatches": summary.get("total_mismatches"),
+                "total_cost_impact": summary.get("total_cost_impact"),
+                "most_significant_type": summary.get("most_significant_type"),
+            }
+
+    if status.get("last_cycle_success"):
+        status["status"] = "running"
+    elif enabled:
+        status["status"] = "error"
+        status["message"] = status.get("error_message", "Unknown error")
+    else:
+        status["status"] = "disabled"
 
     return status

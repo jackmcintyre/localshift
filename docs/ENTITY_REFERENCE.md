@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **52 entities** grouped under a single "LocalShift" device:
+The integration creates **55 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 24 | `sensor` |
+| Sensors | 27 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 11 | `switch` |
 | Numbers | 4 | `number` |
@@ -630,6 +630,122 @@ Attributes:
   sample_count: 0
   last_updated: null
 ```
+
+---
+
+### 25. sensor.localshift_optimizer_shadow_plan
+
+**Purpose:** DP optimizer shadow plan for comparison.
+
+Added in Issue #403. Shows the plan computed by the DP optimizer running in shadow mode alongside the legacy planner.
+
+**State:** One of: `computed`, `error`, `disabled`
+
+**Example Data:**
+```
+State: computed
+Attributes:
+  enabled: true
+  success: true
+  error_message: null
+  decisions:
+    - slot_index: 0
+      timestamp_iso: "2026-03-01T10:00:00+11:00"
+      action: "hold"
+      reason_code: "PRICE_ABOVE_THRESHOLD"
+      predicted_soc_pct: 75.5
+      grid_import_kwh: 0.0
+      grid_export_kwh: 0.0
+    - ...
+  total_slots: 48
+  computed_at: "2026-03-01T10:00:00+11:00"
+```
+
+**Icon:** Dynamic (mdi:shadow for computed, mdi:shadow-off for error/disabled)
+
+---
+
+### 26. sensor.localshift_optimizer_shadow_summary
+
+**Purpose:** DP optimizer shadow run summary.
+
+Added in Issue #403. Shows aggregate metrics from the shadow optimizer run including timing, success status, and projected costs.
+
+**State:** One of: `success`, `failed`, `disabled`
+
+**Example Data:**
+```
+State: success
+Attributes:
+  enabled: true
+  success: true
+  error_message: null
+  computed_at: "2026-03-01T10:00:00+11:00"
+  config_options:
+    battery_target: 80
+    cheap_price_percentile: 25
+```
+
+**Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
+
+---
+
+### 27. sensor.localshift_optimizer_comparison
+
+**Purpose:** Legacy vs optimizer plan comparison.
+
+Added in Issue #403 Phase E. Shows side-by-side comparison metrics for operator trust-building.
+
+**State Class:** `measurement`
+
+**State:** Mismatch count (0 = plans match), `null` when disabled, `-1` when comparison failed
+
+**Example Data:**
+```
+State: 3
+Attributes:
+  enabled: true
+  comparison_available: true
+  comparison_succeeded: true
+  net_cost_delta: -0.15
+  import_kwh_delta: -1.5
+  export_kwh_delta: 0.5
+  legacy_projected_net_cost: 2.50
+  optimizer_projected_net_cost: 2.35
+  legacy_meets_dw_target: true
+  optimizer_meets_dw_target: true
+  total_slots: 48
+  aligned_slots: 48
+  mismatch_count: 3
+  mismatch_by_type:
+    ACTION_MISMATCH: 2
+    IMPORT_QUANTITY_MISMATCH: 1
+  top_mismatches:
+    - slot_index: 5
+      mismatch_type: "ACTION_MISMATCH"
+      legacy_action: "hold"
+      optimizer_action: "charge_grid_normal"
+      reason_detail: "Optimizer avoids costly legacy action..."
+      legacy_net_cost: 0.25
+      optimizer_net_cost: 0.10
+  summary:
+    total_mismatches: 3
+    total_cost_impact: 0.45
+    most_significant_type: "ACTION_MISMATCH"
+  comparison_time_ms: 12.5
+```
+
+**Key Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `net_cost_delta` | Optimizer cost - Legacy cost (negative = optimizer cheaper) |
+| `mismatch_by_type` | Count of mismatches by classification type |
+| `top_mismatches` | Top 5 slots with largest disagreements |
+| `legacy_meets_dw_target` | Whether legacy plan reaches demand window SOC target |
+| `optimizer_meets_dw_target` | Whether optimizer plan reaches demand window SOC target |
+
+**Icon:** Dynamic (mdi:check-circle-outline for 0 mismatches, mdi:compare-horizontal for 1-3, mdi:compare for 4+)
 
 ---
 
