@@ -212,7 +212,12 @@ class ObjectiveTerms:
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue + penalties."""
-        return self.import_cost - self.export_revenue + self.cycle_penalty + self.shortfall_penalty
+        return (
+            self.import_cost
+            - self.export_revenue
+            + self.cycle_penalty
+            + self.shortfall_penalty
+        )
 
     def to_dict(self) -> dict:
         """Serialize to dict for sensor attributes and shadow output."""
@@ -259,7 +264,10 @@ class PlannedSlotDecision:
     # --- Derived compatibility flags (set from action) ---
     @property
     def grid_charge(self) -> bool:
-        return self.action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+        return self.action in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        )
 
     @property
     def grid_charge_boost(self) -> bool:
@@ -477,7 +485,9 @@ class DPPlanner:
         try:
             result = self._solve(inputs)
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("DPPlanner.plan() failed for cycle %s: %s", inputs.cycle_id, exc)
+            _LOGGER.error(
+                "DPPlanner.plan() failed for cycle %s: %s", inputs.cycle_id, exc
+            )
             return OptimizerResult(
                 success=False,
                 planner_version=self.VERSION,
@@ -542,7 +552,14 @@ class DPPlanner:
             target = config.demand_window_target_soc_pct
             for bin_idx, soc in enumerate(soc_grid):
                 shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
-                dp[n_slots][bin_idx] = (shortfall_penalty, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
+                dp[n_slots][bin_idx] = (
+                    shortfall_penalty,
+                    PlannerAction.HOLD,
+                    bin_idx,
+                    0.0,
+                    0.0,
+                    0.0,
+                )
         else:
             # No demand window - no terminal penalty
             for bin_idx in range(n_bins):
@@ -572,7 +589,9 @@ class DPPlanner:
                     )
 
                     # Clamp next_soc to valid range
-                    next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
+                    next_soc = max(
+                        config.min_soc_pct, min(config.max_soc_pct, next_soc)
+                    )
 
                     # Map next_soc to nearest bin
                     next_bin = _map_soc_to_bin(next_soc, soc_grid)
@@ -583,7 +602,9 @@ class DPPlanner:
                     # If exact bin not found, interpolate
                     if future_cost == float("inf") and dp[slot_idx + 1]:
                         future_cost = _interpolate_cost_to_soc(
-                            next_soc, soc_grid, {k: v[0] for k, v in dp[slot_idx + 1].items()}
+                            next_soc,
+                            soc_grid,
+                            {k: v[0] for k, v in dp[slot_idx + 1].items()},
                         )
 
                     # Compute stage cost
@@ -593,12 +614,10 @@ class DPPlanner:
                     total_cost = stage.net_cost + future_cost
 
                     # Deterministic tie-breaking: prefer lower priority index
-                    if (
-                        total_cost < best_cost
-                        or (
-                            total_cost == best_cost
-                            and _ACTION_PRIORITY.get(action, 99) < _ACTION_PRIORITY.get(best_action, 99)
-                        )
+                    if total_cost < best_cost or (
+                        total_cost == best_cost
+                        and _ACTION_PRIORITY.get(action, 99)
+                        < _ACTION_PRIORITY.get(best_action, 99)
                     ):
                         best_cost = total_cost
                         best_action = action
@@ -643,7 +662,9 @@ class DPPlanner:
                 grid_import = 0.0
                 grid_export = 0.0
             else:
-                _, action, next_bin, grid_import, grid_export, next_soc = dp[slot_idx][current_bin]
+                _, action, next_bin, grid_import, grid_export, next_soc = dp[slot_idx][
+                    current_bin
+                ]
 
             # Compute stage cost for this decision
             stage = DPPlanner.stage_cost(action, grid_import, grid_export, slot, config)
@@ -687,7 +708,9 @@ class DPPlanner:
 
         # Calculate terminal shortfall (at demand window entry if applicable)
         terminal_shortfall = 0.0
-        if demand_window_entry_idx is not None and demand_window_entry_idx < len(decisions):
+        if demand_window_entry_idx is not None and demand_window_entry_idx < len(
+            decisions
+        ):
             terminal_soc = decisions[demand_window_entry_idx].predicted_soc_pct
             target = config.demand_window_target_soc_pct
             terminal_shortfall = max(0.0, target - terminal_soc)
@@ -736,9 +759,15 @@ class DPPlanner:
             return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
 
         # Grid charge reasoning
-        if action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST):
+        if action in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
             # Check if needed for demand window target
-            if demand_window_entry_idx is not None and slot_idx < demand_window_entry_idx:
+            if (
+                demand_window_entry_idx is not None
+                and slot_idx < demand_window_entry_idx
+            ):
                 soc_deficit = config.demand_window_target_soc_pct - soc
                 if soc_deficit > 0:
                     # Use real future slots (no repeated-current-slot approximation).
@@ -846,7 +875,10 @@ class DPPlanner:
                 soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
                 remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
                 if remaining_headroom > 0:
-                    grid_charge_kwh = min(effective_charge_kwh, (remaining_headroom / 100.0) * capacity_kwh)
+                    grid_charge_kwh = min(
+                        effective_charge_kwh,
+                        (remaining_headroom / 100.0) * capacity_kwh,
+                    )
                 else:
                     grid_charge_kwh = 0.0
             else:
@@ -862,7 +894,9 @@ class DPPlanner:
             # Clip to max SOC
             if next_soc > config.max_soc_pct:
                 # Reduce grid import to exactly hit max
-                actual_grid_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+                actual_grid_kwh = max(
+                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
+                )
                 next_soc = config.max_soc_pct
                 return next_soc, actual_grid_kwh, 0.0
 
@@ -878,7 +912,10 @@ class DPPlanner:
                 soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
                 remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
                 if remaining_headroom > 0:
-                    grid_charge_kwh = min(effective_charge_kwh, (remaining_headroom / 100.0) * capacity_kwh)
+                    grid_charge_kwh = min(
+                        effective_charge_kwh,
+                        (remaining_headroom / 100.0) * capacity_kwh,
+                    )
                 else:
                     grid_charge_kwh = 0.0
             else:
@@ -891,7 +928,9 @@ class DPPlanner:
             next_soc = soc_pct + delta_soc
             # Clip to max SOC
             if next_soc > config.max_soc_pct:
-                actual_grid_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+                actual_grid_kwh = max(
+                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
+                )
                 next_soc = config.max_soc_pct
                 return next_soc, actual_grid_kwh, 0.0
 
@@ -920,7 +959,9 @@ class DPPlanner:
             # Clip to min SOC
             if next_soc < config.min_soc_pct:
                 # Reduce export to exactly hit min
-                available_kwh = max(0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh)
+                available_kwh = max(
+                    0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
+                )
                 actual_export = available_kwh * config.discharge_efficiency
                 next_soc = config.min_soc_pct
                 return next_soc, 0.0, actual_export

@@ -492,3 +492,30 @@ class CoordinatorData:
     Populated by PlannerComparator each cycle.
     See PlannerComparisonRecord for full schema.
     """
+
+    # ---------------------------------------------------------------------------
+    # --- Active-mode runtime status (Phase F #403) ---
+    # ---------------------------------------------------------------------------
+    # When optimizer_control_mode == "active", these fields track apply status.
+    # In shadow/assist modes, these remain at defaults.
+
+    optimizer_runtime_mode: str = "shadow"
+    """Current optimizer control mode: "shadow", "assist", or "active"."""
+
+    optimizer_last_apply_status: str = "none"
+    """Last apply attempt status: "none", "success", "fallback", "blocked"."""
+
+    optimizer_safety_block_reason: str = ""
+    """Reason for safety gate block (empty if not blocked)."""
+
+    optimizer_fallback_count: int = 0
+    """Consecutive fallback count (triggers cooldown at OPTIMIZER_COOLDOWN_CYCLES)."""
+
+    optimizer_active_applied_at: str | None = None
+    """ISO timestamp of last successful active-mode apply."""
+
+    optimizer_apply_plan: dict[str, Any] | None = None
+    """Apply plan derived from optimizer decisions for active mode execution.
+    Set by _handle_active_mode_apply when active mode passes safety gate.
+    Contains: action, battery_mode, target_soc, fallback_to_legacy, reason.
+    """

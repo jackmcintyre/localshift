@@ -178,9 +178,13 @@ DEFAULT_BATTERY_TARGET = 100  # %
 DEFAULT_DEMAND_WINDOW_START = "15:00:00"
 DEFAULT_DEMAND_WINDOW_END = "21:00:00"
 DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4  # hours
-DEFAULT_LOAD_WEIGHT_RECENT = 0.67  # 2/3 weighting to recent usage (legacy, kept for compatibility)
+DEFAULT_LOAD_WEIGHT_RECENT = (
+    0.67  # 2/3 weighting to recent usage (legacy, kept for compatibility)
+)
 DEFAULT_LOAD_DECAY_FACTOR = 0.8  # 20% reduction per hour for exponential decay
-DEFAULT_LOAD_INITIAL_WEIGHT = 0.8  # Initial weight for current hour (80% recent, 20% historical)
+DEFAULT_LOAD_INITIAL_WEIGHT = (
+    0.8  # Initial weight for current hour (80% recent, 20% historical)
+)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
@@ -509,5 +513,18 @@ DEFAULT_OPTIMIZER_ENABLED = False
 DEFAULT_OPTIMIZER_CONTROL_MODE = "shadow"
 """Always start in shadow mode; never silently assume active control."""
 
-OPTIMIZER_CONTROL_MODES = ["shadow", "assist"]
-"""Valid optimizer control mode values for this release (active = future)."""
+OPTIMIZER_CONTROL_MODES = ["shadow", "assist", "active"]
+"""Valid optimizer control mode values."""
+
+CONF_OPTIMIZER_ACTIVE_MIN_SHADOW_SUCCESS_RATE = (
+    "optimizer_active_min_shadow_success_rate"
+)
+"""Config key for minimum shadow success rate before enabling active mode."""
+DEFAULT_OPTIMIZER_ACTIVE_MIN_SHADOW_SUCCESS_RATE = 0.0
+"""Default: require no minimum success rate (0.0 = disabled check)."""
+
+OPTIMIZER_COOLDOWN_CYCLES = 3
+"""Number of cycles to stay in fallback cooldown after repeated failures."""
+
+OPTIMIZER_FORECAST_FRESHNESS_MINUTES = 30
+"""Maximum forecast age in minutes for active mode admission."""

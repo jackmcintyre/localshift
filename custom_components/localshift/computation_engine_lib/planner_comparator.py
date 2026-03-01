@@ -189,10 +189,14 @@ class PlannerComparisonRecord:
             "mismatch_count": self.mismatch_count,
             "mismatch_by_type": self.mismatch_by_type,
             "legacy_projected_import_kwh": round(self.legacy_projected_import_kwh, 3),
-            "optimizer_projected_import_kwh": round(self.optimizer_projected_import_kwh, 3),
+            "optimizer_projected_import_kwh": round(
+                self.optimizer_projected_import_kwh, 3
+            ),
             "import_kwh_delta": round(self.import_kwh_delta, 3),
             "legacy_projected_export_kwh": round(self.legacy_projected_export_kwh, 3),
-            "optimizer_projected_export_kwh": round(self.optimizer_projected_export_kwh, 3),
+            "optimizer_projected_export_kwh": round(
+                self.optimizer_projected_export_kwh, 3
+            ),
             "export_kwh_delta": round(self.export_kwh_delta, 3),
             "legacy_projected_net_cost": round(self.legacy_projected_net_cost, 4),
             "optimizer_projected_net_cost": round(self.optimizer_projected_net_cost, 4),
@@ -228,10 +232,10 @@ COST_DIFF_THRESHOLD_DOLLARS = 0.01
 SIGNIFICANCE_WEIGHT_COST_IMPACT = 1.0
 SIGNIFICANCE_WEIGHT_ACTION_SEVERITY = {
     # Higher weight = more significant mismatch
-    "charge_grid_boost": 2.0,      # Expensive action, high impact
-    "export_proactive": 1.5,       # Medium impact
-    "charge_grid_normal": 1.2,     # Normal impact
-    "hold": 0.5,                   # Low impact
+    "charge_grid_boost": 2.0,  # Expensive action, high impact
+    "export_proactive": 1.5,  # Medium impact
+    "charge_grid_normal": 1.2,  # Normal impact
+    "hold": 0.5,  # Low impact
 }
 
 
@@ -307,7 +311,9 @@ class PlannerComparator:
                 demand_window_target_soc_pct=demand_window_target_soc_pct,
             )
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("PlannerComparator.compare() failed for cycle %s: %s", cycle_id, exc)
+            _LOGGER.error(
+                "PlannerComparator.compare() failed for cycle %s: %s", cycle_id, exc
+            )
             record.comparison_succeeded = False
             record.error_message = str(exc)
 
@@ -344,11 +350,15 @@ class PlannerComparator:
 
         record.legacy_projected_import_kwh = legacy_projected_import_kwh
         record.optimizer_projected_import_kwh = optimizer_projected_import_kwh
-        record.import_kwh_delta = optimizer_projected_import_kwh - legacy_projected_import_kwh
+        record.import_kwh_delta = (
+            optimizer_projected_import_kwh - legacy_projected_import_kwh
+        )
 
         record.legacy_projected_export_kwh = legacy_projected_export_kwh
         record.optimizer_projected_export_kwh = optimizer_projected_export_kwh
-        record.export_kwh_delta = optimizer_projected_export_kwh - legacy_projected_export_kwh
+        record.export_kwh_delta = (
+            optimizer_projected_export_kwh - legacy_projected_export_kwh
+        )
 
         # --- Slot-level comparison ---
         mismatches: list[SlotMismatch] = []
@@ -419,7 +429,9 @@ class PlannerComparator:
             legacy_soc = legacy_slot.get("predicted_soc")
             optimizer_soc = None
             if idx < len(optimizer_decisions):
-                optimizer_soc = getattr(optimizer_decisions[idx], "predicted_soc_pct", None)
+                optimizer_soc = getattr(
+                    optimizer_decisions[idx], "predicted_soc_pct", None
+                )
 
             try:
                 legacy_soc_f = float(legacy_soc) if legacy_soc is not None else None
@@ -427,7 +439,9 @@ class PlannerComparator:
                 legacy_soc_f = None
 
             try:
-                optimizer_soc_f = float(optimizer_soc) if optimizer_soc is not None else None
+                optimizer_soc_f = (
+                    float(optimizer_soc) if optimizer_soc is not None else None
+                )
             except (TypeError, ValueError):
                 optimizer_soc_f = None
 
@@ -460,7 +474,11 @@ class PlannerComparator:
                 break
 
         legacy_slot = legacy_slots[entry_idx] if legacy_slots else {}
-        opt_decision = optimizer_decisions[entry_idx] if entry_idx < len(optimizer_decisions) else None
+        opt_decision = (
+            optimizer_decisions[entry_idx]
+            if entry_idx < len(optimizer_decisions)
+            else None
+        )
 
         legacy_action = "hold"
         if legacy_slot.get("grid_charge_boost"):
@@ -472,12 +490,13 @@ class PlannerComparator:
 
         optimizer_action = getattr(opt_decision, "action", None)
         optimizer_action_str = (
-            optimizer_action.value if hasattr(optimizer_action, "value") else str(optimizer_action)
+            optimizer_action.value
+            if hasattr(optimizer_action, "value")
+            else str(optimizer_action)
         )
 
-        timestamp_iso = (
-            legacy_slot.get("timestamp_iso", "")
-            or getattr(opt_decision, "timestamp_iso", "")
+        timestamp_iso = legacy_slot.get("timestamp_iso", "") or getattr(
+            opt_decision, "timestamp_iso", ""
         )
         slot_minutes = legacy_slot.get("slot_interval_minutes", 30)
 
@@ -489,9 +508,13 @@ class PlannerComparator:
             legacy_action=legacy_action,
             optimizer_action=optimizer_action_str,
             legacy_import_kwh=float(legacy_slot.get("grid_import_kwh", 0.0) or 0.0),
-            optimizer_import_kwh=float(getattr(opt_decision, "grid_import_kwh", 0.0) or 0.0),
+            optimizer_import_kwh=float(
+                getattr(opt_decision, "grid_import_kwh", 0.0) or 0.0
+            ),
             legacy_export_kwh=float(legacy_slot.get("grid_export_kwh", 0.0) or 0.0),
-            optimizer_export_kwh=float(getattr(opt_decision, "grid_export_kwh", 0.0) or 0.0),
+            optimizer_export_kwh=float(
+                getattr(opt_decision, "grid_export_kwh", 0.0) or 0.0
+            ),
             reason_detail=(
                 f"Demand-window target attainment differs: "
                 f"legacy_meets={legacy_meets_target}, optimizer_meets={optimizer_meets_target}"
@@ -525,7 +548,9 @@ class PlannerComparator:
 
         optimizer_action = getattr(opt_decision, "action", None)
         optimizer_action_str = (
-            optimizer_action.value if hasattr(optimizer_action, "value") else str(optimizer_action)
+            optimizer_action.value
+            if hasattr(optimizer_action, "value")
+            else str(optimizer_action)
         )
 
         # Extract quantities
@@ -537,12 +562,15 @@ class PlannerComparator:
         # Compute per-slot net costs (approximate)
         buy_price = legacy_slot.get("buy_price", 0.0)
         sell_price = legacy_slot.get("sell_price", 0.0)
-        legacy_net_cost = (legacy_import * buy_price) - (legacy_export * max(0, sell_price))
-        optimizer_net_cost = (optimizer_import * buy_price) - (optimizer_export * max(0, sell_price))
+        legacy_net_cost = (legacy_import * buy_price) - (
+            legacy_export * max(0, sell_price)
+        )
+        optimizer_net_cost = (optimizer_import * buy_price) - (
+            optimizer_export * max(0, sell_price)
+        )
 
-        timestamp_iso = (
-            legacy_slot.get("timestamp_iso", "")
-            or getattr(opt_decision, "timestamp_iso", "")
+        timestamp_iso = legacy_slot.get("timestamp_iso", "") or getattr(
+            opt_decision, "timestamp_iso", ""
         )
         slot_minutes = legacy_slot.get("slot_interval_minutes", 30)
 
@@ -553,7 +581,11 @@ class PlannerComparator:
         cost_diff = abs(legacy_net_cost - optimizer_net_cost)
 
         # No mismatch if all quantities match and actions are the same
-        if not action_differs and import_diff <= QUANTITY_DIFF_THRESHOLD_KWH and export_diff <= QUANTITY_DIFF_THRESHOLD_KWH:
+        if (
+            not action_differs
+            and import_diff <= QUANTITY_DIFF_THRESHOLD_KWH
+            and export_diff <= QUANTITY_DIFF_THRESHOLD_KWH
+        ):
             return None
 
         # Classify mismatch type (priority order)
@@ -616,16 +648,25 @@ class PlannerComparator:
         cost_impact = abs(mismatch.optimizer_net_cost - mismatch.legacy_net_cost)
 
         # Get action severity weights (use the more severe of the two actions)
-        legacy_weight = SIGNIFICANCE_WEIGHT_ACTION_SEVERITY.get(mismatch.legacy_action, 1.0)
-        optimizer_weight = SIGNIFICANCE_WEIGHT_ACTION_SEVERITY.get(mismatch.optimizer_action, 1.0)
+        legacy_weight = SIGNIFICANCE_WEIGHT_ACTION_SEVERITY.get(
+            mismatch.legacy_action, 1.0
+        )
+        optimizer_weight = SIGNIFICANCE_WEIGHT_ACTION_SEVERITY.get(
+            mismatch.optimizer_action, 1.0
+        )
         action_severity = max(legacy_weight, optimizer_weight)
 
         # Quantity delta
-        qty_delta = abs(mismatch.legacy_import_kwh - mismatch.optimizer_import_kwh) + \
-                   abs(mismatch.legacy_export_kwh - mismatch.optimizer_export_kwh)
+        qty_delta = abs(
+            mismatch.legacy_import_kwh - mismatch.optimizer_import_kwh
+        ) + abs(mismatch.legacy_export_kwh - mismatch.optimizer_export_kwh)
 
         # Combined score
-        score = (cost_impact * SIGNIFICANCE_WEIGHT_COST_IMPACT) + (action_severity * 0.1) + (qty_delta * 0.05)
+        score = (
+            (cost_impact * SIGNIFICANCE_WEIGHT_COST_IMPACT)
+            + (action_severity * 0.1)
+            + (qty_delta * 0.05)
+        )
         return score
 
     def rank_mismatches(self, mismatches: list[SlotMismatch]) -> list[SlotMismatch]:
@@ -666,12 +707,16 @@ class PlannerComparator:
             total_significance += self.compute_significance_score(m)
 
         # Find most significant type by count
-        most_significant_type = max(by_type.keys(), key=lambda k: len(by_type[k])) if by_type else None
+        most_significant_type = (
+            max(by_type.keys(), key=lambda k: len(by_type[k])) if by_type else None
+        )
 
         return {
             "total_mismatches": len(mismatches),
             "total_cost_impact": round(total_cost_impact, 4),
             "by_type": {k: len(v) for k, v in by_type.items()},
             "most_significant_type": most_significant_type,
-            "avg_significance_score": round(total_significance / len(mismatches), 4) if mismatches else 0.0,
+            "avg_significance_score": round(total_significance / len(mismatches), 4)
+            if mismatches
+            else 0.0,
         }

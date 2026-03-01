@@ -412,7 +412,8 @@ def test_rollout_constants_defaults():
     assert DEFAULT_OPTIMIZER_ENABLED is False
     assert DEFAULT_OPTIMIZER_CONTROL_MODE == "shadow"
     assert "shadow" in OPTIMIZER_CONTROL_MODES
-    assert "active" not in OPTIMIZER_CONTROL_MODES  # not yet released
+    assert "assist" in OPTIMIZER_CONTROL_MODES
+    assert "active" in OPTIMIZER_CONTROL_MODES  # Phase F release
 
 
 def test_rollout_constants_keys():
@@ -467,7 +468,9 @@ def test_dp_planner_determinism_replay(default_config, multi_slots):
     # All results should be identical
     first = results[0]
     for i, r in enumerate(results[1:], start=1):
-        assert r == first, f"Run {i} differs from run 0 - optimizer is not deterministic"
+        assert r == first, (
+            f"Run {i} differs from run 0 - optimizer is not deterministic"
+        )
 
 
 def test_dp_planner_runtime_budget(default_config, multi_slots):
@@ -496,7 +499,7 @@ def test_dp_planner_runtime_budget(default_config, multi_slots):
     # Sort and check p95 (19th of 20 values)
     times.sort()
     p95 = times[19]  # 95th percentile index for 20 samples
-    assert p95 <= 0.200, f"p95 solve time {p95*1000:.1f}ms exceeds 200ms budget"
+    assert p95 <= 0.200, f"p95 solve time {p95 * 1000:.1f}ms exceeds 200ms budget"
 
 
 def test_shadow_mode_no_actuation():

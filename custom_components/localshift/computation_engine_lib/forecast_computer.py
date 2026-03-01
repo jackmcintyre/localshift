@@ -198,7 +198,7 @@ class ForecastComputer:
                 # Calculate decayed weight: initial_weight * (decay_factor ^ distance)
                 # e.g., distance=1: 0.8 * 0.8 = 0.64, distance=2: 0.8 * 0.64 = 0.51
                 live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
-                    DEFAULT_LOAD_DECAY_FACTOR ** hour_distance
+                    DEFAULT_LOAD_DECAY_FACTOR**hour_distance
                 )
                 historical_weight = 1.0 - live_weight
 

@@ -232,7 +232,9 @@ class ComputationEngine:
             recent_load_kw = self._recent_load_1hr_kw
 
             # Simulate to DW start (not through DW - that's solar_can_reach_target_in_dw)
-            sim_end = self._forecast_computer._next_demand_window_start_dt(now_dt, dw_start_time)
+            sim_end = self._forecast_computer._next_demand_window_start_dt(
+                now_dt, dw_start_time
+            )
 
             soc_at_end, max_soc, can_reach_solar_only, _ = (
                 self._forecast_computer._simulate_future_soc_with_solar_only(
@@ -995,8 +997,72 @@ class ComputationEngine:
         return None
 
     def _compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
-        """Compute active battery mode."""
+        """Compute active battery mode.
+
+        Phase F (#403): In active mode, check if optimizer apply plan is ready
+        and use its recommendation instead of running the legacy logic.
+        """
+        # Check if active mode is enabled and optimizer has an apply plan ready
+        if self._check_active_mode_optimizer_override(data):
+            _LOGGER.info("Active mode: using optimizer decision for battery mode")
+            return  # active_mode already set by active mode handler
+
+        # Fall back to legacy mode decision
         self._mode_decision.compute_active_mode(data, now_dt)
+
+    def _check_active_mode_optimizer_override(self, data: CoordinatorData) -> bool:
+        """Check if active mode should override legacy with optimizer decision.
+
+        Phase F (#403): When control_mode is "active" and the optimizer apply
+        plan is ready, use the optimizer's battery mode recommendation.
+
+        Args:
+            data: CoordinatorData instance
+
+        Returns:
+            True if active mode override was applied, False otherwise
+        """
+        # Get optimizer control mode from data (set by coordinator)
+        runtime_mode = getattr(data, "optimizer_runtime_mode", "shadow")
+        if runtime_mode != "active":
+            return False
+
+        # Check if optimizer apply plan is ready
+        apply_plan = getattr(data, "optimizer_apply_plan", None)
+        if not apply_plan:
+            _LOGGER.debug("Active mode: no apply plan available, using legacy")
+            return False
+
+        # Check if apply plan indicates fallback needed
+        if apply_plan.get("fallback_to_legacy", True):
+            _LOGGER.debug("Active mode: apply plan requests fallback to legacy")
+            return False
+
+        # Get the optimizer's recommended battery mode
+        battery_mode_str = apply_plan.get("battery_mode")
+        if not battery_mode_str:
+            _LOGGER.warning("Active mode: no battery_mode in apply plan, using legacy")
+            return False
+
+        # Map string back to BatteryMode enum
+        try:
+            optimizer_mode = _BatteryMode(battery_mode_str)
+        except ValueError:
+            _LOGGER.warning(
+                "Active mode: invalid battery_mode '%s', using legacy",
+                battery_mode_str,
+            )
+            return False
+
+        # Set the active mode to optimizer's recommendation
+        data.active_mode = optimizer_mode
+        _LOGGER.info(
+            "Active mode: optimizer selected %s (action=%s)",
+            optimizer_mode.value,
+            apply_plan.get("action"),
+        )
+
+        return True
 
     def _add_to_decision_log(
         self, data: CoordinatorData, now_dt: datetime, mode_change: bool

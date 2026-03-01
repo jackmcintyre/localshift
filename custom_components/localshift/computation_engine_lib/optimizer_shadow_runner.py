@@ -1,8 +1,8 @@
 """
 optimizer_shadow_runner.py — Dual-run entrypoint for shadow-mode optimizer.
 
-Phase: MVP scaffolding (#403 Phase 1).
-Status: SHADOW ONLY — does not affect runtime control behavior.
+Phase F (#403): Active-control pilot with safety gates.
+Status: Supports shadow, assist, and active modes.
 
 This module is the single entry point called by the coordinator each compute
 cycle AFTER the legacy planner has finished. It:
@@ -10,6 +10,7 @@ cycle AFTER the legacy planner has finished. It:
   2. Runs DPPlanner.plan() (shadow — no side effects).
   3. Runs PlannerComparator.compare() to produce a side-by-side diff.
   4. Writes all results back into CoordinatorData shadow fields.
+  5. (Phase F) In active mode: applies optimizer decision via safety gate.
 
 The coordinator calls run_shadow_optimizer(data, config_options) and that
 is the ONLY coupling point. All optimizer internals stay isolated here.
@@ -20,7 +21,8 @@ from __future__ import annotations
 import logging
 import math
 import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .optimizer_dp import (
@@ -129,7 +131,9 @@ def _run(
     slots, parity_info = _build_slot_contexts(data)
 
     if not slots:
-        _LOGGER.debug("Shadow optimizer: no slots available, skipping cycle %s", cycle_id)
+        _LOGGER.debug(
+            "Shadow optimizer: no slots available, skipping cycle %s", cycle_id
+        )
         data.optimizer_shadow_summary = {
             "enabled": True,
             "shadow_mode": True,
@@ -183,9 +187,7 @@ def _run(
 
     # 3. Write shadow result fields
     data.optimizer_shadow_result = _serialize_result(result)
-    data.optimizer_shadow_decisions = [
-        _serialize_decision(d) for d in result.decisions
-    ]
+    data.optimizer_shadow_decisions = [_serialize_decision(d) for d in result.decisions]
     data.optimizer_shadow_summary = _build_summary(
         result,
         cycle_id,
@@ -206,7 +208,9 @@ def _run(
     )
 
     # 4. Run comparison against legacy planner
-    legacy_import_kwh, legacy_export_kwh = _compute_legacy_energy_totals(data.daily_forecast)
+    legacy_import_kwh, legacy_export_kwh = _compute_legacy_energy_totals(
+        data.daily_forecast
+    )
 
     comparison_record = comparator.compare(
         cycle_id=cycle_id,
@@ -256,9 +260,7 @@ def _build_optimizer_config(
     )
 
     # User-configurable target SOC for demand window
-    target_soc = float(
-        config_options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-    )
+    target_soc = float(config_options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET))
 
     # User-configurable minimum SOC (floor for discharge modes)
     min_soc = float(
@@ -268,27 +270,22 @@ def _build_optimizer_config(
     return OptimizerConfig(
         # --- Battery hardware constraints ---
         battery_capacity_kwh=BATTERY_CAPACITY_KWH,
-        charge_rate_kw=CHARGE_RATE_GRID_KW,          # 3.3 kW normal grid charge
-        boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,   # 5.0 kW boost charge
-        discharge_rate_kw=CHARGE_RATE_BOOST_KW,      # 5.0 kW (Powerwall symmetric)
-
+        charge_rate_kw=CHARGE_RATE_GRID_KW,  # 3.3 kW normal grid charge
+        boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW boost charge
+        discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
         # --- Efficiency defaults (Powerwall typical) ---
         # TODO (#403 Phase C): Consider exposing via config if needed
         charge_efficiency=0.95,
         discharge_efficiency=0.95,
-
         # --- SOC constraints ---
-        min_soc_pct=min_soc,                         # User-configured minimum
-        max_soc_pct=100.0,                           # Hard ceiling
-
+        min_soc_pct=min_soc,  # User-configured minimum
+        max_soc_pct=100.0,  # Hard ceiling
         # --- Demand window target ---
-        demand_window_target_soc_pct=target_soc,     # User-configured target
-
+        demand_window_target_soc_pct=target_soc,  # User-configured target
         # --- Objective weights (conservative defaults) ---
         # TODO (#403 Phase C): Expose for tuning if comparison analytics suggest
         target_shortfall_penalty_per_pct=1.0,
         cycle_penalty_per_kwh=0.005,
-
         # --- SOC discretization ---
         soc_bins=50,
     )
@@ -349,7 +346,9 @@ def _build_slot_contexts(data: Any) -> tuple[list[SlotContext], dict[str, Any]]:
             populated_fields += 1
 
         # Track sell_price completeness
-        sell_price, defaulted = _get_slot_field(slot, "sell_price", "feed_in_price", 0.0)
+        sell_price, defaulted = _get_slot_field(
+            slot, "sell_price", "feed_in_price", 0.0
+        )
         if defaulted:
             defaulted_fields["sell_price"] = defaulted_fields.get("sell_price", 0) + 1
         total_fields += 1
@@ -365,9 +364,13 @@ def _build_slot_contexts(data: Any) -> tuple[list[SlotContext], dict[str, Any]]:
             populated_fields += 1
 
         # Track consumption_kwh completeness
-        consumption_kwh, defaulted = _get_slot_field(slot, "consumption_kwh", "estimated_consumption_kwh", 0.0)
+        consumption_kwh, defaulted = _get_slot_field(
+            slot, "consumption_kwh", "estimated_consumption_kwh", 0.0
+        )
         if defaulted:
-            defaulted_fields["consumption_kwh"] = defaulted_fields.get("consumption_kwh", 0) + 1
+            defaulted_fields["consumption_kwh"] = (
+                defaulted_fields.get("consumption_kwh", 0) + 1
+            )
         total_fields += 1
         if not defaulted:
             populated_fields += 1
@@ -387,7 +390,9 @@ def _build_slot_contexts(data: Any) -> tuple[list[SlotContext], dict[str, Any]]:
         contexts.append(ctx)
 
     # Calculate completeness percentage
-    completeness_pct = (populated_fields / total_fields * 100) if total_fields > 0 else 0.0
+    completeness_pct = (
+        (populated_fields / total_fields * 100) if total_fields > 0 else 0.0
+    )
 
     parity_info = {
         "total_slots": len(contexts),
@@ -464,7 +469,9 @@ def _normalize_initial_soc(
     return soc, info
 
 
-def _compute_legacy_energy_totals(legacy_slots: list[dict[str, Any]]) -> tuple[float, float]:
+def _compute_legacy_energy_totals(
+    legacy_slots: list[dict[str, Any]],
+) -> tuple[float, float]:
     """Compute total legacy import/export kWh from forecast slot payload."""
     total_import = 0.0
     total_export = 0.0
@@ -565,8 +572,12 @@ def _serialize_decision(decision: Any) -> dict[str, Any]:
         "slot_index": decision.slot_index,
         "timestamp_iso": decision.timestamp_iso,
         "slot_interval_minutes": decision.slot_interval_minutes,
-        "action": decision.action.value if hasattr(decision.action, "value") else str(decision.action),
-        "reason_code": decision.reason_code.value if hasattr(decision.reason_code, "value") else str(decision.reason_code),
+        "action": decision.action.value
+        if hasattr(decision.action, "value")
+        else str(decision.action),
+        "reason_code": decision.reason_code.value
+        if hasattr(decision.reason_code, "value")
+        else str(decision.reason_code),
         "objective_terms": {
             "import_cost": round(decision.objective_terms.import_cost, 4),
             "export_revenue": round(decision.objective_terms.export_revenue, 4),
@@ -636,3 +647,333 @@ def _build_summary(
 def _make_cycle_id() -> str:
     """Generate a short unique cycle identifier."""
     return uuid.uuid4().hex[:12]
+
+
+# ---------------------------------------------------------------------------
+# Phase F: Active-mode safety gate and apply path
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SafetyGateResult:
+    """Result of safety gate admission check."""
+
+    allowed: bool
+    """True if active-mode execution is permitted."""
+
+    block_reason: str | None = None
+    """Reason for block (None if allowed)."""
+
+    details: dict[str, Any] = field(default_factory=dict)
+    """Diagnostic details for logging."""
+
+
+class OptimizerSafetyGate:
+    """
+    Safety gate for active-mode optimizer execution.
+
+    Validates prerequisites before allowing optimizer decisions to drive runtime behavior.
+    All checks must pass for active-mode to proceed; any failure triggers fallback to legacy control.
+    """
+
+    def __init__(self, config_options: dict[str, Any]) -> None:
+        """Initialize safety gate with config options.
+
+        Args:
+            config_options: Integration options from config_entry.options
+        """
+        from ..const import (  # noqa: PLC0415
+            CONF_OPTIMIZER_CONTROL_MODE,
+            CONF_OPTIMIZER_ENABLED,
+            DEFAULT_OPTIMIZER_CONTROL_MODE,
+            DEFAULT_OPTIMIZER_ENABLED,
+            OPTIMIZER_COOLDOWN_CYCLES,
+            OPTIMIZER_FORECAST_FRESHNESS_MINUTES,
+        )
+
+        self._config_options = config_options
+        self._optimizer_enabled = config_options.get(
+            CONF_OPTIMIZER_ENABLED, DEFAULT_OPTIMIZER_ENABLED
+        )
+        self._control_mode = config_options.get(
+            CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
+        )
+        self._cooldown_cycles = OPTIMIZER_COOLDOWN_CYCLES
+        self._forecast_freshness_minutes = OPTIMIZER_FORECAST_FRESHNESS_MINUTES
+
+    def check_admission(
+        self,
+        data: Any,
+        optimizer_result: OptimizerResult | None,
+        alignment: dict[str, Any] | None,
+    ) -> SafetyGateResult:
+        """
+        Check all admission criteria for active-mode execution.
+
+        Args:
+            data: CoordinatorData instance
+            optimizer_result: Result from DPPlanner.plan()
+            alignment: Slot alignment validation result
+
+        Returns:
+            SafetyGateResult with allowed status and block reason
+        """
+        checks: list[dict[str, Any]] = []
+        details: dict[str, Any] = {}
+
+        # Check 1: Optimizer enabled
+        if not self._optimizer_enabled:
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="optimizer_disabled",
+                details={"enabled": False},
+            )
+        checks.append({"name": "optimizer_enabled", "passed": True})
+        details["optimizer_enabled"] = True
+
+        # Check 2: Control mode is active
+        if self._control_mode != "active":
+            return SafetyGateResult(
+                allowed=False,
+                block_reason=f"control_mode_not_active(mode={self._control_mode})",
+                details={"control_mode": self._control_mode},
+            )
+        checks.append({"name": "control_mode_active", "passed": True})
+        details["control_mode"] = "active"
+
+        # Check 3: Optimizer result exists
+        if optimizer_result is None:
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="optimizer_result_none",
+                details={"optimizer_result": None},
+            )
+        checks.append({"name": "optimizer_result_exists", "passed": True})
+
+        # Check 4: Optimizer solve succeeded
+        if not optimizer_result.success:
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="optimizer_solve_failed",
+                details={
+                    "success": False,
+                    "error": optimizer_result.error_message,
+                },
+            )
+        checks.append({"name": "solve_success", "passed": True})
+        details["solve_success"] = True
+
+        # Check 5: Slot alignment valid
+        if alignment and not alignment.get("valid", True):
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="slot_alignment_invalid",
+                details={"alignment_issues": alignment.get("issues", [])},
+            )
+        checks.append({"name": "slot_alignment_valid", "passed": True})
+        details["alignment_valid"] = alignment.get("valid", True) if alignment else None
+
+        # Check 5: Forecast freshness
+        forecast_age_minutes = self._get_forecast_age_minutes(data)
+        if (
+            forecast_age_minutes is not None
+            and forecast_age_minutes > self._forecast_freshness_minutes
+        ):
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="forecast_stale",
+                details={
+                    "age_minutes": forecast_age_minutes,
+                    "max_allowed_minutes": self._forecast_freshness_minutes,
+                },
+            )
+        checks.append({"name": "forecast_freshness", "passed": True})
+        details["forecast_age_minutes"] = forecast_age_minutes
+
+        details["forecast_freshness_max"] = self._forecast_freshness_minutes
+
+        # Check 6: Not in fallback cooldown
+        fallback_count = getattr(data, "optimizer_fallback_count", 0)
+        if fallback_count >= self._cooldown_cycles:
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="fallback_cooldown_active",
+                details={
+                    "fallback_count": fallback_count,
+                    "cooldown_threshold": self._cooldown_cycles,
+                },
+            )
+        checks.append({"name": "not_in_cooldown", "passed": True})
+        details["fallback_count"] = fallback_count
+        details["cooldown_cycles"] = self._cooldown_cycles
+
+        # Check 7: Has decisions for current slot
+        if not optimizer_result.decisions:
+            return SafetyGateResult(
+                allowed=False,
+                block_reason="no_decisions_available",
+                details={"decision_count": 0},
+            )
+        checks.append({"name": "has_decisions", "passed": True})
+        details["decision_count"] = len(optimizer_result.decisions)
+
+        # All checks passed
+        details["checks_passed"] = len(checks)
+        details["total_checks"] = len(checks)
+
+        return SafetyGateResult(
+            allowed=True,
+            block_reason=None,
+            details=details,
+        )
+
+    def _get_forecast_age_minutes(self, data: Any) -> float | None:
+        """Get the age of the forecast in minutes.
+
+        Args:
+            data: CoordinatorData instance
+
+        Returns:
+            Age in minutes, or None if not determinable
+        """
+        cycle_timestamp_str = getattr(data, "optimizer_shadow_summary", {}).get(
+            "cycle_timestamp_iso"
+        )
+        if not cycle_timestamp_str:
+            return None
+
+        try:
+            cycle_time = datetime.fromisoformat(
+                cycle_timestamp_str.replace("Z", "+00:00")
+            )
+            now = datetime.now(UTC)
+            age = now - cycle_time
+            return age.total_seconds() / 60.0
+        except (ValueError, TypeError):
+            return None
+
+
+# ---------------------------------------------------------------------------
+# Apply-path logic
+# ---------------------------------------------------------------------------
+
+
+def _derive_runtime_apply_plan(
+    decisions: list[Any],
+    current_slot_idx: int,
+    config: OptimizerConfig,
+) -> dict[str, Any]:
+    """
+    Derive the runtime apply plan from optimizer decisions for the current slot.
+
+    Maps PlannerAction to BatteryMode and extracts SOC targets.
+
+    Args:
+        decisions: List of PlannedSlotDecision objects
+        current_slot_idx: Index of the current slot (0 if unknown)
+        config: OptimizerConfig for target SOC values
+
+    Returns:
+        Dict with:
+            - action: PlannerAction value
+            - battery_mode: BatteryMode string for runtime
+            - target_soc: Target SOC percentage (or None)
+            - fallback_to_legacy: True if action cannot be applied
+    """
+    from ..const import BatteryMode  # noqa: PLC0415
+    from .optimizer_dp import PlannerAction  # noqa: PLC0415
+
+    if not decisions or current_slot_idx < 0 or current_slot_idx >= len(decisions):
+        return {
+            "action": "hold",
+            "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
+            "target_soc": None,
+            "fallback_to_legacy": True,
+            "reason": "no_valid_decision_for_current_slot",
+        }
+
+    decision = decisions[current_slot_idx]
+    action = decision.action
+
+    # Map PlannerAction to BatteryMode
+    if action == PlannerAction.HOLD:
+        return {
+            "action": action.value,
+            "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
+            "target_soc": None,
+            "fallback_to_legacy": False,
+            "reason": "optimizer_hold",
+        }
+
+    if action == PlannerAction.CHARGE_GRID_NORMAL:
+        return {
+            "action": action.value,
+            "battery_mode": BatteryMode.GRID_CHARGING.value,
+            "target_soc": config.demand_window_target_soc_pct,
+            "fallback_to_legacy": False,
+            "reason": "optimizer_charge_grid_normal",
+        }
+
+    if action == PlannerAction.CHARGE_GRID_BOOST:
+        return {
+            "action": action.value,
+            "battery_mode": BatteryMode.BOOST_CHARGING.value,
+            "target_soc": config.demand_window_target_soc_pct,
+            "fallback_to_legacy": False,
+            "reason": "optimizer_charge_grid_boost",
+        }
+
+    if action == PlannerAction.EXPORT_PROACTIVE:
+        return {
+            "action": action.value,
+            "battery_mode": BatteryMode.PROACTIVE_EXPORT.value,
+            "target_soc": None,
+            "fallback_to_legacy": False,
+            "reason": "optimizer_export_proactive",
+        }
+
+    # Unknown action - fall back to legacy
+    return {
+        "action": str(action),
+        "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
+        "target_soc": None,
+        "fallback_to_legacy": True,
+        "reason": f"unknown_action_{action}",
+    }
+
+
+def _find_current_slot_index(data: Any) -> int:
+    """
+    Find the index of the current slot in the optimizer decisions.
+
+    Args:
+        data: CoordinatorData instance
+
+    Returns:
+        Index of current slot, or 0 as fallback
+    """
+    now = datetime.now(UTC)
+
+    decisions = data.optimizer_shadow_decisions
+    if not decisions:
+        return 0
+
+    # Find the first slot where timestamp_iso is >= now
+    for idx, decision in enumerate(decisions):
+        timestamp_str = decision.get("timestamp_iso", "")
+        if not timestamp_str:
+            continue
+
+        try:
+            slot_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            slot_end = slot_time + timedelta(
+                minutes=decision.get("slot_interval_minutes", 30)
+            )
+
+            if slot_time <= now < slot_end:
+                return idx
+        except (ValueError, TypeError):
+            continue
+
+    # Default: use first slot
+    return 0

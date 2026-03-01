@@ -865,7 +865,8 @@ class StateMachine:
 
             mismatch_details = {
                 "operation_mode": data.operation_mode != expected_op,
-                "backup_reserve": abs((data.backup_reserve or 0) - expected_reserve) >= 1,
+                "backup_reserve": abs((data.backup_reserve or 0) - expected_reserve)
+                >= 1,
                 "grid_charging_allowed": actual_grid_charging != expected_grid_charging,
             }
 

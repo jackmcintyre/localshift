@@ -897,9 +897,7 @@ class LocalShiftCoordinator:
             )
 
         self._notify_listeners()
-        _LOGGER.info(
-            "Midnight reset: cost accumulators and target flag"
-        )
+        _LOGGER.info("Midnight reset: cost accumulators and target flag")
 
     @callback
     def _handle_daily_summary(self, now: datetime) -> None:
@@ -933,15 +931,26 @@ class LocalShiftCoordinator:
     def _run_shadow_optimizer(self) -> None:
         """Run the DP optimizer in shadow mode for comparison telemetry.
 
-        Phase 1 (Issue #403): Shadow mode only - populates optimizer_shadow_*
-        fields in CoordinatorData without affecting control decisions.
+        Phase F (#403): When control_mode is "active", also checks safety gate
+        and prepares apply plan for active-mode execution.
         """
-        from .computation_engine_lib.optimizer_shadow_runner import run_shadow_optimizer
+        from .computation_engine_lib.optimizer_shadow_runner import (
+            run_shadow_optimizer,
+        )
+        from .const import (
+            CONF_OPTIMIZER_CONTROL_MODE,
+            DEFAULT_OPTIMIZER_CONTROL_MODE,
+        )
 
         # Get optimizer config from options
         config_options = {
             "optimizer_enabled": self.get_option("optimizer_enabled", False),
+            CONF_OPTIMIZER_CONTROL_MODE: self.get_option(
+                CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
+            ),
         }
+
+        control_mode = config_options.get(CONF_OPTIMIZER_CONTROL_MODE, "shadow")
 
         # Run shadow optimizer - mutates data.optimizer_shadow_* fields in-place
         try:
@@ -951,10 +960,144 @@ class LocalShiftCoordinator:
             _LOGGER.warning("Shadow optimizer failed (non-blocking): %s", e)
             # Ensure summary reflects the error state
             self.data.optimizer_shadow_summary = {
-                "enabled": config_options["optimizer_enabled"],
+                "enabled": config_options.get("optimizer_enabled", False),
                 "success": False,
                 "error_message": str(e),
             }
+            # Reset active mode status on error
+            self.data.optimizer_runtime_mode = control_mode
+            self.data.optimizer_last_apply_status = "fallback"
+            self.data.optimizer_fallback_count = self.data.optimizer_fallback_count + 1
+            return
+
+        # Update runtime mode status
+        self.data.optimizer_runtime_mode = control_mode
+
+        # Phase F: Check safety gate and prepare apply plan for active mode
+        if control_mode == "active":
+            self._handle_active_mode_apply(config_options)
+
+    def _handle_active_mode_apply(self, config_options: dict) -> None:
+        """Handle active-mode optimizer apply path.
+
+        Phase F (#403): Checks safety gate and applies optimizer decision
+        to runtime control if all gates pass.
+
+        This runs synchronously after shadow optimizer completes. The actual
+        battery controller calls are deferred to maintain the async contract
+        with the state machine.
+        """
+        from .computation_engine_lib.optimizer_dp import OptimizerResult
+        from .computation_engine_lib.optimizer_shadow_runner import (
+            OptimizerConfig,
+            OptimizerSafetyGate,
+            _derive_runtime_apply_plan,
+            _find_current_slot_index,
+        )
+        from .const import (
+            BATTERY_CAPACITY_KWH,
+            CHARGE_RATE_BOOST_KW,
+            CHARGE_RATE_GRID_KW,
+            CONF_BATTERY_TARGET,
+            CONF_MINIMUM_TARGET_SOC,
+            DEFAULT_BATTERY_TARGET,
+            DEFAULT_MINIMUM_TARGET_SOC,
+        )
+
+        target_soc = float(self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET))
+        min_soc = float(
+            self.get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+
+        optimizer_config = OptimizerConfig(
+            battery_capacity_kwh=BATTERY_CAPACITY_KWH,
+            charge_rate_kw=CHARGE_RATE_GRID_KW,
+            boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,
+            discharge_rate_kw=CHARGE_RATE_BOOST_KW,
+            min_soc_pct=min_soc,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=target_soc,
+        )
+
+        # Build alignment info from shadow summary
+        alignment = None
+        if self.data.optimizer_shadow_summary:
+            alignment = {
+                "valid": self.data.optimizer_shadow_summary.get(
+                    "alignment_valid", True
+                ),
+                "issues": self.data.optimizer_shadow_summary.get(
+                    "alignment_issues", []
+                ),
+            }
+
+        # Check safety gate
+        safety_gate = OptimizerSafetyGate(config_options)
+
+        # Reconstruct OptimizerResult from shadow data
+        shadow_result = self.data.optimizer_shadow_result
+        if shadow_result:
+            optimizer_result = OptimizerResult(
+                success=shadow_result.get("success", False),
+                planner_version=shadow_result.get("planner_version", "unknown"),
+                solve_time_seconds=shadow_result.get("solve_time_seconds", 0.0),
+                total_slots=shadow_result.get("total_slots", 0),
+                states_explored=shadow_result.get("states_explored", 0),
+                projected_import_kwh=shadow_result.get("projected_import_kwh", 0.0),
+                projected_export_kwh=shadow_result.get("projected_export_kwh", 0.0),
+                projected_net_cost=shadow_result.get("projected_net_cost", 0.0),
+                terminal_shortfall_pct=shadow_result.get("terminal_shortfall_pct", 0.0),
+                error_message=shadow_result.get("error_message"),
+                reason_code_histogram=shadow_result.get("reason_code_histogram", {}),
+            )
+        else:
+            optimizer_result = None
+
+        gate_result = safety_gate.check_admission(
+            self.data, optimizer_result, alignment
+        )
+
+        if not gate_result.allowed:
+            _LOGGER.info(
+                "Active mode blocked by safety gate: %s - %s",
+                gate_result.block_reason,
+                gate_result.details,
+            )
+            self.data.optimizer_last_apply_status = "blocked"
+            self.data.optimizer_safety_block_reason = gate_result.block_reason or ""
+            # Increment fallback count on block (treat as failed attempt)
+            self.data.optimizer_fallback_count = self.data.optimizer_fallback_count + 1
+            return
+
+        # Safety gate passed - check if we have decisions to apply
+        if not self.data.optimizer_shadow_decisions:
+            _LOGGER.warning("Active mode: no shadow decisions available for apply")
+            self.data.optimizer_last_apply_status = "fallback"
+            self.data.optimizer_fallback_count = self.data.optimizer_fallback_count + 1
+            return
+
+        # Find current slot and derive apply plan
+        current_slot_idx = _find_current_slot_index(self.data)
+
+        apply_plan = _derive_runtime_apply_plan(
+            self.data.optimizer_shadow_decisions,
+            current_slot_idx,
+            optimizer_config,
+        )
+
+        # Store the apply plan for the state machine to execute
+        self.data.optimizer_apply_plan = apply_plan
+        self.data.optimizer_last_apply_status = "ready_to_apply"
+        self.data.optimizer_safety_block_reason = ""
+        # Reset fallback count on successful gate check
+        self.data.optimizer_fallback_count = 0
+
+        _LOGGER.info(
+            "Active mode ready: slot_idx=%d action=%s battery_mode=%s",
+            current_slot_idx,
+            apply_plan.get("action"),
+            apply_plan.get("battery_mode"),
+        )
 
     # ------------------------------------------------------------------
     # Cost tracking
