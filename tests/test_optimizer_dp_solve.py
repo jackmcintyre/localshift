@@ -128,6 +128,70 @@ def test_map_soc_to_bin_empty_grid():
     assert _map_soc_to_bin(50.0, []) == 0
 
 
+def test_transition_hold_at_soc_floor_emits_passive_grid_import(default_config):
+    slot = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T10:00:00",
+        slot_interval_minutes=30,
+        buy_price=0.30,
+        sell_price=0.08,
+        solar_kwh=0.0,
+        consumption_kwh=1.0,
+    )
+
+    next_soc, grid_import, grid_export = DPPlanner.transition(
+        soc_pct=default_config.min_soc_pct,
+        action=PlannerAction.HOLD,
+        slot=slot,
+        config=default_config,
+    )
+
+    assert next_soc == pytest.approx(default_config.min_soc_pct)
+    assert grid_import == pytest.approx(1.0)
+    assert grid_export == pytest.approx(0.0)
+
+    terms = DPPlanner.stage_cost(
+        action=PlannerAction.HOLD,
+        grid_import_kwh=grid_import,
+        grid_export_kwh=grid_export,
+        slot=slot,
+        config=default_config,
+    )
+    assert terms.import_cost == pytest.approx(slot.buy_price * grid_import)
+
+
+def test_transition_hold_at_soc_ceiling_emits_passive_grid_export(default_config):
+    slot = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T10:00:00",
+        slot_interval_minutes=30,
+        buy_price=0.12,
+        sell_price=0.10,
+        solar_kwh=1.2,
+        consumption_kwh=0.0,
+    )
+
+    next_soc, grid_import, grid_export = DPPlanner.transition(
+        soc_pct=default_config.max_soc_pct,
+        action=PlannerAction.HOLD,
+        slot=slot,
+        config=default_config,
+    )
+
+    assert next_soc == pytest.approx(default_config.max_soc_pct)
+    assert grid_import == pytest.approx(0.0)
+    assert grid_export == pytest.approx(1.2)
+
+    terms = DPPlanner.stage_cost(
+        action=PlannerAction.HOLD,
+        grid_import_kwh=grid_import,
+        grid_export_kwh=grid_export,
+        slot=slot,
+        config=default_config,
+    )
+    assert terms.export_revenue == pytest.approx(slot.sell_price * grid_export)
+
+
 # ---------------------------------------------------------------------------
 # DPPlanner core tests
 # ---------------------------------------------------------------------------
