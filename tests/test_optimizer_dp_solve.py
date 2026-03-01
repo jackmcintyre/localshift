@@ -284,7 +284,9 @@ def test_dp_planner_determinism_replay(default_config, multi_slots):
     # All results should be identical
     first = results[0]
     for i, r in enumerate(results[1:], start=1):
-        assert r == first, f"Run {i} differs from run 0 - optimizer is not deterministic"
+        assert r == first, (
+            f"Run {i} differs from run 0 - optimizer is not deterministic"
+        )
 
 
 def test_dp_planner_runtime_budget(default_config, multi_slots):
@@ -309,7 +311,7 @@ def test_dp_planner_runtime_budget(default_config, multi_slots):
     # Sort and check p95 (19th of 20 values)
     times.sort()
     p95 = times[19]  # 95th percentile index for 20 samples
-    assert p95 <= 0.200, f"p95 solve time {p95*1000:.1f}ms exceeds 200ms budget"
+    assert p95 <= 0.200, f"p95 solve time {p95 * 1000:.1f}ms exceeds 200ms budget"
 
 
 # ---------------------------------------------------------------------------
@@ -544,19 +546,36 @@ def test_dp_planner_projected_totals(default_config, multi_slots):
 # ---------------------------------------------------------------------------
 
 
-def test_dp_planner_states_explored(default_config, multi_slots):
+def test_dp_planner_states_explored():
     """States explored should be positive for non-empty input."""
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        soc_bins=20,
+        optimization_mode="arbitrage",
+    )
+    multi_slots = [
+        SlotContext(
+            slot_index=i,
+            timestamp_iso=f"2026-01-03T{(i // 2):02d}:{(i % 2) * 30:02d}:00",
+            slot_interval_minutes=30,
+            buy_price=0.10 + 0.01 * (i % 10),
+            sell_price=0.06,
+            solar_kwh=max(0.0, 2.5 - abs(i - 24) * 0.1),
+            consumption_kwh=0.35,
+        )
+        for i in range(48)
+    ]
     inputs = OptimizerInputs(
         cycle_id="states-test",
         initial_soc_pct=50.0,
         slots=multi_slots,
-        config=default_config,
+        config=config,
     )
     result = DPPlanner().plan(inputs)
     assert result.success
     assert result.states_explored > 0
-    # Should explore roughly n_slots * n_bins * n_actions states
-    expected_min = len(multi_slots) * default_config.soc_bins * 2  # At least 2 actions each
+    expected_min = len(multi_slots) * config.soc_bins * 2
     assert result.states_explored >= expected_min
 
 
@@ -568,7 +587,9 @@ def test_dp_planner_states_explored(default_config, multi_slots):
 def test_classify_reason_target_shortfall_uses_future_slots():
     """Grid charging before DW should be tagged shortfall risk when net future solar is insufficient."""
     planner = DPPlanner()
-    config = OptimizerConfig(battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0)
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
+    )
 
     slots = [
         SlotContext(
@@ -618,7 +639,9 @@ def test_classify_reason_target_shortfall_uses_future_slots():
 def test_classify_reason_cheap_import_when_target_can_be_met():
     """Cheap price should classify as CHEAP_IMPORT_WINDOW when shortfall risk test does not trigger."""
     planner = DPPlanner()
-    config = OptimizerConfig(battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0)
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
+    )
 
     slots = [
         SlotContext(

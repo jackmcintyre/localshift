@@ -4,7 +4,7 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **55 entities** grouped under a single "LocalShift" device:
+The integration creates **56 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
@@ -12,7 +12,7 @@ The integration creates **55 entities** grouped under a single "LocalShift" devi
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 11 | `switch` |
 | Numbers | 4 | `number` |
-| Selects | 1 | `select` |
+| Selects | 2 | `select` |
 | Buttons | 2 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
@@ -1180,6 +1180,33 @@ State: grid_charging
 ```
 
 **Use Case:** Manual control of battery mode. Select a mode to disable automation and apply that mode to the battery. Re-enable automation to return to automated control.
+
+---
+
+### 2. select.localshift_optimization_mode
+
+**Purpose:** Select optimizer objective strategy.
+
+Added in Issue #406 to allow runtime switching between self-consumption and arbitrage objectives.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `self_consumption` | Prioritize keeping battery energy for household load; only export when profitable versus retained value |
+| `arbitrage` | Prioritize buy-low/sell-high behavior across available forecast slots |
+
+**Behavior:**
+- Updates integration option `optimization_mode`
+- Triggers immediate recompute/evaluate cycle
+- Changes planner objective and action feasibility in both shadow and active modes
+
+**Example Data:**
+```
+State: self_consumption
+```
+
+**Use Case:** Tune optimizer behavior to match household strategy without editing YAML or restarting Home Assistant.
 
 ---
 

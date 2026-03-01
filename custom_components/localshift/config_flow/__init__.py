@@ -26,6 +26,7 @@ from ..const import (
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
+    CONF_OPTIMIZATION_MODE,
     CONF_OPTIMIZER_CONTROL_MODE,
     CONF_OPTIMIZER_ENABLED,
     CONF_PRICING_FEED_IN_FORECAST,
@@ -56,6 +57,7 @@ from ..const import (
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
+    DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_OPTIMIZER_CONTROL_MODE,
     DEFAULT_OPTIMIZER_ENABLED,
     DEFAULT_WEATHER_ENTITY,
@@ -397,6 +399,11 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     CONF_OPTIMIZER_CONTROL_MODE: current.get(
                         CONF_OPTIMIZER_CONTROL_MODE,
                         DEFAULT_OPTIMIZER_CONTROL_MODE,
+                    ),
+                    # Optimization mode (Issue #406)
+                    CONF_OPTIMIZATION_MODE: current.get(
+                        CONF_OPTIMIZATION_MODE,
+                        DEFAULT_OPTIMIZATION_MODE,
                     ),
                 },
                 notify_services,

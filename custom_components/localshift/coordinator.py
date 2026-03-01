@@ -999,14 +999,27 @@ class LocalShiftCoordinator:
             CHARGE_RATE_BOOST_KW,
             CHARGE_RATE_GRID_KW,
             CONF_BATTERY_TARGET,
+            CONF_EXPORT_PRICE_MARGIN,
             CONF_MINIMUM_TARGET_SOC,
+            CONF_OPTIMIZATION_MODE,
             DEFAULT_BATTERY_TARGET,
+            DEFAULT_EXPORT_PRICE_MARGIN,
             DEFAULT_MINIMUM_TARGET_SOC,
+            DEFAULT_OPTIMIZATION_MODE,
         )
 
         target_soc = float(self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET))
         min_soc = float(
             self.get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        effective_cheap_price = float(getattr(self.data, "effective_cheap_price", 0.10))
+        self_consumption_value_per_kwh = float(
+            getattr(self.data, "general_price", effective_cheap_price)
+        )
+        if self_consumption_value_per_kwh <= 0.0:
+            self_consumption_value_per_kwh = max(0.10, effective_cheap_price)
+        export_price_margin = float(
+            self.get_option(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
         )
 
         optimizer_config = OptimizerConfig(
@@ -1017,6 +1030,12 @@ class LocalShiftCoordinator:
             min_soc_pct=min_soc,
             max_soc_pct=100.0,
             demand_window_target_soc_pct=target_soc,
+            optimization_mode=str(
+                self.get_option(CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE)
+            ),
+            self_consumption_value_per_kwh=self_consumption_value_per_kwh,
+            effective_cheap_price=effective_cheap_price,
+            export_price_margin=export_price_margin,
         )
 
         # Build alignment info from shadow summary

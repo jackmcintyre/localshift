@@ -254,9 +254,13 @@ def _build_optimizer_config(
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
         CONF_BATTERY_TARGET,
+        CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
+        CONF_OPTIMIZATION_MODE,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
+        DEFAULT_OPTIMIZATION_MODE,
     )
 
     # User-configurable target SOC for demand window
@@ -265,6 +269,21 @@ def _build_optimizer_config(
     # User-configurable minimum SOC (floor for discharge modes)
     min_soc = float(
         config_options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+    )
+
+    optimization_mode = str(
+        config_options.get(CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE)
+    )
+
+    effective_cheap_price = float(getattr(data, "effective_cheap_price", 0.10))
+    self_consumption_value_per_kwh = float(
+        getattr(data, "general_price", effective_cheap_price)
+    )
+    if self_consumption_value_per_kwh <= 0.0:
+        self_consumption_value_per_kwh = max(0.10, effective_cheap_price)
+
+    export_price_margin = float(
+        config_options.get(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
     )
 
     return OptimizerConfig(
@@ -288,6 +307,11 @@ def _build_optimizer_config(
         cycle_penalty_per_kwh=0.005,
         # --- SOC discretization ---
         soc_bins=50,
+        # --- Optimization mode ---
+        optimization_mode=optimization_mode,
+        self_consumption_value_per_kwh=self_consumption_value_per_kwh,
+        effective_cheap_price=effective_cheap_price,
+        export_price_margin=export_price_margin,
     )
 
 
