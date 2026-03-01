@@ -965,14 +965,10 @@ views:
 
             | :--- | ---: | :--- | :--- | ---: | ---: |
 
-            {% for d in decisions[:24] %}
+            {% for d in decisions %}
             | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(20) }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
             
             {% endfor %}
-
-            {% if decisions | length > 24 %}
-            *(showing first 24 of {{ decisions | length }} slots)*
-            {% endif %}
 
             {% endif %}
 
