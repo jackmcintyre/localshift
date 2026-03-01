@@ -253,8 +253,10 @@ def _build_optimizer_config(
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
+        CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
         CONF_MINIMUM_TARGET_SOC,
+        DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_MINIMUM_TARGET_SOC,
     )
@@ -265,6 +267,11 @@ def _build_optimizer_config(
     # User-configurable minimum SOC (floor for discharge modes)
     min_soc = float(
         config_options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+    )
+
+    # Allow reaching target during DW via solar (instead of by DW start)
+    allow_dw_entry_under_target = config_options.get(
+        CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
     )
 
     return OptimizerConfig(
@@ -282,6 +289,7 @@ def _build_optimizer_config(
         max_soc_pct=100.0,  # Hard ceiling
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
+        allow_dw_entry_under_target=allow_dw_entry_under_target,
         # --- Objective weights (conservative defaults) ---
         # TODO (#403 Phase C): Expose for tuning if comparison analytics suggest
         target_shortfall_penalty_per_pct=1.0,

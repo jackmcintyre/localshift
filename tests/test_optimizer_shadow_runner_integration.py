@@ -133,6 +133,23 @@ class TestBuildOptimizerConfig:
         assert config.target_shortfall_penalty_per_pct == 1.0
         assert config.cycle_penalty_per_kwh == 0.005
 
+    def test_config_uses_default_allow_dw_entry_under_target(
+        self, mock_coordinator_data
+    ):
+        """Verify allow_dw_entry_under_target defaults to False."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+        assert config.allow_dw_entry_under_target is False
+
+    def test_config_maps_allow_dw_entry_under_target_override(
+        self, mock_coordinator_data
+    ):
+        """Verify allow_dw_entry_under_target is mapped from options."""
+        config = _build_optimizer_config(
+            mock_coordinator_data,
+            {"allow_dw_entry_under_target": True},
+        )
+        assert config.allow_dw_entry_under_target is True
+
 
 # ---------------------------------------------------------------------------
 # Test: Slot context parity

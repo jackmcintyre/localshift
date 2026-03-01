@@ -176,6 +176,9 @@ class OptimizerConfig:
     demand_window_target_soc_pct: float = 80.0
     """Required SOC (%) at demand window entry."""
 
+    allow_dw_entry_under_target: bool = False
+    """If True, allow reaching target during DW via solar (instead of by DW start)."""
+
     # --- Objective weights ---
     target_shortfall_penalty_per_pct: float = 1.0
     """Penalty applied per % SOC below target at demand-window entry."""
@@ -531,12 +534,31 @@ class DPPlanner:
         soc_grid = _build_soc_grid(config)
         n_bins = len(soc_grid)
 
-        # Find demand window entry slot (if any)
+        # Find demand window entry and end slots (if any)
         demand_window_entry_idx = None
+        demand_window_end_idx = None
+        in_demand_window = False
         for i, slot in enumerate(slots):
             if slot.is_demand_window_entry:
                 demand_window_entry_idx = i
+            if slot.is_demand_window_slot:
+                in_demand_window = True
+            # DW ends when we see the first slot that's not in DW after being in DW
+            if in_demand_window and not slot.is_demand_window_slot:
+                demand_window_end_idx = i - 1
                 break
+
+        # If DW extends to end of horizon, set end to last slot
+        if in_demand_window and demand_window_end_idx is None:
+            demand_window_end_idx = n_slots - 1
+
+        # Determine where to apply terminal penalty
+        # If allow_dw_entry_under_target is True, apply at DW end (allows solar during DW)
+        # Otherwise, apply at DW entry (must meet target by DW start)
+        if config.allow_dw_entry_under_target and demand_window_end_idx is not None:
+            terminal_penalty_idx = demand_window_end_idx
+        else:
+            terminal_penalty_idx = demand_window_entry_idx
 
         # ------------------------------------------------------------------
         # Forward pass: compute cost-to-go tables
@@ -547,8 +569,8 @@ class DPPlanner:
         ]
 
         # Initialize terminal costs (after last slot)
-        if demand_window_entry_idx is not None:
-            # Apply shortfall penalty at demand window entry
+        if terminal_penalty_idx is not None:
+            # Apply shortfall penalty at terminal penalty index
             target = config.demand_window_target_soc_pct
             for bin_idx, soc in enumerate(soc_grid):
                 shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
@@ -678,7 +700,7 @@ class DPPlanner:
                 soc=current_soc,
                 next_soc=next_soc,
                 config=config,
-                demand_window_entry_idx=demand_window_entry_idx,
+                terminal_penalty_idx=terminal_penalty_idx,
             )
 
             # Record decision
@@ -706,12 +728,10 @@ class DPPlanner:
             current_soc = next_soc
             current_bin = _map_soc_to_bin(current_soc, soc_grid)
 
-        # Calculate terminal shortfall (at demand window entry if applicable)
+        # Calculate terminal shortfall at the terminal penalty index
         terminal_shortfall = 0.0
-        if demand_window_entry_idx is not None and demand_window_entry_idx < len(
-            decisions
-        ):
-            terminal_soc = decisions[demand_window_entry_idx].predicted_soc_pct
+        if terminal_penalty_idx is not None and terminal_penalty_idx < len(decisions):
+            terminal_soc = decisions[terminal_penalty_idx].predicted_soc_pct
             target = config.demand_window_target_soc_pct
             terminal_shortfall = max(0.0, target - terminal_soc)
 
@@ -737,7 +757,7 @@ class DPPlanner:
         soc: float,
         next_soc: float,
         config: OptimizerConfig,
-        demand_window_entry_idx: int | None,
+        terminal_penalty_idx: int | None,
     ) -> PlannerReasonCode:
         """
         Classify the reason for a decision based on action and context.
@@ -764,16 +784,14 @@ class DPPlanner:
             PlannerAction.CHARGE_GRID_BOOST,
         ):
             # Check if needed for demand window target
-            if (
-                demand_window_entry_idx is not None
-                and slot_idx < demand_window_entry_idx
-            ):
+            # Use terminal_penalty_idx which is DW entry (default) or DW end (if allow_dw_entry_under_target)
+            if terminal_penalty_idx is not None and slot_idx < terminal_penalty_idx:
                 soc_deficit = config.demand_window_target_soc_pct - soc
                 if soc_deficit > 0:
                     # Use real future slots (no repeated-current-slot approximation).
                     projected_net_kwh = sum(
                         s.solar_kwh - s.consumption_kwh
-                        for s in slots[slot_idx:demand_window_entry_idx]
+                        for s in slots[slot_idx:terminal_penalty_idx]
                     )
                     potential_soc_gain_pct = (
                         projected_net_kwh / config.battery_capacity_kwh
@@ -811,7 +829,7 @@ class DPPlanner:
 
         Constraints checked:
         - SOC floor/ceiling
-        - Demand window entry requirements
+        - Demand window: no grid import during DW slots
         - Slot duration vs transfer limits (TODO: implement fully in Phase C)
         """
         actions = []
@@ -821,7 +839,8 @@ class DPPlanner:
 
         actions.append(PlannerAction.HOLD)
 
-        if can_charge:
+        # Block grid charging during demand window (no grid import allowed in DW)
+        if can_charge and not slot.is_demand_window_slot:
             actions.append(PlannerAction.CHARGE_GRID_NORMAL)
             actions.append(PlannerAction.CHARGE_GRID_BOOST)
 
