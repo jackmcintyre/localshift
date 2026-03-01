@@ -940,7 +940,9 @@ class LocalShiftCoordinator:
             run_shadow_optimizer,
         )
         from .const import (
+            CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
             CONF_OPTIMIZER_CONTROL_MODE,
+            DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
             DEFAULT_OPTIMIZER_CONTROL_MODE,
         )
 
@@ -955,6 +957,10 @@ class LocalShiftCoordinator:
             ),
             CONF_BATTERY_TARGET: self.get_option(
                 CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
+            ),
+            # Issue #409: pass switch value so optimizer respects DW entry target setting
+            CONF_ALLOW_DW_ENTRY_UNDER_TARGET: self.get_option(
+                CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
             ),
         }
 

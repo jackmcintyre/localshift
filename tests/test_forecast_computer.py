@@ -641,6 +641,112 @@ class TestComputeForecast:
         assert "solar_kwh" in first_slot
         assert "predicted_soc" in first_slot
 
+    def test_compute_forecast_emits_demand_window_flags(
+        self, mock_entry, mock_get_entity_id
+    ):
+        """Forecast slot dicts must include is_demand_window and is_demand_window_entry.
+
+        Issue #409: The DP optimizer shadow runner reads these keys from the
+        daily_forecast slot dicts produced by ForecastComputer.  Before this fix
+        the keys were absent, so the optimizer always saw is_demand_window_slot=False
+        and never blocked grid charging during the demand window.
+
+        The conftest mock_entry has demand_window_start=18:00 / end=22:00.
+        We run the forecast starting just before 18:00 so that slots on either
+        side of the DW boundary are generated and we can assert:
+        - Slots before 18:00 have is_demand_window=False, is_demand_window_entry=False
+        - The first slot at/after 18:00 has is_demand_window=True AND
+          is_demand_window_entry=True  (entry flag is True only for first DW slot)
+        - Subsequent DW slots have is_demand_window=True, is_demand_window_entry=False
+        """
+        entry = mock_entry
+        # mock_entry already has demand_window_start="18:00:00", demand_window_end="22:00:00"
+        entry.options = {
+            **entry.options,
+            "load_weight_recent": 0.7,
+            "battery_target": 80,
+            "minimum_target_soc": 10,
+        }
+
+        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {})
+
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 50.0
+        data.load_power_kw = 0.5
+        data.general_price = 0.25
+        data.feed_in_price = 0.08
+        data.effective_cheap_price = 0.15
+        data.solcast_today = []
+        data.solcast_tomorrow = []
+        # Use UTC timestamps so that slot.time() directly matches the DW times
+        # configured in mock_entry (demand_window_start=18:00, demand_window_end=22:00).
+        # Slots span 14:00-22:00 UTC so the DW boundary at 18:00 UTC is included.
+        data.general_forecast = [
+            {
+                "start_time": f"2026-02-16T{14 + i:02d}:00:00+00:00",
+                "end_time": f"2026-02-16T{15 + i:02d}:00:00+00:00",
+                "per_kwh": 0.30 if i >= 4 else 0.20,  # peak at/after 18:00 UTC
+            }
+            for i in range(9)  # 14:00 through 22:00 UTC
+        ]
+        data.feed_in_forecast = []
+
+        # Start forecast from 14:00 UTC – pre-DW slots included before 18:00 boundary
+        from datetime import timezone
+
+        now_dt = datetime(2026, 2, 16, 14, 0, 0, tzinfo=timezone.utc)
+
+        daily_forecast, _, _ = computer.compute_forecast(
+            data=data,
+            now_dt=now_dt,
+            historical_avg_kw={},
+            recent_load_kw=0.5,
+            historical_load_source="none",
+            historical_load_sample_counts={},
+        )
+
+        assert len(daily_forecast) >= 2, "Need at least two slots to test DW boundary"
+
+        # Verify every slot has both keys present
+        for slot in daily_forecast:
+            assert "is_demand_window" in slot, (
+                f"Slot {slot.get('timestamp_iso')} missing is_demand_window"
+            )
+            assert "is_demand_window_entry" in slot, (
+                f"Slot {slot.get('timestamp_iso')} missing is_demand_window_entry"
+            )
+
+        # Collect DW entry slots (is_demand_window_entry=True)
+        entry_slots = [s for s in daily_forecast if s["is_demand_window_entry"]]
+        dw_slots = [s for s in daily_forecast if s["is_demand_window"]]
+
+        # There should be exactly one entry slot (the first DW slot)
+        assert len(entry_slots) == 1, (
+            f"Expected exactly 1 entry slot, got {len(entry_slots)}: "
+            + str([s.get("timestamp_iso") for s in entry_slots])
+        )
+
+        # The entry slot must also be a DW slot
+        assert entry_slots[0]["is_demand_window"] is True
+
+        # All DW slots must have is_demand_window=True; only first has entry flag
+        for idx, slot in enumerate(dw_slots):
+            assert slot["is_demand_window"] is True
+            if idx == 0:
+                assert slot["is_demand_window_entry"] is True
+            else:
+                assert slot["is_demand_window_entry"] is False, (
+                    f"DW slot {idx} should not have entry flag set: "
+                    f"{slot.get('timestamp_iso')}"
+                )
+
+        # Pre-DW slots must have both flags False
+        pre_dw_slots = [s for s in daily_forecast if not s["is_demand_window"]]
+        for slot in pre_dw_slots:
+            assert slot["is_demand_window_entry"] is False
+
 
 # =============================================================================
 # SHOULD_GRID_CHARGE_AT_SLOT TESTS
@@ -1053,7 +1159,9 @@ class TestPass3BoostDisable:
             "demand_window_end": "22:00:00",
         }
 
-        computer = ForecastComputer(entry, mock_get_entity_id, lambda x: {6: 0.5, 7: 0.5})
+        computer = ForecastComputer(
+            entry, mock_get_entity_id, lambda x: {6: 0.5, 7: 0.5}
+        )
 
         slot_start = dt_aware(2026, 2, 16, 6, 0, 0)
 

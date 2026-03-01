@@ -2096,6 +2096,7 @@ class ForecastComputer:
         # ========================================================================
 
         predicted_soc = current_soc
+        prev_in_demand_window = False
 
         for slot_idx, slot in enumerate(hybrid_slots):
             slot_start = slot["start"]
@@ -2307,8 +2308,14 @@ class ForecastComputer:
                     ),
                     "buy_price": round(_slot_price, 4),
                     "sell_price": round(_slot_fit_price, 4),
+                    # Demand window flags for DP optimizer (#409)
+                    "is_demand_window": in_demand_window,
+                    "is_demand_window_entry": (
+                        in_demand_window and not prev_in_demand_window
+                    ),
                 }
             )
+            prev_in_demand_window = in_demand_window
 
         # Log warning if any solar forecast data was missing
         if missing_solar_slots:

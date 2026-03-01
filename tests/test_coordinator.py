@@ -677,3 +677,93 @@ class TestAsyncStop:
         await coordinator.async_stop()
 
         coordinator._computation_engine.clear_historical_cache.assert_called_once()
+
+
+# =============================================================================
+# SHADOW OPTIMIZER CONFIG PLUMBING TESTS
+# =============================================================================
+
+
+class TestShadowOptimizerConfigPlumbing:
+    """Tests that _run_shadow_optimizer passes required config keys.
+
+    Issue #409: The coordinator was not passing CONF_ALLOW_DW_ENTRY_UNDER_TARGET
+    in config_options, so the DP optimizer always received allow_dw_entry_under_target=False
+    regardless of the switch state.
+    """
+
+    def test_config_options_includes_allow_dw_entry_under_target(
+        self, coordinator, coordinator_data
+    ):
+        """CONF_ALLOW_DW_ENTRY_UNDER_TARGET must be in config_options passed to runner.
+
+        Captures the config_options dict by mocking run_shadow_optimizer and
+        asserting the key is present with the value derived from get_option.
+        """
+        coordinator.data = coordinator_data
+
+        captured = {}
+
+        def fake_run_shadow_optimizer(data, config_options):
+            captured.update(config_options)
+
+        # run_shadow_optimizer is imported locally inside _run_shadow_optimizer(),
+        # so we must patch it at its definition site in the shadow runner module.
+        with patch(
+            "custom_components.localshift.computation_engine_lib"
+            ".optimizer_shadow_runner.run_shadow_optimizer",
+            side_effect=fake_run_shadow_optimizer,
+        ):
+            coordinator._run_shadow_optimizer()
+
+        from custom_components.localshift.const import CONF_ALLOW_DW_ENTRY_UNDER_TARGET
+
+        assert CONF_ALLOW_DW_ENTRY_UNDER_TARGET in captured, (
+            "config_options must include CONF_ALLOW_DW_ENTRY_UNDER_TARGET so the "
+            "DP optimizer respects the allow_dw_entry_under_target switch (#409)"
+        )
+
+    def test_config_options_allow_dw_entry_under_target_reflects_option(
+        self, mock_hass_with_services, mock_entry
+    ):
+        """Switch value in options must be forwarded to config_options.
+
+        When the allow_dw_entry_under_target option is True, the coordinator
+        must pass True in config_options (not always the default False).
+        """
+        from custom_components.localshift.const import (
+            CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+            CONF_BATTERY_TARGET,
+            CONF_MINIMUM_TARGET_SOC,
+            CONF_OPTIMIZER_CONTROL_MODE,
+        )
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        # Build an entry whose options include allow_dw_entry_under_target=True
+        mock_entry.options = {
+            **mock_entry.options,
+            CONF_ALLOW_DW_ENTRY_UNDER_TARGET: True,
+            CONF_OPTIMIZER_CONTROL_MODE: "shadow",
+            CONF_BATTERY_TARGET: 80.0,
+            CONF_MINIMUM_TARGET_SOC: 10.0,
+        }
+        coordinator = LocalShiftCoordinator(mock_hass_with_services, mock_entry)
+        coordinator.data = CoordinatorData()
+
+        captured = {}
+
+        def fake_run_shadow_optimizer(data, config_options):
+            captured.update(config_options)
+
+        # run_shadow_optimizer is imported locally inside _run_shadow_optimizer(),
+        # so we must patch it at its definition site in the shadow runner module.
+        with patch(
+            "custom_components.localshift.computation_engine_lib"
+            ".optimizer_shadow_runner.run_shadow_optimizer",
+            side_effect=fake_run_shadow_optimizer,
+        ):
+            coordinator._run_shadow_optimizer()
+
+        assert captured.get(CONF_ALLOW_DW_ENTRY_UNDER_TARGET) is True, (
+            "allow_dw_entry_under_target=True in options must propagate to config_options"
+        )
