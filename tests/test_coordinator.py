@@ -432,6 +432,8 @@ class TestEvaluateStateMachine:
 
         # Verify evaluate was called
         coordinator._state_machine.evaluate_state_machine.assert_called_once()
+        call_kwargs = coordinator._state_machine.evaluate_state_machine.call_args.kwargs
+        assert call_kwargs["post_compute_func"] == coordinator._run_shadow_optimizer
 
     @pytest.mark.asyncio
     async def test_async_evaluate_state_machine_public(self, coordinator):
@@ -454,6 +456,8 @@ class TestEvaluateStateMachine:
 
         # Verify evaluate was called
         coordinator._state_machine.evaluate_state_machine.assert_called_once()
+        call_kwargs = coordinator._state_machine.evaluate_state_machine.call_args.kwargs
+        assert call_kwargs["post_compute_func"] == coordinator._run_shadow_optimizer
 
 
 # =============================================================================

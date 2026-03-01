@@ -1045,6 +1045,7 @@ class LocalShiftCoordinator:
                 self._computation_engine,
                 read_state_func=self._read_all_external_state,
                 notify_func=self._notify_listeners,
+                post_compute_func=self._run_shadow_optimizer,
             )
 
     # ------------------------------------------------------------------
