@@ -25,6 +25,7 @@ from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
+    CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
@@ -37,6 +38,7 @@ from .const import (
     CONF_TESLEMETRY_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
+    DEFAULT_MINIMUM_TARGET_SOC,
     SWITCH_DEFAULTS,
     BatteryMode,
 )
@@ -947,6 +949,12 @@ class LocalShiftCoordinator:
             "optimizer_enabled": self.get_option("optimizer_enabled", False),
             CONF_OPTIMIZER_CONTROL_MODE: self.get_option(
                 CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
+            ),
+            CONF_MINIMUM_TARGET_SOC: self.get_option(
+                CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
+            ),
+            CONF_BATTERY_TARGET: self.get_option(
+                CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
             ),
         }
 
