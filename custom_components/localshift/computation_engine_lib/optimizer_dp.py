@@ -918,27 +918,52 @@ class DPPlanner:
         capacity_kwh = config.battery_capacity_kwh
 
         if action == PlannerAction.HOLD:
-            # Battery absorbs surplus or supplies deficit from solar/consumption balance
-            # Net positive = charge from solar surplus
-            # Net negative = discharge to meet consumption
-            # Apply solar charge rate limit and efficiency (aligns with legacy soc_simulator.py)
+            # Battery passively follows site net flow under HOLD:
+            # - Surplus solar charges battery first, then remaining surplus exports.
+            # - Net load discharges battery first, then remaining deficit imports.
+            # Rate limits, efficiency, and SOC bounds are applied in both directions.
             max_transfer_kwh = config.solar_charge_rate_kw * slot_hours
+
             if net_kwh >= 0:
-                # Solar surplus → charge battery (lose efficiency)
-                effective_kwh = (
-                    min(net_kwh, max_transfer_kwh) * config.charge_efficiency
-                )
-                delta_soc = (effective_kwh / capacity_kwh) * 100.0
+                # Surplus solar can be sent to battery subject to rate + headroom.
+                solar_surplus_kwh = net_kwh
+                solar_by_rate_kwh = min(solar_surplus_kwh, max_transfer_kwh)
+                headroom_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+
+                if config.charge_efficiency <= 0:
+                    solar_to_battery_kwh = 0.0
+                else:
+                    solar_by_soc_kwh = headroom_kwh / config.charge_efficiency
+                    solar_to_battery_kwh = min(solar_by_rate_kwh, solar_by_soc_kwh)
+
+                stored_kwh = solar_to_battery_kwh * config.charge_efficiency
+                delta_soc = (stored_kwh / capacity_kwh) * 100.0
+                next_soc = soc_pct + delta_soc
+                grid_export_kwh = max(0.0, solar_surplus_kwh - solar_to_battery_kwh)
+                return next_soc, 0.0, grid_export_kwh
             else:
-                # Consumption deficit → discharge battery (lose efficiency)
-                effective_kwh = (
-                    max(net_kwh, -max_transfer_kwh) / config.discharge_efficiency
+                # Net load can be supplied by battery subject to rate + floor.
+                load_deficit_kwh = -net_kwh
+                discharge_by_rate_kwh = min(load_deficit_kwh, max_transfer_kwh)
+                available_battery_kwh = max(
+                    0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
                 )
-                delta_soc = (effective_kwh / capacity_kwh) * 100.0
-            next_soc = soc_pct + delta_soc
-            # Clip to valid range
-            next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
-            return next_soc, 0.0, 0.0
+                max_load_from_battery_kwh = (
+                    available_battery_kwh * config.discharge_efficiency
+                )
+                battery_to_load_kwh = min(discharge_by_rate_kwh, max_load_from_battery_kwh)
+
+                if config.discharge_efficiency <= 0:
+                    battery_delta_kwh = 0.0
+                else:
+                    battery_delta_kwh = -(
+                        battery_to_load_kwh / config.discharge_efficiency
+                    )
+
+                delta_soc = (battery_delta_kwh / capacity_kwh) * 100.0
+                next_soc = soc_pct + delta_soc
+                grid_import_kwh = max(0.0, load_deficit_kwh - battery_to_load_kwh)
+                return next_soc, grid_import_kwh, 0.0
 
         if action == PlannerAction.CHARGE_GRID_NORMAL:
             # Grid charge at normal rate, plus solar/consumption net effect
