@@ -652,7 +652,12 @@ class DPPlanner:
 
                     # Compute stage cost
                     stage = DPPlanner.stage_cost(
-                        action, grid_import, grid_export, slot, config
+                        action,
+                        grid_import,
+                        grid_export,
+                        slot,
+                        config,
+                        soc_pct=soc,
                     )
                     total_cost = stage.net_cost + future_cost
 
@@ -701,16 +706,33 @@ class DPPlanner:
                     current_bin,
                 )
                 action = PlannerAction.HOLD
-                next_soc = current_soc
-                grid_import = 0.0
-                grid_export = 0.0
             else:
-                _, action, next_bin, grid_import, grid_export, next_soc = dp[slot_idx][
-                    current_bin
-                ]
+                # Read optimal action from DP table (determined by backward
+                # induction at the bin-center SOC).
+                _, action, _, _, _, _ = dp[slot_idx][current_bin]
+
+            # Re-compute the transition from the actual current_soc rather
+            # than using the stored bin-center values.  The DP table stores
+            # grid_import/export/next_soc computed at the bin-center SOC,
+            # which can differ from the true SOC tracked through the forward
+            # pass.  This mismatch causes physically incorrect energy
+            # quantities — most visibly, zero grid_import at the SOC floor
+            # when the bin center had just enough headroom to cover load but
+            # the actual SOC does not.  (Fixes #414)
+            next_soc, grid_import, grid_export = DPPlanner.transition(
+                current_soc, action, slot, config
+            )
+            next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
 
             # Compute stage cost for this decision
-            stage = DPPlanner.stage_cost(action, grid_import, grid_export, slot, config)
+            stage = DPPlanner.stage_cost(
+                action,
+                grid_import,
+                grid_export,
+                slot,
+                config,
+                soc_pct=current_soc,
+            )
 
             # Determine reason code
             reason = self._classify_reason(
@@ -928,7 +950,9 @@ class DPPlanner:
                 # Surplus solar can be sent to battery subject to rate + headroom.
                 solar_surplus_kwh = net_kwh
                 solar_by_rate_kwh = min(solar_surplus_kwh, max_transfer_kwh)
-                headroom_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+                headroom_kwh = max(
+                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
+                )
 
                 if config.charge_efficiency <= 0:
                     solar_to_battery_kwh = 0.0
@@ -951,7 +975,9 @@ class DPPlanner:
                 max_load_from_battery_kwh = (
                     available_battery_kwh * config.discharge_efficiency
                 )
-                battery_to_load_kwh = min(discharge_by_rate_kwh, max_load_from_battery_kwh)
+                battery_to_load_kwh = min(
+                    discharge_by_rate_kwh, max_load_from_battery_kwh
+                )
 
                 if config.discharge_efficiency <= 0:
                     battery_delta_kwh = 0.0
@@ -1081,6 +1107,8 @@ class DPPlanner:
         grid_export_kwh: float,
         slot: SlotContext,
         config: OptimizerConfig,
+        *,
+        soc_pct: float | None = None,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -1088,6 +1116,11 @@ class DPPlanner:
         In self-consumption mode, adds value for battery energy used to cover load.
         This makes the optimizer prefer keeping energy for household use over exporting
         unless the export price exceeds the self-consumption value + margin.
+
+        Args:
+            soc_pct: Current SOC percentage *before* this slot's transition.
+                     When provided, caps self-consumption credit by the
+                     battery's physical discharge capacity (Fixes #417).
         """
         import_cost = grid_import_kwh * slot.buy_price
         export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
@@ -1109,6 +1142,27 @@ class DPPlanner:
                 battery_for_load = max(
                     0.0, net_load - grid_import_kwh - grid_export_kwh
                 )
+
+                # Cap by physical discharge capacity when SOC is known.
+                # Without this cap, the formula can credit load coverage
+                # that the battery cannot physically deliver — e.g. at SOC
+                # floor or during EXPORT_PROACTIVE where all discharge goes
+                # to grid, not to load.  (Fixes #417)
+                if soc_pct is not None:
+                    slot_hours = slot.slot_interval_minutes / 60.0
+                    max_discharge_kwh = config.discharge_rate_kw * slot_hours
+                    available_kwh = max(
+                        0.0,
+                        (soc_pct - config.min_soc_pct)
+                        / 100.0
+                        * config.battery_capacity_kwh,
+                    )
+                    max_load_kwh = min(
+                        max_discharge_kwh,
+                        available_kwh * config.discharge_efficiency,
+                    )
+                    battery_for_load = min(battery_for_load, max_load_kwh)
+
                 self_consumption_value = (
                     battery_for_load * config.self_consumption_value_per_kwh
                 )
