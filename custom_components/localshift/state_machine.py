@@ -173,6 +173,7 @@ class StateMachine:
         computation_engine: ComputationEngine,
         read_state_func: callable | None = None,
         notify_func: callable | None = None,
+        post_compute_func: callable | None = None,
     ) -> None:
         """Compare desired mode with commanded mode and execute transitions.
 
@@ -184,6 +185,10 @@ class StateMachine:
         completed.  This eliminates the race condition where a second
         evaluation could immediately revert a transition because it was working
         from pre-transition hardware state.
+
+        ``post_compute_func`` is an optional callback invoked after
+        ``compute_derived_values``. This is used by the coordinator to refresh
+        shadow optimizer telemetry on the regular evaluation path.
         """
         async with self._evaluate_lock:
             # DIAGNOSTIC: Log current state machine state at INFO level
@@ -200,6 +205,18 @@ class StateMachine:
             if read_state_func is not None:
                 read_state_func()
             computation_engine.compute_derived_values(data)
+
+            # Optional post-compute hook (e.g. shadow optimizer refresh).
+            # This must never block the state-machine evaluation.
+            if post_compute_func is not None:
+                try:
+                    post_compute_func()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Post-compute callback failed (non-blocking): %s",
+                        err,
+                        exc_info=True,
+                    )
 
             # Notify listeners with fresh computed data regardless of which
             # code path is taken below (transition, debounce, no-change, etc.).
@@ -848,7 +865,8 @@ class StateMachine:
 
             mismatch_details = {
                 "operation_mode": data.operation_mode != expected_op,
-                "backup_reserve": abs((data.backup_reserve or 0) - expected_reserve) >= 1,
+                "backup_reserve": abs((data.backup_reserve or 0) - expected_reserve)
+                >= 1,
                 "grid_charging_allowed": actual_grid_charging != expected_grid_charging,
             }
 

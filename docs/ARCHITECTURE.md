@@ -825,6 +825,137 @@ Backfill reports and reconciliation data are stored in `CoordinatorData` and exp
 
 ---
 
+## DP Optimizer Subsystem (Issue #403)
+
+The integration includes a DP (Dynamic Programming) optimizer subsystem that computes optimal battery control decisions using deterministic planning. It runs in **shadow mode** alongside the legacy planner to enable A/B comparison before any control changes.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        COORDINATOR CYCLE                                     │
+│                                                                              │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         │
+│  │   Legacy        │    │   DP Optimizer  │    │   Planner       │         │
+│  │   Planner       │    │   (shadow)      │    │   Comparator    │         │
+│  │   (control)     │    │                 │    │                 │         │
+│  │                 │    │   DPPlanner     │    │ PlannerComparator│        │
+│  │ ForecastComputer│───▶│   .plan()       │───▶│   .compare()    │         │
+│  │                 │    │                 │    │                 │         │
+│  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘         │
+│           │                      │                      │                   │
+│           ▼                      ▼                      ▼                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    CoordinatorData                                   │   │
+│  │                                                                      │   │
+│  │  daily_forecast          optimizer_shadow_result                    │   │
+│  │  (legacy plan)           optimizer_shadow_decisions                 │   │
+│  │  [AUTHORITATIVE]         optimizer_shadow_summary                   │   │
+│  │                          optimizer_comparison                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                      │
+│                                      ▼                                      │
+│                          Optimizer Sensors                                  │
+│                          (shadow_plan, shadow_summary, comparison)          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Component Responsibilities
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **DPPlanner** | `optimizer_dp.py` | Core DP solver with SOC discretization |
+| **PlannerComparator** | `planner_comparator.py` | Side-by-side plan comparison |
+| **run_shadow_optimizer()** | `optimizer_shadow_runner.py` | Coordinator integration entry point |
+
+### Data Flow
+
+1. **Legacy Planner** (Authoritative)
+   - `ForecastComputer` computes 24-hour plan as `daily_forecast`
+   - State machine uses this for control decisions
+
+2. **Shadow Optimizer** (Non-invasive)
+   - `run_shadow_optimizer()` called after legacy planner completes
+   - Converts `daily_forecast` slots to `SlotContext` objects
+   - Builds `OptimizerConfig` from integration options
+   - Runs `DPPlanner.plan()` to compute optimal decisions
+   - Populates shadow fields in `CoordinatorData`
+
+3. **Plan Comparison**
+   - `PlannerComparator.compare()` produces `PlannerComparisonRecord`
+   - Classifies mismatches by type (ACTION, QUANTITY, PROFITABILITY, etc.)
+   - Ranks mismatches by significance score
+   - Stores comparison in `optimizer_comparison`
+
+4. **Active Mode** (when enabled)
+   - `OptimizerSafetyGate.admit()` validates all prerequisites
+   - On success: `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
+   - On failure: falls back to legacy control for this cycle
+   - Tracks `optimizer_fallback_count` for cooldown logic
+
+### CoordinatorData Optimizer Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `optimizer_shadow_result` | `dict` | OptimizerResult metadata (success, solve_time, net_cost) |
+| `optimizer_shadow_decisions` | `list[dict]` | Per-slot decisions from optimizer |
+| `optimizer_shadow_summary` | `dict` | Compact summary for diagnostics sensor |
+| `optimizer_comparison` | `dict` | Legacy vs optimizer comparison record |
+| `optimizer_apply_plan` | `list[dict]` | Apply plan derived from optimizer for active mode execution |
+| `optimizer_last_apply_status` | `dict` | Active-mode apply status (success/failure/block_reason) |
+| `optimizer_last_apply_timestamp` | `str` | ISO timestamp of last successful active-mode apply |
+| `optimizer_fallback_count` | `int` | Number of consecutive fallback-to-legacy cycles |
+
+### Optimizer Sensors
+
+| Sensor | State | Purpose |
+|--------|-------|---------|
+| `sensor.localshift_optimizer_shadow_plan` | disabled/computed/error | Per-slot optimizer decisions |
+| `sensor.localshift_optimizer_shadow_summary` | disabled/success/failed | Aggregate optimizer metrics |
+| `sensor.localshift_optimizer_comparison` | mismatch_count | Legacy vs optimizer comparison |
+
+### Modes
+
+| Mode | Control Behavior | Status |
+|------|------------------|--------|
+| `shadow` | Legacy planner controls | ✅ Supported |
+| `assist` | Legacy planner controls, optimizer recommends | ✅ Supported |
+| `active` | Optimizer controls (with safety gate) | ✅ Supported |
+
+### Phase Rollout Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| A | Scaffold baseline | ✅ Complete |
+| B | Input/config parity | ✅ Complete |
+| C | DP solver implementation | ✅ Complete |
+| D | Comparator hardening | ✅ Complete |
+| E | Assist-mode UX | ✅ Complete |
+| F | Active-control pilot | ✅ Complete |
+| G | Stabilization/release | 🔄 In Progress |
+
+### Safety Guarantees
+
+**Shadow/Assist Mode:**
+- Optimizer runs in **isolation** — no battery control commands issued
+- Legacy planner remains **authoritative** for all control decisions
+- Shadow exceptions are **caught and logged** — never block coordinator
+
+**Active Mode:**
+- All shadow/assist guarantees apply
+- **Safety gate** validates prerequisites each cycle: feature enabled, control mode active, solve success, slot alignment valid, forecast freshness acceptable
+- Any failed gate triggers immediate **fallback to legacy control**
+- **Cooldown period** after repeated failures prevents rapid re-attempts
+- Unsupported/ambiguous optimizer actions fall back to legacy decisions
+- Feature can be **disabled** at any time via configuration
+
+### Related Documentation
+
+- [OPTIMIZER_DP_ROLLOUT.md](OPTIMIZER_DP_ROLLOUT.md) - Rollout guide for operators
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Optimizer troubleshooting
+
+---
+
 ## References
 
 - `FORECAST_DRIVEN_CONTROL.md` - Detailed design for forecast-driven control

@@ -62,6 +62,10 @@ async def async_setup_entry(
         ForecastStatusSensor(coordinator, entry),
         # Automation ready sensor (Issue #349)
         AutomationReadySensor(coordinator, entry),
+        # Optimizer shadow telemetry sensors (Issue #403)
+        OptimizerShadowPlanSensor(coordinator, entry),
+        OptimizerShadowSummarySensor(coordinator, entry),
+        OptimizerComparisonSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1155,3 +1159,200 @@ class AutomationReadySensor(LocalShiftSensorBase):
             return "mdi:check-decagram"
         else:
             return "mdi:decagram-outline"
+
+
+# ---------------------------------------------------------------------------
+# Optimizer Shadow Telemetry Sensors (Issue #403 Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class OptimizerShadowPlanSensor(LocalShiftSensorBase):
+    """DP optimizer shadow plan for comparison.
+
+    Issue #403: Shows the plan computed by the DP optimizer in shadow mode.
+    Used for A/B comparison with the legacy planner before switching control.
+    """
+
+    _attr_unique_id = "localshift_optimizer_shadow_plan"
+    _attr_name = "Optimizer Shadow Plan"
+    _attr_icon = "mdi:shadow"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with shadow plan summary."""
+        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        if not summary or not summary.get("enabled", False):
+            self._attr_native_value = "disabled"
+        elif not summary.get("success", False):
+            self._attr_native_value = "error"
+        else:
+            self._attr_native_value = "computed"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return shadow plan details."""
+        d = self.coordinator.data
+        # Use the decisions list which contains per-slot shadow decisions
+        decisions = d.optimizer_shadow_decisions or []
+        summary = d.optimizer_shadow_summary or {}
+
+        return {
+            "enabled": summary.get("enabled", False),
+            "success": summary.get("success", False),
+            "error_message": summary.get("error_message"),
+            "decisions": decisions,
+            "total_slots": len(decisions),
+            "computed_at": summary.get("cycle_timestamp_iso")
+            or summary.get("computed_at"),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "computed":
+            return "mdi:shadow"
+        elif status == "error":
+            return "mdi:shadow-off"
+        else:  # disabled
+            return "mdi:shadow-off"
+
+
+class OptimizerShadowSummarySensor(LocalShiftSensorBase):
+    """DP optimizer shadow run summary.
+
+    Issue #403: Shows aggregate metrics from the shadow optimizer run.
+    Includes timing, success/failure, and comparison statistics.
+    """
+
+    _attr_unique_id = "localshift_optimizer_shadow_summary"
+    _attr_name = "Optimizer Shadow Summary"
+    _attr_icon = "mdi:chart-box-outline"
+
+    def _update_from_coordinator(self) -> None:
+        """Update with shadow run summary."""
+        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        if not summary or not summary.get("enabled", False):
+            self._attr_native_value = "disabled"
+        elif summary.get("success", False):
+            self._attr_native_value = "success"
+        else:
+            self._attr_native_value = "failed"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return shadow run summary details."""
+        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        return {
+            "enabled": summary.get("enabled", False),
+            "success": summary.get("success", False),
+            "error_message": summary.get("error_message"),
+            "computed_at": summary.get("cycle_timestamp_iso")
+            or summary.get("computed_at"),
+            "config_options": summary.get("config_options", {}),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on status."""
+        status = self._attr_native_value
+        if status == "success":
+            return "mdi:check-circle-outline"
+        elif status == "failed":
+            return "mdi:alert-circle-outline"
+        else:  # disabled
+            return "mdi:minus-circle-outline"
+
+
+class OptimizerComparisonSensor(LocalShiftSensorBase):
+    """DP optimizer vs legacy planner comparison.
+
+    Issue #403 Phase E: Shows side-by-side comparison metrics for operator trust.
+    Exposes mismatch counts, cost deltas, and top mismatches for debugging.
+    """
+
+    _attr_unique_id = "localshift_optimizer_comparison"
+    _attr_name = "Optimizer Comparison"
+    _attr_icon = "mdi:compare-horizontal"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with comparison metrics."""
+        comparison = self.coordinator.data.optimizer_comparison or {}
+        shadow_summary = self.coordinator.data.optimizer_shadow_summary or {}
+
+        if not shadow_summary.get("enabled", False):
+            self._attr_native_value = None
+        elif not comparison:
+            self._attr_native_value = None
+        elif not comparison.get("comparison_succeeded", True):
+            self._attr_native_value = -1
+        else:
+            self._attr_native_value = comparison.get("mismatch_count", 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return comparison details."""
+        comparison = self.coordinator.data.optimizer_comparison or {}
+        shadow_summary = self.coordinator.data.optimizer_shadow_summary or {}
+
+        if not shadow_summary.get("enabled", False):
+            return {"enabled": False}
+
+        if not comparison:
+            return {"enabled": True, "comparison_available": False}
+
+        return {
+            "enabled": True,
+            "comparison_available": True,
+            "comparison_succeeded": comparison.get("comparison_succeeded", True),
+            "error_message": comparison.get("error_message"),
+            "cycle_id": comparison.get("cycle_id"),
+            "cycle_timestamp_iso": comparison.get("cycle_timestamp_iso"),
+            "net_cost_delta": comparison.get("net_cost_delta"),
+            "import_kwh_delta": comparison.get("import_kwh_delta"),
+            "export_kwh_delta": comparison.get("export_kwh_delta"),
+            "legacy_projected_net_cost": comparison.get("legacy_projected_net_cost"),
+            "optimizer_projected_net_cost": comparison.get(
+                "optimizer_projected_net_cost"
+            ),
+            "legacy_projected_import_kwh": comparison.get(
+                "legacy_projected_import_kwh"
+            ),
+            "optimizer_projected_import_kwh": comparison.get(
+                "optimizer_projected_import_kwh"
+            ),
+            "legacy_projected_export_kwh": comparison.get(
+                "legacy_projected_export_kwh"
+            ),
+            "optimizer_projected_export_kwh": comparison.get(
+                "optimizer_projected_export_kwh"
+            ),
+            "legacy_meets_dw_target": comparison.get("legacy_meets_dw_target"),
+            "optimizer_meets_dw_target": comparison.get("optimizer_meets_dw_target"),
+            "total_slots": comparison.get("total_slots"),
+            "aligned_slots": comparison.get("aligned_slots"),
+            "mismatch_count": comparison.get("mismatch_count"),
+            "mismatch_by_type": comparison.get("mismatch_by_type", {}),
+            "top_mismatches": comparison.get("top_mismatches", []),
+            "summary": comparison.get("summary", {}),
+            "comparison_time_ms": comparison.get("comparison_time_ms"),
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on comparison state."""
+        comparison = self.coordinator.data.optimizer_comparison or {}
+        shadow_summary = self.coordinator.data.optimizer_shadow_summary or {}
+
+        if not shadow_summary.get("enabled", False):
+            return "mdi:minus-circle-outline"
+        if not comparison or not comparison.get("comparison_succeeded", True):
+            return "mdi:alert-circle-outline"
+
+        mismatch_count = comparison.get("mismatch_count", 0)
+        if mismatch_count == 0:
+            return "mdi:check-circle-outline"
+        elif mismatch_count <= 3:
+            return "mdi:compare-horizontal"
+        else:
+            return "mdi:compare"

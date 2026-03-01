@@ -456,3 +456,66 @@ class CoordinatorData:
     automation_ready_missing: list[str] = field(
         default_factory=list
     )  # List of missing/invalid inputs
+
+    # ---------------------------------------------------------------------------
+    # --- DP Optimizer shadow outputs (#403 Phase 1)
+    # ---------------------------------------------------------------------------
+    # The optimizer runs in shadow mode alongside the legacy planner.
+    # None when optimizer is disabled or not yet run this cycle.
+    # These fields are read-only from the runtime perspective;
+    # the legacy planner (daily_forecast) remains the source of truth for control.
+
+    optimizer_shadow_result: dict[str, Any] | None = None
+    """Serialized OptimizerResult from DPPlanner.plan() for this cycle.
+    Keys: success, planner_version, solve_time_seconds, total_slots,
+    states_explored, projected_import_kwh, projected_export_kwh,
+    projected_net_cost, terminal_shortfall_pct, error_message, reason_code_histogram.
+    Decisions are stored separately in optimizer_shadow_decisions.
+    """
+
+    optimizer_shadow_decisions: list[dict[str, Any]] = field(default_factory=list)
+    """Per-slot shadow decisions from the optimizer.
+    Each dict mirrors PlannedSlotDecision fields including:
+    slot_index, timestamp_iso, slot_interval_minutes, action, reason_code,
+    objective_terms (dict), predicted_soc_pct, grid_import_kwh, grid_export_kwh.
+    """
+
+    optimizer_shadow_summary: dict[str, Any] = field(default_factory=dict)
+    """Compact summary of shadow run for diagnostics sensor.
+    Keys: enabled, shadow_mode, planner_version, success, solve_time_seconds,
+    projected_net_cost, projected_import_kwh, projected_export_kwh,
+    total_slots, reason_code_histogram, error_message.
+    """
+
+    optimizer_comparison: dict[str, Any] = field(default_factory=dict)
+    """Side-by-side comparison of legacy vs optimizer plans.
+    Populated by PlannerComparator each cycle.
+    See PlannerComparisonRecord for full schema.
+    """
+
+    # ---------------------------------------------------------------------------
+    # --- Active-mode runtime status (Phase F #403) ---
+    # ---------------------------------------------------------------------------
+    # When optimizer_control_mode == "active", these fields track apply status.
+    # In shadow/assist modes, these remain at defaults.
+
+    optimizer_runtime_mode: str = "shadow"
+    """Current optimizer control mode: "shadow", "assist", or "active"."""
+
+    optimizer_last_apply_status: str = "none"
+    """Last apply attempt status: "none", "success", "fallback", "blocked"."""
+
+    optimizer_safety_block_reason: str = ""
+    """Reason for safety gate block (empty if not blocked)."""
+
+    optimizer_fallback_count: int = 0
+    """Consecutive fallback count (triggers cooldown at OPTIMIZER_COOLDOWN_CYCLES)."""
+
+    optimizer_active_applied_at: str | None = None
+    """ISO timestamp of last successful active-mode apply."""
+
+    optimizer_apply_plan: dict[str, Any] | None = None
+    """Apply plan derived from optimizer decisions for active mode execution.
+    Set by _handle_active_mode_apply when active mode passes safety gate.
+    Contains: action, battery_mode, target_soc, fallback_to_legacy, reason.
+    """

@@ -359,6 +359,210 @@ For specific entity issues:
 
 ---
 
+## DP Optimizer Issues (Issue #403)
+
+The DP optimizer runs in shadow mode alongside the legacy planner. Issues here typically affect observability rather than control.
+
+### Optimizer Shows "disabled"
+
+**Symptoms:**
+- `sensor.localshift_optimizer_shadow_plan` state is "disabled"
+- `sensor.localshift_optimizer_shadow_summary` state is "disabled"
+- No comparison data available
+
+**Causes:**
+- Optimizer not enabled in configuration
+- Integration option `optimizer_enabled` is `False`
+
+**Solutions:**
+1. Go to **Settings → Devices & Services → LocalShift → Configure**
+2. Enable the optimizer option
+3. Reload the integration
+
+### Optimizer Shows "error"
+
+**Symptoms:**
+- `sensor.localshift_optimizer_shadow_plan` state is "error"
+- `sensor.localshift_optimizer_shadow_summary` state is "failed"
+- `error_message` attribute contains error details
+
+**Causes:**
+- No forecast slots available
+- Invalid initial SOC (e.g., entity unavailable returning 0)
+- DP solver internal error
+
+**Solutions:**
+1. Check `error_message` attribute in the shadow summary sensor
+2. Check Home Assistant logs for the `cycle_id` mentioned in the error
+3. Verify `sensor.localshift_forecast_battery` has valid data
+4. Verify SOC entity is returning valid values (> 0)
+
+### High Mismatch Count
+
+**Symptoms:**
+- `sensor.localshift_optimizer_comparison` shows high mismatch count (> 10)
+- Plans differ significantly between legacy and optimizer
+
+**Causes:**
+- Different planning assumptions between systems
+- SOC discretization effects
+- Edge case handling differences
+
+**Solutions:**
+1. Check `mismatch_by_type` attribute to see which mismatch types dominate
+2. Review `top_mismatches` for specific slot-level differences
+3. Check `parity_completeness_pct` — if low, input data may be incomplete
+4. Compare `net_cost_delta` — if negative, optimizer may actually be better
+
+**Understanding Mismatch Types:**
+
+| Type | Meaning | Action |
+|------|---------|--------|
+| `ACTION_MISMATCH` | Different action types (charge vs hold) | Review if optimizer's action is reasonable |
+| `IMPORT_QUANTITY_MISMATCH` | Same action, different charge amount | Minor difference, usually OK |
+| `EXPORT_QUANTITY_MISMATCH` | Same action, different export amount | Minor difference, usually OK |
+| `TARGET_ATTAINMENT_MISMATCH` | DW target met by only one plan | Review if optimizer target strategy is better |
+| `PROFITABILITY_MISMATCH` | Action differs due to cost optimization | Check `net_cost_delta` for actual impact |
+
+### Optimizer Cheaper But Not Used
+
+**Symptoms:**
+- `net_cost_delta` is negative (optimizer cheaper)
+- Legacy planner still controls battery
+
+**Explanation:**
+This is expected behavior in shadow/assist mode. The optimizer runs for comparison only and does NOT control the battery. This allows you to:
+
+1. Observe optimizer behavior over time
+2. Build trust in optimizer decisions
+3. Compare projected costs
+4. Identify when optimizer would make different choices
+
+**When Will Optimizer Control?**
+Active control mode is now available (Phase F). To enable:
+1. Ensure optimizer has been running in shadow mode successfully
+2. Go to **Settings → Devices & Services → LocalShift → Configure**
+3. Set **Optimizer Control Mode** to "active"
+4. The optimizer will control the battery with safety gates
+
+**Safety First:**
+Active mode includes strict safety gates:
+- Falls back to legacy control immediately if any check fails
+- Tracks fallback count and applies cooldown after repeated failures
+- Can be disabled at any time
+
+### Comparison Sensor Shows -1
+
+**Symptoms:**
+- `sensor.localshift_optimizer_comparison` state is `-1`
+
+**Meaning:**
+The comparison computation failed, not the optimizer itself.
+
+**Solutions:**
+1. Check `error_message` attribute for details
+2. Verify both legacy and optimizer plans have data
+3. Check diagnostics for comparison error details
+
+### Parity Completeness Low
+
+**Symptoms:**
+- `parity_completeness_pct` < 95%
+- Warning in shadow summary about defaulted fields
+
+**Causes:**
+- Legacy forecast slots missing expected fields
+- Input data quality issues
+
+**Solutions:**
+1. Check `parity_defaulted_fields` in shadow summary
+2. Verify forecast sensors have all expected attributes
+3. Check `sensor.localshift_forecast_battery` for complete data
+
+### Alignment Issues
+
+**Symptoms:**
+- `alignment_valid` is `False`
+- `alignment_issues` list contains warnings
+
+**Causes:**
+- Slot count mismatch between legacy and optimizer
+- Timestamp/interval inconsistencies
+
+**Solutions:**
+1. Check `alignment_issues` for specific problems
+2. Verify forecast is generating slots correctly
+3. Restart integration if issues persist
+
+### Diagnostics Missing Optimizer Section
+
+**Symptoms:**
+- Downloaded diagnostics don't include `optimizer` key
+- Optimizer section shows `status: not_loaded`
+
+**Causes:**
+- Coordinator not available
+- Optimizer never run
+
+**Solutions:**
+1. Verify integration is loaded
+2. Check that optimizer is enabled in configuration
+3. Wait for at least one coordinator cycle after enabling
+
+### Active Mode Issues
+
+When using active mode (optimizer controls battery), additional monitoring is available.
+
+#### Active Mode Fallback
+
+**Symptoms:**
+- `sensor.localshift_optimizer_shadow_summary` shows `block_reason` in attributes
+- Battery is being controlled by legacy planner even though active mode is enabled
+
+**Causes:**
+- Safety gate check failed
+- One or more admission criteria not met
+
+**Solutions:**
+1. Check `block_reason` in `optimizer_shadow_summary` attributes
+2. Review the safety gate checks below
+
+#### Safety Gate Block Reasons
+
+| Block Reason | Meaning | Action |
+|--------------|---------|--------|
+| `optimizer_not_enabled` | Optimizer disabled in config | Enable optimizer in configuration |
+| `control_mode_not_active` | Control mode not set to "active" | Set control mode to "active" |
+| `solve_not_successful` | Last DP solve failed | Check optimizer error messages |
+| `slot_alignment_invalid` | Slot mismatch between legacy and optimizer | Check forecast generation |
+| `no_decisions` | No optimizer decisions available | Check optimizer is producing results |
+| `cooldown_active` | In fallback cooldown after repeated failures | Wait for cooldown to complete |
+
+#### Active Mode Apply Status
+
+**Symptoms:**
+- Want to verify optimizer decisions are being applied
+
+**Solutions:**
+1. Check `sensor.localshift_optimizer_shadow_summary` attributes:
+   - `last_apply_status`: "success" or "failed"
+   - `last_apply_timestamp`: ISO timestamp of last successful apply
+   - `fallback_count`: Number of consecutive fallback cycles
+2. Check diagnostics for detailed apply path information
+
+#### Rolling Back from Active Mode
+
+**Symptoms:**
+- Want to revert to shadow/assist mode or disable optimizer entirely
+
+**Solutions:**
+1. Go to **Settings → Devices & Services → LocalShift → Configure**
+2. Change **Optimizer Control Mode** from "active" to "shadow" or "assist"
+3. Or disable the optimizer entirely by toggling off **Enable Optimizer**
+4. Changes take effect on next coordinator cycle
+
+---
+
 ## Getting Help
 
 If issues persist after troubleshooting:
