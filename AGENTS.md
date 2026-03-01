@@ -179,8 +179,9 @@ except Exception:
 1. Run `git worktree list` to check current state
 2. Create a worktree if not in one:
    ```bash
-   git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
+   git worktree add worktrees/issue-{NNN} -b issue/{NNN}
    ```
+   Work inside that worktree for the duration of the task.
 
 ### After Making Changes
 
