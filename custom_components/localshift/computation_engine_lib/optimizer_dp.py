@@ -1,7 +1,7 @@
 """
-optimizer_dp.py — DP-based battery optimizer (shadow-mode scaffold).
+optimizer_dp.py — DP-based battery optimizer.
 
-Phase: MVP scaffolding (Phase 1 of #403 / target architecture #401).
+Phase: Phase C — DP Solver Implementation (#403).
 Status: SHADOW ONLY — does not control runtime behavior.
 
 This module provides:
@@ -348,6 +348,104 @@ class OptimizerInputs:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Helper functions for DP solver
+# ---------------------------------------------------------------------------
+
+
+def _build_soc_grid(config: OptimizerConfig) -> list[float]:
+    """
+    Build SOC discretization grid from min_soc_pct to max_soc_pct.
+
+    Returns a list of SOC values evenly spaced across the valid range.
+    The grid always includes both boundaries.
+    """
+    if config.soc_bins <= 1:
+        return [config.min_soc_pct]
+
+    step = (config.max_soc_pct - config.min_soc_pct) / (config.soc_bins - 1)
+    return [config.min_soc_pct + i * step for i in range(config.soc_bins)]
+
+
+def _map_soc_to_bin(soc_pct: float, grid: list[float]) -> int:
+    """
+    Map a SOC percentage to the nearest bin index in the grid.
+
+    Uses nearest-neighbor mapping for determinism.
+    Returns 0 if grid is empty.
+    """
+    if not grid:
+        return 0
+
+    # Find nearest bin
+    best_idx = 0
+    best_dist = abs(soc_pct - grid[0])
+    for i, soc in enumerate(grid[1:], start=1):
+        dist = abs(soc_pct - soc)
+        if dist < best_dist:
+            best_dist = dist
+            best_idx = i
+    return best_idx
+
+
+def _interpolate_cost_to_soc(
+    soc_pct: float,
+    soc_grid: list[float],
+    cost_table: dict[int, float],
+) -> float:
+    """
+    Interpolate cost from cost_table at nearest grid points to target SOC.
+
+    Uses linear interpolation between adjacent bins for smoother cost landscape.
+    Falls back to nearest-neighbor if at boundaries.
+    """
+    if not soc_grid or not cost_table:
+        return float("inf")
+
+    # Find the two bins bracketing soc_pct
+    lower_idx = 0
+    for i in range(len(soc_grid) - 1, -1, -1):
+        if soc_grid[i] <= soc_pct and i in cost_table:
+            lower_idx = i
+            break
+    else:
+        # soc_pct is below all grid points - use lowest
+        lower_idx = min(cost_table.keys())
+
+    upper_idx = len(soc_grid) - 1
+    for i in range(len(soc_grid)):
+        if soc_grid[i] >= soc_pct and i in cost_table:
+            upper_idx = i
+            break
+    else:
+        # soc_pct is above all grid points - use highest
+        upper_idx = max(cost_table.keys())
+
+    if lower_idx == upper_idx:
+        return cost_table.get(lower_idx, float("inf"))
+
+    # Linear interpolation
+    lower_soc = soc_grid[lower_idx]
+    upper_soc = soc_grid[upper_idx]
+    lower_cost = cost_table.get(lower_idx, float("inf"))
+    upper_cost = cost_table.get(upper_idx, float("inf"))
+
+    if upper_soc == lower_soc:
+        return lower_cost
+
+    ratio = (soc_pct - lower_soc) / (upper_soc - lower_soc)
+    return lower_cost + ratio * (upper_cost - lower_cost)
+
+
+# Action priority for deterministic tie-breaking (lower index = higher priority)
+_ACTION_PRIORITY: dict[PlannerAction, int] = {
+    PlannerAction.HOLD: 0,
+    PlannerAction.CHARGE_GRID_NORMAL: 1,
+    PlannerAction.CHARGE_GRID_BOOST: 2,
+    PlannerAction.EXPORT_PROACTIVE: 3,
+}
+
+
 class DPPlanner:
     """
     Deterministic dynamic-programming battery optimizer.
@@ -356,8 +454,7 @@ class DPPlanner:
     Actions: PlannerAction enum
     Objective: minimize total net cost including shortfall penalty
 
-    This is an MVP scaffold. The solve() method returns a stub result
-    until the DP algorithm is fully implemented.
+    Phase C: Full DP implementation with deterministic tie-breaking.
     """
 
     VERSION = "dp_v1"
@@ -375,9 +472,6 @@ class DPPlanner:
 
         Returns an OptimizerResult. On success, decisions contains one
         PlannedSlotDecision per slot in inputs.slots.
-
-        In the MVP scaffold, this returns a HOLD decision for every slot
-        as a safe no-op placeholder until the full algorithm is implemented.
         """
         start = time.monotonic()
         try:
@@ -395,50 +489,283 @@ class DPPlanner:
         return result
 
     # ------------------------------------------------------------------
-    # Internal solve (MVP stub — replace with full DP)
+    # Internal solve — Full DP Implementation (Phase C)
     # ------------------------------------------------------------------
 
     def _solve(self, inputs: OptimizerInputs) -> OptimizerResult:
         """
-        MVP STUB: returns HOLD for every slot.
+        Full DP solver implementation.
 
-        TODO (#403 Phase C): Replace with full DP over (slot_index, soc_bin).
-        Algorithm outline:
-          1. Build soc_bins from min_soc_pct to max_soc_pct in config.soc_bins steps.
-          2. For each slot (forward pass): evaluate feasible_actions() per state.
-          3. For each (state, action): compute transition() and stage_cost().
-          4. Store optimal cost-to-go table.
-          5. Backward pass: reconstruct optimal action sequence.
-          6. Map action sequence to PlannedSlotDecision list.
+        Algorithm:
+          1. Build SOC grid from config
+          2. Forward pass: compute cost-to-go for all (slot, soc_bin) states
+          3. Backward pass: reconstruct optimal action sequence
+          4. Build PlannedSlotDecision list with reason codes
         """
-        decisions: list[PlannedSlotDecision] = []
-        soc_pct = inputs.initial_soc_pct
+        config = inputs.config
+        slots = inputs.slots
+        n_slots = len(slots)
 
-        for slot in inputs.slots:
+        # Handle empty input
+        if n_slots == 0:
+            return OptimizerResult(
+                success=True,
+                planner_version=self.VERSION,
+                total_slots=0,
+                states_explored=0,
+                decisions=[],
+                reason_code_histogram={},
+            )
+
+        # Build SOC discretization grid
+        soc_grid = _build_soc_grid(config)
+        n_bins = len(soc_grid)
+
+        # Find demand window entry slot (if any)
+        demand_window_entry_idx = None
+        for i, slot in enumerate(slots):
+            if slot.is_demand_window_entry:
+                demand_window_entry_idx = i
+                break
+
+        # ------------------------------------------------------------------
+        # Forward pass: compute cost-to-go tables
+        # dp[slot_idx][soc_bin] = (min_cost, best_action, next_soc_bin)
+        # ------------------------------------------------------------------
+        dp: list[dict[int, tuple[float, PlannerAction, int, float, float, float]]] = [
+            {} for _ in range(n_slots + 1)
+        ]
+
+        # Initialize terminal costs (after last slot)
+        if demand_window_entry_idx is not None:
+            # Apply shortfall penalty at demand window entry
+            target = config.demand_window_target_soc_pct
+            for bin_idx, soc in enumerate(soc_grid):
+                shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
+                dp[n_slots][bin_idx] = (shortfall_penalty, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
+        else:
+            # No demand window - no terminal penalty
+            for bin_idx in range(n_bins):
+                dp[n_slots][bin_idx] = (0.0, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
+
+        states_explored = 0
+
+        # Backward induction: fill DP tables from last slot to first
+        for slot_idx in range(n_slots - 1, -1, -1):
+            slot = slots[slot_idx]
+
+            for bin_idx, soc in enumerate(soc_grid):
+                # Get feasible actions for this state
+                actions = DPPlanner.feasible_actions(soc, slot, config)
+
+                best_cost = float("inf")
+                best_action = PlannerAction.HOLD
+                best_next_bin = bin_idx
+                best_import = 0.0
+                best_export = 0.0
+                best_next_soc = soc
+
+                for action in actions:
+                    # Compute transition
+                    next_soc, grid_import, grid_export = DPPlanner.transition(
+                        soc, action, slot, config
+                    )
+
+                    # Clamp next_soc to valid range
+                    next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
+
+                    # Map next_soc to nearest bin
+                    next_bin = _map_soc_to_bin(next_soc, soc_grid)
+
+                    # Get future cost from next slot
+                    future_cost = dp[slot_idx + 1].get(next_bin, (float("inf"),))[0]
+
+                    # If exact bin not found, interpolate
+                    if future_cost == float("inf") and dp[slot_idx + 1]:
+                        future_cost = _interpolate_cost_to_soc(
+                            next_soc, soc_grid, {k: v[0] for k, v in dp[slot_idx + 1].items()}
+                        )
+
+                    # Compute stage cost
+                    stage = DPPlanner.stage_cost(
+                        action, grid_import, grid_export, slot, config
+                    )
+                    total_cost = stage.net_cost + future_cost
+
+                    # Deterministic tie-breaking: prefer lower priority index
+                    if (
+                        total_cost < best_cost
+                        or (
+                            total_cost == best_cost
+                            and _ACTION_PRIORITY.get(action, 99) < _ACTION_PRIORITY.get(best_action, 99)
+                        )
+                    ):
+                        best_cost = total_cost
+                        best_action = action
+                        best_next_bin = next_bin
+                        best_import = grid_import
+                        best_export = grid_export
+                        best_next_soc = next_soc
+
+                    states_explored += 1
+
+                dp[slot_idx][bin_idx] = (
+                    best_cost,
+                    best_action,
+                    best_next_bin,
+                    best_import,
+                    best_export,
+                    best_next_soc,
+                )
+
+        # ------------------------------------------------------------------
+        # Forward pass: reconstruct optimal path
+        # ------------------------------------------------------------------
+        decisions: list[PlannedSlotDecision] = []
+        current_soc = inputs.initial_soc_pct
+        current_bin = _map_soc_to_bin(current_soc, soc_grid)
+
+        total_import = 0.0
+        total_export = 0.0
+        total_net_cost = 0.0
+        reason_histogram: dict[str, int] = {}
+
+        for slot_idx, slot in enumerate(slots):
+            if current_bin not in dp[slot_idx]:
+                # Fallback: should not happen with proper initialization
+                _LOGGER.warning(
+                    "DP state missing at slot %d, bin %d - using HOLD fallback",
+                    slot_idx,
+                    current_bin,
+                )
+                action = PlannerAction.HOLD
+                next_soc = current_soc
+                grid_import = 0.0
+                grid_export = 0.0
+            else:
+                _, action, next_bin, grid_import, grid_export, next_soc = dp[slot_idx][current_bin]
+
+            # Compute stage cost for this decision
+            stage = DPPlanner.stage_cost(action, grid_import, grid_export, slot, config)
+
+            # Determine reason code
+            reason = self._classify_reason(
+                action=action,
+                slot=slot,
+                soc=current_soc,
+                next_soc=next_soc,
+                config=config,
+                demand_window_entry_idx=demand_window_entry_idx,
+            )
+
+            # Record decision
             decision = PlannedSlotDecision(
                 slot_index=slot.slot_index,
                 timestamp_iso=slot.timestamp_iso,
                 slot_interval_minutes=slot.slot_interval_minutes,
-                action=PlannerAction.HOLD,
-                reason_code=PlannerReasonCode.IDLE,
-                objective_terms=ObjectiveTerms(),
-                predicted_soc_pct=soc_pct,
-                grid_import_kwh=0.0,
-                grid_export_kwh=0.0,
+                action=action,
+                reason_code=reason,
+                objective_terms=stage,
+                predicted_soc_pct=next_soc,
+                grid_import_kwh=grid_import,
+                grid_export_kwh=grid_export,
             )
             decisions.append(decision)
+
+            # Update accumulators
+            total_import += grid_import
+            total_export += grid_export
+            total_net_cost += stage.net_cost
+            reason_key = reason.value
+            reason_histogram[reason_key] = reason_histogram.get(reason_key, 0) + 1
+
+            # Advance state
+            current_soc = next_soc
+            current_bin = _map_soc_to_bin(current_soc, soc_grid)
+
+        # Calculate terminal shortfall (at demand window entry if applicable)
+        terminal_shortfall = 0.0
+        if demand_window_entry_idx is not None and demand_window_entry_idx < len(decisions):
+            terminal_soc = decisions[demand_window_entry_idx].predicted_soc_pct
+            target = config.demand_window_target_soc_pct
+            terminal_shortfall = max(0.0, target - terminal_soc)
 
         return OptimizerResult(
             success=True,
             planner_version=self.VERSION,
-            total_slots=len(inputs.slots),
-            states_explored=0,  # stub
+            total_slots=n_slots,
+            states_explored=states_explored,
             decisions=decisions,
-            projected_import_kwh=0.0,
-            projected_export_kwh=0.0,
-            projected_net_cost=0.0,
-            reason_code_histogram={"IDLE": len(decisions)},
+            projected_import_kwh=total_import,
+            projected_export_kwh=total_export,
+            projected_net_cost=total_net_cost,
+            terminal_shortfall_pct=terminal_shortfall,
+            reason_code_histogram=reason_histogram,
         )
+
+    def _classify_reason(
+        self,
+        action: PlannerAction,
+        slot: SlotContext,
+        soc: float,
+        next_soc: float,
+        config: OptimizerConfig,
+        demand_window_entry_idx: int | None,
+    ) -> PlannerReasonCode:
+        """
+        Classify the reason for a decision based on action and context.
+
+        Uses deterministic rules to assign a primary reason code.
+        """
+        # SOC constraint checks
+        if action == PlannerAction.HOLD:
+            if soc >= config.max_soc_pct - 0.5:
+                return PlannerReasonCode.SOC_CEILING_CONSTRAINT
+            if soc <= config.min_soc_pct + 0.5:
+                return PlannerReasonCode.SOC_FLOOR_CONSTRAINT
+
+        # Export reasoning
+        if action == PlannerAction.EXPORT_PROACTIVE:
+            if slot.sell_price > 0:
+                return PlannerReasonCode.HIGH_SELL_PRICE_EXPORT
+            # Should not reach here if feasible_actions blocks negative FIT
+            return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
+
+        # Grid charge reasoning
+        if action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST):
+            # Check if needed for demand window target
+            if demand_window_entry_idx is not None and slot.slot_index < demand_window_entry_idx:
+                # Check if current trajectory would miss target
+                slots_remaining = demand_window_entry_idx - slot.slot_index
+                soc_deficit = config.demand_window_target_soc_pct - soc
+                if soc_deficit > 0:
+                    # Rough estimate: can solar alone meet the target?
+                    future_solar = sum(
+                        s.solar_kwh - s.consumption_kwh
+                        for s in (
+                            slot for i, slot in enumerate(
+                                [slot] * slots_remaining  # Approximation
+                            )
+                        )
+                    )
+                    potential_soc_gain = (future_solar / config.battery_capacity_kwh) * 100.0
+                    if potential_soc_gain < soc_deficit * 0.8:
+                        return PlannerReasonCode.TARGET_SHORTFALL_RISK
+
+            # Check for cheap import opportunity
+            if slot.buy_price < 0.15:  # Threshold for "cheap"
+                return PlannerReasonCode.CHEAP_IMPORT_WINDOW
+
+            return PlannerReasonCode.TARGET_SHORTFALL_RISK
+
+        # HOLD with solar surplus
+        if action == PlannerAction.HOLD:
+            net_kwh = slot.solar_kwh - slot.consumption_kwh
+            if net_kwh > 0 and next_soc > soc:
+                return PlannerReasonCode.SOLAR_SURPLUS_CAPTURE
+
+        # Default
+        return PlannerReasonCode.IDLE
 
     # ------------------------------------------------------------------
     # Pure primitive functions (to be expanded in Phase C of #403)
@@ -484,39 +811,121 @@ class DPPlanner:
         """
         Compute next SOC, grid_import_kwh, grid_export_kwh for a given action.
 
+        All actions account for solar generation and household consumption.
+
         Returns:
             (next_soc_pct, grid_import_kwh, grid_export_kwh)
 
-        TODO (#403 Phase C): Implement fully with efficiency losses,
-        partial slot charge clipping at SOC boundaries.
+        Phase C: Full implementation with efficiency losses and SOC clipping.
         """
         slot_hours = slot.slot_interval_minutes / 60.0
         net_kwh = slot.solar_kwh - slot.consumption_kwh  # positive = surplus
+        capacity_kwh = config.battery_capacity_kwh
 
         if action == PlannerAction.HOLD:
-            # Battery absorbs/supplies net deficit/surplus up to rate limits
-            # Simplified: net effect on battery from solar surplus
-            delta_soc = (net_kwh / config.battery_capacity_kwh) * 100.0
-            next_soc = max(config.min_soc_pct, min(config.max_soc_pct, soc_pct + delta_soc))
+            # Battery absorbs surplus or supplies deficit from solar/consumption balance
+            # Net positive = charge from solar surplus
+            # Net negative = discharge to meet consumption
+            delta_soc = (net_kwh / capacity_kwh) * 100.0
+            next_soc = soc_pct + delta_soc
+            # Clip to valid range
+            next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
             return next_soc, 0.0, 0.0
 
         if action == PlannerAction.CHARGE_GRID_NORMAL:
-            charge_kwh = config.charge_rate_kw * slot_hours * config.charge_efficiency
-            delta_soc = (charge_kwh / config.battery_capacity_kwh) * 100.0
-            next_soc = min(config.max_soc_pct, soc_pct + delta_soc)
-            return next_soc, charge_kwh, 0.0
+            # Grid charge at normal rate, plus solar/consumption net effect
+            max_charge_kwh = config.charge_rate_kw * slot_hours
+            effective_charge_kwh = max_charge_kwh * config.charge_efficiency
+
+            # Account for solar surplus (reduces grid need) or deficit (increases effective charge)
+            # Solar surplus goes to battery first, then grid tops up
+            if net_kwh > 0:
+                # Solar surplus charges battery directly
+                solar_to_battery = net_kwh * config.charge_efficiency
+                # Grid charge only what's needed to fill remaining capacity
+                soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
+                remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
+                if remaining_headroom > 0:
+                    grid_charge_kwh = min(effective_charge_kwh, (remaining_headroom / 100.0) * capacity_kwh)
+                else:
+                    grid_charge_kwh = 0.0
+            else:
+                # Net consumption - grid must charge battery AND cover deficit
+                # Battery still charges from grid, but household draws from grid too
+                grid_charge_kwh = effective_charge_kwh
+
+            delta_soc = (grid_charge_kwh / capacity_kwh) * 100.0
+            if net_kwh > 0:
+                delta_soc += (net_kwh * config.charge_efficiency / capacity_kwh) * 100.0
+
+            next_soc = soc_pct + delta_soc
+            # Clip to max SOC
+            if next_soc > config.max_soc_pct:
+                # Reduce grid import to exactly hit max
+                actual_grid_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+                next_soc = config.max_soc_pct
+                return next_soc, actual_grid_kwh, 0.0
+
+            return next_soc, grid_charge_kwh, 0.0
 
         if action == PlannerAction.CHARGE_GRID_BOOST:
-            charge_kwh = config.boost_charge_rate_kw * slot_hours * config.charge_efficiency
-            delta_soc = (charge_kwh / config.battery_capacity_kwh) * 100.0
-            next_soc = min(config.max_soc_pct, soc_pct + delta_soc)
-            return next_soc, charge_kwh, 0.0
+            # Grid charge at boost rate, plus solar/consumption net effect
+            max_charge_kwh = config.boost_charge_rate_kw * slot_hours
+            effective_charge_kwh = max_charge_kwh * config.charge_efficiency
+
+            if net_kwh > 0:
+                solar_to_battery = net_kwh * config.charge_efficiency
+                soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
+                remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
+                if remaining_headroom > 0:
+                    grid_charge_kwh = min(effective_charge_kwh, (remaining_headroom / 100.0) * capacity_kwh)
+                else:
+                    grid_charge_kwh = 0.0
+            else:
+                grid_charge_kwh = effective_charge_kwh
+
+            delta_soc = (grid_charge_kwh / capacity_kwh) * 100.0
+            if net_kwh > 0:
+                delta_soc += (net_kwh * config.charge_efficiency / capacity_kwh) * 100.0
+
+            next_soc = soc_pct + delta_soc
+            # Clip to max SOC
+            if next_soc > config.max_soc_pct:
+                actual_grid_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+                next_soc = config.max_soc_pct
+                return next_soc, actual_grid_kwh, 0.0
+
+            return next_soc, grid_charge_kwh, 0.0
 
         if action == PlannerAction.EXPORT_PROACTIVE:
-            discharge_kwh = config.discharge_rate_kw * slot_hours / config.discharge_efficiency
-            delta_soc = -(discharge_kwh / config.battery_capacity_kwh) * 100.0
-            next_soc = max(config.min_soc_pct, soc_pct + delta_soc)
-            return next_soc, 0.0, discharge_kwh
+            # Discharge to grid at max rate
+            max_discharge_kwh = config.discharge_rate_kw * slot_hours
+            # Effective export accounts for discharge efficiency loss
+            effective_export_kwh = max_discharge_kwh / config.discharge_efficiency
+
+            # Account for solar/consumption net
+            # Solar goes directly to export (not through battery)
+            # Consumption reduces effective export
+            net_export = effective_export_kwh
+            if net_kwh > 0:
+                # Solar surplus adds to export directly
+                net_export += net_kwh
+            else:
+                # Consumption deficit reduces export
+                net_export = max(0.0, net_export + net_kwh)
+
+            delta_soc = -(effective_export_kwh / capacity_kwh) * 100.0
+            next_soc = soc_pct + delta_soc
+
+            # Clip to min SOC
+            if next_soc < config.min_soc_pct:
+                # Reduce export to exactly hit min
+                available_kwh = max(0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh)
+                actual_export = available_kwh * config.discharge_efficiency
+                next_soc = config.min_soc_pct
+                return next_soc, 0.0, actual_export
+
+            return next_soc, 0.0, net_export
 
         return soc_pct, 0.0, 0.0
 
