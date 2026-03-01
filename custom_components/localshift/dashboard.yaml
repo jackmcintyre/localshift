@@ -939,3 +939,60 @@ views:
             "%.4f"|format(grid_item.export_amount_kwh | float) }} |
 
             {%- endfor %}
+
+        - type: markdown
+          content: >
+            {% set decisions = state_attr('sensor.localshift_optimizer_shadow_plan', 'decisions') | default([]) %}
+            {% set opt_enabled = state_attr('sensor.localshift_optimizer_shadow_plan', 'enabled') | default(false) %}
+            {% set success = state_attr('sensor.localshift_optimizer_shadow_plan', 'success') | default(false) %}
+
+            {% if not opt_enabled %}
+            **Optimizer disabled**
+            {% elif not success %}
+            **Optimizer error** — check error_message attribute
+            {% elif decisions | length == 0 %}
+            **No decisions available**
+            {% else %}
+
+            **Optimizer Summary:** {{ state_attr('sensor.localshift_optimizer_shadow_summary', 'total_slots') | default(0) }} slots |
+            {{ state_attr('sensor.localshift_optimizer_comparison', 'total_slots') | default(0) }} legacy slots |
+            {{ state_attr('sensor.localshift_optimizer_comparison', 'aligned_slots') | default(0) }} optimizer slots
+
+            **Projected Cost:** Legacy: ${{ state_attr('sensor.localshift_optimizer_comparison', 'legacy_projected_net_cost') | default(0) | round(2) }} |
+            Optimizer: ${{ state_attr('sensor.localshift_optimizer_comparison', 'optimizer_projected_net_cost') | default(0) | round(2) }}
+
+            | Time | SOC% | Action | Reason | Import | Export |
+
+            | :--- | ---: | :--- | :--- | ---: | ---: |
+
+            {% for d in decisions[:24] %}
+            | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(20) }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
+            {% endfor %}
+
+            {% if decisions | length > 24 %}
+            *(showing first 24 of {{ decisions | length }} slots)*
+            {% endif %}
+
+            {% endif %}
+
+        - type: markdown
+          content: >
+            {% set top = state_attr('sensor.localshift_optimizer_comparison', 'top_mismatches') | default([]) %}
+
+            {% if top | length > 0 %}
+
+            **Top Mismatches:**
+
+            | Slot | Time | Type | Legacy | Optimizer | Savings |
+
+            | :--- | :--- | :--- | :--- | :--- | ---: |
+
+            {% for m in top[:5] %}
+            | {{ m.slot_index }} | {{ m.timestamp_iso[11:16] if m.timestamp_iso else '-' }} | {{ m.mismatch_type | replace('_MISMATCH', '') }} | {{ m.legacy_action }} | {{ m.optimizer_action }} | ${{ (m.legacy_net_cost | default(0) - m.optimizer_net_cost | default(0)) | round(3) }} |
+            {% endfor %}
+
+            {% else %}
+
+            *No mismatches or optimizer disabled*
+
+            {% endif %}
