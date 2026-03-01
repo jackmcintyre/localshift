@@ -362,6 +362,136 @@ def test_dp_planner_terminal_shortfall_calculation(demand_window_slots):
     assert result.terminal_shortfall_pct >= 0.0
 
 
+def test_feasible_actions_blocks_grid_charging_in_demand_window(default_config):
+    """Grid charging actions should be unavailable during demand window slots."""
+    slot = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T18:00:00",
+        slot_interval_minutes=30,
+        buy_price=0.08,
+        sell_price=0.05,
+        solar_kwh=0.0,
+        consumption_kwh=0.5,
+        is_demand_window_slot=True,
+    )
+
+    actions = DPPlanner.feasible_actions(50.0, slot, default_config)
+
+    assert PlannerAction.HOLD in actions
+    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
+    assert PlannerAction.CHARGE_GRID_BOOST not in actions
+
+
+def test_terminal_penalty_applied_at_dw_entry_by_default():
+    """When switch is off, shortfall is measured at demand window entry."""
+    slots = [
+        SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-01-03T18:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_entry=True,
+            is_demand_window_slot=True,
+        ),
+        SlotContext(
+            slot_index=1,
+            timestamp_iso="2026-01-03T18:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=2.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=True,
+        ),
+        SlotContext(
+            slot_index=2,
+            timestamp_iso="2026-01-03T19:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=False,
+        ),
+    ]
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=60.0,
+        allow_dw_entry_under_target=False,
+        soc_bins=20,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="dw-entry-penalty",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=config,
+    )
+
+    result = DPPlanner().plan(inputs)
+
+    assert result.success
+    assert result.terminal_shortfall_pct > 0.0
+
+
+def test_terminal_penalty_applied_at_dw_end_when_switch_enabled():
+    """When switch is on, shortfall can be recovered within demand window."""
+    slots = [
+        SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-01-03T18:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_entry=True,
+            is_demand_window_slot=True,
+        ),
+        SlotContext(
+            slot_index=1,
+            timestamp_iso="2026-01-03T18:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=2.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=True,
+        ),
+        SlotContext(
+            slot_index=2,
+            timestamp_iso="2026-01-03T19:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=False,
+        ),
+    ]
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=60.0,
+        allow_dw_entry_under_target=True,
+        soc_bins=20,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="dw-end-penalty",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=config,
+    )
+
+    result = DPPlanner().plan(inputs)
+
+    assert result.success
+    assert result.terminal_shortfall_pct == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # Negative FIT tests
 # ---------------------------------------------------------------------------
@@ -575,6 +705,7 @@ def test_dp_planner_states_explored():
     result = DPPlanner().plan(inputs)
     assert result.success
     assert result.states_explored > 0
+    # Should explore roughly n_slots * n_bins * n_actions states.
     expected_min = len(multi_slots) * config.soc_bins * 2
     assert result.states_explored >= expected_min
 
@@ -630,7 +761,7 @@ def test_classify_reason_target_shortfall_uses_future_slots():
         soc=40.0,
         next_soc=45.0,
         config=config,
-        demand_window_entry_idx=2,
+        terminal_penalty_idx=2,
     )
 
     assert reason == PlannerReasonCode.TARGET_SHORTFALL_RISK
@@ -682,7 +813,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
         soc=75.0,
         next_soc=78.0,
         config=config,
-        demand_window_entry_idx=2,
+        terminal_penalty_idx=2,
     )
 
     assert reason == PlannerReasonCode.CHEAP_IMPORT_WINDOW
