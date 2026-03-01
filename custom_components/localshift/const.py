@@ -168,6 +168,15 @@ CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
+CONF_OPTIMIZATION_MODE = "optimization_mode"
+
+# Optimization mode options
+OPTIMIZATION_MODE_SELF_CONSUMPTION = "self_consumption"
+OPTIMIZATION_MODE_ARBITRAGE = "arbitrage"
+OPTIMIZATION_MODE_OPTIONS = [
+    OPTIMIZATION_MODE_SELF_CONSUMPTION,
+    OPTIMIZATION_MODE_ARBITRAGE,
+]
 
 # Default values (matching YAML package)
 DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
@@ -193,6 +202,7 @@ DEFAULT_SPIKE_PRICE_PERCENTILE = 75  # Only export at top 25% of spike prices
 DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
 )
+DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -342,6 +352,7 @@ SWITCH_NAMES = {
 # -----------------------------------------------------------------------------
 
 SELECT_BATTERY_MODE = "battery_mode"
+SELECT_OPTIMIZATION_MODE = "optimization_mode"
 
 SELECT_OPTIONS = {
     SELECT_BATTERY_MODE: [
@@ -351,14 +362,17 @@ SELECT_OPTIONS = {
         "spike_discharge",
         "proactive_export",
     ],
+    SELECT_OPTIMIZATION_MODE: OPTIMIZATION_MODE_OPTIONS,
 }
 
 SELECT_ICONS = {
     SELECT_BATTERY_MODE: "mdi:battery-sync",
+    SELECT_OPTIMIZATION_MODE: "mdi:target",
 }
 
 SELECT_NAMES = {
     SELECT_BATTERY_MODE: "Battery Mode",
+    SELECT_OPTIMIZATION_MODE: "Optimization Mode",
 }
 
 # -----------------------------------------------------------------------------

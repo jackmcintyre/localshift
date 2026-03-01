@@ -190,6 +190,19 @@ class OptimizerConfig:
     soc_bins: int = 50
     """Number of SOC bins for DP state space (higher = more precise, slower)."""
 
+    # --- Optimization mode (Issue #406) ---
+    optimization_mode: str = "self_consumption"
+    """Optimization strategy: 'self_consumption' (default) or 'arbitrage'."""
+
+    self_consumption_value_per_kwh: float = 0.15
+    """Value of using battery energy for household load ($/kWh). Auto-derived from average buy price."""
+
+    effective_cheap_price: float = 0.10
+    """Price threshold for grid charging in self-consumption mode ($/kWh)."""
+
+    export_price_margin: float = 0.02
+    """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
+
 
 # ---------------------------------------------------------------------------
 # Per-slot decision output
@@ -212,12 +225,16 @@ class ObjectiveTerms:
     shortfall_penalty: float = 0.0
     """Terminal penalty applied at demand window boundary (only for terminal slots)."""
 
+    self_consumption_value: float = 0.0
+    """Value of battery energy used for household load (benefit, subtracted from cost)."""
+
     @property
     def net_cost(self) -> float:
-        """Net slot cost = import - revenue + penalties."""
+        """Net slot cost = import - revenue - self_consumption_value + penalties."""
         return (
             self.import_cost
             - self.export_revenue
+            - self.self_consumption_value
             + self.cycle_penalty
             + self.shortfall_penalty
         )
@@ -229,6 +246,7 @@ class ObjectiveTerms:
             "export_revenue": self.export_revenue,
             "cycle_penalty": self.cycle_penalty,
             "shortfall_penalty": self.shortfall_penalty,
+            "self_consumption_value": self.self_consumption_value,
             "net_cost": self.net_cost,
         }
 
@@ -815,7 +833,8 @@ class DPPlanner:
         Constraints checked:
         - SOC floor/ceiling
         - Demand window entry requirements
-        - Slot duration vs transfer limits (TODO: implement fully in Phase C)
+        - Optimization mode (self_consumption vs arbitrage)
+        - Price thresholds for self-consumption mode
         """
         actions = []
 
@@ -824,12 +843,37 @@ class DPPlanner:
 
         actions.append(PlannerAction.HOLD)
 
-        if can_charge:
-            actions.append(PlannerAction.CHARGE_GRID_NORMAL)
-            actions.append(PlannerAction.CHARGE_GRID_BOOST)
+        # Grid charging constraints (Issue #406)
+        if can_charge and not slot.is_demand_window_slot:
+            # In self-consumption mode, only charge if price is cheap
+            if config.optimization_mode == "self_consumption":
+                price_is_cheap = slot.buy_price <= config.effective_cheap_price
+                price_is_very_cheap = (
+                    slot.buy_price <= config.effective_cheap_price * 0.8
+                )
 
-        if can_discharge and slot.sell_price > 0:
-            actions.append(PlannerAction.EXPORT_PROACTIVE)
+                if price_is_cheap:
+                    actions.append(PlannerAction.CHARGE_GRID_NORMAL)
+                    if price_is_very_cheap:
+                        actions.append(PlannerAction.CHARGE_GRID_BOOST)
+            else:
+                # Arbitrage mode: charge whenever below max
+                actions.append(PlannerAction.CHARGE_GRID_NORMAL)
+                actions.append(PlannerAction.CHARGE_GRID_BOOST)
+
+        # Export constraints (Issue #406)
+        if can_discharge:
+            # In self-consumption mode, only export if profitable vs keeping energy for load
+            if config.optimization_mode == "self_consumption":
+                min_profitable_sell = (
+                    config.self_consumption_value_per_kwh + config.export_price_margin
+                )
+                if slot.sell_price >= min_profitable_sell:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+            else:
+                # Arbitrage mode: export if positive price
+                if slot.sell_price > 0:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
 
         return actions
 
@@ -997,17 +1041,39 @@ class DPPlanner:
         """
         Compute per-slot stage cost terms for an action.
 
-        Returns ObjectiveTerms with all applicable cost components.
+        In self-consumption mode, adds value for battery energy used to cover load.
+        This makes the optimizer prefer keeping energy for household use over exporting
+        unless the export price exceeds the self-consumption value + margin.
         """
         import_cost = grid_import_kwh * slot.buy_price
         export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
         cycle_kwh = grid_import_kwh + grid_export_kwh
         cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
 
+        # Calculate self-consumption value (Issue #406)
+        # Battery energy used to cover household load has value because it avoids
+        # buying from grid at retail price
+        self_consumption_value = 0.0
+        if config.optimization_mode == "self_consumption":
+            # Net load that battery covers = consumption - solar - grid_import
+            # (If positive, battery discharges for load; if negative, battery is being charged)
+            net_load = slot.consumption_kwh - slot.solar_kwh
+            if net_load > 0:
+                # Household needs energy beyond what solar provides
+                # Battery covers some of this (the rest would be grid import)
+                # Grid export takes energy away from load coverage
+                battery_for_load = max(
+                    0.0, net_load - grid_import_kwh - grid_export_kwh
+                )
+                self_consumption_value = (
+                    battery_for_load * config.self_consumption_value_per_kwh
+                )
+
         return ObjectiveTerms(
             import_cost=import_cost,
             export_revenue=export_revenue,
             cycle_penalty=cycle_penalty,
+            self_consumption_value=self_consumption_value,
         )
 
     @staticmethod

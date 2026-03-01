@@ -157,11 +157,12 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `number.localshift_spike_price_percentile` | Price percentile for spike discharge activation |
 | `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes |
 
-### Selects (1)
+### Selects (2)
 
 | Entity ID | Description |
 |---|---|
 | `select.localshift_battery_mode` | Select battery operating mode (self_consumption, grid_charging, boost_charging, spike_discharge, proactive_export). Changing this disables automation and applies manual control. |
+| `select.localshift_optimization_mode` | Select optimizer objective mode (`self_consumption` or `arbitrage`). Changes take effect on the next recompute cycle. |
 
 ### Buttons (3)
 

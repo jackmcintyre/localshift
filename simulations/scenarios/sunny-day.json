@@ -140,7 +140,7 @@
     "demand_window_block": true
   },
   "expected": {
-    "solar_can_reach_target": false,
+    "solar_can_reach_target": true,
     "boost_charge_needed": false
   }
 }

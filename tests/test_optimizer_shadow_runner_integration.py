@@ -32,6 +32,8 @@ def mock_coordinator_data():
     class MockData:
         def __init__(self):
             self.soc = 65.0
+            self.general_price = 0.26
+            self.effective_cheap_price = 0.12
             self.daily_forecast = [
                 {
                     "timestamp_iso": "2025-01-15T06:00:00Z",
@@ -81,6 +83,7 @@ def config_options():
     return {
         "battery_target": 80.0,
         "minimum_target_soc": 15.0,
+        "export_price_margin": 0.10,
     }
 
 
@@ -133,6 +136,21 @@ class TestBuildOptimizerConfig:
         config = _build_optimizer_config(mock_coordinator_data, config_options)
         assert config.target_shortfall_penalty_per_pct == 1.0
         assert config.cycle_penalty_per_kwh == 0.005
+
+    def test_config_maps_optimization_mode(self, mock_coordinator_data, config_options):
+        """Verify optimization mode is mapped from options."""
+        config_options["optimization_mode"] = "arbitrage"
+        config = _build_optimizer_config(mock_coordinator_data, config_options)
+        assert config.optimization_mode == "arbitrage"
+
+    def test_config_maps_self_consumption_inputs(
+        self, mock_coordinator_data, config_options
+    ):
+        """Verify self-consumption economic inputs are mapped."""
+        config = _build_optimizer_config(mock_coordinator_data, config_options)
+        assert config.effective_cheap_price == pytest.approx(0.12)
+        assert config.self_consumption_value_per_kwh == pytest.approx(0.26)
+        assert config.export_price_margin == pytest.approx(0.10)
 
 
 # ---------------------------------------------------------------------------
