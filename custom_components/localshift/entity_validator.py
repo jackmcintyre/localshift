@@ -199,7 +199,10 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
 
 # Staleness thresholds (how long before data is considered stale)
 STALENESS_THRESHOLDS: dict[str, timedelta] = {
-    CONF_TESLEMETRY_SOC: timedelta(minutes=5),
+    # SOC can remain unchanged for extended periods during equilibrium.
+    # Use a longer threshold to avoid false stale warnings while still detecting
+    # genuinely dead telemetry feeds.
+    CONF_TESLEMETRY_SOC: timedelta(minutes=30),
     CONF_TESLEMETRY_OPERATION_MODE: timedelta(minutes=5),
     CONF_PRICING_GENERAL_PRICE: timedelta(minutes=10),
     CONF_PRICING_FEED_IN_PRICE: timedelta(minutes=10),
@@ -328,15 +331,25 @@ class EntityValidator:
         # the data is NOT stale, it's just unchanged.
         staleness_threshold = STALENESS_THRESHOLDS.get(config_key)
         if staleness_threshold and not entity_id.startswith("select."):
-            time_since_update = dt_util.now() - state.last_updated
-            if time_since_update > staleness_threshold:
-                health.status = EntityStatus.STALE
-                health.error_message = (
-                    f"Entity '{entity_id}' data is stale "
-                    f"({time_since_update.total_seconds():.0f}s old)"
-                )
-                # Don't increment failures for stale - it still has a value
-                return health
+            freshness_timestamp = self._get_freshness_timestamp(state)
+            if freshness_timestamp is not None:
+                try:
+                    time_since_update = dt_util.now() - freshness_timestamp
+                except TypeError:
+                    # Defensive guard for malformed timestamps (e.g., naive vs aware)
+                    _LOGGER.debug(
+                        "Skipping staleness check for '%s' due to incompatible timestamp",
+                        entity_id,
+                    )
+                else:
+                    if time_since_update > staleness_threshold:
+                        health.status = EntityStatus.STALE
+                        health.error_message = (
+                            f"Entity '{entity_id}' data is stale "
+                            f"({time_since_update.total_seconds():.0f}s old)"
+                        )
+                        # Don't increment failures for stale - it still has a value
+                        return health
 
         # Entity is healthy - clear broken status if it was previously set
         if health.is_broken:
@@ -354,6 +367,19 @@ class EntityValidator:
         health.consecutive_failures = 0
 
         return health
+
+    def _get_freshness_timestamp(self, state: Any) -> datetime | None:
+        """Return the best timestamp for staleness checks.
+
+        Prefer ``last_reported`` when available because Home Assistant updates
+        it when telemetry is received even if value does not change. Fall back
+        to ``last_updated`` for compatibility.
+        """
+        last_reported = getattr(state, "last_reported", None)
+        if last_reported is not None:
+            return last_reported
+
+        return getattr(state, "last_updated", None)
 
     def _check_failure_thresholds(self, health: EntityHealth, config_key: str) -> None:
         """Check failure thresholds and escalate status if needed.

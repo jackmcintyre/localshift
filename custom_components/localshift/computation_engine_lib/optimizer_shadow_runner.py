@@ -18,6 +18,7 @@ is the ONLY coupling point. All optimizer internals stay isolated here.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -148,9 +149,31 @@ def _run(
             alignment["issues"],
         )
 
+    initial_soc_pct, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
+    if initial_soc_pct is None:
+        data.optimizer_shadow_summary = {
+            "enabled": True,
+            "shadow_mode": True,
+            "planner_version": DPPlanner.VERSION,
+            "success": False,
+            "error_message": "invalid_initial_soc",
+            "cycle_id": cycle_id,
+            "cycle_timestamp_iso": cycle_timestamp_iso,
+            "computed_at": cycle_timestamp_iso,
+            "initial_soc_info": soc_info,
+            "parity_completeness_pct": parity_info.get("completeness_pct", 0.0),
+            "alignment_valid": alignment.get("valid", False),
+        }
+        _LOGGER.warning(
+            "Shadow optimizer skipped cycle %s due to invalid initial SOC: %s",
+            cycle_id,
+            soc_info,
+        )
+        return
+
     inputs = OptimizerInputs(
         cycle_id=cycle_id,
-        initial_soc_pct=float(data.soc),
+        initial_soc_pct=initial_soc_pct,
         slots=slots,
         config=optimizer_config,
     )
@@ -164,7 +187,13 @@ def _run(
         _serialize_decision(d) for d in result.decisions
     ]
     data.optimizer_shadow_summary = _build_summary(
-        result, cycle_id, cycle_timestamp_iso, parity_info, alignment
+        result,
+        cycle_id,
+        cycle_timestamp_iso,
+        parity_info,
+        alignment,
+        config_options,
+        soc_info,
     )
 
     _LOGGER.debug(
@@ -177,17 +206,20 @@ def _run(
     )
 
     # 4. Run comparison against legacy planner
+    legacy_import_kwh, legacy_export_kwh = _compute_legacy_energy_totals(data.daily_forecast)
+
     comparison_record = comparator.compare(
         cycle_id=cycle_id,
         cycle_timestamp_iso=cycle_timestamp_iso,
         legacy_slots=data.daily_forecast,
         optimizer_decisions=result.decisions,
         legacy_projected_net_cost=getattr(data, "forecast_net_cost", 0.0),
-        legacy_projected_import_kwh=getattr(data, "forecast_import_cost", 0.0),
-        legacy_projected_export_kwh=getattr(data, "forecast_export_revenue", 0.0),
+        legacy_projected_import_kwh=legacy_import_kwh,
+        legacy_projected_export_kwh=legacy_export_kwh,
         optimizer_projected_net_cost=result.projected_net_cost,
         optimizer_projected_import_kwh=result.projected_import_kwh,
         optimizer_projected_export_kwh=result.projected_export_kwh,
+        demand_window_target_soc_pct=optimizer_config.demand_window_target_soc_pct,
     )
     data.optimizer_comparison = comparison_record.to_dict()
 
@@ -387,6 +419,69 @@ def _get_slot_field(
     return default, True
 
 
+def _normalize_initial_soc(
+    raw_soc: Any,
+    config: OptimizerConfig,
+) -> tuple[float | None, dict[str, Any]]:
+    """Normalize and validate initial SOC before optimizer input construction.
+
+    Behavior:
+    - Reject non-numeric / non-finite values.
+    - Treat 0 < SOC <= 1 as fractional input and convert to percentage.
+    - Reject SOC <= 0 as invalid (typically unavailable entity fallback).
+    - Clamp out-of-range values to configured bounds.
+    """
+    info: dict[str, Any] = {
+        "raw_soc": raw_soc,
+        "normalization": "none",
+    }
+
+    try:
+        soc = float(raw_soc)
+    except (TypeError, ValueError):
+        info["error"] = "non_numeric"
+        return None, info
+
+    if not math.isfinite(soc):
+        info["error"] = "non_finite"
+        return None, info
+
+    if 0.0 < soc <= 1.0:
+        soc *= 100.0
+        info["normalization"] = "fraction_to_percent"
+
+    if soc <= 0.0:
+        info["error"] = "non_positive"
+        return None, info
+
+    clamped_soc = max(config.min_soc_pct, min(config.max_soc_pct, soc))
+    if clamped_soc != soc:
+        info["normalization"] = "clamped_to_bounds"
+        info["pre_clamp_soc"] = soc
+    soc = clamped_soc
+
+    info["normalized_soc_pct"] = round(soc, 3)
+    return soc, info
+
+
+def _compute_legacy_energy_totals(legacy_slots: list[dict[str, Any]]) -> tuple[float, float]:
+    """Compute total legacy import/export kWh from forecast slot payload."""
+    total_import = 0.0
+    total_export = 0.0
+
+    for slot in legacy_slots:
+        try:
+            total_import += float(slot.get("grid_import_kwh", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            total_export += float(slot.get("grid_export_kwh", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    return total_import, total_export
+
+
 def _validate_slot_alignment(
     legacy_slots: list[dict[str, Any]],
     contexts: list[SlotContext],
@@ -495,6 +590,8 @@ def _build_summary(
     cycle_timestamp_iso: str,
     parity_info: dict[str, Any] | None = None,
     alignment: dict[str, Any] | None = None,
+    config_options: dict[str, Any] | None = None,
+    initial_soc_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the compact optimizer_shadow_summary dict for the diagnostics sensor."""
     summary = {
@@ -504,6 +601,7 @@ def _build_summary(
         "success": result.success,
         "cycle_id": cycle_id,
         "cycle_timestamp_iso": cycle_timestamp_iso,
+        "computed_at": cycle_timestamp_iso,
         "solve_time_seconds": round(result.solve_time_seconds, 4),
         "total_slots": result.total_slots,
         "projected_net_cost": round(result.projected_net_cost, 4),
@@ -512,7 +610,12 @@ def _build_summary(
         "terminal_shortfall_pct": round(result.terminal_shortfall_pct, 2),
         "reason_code_histogram": result.reason_code_histogram,
         "error_message": result.error_message,
+        "config_options": config_options or {},
     }
+
+    if initial_soc_info:
+        summary["initial_soc_info"] = initial_soc_info
+        summary["initial_soc_pct"] = initial_soc_info.get("normalized_soc_pct")
 
     # Add parity completeness diagnostics (Phase B #403)
     if parity_info:

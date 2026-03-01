@@ -652,6 +652,8 @@ class DPPlanner:
             reason = self._classify_reason(
                 action=action,
                 slot=slot,
+                slot_idx=slot_idx,
+                slots=slots,
                 soc=current_soc,
                 next_soc=next_soc,
                 config=config,
@@ -707,6 +709,8 @@ class DPPlanner:
         self,
         action: PlannerAction,
         slot: SlotContext,
+        slot_idx: int,
+        slots: list[SlotContext],
         soc: float,
         next_soc: float,
         config: OptimizerConfig,
@@ -734,22 +738,18 @@ class DPPlanner:
         # Grid charge reasoning
         if action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST):
             # Check if needed for demand window target
-            if demand_window_entry_idx is not None and slot.slot_index < demand_window_entry_idx:
-                # Check if current trajectory would miss target
-                slots_remaining = demand_window_entry_idx - slot.slot_index
+            if demand_window_entry_idx is not None and slot_idx < demand_window_entry_idx:
                 soc_deficit = config.demand_window_target_soc_pct - soc
                 if soc_deficit > 0:
-                    # Rough estimate: can solar alone meet the target?
-                    future_solar = sum(
+                    # Use real future slots (no repeated-current-slot approximation).
+                    projected_net_kwh = sum(
                         s.solar_kwh - s.consumption_kwh
-                        for s in (
-                            slot for i, slot in enumerate(
-                                [slot] * slots_remaining  # Approximation
-                            )
-                        )
+                        for s in slots[slot_idx:demand_window_entry_idx]
                     )
-                    potential_soc_gain = (future_solar / config.battery_capacity_kwh) * 100.0
-                    if potential_soc_gain < soc_deficit * 0.8:
+                    potential_soc_gain_pct = (
+                        projected_net_kwh / config.battery_capacity_kwh
+                    ) * 100.0
+                    if potential_soc_gain_pct < soc_deficit:
                         return PlannerReasonCode.TARGET_SHORTFALL_RISK
 
             # Check for cheap import opportunity

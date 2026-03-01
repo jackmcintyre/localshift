@@ -1178,8 +1178,8 @@ class OptimizerShadowPlanSensor(LocalShiftSensorBase):
 
     def _update_from_coordinator(self) -> None:
         """Update with shadow plan summary."""
-        summary = self.coordinator.data.optimizer_shadow_summary
-        if summary is None:
+        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        if not summary or not summary.get("enabled", False):
             self._attr_native_value = "disabled"
         elif not summary.get("success", False):
             self._attr_native_value = "error"
@@ -1200,7 +1200,8 @@ class OptimizerShadowPlanSensor(LocalShiftSensorBase):
             "error_message": summary.get("error_message"),
             "decisions": decisions,
             "total_slots": len(decisions),
-            "computed_at": summary.get("computed_at"),
+            "computed_at": summary.get("cycle_timestamp_iso")
+            or summary.get("computed_at"),
         }
 
     @property
@@ -1228,8 +1229,8 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
 
     def _update_from_coordinator(self) -> None:
         """Update with shadow run summary."""
-        summary = self.coordinator.data.optimizer_shadow_summary
-        if summary is None:
+        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        if not summary or not summary.get("enabled", False):
             self._attr_native_value = "disabled"
         elif summary.get("success", False):
             self._attr_native_value = "success"
@@ -1244,7 +1245,8 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
             "enabled": summary.get("enabled", False),
             "success": summary.get("success", False),
             "error_message": summary.get("error_message"),
-            "computed_at": summary.get("computed_at"),
+            "computed_at": summary.get("cycle_timestamp_iso")
+            or summary.get("computed_at"),
             "config_options": summary.get("config_options", {}),
         }
 

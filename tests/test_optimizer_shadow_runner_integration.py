@@ -15,6 +15,7 @@ from custom_components.localshift.computation_engine_lib.optimizer_shadow_runner
     _build_optimizer_config,
     _build_slot_contexts,
     _build_summary,
+    _normalize_initial_soc,
     _validate_slot_alignment,
     run_shadow_optimizer,
 )
@@ -364,6 +365,56 @@ class TestBuildSummary:
         assert "alignment_issues" in summary
         assert "test_issue" in summary["alignment_issues"]
 
+    def test_summary_includes_cycle_timestamp_as_computed_at(
+        self, mock_coordinator_data
+    ):
+        """Verify summary exposes cycle timestamp under computed_at for sensors."""
+        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+            OptimizerResult,
+        )
+
+        result = OptimizerResult(success=True, total_slots=3)
+        summary = _build_summary(
+            result,
+            "cycle123",
+            "2025-01-15T06:00:00Z",
+        )
+
+        assert summary["cycle_timestamp_iso"] == "2025-01-15T06:00:00Z"
+        assert summary["computed_at"] == "2025-01-15T06:00:00Z"
+
+
+class TestNormalizeInitialSoc:
+    """Tests for initial SOC normalization and validation guard."""
+
+    def test_fraction_is_converted_to_percent(self, mock_coordinator_data):
+        """SOC values in 0..1 range should be treated as fractional."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+        normalized, info = _normalize_initial_soc(0.65, config)
+
+        assert normalized == pytest.approx(65.0)
+        assert info["normalization"] == "fraction_to_percent"
+        assert info["normalized_soc_pct"] == pytest.approx(65.0)
+
+    def test_non_positive_soc_is_rejected(self, mock_coordinator_data):
+        """SOC <= 0 should be rejected to avoid invalid optimizer runs."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+        normalized, info = _normalize_initial_soc(0.0, config)
+
+        assert normalized is None
+        assert info["error"] == "non_positive"
+
+    def test_soc_is_clamped_to_bounds(self, mock_coordinator_data):
+        """Out-of-range SOC should be clamped to configured min/max bounds."""
+        config = _build_optimizer_config(
+            mock_coordinator_data,
+            {"minimum_target_soc": 20.0},
+        )
+        normalized, info = _normalize_initial_soc(110.0, config)
+
+        assert normalized == pytest.approx(config.max_soc_pct)
+        assert info["normalization"] == "clamped_to_bounds"
+
 
 # ---------------------------------------------------------------------------
 # Test: Full shadow run integration
@@ -418,3 +469,29 @@ class TestRunShadowOptimizer:
         assert (
             "no_slots_available" in empty_data.optimizer_shadow_summary["error_message"]
         )
+
+    def test_invalid_initial_soc_sets_error_summary(self, config_options):
+        """Invalid initial SOC should surface a deterministic error summary."""
+
+        class InvalidSocData:
+            def __init__(self):
+                self.soc = 0.0
+                self.daily_forecast = [
+                    {
+                        "timestamp_iso": "2025-01-15T06:00:00Z",
+                        "slot_interval_minutes": 30,
+                        "buy_price": 0.25,
+                        "sell_price": 0.08,
+                        "solar_kwh": 0.5,
+                        "consumption_kwh": 1.2,
+                    }
+                ]
+
+        data = InvalidSocData()
+        config_options["optimizer_enabled"] = True
+        run_shadow_optimizer(data, config_options)
+
+        assert data.optimizer_shadow_summary is not None
+        assert data.optimizer_shadow_summary["success"] is False
+        assert data.optimizer_shadow_summary["error_message"] == "invalid_initial_soc"
+        assert "initial_soc_info" in data.optimizer_shadow_summary

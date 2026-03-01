@@ -169,10 +169,6 @@ CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 
-# Optimizer settings (Issue #403)
-CONF_OPTIMIZER_ENABLED = "optimizer_enabled"
-DEFAULT_OPTIMIZER_ENABLED = False
-
 # Default values (matching YAML package)
 DEFAULT_CHEAP_PRICE_PERCENTILE = 25  # percentile (e.g., 25th percentile)
 DEFAULT_MAX_PRECHARGE_PRICE = 0.20  # $/kWh

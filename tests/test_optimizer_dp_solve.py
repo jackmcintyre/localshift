@@ -25,7 +25,6 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     _map_soc_to_bin,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -559,3 +558,108 @@ def test_dp_planner_states_explored(default_config, multi_slots):
     # Should explore roughly n_slots * n_bins * n_actions states
     expected_min = len(multi_slots) * default_config.soc_bins * 2  # At least 2 actions each
     assert result.states_explored >= expected_min
+
+
+# ---------------------------------------------------------------------------
+# Reason-classification tests
+# ---------------------------------------------------------------------------
+
+
+def test_classify_reason_target_shortfall_uses_future_slots():
+    """Grid charging before DW should be tagged shortfall risk when net future solar is insufficient."""
+    planner = DPPlanner()
+    config = OptimizerConfig(battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0)
+
+    slots = [
+        SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-01-03T10:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.20,
+            sell_price=0.06,
+            solar_kwh=0.1,
+            consumption_kwh=0.7,
+        ),
+        SlotContext(
+            slot_index=1,
+            timestamp_iso="2026-01-03T10:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.20,
+            sell_price=0.06,
+            solar_kwh=0.2,
+            consumption_kwh=0.8,
+        ),
+        SlotContext(
+            slot_index=2,
+            timestamp_iso="2026-01-03T11:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.20,
+            sell_price=0.06,
+            solar_kwh=0.2,
+            consumption_kwh=0.8,
+            is_demand_window_entry=True,
+        ),
+    ]
+
+    reason = planner._classify_reason(  # noqa: SLF001 - unit test for internal logic
+        action=PlannerAction.CHARGE_GRID_NORMAL,
+        slot=slots[0],
+        slot_idx=0,
+        slots=slots,
+        soc=40.0,
+        next_soc=45.0,
+        config=config,
+        demand_window_entry_idx=2,
+    )
+
+    assert reason == PlannerReasonCode.TARGET_SHORTFALL_RISK
+
+
+def test_classify_reason_cheap_import_when_target_can_be_met():
+    """Cheap price should classify as CHEAP_IMPORT_WINDOW when shortfall risk test does not trigger."""
+    planner = DPPlanner()
+    config = OptimizerConfig(battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0)
+
+    slots = [
+        SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-01-03T10:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.10,
+            sell_price=0.06,
+            solar_kwh=1.5,
+            consumption_kwh=0.2,
+        ),
+        SlotContext(
+            slot_index=1,
+            timestamp_iso="2026-01-03T10:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.10,
+            sell_price=0.06,
+            solar_kwh=1.5,
+            consumption_kwh=0.2,
+        ),
+        SlotContext(
+            slot_index=2,
+            timestamp_iso="2026-01-03T11:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.10,
+            sell_price=0.06,
+            solar_kwh=1.0,
+            consumption_kwh=0.2,
+            is_demand_window_entry=True,
+        ),
+    ]
+
+    reason = planner._classify_reason(  # noqa: SLF001 - unit test for internal logic
+        action=PlannerAction.CHARGE_GRID_NORMAL,
+        slot=slots[0],
+        slot_idx=0,
+        slots=slots,
+        soc=75.0,
+        next_soc=78.0,
+        config=config,
+        demand_window_entry_idx=2,
+    )
+
+    assert reason == PlannerReasonCode.CHEAP_IMPORT_WINDOW
