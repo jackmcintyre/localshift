@@ -418,7 +418,18 @@ class PlannerComparator:
         optimizer_decisions: list[Any],
         demand_window_target_soc_pct: float | None,
     ) -> tuple[bool | None, bool | None]:
-        """Compute DW target attainment booleans for legacy and optimizer plans."""
+        """Compute DW target attainment booleans for legacy and optimizer plans.
+
+        Scans legacy_slots for the first slot where ``is_demand_window_entry``
+        is True and compares each planner's projected SOC against
+        ``demand_window_target_soc_pct``.
+
+        When no ``is_demand_window_entry`` slot falls within the current
+        forecast window (the common case when the DW boundary is several
+        hours away), the function falls back to the last aligned slot as a
+        proxy for end-of-horizon attainment and emits a warning so the
+        fallback is visible in logs.
+        """
         if demand_window_target_soc_pct is None:
             return None, None
 
@@ -457,7 +468,49 @@ class PlannerComparator:
             )
             return legacy_meets, optimizer_meets
 
-        return None, None
+        # Fallback: no is_demand_window_entry slot found in the forecast window.
+        # This is the normal case when the DW boundary lies beyond the current
+        # planning horizon. Use the last aligned slot as a proxy so callers
+        # receive a non-None result and can still detect attainment divergence.
+        last_idx = min(len(legacy_slots), len(optimizer_decisions)) - 1
+        if last_idx < 0:
+            return None, None
+
+        _LOGGER.warning(
+            "No is_demand_window_entry slot found in forecast window; "
+            "using last aligned slot (idx=%d) as DW target proxy",
+            last_idx,
+        )
+
+        legacy_slot = legacy_slots[last_idx]
+        legacy_soc = legacy_slot.get("predicted_soc")
+        optimizer_soc = getattr(
+            optimizer_decisions[last_idx], "predicted_soc_pct", None
+        )
+
+        try:
+            legacy_soc_f = float(legacy_soc) if legacy_soc is not None else None
+        except (TypeError, ValueError):
+            legacy_soc_f = None
+
+        try:
+            optimizer_soc_f = (
+                float(optimizer_soc) if optimizer_soc is not None else None
+            )
+        except (TypeError, ValueError):
+            optimizer_soc_f = None
+
+        legacy_meets = (
+            legacy_soc_f >= demand_window_target_soc_pct
+            if legacy_soc_f is not None
+            else None
+        )
+        optimizer_meets = (
+            optimizer_soc_f >= demand_window_target_soc_pct
+            if optimizer_soc_f is not None
+            else None
+        )
+        return legacy_meets, optimizer_meets
 
     def _build_target_attainment_mismatch(
         self,
@@ -466,12 +519,23 @@ class PlannerComparator:
         legacy_meets_target: bool,
         optimizer_meets_target: bool,
     ) -> SlotMismatch:
-        """Create a synthetic mismatch record for DW target attainment divergence."""
-        entry_idx = 0
+        """Create a synthetic mismatch record for DW target attainment divergence.
+
+        Uses the DW entry slot when present, or the last aligned slot as a
+        fallback (matching the fallback logic in ``_compute_target_attainment``).
+        """
+        entry_idx: int | None = None
         for idx, legacy_slot in enumerate(legacy_slots):
             if legacy_slot.get("is_demand_window_entry", False):
                 entry_idx = idx
                 break
+
+        if entry_idx is None:
+            # No DW entry slot in window — mirror the fallback used by
+            # _compute_target_attainment and use the last aligned slot.
+            entry_idx = min(len(legacy_slots), len(optimizer_decisions)) - 1
+            if entry_idx < 0:
+                entry_idx = 0
 
         legacy_slot = legacy_slots[entry_idx] if legacy_slots else {}
         opt_decision = (
