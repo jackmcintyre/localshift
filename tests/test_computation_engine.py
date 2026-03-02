@@ -9,6 +9,11 @@ from custom_components.localshift.computation_engine import (
     BatteryMode,
     ForecastChangeTracker,
 )
+from custom_components.localshift.computation_engine_lib.mode_decision import (
+    PRESERVE_BUFFER_PERCENT,
+    ModeDecisionEngine,
+)
+from custom_components.localshift.coordinator_data import CoordinatorData
 
 
 @pytest.mark.parametrize(
@@ -649,6 +654,7 @@ async def test_async_initialize_weather_correlation_updates_forecast_computer(
 
         mock_set_weather.assert_called_once_with(mock_weather)
 
+
 class TestLoadForecastSlots:
     """Tests for load_forecast_slots (Issue #441 Phase 1)."""
 
@@ -664,14 +670,19 @@ class TestLoadForecastSlots:
         coordinator_data.load_power_kw = 0.5
 
         with patch.object(
-            computation_engine, "_get_historical_hourly_averages", return_value={10: 0.5, 11: 0.6}
+            computation_engine,
+            "_get_historical_hourly_averages",
+            return_value={10: 0.5, 11: 0.6},
         ):
             computation_engine.compute_derived_values(coordinator_data)
 
         # Verify load_forecast_slots is populated
         assert hasattr(coordinator_data, "load_forecast_slots")
         assert len(coordinator_data.load_forecast_slots) == TOTAL_SLOTS
-        assert all(isinstance(v, float) and v >= 0 for v in coordinator_data.load_forecast_slots)
+        assert all(
+            isinstance(v, float) and v >= 0
+            for v in coordinator_data.load_forecast_slots
+        )
 
     def test_load_forecast_slots_populated_before_forecast_computer_runs(
         self, computation_engine, coordinator_data
@@ -680,7 +691,9 @@ class TestLoadForecastSlots:
         coordinator_data.load_power_kw = 0.5
 
         with patch.object(
-            computation_engine, "_get_historical_hourly_averages", return_value={10: 0.5, 11: 0.6}
+            computation_engine,
+            "_get_historical_hourly_averages",
+            return_value={10: 0.5, 11: 0.6},
         ):
             with patch.object(
                 computation_engine, "_compute_daily_15min_forecast"
@@ -689,7 +702,10 @@ class TestLoadForecastSlots:
                 def check_slots_on_call(*args, **kwargs):
                     assert hasattr(coordinator_data, "load_forecast_slots")
                     assert len(coordinator_data.load_forecast_slots) > 0
-                    assert all(isinstance(v, float) and v >= 0 for v in coordinator_data.load_forecast_slots)
+                    assert all(
+                        isinstance(v, float) and v >= 0
+                        for v in coordinator_data.load_forecast_slots
+                    )
                     return None
 
                 mock_forecast.side_effect = check_slots_on_call
@@ -697,3 +713,207 @@ class TestLoadForecastSlots:
 
                 # Verify _compute_daily_15min_forecast was called
                 assert mock_forecast.called
+
+
+# =============================================================================
+# Tests for ModeDecisionEngine._compute_preserve_soc (Issue #457)
+# =============================================================================
+
+
+@pytest.fixture
+def mode_engine():
+    """Minimal ModeDecisionEngine instance for preserve_soc unit tests."""
+    engine = ModeDecisionEngine(
+        get_switch_state=MagicMock(return_value=True),
+        get_forecast_entry_for_now=MagicMock(return_value=None),
+    )
+    return engine
+
+
+@pytest.fixture
+def preserve_data():
+    """CoordinatorData pre-configured for preserve_soc tests."""
+    data = CoordinatorData()
+    data.active_mode = BatteryMode.SELF_CONSUMPTION
+    data.demand_window_active = False
+    data.solar_can_reach_target = False
+    data.soc = 60.0
+    data.backup_reserve = 10.0
+    data.daily_forecast = []
+    return data
+
+
+# Helpers -------------------------------------------------------------------
+
+_TZ = timezone(timedelta(hours=11))  # AEDT (same as logs)
+
+
+def _now(hour: int, minute: int = 0) -> datetime:
+    """Return a timezone-aware datetime for the given time today."""
+    return datetime(2026, 3, 3, hour, minute, 0, tzinfo=_TZ)
+
+
+def _slot(
+    hour: int, minute: int = 0, grid_charge: bool = False, boost: bool = False
+) -> dict:
+    """Build a minimal forecast slot dict."""
+    ts = datetime(2026, 3, 3, hour, minute, 0, tzinfo=_TZ)
+    return {
+        "timestamp": ts.isoformat(),
+        "grid_charge": grid_charge,
+        "grid_charge_boost": boost,
+    }
+
+
+# Test: not in SELF_CONSUMPTION → no preservation ---------------------------
+
+
+def test_preserve_soc_skipped_when_not_self_consumption(mode_engine, preserve_data):
+    """preserve_soc must remain None when active_mode is not SELF_CONSUMPTION."""
+    preserve_data.active_mode = BatteryMode.GRID_CHARGING
+    mode_engine._compute_preserve_soc(preserve_data, _now(6), dw_start_time=time(15, 0))
+    assert preserve_data.preserve_soc is None
+
+
+# Test: demand window active → no preservation ------------------------------
+
+
+def test_preserve_soc_skipped_during_demand_window(mode_engine, preserve_data):
+    """preserve_soc must remain None when the demand window is active."""
+    preserve_data.demand_window_active = True
+    mode_engine._compute_preserve_soc(
+        preserve_data, _now(16), dw_start_time=time(15, 0)
+    )
+    assert preserve_data.preserve_soc is None
+
+
+# Test: solar can reach target → no preservation ----------------------------
+
+
+def test_preserve_soc_skipped_when_solar_sufficient(mode_engine, preserve_data):
+    """preserve_soc must remain None when solar alone can reach the target."""
+    preserve_data.solar_can_reach_target = True
+    mode_engine._compute_preserve_soc(preserve_data, _now(9), dw_start_time=time(15, 0))
+    assert preserve_data.preserve_soc is None
+
+
+# Test: Issue #457 — grid charge planned before DW → no preservation --------
+
+
+def test_preserve_soc_skipped_when_grid_charge_planned_before_dw(
+    mode_engine, preserve_data
+):
+    """preserve_soc must not activate when forecast has grid charging before DW start.
+
+    This is the primary regression test for Issue #457: at 06:00 with grid
+    charging scheduled at 09:30, preservation should be suppressed.
+    """
+    now = _now(6, 0)
+    preserve_data.daily_forecast = [
+        _slot(7, 0),  # self-consumption, no charge
+        _slot(9, 30, grid_charge=True),  # cheap grid charge slot
+        _slot(10, 0, grid_charge=True),
+        _slot(14, 30, grid_charge=True),  # still before 15:00 DW
+    ]
+    mode_engine._compute_preserve_soc(preserve_data, now, dw_start_time=time(15, 0))
+    assert preserve_data.preserve_soc is None
+
+
+def test_preserve_soc_skipped_when_boost_planned_before_dw(mode_engine, preserve_data):
+    """preserve_soc must not activate when a boost (grid_charge_boost) is planned before DW."""
+    now = _now(6, 0)
+    preserve_data.daily_forecast = [
+        _slot(10, 30, boost=True),
+    ]
+    mode_engine._compute_preserve_soc(preserve_data, now, dw_start_time=time(15, 0))
+    assert preserve_data.preserve_soc is None
+
+
+# Test: grid charge only after DW start → preservation fires ----------------
+
+
+def test_preserve_soc_fires_when_grid_charge_only_after_dw(mode_engine, preserve_data):
+    """preserve_soc should activate when the only grid charging is after DW start.
+
+    Grid charging inside the DW (e.g. overnight) is outside the lookahead
+    window and must not suppress pre-DW preservation.
+    """
+    now = _now(6, 0)
+    preserve_data.soc = 60.0
+    preserve_data.backup_reserve = 10.0
+    preserve_data.daily_forecast = [
+        _slot(7, 0),  # no charge
+        _slot(22, 0, grid_charge=True),  # overnight — after DW end, well past lookahead
+    ]
+    mode_engine._compute_preserve_soc(preserve_data, now, dw_start_time=time(15, 0))
+    expected = max(10.0, 60.0 - PRESERVE_BUFFER_PERCENT)
+    assert preserve_data.preserve_soc == pytest.approx(expected)
+
+
+# Test: no grid charge at all → preservation fires --------------------------
+
+
+def test_preserve_soc_fires_when_no_grid_charge_planned(mode_engine, preserve_data):
+    """preserve_soc should activate when forecast has no grid charging at all."""
+    now = _now(7, 0)
+    preserve_data.soc = 55.0
+    preserve_data.backup_reserve = 10.0
+    preserve_data.daily_forecast = [
+        _slot(8, 0),
+        _slot(9, 0),
+        _slot(12, 0),
+    ]
+    mode_engine._compute_preserve_soc(preserve_data, now, dw_start_time=time(15, 0))
+    expected = max(10.0, 55.0 - PRESERVE_BUFFER_PERCENT)
+    assert preserve_data.preserve_soc == pytest.approx(expected)
+
+
+# Test: empty forecast → preservation fires ---------------------------------
+
+
+def test_preserve_soc_fires_when_forecast_empty(mode_engine, preserve_data):
+    """preserve_soc should activate when daily_forecast is empty."""
+    preserve_data.daily_forecast = []
+    mode_engine._compute_preserve_soc(preserve_data, _now(7), dw_start_time=time(15, 0))
+    expected = max(
+        preserve_data.backup_reserve, preserve_data.soc - PRESERVE_BUFFER_PERCENT
+    )
+    assert preserve_data.preserve_soc == pytest.approx(expected)
+
+
+# Test: preserve level floored at backup_reserve ----------------------------
+
+
+def test_preserve_soc_floored_at_backup_reserve(mode_engine, preserve_data):
+    """preserve_soc must not fall below the existing backup_reserve."""
+    preserve_data.soc = 13.0  # soc - buffer = 8.0, below backup_reserve=10
+    preserve_data.backup_reserve = 10.0
+    preserve_data.daily_forecast = []
+    mode_engine._compute_preserve_soc(preserve_data, _now(7), dw_start_time=time(15, 0))
+    assert preserve_data.preserve_soc == pytest.approx(10.0)
+
+
+# Test: fallback when dw_start_time is None ---------------------------------
+
+
+def test_preserve_soc_fallback_without_dw_start_time(mode_engine, preserve_data):
+    """When dw_start_time is None the 8-hour fallback window is used.
+
+    Grid charging within 8 hours of now should still suppress preservation.
+    """
+    now = _now(6, 0)
+    preserve_data.daily_forecast = [
+        _slot(12, 0, grid_charge=True),  # 6 hours away — within 8h fallback
+    ]
+    mode_engine._compute_preserve_soc(preserve_data, now, dw_start_time=None)
+    assert preserve_data.preserve_soc is None
+
+
+def test_preserve_soc_fires_outside_fallback_window(mode_engine, preserve_data):
+    """When dw_start_time is None, grid charging >8h away must not suppress preservation."""
+    now = _now(6, 0)
+    preserve_data.daily_forecast = [
+        _slot(16, 0, grid_charge=True),  # 10 hours away — outside 8h fallback
+    ]
+    mode_engine._compute_preserve_soc(preserve_data, now, dw_start_time=None)
+    assert preserve_data.preserve_soc is not None
