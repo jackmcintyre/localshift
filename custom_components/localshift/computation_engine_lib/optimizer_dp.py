@@ -852,7 +852,22 @@ class DPPlanner:
 
             # Check for cheap import opportunity
             if slot.buy_price <= config.effective_cheap_price:
-                return PlannerReasonCode.CHEAP_IMPORT_WINDOW
+                # Issue #431: Horizon Guard
+                # If blind to next day's solar, don't use CHEAP_IMPORT_WINDOW reason
+                # unless price is exceptionally cheap (safety net).
+                is_blind = False
+                if terminal_penalty_idx is None:
+                    is_blind = True
+                else:
+                    # Estimate visibility beyond terminal penalty
+                    slots_beyond = len(slots) - terminal_penalty_idx - 1
+                    if slots_beyond < 8:  # < 4 hours visibility into DW
+                        is_blind = True
+
+                if not is_blind or slot.buy_price <= (
+                    config.effective_cheap_price * 0.8
+                ):
+                    return PlannerReasonCode.CHEAP_IMPORT_WINDOW
 
             return PlannerReasonCode.TARGET_SHORTFALL_RISK
 
@@ -1172,12 +1187,10 @@ class DPPlanner:
             PlannerAction.CHARGE_GRID_BOOST,
         ):
             if config.forecast_horizon_hours < 20.0:
-                # Add a small penalty proportional to "blindness"
+                # Add a meaningful penalty proportional to "blindness"
                 horizon_penalty_factor = (20.0 - config.forecast_horizon_hours) / 20.0
-                # Scale uncertainty penalty relative to cycle penalty to ensure it's meaningful
-                uncertainty_penalty = (
-                    0.01 * horizon_penalty_factor
-                )  # max 1 cent penalty
+                # Multiply by import amount. 0.05 $/kWh is a strong deterrent.
+                uncertainty_penalty = 0.05 * horizon_penalty_factor * grid_import_kwh
 
         # Calculate self-consumption value (Issue #406)
         # Battery energy used to cover household load has value because it avoids

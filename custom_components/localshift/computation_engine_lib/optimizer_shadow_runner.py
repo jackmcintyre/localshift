@@ -613,13 +613,7 @@ def _serialize_decision(decision: Any) -> dict[str, Any]:
         "reason_code": decision.reason_code.value
         if hasattr(decision.reason_code, "value")
         else str(decision.reason_code),
-        "objective_terms": {
-            "import_cost": round(decision.objective_terms.import_cost, 4),
-            "export_revenue": round(decision.objective_terms.export_revenue, 4),
-            "cycle_penalty": round(decision.objective_terms.cycle_penalty, 4),
-            "shortfall_penalty": round(decision.objective_terms.shortfall_penalty, 4),
-            "net_cost": round(decision.objective_terms.net_cost, 4),
-        },
+        "objective_terms": decision.objective_terms.to_dict(),
         "predicted_soc_pct": round(decision.predicted_soc_pct, 2),
         "grid_import_kwh": round(decision.grid_import_kwh, 4),
         "grid_export_kwh": round(decision.grid_export_kwh, 4),
