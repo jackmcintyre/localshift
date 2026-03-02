@@ -183,8 +183,23 @@ class OptimizerConfig:
     """If True, allow reaching target during DW via solar (instead of by DW start)."""
 
     # --- Objective weights ---
-    target_shortfall_penalty_per_pct: float = 1.0
-    """Penalty applied per % SOC below target at demand-window entry."""
+    target_shortfall_penalty_per_pct: float = 0.030
+    """Penalty applied per % SOC below target at demand-window entry ($/%-point).
+
+    This should be calibrated to the actual cost of importing 1% SOC from the grid
+    at the cheapest available price, with a small safety multiplier:
+
+        penalty = effective_cheap_price ($/kWh) * battery_capacity_kwh / 100 * safety_factor
+
+    Example: 0.15 $/kWh * 13.5 kWh / 100 * 1.5 = $0.030 per %-point
+
+    Do NOT use the original default of 1.0 — it is ~53x the actual remediation cost
+    and causes the optimizer to grid-charge compulsively. See issue #438.
+
+    In production, this value is computed in optimizer_shadow_runner._build_optimizer_config()
+    from the live tariff data; the dataclass default here is a reasonable fallback
+    for unit tests and standalone use.
+    """
 
     cycle_penalty_per_kwh: float = 0.005
     """Mild penalty per kWh cycled to discourage unnecessary grid arbitrage."""
@@ -637,7 +652,14 @@ class DPPlanner:
 
             for bin_idx, soc in enumerate(soc_grid):
                 # Get feasible actions for this state
-                actions = DPPlanner.feasible_actions(soc, slot, config)
+                actions = DPPlanner.feasible_actions(
+                    soc,
+                    slot,
+                    config,
+                    slot_idx=slot_idx,
+                    slots=slots,
+                    terminal_penalty_idx=terminal_penalty_idx,
+                )
 
                 best_cost = float("inf")
                 best_action = PlannerAction.HOLD
@@ -856,14 +878,13 @@ class DPPlanner:
             if terminal_penalty_idx is not None and slot_idx < terminal_penalty_idx:
                 soc_deficit = config.demand_window_target_soc_pct - soc
                 if soc_deficit > 0:
-                    # Use real future slots (no repeated-current-slot approximation).
-                    projected_net_kwh = sum(
-                        s.solar_kwh - s.consumption_kwh
-                        for s in slots[slot_idx:terminal_penalty_idx]
+                    # Use shared helper (same calculation as feasible_actions solar gate).
+                    potential_soc_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
+                        slot_idx=slot_idx,
+                        slots=slots,
+                        terminal_penalty_idx=terminal_penalty_idx,
+                        battery_capacity_kwh=config.battery_capacity_kwh,
                     )
-                    potential_soc_gain_pct = (
-                        projected_net_kwh / config.battery_capacity_kwh
-                    ) * 100.0
                     if potential_soc_gain_pct < soc_deficit:
                         return PlannerReasonCode.TARGET_SHORTFALL_RISK
 
@@ -902,10 +923,36 @@ class DPPlanner:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _projected_solar_soc_gain_pct(
+        slot_idx: int,
+        slots: list[SlotContext],
+        terminal_penalty_idx: int,
+        battery_capacity_kwh: float,
+    ) -> float:
+        """
+        Estimate the net SOC gain (%) achievable from solar between slot_idx
+        (inclusive) and terminal_penalty_idx (exclusive), after subtracting
+        household consumption.
+
+        A positive return value means solar surplus exceeds consumption over the
+        window; negative means consumption exceeds solar (net grid draw expected).
+
+        Used by feasible_actions() to decide whether to suppress grid charging.
+        """
+        projected_net_kwh = sum(
+            s.solar_kwh - s.consumption_kwh
+            for s in slots[slot_idx:terminal_penalty_idx]
+        )
+        return (projected_net_kwh / battery_capacity_kwh) * 100.0
+
+    @staticmethod
     def feasible_actions(
         soc_pct: float,
         slot: SlotContext,
         config: OptimizerConfig,
+        slot_idx: int = 0,
+        slots: list[SlotContext] | None = None,
+        terminal_penalty_idx: int | None = None,
     ) -> list[PlannerAction]:
         """
         Return list of actions feasible from given SOC and slot context.
@@ -915,7 +962,18 @@ class DPPlanner:
         - Demand window: no grid import during DW slots
         - Optimization mode (self_consumption vs arbitrage)
         - Price thresholds for self-consumption mode
+        - Solar surplus gate: suppresses grid charging when solar will cover
+          the full SOC deficit before the demand window (self_consumption mode only)
         - Slot duration vs transfer limits (TODO: implement fully in Phase C)
+
+        Args:
+            soc_pct: Current battery SOC percentage.
+            slot: Per-slot context (price, solar, consumption, flags).
+            config: Optimizer configuration and constraints.
+            slot_idx: Index of the current slot in the planning horizon (default 0).
+            slots: Full list of planning slots (None disables solar gate).
+            terminal_penalty_idx: Index at which the shortfall penalty is applied
+                (None disables solar gate).
         """
         actions = []
 
@@ -924,8 +982,30 @@ class DPPlanner:
 
         actions.append(PlannerAction.HOLD)
 
+        # Solar surplus gate: if projected solar can cover the full SOC deficit
+        # before the demand window, suppress grid charging entirely.
+        # This prevents the solver from grid-charging during solar-peak hours
+        # when solar will naturally fill the battery at zero cost.
+        _solar_covers_deficit = False
+        if (
+            config.optimization_mode == "self_consumption"
+            and slots is not None
+            and terminal_penalty_idx is not None
+            and slot_idx < terminal_penalty_idx
+        ):
+            soc_deficit_pct = config.demand_window_target_soc_pct - soc_pct
+            if soc_deficit_pct > 0:
+                solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
+                    slot_idx=slot_idx,
+                    slots=slots,
+                    terminal_penalty_idx=terminal_penalty_idx,
+                    battery_capacity_kwh=config.battery_capacity_kwh,
+                )
+                if solar_gain_pct >= soc_deficit_pct:
+                    _solar_covers_deficit = True
+
         # Grid charging constraints (Issue #406)
-        if can_charge and not slot.is_demand_window_slot:
+        if can_charge and not slot.is_demand_window_slot and not _solar_covers_deficit:
             # In self-consumption mode, only charge if price is cheap
             if config.optimization_mode == "self_consumption":
                 price_is_cheap = slot.buy_price <= config.effective_cheap_price
@@ -938,7 +1018,7 @@ class DPPlanner:
                     if price_is_very_cheap:
                         actions.append(PlannerAction.CHARGE_GRID_BOOST)
             else:
-                # Arbitrage mode: charge whenever below max
+                # Arbitrage mode: charge whenever below max (no solar gate)
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
                 actions.append(PlannerAction.CHARGE_GRID_BOOST)
 

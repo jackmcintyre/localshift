@@ -132,10 +132,41 @@ class TestBuildOptimizerConfig:
     def test_config_objective_weights_default(
         self, mock_coordinator_data, config_options
     ):
-        """Verify objective weight defaults."""
+        """Verify objective weight defaults (calibrated formula, not hardcoded 1.0)."""
         config = _build_optimizer_config(mock_coordinator_data, config_options)
-        assert config.target_shortfall_penalty_per_pct == 1.0
+        # Penalty must be calibrated: effective_cheap_price * battery_kwh / 100 * factor
+        # With effective_cheap_price=0.12, battery=13.5 kWh, safety_factor=1.5:
+        # 0.12 * 13.5 / 100 * 1.5 = 0.02430
+        assert config.target_shortfall_penalty_per_pct != 1.0
+        assert 0.010 <= config.target_shortfall_penalty_per_pct <= 0.100
         assert config.cycle_penalty_per_kwh == 0.005
+
+    def test_config_penalty_calibrated_to_tariff(
+        self, mock_coordinator_data, config_options
+    ):
+        """target_shortfall_penalty_per_pct is calibrated from effective_cheap_price."""
+        # mock_coordinator_data has effective_cheap_price=0.12
+        config = _build_optimizer_config(mock_coordinator_data, config_options)
+        expected = pytest.approx(0.12 * 13.5 / 100.0 * 1.5, rel=1e-4)
+        assert config.target_shortfall_penalty_per_pct == expected
+
+    def test_config_penalty_not_hardcoded_to_1(
+        self, mock_coordinator_data, config_options
+    ):
+        """The penalty must not be 1.0 (the original miscalibrated value). Fixes #438."""
+        config = _build_optimizer_config(mock_coordinator_data, config_options)
+        assert config.target_shortfall_penalty_per_pct != 1.0
+
+    def test_config_penalty_scales_with_cheap_price(self, mock_coordinator_data):
+        """Penalty scales proportionally with effective_cheap_price."""
+        mock_coordinator_data.effective_cheap_price = 0.20
+        config_high = _build_optimizer_config(mock_coordinator_data, {})
+        mock_coordinator_data.effective_cheap_price = 0.10
+        config_low = _build_optimizer_config(mock_coordinator_data, {})
+        # Higher cheap price → higher penalty (2x cheap price → 2x penalty)
+        assert config_high.target_shortfall_penalty_per_pct == pytest.approx(
+            config_low.target_shortfall_penalty_per_pct * 2.0, rel=1e-4
+        )
 
     def test_config_uses_default_allow_dw_entry_under_target(
         self, mock_coordinator_data

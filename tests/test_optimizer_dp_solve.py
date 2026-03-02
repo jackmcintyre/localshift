@@ -863,7 +863,11 @@ def test_classify_reason_target_shortfall_uses_future_slots():
 
 
 def test_classify_reason_cheap_import_when_target_can_be_met():
-    """Cheap price should classify as CHEAP_IMPORT_WINDOW when shortfall risk test does not trigger."""
+    """Cheap price should classify as CHEAP_IMPORT_WINDOW when shortfall risk test does not trigger.
+
+    Uses a very cheap price (≤ effective_cheap_price * 0.8) so the blind-horizon guard
+    still allows the CHEAP_IMPORT_WINDOW classification (only 3 slots — horizon is short).
+    """
     planner = DPPlanner()
     config = OptimizerConfig(
         battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
@@ -874,7 +878,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
             slot_index=0,
             timestamp_iso="2026-01-03T10:00:00",
             slot_interval_minutes=30,
-            buy_price=0.10,
+            buy_price=0.07,  # very cheap: ≤ effective_cheap_price * 0.8 (0.10 * 0.8 = 0.08)
             sell_price=0.06,
             solar_kwh=1.5,
             consumption_kwh=0.2,
@@ -883,7 +887,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
             slot_index=1,
             timestamp_iso="2026-01-03T10:30:00",
             slot_interval_minutes=30,
-            buy_price=0.10,
+            buy_price=0.07,
             sell_price=0.06,
             solar_kwh=1.5,
             consumption_kwh=0.2,
@@ -892,7 +896,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
             slot_index=2,
             timestamp_iso="2026-01-03T11:00:00",
             slot_interval_minutes=30,
-            buy_price=0.10,
+            buy_price=0.07,
             sell_price=0.06,
             solar_kwh=1.0,
             consumption_kwh=0.2,
@@ -912,3 +916,281 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
     )
 
     assert reason == PlannerReasonCode.CHEAP_IMPORT_WINDOW
+
+
+# ---------------------------------------------------------------------------
+# Tests: solar gate in feasible_actions() (#437 / #439)
+# ---------------------------------------------------------------------------
+
+
+def _make_slot(
+    slot_index: int = 0,
+    buy_price: float = 0.08,
+    solar_kwh: float = 0.0,
+    consumption_kwh: float = 0.3,
+    is_demand_window_slot: bool = False,
+) -> SlotContext:
+    """Helper to create a minimal SlotContext for feasibility tests."""
+    return SlotContext(
+        slot_index=slot_index,
+        timestamp_iso=f"2026-01-03T10:{slot_index * 5:02d}:00",
+        slot_interval_minutes=30,
+        buy_price=buy_price,
+        sell_price=0.06,
+        solar_kwh=solar_kwh,
+        consumption_kwh=consumption_kwh,
+        is_demand_window_slot=is_demand_window_slot,
+    )
+
+
+def test_feasible_actions_suppresses_grid_charge_when_solar_covers_deficit():
+    """Solar surplus >= SOC deficit: no CHARGE_GRID_* in feasible actions (self_consumption mode)."""
+    # SOC=70, target=80 → deficit=10%
+    # 10% of 13.5 kWh = 1.35 kWh needed
+    # Slots: 6 slots each with solar=0.5 kWh, consumption=0.2 kWh → net=0.3 kWh/slot → 1.8 kWh total
+    # 1.8 / 13.5 * 100 = 13.3% solar gain >= 10% deficit → gate fires
+    slots = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.5, consumption_kwh=0.2)
+        for i in range(6)
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    actions = DPPlanner.feasible_actions(
+        soc_pct=70.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=6,
+    )
+
+    assert PlannerAction.HOLD in actions
+    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
+    assert PlannerAction.CHARGE_GRID_BOOST not in actions
+
+
+def test_feasible_actions_allows_grid_charge_when_solar_insufficient():
+    """Solar surplus < SOC deficit: CHARGE_GRID_* remains feasible (price-gated)."""
+    # SOC=70, target=80 → deficit=10% (1.35 kWh needed)
+    # Slots: 6 slots each solar=0.1 kWh, consumption=0.2 kWh → net=-0.1/slot → -0.6 kWh total
+    # -0.6 / 13.5 * 100 = -4.4% solar gain < 10% deficit → gate does NOT fire
+    # buy_price=0.08 < effective_cheap_price=0.10 → charge actions available
+    slots = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.1, consumption_kwh=0.2)
+        for i in range(6)
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    actions = DPPlanner.feasible_actions(
+        soc_pct=70.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=6,
+    )
+
+    assert PlannerAction.HOLD in actions
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+    # buy_price=0.08 = effective_cheap_price * 0.8 = 0.08 → very_cheap → boost also offered
+    assert PlannerAction.CHARGE_GRID_BOOST in actions
+
+
+def test_feasible_actions_no_context_behaves_as_before():
+    """When slot_idx/slots/terminal_penalty_idx not provided, no solar gate (original behaviour)."""
+    # This checks the 3-argument call still works identically to pre-fix.
+    # SOC=70, target=80, cheap price, no solar — without context the gate is disabled.
+    slot = _make_slot(buy_price=0.08, solar_kwh=0.0, consumption_kwh=0.3)
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    # 3-argument form: no solar context → gate disabled → grid charge offered normally
+    actions = DPPlanner.feasible_actions(70.0, slot, config)
+
+    assert PlannerAction.HOLD in actions
+    # Price is cheap, no gate in effect → grid charge should be available
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+
+
+def test_feasible_actions_gate_disabled_in_arbitrage_mode():
+    """Solar gate does not apply in arbitrage mode — grid charge always available."""
+    # Solar more than covers deficit, but mode='arbitrage' → gate is skipped
+    slots = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=2.0, consumption_kwh=0.1)
+        for i in range(6)
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="arbitrage",
+        soc_bins=20,
+    )
+
+    actions = DPPlanner.feasible_actions(
+        soc_pct=70.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=6,
+    )
+
+    # Arbitrage mode skips gate — both charge actions always available (below max_soc)
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+    assert PlannerAction.CHARGE_GRID_BOOST in actions
+
+
+def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
+    """When SOC >= target (no deficit), gate should not suppress grid charging."""
+    # SOC=85 >= target=80 → deficit=0 → gate does not fire
+    slots = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.0, consumption_kwh=0.3)
+        for i in range(4)
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    actions = DPPlanner.feasible_actions(
+        soc_pct=85.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=4,
+    )
+
+    # No deficit → gate does not fire → price-gated grid charge offered
+    assert PlannerAction.HOLD in actions
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+
+
+def test_projected_solar_soc_gain_pct_positive_surplus():
+    """_projected_solar_soc_gain_pct returns positive when solar > consumption."""
+    slots = [
+        _make_slot(slot_index=i, solar_kwh=1.0, consumption_kwh=0.3) for i in range(4)
+    ]
+    # 4 slots * (1.0 - 0.3) = 2.8 kWh net; 2.8/13.5 * 100 = ~20.7%
+    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=4,
+        battery_capacity_kwh=13.5,
+    )
+    assert result == pytest.approx((4 * 0.7 / 13.5) * 100.0, rel=1e-6)
+
+
+def test_projected_solar_soc_gain_pct_negative_when_consumption_dominates():
+    """_projected_solar_soc_gain_pct returns negative when consumption > solar."""
+    slots = [
+        _make_slot(slot_index=i, solar_kwh=0.1, consumption_kwh=0.5) for i in range(4)
+    ]
+    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=4,
+        battery_capacity_kwh=13.5,
+    )
+    assert result < 0.0
+
+
+def test_projected_solar_soc_gain_pct_respects_slot_range():
+    """Only slots in [slot_idx, terminal_penalty_idx) are counted."""
+    slots = [
+        _make_slot(slot_index=0, solar_kwh=3.0, consumption_kwh=0.1),  # large surplus
+        _make_slot(slot_index=1, solar_kwh=0.0, consumption_kwh=0.5),  # deficit
+        _make_slot(slot_index=2, solar_kwh=0.0, consumption_kwh=0.5),  # deficit
+        _make_slot(slot_index=3, solar_kwh=3.0, consumption_kwh=0.1),  # ignored
+    ]
+    # Only slots 1–2 (slot_idx=1, terminal=3); both are net deficit
+    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+        slot_idx=1,
+        slots=slots,
+        terminal_penalty_idx=3,
+        battery_capacity_kwh=13.5,
+    )
+    # 2 slots * (0.0 - 0.5) = -1.0 kWh; -1.0/13.5*100 = -7.4%
+    assert result < 0.0
+    assert result == pytest.approx((2 * -0.5 / 13.5) * 100.0, rel=1e-6)
+
+
+def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar():
+    """Integration: on a sunny day with enough solar, no grid charging before demand window."""
+    # 8 pre-DW slots (09:00–13:00) with strong solar; DW entry at slot 8
+    # SOC deficit: 80% - 70% = 10% (1.35 kWh)
+    # Solar surplus: 8 slots * (0.6 kWh solar - 0.2 kWh consumption) = 3.2 kWh net
+    # 3.2 / 13.5 * 100 = 23.7% solar gain >> 10% deficit → gate fires on all pre-DW slots
+    pre_dw_slots = [
+        SlotContext(
+            slot_index=i,
+            timestamp_iso=f"2026-01-03T{9 + i // 2:02d}:{(i % 2) * 30:02d}:00",
+            slot_interval_minutes=30,
+            buy_price=0.08,  # cheap — would grid-charge without the gate
+            sell_price=0.06,
+            solar_kwh=0.6,
+            consumption_kwh=0.2,
+        )
+        for i in range(8)
+    ]
+    dw_slots = [
+        SlotContext(
+            slot_index=8 + i,
+            timestamp_iso=f"2026-01-03T1{3 + i // 2}:{(i % 2) * 30:02d}:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.06,
+            solar_kwh=0.0,
+            consumption_kwh=0.5,
+            is_demand_window_entry=(i == 0),
+            is_demand_window_slot=True,
+        )
+        for i in range(4)
+    ]
+    slots = pre_dw_slots + dw_slots
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=30,
+        target_shortfall_penalty_per_pct=0.030,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="test-solar-gate-integration",
+        initial_soc_pct=70.0,
+        slots=slots,
+        config=config,
+    )
+
+    result = DPPlanner().plan(inputs)
+    assert result.success
+
+    # No grid charging actions in the pre-DW solar window (slots 0–7)
+    for decision in result.decisions[:8]:
+        assert decision.action not in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ), f"Unexpected grid charge at slot {decision.slot_index}: {decision.action}"

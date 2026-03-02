@@ -36,6 +36,14 @@ from .planner_comparator import PlannerComparator
 
 _LOGGER = logging.getLogger(__name__)
 
+# Safety multiplier for shortfall penalty calibration.
+# The penalty is set to (cheapest_grid_price * battery_kwh / 100) * this factor.
+# A value of 1.5 means the optimizer mildly prefers pre-charging over risking
+# a shortfall, but won't pay more than 1.5x the remediation cost to do so.
+# Do not set above 3.0 without careful testing — higher values cause compulsive
+# pre-charging even when solar will cover the deficit.
+_SHORTFALL_PENALTY_SAFETY_FACTOR = 1.5
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -311,9 +319,18 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
-        # --- Objective weights (conservative defaults) ---
-        # TODO (#403 Phase C): Expose for tuning if comparison analytics suggest
-        target_shortfall_penalty_per_pct=1.0,
+        # --- Objective weights ---
+        # Calibrated to the actual cost of buying 1% SOC at the cheapest grid price,
+        # with a safety margin so the optimizer mildly prefers pre-charging over shortfall.
+        # Formula: effective_cheap_price ($/kWh) * battery_kwh / 100 * safety_factor
+        # Example at typical Amber overnight rates: 0.15 * 13.5 / 100 * 1.5 = $0.030/%-pt
+        # (Fixes #438 — original hardcoded 1.0 was ~53x the actual remediation cost)
+        target_shortfall_penalty_per_pct=(
+            effective_cheap_price
+            * BATTERY_CAPACITY_KWH
+            / 100.0
+            * _SHORTFALL_PENALTY_SAFETY_FACTOR
+        ),
         cycle_penalty_per_kwh=0.005,
         # --- SOC discretization ---
         soc_bins=50,
