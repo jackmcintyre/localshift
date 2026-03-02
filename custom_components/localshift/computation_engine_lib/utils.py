@@ -6,11 +6,14 @@ instance state or modification of CoordinatorData.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.util import dt as dt_util
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def parse_forecast_dt(dt_str: str | None) -> datetime | None:
@@ -47,14 +50,35 @@ def parse_slot_time(time_str: str, ha_timezone: str) -> datetime | None:
         # Parse the ISO timestamp (includes timezone info)
         dt = datetime.fromisoformat(str(time_str))
 
+        # Log raw timestamp for debugging
+        _LOGGER.debug(
+            "parse_slot_time: Raw timestamp=%s, ha_timezone=%s",
+            dt.isoformat(),
+            ha_timezone,
+        )
+
         # If the datetime is naive (no timezone), assume it's in HA's timezone
         if dt.tzinfo is None:
             local_tz = ZoneInfo(ha_timezone)
-            return dt.replace(tzinfo=local_tz)
+            result = dt.replace(tzinfo=local_tz)
+            _LOGGER.debug(
+                "parse_slot_time: Naive timestamp, assuming local TZ: %s",
+                result.isoformat(),
+            )
+            return result
 
         # Convert to HA local timezone
         local_tz = ZoneInfo(ha_timezone)
-        return dt.astimezone(local_tz)
+        result = dt.astimezone(local_tz)
+
+        # Log conversion result
+        _LOGGER.debug(
+            "parse_slot_time: Converted from %s to %s (local)",
+            dt.isoformat(),
+            result.isoformat(),
+        )
+
+        return result
     except (ValueError, TypeError):
         return None
 

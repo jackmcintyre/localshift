@@ -1417,14 +1417,22 @@ class ForecastComputer:
             solar_kwh = get_solar_for_slot_by_interval(
                 all_solcast, slot_start, interval_minutes
             )
-            load_kw, _ = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
-                slot_hour,
-                current_hour,
-                data.load_power_kw,
-                recent_load_kw,
-                slot_temp,
-            )
+
+            # Phase 1 (#441): Read from shared load_forecast_slots
+            elapsed_min = (slot_start - base_slot).total_seconds() / 60
+            fixed_idx = min(int(elapsed_min // 15), TOTAL_SLOTS - 1)
+            if data.load_forecast_slots:
+                load_kw = data.load_forecast_slots[fixed_idx]
+            else:
+                # Fallback for direct compute_forecast() calls (tests)
+                load_kw, _ = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    data.load_power_kw,
+                    recent_load_kw,
+                    slot_temp,
+                )
             consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
 
@@ -1784,14 +1792,24 @@ class ForecastComputer:
             slot_temp = temperature_by_hour.get(
                 (slot_start.year, slot_start.month, slot_start.day, slot_start.hour)
             )
-            baseline_kw, load_source = self._estimate_hourly_consumption_kw(
-                historical_avg_kw,
-                slot_hour,
-                current_hour,
-                data.load_power_kw,
-                recent_load_kw,
-                slot_temp,
-            )
+
+            # Phase 1 (#441): Read from shared load_forecast_slots
+            elapsed_min = (slot_start - base_slot).total_seconds() / 60
+            fixed_idx = min(int(elapsed_min // 15), TOTAL_SLOTS - 1)
+            if data.load_forecast_slots:
+                baseline_kw = data.load_forecast_slots[fixed_idx]
+                # load_source tracking will be moved to _compute_load_forecast_slots in Phase 3
+                load_source = "load_forecast_slots"
+            else:
+                # Fallback for direct compute_forecast() calls (tests)
+                baseline_kw, load_source = self._estimate_hourly_consumption_kw(
+                    historical_avg_kw,
+                    slot_hour,
+                    current_hour,
+                    data.load_power_kw,
+                    recent_load_kw,
+                    slot_temp,
+                )
 
             consumption_kwh = baseline_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
@@ -1985,6 +2003,20 @@ class ForecastComputer:
                 len(missing_solar_slots),
                 ", ".join(missing_solar_slots[:10])
                 + ("..." if len(missing_solar_slots) > 10 else ""),
+            )
+
+        # Log timezone information for first few forecast slots (Issue #455)
+        if daily_forecast:
+            _LOGGER.info(
+                "FORECAST_SLOTS: First 5 slots (with TZ): %s",
+                [slot["timestamp_iso"] for slot in daily_forecast[:5]],
+            )
+            _LOGGER.info(
+                "FORECAST_SLOTS: Slot 0 TZ: %s, Slot 1 TZ: %s",
+                daily_forecast[0]["timestamp_iso"],
+                daily_forecast[1]["timestamp_iso"]
+                if len(daily_forecast) > 1
+                else "N/A",
             )
 
         # ========================================================================

@@ -227,6 +227,24 @@ def compute_hybrid_slot_schedule(
     else:
         metadata["horizon_hours"] = 0.0
 
+    # Log timezone information for first few slots (Issue #455)
+    if slots:
+        _LOGGER.info(
+            "HYBRID_SLOTS: First 5 slots (with TZ): %s",
+            [s["start"].isoformat() for s in slots[:5]],
+        )
+        _LOGGER.info(
+            "HYBRID_SLOTS: Slot 0 TZ info: %s (offset=%s)",
+            slots[0]["start"].isoformat(),
+            slots[0]["start"].utcoffset(),
+        )
+        if len(slots) > 1:
+            _LOGGER.info(
+                "HYBRID_SLOTS: Slot 1 TZ info: %s (offset=%s)",
+                slots[1]["start"].isoformat(),
+                slots[1]["start"].utcoffset(),
+            )
+
     _LOGGER.info(
         "Hybrid slot schedule: %d 5-min slots, %d 30-min slots, horizon=%.2fh, transition at %s",
         five_min_count,

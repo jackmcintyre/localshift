@@ -454,6 +454,18 @@ def _build_slot_contexts(data: Any) -> tuple[list[SlotContext], dict[str, Any]]:
         "completeness_pct": round(completeness_pct, 1),
     }
 
+    # Log timezone information for first few optimizer slot contexts (Issue #455)
+    if contexts:
+        _LOGGER.info(
+            "OPTIMIZER_SLOTS: First 5 slot timestamps: %s",
+            [ctx.timestamp_iso for ctx in contexts[:5]],
+        )
+        _LOGGER.info(
+            "OPTIMIZER_SLOTS: Slot 0=%s, Slot 1=%s",
+            contexts[0].timestamp_iso,
+            contexts[1].timestamp_iso if len(contexts) > 1 else "N/A",
+        )
+
     return contexts, parity_info
 
 
