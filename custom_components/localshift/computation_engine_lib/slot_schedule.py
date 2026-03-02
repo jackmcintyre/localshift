@@ -51,6 +51,7 @@ def compute_hybrid_slot_schedule(
             - slot_intervals: {"5min": count, "30min": count}
             - transition_boundary: Time when 5-min switches to 30-min (or None)
             - total_slots: Total number of slots
+            - horizon_hours: Actual time span covered by slots in hours
     """
     slots: list[dict] = []
     metadata: dict = {
@@ -58,6 +59,7 @@ def compute_hybrid_slot_schedule(
         "slot_intervals": {"5min": 0, "30min": 0},
         "transition_boundary": None,
         "total_slots": 0,
+        "horizon_hours": 0.0,
     }
 
     if not general_forecast:
@@ -213,10 +215,23 @@ def compute_hybrid_slot_schedule(
     }
     metadata["total_slots"] = len(slots)
 
+    # Calculate actual horizon duration in hours
+    if slots:
+        horizon_delta = slots[-1]["start"] - slots[0]["start"]
+        # Add the duration of the last slot to get full coverage
+        last_slot_duration = slots[-1]["interval_minutes"]
+        horizon_hours = (horizon_delta.total_seconds() / 3600.0) + (
+            last_slot_duration / 60.0
+        )
+        metadata["horizon_hours"] = round(horizon_hours, 2)
+    else:
+        metadata["horizon_hours"] = 0.0
+
     _LOGGER.info(
-        "Hybrid slot schedule: %d 5-min slots, %d 30-min slots, transition at %s",
+        "Hybrid slot schedule: %d 5-min slots, %d 30-min slots, horizon=%.2fh, transition at %s",
         five_min_count,
         thirty_min_count,
+        metadata["horizon_hours"],
         metadata["transition_boundary"] or "N/A",
     )
 

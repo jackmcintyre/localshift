@@ -1201,6 +1201,7 @@ class OptimizerShadowPlanSensor(LocalShiftSensorBase):
             "error_message": summary.get("error_message"),
             "decisions": decisions,
             "total_slots": len(decisions),
+            "forecast_horizon_hours": d.forecast_horizon_hours,
             "computed_at": summary.get("cycle_timestamp_iso")
             or summary.get("computed_at"),
         }

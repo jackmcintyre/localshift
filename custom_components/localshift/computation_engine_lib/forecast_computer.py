@@ -1725,12 +1725,14 @@ class ForecastComputer:
 
         # Store hybrid metadata in CoordinatorData for diagnostics
         data.hybrid_slot_metadata = hybrid_metadata
+        data.forecast_horizon_hours = hybrid_metadata.get("horizon_hours", 0.0)
 
         _LOGGER.info(
-            "Hybrid forecast: %d slots (%d 5-min, %d 30-min), transition at %s",
+            "Hybrid forecast: %d slots (%d 5-min, %d 30-min), horizon=%.2fh, transition at %s",
             hybrid_metadata.get("total_slots", 0),
             hybrid_metadata.get("slot_intervals", {}).get("5min", 0),
             hybrid_metadata.get("slot_intervals", {}).get("30min", 0),
+            data.forecast_horizon_hours,
             hybrid_metadata.get("transition_boundary", "N/A"),
         )
 
@@ -1987,6 +1989,7 @@ class ForecastComputer:
                 is_current_slot=is_first_slot,
                 is_currently_grid_charging=is_currently_grid_charging,
                 baseline_avg_kw=baseline_avg_kw,
+                forecast_horizon_hours=data.forecast_horizon_hours,
             )
 
             # If this slot should grid charge, add to candidates

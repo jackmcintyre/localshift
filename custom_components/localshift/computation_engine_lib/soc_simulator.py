@@ -433,9 +433,9 @@ class SocSimulator:
         # Track whether we found solar in the forecast
         solar_found = solar_start_slot is not None
 
-        # If no solar found, simulate 8 hours (typical overnight period)
+        # If no solar found, simulate 12 hours (typical overnight period)
         if solar_start_slot is None:
-            solar_start_slot = base_slot + timedelta(hours=8)
+            solar_start_slot = base_slot + timedelta(hours=12)
 
         # Use 15-min slots throughout for consistency
         slot_fraction = 15 / 60.0  # 0.25 hours

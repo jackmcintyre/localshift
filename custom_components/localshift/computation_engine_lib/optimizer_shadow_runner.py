@@ -322,6 +322,7 @@ def _build_optimizer_config(
         self_consumption_value_per_kwh=self_consumption_value_per_kwh,
         effective_cheap_price=effective_cheap_price,
         export_price_margin=export_price_margin,
+        forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )
 
 

@@ -206,6 +206,9 @@ class OptimizerConfig:
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
 
+    forecast_horizon_hours: float = 24.0
+    """Actual hours of forecast available (Issue #431)."""
+
 
 # ---------------------------------------------------------------------------
 # Per-slot decision output
@@ -231,6 +234,9 @@ class ObjectiveTerms:
     self_consumption_value: float = 0.0
     """Value of battery energy used for household load (benefit, subtracted from cost)."""
 
+    uncertainty_penalty: float = 0.0
+    """Penalty for grid actions when forecast horizon is restricted (Issue #431)."""
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue - self_consumption_value + penalties."""
@@ -240,6 +246,7 @@ class ObjectiveTerms:
             - self.self_consumption_value
             + self.cycle_penalty
             + self.shortfall_penalty
+            + self.uncertainty_penalty
         )
 
     def to_dict(self) -> dict:
@@ -250,6 +257,7 @@ class ObjectiveTerms:
             "cycle_penalty": self.cycle_penalty,
             "shortfall_penalty": self.shortfall_penalty,
             "self_consumption_value": self.self_consumption_value,
+            "uncertainty_penalty": self.uncertainty_penalty,
             "net_cost": self.net_cost,
         }
 
@@ -843,7 +851,7 @@ class DPPlanner:
                         return PlannerReasonCode.TARGET_SHORTFALL_RISK
 
             # Check for cheap import opportunity
-            if slot.buy_price < 0.15:  # Threshold for "cheap"
+            if slot.buy_price <= config.effective_cheap_price:
                 return PlannerReasonCode.CHEAP_IMPORT_WINDOW
 
             return PlannerReasonCode.TARGET_SHORTFALL_RISK
@@ -1156,6 +1164,21 @@ class DPPlanner:
         cycle_kwh = grid_import_kwh + grid_export_kwh
         cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
 
+        # Issue #431: uncertainty penalty for grid charging when horizon is short.
+        # This biases the optimizer toward HOLD (waiting for more data) when blind.
+        uncertainty_penalty = 0.0
+        if action in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            if config.forecast_horizon_hours < 20.0:
+                # Add a small penalty proportional to "blindness"
+                horizon_penalty_factor = (20.0 - config.forecast_horizon_hours) / 20.0
+                # Scale uncertainty penalty relative to cycle penalty to ensure it's meaningful
+                uncertainty_penalty = (
+                    0.01 * horizon_penalty_factor
+                )  # max 1 cent penalty
+
         # Calculate self-consumption value (Issue #406)
         # Battery energy used to cover household load has value because it avoids
         # buying from grid at retail price
@@ -1201,6 +1224,7 @@ class DPPlanner:
             export_revenue=export_revenue,
             cycle_penalty=cycle_penalty,
             self_consumption_value=self_consumption_value,
+            uncertainty_penalty=uncertainty_penalty,
         )
 
     @staticmethod
