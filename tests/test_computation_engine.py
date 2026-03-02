@@ -648,3 +648,52 @@ async def test_async_initialize_weather_correlation_updates_forecast_computer(
             await computation_engine.async_initialize_weather_correlation()
 
         mock_set_weather.assert_called_once_with(mock_weather)
+
+class TestLoadForecastSlots:
+    """Tests for load_forecast_slots (Issue #441 Phase 1)."""
+
+    def test_load_forecast_slots_populated_before_forecast(
+        self, computation_engine, coordinator_data
+    ):
+        """Test that load_forecast_slots has 96 entries after compute_derived_values()."""
+        from custom_components.localshift.computation_engine_lib.slot_schedule import (
+            TOTAL_SLOTS,
+        )
+
+        # Ensure we have valid data
+        coordinator_data.load_power_kw = 0.5
+
+        with patch.object(
+            computation_engine, "_get_historical_hourly_averages", return_value={10: 0.5, 11: 0.6}
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        # Verify load_forecast_slots is populated
+        assert hasattr(coordinator_data, "load_forecast_slots")
+        assert len(coordinator_data.load_forecast_slots) == TOTAL_SLOTS
+        assert all(isinstance(v, float) and v >= 0 for v in coordinator_data.load_forecast_slots)
+
+    def test_load_forecast_slots_populated_before_forecast_computer_runs(
+        self, computation_engine, coordinator_data
+    ):
+        """Test that load_forecast_slots is populated before _compute_daily_15min_forecast is called."""
+        coordinator_data.load_power_kw = 0.5
+
+        with patch.object(
+            computation_engine, "_get_historical_hourly_averages", return_value={10: 0.5, 11: 0.6}
+        ):
+            with patch.object(
+                computation_engine, "_compute_daily_15min_forecast"
+            ) as mock_forecast:
+                # Track the state of load_forecast_slots when _compute_daily_15min_forecast is called
+                def check_slots_on_call(*args, **kwargs):
+                    assert hasattr(coordinator_data, "load_forecast_slots")
+                    assert len(coordinator_data.load_forecast_slots) > 0
+                    assert all(isinstance(v, float) and v >= 0 for v in coordinator_data.load_forecast_slots)
+                    return None
+
+                mock_forecast.side_effect = check_slots_on_call
+                computation_engine.compute_derived_values(coordinator_data)
+
+                # Verify _compute_daily_15min_forecast was called
+                assert mock_forecast.called

@@ -30,6 +30,7 @@ from .computation_engine_lib import (
     scan_forecast_for_spike,
     sum_solar_before_target,
 )
+from .computation_engine_lib.slot_schedule import TOTAL_SLOTS
 from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_GRID_KW,
@@ -209,6 +210,14 @@ class ComputationEngine:
             SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
         )
         data.allow_dw_entry_under_target = allow_dw_under_target and before_dw
+
+        # ---- Phase 1 (#441): Shared load forecast slots ----
+        # Must run before _compute_daily_15min_forecast so load_forecast_slots
+        # is available for both the legacy planner and (from Phase 2) the DP optimizer.
+        load_entity_id = self._get_entity_id("teslemetry_load_power")
+        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        recent_load_kw = self._recent_load_1hr_kw
+        self._compute_load_forecast_slots(data, now_dt, hourly_avg_kw, recent_load_kw)
 
         # ---- Step 4/16: daily_forecast (detailed 15-min forecast) ----
         # Compute detailed forecast AFTER effective_cheap_price is set
@@ -694,6 +703,49 @@ class ComputationEngine:
                 len(baseline_avg_kw),
                 sum(baseline_avg_kw.values()) / len(baseline_avg_kw),
             )
+
+    def _compute_load_forecast_slots(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        historical_avg_kw: dict[int, float],
+        recent_load_kw: float,
+    ) -> None:
+        """Populate data.load_forecast_slots with per-slot kW estimates.
+
+        Runs before ForecastComputer.compute_forecast() so both the legacy planner
+        and the DP optimizer can read from a shared intermediate (Issue #441 Phase 1).
+
+        Uses LoadForecaster (exponential decay, Issue #381) to produce the same
+        values that ForecastComputer._estimate_hourly_consumption_kw() would produce.
+        Slots are fixed 15-min (TOTAL_SLOTS = 96) aligned to the current 5-min boundary.
+        """
+        current_5min = (now_dt.minute // 5) * 5
+        base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
+        current_hour = base_slot.hour
+
+        slots: list[float] = []
+        for i in range(TOTAL_SLOTS):
+            slot_start = base_slot + timedelta(minutes=15 * i)
+            slot_hour = slot_start.hour
+            load_kw, _ = (
+                self._forecast_computer._load_forecaster.estimate_hourly_consumption_kw(
+                    hourly_avg_kw=historical_avg_kw,
+                    slot_hour=slot_hour,
+                    current_hour=current_hour,
+                    current_load_kw=data.load_power_kw,
+                    recent_load_kw=recent_load_kw,
+                )
+            )
+            slots.append(load_kw)
+
+        data.load_forecast_slots = slots
+        _LOGGER.debug(
+            "load_forecast_slots: %d slots computed, first=%.3f kW, last=%.3f kW",
+            len(slots),
+            slots[0] if slots else 0.0,
+            slots[-1] if slots else 0.0,
+        )
 
     def _compute_daily_15min_forecast(
         self,

@@ -281,6 +281,11 @@ class CoordinatorData:
     recent_load_1hr_last_error: str = ""
     consumption_weighting: float = 0.67
 
+    # Shared load forecast slots — populated before ForecastComputer runs (Issue #441 Phase 1)
+    # 96 entries, one per 15-min slot starting from the current 5-min boundary.
+    # Index aligns with slot_idx in ForecastComputer.compute_forecast() hybrid slot loop.
+    load_forecast_slots: list[float] = field(default_factory=list)
+
     # Cost accumulators (Phase 4)
     grid_import_cost: float = 0.0
     grid_export_revenue: float = 0.0
