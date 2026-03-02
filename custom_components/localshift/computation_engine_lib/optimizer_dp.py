@@ -1070,7 +1070,7 @@ class DPPlanner:
             # Discharge to grid at max rate
             max_discharge_kwh = config.discharge_rate_kw * slot_hours
             # Effective export accounts for discharge efficiency loss
-            effective_export_kwh = max_discharge_kwh / config.discharge_efficiency
+            effective_export_kwh = max_discharge_kwh * config.discharge_efficiency
 
             # Account for solar/consumption net
             # Solar goes directly to export (not through battery)
@@ -1083,7 +1083,7 @@ class DPPlanner:
                 # Consumption deficit reduces export
                 net_export = max(0.0, net_export + net_kwh)
 
-            delta_soc = -(effective_export_kwh / capacity_kwh) * 100.0
+            delta_soc = -(max_discharge_kwh / capacity_kwh) * 100.0
             next_soc = soc_pct + delta_soc
 
             # Clip to min SOC
