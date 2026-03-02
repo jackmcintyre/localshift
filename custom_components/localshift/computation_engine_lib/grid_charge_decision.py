@@ -9,6 +9,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..const import BOOST_CHARGE_MAX_SOC
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -330,6 +332,9 @@ class GridChargeDecisionEngine:
             )
             # Check if we should boost (very cheap price)
             if price_is_very_cheap:
+                # Issue #309: Disable boost if SOC >= 80% (Powerwall throttles charge rate)
+                if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                    return True, False
                 return True, True
             return True, False
 
@@ -448,6 +453,9 @@ class GridChargeDecisionEngine:
                 )
                 # Only grid charge if price is very cheap (safety net for extreme cases)
                 if price_is_very_cheap:
+                    # Issue #309: Disable boost if SOC >= 80% (Powerwall throttles charge rate)
+                    if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                        return True, False
                     return True, True
                 return False, False
         else:
@@ -481,6 +489,9 @@ class GridChargeDecisionEngine:
         # SAFETY NET: Charge if very cheap (forecast could be wrong)
         # IMPORTANT: only applies when solar *cannot* meet the target before DW.
         if price_is_very_cheap:
+            # Issue #309: Disable boost if SOC >= 80% (Powerwall throttles charge rate)
+            if predicted_soc >= BOOST_CHARGE_MAX_SOC:
+                return True, False
             _LOGGER.info(
                 "Grid charge: VERY CHEAP price $%.2f at %s (safety net)",
                 slot_price,
