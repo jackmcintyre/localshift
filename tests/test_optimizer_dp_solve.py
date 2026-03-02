@@ -192,6 +192,37 @@ def test_transition_hold_at_soc_ceiling_emits_passive_grid_export(default_config
     assert terms.export_revenue == pytest.approx(slot.sell_price * grid_export)
 
 
+def test_transition_hold_respects_separate_rates():
+    """Issue #422: HOLD must use solar_charge_rate_kw for charge and discharge_rate_kw for discharge."""
+    config = OptimizerConfig(solar_charge_rate_kw=2.0, discharge_rate_kw=4.0)
+    slot = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-01T12:00:00",
+        slot_interval_minutes=60,
+        buy_price=0.1,
+        sell_price=0.05,
+        solar_kwh=0,
+        consumption_kwh=0,
+    )
+
+    # 1. Discharge (net_kwh = -10): should be capped by discharge_rate_kw (4.0 kW * 1h = 4.0 kWh)
+    slot.consumption_kwh = 10.0
+    _, grid_import, _ = DPPlanner.transition(
+        soc_pct=50.0, action=PlannerAction.HOLD, slot=slot, config=config
+    )
+    assert grid_import == pytest.approx(6.0)  # 10.0 - 4.0
+
+    # 2. Charge (net_kwh = 10): should be capped by solar_charge_rate_kw (2.0 kW * 1h = 2.0 kWh)
+    slot.consumption_kwh = 0.0
+    slot.solar_kwh = 10.0
+    _, _, grid_export = DPPlanner.transition(
+        soc_pct=50.0, action=PlannerAction.HOLD, slot=slot, config=config
+    )
+    assert grid_export == pytest.approx(8.0)  # 10.0 - 2.0
+
+
+# ---------------------------------------------------------------------------
+# DPPlanner core tests
 # ---------------------------------------------------------------------------
 # DPPlanner core tests
 # ---------------------------------------------------------------------------
