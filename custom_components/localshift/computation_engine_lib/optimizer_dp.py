@@ -928,7 +928,9 @@ class DPPlanner:
                 # Surplus solar can be sent to battery subject to rate + headroom.
                 solar_surplus_kwh = net_kwh
                 solar_by_rate_kwh = min(solar_surplus_kwh, max_transfer_kwh)
-                headroom_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+                headroom_kwh = max(
+                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
+                )
 
                 if config.charge_efficiency <= 0:
                     solar_to_battery_kwh = 0.0
@@ -951,7 +953,9 @@ class DPPlanner:
                 max_load_from_battery_kwh = (
                     available_battery_kwh * config.discharge_efficiency
                 )
-                battery_to_load_kwh = min(discharge_by_rate_kwh, max_load_from_battery_kwh)
+                battery_to_load_kwh = min(
+                    discharge_by_rate_kwh, max_load_from_battery_kwh
+                )
 
                 if config.discharge_efficiency <= 0:
                     battery_delta_kwh = 0.0
@@ -1044,7 +1048,7 @@ class DPPlanner:
             # Discharge to grid at max rate
             max_discharge_kwh = config.discharge_rate_kw * slot_hours
             # Effective export accounts for discharge efficiency loss
-            effective_export_kwh = max_discharge_kwh / config.discharge_efficiency
+            effective_export_kwh = max_discharge_kwh * config.discharge_efficiency
 
             # Account for solar/consumption net
             # Solar goes directly to export (not through battery)
@@ -1057,7 +1061,7 @@ class DPPlanner:
                 # Consumption deficit reduces export
                 net_export = max(0.0, net_export + net_kwh)
 
-            delta_soc = -(effective_export_kwh / capacity_kwh) * 100.0
+            delta_soc = -(max_discharge_kwh / capacity_kwh) * 100.0
             next_soc = soc_pct + delta_soc
 
             # Clip to min SOC
