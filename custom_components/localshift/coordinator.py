@@ -136,6 +136,7 @@ class LocalShiftCoordinator:
         # Solcast startup retry tracking
         self._solcast_retry_count: int = 0
         self._solcast_ready: bool = False
+        self._forecast_computed_on_startup: bool = False
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -377,6 +378,13 @@ class LocalShiftCoordinator:
             inferred_mode.value,
         )
 
+        # Log if forecast was computed during startup
+        if self._forecast_computed_on_startup:
+            _LOGGER.info(
+                "Initial forecast computed successfully on startup (after %d Solcast retries)",
+                self._solcast_retry_count,
+            )
+
     async def async_stop(self) -> None:
         """Stop listening and clean up.
 
@@ -609,6 +617,11 @@ class LocalShiftCoordinator:
             _LOGGER.info("Solcast data available, proceeding with forecast computation")
             self._compute_derived_values()
             self._notify_listeners()
+
+            # Trigger immediate state machine evaluation for fast battery control on startup
+            await self._evaluate_state_machine()
+
+            self._forecast_computed_on_startup = True
             return
 
         # Solcast not ready - check if we can retry
@@ -622,6 +635,11 @@ class LocalShiftCoordinator:
             # Still compute with whatever data we have
             self._compute_derived_values()
             self._notify_listeners()
+
+            # Trigger state machine evaluation even with incomplete data
+            await self._evaluate_state_machine()
+
+            self._forecast_computed_on_startup = True
             return
 
         self._solcast_retry_count += 1
