@@ -417,8 +417,14 @@ class TestEvaluateStateMachine:
 
         # Verify evaluate was called
         coordinator._state_machine.evaluate_state_machine.assert_called_once()
-        call_kwargs = coordinator._state_machine.evaluate_state_machine.call_args.kwargs
-        assert call_kwargs["post_compute_func"] == coordinator._run_shadow_optimizer
+        call_args = coordinator._state_machine.evaluate_state_machine.call_args
+        # Verify correct parameters were passed (positional: data, computation_engine)
+        assert len(call_args.args) >= 2
+        assert call_args.args[0] is coordinator.data
+        assert call_args.args[1] is coordinator._computation_engine
+        # Verify keyword args
+        assert "read_state_func" in call_args.kwargs
+        assert "notify_func" in call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_async_evaluate_state_machine_public(self, coordinator):
@@ -441,8 +447,14 @@ class TestEvaluateStateMachine:
 
         # Verify evaluate was called
         coordinator._state_machine.evaluate_state_machine.assert_called_once()
-        call_kwargs = coordinator._state_machine.evaluate_state_machine.call_args.kwargs
-        assert call_kwargs["post_compute_func"] == coordinator._run_shadow_optimizer
+        call_args = coordinator._state_machine.evaluate_state_machine.call_args
+        # Verify correct parameters were passed (positional: data, computation_engine)
+        assert len(call_args.args) >= 2
+        assert call_args.args[0] is coordinator.data
+        assert call_args.args[1] is coordinator._computation_engine
+        # Verify keyword args
+        assert "read_state_func" in call_args.kwargs
+        assert "notify_func" in call_args.kwargs
 
 
 # =============================================================================
