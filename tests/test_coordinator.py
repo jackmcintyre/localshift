@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from custom_components.localshift.const import BatteryMode, PLATFORMS
 from custom_components.localshift.coordinator import LocalShiftCoordinator
 
 
@@ -108,7 +109,7 @@ class TestAsyncStart:
 
     Uses mock_storage fixture to mock HA's Store class for components
     that use persistent storage (DecisionOutcomeTracker, ParameterOptimizer,
-    PatternAnalyzer, OptimizationController, ThermalManager).
+    PatternAnalyzer, OptimizationController).
     """
 
     @pytest.mark.asyncio
@@ -124,15 +125,10 @@ class TestAsyncStart:
             patch(
                 "custom_components.localshift.coordinator.async_track_time_change"
             ) as mock_track_time_change,
-            patch(
-                "custom_components.localshift.thermal_manager.ThermalManager.async_initialize",
-                new_callable=AsyncMock,
-            ) as mock_thermal_init,
         ):
             mock_track_state.return_value = MagicMock()
             mock_track_time.return_value = MagicMock()
             mock_track_time_change.return_value = MagicMock()
-            mock_thermal_init.return_value = None
 
             await coordinator.async_start()
 
@@ -142,7 +138,6 @@ class TestAsyncStart:
             assert coordinator._computation_engine is not None
             assert coordinator._state_machine is not None
             assert coordinator._notification_service is not None
-            assert coordinator._thermal_manager is not None
 
     @pytest.mark.asyncio
     async def test_async_start_subscribes_to_events(self, coordinator, mock_recorder):
@@ -157,15 +152,10 @@ class TestAsyncStart:
             patch(
                 "custom_components.localshift.coordinator.async_track_time_change"
             ) as mock_track_time_change,
-            patch(
-                "custom_components.localshift.thermal_manager.ThermalManager.async_initialize",
-                new_callable=AsyncMock,
-            ) as mock_thermal_init,
         ):
             mock_track_state.return_value = MagicMock()
             mock_track_time.return_value = MagicMock()
             mock_track_time_change.return_value = MagicMock()
-            mock_thermal_init.return_value = None
 
             await coordinator.async_start()
 
@@ -174,8 +164,8 @@ class TestAsyncStart:
             # Verify periodic timer subscriptions (periodic tick, learning save, solcast retry, etc.)
             # The exact count may vary based on coordinator implementation
             assert mock_track_time.call_count >= 2
-            # Verify midnight, daily summary, and thermal mode decision subscriptions
-            assert mock_track_time_change.call_count >= 3
+            # Verify midnight and daily summary subscriptions
+            assert mock_track_time_change.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_async_start_sets_startup_grace(self, coordinator, mock_recorder):
@@ -190,15 +180,10 @@ class TestAsyncStart:
             patch(
                 "custom_components.localshift.coordinator.async_track_time_change"
             ) as mock_track_time_change,
-            patch(
-                "custom_components.localshift.thermal_manager.ThermalManager.async_initialize",
-                new_callable=AsyncMock,
-            ) as mock_thermal_init,
         ):
             mock_track_state.return_value = MagicMock()
             mock_track_time.return_value = MagicMock()
             mock_track_time_change.return_value = MagicMock()
-            mock_thermal_init.return_value = None
 
             await coordinator.async_start()
 
@@ -465,8 +450,8 @@ class TestEvaluateStateMachine:
 # =============================================================================
 
 
-class TestButtonHandlers:
-    """Tests for button handler methods."""
+class TestModeHandlers:
+    """Tests for battery mode handler methods."""
 
     @pytest.mark.asyncio
     async def test_async_set_self_consumption(self, coordinator, coordinator_data):
@@ -484,66 +469,49 @@ class TestButtonHandlers:
         )
 
     @pytest.mark.asyncio
-    async def test_async_set_force_charge(self, coordinator, coordinator_data):
-        """Test set_force_charge button handler."""
+    async def test_async_set_battery_mode_grid_charging(
+        self, coordinator, coordinator_data
+    ):
+        """Test async_set_battery_mode with GRID_CHARGING."""
         coordinator.data = coordinator_data
 
         # Mock battery controller
         coordinator._battery_controller = MagicMock()
         coordinator._battery_controller.set_force_charge = AsyncMock()
 
-        await coordinator.async_set_force_charge()
+        await coordinator.async_set_battery_mode(BatteryMode.GRID_CHARGING)
 
-        coordinator._battery_controller.set_force_charge.assert_called_once_with(
-            coordinator.data, False
-        )
+        coordinator._battery_controller.set_force_charge.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_async_set_boost_charge(self, coordinator, coordinator_data):
-        """Test set_boost_charge button handler."""
+    async def test_async_set_battery_mode_boost_charging(
+        self, coordinator, coordinator_data
+    ):
+        """Test async_set_battery_mode with BOOST_CHARGING."""
         coordinator.data = coordinator_data
 
         # Mock battery controller
         coordinator._battery_controller = MagicMock()
         coordinator._battery_controller.set_boost_charge = AsyncMock()
 
-        await coordinator.async_set_boost_charge()
+        await coordinator.async_set_battery_mode(BatteryMode.BOOST_CHARGING)
 
-        coordinator._battery_controller.set_boost_charge.assert_called_once_with(
-            coordinator.data, False
-        )
+        coordinator._battery_controller.set_boost_charge.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_async_set_force_discharge(self, coordinator, coordinator_data):
-        """Test set_force_discharge button handler."""
+    async def test_async_set_battery_mode_spike_discharge(
+        self, coordinator, coordinator_data
+    ):
+        """Test async_set_battery_mode with SPIKE_DISCHARGE."""
         coordinator.data = coordinator_data
 
         # Mock battery controller
         coordinator._battery_controller = MagicMock()
         coordinator._battery_controller.set_force_discharge = AsyncMock()
 
-        await coordinator.async_set_force_discharge()
+        await coordinator.async_set_battery_mode(BatteryMode.SPIKE_DISCHARGE)
 
-        coordinator._battery_controller.set_force_discharge.assert_called_once_with(
-            coordinator.data, False
-        )
-
-    @pytest.mark.asyncio
-    async def test_async_set_manual_override(self, coordinator, coordinator_data):
-        """Test set_manual_override button handler."""
-        coordinator.data = coordinator_data
-
-        # Mock state machine
-        coordinator._state_machine = MagicMock()
-        coordinator._state_machine.set_manual_override_timestamp = MagicMock()
-
-        # Mock battery controller
-        coordinator._battery_controller = MagicMock()
-
-        await coordinator.async_set_manual_override()
-
-        assert coordinator.data.manual_override is True
-        coordinator._state_machine.set_manual_override_timestamp.assert_called_once()
+        coordinator._battery_controller.set_force_discharge.assert_called_once()
 
 
 # =============================================================================
