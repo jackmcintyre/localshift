@@ -30,21 +30,45 @@ from .computation_engine_lib import (
     scan_forecast_for_spike,
     sum_solar_before_target,
 )
+from .computation_engine_lib.optimizer_active_mode import OptimizerSafetyGate
+from .computation_engine_lib.optimizer_dp import DPPlanner
+from .computation_engine_lib.optimizer_shadow_runner import (
+    _build_optimizer_config,
+    _build_summary,
+    _derive_runtime_apply_plan,
+    _find_current_slot_index,
+    _normalize_initial_soc,
+    _serialize_decision,
+    _serialize_result,
+)
+from .computation_engine_lib.slot_builder import SlotBuilder
 from .computation_engine_lib.slot_schedule import TOTAL_SLOTS
 from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_GRID_KW,
+    CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
+    CONF_EXPORT_PRICE_MARGIN,
+    CONF_MINIMUM_TARGET_SOC,
+    CONF_OPTIMIZATION_MODE,
+    CONF_OPTIMIZER_CONTROL_MODE,
+    CONF_OPTIMIZER_ENABLED,
     CONF_SUN_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
+    DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
+    DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_LOAD_WEIGHT_RECENT,
+    DEFAULT_MINIMUM_TARGET_SOC,
+    DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_OPTIMIZER_CONTROL_MODE,
+    DEFAULT_OPTIMIZER_ENABLED,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 )
@@ -132,6 +156,9 @@ class ComputationEngine:
         )
         self._forecast_accuracy = ForecastAccuracyEngine()
         self._weather_diagnostics = WeatherDiagnosticsEngine(entry)
+
+        # DP Planner for Phase 3 (#441) - eliminates one-cycle lag
+        self._dp_planner = DPPlanner()
 
         # Change tracker for forecast regeneration
         self._forecast_change_tracker = ForecastChangeTracker()
@@ -379,6 +406,10 @@ class ComputationEngine:
         self._compute_solar_weighted_avg_fit(data, now_dt, target_hour, after_dw)
 
         # ---- Step 12: active_mode ----
+        # Phase 3 (#441): Run DP optimizer inline BEFORE legacy active_mode computation
+        # This eliminates the one-cycle lag by setting data.active_mode in the same cycle
+
+        self._run_dp_optimizer_inline(data, now_dt)
 
         self._compute_active_mode(data, now_dt)
 
@@ -1047,6 +1078,225 @@ class ComputationEngine:
 
         # No future DW slot found in the current forecast window
         return None
+
+    # ========================================================================
+    # PHASE 3 (#441): INLINE DP OPTIMIZER - ELIMINATE ONE-CYCLE LAG
+    # ========================================================================
+
+    def _build_optimizer_config_options(self) -> dict[str, Any]:
+        """Build config_options dict for optimizer and safety gate.
+
+        Phase 3 (#441): Consolidates config options construction.
+        """
+        return {
+            "optimizer_enabled": self.entry.options.get(
+                CONF_OPTIMIZER_ENABLED, DEFAULT_OPTIMIZER_ENABLED
+            ),
+            CONF_OPTIMIZER_CONTROL_MODE: self.entry.options.get(
+                CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
+            ),
+            CONF_MINIMUM_TARGET_SOC: self.entry.options.get(
+                CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
+            ),
+            CONF_BATTERY_TARGET: self.entry.options.get(
+                CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
+            ),
+            CONF_ALLOW_DW_ENTRY_UNDER_TARGET: self.entry.options.get(
+                SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
+            ),
+            CONF_OPTIMIZATION_MODE: self.entry.options.get(
+                CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE
+            ),
+            CONF_EXPORT_PRICE_MARGIN: self.entry.options.get(
+                CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN
+            ),
+        }
+
+    def _run_dp_optimizer_inline(self, data: CoordinatorData, now_dt: datetime) -> None:
+        """Run DP optimizer inline so active_mode has no cycle lag (Phase 3, #441).
+
+        Steps A–E from the architecture doc:
+          A: build slot contexts from raw data
+          B: run DPPlanner.plan()
+          C: write optimizer fields to data
+          D: derive apply plan from current-slot decision
+          E: assign data.active_mode (or default to SELF_CONSUMPTION on gate failure)
+        """
+        import uuid  # noqa: PLC0415
+
+        from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
+        # Read config once for this cycle
+        config_options = self._build_optimizer_config_options()
+
+        # Gate: only proceed if optimizer is enabled
+        optimizer_enabled = config_options.get("optimizer_enabled", False)
+        if not optimizer_enabled:
+            # Optimizer disabled — active_mode will be set by legacy path (_compute_active_mode)
+            return
+
+        control_mode = config_options.get(
+            CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
+        )
+
+        # Set runtime mode for sensor visibility
+        data.optimizer_runtime_mode = control_mode
+
+        try:
+            # Step A: Build slots from raw data (Phase 2 SlotBuilder)
+            ha_timezone = (
+                str(dt_util.DEFAULT_TIME_ZONE)
+                if dt_util.DEFAULT_TIME_ZONE
+                else "Australia/Sydney"
+            )
+            slot_builder = SlotBuilder(
+                config_options=config_options, ha_timezone=ha_timezone
+            )
+            slots, slot_metadata = slot_builder.build_slots(data, data.adaptive_params)
+
+            if not slots:
+                _LOGGER.warning("DP optimizer: no slots available, skipping")
+                return
+
+            # Step B: Build OptimizerConfig
+            optimizer_config = _build_optimizer_config(data, config_options)
+
+            # Normalize and validate SOC
+            initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
+            if initial_soc is None:
+                _LOGGER.warning(
+                    "DP optimizer: invalid SOC %s, skipping", soc_info.get("error")
+                )
+                return
+
+            # Step B: Run DPPlanner
+            cycle_id = uuid.uuid4().hex[:12]
+            from .computation_engine_lib.optimizer_dp import (
+                OptimizerInputs,  # noqa: PLC0415
+            )
+
+            inputs = OptimizerInputs(
+                cycle_id=cycle_id,
+                initial_soc_pct=initial_soc,
+                slots=slots,
+                config=optimizer_config,
+            )
+            result = self._dp_planner.plan(inputs)
+
+            # Step C: Write optimizer fields (always, even on solve failure, for diagnostics)
+            self._write_optimizer_fields(
+                data, result, slot_metadata, config_options, cycle_id
+            )
+
+            # Steps D+E: Derive apply plan and assign active_mode (only if control is active)
+            if control_mode == "active":
+                self._assign_active_mode(data, result, optimizer_config)
+
+        except Exception as e:
+            _LOGGER.warning(
+                "Inline DP optimizer failed (non-blocking): %s", e, exc_info=True
+            )
+            # active_mode falls through to legacy _compute_active_mode
+
+    def _write_optimizer_fields(
+        self,
+        data: CoordinatorData,
+        result: Any,  # OptimizerResult
+        slot_metadata: Any,  # SlotBuildMetadata
+        config_options: dict[str, Any],
+        cycle_id: str,
+    ) -> None:
+        """Write DP result to CoordinatorData shadow fields (Step C)."""
+        from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
+        data.optimizer_shadow_result = _serialize_result(result)
+        data.optimizer_shadow_decisions = [
+            _serialize_decision(d) for d in result.decisions
+        ]
+        data.optimizer_shadow_summary = _build_summary(
+            result=result,
+            cycle_id=cycle_id,
+            cycle_timestamp_iso=dt_util.utcnow().isoformat(),
+            parity_info=slot_metadata.to_parity_dict(),
+            config_options=config_options,
+        )
+
+    def _assign_active_mode(
+        self,
+        data: CoordinatorData,
+        result: Any,  # OptimizerResult
+        optimizer_config: Any,  # OptimizerConfig
+    ) -> None:
+        """Assign data.active_mode from DP result within the same cycle (Steps D+E).
+
+        On safety gate failure, defaults to SELF_CONSUMPTION — the safe hardware state.
+        """
+        # Build alignment info from the summary we just wrote
+        alignment = {
+            "valid": True,  # SlotBuilder produces aligned slots by construction (Phase 2)
+            "issues": [],
+            "warnings": [],
+        }
+
+        config_options = self._build_optimizer_config_options()
+        safety_gate = OptimizerSafetyGate(config_options)
+        gate_result = safety_gate.check_admission(data, result, alignment)
+
+        if not gate_result.allowed:
+            _LOGGER.info(
+                "DP optimizer safety gate blocked: %s — defaulting to SELF_CONSUMPTION",
+                gate_result.block_reason,
+            )
+            from .coordinator_data import _BatteryMode  # noqa: PLC0415
+
+            data.active_mode = _BatteryMode.SELF_CONSUMPTION
+            data.optimizer_last_apply_status = "blocked"
+            data.optimizer_safety_block_reason = gate_result.block_reason or ""
+            data.optimizer_fallback_count = data.optimizer_fallback_count + 1
+            return
+
+        # Gate passed — derive apply plan from current slot
+        current_slot_idx = _find_current_slot_index(data)
+        apply_plan = _derive_runtime_apply_plan(
+            data.optimizer_shadow_decisions, current_slot_idx, optimizer_config
+        )
+        data.optimizer_apply_plan = apply_plan
+
+        if apply_plan.get("fallback_to_legacy", True):
+            _LOGGER.info(
+                "DP optimizer: apply plan requests fallback — defaulting to SELF_CONSUMPTION"
+            )
+            from .coordinator_data import _BatteryMode  # noqa: PLC0415
+
+            data.active_mode = _BatteryMode.SELF_CONSUMPTION
+            data.optimizer_last_apply_status = "fallback"
+            data.optimizer_fallback_count = data.optimizer_fallback_count + 1
+            return
+
+        # Map battery_mode string → BatteryMode enum
+        battery_mode_str = apply_plan.get("battery_mode", "")
+        try:
+            from .coordinator_data import _BatteryMode  # noqa: PLC0415
+
+            data.active_mode = _BatteryMode(battery_mode_str)
+            data.optimizer_last_apply_status = "ready_to_apply"
+            data.optimizer_safety_block_reason = ""
+            data.optimizer_fallback_count = 0
+            _LOGGER.info(
+                "DP optimizer (same-cycle): selected %s (action=%s, slot=%d)",
+                battery_mode_str,
+                apply_plan.get("action"),
+                current_slot_idx,
+            )
+        except ValueError:
+            _LOGGER.warning(
+                "DP optimizer: invalid battery_mode '%s' — SELF_CONSUMPTION",
+                battery_mode_str,
+            )
+            from .coordinator_data import _BatteryMode  # noqa: PLC0415
+
+            data.active_mode = _BatteryMode.SELF_CONSUMPTION
+            data.optimizer_last_apply_status = "fallback"
 
     def _compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
         """Compute active battery mode.
