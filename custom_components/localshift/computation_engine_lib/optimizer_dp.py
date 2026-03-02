@@ -996,41 +996,52 @@ class DPPlanner:
             max_charge_kwh = config.charge_rate_kw * slot_hours
             effective_charge_kwh = max_charge_kwh * config.charge_efficiency
 
-            # Account for solar surplus (reduces grid need) or deficit (increases effective charge)
-            # Solar surplus goes to battery first, then grid tops up
             if net_kwh > 0:
-                # Solar surplus charges battery directly
+                # Solar surplus: solar charges battery directly
                 solar_to_battery = net_kwh * config.charge_efficiency
-                # Grid charge only what's needed to fill remaining capacity
                 soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
                 remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
                 if remaining_headroom > 0:
-                    grid_charge_kwh = min(
+                    grid_charge_stored_kwh = min(
                         effective_charge_kwh,
                         (remaining_headroom / 100.0) * capacity_kwh,
                     )
                 else:
-                    grid_charge_kwh = 0.0
+                    grid_charge_stored_kwh = 0.0
+                # Grid import: pre-efficiency energy to charge battery
+                grid_import_kwh = grid_charge_stored_kwh / config.charge_efficiency
+                delta_soc_from_grid = grid_charge_stored_kwh / capacity_kwh * 100.0
+                delta_soc_from_solar = solar_to_battery / capacity_kwh * 100.0
+                next_soc = soc_pct + delta_soc_from_grid + delta_soc_from_solar
             else:
-                # Net consumption - grid must charge battery AND cover deficit
-                # Battery still charges from grid, but household draws from grid too
-                grid_charge_kwh = effective_charge_kwh
+                # Net consumption deficit: grid supplies battery charging AND household deficit
+                grid_charge_stored_kwh = effective_charge_kwh
+                # Grid import for battery (pre-efficiency) + household deficit
+                grid_import_kwh = max_charge_kwh + (-net_kwh)
+                delta_soc = (grid_charge_stored_kwh / capacity_kwh) * 100.0
+                next_soc = soc_pct + delta_soc
 
-            delta_soc = (grid_charge_kwh / capacity_kwh) * 100.0
-            if net_kwh > 0:
-                delta_soc += (net_kwh * config.charge_efficiency / capacity_kwh) * 100.0
-
-            next_soc = soc_pct + delta_soc
-            # Clip to max SOC
+            # Clip to max SOC if necessary
             if next_soc > config.max_soc_pct:
-                # Reduce grid import to exactly hit max
-                actual_grid_kwh = max(
-                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
-                )
+                # Reduce grid charging to hit max_soc exactly
+                total_soc_needed = config.max_soc_pct - soc_pct
+                solar_soc_contrib = 0.0
+                if net_kwh > 0:
+                    solar_soc_contrib = (
+                        net_kwh * config.charge_efficiency / capacity_kwh
+                    ) * 100.0
+                grid_soc_needed = max(0.0, total_soc_needed - solar_soc_contrib)
+                # Pre-efficiency grid energy needed for that SOC increase
+                grid_import_for_charging = (
+                    grid_soc_needed / 100.0 * capacity_kwh
+                ) / config.charge_efficiency
+                grid_import_total = grid_import_for_charging
+                if net_kwh < 0:
+                    grid_import_total += -net_kwh
                 next_soc = config.max_soc_pct
-                return next_soc, actual_grid_kwh, 0.0
+                return next_soc, grid_import_total, 0.0
 
-            return next_soc, grid_charge_kwh, 0.0
+            return next_soc, grid_import_kwh, 0.0
 
         if action == PlannerAction.CHARGE_GRID_BOOST:
             # Grid charge at boost rate, plus solar/consumption net effect
@@ -1038,33 +1049,51 @@ class DPPlanner:
             effective_charge_kwh = max_charge_kwh * config.charge_efficiency
 
             if net_kwh > 0:
+                # Solar surplus: solar charges battery directly
                 solar_to_battery = net_kwh * config.charge_efficiency
                 soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
                 remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
                 if remaining_headroom > 0:
-                    grid_charge_kwh = min(
+                    grid_charge_stored_kwh = min(
                         effective_charge_kwh,
                         (remaining_headroom / 100.0) * capacity_kwh,
                     )
                 else:
-                    grid_charge_kwh = 0.0
+                    grid_charge_stored_kwh = 0.0
+                # Grid import: pre-efficiency energy to charge battery
+                grid_import_kwh = grid_charge_stored_kwh / config.charge_efficiency
+                delta_soc_from_grid = grid_charge_stored_kwh / capacity_kwh * 100.0
+                delta_soc_from_solar = solar_to_battery / capacity_kwh * 100.0
+                next_soc = soc_pct + delta_soc_from_grid + delta_soc_from_solar
             else:
-                grid_charge_kwh = effective_charge_kwh
+                # Net consumption deficit: grid supplies battery charging AND household deficit
+                grid_charge_stored_kwh = effective_charge_kwh
+                # Grid import for battery (pre-efficiency) + household deficit
+                grid_import_kwh = max_charge_kwh + (-net_kwh)
+                delta_soc = (grid_charge_stored_kwh / capacity_kwh) * 100.0
+                next_soc = soc_pct + delta_soc
 
-            delta_soc = (grid_charge_kwh / capacity_kwh) * 100.0
-            if net_kwh > 0:
-                delta_soc += (net_kwh * config.charge_efficiency / capacity_kwh) * 100.0
-
-            next_soc = soc_pct + delta_soc
-            # Clip to max SOC
+            # Clip to max SOC if necessary
             if next_soc > config.max_soc_pct:
-                actual_grid_kwh = max(
-                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
-                )
+                # Reduce grid charging to hit max_soc exactly
+                total_soc_needed = config.max_soc_pct - soc_pct
+                solar_soc_contrib = 0.0
+                if net_kwh > 0:
+                    solar_soc_contrib = (
+                        net_kwh * config.charge_efficiency / capacity_kwh
+                    ) * 100.0
+                grid_soc_needed = max(0.0, total_soc_needed - solar_soc_contrib)
+                # Pre-efficiency grid energy needed for that SOC increase
+                grid_import_for_charging = (
+                    grid_soc_needed / 100.0 * capacity_kwh
+                ) / config.charge_efficiency
+                grid_import_total = grid_import_for_charging
+                if net_kwh < 0:
+                    grid_import_total += -net_kwh
                 next_soc = config.max_soc_pct
-                return next_soc, actual_grid_kwh, 0.0
+                return next_soc, grid_import_total, 0.0
 
-            return next_soc, grid_charge_kwh, 0.0
+            return next_soc, grid_import_kwh, 0.0
 
         if action == PlannerAction.EXPORT_PROACTIVE:
             # Discharge to grid at max rate

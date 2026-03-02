@@ -705,10 +705,6 @@ def mock_storage():
             "custom_components.localshift.computation_engine_lib.optimization_controller.Store",
             return_value=mock_store,
         ),
-        patch(
-            "custom_components.localshift.thermal_manager.Store",
-            return_value=mock_store,
-        ),
     ):
         yield mock_store
 
