@@ -944,12 +944,12 @@ class DPPlanner:
             # - Surplus solar charges battery first, then remaining surplus exports.
             # - Net load discharges battery first, then remaining deficit imports.
             # Rate limits, efficiency, and SOC bounds are applied in both directions.
-            max_transfer_kwh = config.solar_charge_rate_kw * slot_hours
 
             if net_kwh >= 0:
                 # Surplus solar can be sent to battery subject to rate + headroom.
+                limit_kwh = config.solar_charge_rate_kw * slot_hours
                 solar_surplus_kwh = net_kwh
-                solar_by_rate_kwh = min(solar_surplus_kwh, max_transfer_kwh)
+                solar_by_rate_kwh = min(solar_surplus_kwh, limit_kwh)
                 headroom_kwh = max(
                     0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
                 )
@@ -967,8 +967,9 @@ class DPPlanner:
                 return next_soc, 0.0, grid_export_kwh
             else:
                 # Net load can be supplied by battery subject to rate + floor.
+                limit_kwh = config.discharge_rate_kw * slot_hours
                 load_deficit_kwh = -net_kwh
-                discharge_by_rate_kwh = min(load_deficit_kwh, max_transfer_kwh)
+                discharge_by_rate_kwh = min(load_deficit_kwh, limit_kwh)
                 available_battery_kwh = max(
                     0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
                 )
