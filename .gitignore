@@ -42,3 +42,7 @@ charging_plan_snapshot_*.md
 snapshots/
 
 **.log
+
+# Worktrees (local development only)
+worktrees/
+
