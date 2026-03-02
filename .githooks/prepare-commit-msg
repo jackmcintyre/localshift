@@ -1,0 +1,24 @@
+#!/bin/bash
+# Prepare-commit-msg hook: Add warning comment for commits mentioning main
+# Does not block - adds reviewer-awareness comment
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+# Skip if this is a merge, squash, or fixup
+if [ -n "$COMMIT_SOURCE" ]; then
+    exit 0
+fi
+
+# Read the commit message
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Check if message mentions main branch or merge
+if echo "$COMMIT_MSG" | grep -qiE "(main branch|merge.*main|main.*merge)"; then
+    # Prepend warning comment
+    echo "# WARNING: This commit references main branch - ensure this is via approved PR" > "$COMMIT_MSG_FILE.tmp"
+    echo "$COMMIT_MSG" >> "$COMMIT_MSG_FILE.tmp"
+    mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
+fi
+
+exit 0

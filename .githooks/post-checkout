@@ -1,0 +1,31 @@
+#!/bin/bash
+# Post-checkout hook: Display warning when on main branch
+# Informational only - does not block
+
+PREV_BRANCH="$1"
+NEW_BRANCH="$2"
+CHECKOUT_TYPE="$3"
+
+# Only run on branch checkouts (not file checkouts)
+if [ "$CHECKOUT_TYPE" != "1" ]; then
+    exit 0
+fi
+
+if [ "$NEW_BRANCH" = "main" ]; then
+    echo ""
+    echo "=========================================="
+    echo "WARNING: You are now on the main branch"
+    echo "=========================================="
+    echo ""
+    echo "Direct commits to main are blocked. All changes require a pull request."
+    echo ""
+    echo "Recommended workflow:"
+    echo "  git worktree add worktrees/issue-{NNN} -b issue/{NNN}"
+    echo ""
+    echo "Recent main branch activity:"
+    git log --oneline -3 --decorate 2>/dev/null | sed 's/^/  /'
+    echo ""
+    echo "=========================================="
+fi
+
+exit 0

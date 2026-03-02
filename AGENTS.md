@@ -8,14 +8,18 @@ LocalShift is a Home Assistant integration for automated Tesla Powerwall battery
 
 ## ⚠️ ENFORCED: Worktree-Only Workflow
 
-**A git hook blocks all commits on `main` branch.**
+**Git hooks in `.githooks/` block all main branch commits and pushes.**
 
 Before starting ANY task:
 1. Run `git worktree list` - verify you're in a worktree
 2. Run `git branch --show-current` - must NOT be `main`
 3. If on main, create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
 
-See `.opencode/rules` for full workflow.
+**Verify protection is active:** `.githooks/scripts/verify-safety.sh`
+
+**Emergency bypass (logged, audit required):** `GIT_EMERGENCY_PUSH=1 git push origin main`
+
+See `.opencode/rules` and `.githooks/README.md` for full workflow.
 
 ---
 

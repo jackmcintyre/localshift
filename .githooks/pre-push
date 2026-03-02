@@ -1,0 +1,40 @@
+#!/bin/bash
+# Pre-push hook: Block all pushes from main branch
+# Emergency override: GIT_EMERGENCY_PUSH=1 (logged)
+
+REMOTE="$1"
+URL="$2"
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$BRANCH" = "main" ]; then
+    # Check for emergency override
+    if [ "$GIT_EMERGENCY_PUSH" = "1" ]; then
+        echo "$(date -Iseconds) - pre-push EMERGENCY OVERRIDE: push from main to $REMOTE" >> .git-bypass.log
+        echo "WARNING: Emergency push from main branch logged for audit"
+        exit 0
+    fi
+    
+    echo "=========================================="
+    echo "ERROR: Pushes from 'main' branch are blocked!"
+    echo "=========================================="
+    echo ""
+    echo "The main branch is protected. Push from feature branches only."
+    echo ""
+    echo "Correct workflow:"
+    echo "  1. Push your issue branch: git push origin issue/{NNN}"
+    echo "  2. Create pull request on GitHub"
+    echo "  3. Merge via GitHub UI after review"
+    echo ""
+    echo "Emergency override (logged, audit required):"
+    echo "  GIT_EMERGENCY_PUSH=1 git push origin main"
+    echo ""
+    echo "=========================================="
+    
+    # Log the attempt
+    echo "$(date -Iseconds) - pre-push blocked push from main to $REMOTE" >> .git-bypass.log
+    
+    exit 1
+fi
+
+exit 0

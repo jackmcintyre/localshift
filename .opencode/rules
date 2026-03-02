@@ -2,6 +2,14 @@
 
 **NEVER commit directly to the `main` branch.**
 
+## Enforcement
+
+Git hooks in `.githooks/` automatically block:
+- Direct commits on main (pre-commit hook)
+- Pushes from main branch (pre-push hook)
+
+Bypass attempts are logged to `.git-bypass.log` for audit.
+
 ## Required Workflow
 
 1. **Create a worktree** for your task:
@@ -34,4 +42,16 @@ git worktree list          # Should show you're in a worktree
 
 ## Emergency Bypass
 
-Only if explicitly instructed by user: `git commit --no-verify`
+Only if explicitly instructed by user:
+```bash
+GIT_EMERGENCY_PUSH=1 git push origin main
+```
+
+This is logged and requires post-hoc audit justification.
+
+## Consequences of Bypass
+
+- Production corruption requiring manual recovery
+- Team workflow disruption
+- Audit log review by project maintainer
+- Potential rollback via `.githooks/scripts/recover-main.sh`
