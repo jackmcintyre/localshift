@@ -622,6 +622,11 @@ def _serialize_decision(decision: Any) -> dict[str, Any]:
         "predicted_soc_pct": round(decision.predicted_soc_pct, 2),
         "grid_import_kwh": round(decision.grid_import_kwh, 4),
         "grid_export_kwh": round(decision.grid_export_kwh, 4),
+        # Slot context passthroughs (for dashboard debug display) — see #434
+        "solar_kwh": round(decision.solar_kwh, 3),
+        "consumption_kwh": round(decision.consumption_kwh, 3),
+        "buy_price": round(decision.buy_price, 4),
+        "sell_price": round(decision.sell_price, 4),
         # Derived compatibility flags
         "grid_charge": decision.grid_charge,
         "grid_charge_boost": decision.grid_charge_boost,

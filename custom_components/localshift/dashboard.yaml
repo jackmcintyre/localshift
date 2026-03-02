@@ -961,12 +961,12 @@ views:
             **Projected Cost:** Legacy: ${{ state_attr('sensor.localshift_optimizer_comparison', 'legacy_projected_net_cost') | default(0) | round(2) }} |
             Optimizer: ${{ state_attr('sensor.localshift_optimizer_comparison', 'optimizer_projected_net_cost') | default(0) | round(2) }}
 
-            | Time | SOC% | Action | Reason | Import | Export |
+            | Time | SOC% | Solar | Load | Buy$ | Sell$ | Action | Reason | Import | Export |
 
-            | :--- | ---: | :--- | :--- | ---: | ---: |
+            | :--- | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: |
 
             {% for d in decisions %}
-            | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(20) }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
+            | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ "%.3f"|format(d.solar_kwh | float) }} | {{ "%.3f"|format(d.consumption_kwh | float) }} | {{ "%.3f"|format(d.buy_price | float) }} | {{ "%.3f"|format(d.sell_price | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(20) }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
             
             {% endfor %}
 
