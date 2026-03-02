@@ -1242,6 +1242,8 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return shadow run summary details."""
         summary = self.coordinator.data.optimizer_shadow_summary or {}
+        # Expose parity/alignment diagnostics so basic triage can be done
+        # from Home Assistant state without digging into logs.
         return {
             "enabled": summary.get("enabled", False),
             "success": summary.get("success", False),
@@ -1249,6 +1251,20 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
             "computed_at": summary.get("cycle_timestamp_iso")
             or summary.get("computed_at"),
             "config_options": summary.get("config_options", {}),
+            # Parity diagnostics (Issue #419)
+            "parity_completeness_pct": summary.get("parity_completeness_pct"),
+            "parity_defaulted_fields": summary.get("parity_defaulted_fields", {}),
+            # Alignment diagnostics (Issue #419)
+            "alignment_valid": summary.get("alignment_valid"),
+            "alignment_issues": summary.get("alignment_issues", []),
+            "alignment_warnings": summary.get("alignment_warnings", []),
+            # Additional helpful triage fields
+            "planner_version": summary.get("planner_version"),
+            "cycle_id": summary.get("cycle_id"),
+            "solve_time_seconds": summary.get("solve_time_seconds"),
+            "projected_net_cost": summary.get("projected_net_cost"),
+            "terminal_shortfall_pct": summary.get("terminal_shortfall_pct"),
+            "initial_soc_pct": summary.get("initial_soc_pct"),
         }
 
     @property
