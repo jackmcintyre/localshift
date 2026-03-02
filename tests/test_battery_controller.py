@@ -32,6 +32,7 @@ def mock_get_entity_id():
             "teslemetry_backup_reserve": "number.tesla_powerwall_backup_reserve",
             "teslemetry_allow_export": "select.tesla_powerwall_allow_export",
             "teslemetry_grid_power": "sensor.tesla_powerwall_grid_power",
+            "teslemetry_allow_charging_from_grid": "switch.tesla_powerwall_allow_charging_from_grid",
             "minimum_target_soc": "number.minimum_target_soc",
         }
         return entity_map.get(key)
@@ -86,6 +87,8 @@ class TestSetSelfConsumption:
                 state.state = "10"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "off"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -146,6 +149,8 @@ class TestSetSelfConsumption:
                 state.state = "10"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -186,6 +191,8 @@ class TestSetForceCharge:
                 state.state = "80"  # Clamped for default target=100
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -253,6 +260,8 @@ class TestSetBoostCharge:
                 state.state = "100"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -292,6 +301,8 @@ class TestSetBoostCharge:
                 state.state = "100"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -376,9 +387,11 @@ class TestSetForceDischarge:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "20"
+                state.state = "100"
             elif "allow_export" in entity_id:
-                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -500,9 +513,11 @@ class TestSetProactiveExport:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "45"  # SOC - 5 = 45
+                state.state = "100"
             elif "allow_export" in entity_id:
-                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -740,6 +755,8 @@ class TestValidateTransition:
                 state.state = "20"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
             return state
 
         mock_hass.states.get = mock_get_state
