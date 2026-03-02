@@ -445,7 +445,10 @@ class CoordinatorData:
     # --- Hybrid timescale metadata (Issue #329) ---
     hybrid_slot_metadata: dict[str, Any] = field(
         default_factory=dict
-    )  # slot_intervals, transition_boundary, total_slots
+    )  # slot_intervals, transition_boundary, total_slots, horizon_hours
+    forecast_horizon_hours: float = (
+        0.0  # Actual time span covered by forecast (Issue #431)
+    )
 
     # --- Startup ready state (Issue #349) ---
     # Tracks whether all required inputs are valid before making automation decisions

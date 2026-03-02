@@ -96,6 +96,8 @@ def percentile(prices: list[float], percentile_value: float) -> float:
     """Calculate Nth percentile of a list of prices."""
     if not prices:
         return 0.0
+    # Issue #431: Clamp percentile to prevent errors from extreme scaling
+    percentile_value = max(0.0, min(100.0, percentile_value))
     sorted_prices = sorted(prices)
     n = len(sorted_prices)
     index = (percentile_value / 100) * (n - 1)

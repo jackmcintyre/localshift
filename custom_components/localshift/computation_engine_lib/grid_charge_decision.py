@@ -175,6 +175,8 @@ class GridChargeDecisionEngine:
         current_hour: int | None = None,
         is_current_slot: bool = False,
         is_currently_grid_charging: bool = False,
+        forecast_horizon_hours: float = 24.0,
+        baseline_avg_kw: dict[int, float] | None = None,
     ) -> tuple[bool, bool]:
         """Determine if grid charging should happen at this slot.
 
@@ -190,6 +192,9 @@ class GridChargeDecisionEngine:
            (allows solar to charge during DW period)
         6. HYSTERESIS: Once grid charging starts, require stronger evidence to stop
            (solar must reach target + margin, not just target)
+
+        Issue #431: Adds forecast_horizon_hours to suppress opportunistic
+        charging when the forecast is incomplete.
 
         Issue #170 Phase 2: Applies adaptive parameters:
         - solar_confidence_factor: Scales solar forecasts (pessimistic/optimistic)
@@ -217,12 +222,28 @@ class GridChargeDecisionEngine:
             general_price_current: Current spot buy price (only for current slot)
             is_current_slot: True if this is the current time slot (use spot price)
             is_currently_grid_charging: True if currently in grid charging mode (hysteresis)
-
-        Returns:
-            (should_charge, should_boost)
+            forecast_horizon_hours: Actual hours of forecast available
+            baseline_avg_kw: Optional baseline load profile
         """
         # Basic constraints
         if in_demand_window:
+            return False, False
+
+        if not is_before_dw:
+            return False, False
+
+        # Issue #431: Horizon Guard
+        # If the forecast horizon is severely restricted (e.g. at 11pm only seeing to 4pm),
+        # suppress opportunistic grid charging because we can't see the full solar
+        # potential of the next day.
+        # We must see at least 4 hours into the NEXT demand window to trust the "shortfall".
+        next_dw_start = self._next_demand_window_start_dt(slot_start, dw_start_time)
+        visibility_needed_dt = next_dw_start + timedelta(hours=4)
+        forecast_end_dt = slot_start + timedelta(hours=forecast_horizon_hours)
+
+        is_blind = forecast_end_dt < visibility_needed_dt
+
+        if gap_to_target <= 0:
             return False, False
 
         if not is_before_dw:
@@ -272,6 +293,17 @@ class GridChargeDecisionEngine:
         # Price-based thresholds
         price_is_cheap = use_price <= effective_cheap_price
         price_is_very_cheap = use_price <= (effective_cheap_price * 0.8)
+
+        # Issue #431: Apply blindness guard
+        # Only allow cheap charging if we have sufficient visibility.
+        # Very cheap prices (safety net) are still allowed even if blind.
+        if is_blind and price_is_cheap and not price_is_very_cheap:
+            _LOGGER.debug(
+                "GRID_CHARGE SKIPPED: blind horizon (%.1fh), suppressing opportunistic charge at $%.2f",
+                forecast_horizon_hours,
+                use_price,
+            )
+            return False, False
 
         # HYSTERESIS: If currently grid charging, apply stickiness to prevent flip-flopping
         # Only stop charging if:

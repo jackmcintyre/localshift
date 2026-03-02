@@ -266,6 +266,7 @@ class PriceCalculator:
         self,
         general_forecast: list[dict[str, Any]],
         now_dt: datetime,
+        horizon_hours: float = 24.0,
     ) -> tuple[list[float], float, float]:
         """Collect forecast prices and compute base/max price values.
 
@@ -274,6 +275,7 @@ class PriceCalculator:
         Args:
             general_forecast: List of forecast dictionaries with start_time and per_kwh.
             now_dt: Current datetime for filtering forecasts.
+            horizon_hours: Actual hours of forecast available.
 
         Returns:
             Tuple of (forecast_prices, base_price, max_price).
@@ -292,11 +294,17 @@ class PriceCalculator:
             if start_local >= now_dt and start_local <= cutoff:
                 forecast_prices.append(float(forecast.get("per_kwh", 0)))
 
-        percentile_value = float(
+        configured_percentile = float(
             self.entry.options.get(
                 CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
             )
         )
+
+        # Issue #431: Scale percentile by horizon completeness.
+        # If horizon < 24h, reduce percentile to be more selective about "cheap".
+        horizon_factor = max(0.1, min(horizon_hours / 24.0, 1.0))
+        percentile_value = configured_percentile * horizon_factor
+
         if forecast_prices:
             base = round(self._percentile(forecast_prices, percentile_value), 2)
         else:
@@ -374,7 +382,7 @@ class PriceCalculator:
         """
         # Use shared helper for forecast price collection
         _, base, max_price = self._collect_forecast_prices_and_base(
-            data.general_forecast, now_dt
+            data.general_forecast, now_dt, data.forecast_horizon_hours
         )
 
         try:
@@ -426,7 +434,11 @@ class PriceCalculator:
             return raw_threshold
 
         # Check if change exceeds hysteresis threshold
-        change = abs(raw_threshold - self._last_raw_effective_cheap_price)
+        last_raw = self._last_raw_effective_cheap_price
+        if last_raw is None:
+            return self._smoothed_effective_cheap_price or raw_threshold
+
+        change = abs(raw_threshold - last_raw)
         if change < self._THRESHOLD_HYSTERESIS:
             # Change too small - keep smoothed value
             return self._smoothed_effective_cheap_price
@@ -456,7 +468,7 @@ class PriceCalculator:
         """
         # Use shared helper for forecast price collection
         _, base, max_price = self._collect_forecast_prices_and_base(
-            data.general_forecast, now_dt
+            data.general_forecast, now_dt, data.forecast_horizon_hours
         )
 
         solar_gap = not data.solar_can_reach_target
