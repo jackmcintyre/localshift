@@ -30,9 +30,9 @@ from .computation_engine_lib import (
     scan_forecast_for_spike,
     sum_solar_before_target,
 )
-from .computation_engine_lib.optimizer_active_mode import OptimizerSafetyGate
 from .computation_engine_lib.optimizer_dp import DPPlanner
 from .computation_engine_lib.optimizer_shadow_runner import (
+    OptimizerSafetyGate,
     _build_optimizer_config,
     _build_summary,
     _derive_runtime_apply_plan,
