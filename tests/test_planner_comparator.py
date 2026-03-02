@@ -122,20 +122,26 @@ class TestMismatchTaxonomy:
 
     def test_profitability_mismatch_hold_vs_charge(self, comparator, legacy_slot_hold):
         """Test PROFITABILITY_MISMATCH when legacy holds and optimizer charges (cost differs)."""
-        opt_decision = MockOptimizerDecision(action="charge_grid_normal", grid_import_kwh=1.65)
-        
+        opt_decision = MockOptimizerDecision(
+            action="charge_grid_normal", grid_import_kwh=1.65
+        )
+
         mismatch = comparator._compare_slot(0, legacy_slot_hold, opt_decision)
-        
+
         # When actions differ AND cost differs, it's PROFITABILITY_MISMATCH
         assert mismatch is not None
         assert mismatch.mismatch_type == MismatchType.PROFITABILITY_MISMATCH
 
-    def test_profitability_mismatch_charge_vs_export(self, comparator, legacy_slot_charge):
+    def test_profitability_mismatch_charge_vs_export(
+        self, comparator, legacy_slot_charge
+    ):
         """Test PROFITABILITY_MISMATCH when legacy charges and optimizer exports."""
-        opt_decision = MockOptimizerDecision(action="export_proactive", grid_export_kwh=2.5)
-        
+        opt_decision = MockOptimizerDecision(
+            action="export_proactive", grid_export_kwh=2.5
+        )
+
         mismatch = comparator._compare_slot(0, legacy_slot_charge, opt_decision)
-        
+
         # When actions differ AND cost differs, it's PROFITABILITY_MISMATCH
         assert mismatch is not None
         assert mismatch.mismatch_type == MismatchType.PROFITABILITY_MISMATCH
@@ -155,22 +161,26 @@ class TestMismatchTaxonomy:
             "sell_price": 0.001,
         }
         # Optimizer charges but cost diff is tiny
-        opt_decision = MockOptimizerDecision(action="charge_grid_normal", grid_import_kwh=0.01)
-        
+        opt_decision = MockOptimizerDecision(
+            action="charge_grid_normal", grid_import_kwh=0.01
+        )
+
         mismatch = comparator._compare_slot(0, legacy_slot, opt_decision)
-        
+
         # With very low cost diff, it should be ACTION_MISMATCH not PROFITABILITY_MISMATCH
         assert mismatch is not None
         assert mismatch.mismatch_type == MismatchType.ACTION_MISMATCH
         assert "Action type differs" in mismatch.reason_detail
 
-    def test_profitability_mismatch_optimizer_cheaper(self, comparator, legacy_slot_boost):
+    def test_profitability_mismatch_optimizer_cheaper(
+        self, comparator, legacy_slot_boost
+    ):
         """Test PROFITABILITY_MISMATCH when optimizer avoids costly action."""
         # Legacy boost charges at $0.10/kWh, optimizer holds (costs nothing)
         opt_decision = MockOptimizerDecision(action="hold")
-        
+
         mismatch = comparator._compare_slot(0, legacy_slot_boost, opt_decision)
-        
+
         assert mismatch is not None
         assert mismatch.mismatch_type == MismatchType.PROFITABILITY_MISMATCH
         assert "Optimizer avoids costly legacy action" in mismatch.reason_detail
@@ -182,9 +192,9 @@ class TestMismatchTaxonomy:
             action="charge_grid_normal",
             grid_import_kwh=1.0,  # Less than legacy's 1.65
         )
-        
+
         mismatch = comparator._compare_slot(0, legacy_slot_charge, opt_decision)
-        
+
         assert mismatch is not None
         assert mismatch.mismatch_type == MismatchType.IMPORT_QUANTITY_MISMATCH
         assert "Import qty differs" in mismatch.reason_detail
@@ -196,9 +206,9 @@ class TestMismatchTaxonomy:
             action="export_proactive",
             grid_export_kwh=1.5,  # Less than legacy's 2.5
         )
-        
+
         mismatch = comparator._compare_slot(0, legacy_slot_export, opt_decision)
-        
+
         assert mismatch is not None
         assert mismatch.mismatch_type == MismatchType.EXPORT_QUANTITY_MISMATCH
         assert "Export qty differs" in mismatch.reason_detail
@@ -206,9 +216,9 @@ class TestMismatchTaxonomy:
     def test_no_mismatch_same_action_same_qty(self, comparator, legacy_slot_hold):
         """Test no mismatch when actions and quantities match."""
         opt_decision = MockOptimizerDecision(action="hold")
-        
+
         mismatch = comparator._compare_slot(0, legacy_slot_hold, opt_decision)
-        
+
         assert mismatch is None
 
     def test_no_mismatch_small_quantity_diff(self, comparator, legacy_slot_charge):
@@ -218,9 +228,9 @@ class TestMismatchTaxonomy:
             action="charge_grid_normal",
             grid_import_kwh=1.64,  # 0.01 less than legacy's 1.65
         )
-        
+
         mismatch = comparator._compare_slot(0, legacy_slot_charge, opt_decision)
-        
+
         assert mismatch is None
 
 
@@ -246,7 +256,7 @@ class TestSignificanceScoring:
             legacy_net_cost=0.25,
             optimizer_net_cost=0.0,
         )
-        
+
         hold_mismatch = SlotMismatch(
             slot_index=1,
             timestamp_iso="2025-01-01T00:30:00Z",
@@ -259,10 +269,10 @@ class TestSignificanceScoring:
             legacy_net_cost=0.0,
             optimizer_net_cost=0.0,
         )
-        
+
         boost_score = comparator.compute_significance_score(boost_mismatch)
         hold_score = comparator.compute_significance_score(hold_mismatch)
-        
+
         assert boost_score > hold_score
 
     def test_rank_mismatches_by_significance(self, comparator):
@@ -299,9 +309,9 @@ class TestSignificanceScoring:
                 optimizer_net_cost=0.0,
             ),
         ]
-        
+
         ranked = comparator.rank_mismatches(mismatches)
-        
+
         # Should be sorted by descending significance
         assert ranked[0].slot_index == 1  # Boost has highest significance
         assert ranked[1].slot_index == 2  # Export is next
@@ -319,7 +329,7 @@ class TestSummaryRollup:
     def test_empty_mismatches(self, comparator):
         """Test summary with no mismatches."""
         summary = comparator.compute_summary_rollup([])
-        
+
         assert summary["total_mismatches"] == 0
         assert summary["total_cost_impact"] == 0.0
         assert summary["by_type"] == {}
@@ -360,9 +370,9 @@ class TestSummaryRollup:
                 optimizer_net_cost=0.0,
             ),
         ]
-        
+
         summary = comparator.compute_summary_rollup(mismatches)
-        
+
         assert summary["total_mismatches"] == 3
         assert summary["by_type"]["ACTION_MISMATCH"] == 2
         assert summary["by_type"]["IMPORT_QUANTITY_MISMATCH"] == 1
@@ -378,21 +388,23 @@ class TestSummaryRollup:
 class TestFullComparison:
     """Tests for full comparison cycle."""
 
-    def test_compare_returns_record(self, comparator, legacy_slot_hold, legacy_slot_charge):
+    def test_compare_returns_record(
+        self, comparator, legacy_slot_hold, legacy_slot_charge
+    ):
         """Test that compare returns a PlannerComparisonRecord."""
         legacy_slots = [legacy_slot_hold, legacy_slot_charge]
         optimizer_decisions = [
             MockOptimizerDecision(action="hold"),
             MockOptimizerDecision(action="charge_grid_normal", grid_import_kwh=1.65),
         ]
-        
+
         record = comparator.compare(
             cycle_id="test-cycle-001",
             cycle_timestamp_iso="2025-01-01T00:00:00Z",
             legacy_slots=legacy_slots,
             optimizer_decisions=optimizer_decisions,
         )
-        
+
         assert isinstance(record, PlannerComparisonRecord)
         assert record.cycle_id == "test-cycle-001"
         assert record.total_slots == 2
@@ -407,24 +419,28 @@ class TestFullComparison:
             legacy_slots=[legacy_slot_hold],
             optimizer_decisions=[MockOptimizerDecision(action="hold")],
         )
-        
+
         assert record.comparison_time_ms >= 0
 
-    def test_compare_includes_summary(self, comparator, legacy_slot_hold, legacy_slot_charge):
+    def test_compare_includes_summary(
+        self, comparator, legacy_slot_hold, legacy_slot_charge
+    ):
         """Test that compare includes summary rollup."""
         legacy_slots = [legacy_slot_hold, legacy_slot_charge]
         optimizer_decisions = [
-            MockOptimizerDecision(action="charge_grid_normal", grid_import_kwh=1.0),  # Mismatch
+            MockOptimizerDecision(
+                action="charge_grid_normal", grid_import_kwh=1.0
+            ),  # Mismatch
             MockOptimizerDecision(action="hold"),  # Mismatch
         ]
-        
+
         record = comparator.compare(
             cycle_id="test-cycle-003",
             cycle_timestamp_iso="2025-01-01T00:00:00Z",
             legacy_slots=legacy_slots,
             optimizer_decisions=optimizer_decisions,
         )
-        
+
         assert "total_mismatches" in record.summary
         assert record.summary["total_mismatches"] == 2
 
@@ -434,25 +450,27 @@ class TestFullComparison:
         legacy_slots = []
         optimizer_decisions = []
         for i in range(10):
-            legacy_slots.append({
-                "timestamp_iso": f"2025-01-01T{i:02d}:00:00Z",
-                "slot_interval_minutes": 30,
-                "grid_charge": True,
-                "grid_charge_boost": False,
-                "proactive_export": False,
-                "grid_import_kwh": 1.65,
-                "buy_price": 0.15,
-                "sell_price": 0.08,
-            })
+            legacy_slots.append(
+                {
+                    "timestamp_iso": f"2025-01-01T{i:02d}:00:00Z",
+                    "slot_interval_minutes": 30,
+                    "grid_charge": True,
+                    "grid_charge_boost": False,
+                    "proactive_export": False,
+                    "grid_import_kwh": 1.65,
+                    "buy_price": 0.15,
+                    "sell_price": 0.08,
+                }
+            )
             optimizer_decisions.append(MockOptimizerDecision(action="hold"))
-        
+
         record = comparator.compare(
             cycle_id="test-cycle-004",
             cycle_timestamp_iso="2025-01-01T00:00:00Z",
             legacy_slots=legacy_slots,
             optimizer_decisions=optimizer_decisions,
         )
-        
+
         assert len(record.top_mismatches) <= PlannerComparator.TOP_N_MISMATCHES
 
     def test_to_dict_serialization(self, comparator, legacy_slot_hold):
@@ -463,9 +481,9 @@ class TestFullComparison:
             legacy_slots=[legacy_slot_hold],
             optimizer_decisions=[MockOptimizerDecision(action="hold")],
         )
-        
+
         data = record.to_dict()
-        
+
         assert "cycle_id" in data
         assert "summary" in data
         assert "comparison_time_ms" in data
@@ -506,7 +524,9 @@ class TestFullComparison:
         assert record.legacy_meets_dw_target is False
         assert record.optimizer_meets_dw_target is True
         assert (
-            record.mismatch_by_type.get(MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0)
+            record.mismatch_by_type.get(
+                MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0
+            )
             == 1
         )
 
@@ -545,9 +565,194 @@ class TestFullComparison:
         assert record.legacy_meets_dw_target is True
         assert record.optimizer_meets_dw_target is True
         assert (
-            record.mismatch_by_type.get(MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0)
+            record.mismatch_by_type.get(
+                MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0
+            )
             == 0
         )
+
+
+# ---------------------------------------------------------------------------
+# Test Target Attainment Fallback (no DW entry slot in window)
+# ---------------------------------------------------------------------------
+
+
+class TestTargetAttainmentFallback:
+    """Tests for _compute_target_attainment when no DW entry slot is present."""
+
+    def test__compute_target_attainment_no_dw_entry_slot_uses_fallback(
+        self, comparator
+    ):
+        """When no is_demand_window_entry slot exists, fallback to last aligned slot.
+
+        Reproduces the production case described in issue #436: the DW boundary
+        lies beyond the forecast horizon so no slot carries
+        is_demand_window_entry=True.  The function must still return a non-None
+        pair and correctly compare SOC at the last aligned slot.
+        """
+        # Three slots, none flagged as DW entry.  Legacy ends at ~10% SOC,
+        # optimizer ends at ~92% SOC — an ~82 pp divergence.
+        legacy_slots = [
+            {
+                "timestamp_iso": "2025-01-01T09:00:00Z",
+                "slot_interval_minutes": 30,
+                "is_demand_window_entry": False,
+                "grid_charge": False,
+                "grid_charge_boost": False,
+                "proactive_export": False,
+                "grid_import_kwh": 0.0,
+                "grid_export_kwh": 0.0,
+                "buy_price": 0.25,
+                "sell_price": 0.08,
+                "predicted_soc": 30.0,
+            },
+            {
+                "timestamp_iso": "2025-01-01T09:30:00Z",
+                "slot_interval_minutes": 30,
+                "is_demand_window_entry": False,
+                "grid_charge": False,
+                "grid_charge_boost": False,
+                "proactive_export": False,
+                "grid_import_kwh": 0.0,
+                "grid_export_kwh": 0.0,
+                "buy_price": 0.25,
+                "sell_price": 0.08,
+                "predicted_soc": 20.0,
+            },
+            {
+                "timestamp_iso": "2025-01-01T10:00:00Z",
+                "slot_interval_minutes": 30,
+                "is_demand_window_entry": False,
+                "grid_charge": False,
+                "grid_charge_boost": False,
+                "proactive_export": False,
+                "grid_import_kwh": 0.0,
+                "grid_export_kwh": 0.0,
+                "buy_price": 0.25,
+                "sell_price": 0.08,
+                "predicted_soc": 10.0,  # legacy ends at 10%
+            },
+        ]
+        optimizer_decisions = [
+            MockOptimizerDecision(action="hold", predicted_soc_pct=70.0),
+            MockOptimizerDecision(action="hold", predicted_soc_pct=85.0),
+            MockOptimizerDecision(
+                action="hold", predicted_soc_pct=92.0
+            ),  # optimizer ends at 92%
+        ]
+
+        # Target is 80%.  Legacy (10%) misses; optimizer (92%) meets.
+        record = comparator.compare(
+            cycle_id="test-no-dw-entry-fallback",
+            cycle_timestamp_iso="2025-01-01T09:00:00Z",
+            legacy_slots=legacy_slots,
+            optimizer_decisions=optimizer_decisions,
+            demand_window_target_soc_pct=80.0,
+        )
+
+        # Non-None values must be returned — the silent-None bug is fixed.
+        assert record.legacy_meets_dw_target is not None
+        assert record.optimizer_meets_dw_target is not None
+
+        # Correct attainment based on last aligned slot SOC values.
+        assert record.legacy_meets_dw_target is False  # 10% < 80%
+        assert record.optimizer_meets_dw_target is True  # 92% >= 80%
+
+        # Divergence must produce a TARGET_ATTAINMENT_MISMATCH entry.
+        assert (
+            record.mismatch_by_type.get(
+                MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0
+            )
+            == 1
+        )
+
+    def test__compute_target_attainment_no_dw_entry_both_miss(self, comparator):
+        """Fallback: both planners miss target — no TARGET_ATTAINMENT_MISMATCH raised."""
+        legacy_slots = [
+            {
+                "timestamp_iso": "2025-01-01T09:00:00Z",
+                "slot_interval_minutes": 30,
+                "is_demand_window_entry": False,
+                "grid_charge": False,
+                "grid_charge_boost": False,
+                "proactive_export": False,
+                "grid_import_kwh": 0.0,
+                "grid_export_kwh": 0.0,
+                "buy_price": 0.25,
+                "sell_price": 0.08,
+                "predicted_soc": 10.0,
+            }
+        ]
+        optimizer_decisions = [
+            MockOptimizerDecision(action="hold", predicted_soc_pct=15.0),
+        ]
+
+        record = comparator.compare(
+            cycle_id="test-no-dw-entry-both-miss",
+            cycle_timestamp_iso="2025-01-01T09:00:00Z",
+            legacy_slots=legacy_slots,
+            optimizer_decisions=optimizer_decisions,
+            demand_window_target_soc_pct=80.0,
+        )
+
+        assert record.legacy_meets_dw_target is False
+        assert record.optimizer_meets_dw_target is False
+        # Agreement (both miss) — no synthetic mismatch.
+        assert (
+            record.mismatch_by_type.get(
+                MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0
+            )
+            == 0
+        )
+
+    def test__compute_target_attainment_no_dw_entry_both_meet(self, comparator):
+        """Fallback: both planners meet target — no TARGET_ATTAINMENT_MISMATCH raised."""
+        legacy_slots = [
+            {
+                "timestamp_iso": "2025-01-01T09:00:00Z",
+                "slot_interval_minutes": 30,
+                "is_demand_window_entry": False,
+                "grid_charge": False,
+                "grid_charge_boost": False,
+                "proactive_export": False,
+                "grid_import_kwh": 0.0,
+                "grid_export_kwh": 0.0,
+                "buy_price": 0.25,
+                "sell_price": 0.08,
+                "predicted_soc": 90.0,
+            }
+        ]
+        optimizer_decisions = [
+            MockOptimizerDecision(action="hold", predicted_soc_pct=85.0),
+        ]
+
+        record = comparator.compare(
+            cycle_id="test-no-dw-entry-both-meet",
+            cycle_timestamp_iso="2025-01-01T09:00:00Z",
+            legacy_slots=legacy_slots,
+            optimizer_decisions=optimizer_decisions,
+            demand_window_target_soc_pct=80.0,
+        )
+
+        assert record.legacy_meets_dw_target is True
+        assert record.optimizer_meets_dw_target is True
+        assert (
+            record.mismatch_by_type.get(
+                MismatchType.TARGET_ATTAINMENT_MISMATCH.value, 0
+            )
+            == 0
+        )
+
+    def test__compute_target_attainment_no_dw_entry_empty_slots(self, comparator):
+        """Fallback: empty slot lists return (None, None) without error."""
+        legacy_meets, optimizer_meets = comparator._compute_target_attainment(
+            legacy_slots=[],
+            optimizer_decisions=[],
+            demand_window_target_soc_pct=80.0,
+        )
+
+        assert legacy_meets is None
+        assert optimizer_meets is None
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +771,7 @@ class TestEdgeCases:
             legacy_slots=[],
             optimizer_decisions=[],
         )
-        
+
         assert record.total_slots == 0
         assert record.mismatch_count == 0
         assert record.comparison_succeeded is True
@@ -579,19 +784,19 @@ class TestEdgeCases:
             legacy_slots=[legacy_slot_hold, legacy_slot_hold, legacy_slot_hold],
             optimizer_decisions=[MockOptimizerDecision(action="hold")],
         )
-        
+
         assert record.total_slots == 3
         assert record.aligned_slots == 1
 
     def test_missing_fields_in_legacy_slot(self, comparator):
         """Test comparison with missing fields in legacy slot."""
         legacy_slot = {"timestamp_iso": "2025-01-01T00:00:00Z"}  # Missing most fields
-        
+
         record = comparator.compare(
             cycle_id="test-missing-fields",
             cycle_timestamp_iso="2025-01-01T00:00:00Z",
             legacy_slots=[legacy_slot],
             optimizer_decisions=[MockOptimizerDecision(action="hold")],
         )
-        
+
         assert record.comparison_succeeded is True
