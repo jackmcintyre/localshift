@@ -293,6 +293,19 @@ class PlannedSlotDecision:
     grid_export_kwh: float
     """Grid export energy for this slot (kWh)."""
 
+    # --- Slot context passthroughs (for dashboard debug display) ---
+    solar_kwh: float = 0.0
+    """Forecast solar generation for this slot (kWh), copied from SlotContext."""
+
+    consumption_kwh: float = 0.0
+    """Forecast household consumption for this slot (kWh), copied from SlotContext."""
+
+    buy_price: float = 0.0
+    """Import price ($/kWh), copied from SlotContext."""
+
+    sell_price: float = 0.0
+    """Export (FIT) price ($/kWh), copied from SlotContext."""
+
     # --- Derived compatibility flags (set from action) ---
     @property
     def grid_charge(self) -> bool:
@@ -765,6 +778,10 @@ class DPPlanner:
                 predicted_soc_pct=next_soc,
                 grid_import_kwh=grid_import,
                 grid_export_kwh=grid_export,
+                solar_kwh=slot.solar_kwh,
+                consumption_kwh=slot.consumption_kwh,
+                buy_price=slot.buy_price,
+                sell_price=slot.sell_price,
             )
             decisions.append(decision)
 
