@@ -32,6 +32,7 @@ from .price_calculator import (
     get_price_for_slot_or_none,
 )
 from .proactive_export import ProactiveExportEngine
+from .slot_builder import SlotBuilder, SlotBuildMetadata
 from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_5min_slot,
@@ -74,6 +75,8 @@ __all__ = [
     "PerformanceMetrics",
     "PriceCalculator",
     "ProactiveExportEngine",
+    "SlotBuilder",
+    "SlotBuildMetadata",
     "SocSimulator",
     "SpikeAnalyzer",
     "WeatherDiagnosticsEngine",

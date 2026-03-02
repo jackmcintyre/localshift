@@ -33,6 +33,7 @@ from .optimizer_dp import (
     SlotContext,
 )
 from .planner_comparator import PlannerComparator
+from .slot_builder import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +44,21 @@ _LOGGER = logging.getLogger(__name__)
 # Do not set above 3.0 without careful testing — higher values cause compulsive
 # pre-charging even when solar will cover the deficit.
 _SHORTFALL_PENALTY_SAFETY_FACTOR = 1.5
+
+
+def _get_ha_timezone() -> str:
+    """Get Home Assistant timezone string.
+
+    Returns:
+        Timezone string (e.g., "Australia/Sydney") or "UTC" as fallback.
+    """
+    from homeassistant.util import dt as dt_util
+
+    try:
+        tz = dt_util.get_time_zone()
+        return str(tz) if tz else "UTC"
+    except Exception:
+        return "UTC"
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +152,13 @@ def _run(
 
     # 1. Build OptimizerInputs from coordinator data
     optimizer_config = _build_optimizer_config(data, config_options)
-    slots, parity_info = _build_slot_contexts(data)
+    slot_builder = SlotBuilder(
+        config_options=config_options, ha_timezone=_get_ha_timezone()
+    )
+    slots, slot_metadata = slot_builder.build_slots(
+        data, getattr(data, "adaptive_params", None)
+    )
+    parity_info = slot_metadata.to_parity_dict()  # backward-compat shim
 
     if not slots:
         _LOGGER.debug(
@@ -302,6 +324,30 @@ def _build_optimizer_config(
         config_options.get(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
     )
 
+    # Apply adaptive parameter transforms (Issue #444 Phase 2)
+    adaptive = getattr(data, "adaptive_params", None)
+
+    # cheap_price_bias -> effective_cheap_price
+    cheap_price_bias = adaptive.get("cheap_price_bias", 0.0) if adaptive else 0.0
+    effective_cheap_price = max(0.0, effective_cheap_price + cheap_price_bias / 100)
+
+    # grid_charge_soc_headroom + overnight_drain_safety_margin -> demand_window_target_soc_pct
+    grid_charge_soc_headroom = (
+        adaptive.get("grid_charge_soc_headroom", 0.0) if adaptive else 0.0
+    )
+    overnight_drain_safety_margin = (
+        adaptive.get("overnight_drain_safety_margin", 0.0) if adaptive else 0.0
+    )
+    target_soc = min(
+        100.0, target_soc + grid_charge_soc_headroom + overnight_drain_safety_margin
+    )
+
+    # export_threshold_adjustment -> export_price_margin
+    export_threshold_adj = (
+        adaptive.get("export_threshold_adjustment", 0.0) if adaptive else 0.0
+    )
+    export_price_margin = max(0.0, export_price_margin + export_threshold_adj / 100)
+
     return OptimizerConfig(
         # --- Battery hardware constraints ---
         battery_capacity_kwh=BATTERY_CAPACITY_KWH,
@@ -341,151 +387,6 @@ def _build_optimizer_config(
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )
-
-
-# Track parity completeness for diagnostics
-_PARITY_FIELDS = [
-    "buy_price",
-    "sell_price",
-    "solar_kwh",
-    "consumption_kwh",
-    "slot_interval_minutes",
-    "is_demand_window_entry",
-    "is_demand_window_slot",
-]
-
-
-def _build_slot_contexts(data: Any) -> tuple[list[SlotContext], dict[str, Any]]:
-    """
-    Convert legacy daily_forecast slots to SlotContext list.
-
-    Each legacy slot dict must provide at minimum:
-      - timestamp or start_time (ISO string)
-      - buy_price
-      - sell_price (or feed_in_price)
-      - solar_kwh
-      - consumption_kwh
-      - slot_interval_minutes (added by #403 deterministic identity work)
-
-    Missing fields are defaulted safely.
-
-    Returns:
-        (contexts, parity_info) tuple where:
-        - contexts: list of SlotContext objects
-        - parity_info: dict with completeness diagnostics
-    """
-    contexts: list[SlotContext] = []
-    total_fields = 0
-    populated_fields = 0
-    defaulted_fields: dict[str, int] = {}
-
-    for idx, slot in enumerate(data.daily_forecast):
-        # Timestamp — use slot_index-derived ISO if present, else from slot
-        timestamp_iso = (
-            slot.get("timestamp_iso")
-            or slot.get("start_time", "")
-            or slot.get("period_start", "")
-        )
-
-        slot_minutes = int(slot.get("slot_interval_minutes", 30))
-
-        # Track buy_price completeness
-        buy_price, defaulted = _get_slot_field(slot, "buy_price", "general_price", 0.0)
-        if defaulted:
-            defaulted_fields["buy_price"] = defaulted_fields.get("buy_price", 0) + 1
-        total_fields += 1
-        if not defaulted:
-            populated_fields += 1
-
-        # Track sell_price completeness
-        sell_price, defaulted = _get_slot_field(
-            slot, "sell_price", "feed_in_price", 0.0
-        )
-        if defaulted:
-            defaulted_fields["sell_price"] = defaulted_fields.get("sell_price", 0) + 1
-        total_fields += 1
-        if not defaulted:
-            populated_fields += 1
-
-        # Track solar_kwh completeness
-        solar_kwh, defaulted = _get_slot_field(slot, "solar_kwh", "pv_estimate", 0.0)
-        if defaulted:
-            defaulted_fields["solar_kwh"] = defaulted_fields.get("solar_kwh", 0) + 1
-        total_fields += 1
-        if not defaulted:
-            populated_fields += 1
-
-        # Track consumption_kwh completeness
-        consumption_kwh, defaulted = _get_slot_field(
-            slot, "consumption_kwh", "estimated_consumption_kwh", 0.0
-        )
-        if defaulted:
-            defaulted_fields["consumption_kwh"] = (
-                defaulted_fields.get("consumption_kwh", 0) + 1
-            )
-        total_fields += 1
-        if not defaulted:
-            populated_fields += 1
-
-        ctx = SlotContext(
-            slot_index=idx,
-            timestamp_iso=str(timestamp_iso),
-            slot_interval_minutes=slot_minutes,
-            buy_price=buy_price,
-            sell_price=sell_price,
-            solar_kwh=solar_kwh,
-            consumption_kwh=consumption_kwh,
-            is_demand_window_entry=bool(slot.get("is_demand_window_entry", False)),
-            is_demand_window_slot=bool(slot.get("is_demand_window", False)),
-            price_source=str(slot.get("price_source", slot.get("slot_type", "legacy"))),
-        )
-        contexts.append(ctx)
-
-    # Calculate completeness percentage
-    completeness_pct = (
-        (populated_fields / total_fields * 100) if total_fields > 0 else 0.0
-    )
-
-    parity_info = {
-        "total_slots": len(contexts),
-        "total_fields_checked": total_fields,
-        "populated_fields": populated_fields,
-        "defaulted_fields": defaulted_fields,
-        "completeness_pct": round(completeness_pct, 1),
-    }
-
-    # Log timezone information for first few optimizer slot contexts (Issue #455)
-    if contexts:
-        _LOGGER.info(
-            "OPTIMIZER_SLOTS: First 5 slot timestamps: %s",
-            [ctx.timestamp_iso for ctx in contexts[:5]],
-        )
-        _LOGGER.info(
-            "OPTIMIZER_SLOTS: Slot 0=%s, Slot 1=%s",
-            contexts[0].timestamp_iso,
-            contexts[1].timestamp_iso if len(contexts) > 1 else "N/A",
-        )
-
-    return contexts, parity_info
-
-
-def _get_slot_field(
-    slot: dict[str, Any],
-    primary_key: str,
-    fallback_key: str,
-    default: float,
-) -> tuple[float, bool]:
-    """
-    Get a field value from slot dict with fallback and default.
-
-    Returns:
-        (value, was_defaulted) tuple
-    """
-    if primary_key in slot:
-        return float(slot[primary_key]), False
-    if fallback_key in slot:
-        return float(slot[fallback_key]), False
-    return default, True
 
 
 def _normalize_initial_soc(

@@ -8,7 +8,10 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 
-from ..const import DEFAULT_LOAD_WEIGHT_RECENT
+from ..const import (
+    DEFAULT_LOAD_DECAY_FACTOR,
+    DEFAULT_LOAD_INITIAL_WEIGHT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,23 +70,21 @@ class LoadForecaster:
         recent_load_kw: float = 0.0,
         temperature: float | None = None,
     ) -> tuple[float, str]:
-        """Estimate hourly household consumption with time-distance-weighted blend.
+        """Estimate hourly household consumption with exponential decay weighting.
 
-        Blends recent 1-hour average with historical hourly average ONLY for
-        hours close to current time, when recent load is predictive.
+        Issue #381: Uses exponential decay weighting instead of fixed blend.
+        - Current hour (distance=0): uses live load directly
+        - Each hour away: weight decays by 20% (factor=0.8)
+        - Beyond 3 hours: use historical profile only
 
-        For distant hours (e.g., overnight when forecasting from midday),
-        uses historical profile only to avoid overestimating load.
+        This gives more weight to recent data for near-term predictions while
+        using historical patterns for distant hours.
 
         When temperature is provided and weather correlation is available with
         sufficient confidence, applies temperature-based adjustments for heating/cooling.
 
         Returns tuple of (kW, source_tag).
         """
-        # Get the weighting configuration (hardcoded default - Issue #214)
-        recent_weight = DEFAULT_LOAD_WEIGHT_RECENT
-        historical_weight = 1.0 - recent_weight
-
         historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
         historical_kw = (
             float(historical_raw) if isinstance(historical_raw, int | float) else 0.0
@@ -92,31 +93,45 @@ class LoadForecaster:
         # Check if we have valid historical data
         has_historical = historical_kw > 0
 
-        # Calculate base load using existing logic
+        # Calculate base load using exponential decay weighting
         base_load_kw = 0.0
         base_source = ""
 
-        # TIME-DISTANCE WEIGHTING: Only blend recent load for hours close to now
+        # EXPONENTIAL DECAY WEIGHTING (Issue #381)
         # When current_hour is None (simulations without time context), skip blending
         if current_hour is not None:
             # Calculate distance from current hour (handles midnight wrap)
             hour_distance = abs(slot_hour - current_hour)
             hour_distance = min(hour_distance, 24 - hour_distance)
 
-            # Only apply weighted blend for hours within 3 hours of current time
-            # Beyond that, recent load is NOT predictive (e.g., daytime load ≠ overnight load)
-            max_blend_distance = 3
+            # CURRENT SLOT: Use live load directly
+            # This ensures immediate accuracy for the current time slot
+            if hour_distance == 0 and current_load_kw > 0:
+                base_load_kw = current_load_kw
+                base_source = "live_load"
+            # NEAR-TERM SLOTS: Apply exponential decay weighting
+            # Weight decays by DEFAULT_LOAD_DECAY_FACTOR per hour
+            elif hour_distance <= 3 and recent_load_kw > 0 and has_historical:
+                # Calculate decayed weight: initial_weight * (decay_factor ^ distance)
+                # e.g., distance=1: 0.8 * 0.8 = 0.64, distance=2: 0.8 * 0.64 = 0.51
+                live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
+                    DEFAULT_LOAD_DECAY_FACTOR**hour_distance
+                )
+                historical_weight = 1.0 - live_weight
 
-            if (
-                hour_distance <= max_blend_distance
-                and recent_load_kw > 0
-                and recent_weight > 0
-                and has_historical
-            ):
-                base_load_kw = (recent_weight * recent_load_kw) + (
+                base_load_kw = (live_weight * recent_load_kw) + (
                     historical_weight * historical_kw
                 )
-                base_source = "weighted_load"
+                base_source = f"decay_load_d{hour_distance}"
+                _LOGGER.debug(
+                    "DECAY_WEIGHT: hour=%d, distance=%d, live_weight=%.2f, recent=%.2f, hist=%.2f, result=%.2f",
+                    slot_hour,
+                    hour_distance,
+                    live_weight,
+                    recent_load_kw,
+                    historical_kw,
+                    base_load_kw,
+                )
 
         # Fallback to historical if available (primary path for distant hours)
         if not base_source and has_historical:
