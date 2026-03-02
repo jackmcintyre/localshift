@@ -411,7 +411,7 @@ class ComputationEngine:
 
         self._run_dp_optimizer_inline(data, now_dt)
 
-        self._compute_active_mode(data, now_dt)
+        self._compute_active_mode(data, now_dt, dw_start_time)
 
         # ---- Step 15: decision_log ----
         # Add entry when mode changes OR periodically for status updates
@@ -1298,7 +1298,12 @@ class ComputationEngine:
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "fallback"
 
-    def _compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
+    def _compute_active_mode(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        dw_start_time: time | None = None,
+    ) -> None:
         """Compute active battery mode.
 
         Phase F (#403): In active mode, check if optimizer apply plan is ready
@@ -1310,7 +1315,7 @@ class ComputationEngine:
             return  # active_mode already set by active mode handler
 
         # Fall back to legacy mode decision
-        self._mode_decision.compute_active_mode(data, now_dt)
+        self._mode_decision.compute_active_mode(data, now_dt, dw_start_time)
 
     def _check_active_mode_optimizer_override(self, data: CoordinatorData) -> bool:
         """Check if active mode should override legacy with optimizer decision.

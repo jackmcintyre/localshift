@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 from ..const import DISCHARGE_EARLIEST_HOUR, BatteryMode
 from ..coordinator_data import CoordinatorData
@@ -133,7 +133,12 @@ class ModeDecisionEngine:
         )
         return True, False
 
-    def compute_active_mode(self, data: CoordinatorData, now_dt: datetime) -> None:
+    def compute_active_mode(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        dw_start_time: time | None = None,
+    ) -> None:
         """Compute active battery mode from forecast and current constraints."""
         automation_enabled = self._get_switch_state("automation_enabled")
         spike_discharge_enabled = self._get_switch_state("spike_discharge_enabled")
@@ -285,9 +290,14 @@ class ModeDecisionEngine:
         # If solar cannot reach the target, we need to preserve the battery
         # to avoid discharging energy that will need to be replaced via grid charging.
         # This is determined by solar_can_reach_target which uses solar-only simulation.
-        self._compute_preserve_soc(data, now_dt)
+        self._compute_preserve_soc(data, now_dt, dw_start_time)
 
-    def _compute_preserve_soc(self, data: CoordinatorData, now_dt: datetime) -> None:
+    def _compute_preserve_soc(
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        dw_start_time: time | None = None,
+    ) -> None:
         """Compute battery preservation SOC when charging is needed.
 
         Issue #350: When solar cannot reach the target, we need to preserve
@@ -295,9 +305,20 @@ class ModeDecisionEngine:
         by setting a raised backup reserve that prevents discharge below
         the current SOC (minus a small buffer).
 
+        Issue #457: Guard against activating when the forecast already has grid
+        charging planned before the demand window. In that case the SOC gap will
+        be filled by scheduled grid charging — preserving the battery by drawing
+        from the grid *now* (at non-cheap rates) achieves nothing and may cost more.
+
+        The lookahead window is derived dynamically from the configured DW start
+        time so it always covers exactly the pre-DW period regardless of how the
+        user has configured the demand window.
+
         Args:
             data: CoordinatorData to update with preserve_soc
-            now_dt: Current datetime
+            now_dt: Current datetime (timezone-aware)
+            dw_start_time: Configured demand-window start time (e.g. time(15, 0)).
+                           When None the guard falls back to a 8-hour fixed window.
         """
         # Reset preserve_soc by default
         data.preserve_soc = None
@@ -310,35 +331,77 @@ class ModeDecisionEngine:
         if data.demand_window_active:
             return
 
-        # Check if charging is needed to meet the target
-        # solar_can_reach_target is True if solar alone can reach the target
+        # Check if charging is needed to meet the target.
+        # solar_can_reach_target is True if solar alone can reach the target.
         charging_needed = not data.solar_can_reach_target
-
-        if charging_needed:
-            # Preserve current SOC (minus buffer) to avoid discharging
-            # energy that will need to be replaced via grid charging
-            preserve_level = max(
-                data.backup_reserve,  # Don't go below existing reserve
-                data.soc - PRESERVE_BUFFER_PERCENT,  # Current SOC minus buffer
-            )
-            data.preserve_soc = preserve_level
-
-            _LOGGER.info(
-                "BATTERY_PRESERVE: Charging needed for target, preserving SOC at %.1f%% "
-                "(current=%.1f%%, buffer=%.1f%%, solar_can_reach=%s)",
-                preserve_level,
-                data.soc,
-                PRESERVE_BUFFER_PERCENT,
-                data.solar_can_reach_target,
-            )
-        else:
-            # Solar can reach target - no preservation needed
+        if not charging_needed:
             _LOGGER.debug(
                 "BATTERY_PRESERVE: Solar can reach target, no preservation needed "
                 "(solar_can_reach=%s, SOC=%.1f%%)",
                 data.solar_can_reach_target,
                 data.soc,
             )
+            return
+
+        # Issue #457: Skip preservation when grid charging is already planned in
+        # the forecast before the demand window starts.  The forecast has already
+        # modelled the discharge between now and the first cheap charge slot — it
+        # is intentional and expected. Blocking it by raising the reserve just
+        # forces the household to draw from the grid at non-cheap rates instead.
+        #
+        # Lookahead window: from now until the next occurrence of dw_start_time.
+        # Floor at now + 1 h so the guard is meaningful even when DW is imminent.
+        if dw_start_time is not None:
+            dw_today = now_dt.replace(
+                hour=dw_start_time.hour,
+                minute=dw_start_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            # If DW start has already passed today, look to tomorrow's occurrence.
+            if dw_today <= now_dt:
+                dw_today = dw_today + timedelta(days=1)
+            lookahead_cutoff = dw_today
+        else:
+            # Fallback when dw_start_time is unavailable (e.g. in tests)
+            lookahead_cutoff = now_dt + timedelta(hours=8)
+
+        # Ensure at least a 1-hour window even when DW is very close.
+        lookahead_cutoff = max(lookahead_cutoff, now_dt + timedelta(hours=1))
+
+        grid_charge_planned_soon = any(
+            (slot.get("grid_charge", False) or slot.get("grid_charge_boost", False))
+            and datetime.fromisoformat(slot["timestamp"]) <= lookahead_cutoff
+            for slot in data.daily_forecast
+            if slot.get("timestamp")
+            and datetime.fromisoformat(slot["timestamp"]) > now_dt
+        )
+
+        if grid_charge_planned_soon:
+            _LOGGER.debug(
+                "BATTERY_PRESERVE: Grid charging already planned before DW start (%s), "
+                "skipping preservation (SOC=%.1f%%)",
+                lookahead_cutoff.strftime("%H:%M"),
+                data.soc,
+            )
+            return
+
+        # No grid charging planned before DW — preserve the current SOC so we
+        # don't discharge energy that would then need expensive make-up charging.
+        preserve_level = max(
+            data.backup_reserve,  # Don't go below existing reserve
+            data.soc - PRESERVE_BUFFER_PERCENT,  # Current SOC minus buffer
+        )
+        data.preserve_soc = preserve_level
+
+        _LOGGER.info(
+            "BATTERY_PRESERVE: Charging needed for target, preserving SOC at %.1f%% "
+            "(current=%.1f%%, buffer=%.1f%%, solar_can_reach=%s)",
+            preserve_level,
+            data.soc,
+            PRESERVE_BUFFER_PERCENT,
+            data.solar_can_reach_target,
+        )
 
     def add_to_decision_log(
         self,
