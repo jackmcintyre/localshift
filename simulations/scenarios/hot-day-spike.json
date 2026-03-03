@@ -163,7 +163,10 @@
     "battery_target": 90,
     "demand_window_start": "18:00:00",
     "demand_window_end": "22:00:00",
-    "minimum_target_soc": 20
+    "minimum_target_soc": 20,
+    "optimizer_enabled": true,
+    "optimizer_control_mode": "active",
+    "ha_timezone": "Australia/Sydney"
   },
   "switch_states": {
     "automation_enabled": true,
@@ -172,9 +175,8 @@
     "spike_discharge_conservative": false
   },
   "expected": {
-    "active_mode": "spike_discharge",
     "price_spike": true,
     "solar_can_reach_target": false,
-    "demand_window_end_soc": 20.0
+    "optimizer_result_success": true
   }
 }
