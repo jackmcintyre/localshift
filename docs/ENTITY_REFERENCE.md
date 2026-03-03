@@ -4,13 +4,13 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **56 entities** grouped under a single "LocalShift" device:
+The integration creates **53 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 27 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
-| Switches | 11 | `switch` |
+| Switches | 8 | `switch` |
 | Numbers | 4 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
@@ -1008,59 +1008,30 @@ State: on
 
 ---
 
-### 7. switch.localshift_notify_mode_transitions
+### 7. switch.localshift_notifications_enabled
 
-**Purpose:** Enable notifications for mode transitions.
+**Purpose:** Enable all LocalShift notifications (consolidated switch).
 
 **Default:** ON
+
+**Controls:**
+- Mode transition notifications (e.g., spike discharge started, grid charging active)
+- Daily summary notifications (end-of-day cost and energy report)
+- Manual action notifications (when force charge/discharge buttons are pressed)
+- Alert notifications (health check corrections, automation disabled, errors)
 
 **Example Data:**
 ```
 State: on
 ```
 
----
-
-### 8. switch.localshift_notify_daily_summary
-
-**Purpose:** Enable daily summary notification.
-
-**Default:** ON
-
-**Example Data:**
-```
-State: on
-```
+**Behavior:**
+- ON: All notification types are sent
+- OFF: All notifications are silenced (useful if you automate on other entities and don't want notification spam)
 
 ---
 
-### 9. switch.localshift_notify_manual_actions
-
-**Purpose:** Enable notifications for manual button actions.
-
-**Default:** ON
-
-**Example Data:**
-```
-State: on
-```
-
----
-
-### 10. switch.localshift_notify_alerts
-
-**Purpose:** Enable alert notifications.
-
-**Default:** ON
-
-**Example Data:**
-```
-State: on
-```
-
----
-
-### 11. switch.localshift_enable_learning
+### 8. switch.localshift_enable_learning
 
 **Purpose:** Enable the learning system to adjust parameters.
 

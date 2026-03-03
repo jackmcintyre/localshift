@@ -84,7 +84,9 @@ class HomeAssistantClient:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            print(f"Warning: HTTP {e.code} for {entity_id}: {e.reason}", file=sys.stderr)
+            print(
+                f"Warning: HTTP {e.code} for {entity_id}: {e.reason}", file=sys.stderr
+            )
             return None
         except urllib.error.URLError as e:
             print(f"Warning: Failed to get {entity_id}: {e.reason}", file=sys.stderr)
@@ -217,14 +219,20 @@ class SnapshotGenerator:
         missing = []
         for name, info in (entities or {}).items():
             if info.get("status") == "stale":
-                stale.append(f"- {info.get('entity_id')}: {info.get('error_message', 'stale')}")
+                stale.append(
+                    f"- {info.get('entity_id')}: {info.get('error_message', 'stale')}"
+                )
             elif info.get("status") == "missing":
-                missing.append(f"- {info.get('entity_id')}: {info.get('error_message', 'missing')}")
+                missing.append(
+                    f"- {info.get('entity_id')}: {info.get('error_message', 'missing')}"
+                )
 
         stale_str = "\n".join(stale) if stale else "None"
         missing_str = "\n".join(missing) if missing else "None"
         errors_str = "\n".join(f"- {e}" for e in (errors or [])) if errors else "None"
-        warnings_str = "\n".join(f"- {w}" for w in (warnings or [])) if warnings else "None"
+        warnings_str = (
+            "\n".join(f"- {w}" for w in (warnings or [])) if warnings else "None"
+        )
 
         return f"""
 ## ENTITY HEALTH
@@ -248,10 +256,16 @@ class SnapshotGenerator:
 
     def _internal_state_flags(self) -> str:
         automation = self.state("switch.localshift_automation_enabled")
-        target_reached = self.attr("sensor.localshift_forecast_battery", "target_reached_today")
+        target_reached = self.attr(
+            "sensor.localshift_forecast_battery", "target_reached_today"
+        )
         spike_coming = self.state("binary_sensor.localshift_price_spike_coming")
-        max_price = self.attr("binary_sensor.localshift_price_spike_coming", "max_forecast_price", 0)
-        max_buy = self.attr("binary_sensor.localshift_price_spike_coming", "max_buy_forecast_price", 0)
+        max_price = self.attr(
+            "binary_sensor.localshift_price_spike_coming", "max_forecast_price", 0
+        )
+        max_buy = self.attr(
+            "binary_sensor.localshift_price_spike_coming", "max_buy_forecast_price", 0
+        )
         mode = self.state("sensor.localshift_battery_mode")
         can_reach = self.state("binary_sensor.localshift_solar_can_reach_target")
         boost_needed = self.state("binary_sensor.localshift_charge_boost_needed")
@@ -261,23 +275,35 @@ class SnapshotGenerator:
 
 | Flag | Value |
 |------|-------|
-| **Manual Override** | {automation == 'off'} |
+| **Manual Override** | {automation == "off"} |
 | **Target Reached Today** | {target_reached} |
 | **Forecast Spike Within Window** | {spike_coming} |
 | **Max Forecast Price** | ${max_price}/kWh |
 | **Max Buy Forecast Price** | ${max_buy}/kWh |
-| **Force Discharge Active** | {mode == 'force_discharge'} |
-| **Force Charge Active** | {mode == 'force_charge'} |
-| **Boost Charge Active** | {mode == 'boost_charging'} |
+| **Force Discharge Active** | {mode == "force_discharge"} |
+| **Force Charge Active** | {mode == "force_charge"} |
+| **Boost Charge Active** | {mode == "boost_charging"} |
 | **Solar Can Reach Target** | {can_reach} |
 | **Boost Charge Needed** | {boost_needed} |"""
 
     def _mode_decision(self) -> str:
-        mode_source = self.attr("sensor.localshift_forecast_diagnostics", "debug_mode_source", "unknown")
-        slot_found = self.attr("sensor.localshift_forecast_diagnostics", "debug_forecast_slot_found", False)
-        slot_time = self.attr("sensor.localshift_forecast_diagnostics", "debug_forecast_slot_time", "-")
-        first_slot = self.attr("sensor.localshift_forecast_diagnostics", "debug_first_forecast_slot_time", "-")
-        time_gap = self.attr("sensor.localshift_forecast_diagnostics", "debug_time_gap_seconds", 0)
+        mode_source = self.attr(
+            "sensor.localshift_forecast_diagnostics", "debug_mode_source", "unknown"
+        )
+        slot_found = self.attr(
+            "sensor.localshift_forecast_diagnostics", "debug_forecast_slot_found", False
+        )
+        slot_time = self.attr(
+            "sensor.localshift_forecast_diagnostics", "debug_forecast_slot_time", "-"
+        )
+        first_slot = self.attr(
+            "sensor.localshift_forecast_diagnostics",
+            "debug_first_forecast_slot_time",
+            "-",
+        )
+        time_gap = self.attr(
+            "sensor.localshift_forecast_diagnostics", "debug_time_gap_seconds", 0
+        )
         dry_run = self.state("switch.localshift_dry_run")
 
         return f"""
@@ -290,7 +316,7 @@ class SnapshotGenerator:
 | **Forecast Slot Time** | {slot_time} |
 | **First Forecast Slot** | {first_slot} |
 | **Time Gap** | {time_gap}s |
-| **Dry Run** | {dry_run == 'on'} |"""
+| **Dry Run** | {dry_run == "on"} |"""
 
     def _config_thresholds(self) -> str:
         cheap_pct = self.state("number.localshift_cheap_price_percentile")
@@ -299,7 +325,9 @@ class SnapshotGenerator:
         effective_cheap = self.state("sensor.localshift_price_cheap_effective")
         charge_stop = self.state("sensor.localshift_price_cheap_charge_stop")
         weighted_fit = self.state("sensor.localshift_solar_weighted_avg_fit")
-        solar_remaining = self.attr("sensor.localshift_solar_weighted_avg_fit", "total_solar_remaining_kwh", 0)
+        solar_remaining = self.attr(
+            "sensor.localshift_solar_weighted_avg_fit", "total_solar_remaining_kwh", 0
+        )
 
         return f"""
 ## CONFIGURATION & THRESHOLDS
@@ -315,17 +343,31 @@ class SnapshotGenerator:
 | **Solar Remaining** | {solar_remaining} kWh |"""
 
     def _forecast_info(self) -> str:
-        predicted_soc = self.attr("sensor.localshift_forecast_battery", "predicted_soc", 0)
+        predicted_soc = self.attr(
+            "sensor.localshift_forecast_battery", "predicted_soc", 0
+        )
         deficit = self.attr("sensor.localshift_forecast_battery", "deficit_kwh", 0)
-        solar_before = self.attr("sensor.localshift_forecast_battery", "solar_before_dw_kwh", 0)
+        solar_before = self.attr(
+            "sensor.localshift_forecast_battery", "solar_before_dw_kwh", 0
+        )
         net_solar = self.attr("sensor.localshift_forecast_battery", "net_solar_kwh", 0)
-        hours_to_dw = self.attr("sensor.localshift_forecast_battery", "hours_to_target_time", 0)
-        can_reach = self.attr("sensor.localshift_forecast_battery", "can_reach_target", True)
-        boost_needed = self.attr("sensor.localshift_forecast_battery", "boost_needed", False)
+        hours_to_dw = self.attr(
+            "sensor.localshift_forecast_battery", "hours_to_target_time", 0
+        )
+        can_reach = self.attr(
+            "sensor.localshift_forecast_battery", "can_reach_target", True
+        )
+        boost_needed = self.attr(
+            "sensor.localshift_forecast_battery", "boost_needed", False
+        )
         daily_entries = self.state("sensor.localshift_forecast_daily")
         slot_count = self.attr("sensor.localshift_forecast_daily", "slot_count", 0)
-        solcast_today = self.attr("sensor.localshift_forecast_daily", "solcast_today_entries", 0)
-        solcast_tomorrow = self.attr("sensor.localshift_forecast_daily", "solcast_tomorrow_entries", 0)
+        solcast_today = self.attr(
+            "sensor.localshift_forecast_daily", "solcast_today_entries", 0
+        )
+        solcast_tomorrow = self.attr(
+            "sensor.localshift_forecast_daily", "solcast_tomorrow_entries", 0
+        )
 
         return f"""
 ## FORECAST INFORMATION
@@ -345,15 +387,33 @@ class SnapshotGenerator:
 | **Solcast Tomorrow Entries** | {solcast_tomorrow} |"""
 
     def _forecast_diagnostics(self) -> str:
-        current_load = self.attr("sensor.localshift_forecast_diagnostics", "current_load_kw", 0)
-        recent_load = self.attr("sensor.localshift_forecast_diagnostics", "recent_load_1hr_kw", 0)
-        stat_id = self.attr("sensor.localshift_forecast_diagnostics", "recent_load_1hr_statistic_id", "")
-        samples = self.attr("sensor.localshift_forecast_diagnostics", "recent_load_1hr_samples", 0)
-        error = self.attr("sensor.localshift_forecast_diagnostics", "recent_load_1hr_last_error", "")
-        weighting = self.attr("sensor.localshift_forecast_diagnostics", "consumption_weighting", 0)
-        source = self.attr("sensor.localshift_forecast_diagnostics", "consumption_source", "")
-        profile_hours = self.attr("sensor.localshift_forecast_diagnostics", "consumption_profile_hours", 0)
-        fallback_hours = self.attr("sensor.localshift_forecast_diagnostics", "consumption_fallback_hours", 0)
+        current_load = self.attr(
+            "sensor.localshift_forecast_diagnostics", "current_load_kw", 0
+        )
+        recent_load = self.attr(
+            "sensor.localshift_forecast_diagnostics", "recent_load_1hr_kw", 0
+        )
+        stat_id = self.attr(
+            "sensor.localshift_forecast_diagnostics", "recent_load_1hr_statistic_id", ""
+        )
+        samples = self.attr(
+            "sensor.localshift_forecast_diagnostics", "recent_load_1hr_samples", 0
+        )
+        error = self.attr(
+            "sensor.localshift_forecast_diagnostics", "recent_load_1hr_last_error", ""
+        )
+        weighting = self.attr(
+            "sensor.localshift_forecast_diagnostics", "consumption_weighting", 0
+        )
+        source = self.attr(
+            "sensor.localshift_forecast_diagnostics", "consumption_source", ""
+        )
+        profile_hours = self.attr(
+            "sensor.localshift_forecast_diagnostics", "consumption_profile_hours", 0
+        )
+        fallback_hours = self.attr(
+            "sensor.localshift_forecast_diagnostics", "consumption_fallback_hours", 0
+        )
 
         return f"""
 ## FORECAST DIAGNOSTICS
@@ -364,7 +424,7 @@ class SnapshotGenerator:
 | **Recent 1hr Load** | {recent_load} kW |
 | **Recent 1hr Statistic ID** | {stat_id} |
 | **Recent 1hr Samples** | {samples} |
-| **Recent 1hr Error** | {error or 'None'} |
+| **Recent 1hr Error** | {error or "None"} |
 | **Consumption Weighting** | {weighting} |
 | **Consumption Source** | {source} |
 | **Consumption Profile Hours** | {profile_hours} |
@@ -373,16 +433,28 @@ class SnapshotGenerator:
     def _forecast_table(self) -> str:
         """Generate detailed forecast table with slot-by-slot breakdown."""
         # Get forecast slots from forecast_daily
-        forecast_slots = self.attr("sensor.localshift_forecast_daily", "forecast_slots", [])
-        grid_interaction = self.attr("sensor.localshift_forecast_grid", "grid_interaction", [])
+        forecast_slots = self.attr(
+            "sensor.localshift_forecast_daily", "forecast_slots", []
+        )
+        grid_interaction = self.attr(
+            "sensor.localshift_forecast_grid", "grid_interaction", []
+        )
         buy_prices = self.attr("sensor.localshift_forecast_prices", "buy_prices", [])
         sell_prices = self.attr("sensor.localshift_forecast_prices", "sell_prices", [])
 
         # Summary stats
-        grid_slots = self.attr("sensor.localshift_forecast_grid", "grid_charge_slots", 0)
-        export_slots = self.attr("sensor.localshift_forecast_grid", "proactive_export_slots", 0)
-        total_import = self.attr("sensor.localshift_forecast_grid", "total_grid_import_kwh", 0)
-        total_export = self.attr("sensor.localshift_forecast_grid", "total_grid_export_kwh", 0)
+        grid_slots = self.attr(
+            "sensor.localshift_forecast_grid", "grid_charge_slots", 0
+        )
+        export_slots = self.attr(
+            "sensor.localshift_forecast_grid", "proactive_export_slots", 0
+        )
+        total_import = self.attr(
+            "sensor.localshift_forecast_grid", "total_grid_import_kwh", 0
+        )
+        total_export = self.attr(
+            "sensor.localshift_forecast_grid", "total_grid_export_kwh", 0
+        )
 
         # Build header
         lines = [
@@ -398,7 +470,9 @@ class SnapshotGenerator:
         # Build rows - limit to first 48 slots (12 hours) to keep output manageable
         max_slots = 48
         for i, slot in enumerate((forecast_slots or [])[:max_slots]):
-            grid = (grid_interaction or [])[i] if i < len(grid_interaction or []) else {}
+            grid = (
+                (grid_interaction or [])[i] if i < len(grid_interaction or []) else {}
+            )
             buy = (buy_prices or [])[i] if i < len(buy_prices or []) else {}
             sell = (sell_prices or [])[i] if i < len(sell_prices or []) else {}
 
@@ -422,12 +496,16 @@ class SnapshotGenerator:
             )
 
         if len(forecast_slots or []) > max_slots:
-            lines.append(f"| ... | ({len(forecast_slots) - max_slots} more slots) | | | | | | | | | | |")
+            lines.append(
+                f"| ... | ({len(forecast_slots) - max_slots} more slots) | | | | | | | | | | |"
+            )
 
         return "\n".join(lines)
 
     def _decision_log(self) -> str:
-        reason = self.attr("sensor.localshift_decision_log", "reason", "No decisions yet")
+        reason = self.attr(
+            "sensor.localshift_decision_log", "reason", "No decisions yet"
+        )
         soc = self.attr("sensor.localshift_decision_log", "soc", 0)
         buy_price = self.attr("sensor.localshift_decision_log", "buy_price", 0)
         sell_price = self.attr("sensor.localshift_decision_log", "sell_price", 0)
@@ -457,10 +535,18 @@ class SnapshotGenerator:
 
     def _cost_tracking(self) -> str:
         net_cost = self.state("sensor.localshift_cost_electricity_net")
-        import_cost = self.attr("sensor.localshift_cost_electricity_net", "grid_import_cost", 0)
-        export_revenue = self.attr("sensor.localshift_cost_electricity_net", "grid_export_revenue", 0)
-        battery_savings = self.attr("sensor.localshift_cost_electricity_net", "battery_savings", 0)
-        charge_cost = self.attr("sensor.localshift_cost_electricity_net", "battery_charge_cost", 0)
+        import_cost = self.attr(
+            "sensor.localshift_cost_electricity_net", "grid_import_cost", 0
+        )
+        export_revenue = self.attr(
+            "sensor.localshift_cost_electricity_net", "grid_export_revenue", 0
+        )
+        battery_savings = self.attr(
+            "sensor.localshift_cost_electricity_net", "battery_savings", 0
+        )
+        charge_cost = self.attr(
+            "sensor.localshift_cost_electricity_net", "battery_charge_cost", 0
+        )
 
         return f"""
 ## COST TRACKING
@@ -474,15 +560,41 @@ class SnapshotGenerator:
 | **Battery Charge Cost** | ${charge_cost} |"""
 
     def _weather_correlation(self) -> str:
-        entity = self.attr("sensor.localshift_forecast_diagnostics", "weather_entity_id", "not configured")
-        temp = self.attr("sensor.localshift_forecast_diagnostics", "weather_temperature_current", "N/A")
-        condition = self.attr("sensor.localshift_forecast_diagnostics", "weather_condition", "unknown")
-        learning = self.attr("sensor.localshift_forecast_diagnostics", "weather_learning_enabled", False)
-        confidence = self.attr("sensor.localshift_forecast_diagnostics", "weather_correlation_confidence", "low")
-        samples = self.attr("sensor.localshift_forecast_diagnostics", "weather_sample_count", 0)
-        cooling = self.attr("sensor.localshift_forecast_diagnostics", "weather_cooling_coefficient", 0)
-        heating = self.attr("sensor.localshift_forecast_diagnostics", "weather_heating_coefficient", 0)
-        adjustment = self.attr("sensor.localshift_forecast_diagnostics", "weather_adjustment_applied", False)
+        entity = self.attr(
+            "sensor.localshift_forecast_diagnostics",
+            "weather_entity_id",
+            "not configured",
+        )
+        temp = self.attr(
+            "sensor.localshift_forecast_diagnostics",
+            "weather_temperature_current",
+            "N/A",
+        )
+        condition = self.attr(
+            "sensor.localshift_forecast_diagnostics", "weather_condition", "unknown"
+        )
+        learning = self.attr(
+            "sensor.localshift_forecast_diagnostics", "weather_learning_enabled", False
+        )
+        confidence = self.attr(
+            "sensor.localshift_forecast_diagnostics",
+            "weather_correlation_confidence",
+            "low",
+        )
+        samples = self.attr(
+            "sensor.localshift_forecast_diagnostics", "weather_sample_count", 0
+        )
+        cooling = self.attr(
+            "sensor.localshift_forecast_diagnostics", "weather_cooling_coefficient", 0
+        )
+        heating = self.attr(
+            "sensor.localshift_forecast_diagnostics", "weather_heating_coefficient", 0
+        )
+        adjustment = self.attr(
+            "sensor.localshift_forecast_diagnostics",
+            "weather_adjustment_applied",
+            False,
+        )
 
         return f"""
 ## WEATHER CORRELATION
@@ -517,7 +629,9 @@ class SnapshotGenerator:
         enabled = self.state("binary_sensor.localshift_thermal_management_enabled")
         mode = self.state("sensor.localshift_daily_thermal_mode")
         locked = self.attr("sensor.localshift_daily_thermal_mode", "mode_locked", False)
-        determined = self.attr("sensor.localshift_daily_thermal_mode", "determined_at", "")
+        determined = self.attr(
+            "sensor.localshift_daily_thermal_mode", "determined_at", ""
+        )
         preconditioning = self.state("binary_sensor.localshift_preconditioning_active")
         solar_taper = self.state("binary_sensor.localshift_solar_taper_active")
         cooling_trigger = self.state("number.localshift_cooling_trigger_temp")
@@ -531,7 +645,7 @@ class SnapshotGenerator:
 | **Thermal Management Enabled** | {enabled} |
 | **Daily Thermal Mode** | {mode} |
 | **Mode Locked** | {locked} |
-| **Mode Determined At** | {determined or 'N/A'} |
+| **Mode Determined At** | {determined or "N/A"} |
 | **Preconditioning Active** | {preconditioning} |
 | **Solar Taper Active** | {solar_taper} |
 | **Cooling Trigger Temp** | {cooling_trigger}°C |
@@ -540,12 +654,22 @@ class SnapshotGenerator:
     def _learning_system(self) -> str:
         status = self.state("sensor.localshift_learning_status")
         quality = self.state("sensor.localshift_decision_quality")
-        decisions = self.attr("sensor.localshift_learning_status", "total_decisions_today", 0)
-        avg_today = self.attr("sensor.localshift_learning_status", "avg_decision_score_today", 0)
-        avg_7d = self.attr("sensor.localshift_learning_status", "avg_decision_score_7d", 0)
+        decisions = self.attr(
+            "sensor.localshift_learning_status", "total_decisions_today", 0
+        )
+        avg_today = self.attr(
+            "sensor.localshift_learning_status", "avg_decision_score_today", 0
+        )
+        avg_7d = self.attr(
+            "sensor.localshift_learning_status", "avg_decision_score_7d", 0
+        )
         trend = self.attr("sensor.localshift_learning_status", "cost_trend", "stable")
-        grid_eff = self.attr("sensor.localshift_decision_quality", "grid_charge_efficiency", 0)
-        export_loss = self.attr("sensor.localshift_decision_quality", "export_loss_ratio", 0)
+        grid_eff = self.attr(
+            "sensor.localshift_decision_quality", "grid_charge_efficiency", 0
+        )
+        export_loss = self.attr(
+            "sensor.localshift_decision_quality", "export_loss_ratio", 0
+        )
 
         return f"""
 ## LEARNING SYSTEM
@@ -567,18 +691,38 @@ class SnapshotGenerator:
             ("Discharge Forced", "binary_sensor.localshift_discharge_forced"),
             ("Charge Forced", "binary_sensor.localshift_charge_forced"),
             ("Charge Boost", "binary_sensor.localshift_charge_boost"),
-            ("Price Expensive Coming", "binary_sensor.localshift_price_expensive_coming"),
-            ("Solar Can Reach Target", "binary_sensor.localshift_solar_can_reach_target"),
+            (
+                "Price Expensive Coming",
+                "binary_sensor.localshift_price_expensive_coming",
+            ),
+            (
+                "Solar Can Reach Target",
+                "binary_sensor.localshift_solar_can_reach_target",
+            ),
             ("Charge Boost Needed", "binary_sensor.localshift_charge_boost_needed"),
             ("Demand Window", "binary_sensor.localshift_demand_window"),
-            ("Excess Solar Available", "binary_sensor.localshift_excess_solar_available"),
+            (
+                "Excess Solar Available",
+                "binary_sensor.localshift_excess_solar_available",
+            ),
             ("Tesla Override Active", "binary_sensor.localshift_tesla_override_active"),
-            ("Preconditioning Active", "binary_sensor.localshift_preconditioning_active"),
+            (
+                "Preconditioning Active",
+                "binary_sensor.localshift_preconditioning_active",
+            ),
             ("Solar Taper Active", "binary_sensor.localshift_solar_taper_active"),
-            ("Thermal Management Enabled", "binary_sensor.localshift_thermal_management_enabled"),
+            (
+                "Thermal Management Enabled",
+                "binary_sensor.localshift_thermal_management_enabled",
+            ),
         ]
 
-        lines = ["## BINARY SENSORS SUMMARY", "", "| Sensor | State |", "|--------|-------|"]
+        lines = [
+            "## BINARY SENSORS SUMMARY",
+            "",
+            "| Sensor | State |",
+            "|--------|-------|",
+        ]
         for name, entity_id in sensors:
             state = self.state(entity_id, "unavailable")
             lines.append(f"| **{name}** | {state} |")
@@ -589,16 +733,17 @@ class SnapshotGenerator:
         switches = [
             ("Automation Enabled", "switch.localshift_automation_enabled"),
             ("Spike Discharge Enabled", "switch.localshift_spike_discharge_enabled"),
-            ("Spike Discharge Conservative", "switch.localshift_spike_discharge_conservative"),
+            (
+                "Spike Discharge Conservative",
+                "switch.localshift_spike_discharge_conservative",
+            ),
             ("Dry Run", "switch.localshift_dry_run"),
             ("Demand Window Block", "switch.localshift_demand_window_block"),
-            ("Allow DW Entry Under Target", "switch.localshift_allow_dw_entry_under_target"),
-            ("Notify Mode Transitions", "switch.localshift_notify_mode_transitions"),
-            ("Notify Daily Summary", "switch.localshift_notify_daily_summary"),
-            ("Notify Manual Actions", "switch.localshift_notify_manual_actions"),
-            ("Notify Alerts", "switch.localshift_notify_alerts"),
-            ("Thermal Management", "switch.localshift_thermal_management"),
-            ("Solar Taper", "switch.localshift_solar_taper"),
+            (
+                "Allow DW Entry Under Target",
+                "switch.localshift_allow_dw_entry_under_target",
+            ),
+            ("Notifications Enabled", "switch.localshift_notifications_enabled"),
             ("Enable Learning", "switch.localshift_enable_learning"),
         ]
 
@@ -640,7 +785,10 @@ def main():
     args = parser.parse_args()
 
     if not args.token:
-        print("Error: No HA token provided. Set HA_TOKEN or HA_LONG_LIVED_TOKEN env or use --token", file=sys.stderr)
+        print(
+            "Error: No HA token provided. Set HA_TOKEN or HA_LONG_LIVED_TOKEN env or use --token",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Create client and generator

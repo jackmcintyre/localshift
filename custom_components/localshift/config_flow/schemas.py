@@ -84,30 +84,37 @@ def build_user_schema(
             vol.Required(
                 CONF_TESLEMETRY_OPERATION_MODE,
                 default=defaults.get(CONF_TESLEMETRY_OPERATION_MODE, ""),
+                description="Current battery mode (e.g., self_consumption, grid_charging)",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="select")),
             vol.Required(
                 CONF_TESLEMETRY_BACKUP_RESERVE,
                 default=defaults.get(CONF_TESLEMETRY_BACKUP_RESERVE, ""),
+                description="Backup reserve setting (percentage)",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="number")),
             vol.Required(
                 CONF_TESLEMETRY_SOC,
                 default=defaults.get(CONF_TESLEMETRY_SOC, ""),
+                description="Battery state of charge",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_TESLEMETRY_GRID_POWER,
                 default=defaults.get(CONF_TESLEMETRY_GRID_POWER, ""),
+                description="Grid import/export power",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_TESLEMETRY_BATTERY_POWER,
                 default=defaults.get(CONF_TESLEMETRY_BATTERY_POWER, ""),
+                description="Battery charge/discharge power",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_TESLEMETRY_SOLAR_POWER,
                 default=defaults.get(CONF_TESLEMETRY_SOLAR_POWER, ""),
+                description="Solar production power",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_TESLEMETRY_LOAD_POWER,
                 default=defaults.get(CONF_TESLEMETRY_LOAD_POWER, ""),
+                description="Home load power",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
         }
     )
@@ -138,22 +145,27 @@ def build_pricing_schema(
             vol.Required(
                 CONF_PRICING_GENERAL_PRICE,
                 default=defaults.get(CONF_PRICING_GENERAL_PRICE, ""),
+                description="Grid import price ($/kWh)",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_PRICING_FEED_IN_PRICE,
                 default=defaults.get(CONF_PRICING_FEED_IN_PRICE, ""),
+                description="Solar export/feed-in price ($/kWh)",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_PRICING_GENERAL_FORECAST,
                 default=defaults.get(CONF_PRICING_GENERAL_FORECAST, ""),
+                description="Grid import price forecast",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_PRICING_FEED_IN_FORECAST,
                 default=defaults.get(CONF_PRICING_FEED_IN_FORECAST, ""),
+                description="Feed-in price forecast",
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_PRICING_PRICE_SPIKE,
                 default=defaults.get(CONF_PRICING_PRICE_SPIKE, ""),
+                description="Price spike alert (binary sensor)",
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor")
             ),
@@ -167,6 +179,7 @@ def build_solcast_schema(
     defaults: dict[str, str] | None = None,
     errors: dict[str, str] | None = None,
     user_input: dict[str, Any] | None = None,
+    include_notify: bool = True,
 ) -> vol.Schema:
     """Build schema for the solcast + notification step.
 
@@ -176,6 +189,7 @@ def build_solcast_schema(
         defaults: Default entity IDs to use
         errors: Validation errors to display
         user_input: Previously submitted input to use as defaults
+        include_notify: Whether to include notify_service field (default True)
 
     Returns:
         Voluptuous schema for the solcast step form
@@ -202,38 +216,52 @@ def build_solcast_schema(
         default_today = defaults.get(CONF_SOLCAST_FORECAST_TODAY, "")
         default_tomorrow = defaults.get(CONF_SOLCAST_FORECAST_TOMORROW, "")
 
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_SOLCAST_FORECAST_TODAY,
-                default=default_today,
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_SOLCAST_FORECAST_TOMORROW,
-                default=default_tomorrow,
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+    # Build schema fields
+    schema_fields = {
+        vol.Required(
+            CONF_SOLCAST_FORECAST_TODAY,
+            default=default_today,
+            description="Today's solar forecast (kWh)",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_SOLCAST_FORECAST_TOMORROW,
+            default=default_tomorrow,
+            description="Tomorrow's solar forecast (kWh)",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_SUN_ENTITY,
+            default=default_sun,
+            description="Sun entity for sunrise/sunset times",
+        ): selector.EntitySelector(),
+        vol.Optional(
+            CONF_WEATHER_ENTITY,
+            default=default_weather,
+            description="Weather entity for cloud cover correlation (optional)",
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=weather_entities
+                if weather_entities
+                else [DEFAULT_WEATHER_ENTITY],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }
+
+    # Optionally add notify_service field
+    if include_notify:
+        schema_fields[
             vol.Required(
                 CONF_NOTIFY_SERVICE,
                 default=default_notify,
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=notify_services,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                CONF_WEATHER_ENTITY,
-                default=default_weather,
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=weather_entities
-                    if weather_entities
-                    else [DEFAULT_WEATHER_ENTITY],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-        }
-    )
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=notify_services,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+
+    return vol.Schema(schema_fields)
 
 
 def build_options_schema(
