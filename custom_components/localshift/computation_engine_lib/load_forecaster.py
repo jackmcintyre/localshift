@@ -69,6 +69,7 @@ class LoadForecaster:
         current_load_kw: float,
         recent_load_kw: float = 0.0,
         temperature: float | None = None,
+        hours_ahead: float | None = None,
     ) -> tuple[float, str]:
         """Estimate hourly household consumption with exponential decay weighting.
 
@@ -82,6 +83,17 @@ class LoadForecaster:
 
         When temperature is provided and weather correlation is available with
         sufficient confidence, applies temperature-based adjustments for heating/cooling.
+
+        Args:
+            hourly_avg_kw: Historical hourly averages (hour -> kW)
+            slot_hour: The hour of the slot being estimated (for historical lookup)
+            current_hour: Current hour of day (for legacy distance calc), or None to skip blending
+            current_load_kw: Instantaneous live load in kW
+            recent_load_kw: 1-hour rolling average load in kW
+            temperature: Optional temperature for weather correlation
+            hours_ahead: Actual hours ahead for decay weighting (fixes midnight wrap bug).
+                        When provided, overrides clock-hour distance calculation.
+                        Pass i/4.0 where i is the slot index (15-min slots).
 
         Returns tuple of (kW, source_tag).
         """
@@ -100,9 +112,14 @@ class LoadForecaster:
         # EXPONENTIAL DECAY WEIGHTING (Issue #381)
         # When current_hour is None (simulations without time context), skip blending
         if current_hour is not None:
-            # Calculate distance from current hour (handles midnight wrap)
-            hour_distance = abs(slot_hour - current_hour)
-            hour_distance = min(hour_distance, 24 - hour_distance)
+            # Calculate distance for decay weighting
+            # Prefer hours_ahead (actual time distance) over clock-hour distance
+            # This fixes the midnight wrap bug where slots 20-23h away appeared "close"
+            if hours_ahead is not None:
+                hour_distance = int(hours_ahead)
+            else:
+                hour_distance = abs(slot_hour - current_hour)
+                hour_distance = min(hour_distance, 24 - hour_distance)
 
             # CURRENT SLOT: Use live load directly
             # This ensures immediate accuracy for the current time slot
@@ -138,10 +155,27 @@ class LoadForecaster:
             base_load_kw = historical_kw
             base_source = "profile_hour"
 
-        # Fallback to current load
+        # Fallback: no historical for this specific hour, no live-load blending applicable
         if not base_source:
-            base_load_kw = current_load_kw if current_load_kw > 0 else 0.6
-            base_source = "live_load_fallback"
+            # Try mean of available historical hours first
+            if hourly_avg_kw:
+                values = [v for v in hourly_avg_kw.values() if v > 0]
+                if values:
+                    base_load_kw = sum(values) / len(values)
+                    base_source = "live_load_fallback"
+            # Then try current live load
+            if not base_source and current_load_kw > 0:
+                base_load_kw = current_load_kw
+                base_source = "live_load_fallback"
+            # No data available - log warning and return 0.0
+            if not base_source:
+                _LOGGER.warning(
+                    "NO_LOAD_DATA: No historical or live load data available for slot_hour=%d. "
+                    "Check load sensor availability and recorder history.",
+                    slot_hour,
+                )
+                base_load_kw = 0.0
+                base_source = "live_load_fallback"
 
         # WEATHER CORRELATION: Apply temperature-based adjustment if available
         # Only apply when:
