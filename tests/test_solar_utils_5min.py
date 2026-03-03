@@ -7,12 +7,10 @@ instead of overlap-weighted accumulation.
 
 from datetime import datetime, timezone, timedelta
 
-import pytest
 
 from custom_components.localshift.computation_engine_lib.solar_utils import (
     get_solar_for_5min_slot,
     get_solar_for_15min_slot,
-    get_solar_for_30min_slot,
 )
 
 

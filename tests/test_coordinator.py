@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.const import BatteryMode, PLATFORMS
+from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.coordinator import LocalShiftCoordinator
 
 

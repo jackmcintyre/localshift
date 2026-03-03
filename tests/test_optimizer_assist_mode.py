@@ -9,7 +9,6 @@ Tests cover:
 - Payload size limits (attributes bounded)
 """
 
-import pytest
 
 from custom_components.localshift.diagnostics import _get_optimizer_status
 

@@ -1,12 +1,11 @@
 """Unit tests for ComputationEngine."""
 
 from datetime import datetime, time, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from custom_components.localshift.computation_engine import BatteryMode
-from custom_components.localshift.coordinator_data import CoordinatorData
 
 
 @pytest.mark.parametrize(
