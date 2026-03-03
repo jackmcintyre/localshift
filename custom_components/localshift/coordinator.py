@@ -1046,6 +1046,9 @@ class LocalShiftCoordinator:
                 self._computation_engine,
                 read_state_func=self._read_all_external_state,
                 notify_func=self._notify_listeners,
+                check_automation_ready_func=self._state_reader.check_automation_ready
+                if self._state_reader is not None
+                else None,
             )
 
     # ------------------------------------------------------------------

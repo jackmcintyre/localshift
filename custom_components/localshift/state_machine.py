@@ -173,6 +173,7 @@ class StateMachine:
         computation_engine: ComputationEngine,
         read_state_func: callable | None = None,
         notify_func: callable | None = None,
+        check_automation_ready_func: callable | None = None,
     ) -> None:
         """Compare desired mode with commanded mode and execute transitions.
 
@@ -200,6 +201,11 @@ class StateMachine:
             # the previous evaluation — preventing stale-state reversions.
             if read_state_func is not None:
                 read_state_func()
+            # Issue #468: Re-check automation ready after reading fresh state
+            # If automation_ready was set False from stale startup data,
+            # re-checking now ensures we use fresh values after state refresh
+            if not data.automation_ready and check_automation_ready_func is not None:
+                check_automation_ready_func(data)
             computation_engine.compute_derived_values(data)
 
             # Notify listeners with fresh computed data regardless of which
