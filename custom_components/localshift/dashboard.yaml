@@ -454,7 +454,7 @@ views:
             heading_style: title
 
           - type: markdown
-            content: >
+            content: |
               {%- set learning = 'sensor.localshift_learning_status' %}
               {%- set learning_state = states(learning) %}
               {%- set params = state_attr(learning, 'adaptive_parameters') %}
@@ -462,10 +462,8 @@ views:
               {%- set config = state_attr('sensor.localshift_optimizer_summary', 'config_options') | default({}) %}
 
               **Optimizer Config**
-              Mode: {{ config.get('optimization_mode', 'unknown') }} ·
-              Control: {{ config.get('optimizer_control_mode', 'unknown') }} ·
-              Min SOC: {{ config.get('minimum_target_soc', 0) }}% ·
-              Target: {{ config.get('battery_target', 0) }}%
+
+              Mode: {{ config.get('optimization_mode', 'unknown') }} · Control: {{ config.get('optimizer_control_mode', 'unknown') }} · Min SOC: {{ config.get('minimum_target_soc', 0) }}% · Target: {{ config.get('battery_target', 0) }}%
 
               ---
 
