@@ -337,9 +337,12 @@ def _normalize_initial_soc(
 
     Behavior:
     - Reject non-numeric / non-finite values.
-    - Treat 0 < SOC <= 1 as fractional input and convert to percentage.
+    - Warn if 0 < SOC <= 1.0 (potential misconfiguration, entity should be 0-100 scale).
     - Reject SOC <= 0 as invalid (typically unavailable entity fallback).
     - Clamp out-of-range values to configured bounds.
+
+    Note: Teslemetry always provides SOC in percentage scale (0-100).
+    The fractional-to-percent auto-detection was removed (Issue #424).
     """
     info: dict[str, Any] = {
         "raw_soc": raw_soc,
@@ -357,8 +360,11 @@ def _normalize_initial_soc(
         return None, info
 
     if 0.0 < soc <= 1.0:
-        soc *= 100.0
-        info["normalization"] = "fraction_to_percent"
+        _LOGGER.warning(
+            "SOC value %.3f is unusually low. Teslemetry provides percentage scale (0-100). "
+            "Check that the SOC sensor entity is configured correctly.",
+            soc,
+        )
 
     if soc <= 0.0:
         info["error"] = "non_positive"

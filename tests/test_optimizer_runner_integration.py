@@ -447,14 +447,47 @@ class TestBuildSummary:
 class TestNormalizeInitialSoc:
     """Tests for initial SOC normalization and validation guard."""
 
-    def test_fraction_is_converted_to_percent(self, mock_coordinator_data):
-        """SOC values in 0..1 range should be treated as fractional."""
-        config = _build_optimizer_config(mock_coordinator_data, {})
-        normalized, info = _normalize_initial_soc(0.65, config)
+    def test_percentage_values_not_converted(self, mock_coordinator_data):
+        """SOC values 0 < value <= 1.0 should NOT be multiplied by 100 (Issue #424).
 
-        assert normalized == pytest.approx(65.0)
-        assert info["normalization"] == "fraction_to_percent"
-        assert info["normalized_soc_pct"] == pytest.approx(65.0)
+        Teslemetry always provides percentage scale (0-100). Values like
+        0.5 or 1.0 represent actual low battery percentages, not fractions.
+        They will be clamped to min_soc_pct but NOT converted.
+        """
+        config = _build_optimizer_config(mock_coordinator_data, {})
+
+        normalized, info = _normalize_initial_soc(0.5, config)
+        assert normalized == pytest.approx(config.min_soc_pct)
+        assert info["normalization"] == "clamped_to_bounds"
+        assert info["pre_clamp_soc"] == pytest.approx(0.5)
+
+        normalized, info = _normalize_initial_soc(1.0, config)
+        assert normalized == pytest.approx(config.min_soc_pct)
+        assert info["pre_clamp_soc"] == pytest.approx(1.0)
+
+    def test_normal_percentage_values_unchanged(self, mock_coordinator_data):
+        """Normal percentage values (e.g., 50%, 75%) should pass through unchanged."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+
+        normalized, info = _normalize_initial_soc(50.0, config)
+        assert normalized == pytest.approx(50.0)
+        assert info["normalization"] == "none"
+
+        normalized, info = _normalize_initial_soc(75.5, config)
+        assert normalized == pytest.approx(75.5)
+        assert info["normalization"] == "none"
+
+    def test_low_soc_warns_about_misconfiguration(self, mock_coordinator_data, caplog):
+        """Values 0 < SOC <= 1.0 should trigger a warning about potential misconfiguration."""
+        import logging
+
+        config = _build_optimizer_config(mock_coordinator_data, {})
+
+        with caplog.at_level(logging.WARNING):
+            normalized, info = _normalize_initial_soc(0.65, config)
+
+        assert "unusually low" in caplog.text
+        assert "percentage scale" in caplog.text
 
     def test_non_positive_soc_is_rejected(self, mock_coordinator_data):
         """SOC <= 0 should be rejected to avoid invalid optimizer runs."""
