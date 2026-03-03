@@ -80,4 +80,6 @@ dev = [
     "ruff>=0.15.2",
     "deptry>=0.20.0",
     "interrogate>=1.7.0",
+    "pytest-cov>=7.0.0",
+    "mypy>=1.19.1",
 ]

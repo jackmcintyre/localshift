@@ -1,0 +1,3 @@
+Usage: interrogate [OPTIONS] [PATHS]...
+
+Error: No such option: --json Did you mean --version?

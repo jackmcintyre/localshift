@@ -1,0 +1,158 @@
+{
+  "baseline_analysis": {
+    "date": "2026-03-03",
+    "issue": 479,
+    "total_files": 47,
+    "files_below_threshold": 34,
+    "overall_coverage": 57.75,
+    "threshold_used": 80
+  },
+  "coverage_gaps": [
+    {
+      "file": "custom_components/localshift/binary_sensor.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 112,
+      "missing_lines": 112
+    },
+    {
+      "file": "custom_components/localshift/button.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 53,
+      "missing_lines": 53
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/change_tracker.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 56,
+      "missing_lines": 56
+    },
+    {
+      "file": "custom_components/localshift/config_flow/defaults.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 29,
+      "missing_lines": 29
+    },
+    {
+      "file": "custom_components/localshift/number.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 40,
+      "missing_lines": 40
+    },
+    {
+      "file": "custom_components/localshift/select.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 116,
+      "missing_lines": 116
+    },
+    {
+      "file": "custom_components/localshift/switch.py",
+      "coverage_percent": 0.0,
+      "statements_covered": 0,
+      "total_statements": 61,
+      "missing_lines": 61
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/fit_analyzer.py",
+      "coverage_percent": 13.33,
+      "statements_covered": 8,
+      "total_statements": 60,
+      "missing_lines": 52
+    },
+    {
+      "file": "custom_components/localshift/weather_correlation.py",
+      "coverage_percent": 22.45,
+      "statements_covered": 66,
+      "total_statements": 294,
+      "missing_lines": 228
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/history_fetcher.py",
+      "coverage_percent": 25.52,
+      "statements_covered": 123,
+      "total_statements": 482,
+      "missing_lines": 359
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/soc_simulator.py",
+      "coverage_percent": 26.89,
+      "statements_covered": 64,
+      "total_statements": 238,
+      "missing_lines": 174
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/solar_accuracy.py",
+      "coverage_percent": 30.99,
+      "statements_covered": 66,
+      "total_statements": 213,
+      "missing_lines": 147
+    },
+    {
+      "file": "custom_components/localshift/diagnostics.py",
+      "coverage_percent": 36.51,
+      "statements_covered": 46,
+      "total_statements": 126,
+      "missing_lines": 80
+    },
+    {
+      "file": "custom_components/localshift/__init__.py",
+      "coverage_percent": 42.31,
+      "statements_covered": 11,
+      "total_statements": 26,
+      "missing_lines": 15
+    },
+    {
+      "file": "custom_components/localshift/entity_validator.py",
+      "coverage_percent": 44.6,
+      "statements_covered": 128,
+      "total_statements": 287,
+      "missing_lines": 159
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/utils.py",
+      "coverage_percent": 49.3,
+      "statements_covered": 70,
+      "total_statements": 142,
+      "missing_lines": 72
+    },
+    {
+      "file": "custom_components/localshift/sensor.py",
+      "coverage_percent": 53.01,
+      "statements_covered": 255,
+      "total_statements": 481,
+      "missing_lines": 226
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/optimization_controller.py",
+      "coverage_percent": 55.89,
+      "statements_covered": 147,
+      "total_statements": 263,
+      "missing_lines": 116
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/solar_utils.py",
+      "coverage_percent": 56.93,
+      "statements_covered": 115,
+      "total_statements": 202,
+      "missing_lines": 87
+    },
+    {
+      "file": "custom_components/localshift/computation_engine_lib/pattern_analyzer.py",
+      "coverage_percent": 57.14,
+      "statements_covered": 176,
+      "total_statements": 308,
+      "missing_lines": 132
+    }
+  ],
+  "recommendations": [
+    "Focus on core modules first: battery_controller.py, computation_engine.py",
+    "Add basic unit tests for 0% coverage files",
+    "Implement integration tests for state_machine.py and coordinator.py",
+    "Create test stubs for sensor.py framework methods"
+  ]
+}

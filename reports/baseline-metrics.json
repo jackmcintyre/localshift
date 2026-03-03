@@ -1,0 +1,290 @@
+{
+  "timestamp": "2026-03-03T21:57:33.385617",
+  "issue": 479,
+  "repository": "localshift",
+  "branch": "issue/479",
+  "summary": {
+    "source_files": 47,
+    "total_tests": 648,
+    "overall_coverage": 57.75
+  },
+  "metrics": {
+    "ruff": {
+      "violations": 0,
+      "status": "pass"
+    },
+    "ruff_format": {
+      "status": "pass"
+    },
+    "bandit": {
+      "issues": 0,
+      "severity_breakdown": {
+        "high": 0,
+        "medium": 0,
+        "low": 0
+      },
+      "status": "pass"
+    },
+    "safety": {
+      "vulnerabilities": 0,
+      "status": "complete"
+    },
+    "vulture": {
+      "dead_code_candidates": 0
+    },
+    "mypy": {
+      "status": "not_run"
+    },
+    "coverage": {
+      "overall_percent": 57.75,
+      "files_below_80": 34,
+      "total_files_analyzed": 47
+    },
+    "docstring": {
+      "status": "not_run"
+    }
+  },
+  "coverage_gaps": {
+    "threshold": 80,
+    "files_below_threshold": [
+      {
+        "file": "custom_components/localshift/binary_sensor.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 112,
+        "missing_lines": 112
+      },
+      {
+        "file": "custom_components/localshift/button.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 53,
+        "missing_lines": 53
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/change_tracker.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 56,
+        "missing_lines": 56
+      },
+      {
+        "file": "custom_components/localshift/config_flow/defaults.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 29,
+        "missing_lines": 29
+      },
+      {
+        "file": "custom_components/localshift/number.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 40,
+        "missing_lines": 40
+      },
+      {
+        "file": "custom_components/localshift/select.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 116,
+        "missing_lines": 116
+      },
+      {
+        "file": "custom_components/localshift/switch.py",
+        "coverage_percent": 0.0,
+        "statements_covered": 0,
+        "total_statements": 61,
+        "missing_lines": 61
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/fit_analyzer.py",
+        "coverage_percent": 13.33,
+        "statements_covered": 8,
+        "total_statements": 60,
+        "missing_lines": 52
+      },
+      {
+        "file": "custom_components/localshift/weather_correlation.py",
+        "coverage_percent": 22.45,
+        "statements_covered": 66,
+        "total_statements": 294,
+        "missing_lines": 228
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/history_fetcher.py",
+        "coverage_percent": 25.52,
+        "statements_covered": 123,
+        "total_statements": 482,
+        "missing_lines": 359
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/soc_simulator.py",
+        "coverage_percent": 26.89,
+        "statements_covered": 64,
+        "total_statements": 238,
+        "missing_lines": 174
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/solar_accuracy.py",
+        "coverage_percent": 30.99,
+        "statements_covered": 66,
+        "total_statements": 213,
+        "missing_lines": 147
+      },
+      {
+        "file": "custom_components/localshift/diagnostics.py",
+        "coverage_percent": 36.51,
+        "statements_covered": 46,
+        "total_statements": 126,
+        "missing_lines": 80
+      },
+      {
+        "file": "custom_components/localshift/__init__.py",
+        "coverage_percent": 42.31,
+        "statements_covered": 11,
+        "total_statements": 26,
+        "missing_lines": 15
+      },
+      {
+        "file": "custom_components/localshift/entity_validator.py",
+        "coverage_percent": 44.6,
+        "statements_covered": 128,
+        "total_statements": 287,
+        "missing_lines": 159
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/utils.py",
+        "coverage_percent": 49.3,
+        "statements_covered": 70,
+        "total_statements": 142,
+        "missing_lines": 72
+      },
+      {
+        "file": "custom_components/localshift/sensor.py",
+        "coverage_percent": 53.01,
+        "statements_covered": 255,
+        "total_statements": 481,
+        "missing_lines": 226
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/optimization_controller.py",
+        "coverage_percent": 55.89,
+        "statements_covered": 147,
+        "total_statements": 263,
+        "missing_lines": 116
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/solar_utils.py",
+        "coverage_percent": 56.93,
+        "statements_covered": 115,
+        "total_statements": 202,
+        "missing_lines": 87
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/pattern_analyzer.py",
+        "coverage_percent": 57.14,
+        "statements_covered": 176,
+        "total_statements": 308,
+        "missing_lines": 132
+      },
+      {
+        "file": "custom_components/localshift/config_flow/validators.py",
+        "coverage_percent": 61.11,
+        "statements_covered": 44,
+        "total_statements": 72,
+        "missing_lines": 28
+      },
+      {
+        "file": "custom_components/localshift/coordinator.py",
+        "coverage_percent": 61.33,
+        "statements_covered": 295,
+        "total_statements": 481,
+        "missing_lines": 186
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/parameter_optimizer.py",
+        "coverage_percent": 63.03,
+        "statements_covered": 133,
+        "total_statements": 211,
+        "missing_lines": 78
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/weather_diagnostics.py",
+        "coverage_percent": 64.52,
+        "statements_covered": 20,
+        "total_statements": 31,
+        "missing_lines": 11
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/forecast_accuracy.py",
+        "coverage_percent": 65.71,
+        "statements_covered": 92,
+        "total_statements": 140,
+        "missing_lines": 48
+      },
+      {
+        "file": "custom_components/localshift/cost_tracker.py",
+        "coverage_percent": 68.93,
+        "statements_covered": 71,
+        "total_statements": 103,
+        "missing_lines": 32
+      },
+      {
+        "file": "custom_components/localshift/computation_engine.py",
+        "coverage_percent": 70.83,
+        "statements_covered": 357,
+        "total_statements": 504,
+        "missing_lines": 147
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/price_calculator.py",
+        "coverage_percent": 70.91,
+        "statements_covered": 156,
+        "total_statements": 220,
+        "missing_lines": 64
+      },
+      {
+        "file": "custom_components/localshift/state_machine.py",
+        "coverage_percent": 72.31,
+        "statements_covered": 222,
+        "total_statements": 307,
+        "missing_lines": 85
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/optimizer_runner.py",
+        "coverage_percent": 73.45,
+        "statements_covered": 166,
+        "total_statements": 226,
+        "missing_lines": 60
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/decision_outcome_tracker.py",
+        "coverage_percent": 73.5,
+        "statements_covered": 172,
+        "total_statements": 234,
+        "missing_lines": 62
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/slot_schedule.py",
+        "coverage_percent": 78.02,
+        "statements_covered": 71,
+        "total_statements": 91,
+        "missing_lines": 20
+      },
+      {
+        "file": "custom_components/localshift/battery_controller.py",
+        "coverage_percent": 78.32,
+        "statements_covered": 242,
+        "total_statements": 309,
+        "missing_lines": 67
+      },
+      {
+        "file": "custom_components/localshift/computation_engine_lib/excess_solar.py",
+        "coverage_percent": 79.83,
+        "statements_covered": 95,
+        "total_statements": 119,
+        "missing_lines": 24
+      }
+    ]
+  }
+}
