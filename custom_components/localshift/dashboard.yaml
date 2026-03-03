@@ -331,7 +331,6 @@ views:
               {%- set weather_confidence = state_attr(diagnostics, 'weather_correlation_confidence') %}
               {%- set weather_samples = state_attr(diagnostics, 'weather_sample_count') %}
               {%- set recent_load = state_attr(diagnostics, 'recent_load_1hr_kw') %}
-              {%- set weighting = state_attr(diagnostics, 'consumption_weighting') %}
               {%- set weekday_total = weekday_counts.values() | sum | default(0) %}
               {%- set weekend_total = weekend_counts.values() | sum | default(0) %}
 
@@ -357,8 +356,8 @@ views:
 
               ---
 
-              **Recent Load Blending**
-              {{ recent_load | round(2) }} kW avg (1hr) · {{ (weighting * 100) | round(0) }}% recent / {{ ((1 - weighting) * 100) | round(0) }}% historical
+              **Recent Load**
+              {{ recent_load | round(2) }} kW average (last 1 hour)
             card_size: 6
 
       # Quick Actions
@@ -803,8 +802,6 @@ views:
               Recent 1hr Samples: {{ state_attr('sensor.localshift_forecast_diagnostics', 'recent_load_1hr_samples') | default(0) }}
 
               Recent 1hr Error: {{ state_attr('sensor.localshift_forecast_diagnostics', 'recent_load_1hr_last_error') | default('') }}
-
-              Consumption Weighting: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_weighting') | default(0) }}
 
               Consumption Source: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_source') }}
 

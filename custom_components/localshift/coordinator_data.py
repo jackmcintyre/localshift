@@ -280,7 +280,6 @@ class CoordinatorData:
     recent_load_1hr_statistic_id: str = ""
     recent_load_1hr_samples: int = 0
     recent_load_1hr_last_error: str = ""
-    consumption_weighting: float = 0.67
 
     # Shared load forecast slots for DP optimizer
     # 96 entries, one per 15-min slot starting from the current 5-min boundary.

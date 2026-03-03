@@ -37,7 +37,6 @@ DEFAULT_BATTERY_TARGET = 90.0
 DEFAULT_DEMAND_WINDOW_START = "14:00:00"
 DEFAULT_DEMAND_WINDOW_END = "20:00:00"
 DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4
-DEFAULT_LOAD_WEIGHT_RECENT = 0.7
 DEFAULT_MINIMUM_TARGET_SOC = 20.0
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = True
 DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
@@ -92,12 +91,6 @@ THRESHOLD_RANGES: dict[str, dict[str, Any]] = {
         "max": 100.0,
         "step": 5.0,
         "unit": "%",
-    },
-    "load_weight_recent": {
-        "min": 0.0,
-        "max": 1.0,
-        "step": 0.1,
-        "unit": "weight",
     },
     "cooling_threshold": {
         "min": 15.0,

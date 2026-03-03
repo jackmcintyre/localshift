@@ -60,7 +60,6 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
-    DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_WEATHER_LEARNING_ENABLED,
@@ -159,7 +158,6 @@ class ComputationEngine:
         self._dp_planner = DPPlanner()
 
         # Local cache properties (delegated to history_fetcher for storage)
-        self._last_weighting: float = DEFAULT_LOAD_WEIGHT_RECENT
         self._previous_active_mode = None
         self._last_forecast_hour: int | None = None
         self._last_decision_log_time: datetime | None = None
@@ -247,6 +245,45 @@ class ComputationEngine:
         hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
         recent_load_kw = self._recent_load_1hr_kw
         self._compute_load_forecast_slots(data, now_dt, hourly_avg_kw, recent_load_kw)
+
+        # ---- Bridge HistoryFetcher results to CoordinatorData (Issue #493) ----
+        # These fields were never populated, causing diagnostic data to be stuck at defaults
+        (
+            data.weekday_hourly_profile_kw,
+            data.weekday_sample_counts,
+        ) = self._history_fetcher.get_weekday_profile()
+        (
+            data.weekend_hourly_profile_kw,
+            data.weekend_sample_counts,
+        ) = self._history_fetcher.get_weekend_profile()
+        data.consumption_profile_type = self._history_fetcher.get_profile_source()
+
+        # Bridge combined profile for backward compatibility
+        data.consumption_hourly_profile_kw = dict(
+            self._history_fetcher._historical_load_cache
+        )
+        data.consumption_hourly_sample_counts = dict(
+            self._history_fetcher._historical_load_sample_counts
+        )
+        data.consumption_source = self._history_fetcher._historical_load_source
+
+        # Bridge recent load data
+        data.recent_load_1hr_kw = self._history_fetcher._recent_load_1hr_kw
+        data.recent_load_1hr_statistic_id = (
+            self._history_fetcher._recent_load_1hr_statistic_id
+        )
+        data.recent_load_1hr_samples = self._history_fetcher._recent_load_1hr_samples
+        data.recent_load_1hr_last_error = (
+            self._history_fetcher._recent_load_1hr_last_error
+        )
+
+        # Determine forecast_profile_selected based on current day
+        if data.consumption_profile_type == "weekday_weekend":
+            data.forecast_profile_selected = (
+                "weekend" if now_dt.weekday() >= 5 else "weekday"
+            )
+        else:
+            data.forecast_profile_selected = data.consumption_profile_type
 
         # ---- Step DP: Inline DP optimizer (Phase 4, #441) ----
         # Runs before effective_cheap_price final update so solar_can_reach_target
