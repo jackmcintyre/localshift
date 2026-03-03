@@ -6,14 +6,32 @@ trigger: always_on
 
 **This applies to ALL tasks, no matter how simple. Failure to follow this is a process violation.**
 
-1. **FIRST ACTION:** Run `git worktree list` to check current worktree status
-2. **If output shows only the main repo (no worktree path matches current directory):**
-   - For GitHub issues: `git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}`
-   - For ad-hoc tasks: `git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}`
-3. **Change directory to the worktree before making ANY file changes**
-4. **Only then proceed with the actual task**
+## Why Worktrees?
 
-This ensures isolation between tasks and prevents changes to the main repo.
+Git hooks block all commits on `main`. Editing on main wastes time - you'll be forced to move changes anyway. Start in a worktree from the beginning.
+
+## Required Workflow
+
+1. **FIRST ACTION:** Run `git branch --show-current` to verify you're NOT on main
+2. **If output is "main":**
+   - **STOP** - Do not make ANY file edits
+   - Create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
+   - Change to worktree: `cd worktrees/issue-{NNN}`
+3. **If output is NOT "main":**
+   - Verify with `git worktree list` that current directory is a worktree
+   - Proceed with the task
+
+## Quick Verification
+
+```bash
+# Should show branch name (NOT "main")
+git branch --show-current
+
+# Should show your current path as a worktree entry
+git worktree list
+```
+
+---
 
 ## ⚠️ FOUND CHANGES ON MAIN (Crashed Session / Orphaned Changes)
 
@@ -29,10 +47,10 @@ This ensures isolation between tasks and prevents changes to the main repo.
    git stash push -m "orphaned changes from crashed session"
    
    # Create worktree
-   git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
+   git worktree add worktrees/{task-name} -b task/{task-name}
    
    # In worktree, apply the stash
-   cd /Users/jackmcintyre/worktrees/{task-name}
+   cd worktrees/{task-name}
    git stash pop
    ```
 4. **Only commit directly on main** if:
@@ -40,4 +58,13 @@ This ensures isolation between tasks and prevents changes to the main repo.
    - Changes are trivial (typo fixes, documentation)
    - You have explained the process violation
 
-**This prevents accidental commits on main from orphaned changes.**
+---
+
+## Why This Matters
+
+- **Git hooks block main commits** - No exceptions (unless emergency bypass)
+- **Time saved** - Editing on main means re-doing work in a worktree
+- **Traceability** - Each task has its own branch and history
+- **Safety** - Main always reflects production-ready code
+
+**The enforcement is real. Work with it, not against it.**

@@ -1,8 +1,37 @@
 # AGENTS.md - Agent Coding Guidelines for LocalShift
 
-LocalShift is a Home Assistant integration for automated Tesla Powerwall battery control. This document provides guidelines for agentic coding agents.
+---
+
+# ⚠️ STOP: MANDATORY FIRST ACTION
+
+**You MUST verify you're NOT on the `main` branch before ANY file edit.**
+
+## Verification Steps
+
+1. Run: `git branch --show-current`
+2. If output is `"main"`: **STOP HERE**
+   - Create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
+   - Change directory: `cd worktrees/issue-{NNN}`
+   - Then proceed with edits
+3. If output is NOT `"main"`: Proceed with the task
+
+## Why This Matters
+
+- **Git hooks block all commits on main** - No exceptions
+- **Editing on main wastes time** - You'll be forced to move changes anyway
+- **Main is read-only** - All changes go through PR
+
+**The enforcement is real. Start in a worktree.**
+
+---
+
+## Project Overview
+
+LocalShift is a Home Assistant integration for automated Tesla Powerwall battery control.
 
 **Python**: 3.13+ | **Main code**: `custom_components/localshift/` | **Tests**: `tests/`
+
+**Verify protection is active:** `.githooks/scripts/verify-safety.sh`
 
 ---
 
@@ -10,20 +39,22 @@ LocalShift is a Home Assistant integration for automated Tesla Powerwall battery
 
 **Git hooks in `.githooks/` block all main branch commits and pushes.**
 
-Before starting ANY task:
+### Before Starting ANY Task
+
 1. Run `git worktree list` - verify you're in a worktree
 2. Run `git branch --show-current` - must NOT be `main`
 3. If on main, create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
 
-**Verify protection is active:** `.githooks/scripts/verify-safety.sh`
+### Emergency Bypass
 
-**Emergency bypass (logged, audit required):** `GIT_EMERGENCY_PUSH=1 git push origin main`
+**Only in emergencies (logged, audit required):** `GIT_EMERGENCY_PUSH=1 git push origin main`
 
 See `.opencode/rules` and `.githooks/README.md` for full workflow.
 
 ---
 
 ### After Making Changes
+
 1. Lint: `uv run ruff check custom_components/localshift`
 2. Format check: `uv run ruff format --check custom_components/localshift`
 3. Test: `uv run pytest`
@@ -31,12 +62,14 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 5. Check logs: `tail -100 /homeassistant/home-assistant.log | grep -i localshift`
 
 ### Deployment Protocol
+
 - **Agents do NOT run deploy.sh directly** - always ask the user to deploy
 - When ready to test: "Ready to deploy. Please run: `./deploy.sh --reserve && ./deploy.sh`"
 - For HA restart: "Restart recommended. Please run: `./deploy.sh --restart` (you'll be prompted to confirm)"
 - User controls all deployments - ensures human-in-the-loop before HA changes
 
 ### Commit Guidelines
+
 - Reference issue: `Fixes #NNN` or `Closes #NNN`
 - Ask user to commit; do not auto-commit
 - Open PR after commit
@@ -44,6 +77,7 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 ---
 
 ## Testing Best Practices
+
 - Test files: `test_*.py`, classes: `Test*`, functions: `test_*`
 - Use fixtures defined in `conftest.py`
 - Mock HA with `hass` fixture
@@ -52,6 +86,7 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 ---
 
 ## Notes
+
 - No Cursor or Copilot rules found in repository
 - Follow existing code patterns when modifying files
 - Update documentation (`docs/ENTITY_REFERENCE.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPER_GUIDE.md`) when adding/removing entities
