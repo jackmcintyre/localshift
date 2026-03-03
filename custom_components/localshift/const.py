@@ -302,11 +302,8 @@ SWITCH_DRY_RUN = "dry_run"
 SWITCH_DEMAND_WINDOW_BLOCK = "demand_window_block"
 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 
-# Notification preference switches
-SWITCH_NOTIFY_TRANSITIONS = "notify_transitions"
-SWITCH_NOTIFY_DAILY_SUMMARY = "notify_daily_summary"
-SWITCH_NOTIFY_MANUAL_ACTIONS = "notify_manual_actions"
-SWITCH_NOTIFY_ALERTS = "notify_alerts"
+# Consolidated notification switch (Issue #214)
+SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
 
 # Learning system switch (Issue #170 Phase 4)
 SWITCH_ENABLE_LEARNING = "enable_learning"
@@ -318,10 +315,7 @@ SWITCH_DEFAULTS = {
     SWITCH_DRY_RUN: False,
     SWITCH_DEMAND_WINDOW_BLOCK: True,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
-    SWITCH_NOTIFY_TRANSITIONS: True,
-    SWITCH_NOTIFY_DAILY_SUMMARY: True,
-    SWITCH_NOTIFY_MANUAL_ACTIONS: True,
-    SWITCH_NOTIFY_ALERTS: True,
+    SWITCH_NOTIFICATIONS_ENABLED: True,  # Consolidated notification toggle
     SWITCH_ENABLE_LEARNING: False,  # Users must opt-in to active optimization
 }
 
@@ -332,10 +326,7 @@ SWITCH_ICONS = {
     SWITCH_DRY_RUN: "mdi:test-tube",
     SWITCH_DEMAND_WINDOW_BLOCK: "mdi:clock-alert-outline",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:transfer-down",
-    SWITCH_NOTIFY_TRANSITIONS: "mdi:bell-sleep",
-    SWITCH_NOTIFY_DAILY_SUMMARY: "mdi:calendar-today",
-    SWITCH_NOTIFY_MANUAL_ACTIONS: "mdi:gesture-tap",
-    SWITCH_NOTIFY_ALERTS: "mdi:alert-circle",
+    SWITCH_NOTIFICATIONS_ENABLED: "mdi:bell",
     SWITCH_ENABLE_LEARNING: "mdi:brain",
 }
 
@@ -346,10 +337,7 @@ SWITCH_NAMES = {
     SWITCH_DRY_RUN: "Dry Run",
     SWITCH_DEMAND_WINDOW_BLOCK: "Demand Window Block",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
-    SWITCH_NOTIFY_TRANSITIONS: "Notify Mode Transitions",
-    SWITCH_NOTIFY_DAILY_SUMMARY: "Notify Daily Summary",
-    SWITCH_NOTIFY_MANUAL_ACTIONS: "Notify Manual Actions",
-    SWITCH_NOTIFY_ALERTS: "Notify Alerts",
+    SWITCH_NOTIFICATIONS_ENABLED: "Notifications Enabled",
     SWITCH_ENABLE_LEARNING: "Enable Learning",
 }
 

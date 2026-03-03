@@ -13,10 +13,7 @@ from .const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
-    SWITCH_NOTIFY_ALERTS,
-    SWITCH_NOTIFY_DAILY_SUMMARY,
-    SWITCH_NOTIFY_MANUAL_ACTIONS,
-    SWITCH_NOTIFY_TRANSITIONS,
+    SWITCH_NOTIFICATIONS_ENABLED,
     BatteryMode,
 )
 
@@ -127,9 +124,8 @@ class NotificationService:
             new_mode: The new battery mode
             data: Current coordinator data
         """
-        # Check if transition notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_TRANSITIONS):
-            _LOGGER.debug("Transition notifications disabled, skipping")
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping transition")
             return
 
         dry_run_prefix = self._get_dry_run_prefix()
@@ -283,9 +279,8 @@ class NotificationService:
         Args:
             data: Current coordinator data
         """
-        # Check if daily summary notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_DAILY_SUMMARY):
-            _LOGGER.debug("Daily summary notifications disabled, skipping")
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping daily summary")
             return
 
         dry_run_prefix = self._get_dry_run_prefix()
@@ -342,9 +337,8 @@ class NotificationService:
                             grid_charging_allowed). Used to suppress notifications for
                             expected Tesla cloud sync behavior (Issue #394).
         """
-        # Check if alert notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_ALERTS):
-            _LOGGER.debug("Alert notifications disabled, skipping health correction")
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping health correction")
             return
 
         # Issue #394: Suppress notification for Tesla cloud grid_charging sync
@@ -409,9 +403,8 @@ class NotificationService:
             target_mode: The mode that was attempted
             data: Current coordinator data
         """
-        # Check if alert notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_ALERTS):
-            _LOGGER.debug("Alert notifications disabled, skipping transition failure")
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping transition failure")
             return
 
         dry_run_prefix = self._get_dry_run_prefix()
@@ -432,9 +425,8 @@ class NotificationService:
         Args:
             data: Current coordinator data
         """
-        # Check if alert notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_ALERTS):
-            _LOGGER.debug("Alert notifications disabled, skipping automation disabled")
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping automation disabled")
             return
 
         dry_run_prefix = self._get_dry_run_prefix()
@@ -456,11 +448,8 @@ class NotificationService:
             data: Current coordinator data
             timeout_hours: The timeout duration in hours
         """
-        # Check if alert notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_ALERTS):
-            _LOGGER.debug(
-                "Alert notifications disabled, skipping manual override timeout"
-            )
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping manual override timeout")
             return
 
         dry_run_prefix = self._get_dry_run_prefix()
@@ -481,9 +470,8 @@ class NotificationService:
             action: Description of the manual action
             data: Current coordinator data
         """
-        # Check if manual action notifications are enabled
-        if not self._is_notification_enabled(SWITCH_NOTIFY_MANUAL_ACTIONS):
-            _LOGGER.debug("Manual action notifications disabled, skipping")
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping manual action")
             return
 
         dry_run_prefix = self._get_dry_run_prefix()

@@ -935,13 +935,7 @@ views:
 
               Allow DW Entry Under Target: {{ states('switch.localshift_allow_dw_entry_under_target') }}
 
-              Notify Mode Transitions: {{ states('switch.localshift_notify_mode_transitions') }}
-
-              Notify Daily Summary: {{ states('switch.localshift_notify_daily_summary') }}
-
-              Notify Manual Actions: {{ states('switch.localshift_notify_manual_actions') }}
-
-              Notify Alerts: {{ states('switch.localshift_notify_alerts') }}
+              Notifications Enabled: {{ states('switch.localshift_notifications_enabled') }}
 
               Enable Learning: {{ states('switch.localshift_enable_learning') }}
 

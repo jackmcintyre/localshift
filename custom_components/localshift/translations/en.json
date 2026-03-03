@@ -61,38 +61,46 @@
   },
   "options": {
     "step": {
-      "init": {
-        "title": "LocalShift Settings",
-        "description": "Configure demand window timing, price thresholds, and battery settings.",
+      "entity_mappings": {
+        "title": "Configure Entity Mappings",
+        "description": "Select the Home Assistant entities for your Powerwall, pricing, and solar forecast. These can be changed at any time.",
+        "data": {
+          "teslemetry_operation_mode": "Operation Mode",
+          "teslemetry_backup_reserve": "Backup Reserve",
+          "teslemetry_soc": "Battery SOC",
+          "teslemetry_grid_power": "Grid Power",
+          "teslemetry_battery_power": "Battery Power",
+          "teslemetry_solar_power": "Solar Power",
+          "teslemetry_load_power": "Load Power",
+          "pricing_general_price": "Import Price",
+          "pricing_feed_in_price": "Export Price",
+          "pricing_general_forecast": "Import Forecast",
+          "pricing_feed_in_forecast": "Export Forecast",
+          "pricing_price_spike": "Price Spike Alert",
+          "solcast_forecast_today": "Solar Forecast Today",
+          "solcast_forecast_tomorrow": "Solar Forecast Tomorrow",
+          "sun_entity": "Sun Entity",
+          "weather_entity": "Weather Entity"
+        }
+      },
+      "settings": {
+        "title": "Essential Settings",
+        "description": "Configure demand window timing, notifications, and optimizer behavior.",
         "data": {
           "notify_service": "Notification Service",
           "demand_window_start": "Demand Window Start",
           "demand_window_end": "Demand Window End",
           "manual_override_timeout": "Manual Override Timeout",
-          "cheap_price_percentile": "Cheap Price Percentile",
-          "max_pre_charge_price": "Max Pre-charge Price",
-          "cheap_price_deadband": "Price Deadband",
-          "spike_price_percentile": "Spike Price Percentile",
-          "battery_target": "Battery Target",
-          "minimum_target_soc": "Minimum Target SOC",
-          "load_weight_recent": "Recent Load Weight",
-          "export_price_margin": "Export Price Margin",
+          "weather_entity": "Weather Entity",
           "optimization_mode": "Optimization Mode"
         },
         "data_description": {
-          "notify_service": "Notification service for alerts (e.g., notify.mobile_app)",
-          "demand_window_start": "Time when demand window begins (battery held for evening peak)",
-          "demand_window_end": "Time when demand window ends (normal operation resumes)",
-          "manual_override_timeout": "Hours before manual mode automatically returns to self-consumption (0 = never)",
-          "cheap_price_percentile": "Price percentile threshold for grid charging (e.g., 25 = charge when price is in bottom 25%)",
-          "max_pre_charge_price": "Maximum price ($/kWh) to pay for pre-charging battery",
-          "cheap_price_deadband": "Minimum price difference ($/kWh) to start/stop charging (prevents rapid cycling)",
-          "spike_price_percentile": "Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices)",
-          "battery_target": "Target SOC % for demand window (battery reserved for evening peak)",
-          "minimum_target_soc": "Minimum SOC % maintained during discharge modes (spike, proactive export)",
-          "load_weight_recent": "Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical)",
-          "export_price_margin": "Minimum profit margin ($/kWh) for battery export when grid import needed to replace",
-          "optimization_mode": "Optimizer objective mode: self_consumption prioritizes keeping energy for home use; arbitrage prioritizes buy-low/sell-high behavior"
+          "notify_service": "Where to send LocalShift notifications (e.g., mobile app, email)",
+          "demand_window_start": "Start of evening peak period when grid imports are blocked",
+          "demand_window_end": "End of evening peak period (normal operation resumes)",
+          "manual_override_timeout": "Hours before manual mode automatically returns to automation (0 = never)",
+          "weather_entity": "Optional: Weather entity for solar forecast correlation",
+          "optimization_mode": "Optimizer strategy: Self Consumption maximizes solar use; Arbitrage minimizes total cost"
         }
       }
     }
@@ -255,21 +263,9 @@
         "name": "Allow Early DW Entry",
         "description": "Allow entering demand window below target if solar forecast can reach target during window."
       },
-      "notify_transitions": {
-        "name": "Notify Mode Transitions",
-        "description": "Send notifications when battery mode changes (e.g., grid charging started, spike discharge activated)."
-      },
-      "notify_daily_summary": {
-        "name": "Notify Daily Summary",
-        "description": "Send daily summary notification with cost savings and battery performance."
-      },
-      "notify_manual_actions": {
-        "name": "Notify Manual Actions",
-        "description": "Send notifications when manual mode buttons are pressed (force charge, force discharge, etc.)."
-      },
-      "notify_alerts": {
-        "name": "Notify Alerts",
-        "description": "Send alert notifications for important events (automation disabled, Tesla override, errors)."
+      "notifications_enabled": {
+        "name": "Notifications Enabled",
+        "description": "Enable all notifications (mode transitions, daily summaries, manual actions, alerts). Turn off to silence all notifications."
       },
       "enable_learning": {
         "name": "Enable Learning",
