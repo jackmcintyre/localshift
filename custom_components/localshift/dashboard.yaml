@@ -63,8 +63,9 @@ views:
             sort_individual_devices: false
 
       # SOC Forecast Chart
-      # entity: sensor.localshift_optimizer_plan_detailed
-      # decisions[].timestamp_iso + decisions[].predicted_soc_pct
+      # sensor.localshift_optimizer_plan state = integer slot count (e.g. 57)
+      # sensor.localshift_optimizer_plan_detailed.decisions[] holds per-slot data
+      # decisions[].timestamp_iso + decisions[].predicted_soc_pct used here
       - type: grid
         cards:
           - type: custom:apexcharts-card
@@ -173,7 +174,7 @@ views:
               {%- set status = states(summary) %}
               {%- set success = state_attr(summary, 'success') | default(false) %}
               {%- set solve_time = state_attr(summary, 'solve_time_seconds') | default(0) | float(0) %}
-              {%- set slots = states('sensor.localshift_optimizer_plan') | int(0) %}
+              {%- set slots = states('sensor.localshift_optimizer_plan') | int(0) %} {# state = slot count #}
               {%- set net = states(plan) | default(0) | float(0) %}
               {%- set import_kwh = state_attr(plan, 'projected_import_kwh') | default(0) | float(0) %}
               {%- set export_kwh = state_attr(plan, 'projected_export_kwh') | default(0) | float(0) %}
@@ -231,8 +232,8 @@ views:
 
               ---
 
-              **Import:** {{ state_attr(plan, 'projected_import_kwh') | default(0) | float(0) | round(2) }} kWh
-              **Export:** {{ state_attr(plan, 'projected_export_kwh') | default(0) | float(0) | round(2) }} kWh
+              **Projected Import:** {{ state_attr(plan, 'projected_import_kwh') | default(0) | float(0) | round(2) }} kWh
+              **Projected Export:** {{ state_attr(plan, 'projected_export_kwh') | default(0) | float(0) | round(2) }} kWh
 
       # Prices & Alerts
       - type: grid
@@ -294,7 +295,7 @@ views:
               {%- set soc = states('sensor.my_home_percentage_charged') | default(0) | int(0) %}
               {%- set shortfall = state_attr(summary, 'terminal_shortfall_pct') | default(0) | float(0) %}
               {%- set boost_needed = is_state('binary_sensor.localshift_charge_boost_needed', 'on') %}
-              {%- set can_reach = shortfall <= 0 %}
+              {%- set can_reach = shortfall <= 5.0 %}
               {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
               {%- set import_kwh = state_attr(plan, 'projected_import_kwh') | default(0) | float(0) %}
               {%- set export_kwh = state_attr(plan, 'projected_export_kwh') | default(0) | float(0) %}
@@ -303,7 +304,7 @@ views:
               **Projected Import:** {{ import_kwh | round(2) }} kWh · **Export:** {{ export_kwh | round(2) }} kWh
 
               {% if can_reach %}
-              ✅ **On track** — optimizer expects to meet target
+              ✅ **On track** — terminal shortfall {{ shortfall | round(1) }}%
               {% elif boost_needed %}
               ⚡ **Boost needed** — shortfall {{ shortfall | round(1) }}%
               {% else %}
@@ -455,7 +456,8 @@ views:
           - type: markdown
             content: >
               {%- set learning = 'sensor.localshift_learning_status' %}
-              {%- set params = state_attr(learning, 'adaptive_parameters') | default({}) %}
+              {%- set learning_state = states(learning) %}
+              {%- set params = state_attr(learning, 'adaptive_parameters') %}
               {%- set overrides = state_attr(learning, 'contextual_adjustments_active') | default([]) %}
               {%- set config = state_attr('sensor.localshift_optimizer_summary', 'config_options') | default({}) %}
 
@@ -467,13 +469,17 @@ views:
 
               ---
 
-              {% if params %}
+              **Learning Status:** {{ learning_state }}
+
+              {% if params is not none and params %}
               **Adaptive Parameters**
               {% for k, v in params.items() %}
               · {{ k | replace('_', ' ') | title }}: {{ v | round(3) if v is number else v }}
               {% endfor %}
+              {% elif learning_state in ['disabled', 'unavailable', 'unknown'] %}
+              *Learning system {{ learning_state }} — no adaptive parameters*
               {% else %}
-              *No adaptive parameters available*
+              *Adaptive parameters not yet available — learning system initialising*
               {% endif %}
 
               {% if overrides %}
@@ -972,7 +978,7 @@ views:
               {%- set opt_enabled = state_attr(summary, 'enabled') | default(false) %}
               {%- set success = state_attr(summary, 'success') | default(false) %}
 
-              **Price Thresholds:** Effective Cheap: ${{ state_attr('sensor.localshift_forecast_prices', 'effective_cheap_price') | default(0) }}/kWh · Stop: ${{ state_attr('sensor.localshift_forecast_prices', 'cheap_charge_stop_price') | default(0) }}/kWh
+              **Price Thresholds:** Effective Cheap: ${{ states('sensor.localshift_price_cheap_effective') | default(0) }}/kWh · Stop: ${{ states('sensor.localshift_price_cheap_charge_stop') | default(0) }}/kWh
 
               **Grid:** Import {{ state_attr(plan, 'projected_import_kwh') | default(0) | round(3) }} kWh · Export {{ state_attr(plan, 'projected_export_kwh') | default(0) | round(3) }} kWh · Net ${{ states(plan) | default(0) | float(0) | round(3) }}
 
@@ -991,7 +997,7 @@ views:
               | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: |
 
               {% for d in decisions -%}
-              | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ d.slot_interval_minutes | default(5) }}m | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ "%.3f"|format(d.solar_kwh | float) }} | {{ "%.3f"|format(d.consumption_kwh | float) }} | {{ "%.3f"|format(d.buy_price | float) }} | {{ "%.3f"|format(d.sell_price | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(18, true, '') }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
+              | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ d.slot_interval_minutes | default(5) }}m | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ "%.3f"|format(d.solar_kwh | float) }} | {{ "%.3f"|format(d.consumption_kwh | float) }} | {{ "%.3f"|format(d.buy_price | float) }} | {{ "%.3f"|format(d.sell_price | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(22, true, '…') }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
 
               {% endfor %}
 
@@ -1000,7 +1006,8 @@ views:
           - type: markdown
             content: |
               {%- set s = 'sensor.localshift_optimizer_summary' %}
-              {%- set slots = state_attr('sensor.localshift_optimizer_plan_detailed', 'total_slots') | default(state_attr(s, 'total_slots') | default(0)) %}
+              {%- set _slots_detailed = state_attr('sensor.localshift_optimizer_plan_detailed', 'total_slots') %}
+              {%- set slots = _slots_detailed if _slots_detailed is not none else state_attr(s, 'total_slots') | default(0) %}
               {%- set defaulted = state_attr(s, 'parity_defaulted_fields') | default({}) %}
               {%- set cfg = state_attr(s, 'config_options') | default({}) %}
 
