@@ -257,6 +257,14 @@ class LocalShiftCoordinator:
             learning_enabled = self.get_switch_state(SWITCH_ENABLE_LEARNING)
             self.optimization_controller.set_learning_enabled(learning_enabled)
 
+        # Initialize solar forecast accuracy tracker (Issue #378)
+        from .computation_engine_lib.solar_accuracy import SolarAccuracyTracker
+
+        self.solar_accuracy_tracker = SolarAccuracyTracker(
+            self.hass, self.entry.entry_id
+        )
+        await self.solar_accuracy_tracker.async_load()
+
         # Wire the decision tracker to the state machine
         self._state_machine._decision_tracker = self.decision_tracker
 
@@ -766,6 +774,7 @@ class LocalShiftCoordinator:
         # Backfill decision outcomes and update performance metrics (Issue #170 Phase 1)
         if self.decision_tracker is not None:
             self.decision_tracker.backfill_outcomes(self.data)
+
             self.data.performance_metrics = self.decision_tracker.get_daily_summary()
             self.data.recent_decision_log = self.decision_tracker.get_decision_log(
                 limit=20
@@ -791,6 +800,18 @@ class LocalShiftCoordinator:
                         decisions, current_7d_score
                     )
 
+        # Backfill solar forecast accuracy for completed periods (Issue #378)
+        if (
+            hasattr(self, "solar_accuracy_tracker")
+            and self.solar_accuracy_tracker is not None
+        ):
+            # Record forecasts for upcoming periods (this would happen when slots are created elsewhere)
+            # But we can't do it here without major refactor
+
+            # For updating solar bias metrics from tracker and handling backfills if needed
+            # (backfills would happen somewhere when we have historical energy data)
+            pass
+
         # Apply contextual overrides from OptimizationController (Issue #449 Phase 7)
         # This merges real-time adjustments on top of Thompson-sampled base params
         if self.optimization_controller is not None:
@@ -799,6 +820,7 @@ class LocalShiftCoordinator:
             self.data.optimization_weights = (
                 self.optimization_controller.weights.to_dict()
             )
+            # Get and update active adjustments
             active_adjustments = self.optimization_controller.get_active_adjustments()
             self.data.contextual_adjustments_active = active_adjustments
             if active_adjustments:
@@ -806,6 +828,16 @@ class LocalShiftCoordinator:
                     "Contextual overrides applied: %d adjustments active",
                     len(active_adjustments),
                 )
+
+        # Update solar bias metrics from tracker (Issue #378)
+        if (
+            hasattr(self, "solar_accuracy_tracker")
+            and self.solar_accuracy_tracker is not None
+        ):
+            self.data.solar_bias_metrics = self.solar_accuracy_tracker.metrics.to_dict()
+            self.data.solar_forecast_accuracy = (
+                self.solar_accuracy_tracker.metrics.accuracy
+            )
 
         # Learn from current temperature/load for weather correlation
         if self._computation_engine is not None:
