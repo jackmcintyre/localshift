@@ -664,6 +664,7 @@ class TestAsyncStop:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="Phase 3 removed _run_shadow_optimizer from coordinator")
 class TestShadowOptimizerConfigPlumbing:
     """Tests that _run_shadow_optimizer passes required config keys.
 

@@ -404,6 +404,9 @@ class TestStartupGracePeriod:
 # =============================================================================
 
 
+@pytest.mark.skip(
+    reason="Phase 3 removed post_compute_func from evaluate_state_machine"
+)
 class TestPostComputeCallback:
     """Tests for the optional post-compute callback hook."""
 
