@@ -9,6 +9,9 @@ from custom_components.localshift.computation_engine_lib.decision_outcome_tracke
     DecisionOutcomeTracker,
     DecisionRecord,
 )
+from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+    PlannerAction,
+)
 from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.coordinator_data import (
     CoordinatorData,
@@ -44,12 +47,12 @@ class TestDecisionRecord:
     """Tests for DecisionRecord dataclass."""
 
     def test_decision_record_creation(self):
-        """Test creating a DecisionRecord."""
+        """Test creating a DecisionRecord (Issue #449: uses PlannerAction)."""
         now = datetime.now()
         record = DecisionRecord(
             timestamp=now,
-            mode_chosen=BatteryMode.GRID_CHARGING,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
             soc_at_decision=50.0,
             general_price_at_decision=0.25,
             feed_in_price_at_decision=0.05,
@@ -64,18 +67,18 @@ class TestDecisionRecord:
         )
 
         assert record.timestamp == now
-        assert record.mode_chosen == BatteryMode.GRID_CHARGING
-        assert record.previous_mode == BatteryMode.SELF_CONSUMPTION
+        assert record.mode_chosen == PlannerAction.CHARGE_GRID_NORMAL
+        assert record.previous_mode == PlannerAction.HOLD
         assert record.soc_at_decision == 50.0
         assert record.outcome_score is None  # Pending
 
     def test_decision_record_to_dict(self):
-        """Test serializing DecisionRecord to dict."""
+        """Test serializing DecisionRecord to dict (Issue #449: DP action strings)."""
         now = datetime.now()
         record = DecisionRecord(
             timestamp=now,
-            mode_chosen=BatteryMode.GRID_CHARGING,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
             soc_at_decision=50.0,
             general_price_at_decision=0.25,
             feed_in_price_at_decision=0.05,
@@ -92,18 +95,49 @@ class TestDecisionRecord:
 
         result = record.to_dict()
 
-        assert result["mode_chosen"] == "grid_charging"
-        assert result["previous_mode"] == "self_consumption"
+        assert result["mode_chosen"] == "charge_grid_normal"
+        assert result["previous_mode"] == "hold"
         assert result["soc_at_decision"] == 50.0
         assert result["outcome_score"] == 0.75
 
-    def test_decision_record_from_dict(self):
-        """Test deserializing DecisionRecord from dict."""
+    def test_decision_record_from_dict_dp_action(self):
+        """Test deserializing DecisionRecord from dict with native DP action strings."""
         now = datetime.now()
         data = {
             "timestamp": now.isoformat(),
-            "mode_chosen": "spike_discharge",
-            "previous_mode": "self_consumption",
+            "mode_chosen": "export_proactive",
+            "previous_mode": "hold",
+            "soc_at_decision": 75.0,
+            "general_price_at_decision": 2.50,
+            "feed_in_price_at_decision": 0.05,
+            "forecast_solar_remaining_kwh": 10.0,
+            "forecast_consumption_remaining_kwh": 8.0,
+            "cheap_price_threshold": 0.10,
+            "battery_target_soc": 80.0,
+            "weather_condition": "cloudy",
+            "day_of_week": 2,
+            "hour_of_day": 18,
+            "is_demand_window": True,
+            "actual_soc_change": -5.0,
+            "duration_minutes": 15.0,
+            "next_mode": "hold",
+            "outcome_score": 0.85,
+        }
+
+        record = DecisionRecord.from_dict(data)
+
+        assert record.mode_chosen == PlannerAction.EXPORT_PROACTIVE
+        assert record.previous_mode == PlannerAction.HOLD
+        assert record.soc_at_decision == 75.0
+        assert record.outcome_score == 0.85
+
+    def test_decision_record_from_dict_legacy_mode(self):
+        """Test deserializing DecisionRecord with legacy BatteryMode strings (backward compat)."""
+        now = datetime.now()
+        data = {
+            "timestamp": now.isoformat(),
+            "mode_chosen": "spike_discharge",  # legacy BatteryMode value
+            "previous_mode": "self_consumption",  # legacy BatteryMode value
             "soc_at_decision": 75.0,
             "general_price_at_decision": 2.50,
             "feed_in_price_at_decision": 0.05,
@@ -123,9 +157,11 @@ class TestDecisionRecord:
 
         record = DecisionRecord.from_dict(data)
 
-        assert record.mode_chosen == BatteryMode.SPIKE_DISCHARGE
+        # Legacy spike_discharge → EXPORT_PROACTIVE
+        assert record.mode_chosen == PlannerAction.EXPORT_PROACTIVE
+        # Legacy self_consumption → HOLD
+        assert record.previous_mode == PlannerAction.HOLD
         assert record.soc_at_decision == 75.0
-        assert record.general_price_at_decision == 2.50
         assert record.outcome_score == 0.85
 
 
@@ -193,10 +229,12 @@ class TestDecisionOutcomeTracker:
         )
 
         assert tracker.pending_count == 1
-        assert tracker._pending_decisions[0].mode_chosen == BatteryMode.GRID_CHARGING
+        # record_decision normalises BatteryMode → PlannerAction
         assert (
-            tracker._pending_decisions[0].previous_mode == BatteryMode.SELF_CONSUMPTION
+            tracker._pending_decisions[0].mode_chosen
+            == PlannerAction.CHARGE_GRID_NORMAL
         )
+        assert tracker._pending_decisions[0].previous_mode == PlannerAction.HOLD
 
     def test_backfill_on_next_decision(self, mock_hass, coordinator_data):
         """Test that backfill happens when next decision is recorded."""
@@ -312,13 +350,13 @@ class TestDecisionOutcomeScoring:
     """Tests for decision outcome scoring logic."""
 
     def test_compute_outcome_score_grid_charging(self, mock_hass, coordinator_data):
-        """Test scoring for grid charging decision."""
+        """Test scoring for grid charging decision (Issue #449: uses PlannerAction)."""
         tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
 
         record = DecisionRecord(
             timestamp=datetime.now(),
-            mode_chosen=BatteryMode.GRID_CHARGING,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
             soc_at_decision=50.0,
             general_price_at_decision=0.10,  # Low price
             feed_in_price_at_decision=0.05,
@@ -339,16 +377,16 @@ class TestDecisionOutcomeScoring:
         # Grid charging at low price should score well
         assert 0.5 <= score <= 1.0
 
-    def test_compute_outcome_score_spike_discharge(self, mock_hass, coordinator_data):
-        """Test scoring for spike discharge decision."""
+    def test_compute_outcome_score_proactive_export(self, mock_hass, coordinator_data):
+        """Test scoring for proactive export decision (Issue #449: uses PlannerAction)."""
         tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
 
         record = DecisionRecord(
             timestamp=datetime.now(),
-            mode_chosen=BatteryMode.SPIKE_DISCHARGE,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
+            mode_chosen=PlannerAction.EXPORT_PROACTIVE,
+            previous_mode=PlannerAction.HOLD,
             soc_at_decision=80.0,
-            general_price_at_decision=2.50,  # High price spike
+            general_price_at_decision=2.50,  # High sell price
             feed_in_price_at_decision=0.05,
             forecast_solar_remaining_kwh=0.0,
             forecast_consumption_remaining_kwh=5.0,
@@ -365,7 +403,7 @@ class TestDecisionOutcomeScoring:
 
         score = tracker.compute_outcome_score(record)
 
-        # Spike discharge during high price should score well
+        # Proactive export during high price should score well
         assert 0.5 <= score <= 1.0
 
     def test_compute_outcome_score_short_duration_penalty(
@@ -377,8 +415,8 @@ class TestDecisionOutcomeScoring:
         # Short duration decision
         record_short = DecisionRecord(
             timestamp=datetime.now(),
-            mode_chosen=BatteryMode.GRID_CHARGING,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
             soc_at_decision=50.0,
             general_price_at_decision=0.10,
             feed_in_price_at_decision=0.05,
@@ -396,8 +434,8 @@ class TestDecisionOutcomeScoring:
         # Long duration decision
         record_long = DecisionRecord(
             timestamp=datetime.now(),
-            mode_chosen=BatteryMode.GRID_CHARGING,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
             soc_at_decision=50.0,
             general_price_at_decision=0.10,
             feed_in_price_at_decision=0.05,

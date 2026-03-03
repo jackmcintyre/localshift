@@ -748,3 +748,157 @@ class TestShadowOptimizerConfigPlumbing:
         assert captured.get(CONF_ALLOW_DW_ENTRY_UNDER_TARGET) is True, (
             "allow_dw_entry_under_target=True in options must propagate to config_options"
         )
+
+
+# =============================================================================
+# MEDIUM TICK OPTIMIZATION CONTROLLER WIRING TESTS (Issue #449 Phase 7)
+# =============================================================================
+
+
+class TestMediumTickOptimizationController:
+    """Tests that _handle_medium_tick() wires OptimizationController.evaluate()
+    correctly (Issue #449 Phase 7).
+
+    Verifies:
+    - evaluate() is called when optimization_controller is set
+    - data.adaptive_params is updated with the returned AdaptiveParameters
+    - data.optimization_weights is populated from controller.weights.to_dict()
+    - data.contextual_adjustments_active is populated from get_active_adjustments()
+    - evaluate() is NOT called when optimization_controller is None
+    """
+
+    @pytest.fixture
+    def coordinator_with_data(self, coordinator, coordinator_data):
+        """Coordinator with data pre-set and minimal mocks for medium tick."""
+        coordinator.data = coordinator_data
+
+        # Stub out methods called before the optimization block so we can run
+        # _handle_medium_tick() without a real HA environment.
+        coordinator._read_all_external_state = MagicMock()
+        coordinator._check_entity_health = MagicMock()
+        coordinator._computation_engine = None
+        coordinator.decision_tracker = None
+
+        return coordinator
+
+    def test_medium_tick_calls_evaluate_when_controller_set(
+        self, coordinator_with_data
+    ):
+        """evaluate() is called on every medium tick when controller is present."""
+        from custom_components.localshift.coordinator_data import AdaptiveParameters
+
+        coordinator = coordinator_with_data
+
+        # Build a fake AdaptiveParameters result
+        returned_params = AdaptiveParameters()
+        returned_params.values["cheap_price_bias"] = 2.5
+
+        # Mock OptimizationController
+        mock_controller = MagicMock()
+        mock_controller.evaluate.return_value = returned_params
+        mock_controller.weights.to_dict.return_value = {
+            "cost_minimization": 0.50,
+            "export_avoidance": 0.20,
+            "target_achievement": 0.20,
+            "cycle_reduction": 0.10,
+        }
+        mock_controller.get_active_adjustments.return_value = []
+
+        coordinator.optimization_controller = mock_controller
+
+        now = datetime(2026, 3, 3, 10, 0, 0)
+        coordinator._handle_medium_tick(now)
+
+        mock_controller.evaluate.assert_called_once_with(coordinator.data)
+
+    def test_medium_tick_updates_adaptive_params(self, coordinator_with_data):
+        """data.adaptive_params is replaced with the result of evaluate()."""
+        from custom_components.localshift.coordinator_data import AdaptiveParameters
+
+        coordinator = coordinator_with_data
+
+        returned_params = AdaptiveParameters()
+        returned_params.values["overnight_drain_safety_margin"] = 5.0
+
+        mock_controller = MagicMock()
+        mock_controller.evaluate.return_value = returned_params
+        mock_controller.weights.to_dict.return_value = {}
+        mock_controller.get_active_adjustments.return_value = []
+
+        coordinator.optimization_controller = mock_controller
+
+        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 5, 0))
+
+        assert coordinator.data.adaptive_params is returned_params
+        assert (
+            coordinator.data.adaptive_params.values["overnight_drain_safety_margin"]
+            == 5.0
+        )
+
+    def test_medium_tick_updates_optimization_weights(self, coordinator_with_data):
+        """data.optimization_weights is populated from weights.to_dict()."""
+        coordinator = coordinator_with_data
+
+        expected_weights = {
+            "cost_minimization": 0.60,
+            "export_avoidance": 0.15,
+            "target_achievement": 0.15,
+            "cycle_reduction": 0.10,
+        }
+
+        from custom_components.localshift.coordinator_data import AdaptiveParameters
+
+        mock_controller = MagicMock()
+        mock_controller.evaluate.return_value = AdaptiveParameters()
+        mock_controller.weights.to_dict.return_value = expected_weights
+        mock_controller.get_active_adjustments.return_value = []
+
+        coordinator.optimization_controller = mock_controller
+
+        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 10, 0))
+
+        assert coordinator.data.optimization_weights == expected_weights
+
+    def test_medium_tick_updates_contextual_adjustments_active(
+        self, coordinator_with_data
+    ):
+        """data.contextual_adjustments_active is populated from get_active_adjustments()."""
+        coordinator = coordinator_with_data
+
+        active_adjustments = [
+            {
+                "param": "cheap_price_bias",
+                "adjustment": 1.5,
+                "reason": "high export rate",
+            }
+        ]
+
+        from custom_components.localshift.coordinator_data import AdaptiveParameters
+
+        mock_controller = MagicMock()
+        mock_controller.evaluate.return_value = AdaptiveParameters()
+        mock_controller.weights.to_dict.return_value = {}
+        mock_controller.get_active_adjustments.return_value = active_adjustments
+
+        coordinator.optimization_controller = mock_controller
+
+        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 15, 0))
+
+        assert coordinator.data.contextual_adjustments_active == active_adjustments
+
+    def test_medium_tick_skips_evaluate_when_no_controller(self, coordinator_with_data):
+        """When optimization_controller is None, no evaluate() call is made and
+        adaptive_params/optimization_weights are unchanged."""
+        coordinator = coordinator_with_data
+        coordinator.optimization_controller = None
+
+        # Set a sentinel on data fields so we can verify nothing changes
+        from custom_components.localshift.coordinator_data import AdaptiveParameters
+
+        original_params = AdaptiveParameters()
+        coordinator.data.adaptive_params = original_params
+
+        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 20, 0))
+
+        # Unchanged – no controller was present
+        assert coordinator.data.adaptive_params is original_params

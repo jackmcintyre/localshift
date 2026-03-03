@@ -791,6 +791,22 @@ class LocalShiftCoordinator:
                         decisions, current_7d_score
                     )
 
+        # Apply contextual overrides from OptimizationController (Issue #449 Phase 7)
+        # This merges real-time adjustments on top of Thompson-sampled base params
+        if self.optimization_controller is not None:
+            self.data.adaptive_params = self.optimization_controller.evaluate(self.data)
+            # Update observability fields for sensors
+            self.data.optimization_weights = (
+                self.optimization_controller.weights.to_dict()
+            )
+            active_adjustments = self.optimization_controller.get_active_adjustments()
+            self.data.contextual_adjustments_active = active_adjustments
+            if active_adjustments:
+                _LOGGER.debug(
+                    "Contextual overrides applied: %d adjustments active",
+                    len(active_adjustments),
+                )
+
         # Learn from current temperature/load for weather correlation
         if self._computation_engine is not None:
             self.hass.async_create_task(
@@ -1212,16 +1228,3 @@ class LocalShiftCoordinator:
             report.data_points_analyzed,
             len(report.biases_detected),
         )
-
-        # Run optimization controller cycle (Issue #170 Phase 4)
-        # This computes contextual adjustments and returns adaptive parameters
-        if self.optimization_controller is not None:
-            # Evaluate returns AdaptiveParameters, which updates the data
-            self.optimization_controller.evaluate(self.data)
-            # Update coordinator data with optimization state
-            self.data.optimization_weights = (
-                self.optimization_controller.weights.to_dict()
-            )
-            self.data.contextual_adjustments_active = (
-                self.optimization_controller.get_active_adjustments()
-            )

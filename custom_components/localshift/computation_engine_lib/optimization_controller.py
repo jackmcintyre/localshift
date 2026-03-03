@@ -618,10 +618,15 @@ class OptimizationController:
 
         # Export score
         if record.actual_export_kwh is not None and record.actual_export_kwh > 0.1:
-            if record.mode_chosen.value in ("proactive_export", "spike_discharge"):
-                # These modes are supposed to export
+            from .optimizer_dp import PlannerAction  # noqa: PLC0415
+
+            if record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
+                # This mode is supposed to export
                 scores["export"] = 0.8
-            elif record.mode_chosen.value == "grid_charging":
+            elif record.mode_chosen in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
                 # Bad: grid charged then exported
                 scores["export"] = 0.2
             else:
