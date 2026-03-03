@@ -352,7 +352,6 @@ def run_scenario(scenario_name: str) -> CoordinatorData:
     Raises:
         FileNotFoundError: If no matching scenario file is found
     """
-    from pathlib import Path  # noqa: PLC0415
 
     scenario_paths = discover_scenarios()
     matching = [p for p in scenario_paths if p.stem == scenario_name]
