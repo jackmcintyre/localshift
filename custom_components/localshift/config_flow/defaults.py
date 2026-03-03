@@ -24,7 +24,6 @@ DEFAULT_ENTITY_IDS: dict[str, str] = {
     "pricing_price_spike": "binary_sensor.amber_price_spike",
     "solcast_forecast_today": "sensor.solcast_forecast_today",
     "solcast_forecast_tomorrow": "sensor.solcast_forecast_tomorrow",
-    "sun_entity": "sun.sun",
     "weather_entity": "",  # No default - user must configure
 }
 

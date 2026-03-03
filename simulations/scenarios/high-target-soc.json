@@ -15,7 +15,6 @@
     "price_spike": false,
     "manual_override": false,
     "target_reached_today": false,
-    "sun_state": "below_horizon",
     "solcast_today": [
       {"period_start": "2026-02-17T00:00:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
       {"period_start": "2026-02-17T00:30:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},

@@ -34,7 +34,6 @@ from ..const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
-    CONF_SUN_ENTITY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -213,10 +212,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_SOLCAST_FORECAST_TOMORROW],
                     "sensor",
                 ),
-                CONF_SUN_ENTITY: (
-                    user_input[CONF_SUN_ENTITY],
-                    "sun",
-                ),
             }
 
             errors = await validate_all_entities(self.hass, entities_to_validate) or {}
@@ -249,7 +244,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SOLCAST_FORECAST_TOMORROW: user_input[
                     CONF_SOLCAST_FORECAST_TOMORROW
                 ],
-                CONF_SUN_ENTITY: user_input[CONF_SUN_ENTITY],
             }
             # Set default options (includes notify_service for configurability)
             options = {

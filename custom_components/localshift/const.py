@@ -112,9 +112,6 @@ CONF_SOLCAST_FORECAST_TOMORROW = "solcast_forecast_tomorrow"
 # Notification service
 CONF_NOTIFY_SERVICE = "notify_service"
 
-# Sun entity (for solar export hold logic)
-CONF_SUN_ENTITY = "sun_entity"
-
 # Weather entity (for temperature-based consumption prediction)
 CONF_WEATHER_ENTITY = "weather_entity"
 DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
@@ -154,7 +151,6 @@ DEFAULT_ENTITY_IDS = {
     CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
-    CONF_SUN_ENTITY: "sun.sun",
     CONF_WEATHER_ENTITY: DEFAULT_WEATHER_ENTITY,
 }
 
