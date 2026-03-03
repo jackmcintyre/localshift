@@ -1,10 +1,10 @@
 """
-tests/test_optimizer_scaffold.py — Phase 1 scaffolding tests for #403.
+tests/test_optimizer_scaffold.py — Scaffolding tests for DP optimizer.
 
-Tests that the DP optimizer skeleton, planner comparator, and shadow runner
-can all be imported and produce valid output structures without errors.
+Phase 6 (#448): Removed PlannerComparator tests (module deleted) and
+rollout-constants tests (CONF_OPTIMIZER_ENABLED etc. removed).
 
-These tests run ENTIRELY OFFLINE — no Home Assistant or Solcast data required.
+Tests run ENTIRELY OFFLINE — no Home Assistant or Solcast data required.
 """
 
 from __future__ import annotations
@@ -21,18 +21,6 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     PlannerAction,
     PlannerReasonCode,
     SlotContext,
-)
-from custom_components.localshift.computation_engine_lib.planner_comparator import (
-    MismatchType,
-    PlannerComparator,
-    SlotMismatch,
-)
-from custom_components.localshift.const import (
-    CONF_OPTIMIZER_CONTROL_MODE,
-    CONF_OPTIMIZER_ENABLED,
-    DEFAULT_OPTIMIZER_CONTROL_MODE,
-    DEFAULT_OPTIMIZER_ENABLED,
-    OPTIMIZER_CONTROL_MODES,
 )
 
 # ---------------------------------------------------------------------------
@@ -266,162 +254,6 @@ def test_objective_terms_to_dict():
 
 
 # ---------------------------------------------------------------------------
-# PlannerComparator tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def hold_result(default_config, single_slot) -> OptimizerResult:
-    inputs = OptimizerInputs(
-        cycle_id="cmp-single",
-        initial_soc_pct=55.0,
-        slots=[single_slot],
-        config=default_config,
-    )
-    return DPPlanner().plan(inputs)
-
-
-def test_comparator_detects_action_mismatch_correctly(hold_result):
-    """Comparator correctly identifies when legacy and optimizer disagree."""
-    # Legacy says "hold" (all flags False)
-    legacy_slots = [
-        {
-            "slot_index": 0,
-            "timestamp_iso": "2026-01-03T10:00:00",
-            "slot_interval_minutes": 30,
-            "grid_charge": False,
-            "grid_charge_boost": False,
-            "proactive_export": False,
-        }
-    ]
-    comp = PlannerComparator()
-    record = comp.compare(
-        cycle_id="mismatch-check",
-        cycle_timestamp_iso="2026-01-03T10:00:00",
-        legacy_slots=legacy_slots,
-        optimizer_decisions=hold_result.decisions,
-    )
-    assert record.comparison_succeeded
-    # The DP solver may choose a different action than legacy hold
-    # The key guarantee is that the comparator correctly detects this
-    assert record.aligned_slots == 1
-    # If optimizer chose HOLD, mismatch_count=0; otherwise mismatch_count=1
-    # Both are valid outcomes - we just verify comparison works
-
-
-def test_comparator_detects_action_mismatch(default_config, single_slot, hold_result):
-    """Legacy says charge, optimizer says hold → ACTION_MISMATCH."""
-    legacy_slots = [
-        {
-            "slot_index": 0,
-            "timestamp_iso": "2026-01-03T10:00:00",
-            "slot_interval_minutes": 30,
-            "grid_charge": True,  # legacy charges
-            "grid_charge_boost": False,
-            "proactive_export": False,
-        }
-    ]
-    comp = PlannerComparator()
-    record = comp.compare(
-        cycle_id="mismatch-test",
-        cycle_timestamp_iso="2026-01-03T10:00:00",
-        legacy_slots=legacy_slots,
-        optimizer_decisions=hold_result.decisions,
-    )
-    assert record.comparison_succeeded
-    assert record.mismatch_count == 1
-    assert record.mismatch_by_type.get(MismatchType.ACTION_MISMATCH.value, 0) == 1
-
-
-def test_comparator_to_dict_complete(hold_result):
-    legacy_slots = [{"grid_charge": False, "proactive_export": False}]
-    comp = PlannerComparator()
-    record = comp.compare(
-        cycle_id="dict-test",
-        cycle_timestamp_iso="2026-01-03T10:00:00",
-        legacy_slots=legacy_slots,
-        optimizer_decisions=hold_result.decisions,
-    )
-    d = record.to_dict()
-    required_keys = [
-        "cycle_id",
-        "total_slots",
-        "aligned_slots",
-        "mismatch_count",
-        "net_cost_delta",
-        "comparison_succeeded",
-    ]
-    for key in required_keys:
-        assert key in d, f"Missing key in to_dict(): {key}"
-
-
-def test_comparator_cost_deltas(hold_result):
-    comp = PlannerComparator()
-    record = comp.compare(
-        cycle_id="delta-test",
-        cycle_timestamp_iso="2026-01-03T10:00:00",
-        legacy_slots=[{"grid_charge": False, "proactive_export": False}],
-        optimizer_decisions=hold_result.decisions,
-        legacy_projected_net_cost=1.50,
-        optimizer_projected_net_cost=1.20,
-    )
-    assert record.net_cost_delta == pytest.approx(1.20 - 1.50)
-    assert record.import_kwh_delta == pytest.approx(0.0)  # defaults
-
-
-def test_comparator_handles_empty_slots():
-    comp = PlannerComparator()
-    record = comp.compare(
-        cycle_id="empty-both",
-        cycle_timestamp_iso="2026-01-03T10:00:00",
-        legacy_slots=[],
-        optimizer_decisions=[],
-    )
-    assert record.comparison_succeeded
-    assert record.total_slots == 0
-    assert record.mismatch_count == 0
-
-
-# ---------------------------------------------------------------------------
-# SlotMismatch
-# ---------------------------------------------------------------------------
-
-
-def test_slot_mismatch_to_dict():
-    m = SlotMismatch(
-        slot_index=3,
-        timestamp_iso="2026-01-03T11:30:00",
-        slot_interval_minutes=30,
-        mismatch_type=MismatchType.ACTION_MISMATCH,
-        legacy_action="charge_grid_normal",
-        optimizer_action="hold",
-    )
-    d = m.to_dict()
-    assert d["slot_index"] == 3
-    assert d["mismatch_type"] == "ACTION_MISMATCH"
-    assert d["legacy_action"] == "charge_grid_normal"
-    assert d["optimizer_action"] == "hold"
-
-
-# ---------------------------------------------------------------------------
-# Rollout config constants
-# ---------------------------------------------------------------------------
-
-
-def test_rollout_constants_defaults():
-    assert DEFAULT_OPTIMIZER_ENABLED is False
-    assert DEFAULT_OPTIMIZER_CONTROL_MODE == "shadow"
-    assert "shadow" in OPTIMIZER_CONTROL_MODES
-    assert "assist" in OPTIMIZER_CONTROL_MODES
-    assert "active" in OPTIMIZER_CONTROL_MODES  # Phase F release
-
-
-def test_rollout_constants_keys():
-    assert CONF_OPTIMIZER_ENABLED == "optimizer_enabled"
-    assert CONF_OPTIMIZER_CONTROL_MODE == "optimizer_control_mode"
-
-
-# ---------------------------------------------------------------------------
 # Phase A acceptance tests — determinism, no-actuation, fallback, timing
 # ---------------------------------------------------------------------------
 
@@ -502,21 +334,18 @@ def test_dp_planner_runtime_budget(default_config, multi_slots):
     assert p95 <= 0.200, f"p95 solve time {p95 * 1000:.1f}ms exceeds 200ms budget"
 
 
-def test_shadow_mode_no_actuation():
-    """Phase A acceptance: shadow execution makes zero calls to battery/state-machine actuation.
+def test_optimizer_no_actuation():
+    """Phase 6 acceptance: optimizer execution makes zero calls to battery/state-machine actuation.
 
-    This validates the non-invasive guarantee - shadow mode produces only
-    telemetry mutations, never actual control commands.
+    The optimizer runner produces only data mutations, never actual control commands.
     """
     from dataclasses import dataclass, field
     from typing import Any
 
-    # Import the shadow runner
-    from custom_components.localshift.computation_engine_lib.optimizer_shadow_runner import (
-        run_shadow_optimizer,
+    from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+        run_optimizer,
     )
 
-    # Create a minimal CoordinatorData-like object
     @dataclass
     class MockCoordinatorData:
         soc: float = 50.0
@@ -528,7 +357,6 @@ def test_shadow_mode_no_actuation():
         forecast_import_cost: float = 0.0
         forecast_export_revenue: float = 0.0
 
-    # Create mock data with one slot
     data = MockCoordinatorData(
         daily_forecast=[
             {
@@ -542,36 +370,26 @@ def test_shadow_mode_no_actuation():
         ]
     )
 
-    # Config with optimizer enabled
-    config_options = {"optimizer_enabled": True}
-
-    # Run shadow optimizer - it should NOT call any battery/state-machine methods
-    # The function mutates data in-place and returns None
-    run_shadow_optimizer(data, config_options)
+    # Run optimizer — should NOT call any battery/state-machine methods
+    run_optimizer(data, {})
 
     # Verify result was produced (mutation on data)
     assert data.optimizer_summary is not None
     assert data.optimizer_summary.get("enabled") is True
 
-    # The key guarantee: shadow mode only writes to shadow_* fields
-    # It never calls battery_controller or state_machine methods
-    # (Those modules are never imported by the shadow runner)
 
+def test_optimizer_failure_fallback(default_config):
+    """Phase 6 acceptance: optimizer exceptions never block coordinator completion.
 
-def test_shadow_failure_fallback(default_config):
-    """Phase A acceptance: shadow exceptions never block coordinator completion.
-
-    When the shadow optimizer fails, the legacy planner remains authoritative
-    and the error state is captured in telemetry.
+    Error state is captured in telemetry without propagating.
     """
     from dataclasses import dataclass, field
     from typing import Any
 
-    from custom_components.localshift.computation_engine_lib.optimizer_shadow_runner import (
-        run_shadow_optimizer,
+    from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+        run_optimizer,
     )
 
-    # Create a minimal CoordinatorData-like object with empty slots
     @dataclass
     class MockCoordinatorData:
         soc: float = 50.0
@@ -583,35 +401,32 @@ def test_shadow_failure_fallback(default_config):
         forecast_import_cost: float = 0.0
         forecast_export_revenue: float = 0.0
 
-    # Empty slots case - should handle gracefully
+    # Empty slots — should handle gracefully
     data = MockCoordinatorData(daily_forecast=[])
-    config_options = {"optimizer_enabled": True}
 
-    # Run shadow optimizer - should not raise, even with empty slots
-    run_shadow_optimizer(data, config_options)
+    # Should not raise, even with empty slots
+    run_optimizer(data, {})
 
     # Verify error state is captured in summary
     assert data.optimizer_summary is not None
-    # Empty slots results in success=False with error_message
     assert data.optimizer_summary.get("success") is False
     assert "error_message" in data.optimizer_summary
 
 
-def test_shadow_result_serialization_safe(default_config, multi_slots):
-    """Phase A acceptance: shadow result is JSON-serializable for HA state attributes.
+def test_optimizer_result_serialization_safe(default_config, multi_slots):
+    """Phase 6 acceptance: optimizer result is JSON-serializable for HA state attributes.
 
-    All shadow output fields must be serializable to JSON for storage in
+    All output fields must be serializable to JSON for storage in
     CoordinatorData and exposure via sensor attributes.
     """
     import json
     from dataclasses import dataclass, field
     from typing import Any
 
-    from custom_components.localshift.computation_engine_lib.optimizer_shadow_runner import (
-        run_shadow_optimizer,
+    from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+        run_optimizer,
     )
 
-    # Create a minimal CoordinatorData-like object
     @dataclass
     class MockCoordinatorData:
         soc: float = 50.0
@@ -623,7 +438,6 @@ def test_shadow_result_serialization_safe(default_config, multi_slots):
         forecast_import_cost: float = 0.0
         forecast_export_revenue: float = 0.0
 
-    # Create mock data with 48 slots (full day)
     data = MockCoordinatorData(
         daily_forecast=[
             {
@@ -637,23 +451,17 @@ def test_shadow_result_serialization_safe(default_config, multi_slots):
             for i in range(48)
         ]
     )
-    config_options = {"optimizer_enabled": True}
 
-    # Run shadow optimizer
-    run_shadow_optimizer(data, config_options)
+    run_optimizer(data, {})
 
-    # Attempt to serialize all output fields to JSON
-    # This will raise TypeError if any values are not JSON-compatible
     try:
-        # Serialize summary
         json_str = json.dumps(data.optimizer_summary)
         parsed = json.loads(json_str)
         assert parsed is not None
 
-        # Serialize decisions
         json_str = json.dumps(data.optimizer_decisions)
         parsed = json.loads(json_str)
         assert isinstance(parsed, list)
 
     except (TypeError, ValueError) as e:
-        pytest.fail(f"Shadow result is not JSON-serializable: {e}")
+        pytest.fail(f"Optimizer result is not JSON-serializable: {e}")

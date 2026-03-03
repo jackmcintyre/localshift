@@ -1,4 +1,4 @@
-"""Tests for shadow runner adapter parity (Phase B #403).
+"""Tests for optimizer runner adapter parity (Phase 6 #448 rename from shadow_runner).
 
 Validates that the adapter layer correctly converts legacy coordinator data
 into OptimizerInputs with proper field mapping:
@@ -11,12 +11,12 @@ into OptimizerInputs with proper field mapping:
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.optimizer_shadow_runner import (
+from custom_components.localshift.computation_engine_lib.optimizer_runner import (
     _build_optimizer_config,
     _build_summary,
     _normalize_initial_soc,
     _validate_slot_alignment,
-    run_shadow_optimizer,
+    run_optimizer,
 )
 
 # ---------------------------------------------------------------------------
@@ -33,11 +33,66 @@ def mock_coordinator_data():
             self.soc = 65.0
             self.general_price = 0.26
             self.effective_cheap_price = 0.12
-            self.general_forecast = [{'start_time': '2026-03-02T22:12:00', 'per_kwh': 0.1}, {'start_time': '2026-03-02T22:27:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-02T22:42:00', 'per_kwh': 0.14}, {'start_time': '2026-03-02T22:57:00', 'per_kwh': 0.16}, {'start_time': '2026-03-02T23:12:00', 'per_kwh': 0.18}, {'start_time': '2026-03-02T23:27:00', 'per_kwh': 0.2}, {'start_time': '2026-03-02T23:42:00', 'per_kwh': 0.22}, {'start_time': '2026-03-02T23:57:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T00:12:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T00:27:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T00:42:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T00:57:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T01:12:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T01:27:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T01:42:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T01:57:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T02:12:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T02:27:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T02:42:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T02:57:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T03:12:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T03:27:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T03:42:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T03:57:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T04:12:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T04:27:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T04:42:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T04:57:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T05:12:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T05:27:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T05:42:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T05:57:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T06:12:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T06:27:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T06:42:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T06:57:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T07:12:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T07:27:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T07:42:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T07:57:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T08:12:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T08:27:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T08:42:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T08:57:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T09:12:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T09:27:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T09:42:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T09:57:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T10:12:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T10:27:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T10:42:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T10:57:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T11:12:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T11:27:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T11:42:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T11:57:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T12:12:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T12:27:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T12:42:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T12:57:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T13:12:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T13:27:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T13:42:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T13:57:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T14:12:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T14:27:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T14:42:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T14:57:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T15:12:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T15:27:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T15:42:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T15:57:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T16:12:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T16:27:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T16:42:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T16:57:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T17:12:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T17:27:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T17:42:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T17:57:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T18:12:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T18:27:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T18:42:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T18:57:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T19:12:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T19:27:00', 'per_kwh': 0.2}, {'start_time': '2026-03-03T19:42:00', 'per_kwh': 0.22}, {'start_time': '2026-03-03T19:57:00', 'per_kwh': 0.24000000000000002}, {'start_time': '2026-03-03T20:12:00', 'per_kwh': 0.26}, {'start_time': '2026-03-03T20:27:00', 'per_kwh': 0.28}, {'start_time': '2026-03-03T20:42:00', 'per_kwh': 0.1}, {'start_time': '2026-03-03T20:57:00', 'per_kwh': 0.12000000000000001}, {'start_time': '2026-03-03T21:12:00', 'per_kwh': 0.14}, {'start_time': '2026-03-03T21:27:00', 'per_kwh': 0.16}, {'start_time': '2026-03-03T21:42:00', 'per_kwh': 0.18}, {'start_time': '2026-03-03T21:57:00', 'per_kwh': 0.2}]
-            self.feed_in_forecast = [{'start_time': '2026-03-02T22:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T22:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T22:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T22:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T23:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T23:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T23:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-02T23:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T00:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T00:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T00:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T00:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T01:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T01:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T01:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T01:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T02:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T02:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T02:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T02:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T03:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T03:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T03:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T03:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T04:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T04:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T04:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T04:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T05:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T05:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T05:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T05:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T06:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T06:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T06:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T06:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T07:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T07:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T07:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T07:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T08:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T08:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T08:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T08:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T09:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T09:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T09:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T09:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T10:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T10:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T10:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T10:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T11:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T11:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T11:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T11:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T12:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T12:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T12:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T12:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T13:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T13:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T13:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T13:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T14:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T14:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T14:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T14:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T15:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T15:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T15:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T15:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T16:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T16:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T16:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T16:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T17:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T17:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T17:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T17:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T18:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T18:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T18:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T18:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T19:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T19:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T19:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T19:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T20:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T20:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T20:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T20:57:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T21:12:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T21:27:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T21:42:00', 'per_kwh': 0.05}, {'start_time': '2026-03-03T21:57:00', 'per_kwh': 0.05}]
-            self.solcast_today = [{'period_end': '2026-03-02T22:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-02T22:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-02T23:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-02T23:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T00:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T00:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T01:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T01:42:00', 'pv_estimate': 0.19999999999999996}, {'period_end': '2026-03-03T02:12:00', 'pv_estimate': 0.3999999999999999}, {'period_end': '2026-03-03T02:42:00', 'pv_estimate': 0.5999999999999999}, {'period_end': '2026-03-03T03:12:00', 'pv_estimate': 0.7999999999999998}, {'period_end': '2026-03-03T03:42:00', 'pv_estimate': 1.0}, {'period_end': '2026-03-03T04:12:00', 'pv_estimate': 1.2}, {'period_end': '2026-03-03T04:42:00', 'pv_estimate': 1.4}, {'period_end': '2026-03-03T05:12:00', 'pv_estimate': 1.6}, {'period_end': '2026-03-03T05:42:00', 'pv_estimate': 1.8}, {'period_end': '2026-03-03T06:12:00', 'pv_estimate': 2.0}, {'period_end': '2026-03-03T06:42:00', 'pv_estimate': 1.8}, {'period_end': '2026-03-03T07:12:00', 'pv_estimate': 1.6}, {'period_end': '2026-03-03T07:42:00', 'pv_estimate': 1.4}, {'period_end': '2026-03-03T08:12:00', 'pv_estimate': 1.2}, {'period_end': '2026-03-03T08:42:00', 'pv_estimate': 1.0}, {'period_end': '2026-03-03T09:12:00', 'pv_estimate': 0.7999999999999998}, {'period_end': '2026-03-03T09:42:00', 'pv_estimate': 0.5999999999999999}, {'period_end': '2026-03-03T10:12:00', 'pv_estimate': 0.3999999999999999}, {'period_end': '2026-03-03T10:42:00', 'pv_estimate': 0.19999999999999996}, {'period_end': '2026-03-03T11:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T11:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T12:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T12:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T13:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T13:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T14:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T14:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T15:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T15:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T16:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T16:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T17:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T17:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T18:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T18:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T19:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T19:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T20:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T20:42:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T21:12:00', 'pv_estimate': 0}, {'period_end': '2026-03-03T21:42:00', 'pv_estimate': 0}]
+            self.general_forecast = [
+                {"start_time": "2026-03-02T22:12:00", "per_kwh": 0.1},
+                {"start_time": "2026-03-02T22:27:00", "per_kwh": 0.12000000000000001},
+                {"start_time": "2026-03-02T22:42:00", "per_kwh": 0.14},
+                {"start_time": "2026-03-02T22:57:00", "per_kwh": 0.16},
+                {"start_time": "2026-03-02T23:12:00", "per_kwh": 0.18},
+                {"start_time": "2026-03-02T23:27:00", "per_kwh": 0.2},
+                {"start_time": "2026-03-02T23:42:00", "per_kwh": 0.22},
+                {"start_time": "2026-03-02T23:57:00", "per_kwh": 0.24000000000000002},
+                {"start_time": "2026-03-03T00:12:00", "per_kwh": 0.26},
+                {"start_time": "2026-03-03T00:27:00", "per_kwh": 0.28},
+                {"start_time": "2026-03-03T00:42:00", "per_kwh": 0.1},
+                {"start_time": "2026-03-03T00:57:00", "per_kwh": 0.12000000000000001},
+                {"start_time": "2026-03-03T01:12:00", "per_kwh": 0.14},
+                {"start_time": "2026-03-03T01:27:00", "per_kwh": 0.16},
+                {"start_time": "2026-03-03T01:42:00", "per_kwh": 0.18},
+                {"start_time": "2026-03-03T01:57:00", "per_kwh": 0.2},
+                {"start_time": "2026-03-03T02:12:00", "per_kwh": 0.22},
+                {"start_time": "2026-03-03T02:27:00", "per_kwh": 0.24000000000000002},
+                {"start_time": "2026-03-03T02:42:00", "per_kwh": 0.26},
+                {"start_time": "2026-03-03T02:57:00", "per_kwh": 0.28},
+                {"start_time": "2026-03-03T03:12:00", "per_kwh": 0.1},
+                {"start_time": "2026-03-03T03:27:00", "per_kwh": 0.12000000000000001},
+                {"start_time": "2026-03-03T03:42:00", "per_kwh": 0.14},
+                {"start_time": "2026-03-03T03:57:00", "per_kwh": 0.16},
+                {"start_time": "2026-03-03T04:12:00", "per_kwh": 0.18},
+                {"start_time": "2026-03-03T04:27:00", "per_kwh": 0.2},
+                {"start_time": "2026-03-03T04:42:00", "per_kwh": 0.22},
+                {"start_time": "2026-03-03T04:57:00", "per_kwh": 0.24000000000000002},
+                {"start_time": "2026-03-03T05:12:00", "per_kwh": 0.26},
+                {"start_time": "2026-03-03T05:27:00", "per_kwh": 0.28},
+                {"start_time": "2026-03-03T05:42:00", "per_kwh": 0.1},
+                {"start_time": "2026-03-03T05:57:00", "per_kwh": 0.12000000000000001},
+                {"start_time": "2026-03-03T06:12:00", "per_kwh": 0.14},
+            ]  # noqa: E501
+            self.feed_in_forecast = [
+                {"start_time": "2026-03-02T22:12:00", "per_kwh": 0.05}
+            ]  # noqa: E501
+            self.solcast_today = [
+                {"period_end": "2026-03-02T22:12:00", "pv_estimate": 0},
+                {"period_end": "2026-03-02T22:42:00", "pv_estimate": 0},
+                {"period_end": "2026-03-02T23:12:00", "pv_estimate": 0},
+                {"period_end": "2026-03-02T23:42:00", "pv_estimate": 0},
+                {"period_end": "2026-03-03T00:12:00", "pv_estimate": 0},
+                {"period_end": "2026-03-03T00:42:00", "pv_estimate": 0},
+                {"period_end": "2026-03-03T01:12:00", "pv_estimate": 0},
+                {"period_end": "2026-03-03T01:42:00", "pv_estimate": 0.2},
+                {"period_end": "2026-03-03T02:12:00", "pv_estimate": 0.4},
+                {"period_end": "2026-03-03T02:42:00", "pv_estimate": 0.6},
+                {"period_end": "2026-03-03T03:12:00", "pv_estimate": 0.8},
+                {"period_end": "2026-03-03T03:42:00", "pv_estimate": 1.0},
+                {"period_end": "2026-03-03T04:12:00", "pv_estimate": 1.2},
+                {"period_end": "2026-03-03T04:42:00", "pv_estimate": 1.4},
+                {"period_end": "2026-03-03T05:12:00", "pv_estimate": 1.6},
+                {"period_end": "2026-03-03T05:42:00", "pv_estimate": 1.8},
+                {"period_end": "2026-03-03T06:12:00", "pv_estimate": 2.0},
+                {"period_end": "2026-03-03T06:42:00", "pv_estimate": 1.8},
+            ]  # noqa: E501
             self.solcast_tomorrow = []
-            self.load_forecast_slots = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2000000000000002, 1.3, 1.4, 1.5, 1.6, 1.7000000000000002, 1.8, 1.9000000000000001, 2.0, 2.1, 2.2, 2.3, 2.4000000000000004, 2.5, 2.6, 2.7, 2.8000000000000003, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2000000000000002, 1.3, 1.4, 1.5, 1.6, 1.7000000000000002, 1.8, 1.9000000000000001, 2.0, 2.1, 2.2, 2.3, 2.4000000000000004, 2.5, 2.6, 2.7, 2.8000000000000003, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2000000000000002, 1.3, 1.4, 1.5, 1.6, 1.7000000000000002, 1.8, 1.9000000000000001, 2.0, 2.1, 2.2, 2.3, 2.4000000000000004, 2.5, 2.6, 2.7, 2.8000000000000003, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2000000000000002, 1.3, 1.4, 1.5, 1.6, 1.7000000000000002, 1.8, 1.9000000000000001, 2.0, 2.1, 2.2, 2.3, 2.4000000000000004, 2.5, 2.6, 2.7, 2.8000000000000003]
+            self.load_forecast_slots = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
             self.adaptive_params = None
             self.daily_forecast = [
                 {
@@ -74,10 +129,9 @@ def mock_coordinator_data():
                     "price_source": "5min",
                 },
             ]
-            self.optimizer_shadow_summary = None
-            self.optimizer_shadow_result = None
-            self.optimizer_shadow_decisions = None
-            self.optimizer_comparison = None
+            self.optimizer_summary = None
+            self.optimizer_result = None
+            self.optimizer_decisions = None
 
     return MockData()
 
@@ -213,15 +267,16 @@ class TestBuildOptimizerConfig:
 
 # DEPRECATED: Phase 2 (#444) replaced _build_slot_contexts with SlotBuilder
 # Tests moved to tests/test_slot_builder.py
-# DEPRECATED: Phase 2 (#444) - _build_slot_contexts replaced by SlotBuilder
-# Tests moved to tests/test_slot_builder.py
+
 
 class TestParityCompleteness:
     """Tests for parity completeness tracking."""
 
     def test_completeness_100_when_all_fields_present(self, mock_coordinator_data):
         """Verify 100% completeness when all fields populated."""
-        _, parity_info = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        _, parity_info = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         assert parity_info["completeness_pct"] == 100.0
         assert parity_info["defaulted_fields"] == {}
 
@@ -231,14 +286,18 @@ class TestParityCompleteness:
         mock_coordinator_data.daily_forecast[0].pop("buy_price", None)
         mock_coordinator_data.daily_forecast[0].pop("general_price", None)
 
-        _, parity_info = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        _, parity_info = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         assert parity_info["completeness_pct"] < 100.0
         assert "buy_price" in parity_info["defaulted_fields"]
         assert parity_info["defaulted_fields"]["buy_price"] == 1
 
     def test_total_fields_checked(self, mock_coordinator_data):
         """Verify total_fields_checked is correct."""
-        _, parity_info = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        _, parity_info = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         # 4 fields checked per slot: buy_price, sell_price, solar_kwh, consumption_kwh
         expected = 4 * len(mock_coordinator_data.daily_forecast)
         assert parity_info["total_fields_checked"] == expected
@@ -254,7 +313,9 @@ class TestValidateSlotAlignment:
 
     def test_valid_when_aligned(self, mock_coordinator_data):
         """Verify validation passes for properly aligned data."""
-        contexts, _ = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        contexts, _ = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         result = _validate_slot_alignment(
             mock_coordinator_data.daily_forecast, contexts
         )
@@ -263,7 +324,9 @@ class TestValidateSlotAlignment:
 
     def test_detects_count_mismatch(self, mock_coordinator_data):
         """Verify detection of slot count mismatch."""
-        contexts, _ = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        contexts, _ = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         # Remove one context to create mismatch
         contexts = contexts[:-1]
         result = _validate_slot_alignment(
@@ -274,7 +337,9 @@ class TestValidateSlotAlignment:
 
     def test_detects_index_mismatch(self, mock_coordinator_data):
         """Verify detection of slot index mismatch."""
-        contexts, _ = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        contexts, _ = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         # Corrupt slot_index
         contexts[0].slot_index = 99
         result = _validate_slot_alignment(
@@ -286,7 +351,9 @@ class TestValidateSlotAlignment:
     def test_warns_on_missing_timestamp(self, mock_coordinator_data):
         """Verify warning for missing timestamp."""
         mock_coordinator_data.daily_forecast[0]["timestamp_iso"] = ""
-        contexts, _ = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        contexts, _ = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         result = _validate_slot_alignment(
             mock_coordinator_data.daily_forecast, contexts
         )
@@ -295,7 +362,9 @@ class TestValidateSlotAlignment:
     def test_warns_on_negative_price(self, mock_coordinator_data):
         """Verify warning for negative buy price."""
         mock_coordinator_data.daily_forecast[0]["buy_price"] = -0.10
-        contexts, _ = pytest.skip("Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder")
+        contexts, _ = pytest.skip(
+            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
+        )
         result = _validate_slot_alignment(
             mock_coordinator_data.daily_forecast, contexts
         )
@@ -408,41 +477,36 @@ class TestNormalizeInitialSoc:
 
 
 # ---------------------------------------------------------------------------
-# Test: Full shadow run integration
+# Test: Full optimizer run integration
 # ---------------------------------------------------------------------------
 
 
-class TestRunShadowOptimizer:
-    """Integration tests for run_shadow_optimizer entry point."""
+class TestRunOptimizer:
+    """Integration tests for run_optimizer entry point."""
 
     @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_disabled_optimizer_writes_summary(self, mock_coordinator_data):
-        """Verify disabled optimizer writes minimal summary."""
-        config = {"optimizer_enabled": False}
-        run_shadow_optimizer(mock_coordinator_data, config)
+    def test_optimizer_writes_summary(self, mock_coordinator_data):
+        """Verify optimizer writes summary after run."""
+        run_optimizer(mock_coordinator_data, {})
 
-        assert mock_coordinator_data.optimizer_shadow_summary is not None
-        assert mock_coordinator_data.optimizer_shadow_summary["enabled"] is False
+        assert mock_coordinator_data.optimizer_summary is not None
+        assert mock_coordinator_data.optimizer_summary["enabled"] is True
 
     @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_enabled_optimizer_writes_results(
-        self, mock_coordinator_data, config_options
-    ):
-        """Verify enabled optimizer writes full results."""
-        config_options["optimizer_enabled"] = True
-        run_shadow_optimizer(mock_coordinator_data, config_options)
+    def test_optimizer_writes_results(self, mock_coordinator_data, config_options):
+        """Verify optimizer writes full results."""
+        run_optimizer(mock_coordinator_data, config_options)
 
-        assert mock_coordinator_data.optimizer_shadow_summary is not None
-        assert mock_coordinator_data.optimizer_shadow_result is not None
-        assert mock_coordinator_data.optimizer_shadow_decisions is not None
+        assert mock_coordinator_data.optimizer_summary is not None
+        assert mock_coordinator_data.optimizer_result is not None
+        assert mock_coordinator_data.optimizer_decisions is not None
 
     @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
     def test_summary_includes_parity_info(self, mock_coordinator_data, config_options):
         """Verify parity info in summary after run."""
-        config_options["optimizer_enabled"] = True
-        run_shadow_optimizer(mock_coordinator_data, config_options)
+        run_optimizer(mock_coordinator_data, config_options)
 
-        summary = mock_coordinator_data.optimizer_shadow_summary
+        summary = mock_coordinator_data.optimizer_summary
         assert "parity_completeness_pct" in summary
         assert "alignment_valid" in summary
 
@@ -453,17 +517,17 @@ class TestRunShadowOptimizer:
         class EmptyData:
             def __init__(self):
                 self.soc = 50.0
-                self.daily_forecast = []
+                self.daily_forecast: list = []
+                self.optimizer_summary: dict | None = None
+                self.optimizer_result: dict | None = None
+                self.optimizer_decisions: list = []
 
         empty_data = EmptyData()
-        config_options["optimizer_enabled"] = True
-        run_shadow_optimizer(empty_data, config_options)
+        run_optimizer(empty_data, config_options)
 
-        assert empty_data.optimizer_shadow_summary is not None
-        assert empty_data.optimizer_shadow_summary["success"] is False
-        assert (
-            "no_slots_available" in empty_data.optimizer_shadow_summary["error_message"]
-        )
+        assert empty_data.optimizer_summary is not None
+        assert empty_data.optimizer_summary["success"] is False
+        assert "no_slots_available" in empty_data.optimizer_summary["error_message"]
 
     @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
     def test_invalid_initial_soc_sets_error_summary(self, config_options):
@@ -482,12 +546,14 @@ class TestRunShadowOptimizer:
                         "consumption_kwh": 1.2,
                     }
                 ]
+                self.optimizer_summary: dict | None = None
+                self.optimizer_result: dict | None = None
+                self.optimizer_decisions: list = []
 
         data = InvalidSocData()
-        config_options["optimizer_enabled"] = True
-        run_shadow_optimizer(data, config_options)
+        run_optimizer(data, config_options)
 
-        assert data.optimizer_shadow_summary is not None
-        assert data.optimizer_shadow_summary["success"] is False
-        assert data.optimizer_shadow_summary["error_message"] == "invalid_initial_soc"
-        assert "initial_soc_info" in data.optimizer_shadow_summary
+        assert data.optimizer_summary is not None
+        assert data.optimizer_summary["success"] is False
+        assert data.optimizer_summary["error_message"] == "invalid_initial_soc"
+        assert "initial_soc_info" in data.optimizer_summary

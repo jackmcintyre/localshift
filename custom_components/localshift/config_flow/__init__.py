@@ -27,8 +27,6 @@ from ..const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
-    CONF_OPTIMIZER_CONTROL_MODE,
-    CONF_OPTIMIZER_ENABLED,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -58,8 +56,6 @@ from ..const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
-    DEFAULT_OPTIMIZER_CONTROL_MODE,
-    DEFAULT_OPTIMIZER_ENABLED,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
@@ -273,9 +269,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_WEATHER_ENTITY, DEFAULT_WEATHER_ENTITY
                 ),
                 CONF_WEATHER_LEARNING_ENABLED: DEFAULT_WEATHER_LEARNING_ENABLED,
-                # Optimizer options (Issue #403)
-                CONF_OPTIMIZER_ENABLED: DEFAULT_OPTIMIZER_ENABLED,
-                CONF_OPTIMIZER_CONTROL_MODE: DEFAULT_OPTIMIZER_CONTROL_MODE,
             }
 
             return self.async_create_entry(
@@ -390,15 +383,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     CONF_EXPORT_PRICE_MARGIN: current.get(
                         CONF_EXPORT_PRICE_MARGIN,
                         DEFAULT_EXPORT_PRICE_MARGIN,
-                    ),
-                    # Optimizer options (Issue #403)
-                    CONF_OPTIMIZER_ENABLED: current.get(
-                        CONF_OPTIMIZER_ENABLED,
-                        DEFAULT_OPTIMIZER_ENABLED,
-                    ),
-                    CONF_OPTIMIZER_CONTROL_MODE: current.get(
-                        CONF_OPTIMIZER_CONTROL_MODE,
-                        DEFAULT_OPTIMIZER_CONTROL_MODE,
                     ),
                     # Optimization mode (Issue #406)
                     CONF_OPTIMIZATION_MODE: current.get(

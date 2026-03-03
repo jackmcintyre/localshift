@@ -1,11 +1,10 @@
 """
-Tests for Phase F — Active-Control Pilot.
+Tests for Phase 6 (#448) — Optimizer safety gate and apply-path mapping.
 
 Tests cover:
-- OptimizerSafetyGate admission checks
-- Action → BatteryMode mapping
-- Fallback behavior
-- Cooldown logic
+- OptimizerSafetyGate admission checks (simplified: no mode/enabled/cooldown checks)
+- Action → BatteryMode mapping (no fallback_to_legacy field)
+- Safety gate failure defaults to SELF_CONSUMPTION
 """
 
 from datetime import datetime
@@ -13,14 +12,14 @@ from datetime import datetime
 import pytest
 
 from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+    ObjectiveTerms,
     OptimizerConfig,
     OptimizerResult,
     PlannedSlotDecision,
     PlannerAction,
     PlannerReasonCode,
-    ObjectiveTerms,
 )
-from custom_components.localshift.computation_engine_lib.optimizer_shadow_runner import (
+from custom_components.localshift.computation_engine_lib.optimizer_runner import (
     OptimizerSafetyGate,
     _derive_runtime_apply_plan,
 )
@@ -31,13 +30,9 @@ class MockData:
 
     def __init__(
         self,
-        optimizer_shadow_summary: dict | None = None,
-        optimizer_shadow_decisions: list | None = None,
-        optimizer_fallback_count: int = 0,
+        optimizer_summary: dict | None = None,
     ):
-        self.optimizer_shadow_summary = optimizer_shadow_summary or {}
-        self.optimizer_shadow_decisions = optimizer_shadow_decisions or []
-        self.optimizer_fallback_count = optimizer_fallback_count
+        self.optimizer_summary = optimizer_summary or {}
 
 
 # ---------------------------------------------------------------------------
@@ -50,25 +45,15 @@ class TestOptimizerSafetyGate:
 
     def test_allows_when_all_checks_pass(self):
         """Gate should allow when all checks pass."""
-        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
-            PlannerReasonCode,
-            ObjectiveTerms,
-        )
-
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
+        config_options = {}
         data = MockData(
-            optimizer_shadow_summary={
+            optimizer_summary={
                 "enabled": True,
                 "success": True,
                 "cycle_timestamp_iso": datetime.now().isoformat(),
                 "alignment_valid": True,
             },
-            optimizer_fallback_count=0,
         )
-        # Create a valid PlannedSlotDecision
         decision = PlannedSlotDecision(
             slot_index=0,
             timestamp_iso="2025-01-01T00:00:00",
@@ -93,63 +78,33 @@ class TestOptimizerSafetyGate:
         assert result.allowed is True
         assert result.block_reason is None
 
-    def test_blocks_on_disabled_optimizer(self):
-        """Gate should block when optimizer is disabled."""
-        config_options = {
-            "optimizer_enabled": False,
-            "optimizer_control_mode": "active",
-        }
-
-        gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(MockData(), None, None)
+    def test_blocks_on_none_result(self):
+        """Gate should block when optimizer result is None."""
+        gate = OptimizerSafetyGate({})
+        result = gate.check_admission(MockData(), None, {"valid": True})
 
         assert result.allowed is False
-        assert result.block_reason == "optimizer_disabled"
-
-    def test_blocks_on_wrong_control_mode(self):
-        """Gate should block when control mode is not active."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "shadow",
-        }
-
-        gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(MockData(), None, None)
-
-        assert result.allowed is False
-        assert result.block_reason is not None
-        assert "control_mode_not_active" in str(result.block_reason)
+        assert result.block_reason == "optimizer_result_none"
 
     def test_blocks_on_failed_solve(self):
         """Gate should block when optimizer solve failed."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
-        data = MockData(
-            optimizer_shadow_summary={"enabled": True, "success": False},
-        )
         optimizer_result = OptimizerResult(
             success=False,
             error_message="test error",
         )
 
-        gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(data, optimizer_result, None)
+        gate = OptimizerSafetyGate({})
+        result = gate.check_admission(MockData(), optimizer_result, None)
 
         assert result.allowed is False
         assert result.block_reason == "optimizer_solve_failed"
 
     def test_blocks_on_slot_alignment_failure(self):
         """Gate should block when slot alignment is invalid."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
         optimizer_result = OptimizerResult(success=True, decisions=[])
         alignment = {"valid": False, "issues": ["slot_count_mismatch"]}
 
-        gate = OptimizerSafetyGate(config_options)
+        gate = OptimizerSafetyGate({})
         result = gate.check_admission(MockData(), optimizer_result, alignment)
 
         assert result.allowed is False
@@ -157,15 +112,11 @@ class TestOptimizerSafetyGate:
 
     def test_blocks_on_no_decisions(self):
         """Gate should block when there are no decisions."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
         optimizer_result = OptimizerResult(success=True, decisions=[])
 
-        gate = OptimizerSafetyGate(config_options)
+        gate = OptimizerSafetyGate({})
         result = gate.check_admission(
-            MockData(optimizer_shadow_decisions=[]),
+            MockData(),
             optimizer_result,
             {"valid": True},
         )
@@ -173,29 +124,38 @@ class TestOptimizerSafetyGate:
         assert result.allowed is False
         assert result.block_reason == "no_decisions_available"
 
-    def test_blocks_on_cooldown(self):
-        """Gate should block when in fallback cooldown."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
-        data = MockData(optimizer_fallback_count=5)  # Exceeds default cooldown of 3
-
-        gate = OptimizerSafetyGate(config_options)
-        # Pass None for decisions - the gate checks fallback_count before checking decisions
-        result = gate.check_admission(
-            data,
-            OptimizerResult(success=True, decisions=[]),
-            {"valid": True},
+    def test_blocks_on_stale_forecast(self):
+        """Gate should block when forecast is stale."""
+        from custom_components.localshift.const import (
+            OPTIMIZER_FORECAST_FRESHNESS_MINUTES,
         )
 
+        # Set timestamp way in the past
+        old_ts = "2020-01-01T00:00:00+00:00"
+        data = MockData(optimizer_summary={"cycle_timestamp_iso": old_ts})
+        decision = PlannedSlotDecision(
+            slot_index=0,
+            timestamp_iso="2025-01-01T00:00:00",
+            slot_interval_minutes=30,
+            action=PlannerAction.HOLD,
+            reason_code=PlannerReasonCode.IDLE,
+            objective_terms=ObjectiveTerms(),
+            predicted_soc_pct=50.0,
+            grid_import_kwh=0.0,
+            grid_export_kwh=0.0,
+        )
+        optimizer_result = OptimizerResult(success=True, decisions=[decision])
+
+        gate = OptimizerSafetyGate({})
+        result = gate.check_admission(data, optimizer_result, {"valid": True})
+
         assert result.allowed is False
-        assert result.block_reason == "fallback_cooldown_active"
-        assert result.details["fallback_count"] == 5
+        assert result.block_reason == "forecast_stale"
+        assert result.details["age_minutes"] > OPTIMIZER_FORECAST_FRESHNESS_MINUTES
 
 
 # ---------------------------------------------------------------------------
-# Test Apply-Path Mapping
+# Test Apply-Path Mapping (no fallback_to_legacy field)
 # ---------------------------------------------------------------------------
 
 
@@ -217,286 +177,137 @@ class TestApplyPathMapping:
         result = _derive_runtime_apply_plan(decisions, 0, config)
 
         assert result["battery_mode"] == "self_consumption"
-        assert result["fallback_to_legacy"] is False
+        assert "fallback_to_legacy" not in result
 
     def test_charge_grid_normal_maps_to_grid_charging(self):
         """CHARGE_GRID_NORMAL action should map to GRID_CHARGING mode."""
         config = OptimizerConfig(demand_window_target_soc_pct=80.0)
-        decisions = [
-            {
-                "action": "charge_grid_normal",
-                "slot_index": 0,
-            }
-        ]
+        decisions = [{"action": "charge_grid_normal", "slot_index": 0}]
 
         result = _derive_runtime_apply_plan(decisions, 0, config)
 
         assert result["battery_mode"] == "grid_charging"
         assert result["target_soc"] == 80.0
-        assert result["fallback_to_legacy"] is False
+        assert "fallback_to_legacy" not in result
 
     def test_charge_grid_boost_maps_to_boost_charging(self):
         """CHARGE_GRID_BOOST action should map to BOOST_CHARGING mode."""
         config = OptimizerConfig(demand_window_target_soc_pct=100.0)
-        decisions = [
-            {
-                "action": "charge_grid_boost",
-                "slot_index": 0,
-            }
-        ]
+        decisions = [{"action": "charge_grid_boost", "slot_index": 0}]
 
         result = _derive_runtime_apply_plan(decisions, 0, config)
 
         assert result["battery_mode"] == "boost_charging"
         assert result["target_soc"] == 100.0
-        assert result["fallback_to_legacy"] is False
+        assert "fallback_to_legacy" not in result
 
     def test_export_proactive_maps_to_proactive_export(self):
         """EXPORT_PROACTIVE action should map to PROACTIVE_EXPORT mode."""
         config = OptimizerConfig()
-        decisions = [
-            {
-                "action": "export_proactive",
-                "slot_index": 0,
-            }
-        ]
+        decisions = [{"action": "export_proactive", "slot_index": 0}]
 
         result = _derive_runtime_apply_plan(decisions, 0, config)
 
         assert result["battery_mode"] == "proactive_export"
-        assert result["fallback_to_legacy"] is False
+        assert "fallback_to_legacy" not in result
 
-    def test_unknown_index_falls_back_to_legacy(self):
-        """Out of bounds index should fall back to legacy."""
+    def test_out_of_bounds_index_defaults_to_self_consumption(self):
+        """Out of bounds index should default to SELF_CONSUMPTION, not fallback."""
         config = OptimizerConfig()
-        decisions = [
-            {
-                "action": "hold",
-                "slot_index": 0,
-            }
-        ]
+        decisions = [{"action": "hold", "slot_index": 0}]
 
         result = _derive_runtime_apply_plan(decisions, 100, config)
 
-        assert result["fallback_to_legacy"] is True
         assert result["battery_mode"] == "self_consumption"
+        assert result["reason"] == "no_valid_decision_for_current_slot"
+        assert "fallback_to_legacy" not in result
 
-    def test_empty_decisions_falls_back_to_legacy(self):
-        """Empty decisions list should fall back to legacy."""
+    def test_empty_decisions_defaults_to_self_consumption(self):
+        """Empty decisions list should default to SELF_CONSUMPTION."""
         config = OptimizerConfig()
 
         result = _derive_runtime_apply_plan([], 0, config)
 
-        assert result["fallback_to_legacy"] is True
+        assert result["battery_mode"] == "self_consumption"
         assert result["reason"] == "no_valid_decision_for_current_slot"
+        assert "fallback_to_legacy" not in result
+
+    def test_unknown_action_defaults_to_self_consumption(self):
+        """Unknown action should default to SELF_CONSUMPTION (not raise)."""
+        config = OptimizerConfig()
+        decisions = [{"action": "completely_unknown_action", "slot_index": 0}]
+
+        result = _derive_runtime_apply_plan(decisions, 0, config)
+
+        assert result["battery_mode"] == "self_consumption"
+        assert "unknown_action_completely_unknown_action" in result["reason"]
+        assert "fallback_to_legacy" not in result
 
 
 # ---------------------------------------------------------------------------
-# Test Fallback Behavior
+# Test safety gate failure defaults to SELF_CONSUMPTION (issue #448 AC)
 # ---------------------------------------------------------------------------
 
 
-class TestFallbackBehavior:
-    """Tests for fallback behavior."""
+class TestSafetyGateFailureDefaultsToSelfConsumption:
+    """Acceptance criterion: gate failure → SELF_CONSUMPTION, no fallback logic."""
 
-    def test_increment_fallback_count_on_block(self):
-        """Fallback count should increment on safety gate block."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
-        data = MockData(optimizer_fallback_count=2)
+    def test_gate_failure_returns_blocked_not_allowed(self):
+        """Gate result is not allowed when optimizer solve failed."""
+        optimizer_result = OptimizerResult(
+            success=False,
+            error_message="solve_failed",
+        )
+        gate = OptimizerSafetyGate({})
+        result = gate.check_admission(MockData(), optimizer_result, None)
 
-        gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(
-            data,
-            OptimizerResult(success=True, decisions=[]),
-            {"valid": True},
+        assert result.allowed is False
+        assert result.block_reason is not None
+
+    def test_no_fallback_count_field_on_coordinator_data(self):
+        """CoordinatorData must not have optimizer_fallback_count field (Phase 6)."""
+        from custom_components.localshift.coordinator_data import CoordinatorData
+
+        data = CoordinatorData()
+        assert not hasattr(data, "optimizer_fallback_count"), (
+            "optimizer_fallback_count should have been removed in Phase 6 (#448)"
         )
 
-        assert result.allowed is False
-        # Note: The count increment happens in coordinator, not in safety gate
+    def test_no_optimizer_runtime_mode_field_on_coordinator_data(self):
+        """CoordinatorData must not have optimizer_runtime_mode field (Phase 6)."""
+        from custom_components.localshift.coordinator_data import CoordinatorData
 
-    def test_cooldown_threshold(self):
-        """Cooldown should trigger at threshold."""
-        from custom_components.localshift.const import OPTIMIZER_COOLDOWN_CYCLES
+        data = CoordinatorData()
+        assert not hasattr(data, "optimizer_runtime_mode"), (
+            "optimizer_runtime_mode should have been removed in Phase 6 (#448)"
+        )
 
-        assert OPTIMIZER_COOLDOWN_CYCLES == 3
+    def test_optimizer_runner_class_exists(self):
+        """OptimizerRunner (renamed) should be importable from optimizer_runner."""
+        from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+            OptimizerSafetyGate,
+            _derive_runtime_apply_plan,
+            run_optimizer,
+        )
 
+        assert OptimizerSafetyGate is not None
+        assert _derive_runtime_apply_plan is not None
+        assert run_optimizer is not None
 
-# ---------------------------------------------------------------------------
-# Test Integration Safety
-# ---------------------------------------------------------------------------
+    def test_optimizer_shadow_runner_module_does_not_exist(self):
+        """optimizer_shadow_runner module must not exist after Phase 6."""
+        import importlib
 
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(
+                "custom_components.localshift.computation_engine_lib.optimizer_shadow_runner"
+            )
 
-class TestIntegrationSafety:
-    """Tests for safety-critical integration behavior."""
+    def test_planner_comparator_module_does_not_exist(self):
+        """planner_comparator module must not exist after Phase 6."""
+        import importlib
 
-    def test_safety_gate_returns_details_on_block(self):
-        """Safety gate should return detailed block reason."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "shadow",  # Not active
-        }
-
-        gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(MockData(), None, None)
-
-        assert result.allowed is False
-        assert result.details.get("control_mode") == "shadow"
-
-    def test_optimizer_result_none_handled(self):
-        """None optimizer_result should be handled gracefully."""
-        config_options = {
-            "optimizer_enabled": True,
-            "optimizer_control_mode": "active",
-        }
-
-        gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(MockData(), None, {"valid": True})
-
-        assert result.allowed is False
-        assert result.block_reason == "optimizer_result_none"
-
-
-# ---------------------------------------------------------------------------
-# Test Computation Engine Active Mode Integration
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason="Phase 4 removed _check_active_mode_optimizer_override - update in Phase 5/6"
-)
-class TestComputationEngineActiveModeIntegration:
-    """Tests for active mode integration in computation engine."""
-
-    def test_active_mode_uses_optimizer_decision(self):
-        """Computation engine should use optimizer decision when active mode is enabled."""
-        from custom_components.localshift.computation_engine import ComputationEngine
-        from custom_components.localshift.const import BatteryMode
-
-        # Create mock coordinator data with active mode settings
-        data = type(
-            "CoordinatorData",
-            (),
-            {
-                "optimizer_runtime_mode": "active",
-                "optimizer_apply_plan": {
-                    "action": "charge_grid_normal",
-                    "battery_mode": "grid_charging",
-                    "target_soc": 80.0,
-                    "fallback_to_legacy": False,
-                    "reason": "optimizer_charge_grid_normal",
-                },
-                "active_mode": BatteryMode.SELF_CONSUMPTION,
-            },
-        )()
-
-        # Create a mock computation engine
-        engine = ComputationEngine.__new__(ComputationEngine)
-
-        # Call the active mode override check
-        result = engine._check_active_mode_optimizer_override(data)
-
-        # Verify the optimizer decision was applied
-        assert result is True
-        assert data.active_mode == BatteryMode.GRID_CHARGING
-
-    def test_legacy_used_when_not_active_mode(self):
-        """Legacy mode should be used when optimizer is not in active mode."""
-        from custom_components.localshift.computation_engine import ComputationEngine
-        from custom_components.localshift.const import BatteryMode
-
-        # Create mock coordinator data with shadow mode
-        data = type(
-            "CoordinatorData",
-            (),
-            {
-                "optimizer_runtime_mode": "shadow",
-                "optimizer_apply_plan": None,
-                "active_mode": BatteryMode.SELF_CONSUMPTION,
-            },
-        )()
-
-        engine = ComputationEngine.__new__(ComputationEngine)
-        result = engine._check_active_mode_optimizer_override(data)
-
-        # Verify legacy mode is used (no override applied)
-        assert result is False
-
-    def test_fallback_to_legacy_when_requested(self):
-        """Should fall back to legacy when optimizer requests fallback."""
-        from custom_components.localshift.computation_engine import ComputationEngine
-        from custom_components.localshift.const import BatteryMode
-
-        # Create mock coordinator data with active mode but fallback requested
-        data = type(
-            "CoordinatorData",
-            (),
-            {
-                "optimizer_runtime_mode": "active",
-                "optimizer_apply_plan": {
-                    "action": "hold",
-                    "battery_mode": "self_consumption",
-                    "fallback_to_legacy": True,  # Explicit fallback request
-                    "reason": "no_valid_decision_for_current_slot",
-                },
-                "active_mode": BatteryMode.SELF_CONSUMPTION,
-            },
-        )()
-
-        engine = ComputationEngine.__new__(ComputationEngine)
-        result = engine._check_active_mode_optimizer_override(data)
-
-        # Verify fallback to legacy
-        assert result is False
-
-    def test_proactive_export_action(self):
-        """PROACTIVE_EXPORT action should map correctly."""
-        from custom_components.localshift.computation_engine import ComputationEngine
-        from custom_components.localshift.const import BatteryMode
-
-        data = type(
-            "CoordinatorData",
-            (),
-            {
-                "optimizer_runtime_mode": "active",
-                "optimizer_apply_plan": {
-                    "action": "export_proactive",
-                    "battery_mode": "proactive_export",
-                    "fallback_to_legacy": False,
-                },
-                "active_mode": BatteryMode.SELF_CONSUMPTION,
-            },
-        )()
-
-        engine = ComputationEngine.__new__(ComputationEngine)
-        result = engine._check_active_mode_optimizer_override(data)
-
-        assert result is True
-        assert data.active_mode == BatteryMode.PROACTIVE_EXPORT
-
-    def test_boost_charging_action(self):
-        """BOOST_CHARGING action should map correctly."""
-        from custom_components.localshift.computation_engine import ComputationEngine
-        from custom_components.localshift.const import BatteryMode
-
-        data = type(
-            "CoordinatorData",
-            (),
-            {
-                "optimizer_runtime_mode": "active",
-                "optimizer_apply_plan": {
-                    "action": "charge_grid_boost",
-                    "battery_mode": "boost_charging",
-                    "fallback_to_legacy": False,
-                },
-                "active_mode": BatteryMode.SELF_CONSUMPTION,
-            },
-        )()
-
-        engine = ComputationEngine.__new__(ComputationEngine)
-        result = engine._check_active_mode_optimizer_override(data)
-
-        assert result is True
-        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(
+                "custom_components.localshift.computation_engine_lib.planner_comparator"
+            )

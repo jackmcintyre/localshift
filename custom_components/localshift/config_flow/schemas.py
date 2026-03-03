@@ -23,8 +23,6 @@ from ..const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
-    CONF_OPTIMIZER_CONTROL_MODE,
-    CONF_OPTIMIZER_ENABLED,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -54,13 +52,10 @@ from ..const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
-    DEFAULT_OPTIMIZER_CONTROL_MODE,
-    DEFAULT_OPTIMIZER_ENABLED,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     OPTIMIZATION_MODE_OPTIONS,
-    OPTIMIZER_CONTROL_MODES,
     THRESHOLD_RANGES,
 )
 
@@ -450,27 +445,6 @@ def build_options_schema(
                         "unit"
                     ],
                     mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            # DP Optimizer (Issue #403 Phase F - active mode now supported)
-            vol.Optional(
-                CONF_OPTIMIZER_ENABLED,
-                default=values.get(
-                    CONF_OPTIMIZER_ENABLED,
-                    DEFAULT_OPTIMIZER_ENABLED,
-                ),
-            ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_OPTIMIZER_CONTROL_MODE,
-                default=values.get(
-                    CONF_OPTIMIZER_CONTROL_MODE,
-                    DEFAULT_OPTIMIZER_CONTROL_MODE,
-                ),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=OPTIMIZER_CONTROL_MODES,
-                    translation_key="optimizer_control_mode",
-                    mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
             # Optimization mode (Issue #406)

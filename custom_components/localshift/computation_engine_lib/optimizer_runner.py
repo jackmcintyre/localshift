@@ -1,17 +1,15 @@
 """
-optimizer_shadow_runner.py — DP optimizer entrypoint.
+optimizer_runner.py — DP optimizer entrypoint.
 
-Phase F (#403): Active-control pilot with safety gates.
-Phase 5 (#447): Renamed fields, removed comparison sensor.
+Phase 6 (#448): Renamed from optimizer_shadow_runner.py, removed shadow terminology.
 
 This module is the single entry point called by the coordinator each compute
 cycle. It:
   1. Converts raw coordinator data into OptimizerInputs via SlotBuilder.
   2. Runs DPPlanner.plan() to compute optimal schedule.
   3. Writes all results into CoordinatorData optimizer_* fields.
-  4. (Phase F) In active mode: applies optimizer decision via safety gate.
 
-The coordinator calls run_shadow_optimizer(data, config_options) and that
+The coordinator calls run_optimizer(data, config_options) and that
 is the ONLY coupling point. All optimizer internals stay isolated here.
 """
 
@@ -31,7 +29,6 @@ from .optimizer_dp import (
     OptimizerResult,
     SlotContext,
 )
-from .planner_comparator import PlannerComparator
 from .slot_builder import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,47 +62,28 @@ def _get_ha_timezone() -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_shadow_optimizer(
+def run_optimizer(
     data: Any,  # CoordinatorData — avoid circular import at module load
     config_options: dict[str, Any],
     planner: DPPlanner | None = None,
-    comparator: PlannerComparator | None = None,
 ) -> None:
     """
-    Run the DP optimizer in shadow mode and write results into ``data``.
+    Run the DP optimizer and write results into ``data``.
 
-    This function is SAFE to call every compute cycle. If the optimizer is
-    disabled or encounters any error it exits cleanly without touching runtime
+    This function is SAFE to call every compute cycle. If the optimizer
+    encounters any error it exits cleanly without touching runtime
     control fields.
 
     Args:
-        data:           CoordinatorData instance (mutated for shadow fields only).
+        data:           CoordinatorData instance (mutated for optimizer fields).
         config_options: Integration options dict (from config_entry.options).
         planner:        Optional pre-constructed DPPlanner (for testing / DI).
-        comparator:     Optional pre-constructed PlannerComparator (for testing / DI).
     """
-    # --- Feature gate ---
-    from ..const import (  # noqa: PLC0415
-        CONF_OPTIMIZER_ENABLED,
-        DEFAULT_OPTIMIZER_ENABLED,
-    )
-
-    enabled = config_options.get(CONF_OPTIMIZER_ENABLED, DEFAULT_OPTIMIZER_ENABLED)
-    if not enabled:
-        # Optimizer disabled — write a minimal summary and exit cleanly
-        data.optimizer_summary = {
-            "enabled": False,
-            "planner_version": DPPlanner.VERSION,
-            "success": False,
-            "error_message": "optimizer_enabled=False",
-        }
-        return
-
     cycle_id = _make_cycle_id()
     cycle_timestamp_iso = datetime.now(UTC).isoformat()
 
     _LOGGER.debug(
-        "Shadow optimizer starting cycle %s (%d legacy slots)",
+        "Optimizer starting cycle %s (%d legacy slots)",
         cycle_id,
         len(data.daily_forecast),
     )
@@ -117,12 +95,9 @@ def run_shadow_optimizer(
             cycle_id=cycle_id,
             cycle_timestamp_iso=cycle_timestamp_iso,
             planner=planner or DPPlanner(),
-            comparator=comparator or PlannerComparator(),
         )
     except Exception as exc:  # noqa: BLE001
-        _LOGGER.error(
-            "Shadow optimizer failed for cycle %s: %s", cycle_id, exc, exc_info=True
-        )
+        _LOGGER.error("Optimizer failed for cycle %s: %s", cycle_id, exc, exc_info=True)
         data.optimizer_summary = {
             "enabled": True,
             "planner_version": DPPlanner.VERSION,
@@ -143,9 +118,8 @@ def _run(
     cycle_id: str,
     cycle_timestamp_iso: str,
     planner: DPPlanner,
-    comparator: PlannerComparator,
 ) -> None:
-    """Core shadow run logic (separated for testability)."""
+    """Core optimizer run logic (separated for testability)."""
 
     # 1. Build OptimizerInputs from coordinator data
     optimizer_config = _build_optimizer_config(data, config_options)
@@ -158,9 +132,7 @@ def _run(
     parity_info = slot_metadata.to_parity_dict()  # backward-compat shim
 
     if not slots:
-        _LOGGER.debug(
-            "Shadow optimizer: no slots available, skipping cycle %s", cycle_id
-        )
+        _LOGGER.debug("Optimizer: no slots available, skipping cycle %s", cycle_id)
         data.optimizer_summary = {
             "enabled": True,
             "planner_version": DPPlanner.VERSION,
@@ -175,7 +147,7 @@ def _run(
     alignment = _validate_slot_alignment(data.daily_forecast, slots)
     if not alignment["valid"]:
         _LOGGER.warning(
-            "Shadow optimizer slot alignment issues: %s",
+            "Optimizer slot alignment issues: %s",
             alignment["issues"],
         )
 
@@ -194,7 +166,7 @@ def _run(
             "alignment_valid": alignment.get("valid", False),
         }
         _LOGGER.warning(
-            "Shadow optimizer skipped cycle %s due to invalid initial SOC: %s",
+            "Optimizer skipped cycle %s due to invalid initial SOC: %s",
             cycle_id,
             soc_info,
         )
@@ -224,15 +196,13 @@ def _run(
     )
 
     _LOGGER.debug(
-        "Shadow optimizer cycle %s complete: success=%s slots=%d solve=%.3fs net_cost=%.4f",
+        "Optimizer cycle %s complete: success=%s slots=%d solve=%.3fs net_cost=%.4f",
         cycle_id,
         result.success,
         result.total_slots,
         result.solve_time_seconds,
         result.projected_net_cost,
     )
-
-    # Phase 5 (#447): Comparison removed - legacy planner no longer exists
 
 
 # ---------------------------------------------------------------------------
@@ -603,10 +573,10 @@ class SafetyGateResult:
 
 class OptimizerSafetyGate:
     """
-    Safety gate for active-mode optimizer execution.
+    Safety gate for optimizer execution.
 
     Validates prerequisites before allowing optimizer decisions to drive runtime behavior.
-    All checks must pass for active-mode to proceed; any failure triggers fallback to legacy control.
+    All checks must pass for execution; any failure triggers fallback to SELF_CONSUMPTION.
     """
 
     def __init__(self, config_options: dict[str, Any]) -> None:
@@ -616,22 +586,10 @@ class OptimizerSafetyGate:
             config_options: Integration options from config_entry.options
         """
         from ..const import (  # noqa: PLC0415
-            CONF_OPTIMIZER_CONTROL_MODE,
-            CONF_OPTIMIZER_ENABLED,
-            DEFAULT_OPTIMIZER_CONTROL_MODE,
-            DEFAULT_OPTIMIZER_ENABLED,
-            OPTIMIZER_COOLDOWN_CYCLES,
             OPTIMIZER_FORECAST_FRESHNESS_MINUTES,
         )
 
         self._config_options = config_options
-        self._optimizer_enabled = config_options.get(
-            CONF_OPTIMIZER_ENABLED, DEFAULT_OPTIMIZER_ENABLED
-        )
-        self._control_mode = config_options.get(
-            CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
-        )
-        self._cooldown_cycles = OPTIMIZER_COOLDOWN_CYCLES
         self._forecast_freshness_minutes = OPTIMIZER_FORECAST_FRESHNESS_MINUTES
 
     def check_admission(
@@ -641,7 +599,7 @@ class OptimizerSafetyGate:
         alignment: dict[str, Any] | None,
     ) -> SafetyGateResult:
         """
-        Check all admission criteria for active-mode execution.
+        Check all admission criteria for optimizer execution.
 
         Args:
             data: CoordinatorData instance
@@ -654,27 +612,7 @@ class OptimizerSafetyGate:
         checks: list[dict[str, Any]] = []
         details: dict[str, Any] = {}
 
-        # Check 1: Optimizer enabled
-        if not self._optimizer_enabled:
-            return SafetyGateResult(
-                allowed=False,
-                block_reason="optimizer_disabled",
-                details={"enabled": False},
-            )
-        checks.append({"name": "optimizer_enabled", "passed": True})
-        details["optimizer_enabled"] = True
-
-        # Check 2: Control mode is active
-        if self._control_mode != "active":
-            return SafetyGateResult(
-                allowed=False,
-                block_reason=f"control_mode_not_active(mode={self._control_mode})",
-                details={"control_mode": self._control_mode},
-            )
-        checks.append({"name": "control_mode_active", "passed": True})
-        details["control_mode"] = "active"
-
-        # Check 3: Optimizer result exists
+        # Check 1: Optimizer result exists
         if optimizer_result is None:
             return SafetyGateResult(
                 allowed=False,
@@ -683,7 +621,7 @@ class OptimizerSafetyGate:
             )
         checks.append({"name": "optimizer_result_exists", "passed": True})
 
-        # Check 4: Optimizer solve succeeded
+        # Check 2: Optimizer solve succeeded
         if not optimizer_result.success:
             return SafetyGateResult(
                 allowed=False,
@@ -696,7 +634,7 @@ class OptimizerSafetyGate:
         checks.append({"name": "solve_success", "passed": True})
         details["solve_success"] = True
 
-        # Check 5: Slot alignment valid
+        # Check 3: Slot alignment valid
         if alignment and not alignment.get("valid", True):
             return SafetyGateResult(
                 allowed=False,
@@ -706,7 +644,7 @@ class OptimizerSafetyGate:
         checks.append({"name": "slot_alignment_valid", "passed": True})
         details["alignment_valid"] = alignment.get("valid", True) if alignment else None
 
-        # Check 5: Forecast freshness
+        # Check 4: Forecast freshness
         forecast_age_minutes = self._get_forecast_age_minutes(data)
         if (
             forecast_age_minutes is not None
@@ -725,22 +663,7 @@ class OptimizerSafetyGate:
 
         details["forecast_freshness_max"] = self._forecast_freshness_minutes
 
-        # Check 6: Not in fallback cooldown
-        fallback_count = getattr(data, "optimizer_fallback_count", 0)
-        if fallback_count >= self._cooldown_cycles:
-            return SafetyGateResult(
-                allowed=False,
-                block_reason="fallback_cooldown_active",
-                details={
-                    "fallback_count": fallback_count,
-                    "cooldown_threshold": self._cooldown_cycles,
-                },
-            )
-        checks.append({"name": "not_in_cooldown", "passed": True})
-        details["fallback_count"] = fallback_count
-        details["cooldown_cycles"] = self._cooldown_cycles
-
-        # Check 7: Has decisions for current slot
+        # Check 5: Has decisions for current slot
         if not optimizer_result.decisions:
             return SafetyGateResult(
                 allowed=False,
@@ -811,7 +734,7 @@ def _derive_runtime_apply_plan(
             - action: PlannerAction value
             - battery_mode: BatteryMode string for runtime
             - target_soc: Target SOC percentage (or None)
-            - fallback_to_legacy: True if action cannot be applied
+            - reason: Explanation for the decision
     """
     from ..const import BatteryMode  # noqa: PLC0415
 
@@ -820,7 +743,6 @@ def _derive_runtime_apply_plan(
             "action": "hold",
             "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
             "target_soc": None,
-            "fallback_to_legacy": True,
             "reason": "no_valid_decision_for_current_slot",
         }
 
@@ -834,7 +756,6 @@ def _derive_runtime_apply_plan(
             "action": action_str,
             "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
             "target_soc": None,
-            "fallback_to_legacy": False,
             "reason": "optimizer_hold",
         }
 
@@ -843,7 +764,6 @@ def _derive_runtime_apply_plan(
             "action": action_str,
             "battery_mode": BatteryMode.GRID_CHARGING.value,
             "target_soc": config.demand_window_target_soc_pct,
-            "fallback_to_legacy": False,
             "reason": "optimizer_charge_grid_normal",
         }
 
@@ -852,7 +772,6 @@ def _derive_runtime_apply_plan(
             "action": action_str,
             "battery_mode": BatteryMode.BOOST_CHARGING.value,
             "target_soc": config.demand_window_target_soc_pct,
-            "fallback_to_legacy": False,
             "reason": "optimizer_charge_grid_boost",
         }
 
@@ -861,16 +780,14 @@ def _derive_runtime_apply_plan(
             "action": action_str,
             "battery_mode": BatteryMode.PROACTIVE_EXPORT.value,
             "target_soc": None,
-            "fallback_to_legacy": False,
             "reason": "optimizer_export_proactive",
         }
 
-    # Unknown action - fall back to legacy
+    # Unknown action - default to SELF_CONSUMPTION
     return {
         "action": action_str or "unknown",
         "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
         "target_soc": None,
-        "fallback_to_legacy": True,
         "reason": f"unknown_action_{action_str}",
     }
 
