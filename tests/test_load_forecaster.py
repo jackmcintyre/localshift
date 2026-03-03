@@ -272,48 +272,6 @@ class TestLoadForecasterExponentialDecay:
 
         assert abs(kw - expected_kw) < 0.001
 
-    def test_matches_forecast_computer_algorithm(self, mock_entry, mock_get_entity_id):
-        """Test LoadForecaster and ForecastComputer._estimate_hourly_consumption_kw return identical values.
-
-        Parametrized test for hour_distance 0-5 to ensure both implementations
-        use the same exponential decay algorithm.
-        """
-        from custom_components.localshift.computation_engine_lib.forecast_computer import (
-            ForecastComputer,
-        )
-
-        forecaster = _create_load_forecaster()
-        computer = ForecastComputer(mock_entry, mock_get_entity_id, lambda x: {})
-
-        hourly_avg = {8: 0.4, 9: 0.5, 10: 0.6, 11: 0.7, 12: 0.8}
-        current_hour = 10
-        current_load = 0.55
-        recent_load = 0.6
-
-        for slot_hour in range(5, 16):
-            kw_forecaster, source_forecaster = (
-                forecaster.estimate_hourly_consumption_kw(
-                    hourly_avg_kw=hourly_avg,
-                    slot_hour=slot_hour,
-                    current_hour=current_hour,
-                    current_load_kw=current_load,
-                    recent_load_kw=recent_load,
-                )
-            )
-
-            kw_computer, source_computer = computer._estimate_hourly_consumption_kw(
-                hourly_avg,
-                slot_hour,
-                current_hour,
-                current_load,
-                recent_load,
-            )
-
-            assert abs(kw_forecaster - kw_computer) < 0.001, (
-                f"Mismatch at hour {slot_hour}: LoadForecaster={kw_forecaster}, "
-                f"ForecastComputer={kw_computer}"
-            )
-
 
 @pytest.fixture
 def mock_weather_correlation():

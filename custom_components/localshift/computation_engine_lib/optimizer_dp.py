@@ -377,6 +377,9 @@ class OptimizerResult:
     terminal_shortfall_pct: float = 0.0
     """Residual SOC shortfall (%) at demand window entry, if any."""
 
+    can_solar_reach_target: bool = False
+    """True if solar alone can reach DW target (no grid charge, no export). Phase 4, #441."""
+
     error_message: str | None = None
     """Error description if success=False."""
 
@@ -825,6 +828,17 @@ class DPPlanner:
             target = config.demand_window_target_soc_pct
             terminal_shortfall = max(0.0, target - terminal_soc)
 
+        # Determine if solar alone can reach the DW target (Phase 4, #441)
+        can_solar = (
+            _simulate_solar_only_terminal_soc(
+                initial_soc_pct=inputs.initial_soc_pct,
+                slots=slots,
+                terminal_penalty_idx=terminal_penalty_idx,
+                config=config,
+            )
+            >= config.demand_window_target_soc_pct
+        )
+
         return OptimizerResult(
             success=True,
             planner_version=self.VERSION,
@@ -835,6 +849,7 @@ class DPPlanner:
             projected_export_kwh=total_export,
             projected_net_cost=total_net_cost,
             terminal_shortfall_pct=terminal_shortfall,
+            can_solar_reach_target=can_solar,
             reason_code_histogram=reason_histogram,
         )
 
@@ -1351,3 +1366,33 @@ class DPPlanner:
         """
         shortfall = max(0.0, target_soc_pct - final_soc_pct)
         return shortfall * config.target_shortfall_penalty_per_pct
+
+
+def _simulate_solar_only_terminal_soc(
+    initial_soc_pct: float,
+    slots: list[SlotContext],
+    terminal_penalty_idx: int | None,
+    config: OptimizerConfig,
+) -> float:
+    """Fast solar-only SOC simulation — no grid actions, no exports.
+
+    Walks each slot accumulating net solar/consumption, clamps SOC to
+    [config.min_soc_pct, 100]. Returns SOC at the terminal_penalty_idx
+    slot, or at the last slot if terminal_penalty_idx is None.
+
+    Used to populate OptimizerResult.can_solar_reach_target (Phase 4, #441).
+    """
+    soc = initial_soc_pct
+    for i, slot in enumerate(slots):
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        slot_hours = slot.slot_interval_minutes / 60.0
+        max_slot_transfer_kwh = config.charge_rate_kw * slot_hours
+        if net_kwh >= 0:
+            delta = min(net_kwh, max_slot_transfer_kwh) * config.charge_efficiency
+        else:
+            delta = max(net_kwh, -max_slot_transfer_kwh) / config.discharge_efficiency
+        soc += delta / config.battery_capacity_kwh * 100
+        soc = max(config.min_soc_pct, min(100.0, soc))
+        if terminal_penalty_idx is not None and i == terminal_penalty_idx:
+            return soc
+    return soc

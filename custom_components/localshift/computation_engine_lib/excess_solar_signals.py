@@ -17,7 +17,6 @@ from ..const import (
     DEFAULT_MINIMUM_TARGET_SOC,
 )
 from ..coordinator_data import CoordinatorData
-from .forecast_computer import ForecastComputer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,15 +27,25 @@ class ExcessSolarSignalsEngine:
     def __init__(
         self,
         entry: ConfigEntry,
-        forecast_computer: ForecastComputer,
+        calculate_excess_by_windows: Callable[..., dict[str, float]],
+        find_nearest_negative_fit_window: Callable[..., tuple[datetime | None, int]],
+        calculate_excess_until_negative_fit: Callable[..., float],
+        find_battery_fill_point: Callable[..., int | None],
+        calculate_safe_additional_load: Callable[..., tuple[float, bool]],
+        compute_load_shift_signal: Callable[..., tuple[str, float, int, str, str]],
         get_entity_id: Callable[[str], str],
         get_historical_hourly_averages: Callable[[str], dict[int, float]],
         recent_load_1hr_getter: Callable[[], float],
         parse_time_option: Callable[[str, str], time],
     ) -> None:
-        """Initialize engine dependencies."""
+        """Initialize engine dependencies (Phase 4, #441)."""
         self.entry = entry
-        self._forecast_computer = forecast_computer
+        self._calculate_excess_by_windows = calculate_excess_by_windows
+        self._find_nearest_negative_fit_window = find_nearest_negative_fit_window
+        self._calculate_excess_until_negative_fit = calculate_excess_until_negative_fit
+        self._find_battery_fill_point = find_battery_fill_point
+        self._calculate_safe_additional_load = calculate_safe_additional_load
+        self._compute_load_shift_signal = compute_load_shift_signal
         self._get_entity_id = get_entity_id
         self._get_historical_hourly_averages = get_historical_hourly_averages
         self._recent_load_1hr_getter = recent_load_1hr_getter
@@ -71,7 +80,7 @@ class ExcessSolarSignalsEngine:
         base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
         current_hour = base_slot.hour
 
-        excess_by_windows = self._forecast_computer._calculate_excess_by_windows(
+        excess_by_windows = self._calculate_excess_by_windows(
             base_slot=base_slot,
             all_solcast=all_solcast,
             historical_avg_kw=hourly_avg_kw,
@@ -92,28 +101,24 @@ class ExcessSolarSignalsEngine:
         )
 
         negative_fit_start, negative_fit_duration = (
-            self._forecast_computer._find_nearest_negative_fit_window(
-                data.feed_in_forecast, now_dt
-            )
+            self._find_nearest_negative_fit_window(data.feed_in_forecast, now_dt)
         )
         data.negative_fit_window_start = negative_fit_start
         data.negative_fit_window_duration_minutes = negative_fit_duration
 
-        data.excess_until_negative_fit_kwh = (
-            self._forecast_computer._calculate_excess_until_negative_fit(
-                base_slot=base_slot,
-                negative_fit_start=negative_fit_start,
-                all_solcast=all_solcast,
-                historical_avg_kw=hourly_avg_kw,
-                current_load_kw=data.load_power_kw,
-                recent_load_kw=recent_load_kw,
-                current_soc=data.soc,
-                target_pct=target_pct,
-                current_hour=current_hour,
-            )
+        data.excess_until_negative_fit_kwh = self._calculate_excess_until_negative_fit(
+            base_slot=base_slot,
+            negative_fit_start=negative_fit_start,
+            all_solcast=all_solcast,
+            historical_avg_kw=hourly_avg_kw,
+            current_load_kw=data.load_power_kw,
+            recent_load_kw=recent_load_kw,
+            current_soc=data.soc,
+            target_pct=target_pct,
+            current_hour=current_hour,
         )
 
-        fill_point_minutes = self._forecast_computer._find_battery_fill_point(
+        fill_point_minutes = self._find_battery_fill_point(
             start_soc=data.soc,
             start_slot=base_slot,
             all_solcast=all_solcast,
@@ -124,27 +129,25 @@ class ExcessSolarSignalsEngine:
         )
         data.time_until_battery_full_minutes = fill_point_minutes or 0
 
-        safe_additional_load, grid_charge_risk = (
-            self._forecast_computer._calculate_safe_additional_load(
-                base_slot=base_slot,
-                all_solcast=all_solcast,
-                historical_avg_kw=hourly_avg_kw,
-                current_load_kw=data.load_power_kw,
-                recent_load_kw=recent_load_kw,
-                current_soc=data.soc,
-                target_pct=target_pct,
-                dw_start_time=demand_window_start,
-                effective_cheap_price=data.effective_cheap_price,
-                general_forecast=data.general_forecast,
-                min_soc_pct=min_soc_pct,
-                current_hour=current_hour,
-            )
+        safe_additional_load, grid_charge_risk = self._calculate_safe_additional_load(
+            base_slot=base_slot,
+            all_solcast=all_solcast,
+            historical_avg_kw=hourly_avg_kw,
+            current_load_kw=data.load_power_kw,
+            recent_load_kw=recent_load_kw,
+            current_soc=data.soc,
+            target_pct=target_pct,
+            dw_start_time=demand_window_start,
+            effective_cheap_price=data.effective_cheap_price,
+            general_forecast=data.general_forecast,
+            min_soc_pct=min_soc_pct,
+            current_hour=current_hour,
         )
         data.safe_additional_load_kw = round(safe_additional_load, 1)
         data.grid_charge_risk = grid_charge_risk
 
         signal, recommended_kw, duration, reason, confidence = (
-            self._forecast_computer._compute_load_shift_signal(
+            self._compute_load_shift_signal(
                 data=data,
                 excess_by_windows=excess_by_windows,
                 negative_fit_start=negative_fit_start,

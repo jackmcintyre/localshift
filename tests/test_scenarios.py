@@ -296,11 +296,7 @@ def test_scenario(scenario_path, request):
         patch.object(engine._history_fetcher, "_historical_load_sample_counts", {}),
         patch.object(engine._history_fetcher, "_historical_load_source", "none"),
         patch.object(engine._history_fetcher, "_recent_load_1hr_kw", recent_load),
-        patch.object(
-            engine._forecast_computer,
-            "_get_historical_hourly_averages",
-            return_value={},
-        ),
+
     ):
         # Run computation
         engine.compute_derived_values(data)
