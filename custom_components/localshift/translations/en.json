@@ -47,14 +47,12 @@
         "data": {
           "solcast_forecast_today": "Solar Forecast Today",
           "solcast_forecast_tomorrow": "Solar Forecast Tomorrow",
-          "notify_service": "Notification Service",
-          "sun_entity": "Sun Entity"
+          "notify_service": "Notification Service"
         },
         "data_description": {
           "solcast_forecast_today": "Solcast forecast for today's solar production",
           "solcast_forecast_tomorrow": "Solcast forecast for tomorrow's solar production",
-          "notify_service": "Notification service for alerts (e.g., notify.mobile_app)",
-          "sun_entity": "Sun entity for sunrise/sunset times (usually sun.sun)"
+          "notify_service": "Notification service for alerts (e.g., notify.mobile_app)"
         }
       }
     }

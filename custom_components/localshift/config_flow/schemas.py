@@ -31,7 +31,6 @@ from ..const import (
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_SPIKE_PRICE_PERCENTILE,
-    CONF_SUN_ENTITY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -195,7 +194,6 @@ def build_solcast_schema(
             CONF_SOLCAST_FORECAST_TOMORROW,
             defaults.get(CONF_SOLCAST_FORECAST_TOMORROW, ""),
         )
-        default_sun = user_input.get(CONF_SUN_ENTITY, defaults.get(CONF_SUN_ENTITY, ""))
     else:
         default_notify = notify_services[0] if notify_services else ""
         default_weather = (
@@ -203,7 +201,6 @@ def build_solcast_schema(
         )
         default_today = defaults.get(CONF_SOLCAST_FORECAST_TODAY, "")
         default_tomorrow = defaults.get(CONF_SOLCAST_FORECAST_TOMORROW, "")
-        default_sun = defaults.get(CONF_SUN_ENTITY, "")
 
     return vol.Schema(
         {
@@ -224,10 +221,6 @@ def build_solcast_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Required(
-                CONF_SUN_ENTITY,
-                default=default_sun,
-            ): selector.EntitySelector(),
             vol.Optional(
                 CONF_WEATHER_ENTITY,
                 default=default_weather,
