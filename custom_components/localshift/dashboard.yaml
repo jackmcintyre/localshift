@@ -31,7 +31,7 @@ views:
     max_columns: 2
     sections:
       # --- LEFT COLUMN: Power Flow & Forecast Chart ---
-      
+
       # Power Flow Card
       - type: grid
         cards:
@@ -63,6 +63,9 @@ views:
             sort_individual_devices: false
 
       # SOC Forecast Chart
+      # sensor.localshift_optimizer_plan state = integer slot count (e.g. 57)
+      # sensor.localshift_optimizer_plan_detailed.decisions[] holds per-slot data
+      # decisions[].timestamp_iso + decisions[].predicted_soc_pct used here
       - type: grid
         cards:
           - type: custom:apexcharts-card
@@ -81,7 +84,7 @@ views:
                 curve: smooth
                 type: line
                 extend_to: false
-              - entity: sensor.localshift_forecast_daily
+              - entity: sensor.localshift_optimizer_plan_detailed
                 name: Planned SOC
                 color: "#F59E0B"
                 stroke_width: 2
@@ -89,9 +92,8 @@ views:
                 type: line
                 extend_to: false
                 data_generator: |
-                  return (entity.attributes.soc_series || []).map(function(entry) {
-                    // Convert ISO timestamp to Epoch milliseconds for ApexCharts
-                    return [new Date(entry.time).getTime(), entry.soc];
+                  return (entity.attributes.decisions || []).map(function(d) {
+                    return [new Date(d.timestamp_iso).getTime(), d.predicted_soc_pct];
                   });
             yaxis:
               - min: 0
@@ -134,31 +136,69 @@ views:
               {% set mode = states('select.localshift_battery_mode') %}
               {% set soc = states('sensor.my_home_percentage_charged') | int(0) %}
               {% set target = states('number.localshift_battery_target') | int(100) %}
-              
+
               {% if mode == 'manual' %}
               🟠 **Manual control active** — automation disabled
-              
+
               {% elif mode == 'spike_discharge' %}
               🔴 **Exporting to grid** — price spike detected
-              
+
               {% elif mode == 'boost_charging' %}
               🟡 **Fast charging (5kW)** — urgent charge before demand window
-              
+
               {% elif mode == 'grid_charging' %}
               🟢 **Grid charging (3.3kW)** — price below threshold
-              
+
               {% elif mode == 'proactive_export' %}
               🟢 **Exporting battery** — negative feed-in price coming
-              
+
               {% elif mode == 'demand_block' %}
               🟠 **Demand window active** — protecting from grid imports
-              
+
               {% else %}
               ⚪ **Self consumption** — normal operation
-              
+
               {% endif %}
 
+      # DP Optimizer Performance Card
+      - type: grid
+        cards:
+          - type: heading
+            heading: Optimizer Performance
+            heading_style: title
+
+          - type: markdown
+            content: >
+              {%- set summary = 'sensor.localshift_optimizer_summary' %}
+              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
+              {%- set status = states(summary) %}
+              {%- set success = state_attr(summary, 'success') | default(false) %}
+              {%- set solve_time = state_attr(summary, 'solve_time_seconds') | default(0) | float(0) %}
+              {%- set slots = states('sensor.localshift_optimizer_plan') | int(0) %} {# state = slot count #}
+              {%- set net = states(plan) | default(0) | float(0) %}
+              {%- set import_kwh = state_attr(plan, 'projected_import_kwh') | default(0) | float(0) %}
+              {%- set export_kwh = state_attr(plan, 'projected_export_kwh') | default(0) | float(0) %}
+              {%- set shortfall = state_attr(summary, 'terminal_shortfall_pct') | default(0) | float(0) %}
+              {%- set breakdown = state_attr(plan, 'action_breakdown') | default({}) %}
+              {%- set planner = state_attr(plan, 'planner') | default('unknown') %}
+              {%- set cycle_id = state_attr(summary, 'cycle_id') | default('-') %}
+
+              {% if not success %}
+              <ha-alert alert-type="error">Optimizer error — check logs</ha-alert>
+              {% endif %}
+
+              **Planner:** {{ planner }} · **Solve:** {{ (solve_time * 1000) | round(0) | int }}ms · **Slots:** {{ slots }}
+
+              **Projected Net:** ${{ net | round(3) }} · **Import:** {{ import_kwh | round(2) }} kWh · **Export:** {{ export_kwh | round(2) }} kWh
+
+              **Terminal Shortfall:** {{ shortfall | round(1) }}%
+
+              **Actions:** Hold {{ breakdown.get('hold', 0) }} · Grid Charge {{ breakdown.get('charge_grid_normal', 0) }} · Boost {{ breakdown.get('charge_grid_boost', 0) }} · Export {{ breakdown.get('proactive_export', 0) }}
+
+              *Cycle: {{ cycle_id[:8] if cycle_id else '-' }}*
+
       # Today's Cost (Hero Metric)
+      # Forecast section now uses optimizer_plan_grid for projected cost/import/export
       - type: grid
         columns: 2
         cards:
@@ -173,27 +213,27 @@ views:
               {% else %}
               # 💰 ${{ (net * -1) | round(2) }}
               {% endif %}
-              
+
               ---
-              
-              **Import:** ${{ state_attr(cost, 'grid_import_cost') | default(0) | float(0) | round(2) }}  
+
+              **Import:** ${{ state_attr(cost, 'grid_import_cost') | default(0) | float(0) | round(2) }}
               **Export:** ${{ state_attr(cost, 'grid_export_revenue') | default(0) | float(0) | round(2) }}
           - type: markdown
             content: >
               Forecast Today
 
-              {% set forecast = 'sensor.localshift_forecast_prices' %}
-              {% set net = state_attr(forecast, 'forecast_net_cost') | default(0) | float(0) %}
+              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
+              {%- set net = states(plan) | default(0) | float(0) %}
               {% if net >= 0 %}
               # 📊 ${{ net | round(2) }}
               {% else %}
               # 📈 ${{ (net * -1) | round(2) }}
               {% endif %}
-              
+
               ---
-              
-              **Import:** ${{ state_attr(forecast, 'forecast_import_cost') | default(0) | float(0) | round(2) }}  
-              **Export:** ${{ state_attr(forecast, 'forecast_export_revenue') | default(0) | float(0) | round(2) }}
+
+              **Projected Import:** {{ state_attr(plan, 'projected_import_kwh') | default(0) | float(0) | round(2) }} kWh
+              **Projected Export:** {{ state_attr(plan, 'projected_export_kwh') | default(0) | float(0) | round(2) }} kWh
 
       # Prices & Alerts
       - type: grid
@@ -240,6 +280,8 @@ views:
               color: orange
 
       # Solar Outlook
+      # Migrated from sensor.localshift_forecast_battery to optimizer entities.
+      # can_reach_target and terminal_shortfall sourced from optimizer_summary.
       - type: grid
         cards:
           - type: heading
@@ -248,25 +290,25 @@ views:
 
           - type: markdown
             content: >
-              {% set forecast = 'sensor.localshift_forecast_battery' %}
-              {% set target = states('number.localshift_battery_target') | default(100) | int(100) %}
-              {% set soc = states('sensor.my_home_percentage_charged') | default(0) | int(0) %}
-              {% set can_reach = is_state('binary_sensor.localshift_solar_can_reach_target', 'on') %}
-              {% set boost_needed = is_state('binary_sensor.localshift_charge_boost_needed', 'on') %}
-              {% set deficit = state_attr(forecast, 'deficit_kwh') | default(0) | float(0) %}
-              {% set solar = state_attr(forecast, 'solar_before_dw_kwh') | default(0) | float(0) %}
-              {% set hours = state_attr(forecast, 'hours_to_target_time') | default(0) | float(0) %}
-              
-              **Target:** {{ soc }}% → {{ target }}%  
-              **Solar remaining:** {{ solar | round(1) }} kWh  
-              **Hours to DW:** {{ hours | round(1) }}h  
-              
+              {%- set summary = 'sensor.localshift_optimizer_summary' %}
+              {%- set target = states('number.localshift_battery_target') | default(100) | int(100) %}
+              {%- set soc = states('sensor.my_home_percentage_charged') | default(0) | int(0) %}
+              {%- set shortfall = state_attr(summary, 'terminal_shortfall_pct') | default(0) | float(0) %}
+              {%- set boost_needed = is_state('binary_sensor.localshift_charge_boost_needed', 'on') %}
+              {%- set can_reach = shortfall <= 5.0 %}
+              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
+              {%- set import_kwh = state_attr(plan, 'projected_import_kwh') | default(0) | float(0) %}
+              {%- set export_kwh = state_attr(plan, 'projected_export_kwh') | default(0) | float(0) %}
+
+              **Target:** {{ soc }}% → {{ target }}%
+              **Projected Import:** {{ import_kwh | round(2) }} kWh · **Export:** {{ export_kwh | round(2) }} kWh
+
               {% if can_reach %}
-              ✅ **On track** — solar can reach target
+              ✅ **On track** — terminal shortfall {{ shortfall | round(1) }}%
               {% elif boost_needed %}
-              ⚡ **Boost needed** — grid charge at {{ (soc + (deficit * 100 / 13.5)) | round(0) }}%
+              ⚡ **Boost needed** — shortfall {{ shortfall | round(1) }}%
               {% else %}
-              ⚠️ **Solar gap** — {{ deficit | round(1) }} kWh deficit
+              ⚠️ **Solar gap** — {{ shortfall | round(1) }}% shortfall at end of horizon
               {% endif %}
 
       # Forecast Logic
@@ -374,9 +416,9 @@ views:
               {%- set decisions = state_attr('sensor.localshift_learning_status', 'total_decisions_today') | default(0) | int(0) %}
               {%- set trend = state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') %}
               {%- set score_7d = state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | default(0) | float(0) * 100 %}
-              
+
               **{{ decisions }}** decisions today · {{ score_7d | round(0) }}% 7-day avg
-              
+
               {% if trend == 'improving' %}
               📈 **{{ trend }}** — learning from data
               {% elif trend == 'degrading' %}
@@ -389,18 +431,60 @@ views:
             content: >
               {%- set weights = state_attr('sensor.localshift_learning_status', 'optimization_weights') | default({}) %}
               {%- set adjustments = state_attr('sensor.localshift_learning_status', 'contextual_adjustments_active') | default([]) %}
-              
+
               **Optimization Weights**
-              Cost: {{ (weights.get('cost_minimization', 0.5) * 100) | round(0) }}% · 
-              Export: {{ (weights.get('export_avoidance', 0.2) * 100) | round(0) }}% · 
-              Target: {{ (weights.get('target_achievement', 0.2) * 100) | round(0) }}% · 
+              Cost: {{ (weights.get('cost_minimization', 0.5) * 100) | round(0) }}% ·
+              Export: {{ (weights.get('export_avoidance', 0.2) * 100) | round(0) }}% ·
+              Target: {{ (weights.get('target_achievement', 0.2) * 100) | round(0) }}% ·
               Cycle: {{ (weights.get('cycle_reduction', 0.1) * 100) | round(0) }}%
-              
+
               {% if adjustments %}
               ---
               **Active Adjustments**
               {% for adj in adjustments %}
               · {{ adj.get('param_name', '') }}: {{ adj.get('adjustment', 0) | round(1) }} ({{ adj.get('reason', '') }})
+              {% endfor %}
+              {% endif %}
+
+      # Adaptive Parameters Card
+      - type: grid
+        cards:
+          - type: heading
+            heading: Adaptive Parameters
+            heading_style: title
+
+          - type: markdown
+            content: |
+              {%- set learning = 'sensor.localshift_learning_status' %}
+              {%- set learning_state = states(learning) %}
+              {%- set params = state_attr(learning, 'adaptive_parameters') %}
+              {%- set overrides = state_attr(learning, 'contextual_adjustments_active') | default([]) %}
+              {%- set config = state_attr('sensor.localshift_optimizer_summary', 'config_options') | default({}) %}
+
+              **Optimizer Config**
+
+              Mode: {{ config.get('optimization_mode', 'unknown') }} · Control: {{ config.get('optimizer_control_mode', 'unknown') }} · Min SOC: {{ config.get('minimum_target_soc', 0) }}% · Target: {{ config.get('battery_target', 0) }}%
+
+              ---
+
+              **Learning Status:** {{ learning_state }}
+
+              {% if params is not none and params %}
+              **Adaptive Parameters**
+              {% for k, v in params.items() %}
+              · {{ k | replace('_', ' ') | title }}: {{ v | round(3) if v is number else v }}
+              {% endfor %}
+              {% elif learning_state in ['disabled', 'unavailable', 'unknown'] %}
+              *Learning system {{ learning_state }} — no adaptive parameters*
+              {% else %}
+              *Adaptive parameters not yet available — learning system initialising*
+              {% endif %}
+
+              {% if overrides %}
+              ---
+              **Active Contextual Overrides**
+              {% for o in overrides %}
+              · {{ o.get('param_name', '') }}: {{ o.get('adjustment', 0) | round(3) }} — {{ o.get('reason', '') }}
               {% endfor %}
               {% endif %}
 
@@ -540,7 +624,7 @@ views:
 
           - type: markdown
             content: >
-              **Current Effective:** ${{ states('sensor.localshift_price_cheap_effective') }}/kWh  
+              **Current Effective:** ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
               **Stop Charging At:** ${{ states('sensor.localshift_price_cheap_charge_stop') }}/kWh
 
       # Forecast & Battery Settings
@@ -575,294 +659,292 @@ views:
             content: >
               ```
               === DEBUG STATE SUMMARY ===
-              
+
               Time: {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
-              
+
               === CURRENT STATE ===
-              
+
               Mode: {{ states('select.localshift_battery_mode') }}
-              
+
               SOC: {{ states('sensor.my_home_percentage_charged') }}%
-              
+
               Battery Power: {{ states('sensor.my_home_battery_power') }} kW
-              
+
               Grid Power: {{ states('sensor.my_home_grid_power') }} kW
-              
+
               Solar Power: {{ states('sensor.my_home_solar_power') }} kW
-              
+
               Buy Price: ${{ states('sensor.100h_general_price') }}/kWh
-              
+
               Sell Price: ${{ states('sensor.100h_feed_in_price') }}/kWh
-              
+
               Price Spike: {{ states('binary_sensor.100h_price_spike') }}
-              
+
               Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
-              
+
               === ENTITY HEALTH ===
-              
+
               Integration Status: {{ states('sensor.localshift_integration_status') }}
-              
+
               Entity Health: {{ states('sensor.localshift_entity_health') }}
-              
+
               {% set entities = state_attr('sensor.localshift_entity_health', 'entities') | default({}) %}
               {% set errors = state_attr('sensor.localshift_entity_health', 'errors') | default([]) %}
               {% set warnings = state_attr('sensor.localshift_entity_health', 'warnings') | default([]) %}
-              
+
               Errors: {{ errors | length }}
               {% for error in errors %}
                 - {{ error }}
               {% endfor %}
-              
+
               Warnings: {{ warnings | length }}
               {% for warning in warnings %}
                 - {{ warning }}
               {% endfor %}
-              
+
               Stale Entities:
               {% for name, info in entities.items() %}
               {%- if info.status == 'stale' %}
                 - {{ info.entity_id }}: {{ info.error_message | default('stale') }}
               {%- endif %}
               {%- endfor %}
-              
+
               Missing Entities:
               {% for name, info in entities.items() %}
               {%- if info.status == 'missing' %}
                 - {{ info.entity_id }}: {{ info.error_message | default('missing') }}
               {%- endif %}
               {%- endfor %}
-              
+
               === INTERNAL STATE FLAGS ===
-              
+
               Manual Override: {{ states('switch.localshift_automation_enabled') == 'off' }}
-              
-              Target Reached Today: {{ state_attr('sensor.localshift_forecast_battery', 'target_reached_today') }}
-              
+
               Forecast Spike Within Window: {{ states('binary_sensor.localshift_price_spike_coming') }}
-              
+
               Max Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_forecast_price') | default(0) }}/kWh
-              
+
               Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
-              
+
               Force Discharge Active: {{ states('select.localshift_battery_mode') == 'force_discharge' }}
-              
+
               Force Charge Active: {{ states('select.localshift_battery_mode') == 'force_charge' }}
-              
+
               Boost Charge Active: {{ states('select.localshift_battery_mode') == 'boost_charging' }}
-              
+
               Solar Can Reach Target: {{ states('binary_sensor.localshift_solar_can_reach_target') }}
-              
+
               Boost Charge Needed: {{ states('binary_sensor.localshift_charge_boost_needed') }}
-              
+
               === DEBUG: MODE DECISION (from forecast_diagnostics) ===
-              
+
               Mode Source: {{ state_attr('sensor.localshift_forecast_diagnostics', 'debug_mode_source') | default('unknown') }}
-              
+
               Forecast Slot Found: {{ state_attr('sensor.localshift_forecast_diagnostics', 'debug_forecast_slot_found') | default(false) }}
-              
+
               Forecast Slot Time: {{ state_attr('sensor.localshift_forecast_diagnostics', 'debug_forecast_slot_time') | default('-') }}
-              
+
               First Forecast Slot: {{ state_attr('sensor.localshift_forecast_diagnostics', 'debug_first_forecast_slot_time') | default('-') }}
-              
+
               Time Gap: {{ state_attr('sensor.localshift_forecast_diagnostics', 'debug_time_gap_seconds') | default(0) }}s
-              
+
               Dry Run: {{ states('switch.localshift_dry_run') == 'on' }}
-              
+
               === CONFIGURATION & THRESHOLDS ===
-              
+
               Cheap Price Percentile: {{ states('number.localshift_cheap_price_percentile') }}%
-              
+
               Max Pre-charge Price: ${{ states('number.localshift_max_pre_charge_price') }}/kWh
-              
+
               Battery Target: {{ states('number.localshift_battery_target') }}%
-              
+
               Effective Cheap Price: ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
-              
+
               Cheap Charge Stop Price: ${{ states('sensor.localshift_price_cheap_charge_stop') }}/kWh
-              
+
               Solar Weighted Avg FIT: ${{ states('sensor.localshift_solar_weighted_avg_fit') }}/kWh
-              
+
               Solar Remaining: {{ state_attr('sensor.localshift_solar_weighted_avg_fit', 'total_solar_remaining_kwh') | default(0) }} kWh
-              
-              === FORECAST INFORMATION ===
-              
-              Solar Battery Forecast SOC: {{ state_attr('sensor.localshift_forecast_battery', 'predicted_soc') | default(0) }}%
-              
-              Forecast Deficit: {{ state_attr('sensor.localshift_forecast_battery', 'deficit_kwh') | default(0) }} kWh
-              
-              Solar Before DW: {{ state_attr('sensor.localshift_forecast_battery', 'solar_before_dw_kwh') | default(0) }} kWh
-              
-              Net Solar: {{ state_attr('sensor.localshift_forecast_battery', 'net_solar_kwh') | default(0) }} kWh
-              
-              Hours to DW: {{ state_attr('sensor.localshift_forecast_battery', 'hours_to_target_time') | default(0) }}h
-              
-              Can Reach Target: {{ state_attr('sensor.localshift_forecast_battery', 'can_reach_target') | default(true) }}
-              
-              Boost Needed: {{ state_attr('sensor.localshift_forecast_battery', 'boost_needed') }}
-              
-              Daily Forecast Entries: {{ states('sensor.localshift_forecast_daily') | int(default=0) }}
-              
-              Slot Count: {{ state_attr('sensor.localshift_forecast_daily', 'slot_count') | default(0) }}
-              
-              Forecast Hourly Entries: {{ state_attr('sensor.localshift_forecast_daily', 'forecast_hourly') | default([]) | length }}
-              
-              Solcast Today Entries: {{ state_attr('sensor.localshift_forecast_daily', 'solcast_today_entries') | default(0) }}
-              
-              Solcast Tomorrow Entries: {{ state_attr('sensor.localshift_forecast_daily', 'solcast_tomorrow_entries') | default(0) }}
-              
+
+              === OPTIMIZER INFORMATION ===
+
+              Optimizer Status: {{ states('sensor.localshift_optimizer_summary') }}
+
+              Optimizer Slots: {{ states('sensor.localshift_optimizer_plan') }}
+
+              Planner: {{ state_attr('sensor.localshift_optimizer_plan_grid', 'planner') | default('unknown') }}
+
+              Projected Net Cost: ${{ states('sensor.localshift_optimizer_plan_grid') }}
+
+              Projected Import: {{ state_attr('sensor.localshift_optimizer_plan_grid', 'projected_import_kwh') | default(0) }} kWh
+
+              Projected Export: {{ state_attr('sensor.localshift_optimizer_plan_grid', 'projected_export_kwh') | default(0) }} kWh
+
+              Terminal Shortfall: {{ state_attr('sensor.localshift_optimizer_summary', 'terminal_shortfall_pct') | default(0) }}%
+
+              Solve Time: {{ state_attr('sensor.localshift_optimizer_summary', 'solve_time_seconds') | default(0) }}s
+
+              Cycle ID: {{ state_attr('sensor.localshift_optimizer_summary', 'cycle_id') | default('-') }}
+
+              Parity Completeness: {{ state_attr('sensor.localshift_optimizer_summary', 'parity_completeness_pct') | default(0) }}%
+
+              Action Breakdown: {{ state_attr('sensor.localshift_optimizer_plan_grid', 'action_breakdown') | default({}) }}
+
+              Computed At: {{ state_attr('sensor.localshift_optimizer_plan_detailed', 'computed_at') | default('-') }}
+
               === FORECAST DIAGNOSTICS (from forecast_diagnostics sensor) ===
-              
+
               Current Load: {{ state_attr('sensor.localshift_forecast_diagnostics', 'current_load_kw') | default(0) }} kW
-              
+
               Recent 1hr Load: {{ state_attr('sensor.localshift_forecast_diagnostics', 'recent_load_1hr_kw') | default(0) }} kW
-              
+
               Recent 1hr Statistic ID: {{ state_attr('sensor.localshift_forecast_diagnostics', 'recent_load_1hr_statistic_id') | default('') }}
-              
+
               Recent 1hr Samples: {{ state_attr('sensor.localshift_forecast_diagnostics', 'recent_load_1hr_samples') | default(0) }}
-              
+
               Recent 1hr Error: {{ state_attr('sensor.localshift_forecast_diagnostics', 'recent_load_1hr_last_error') | default('') }}
-              
+
               Consumption Weighting: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_weighting') | default(0) }}
-              
+
               Consumption Source: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_source') }}
-              
+
               Consumption Source Counts: {{ state_attr('sensor.localshift_forecast_diagnostics', 'forecast_consumption_source_counts') | default({}) }}
-              
+
               Consumption Profile Hours: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_profile_hours') | default(0) }}
-              
+
               Consumption Fallback Hours: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_fallback_hours') | default(0) }}
-              
+
               === DECISION LOG ===
-              
+
               Latest Decision: {{ state_attr('sensor.localshift_decision_log', 'reason') | default('No decisions yet') }}
-              
+
               Latest SOC: {{ state_attr('sensor.localshift_decision_log', 'soc') }}%
-              
+
               Latest Buy Price: ${{ state_attr('sensor.localshift_decision_log', 'buy_price') }}/kWh
-              
+
               Latest Sell Price: ${{ state_attr('sensor.localshift_decision_log', 'sell_price') }}/kWh
-              
+
               Latest Timestamp: {{ state_attr('sensor.localshift_decision_log', 'timestamp') }}
-              
+
               Recent History:
               {% for entry in state_attr('sensor.localshift_decision_log', 'history') | default([]) | slice(-5) %}
                 - {{ entry.get('timestamp', '') }}: {{ entry.get('reason', '') }} (SOC: {{ entry.get('soc') }}%)
               {% endfor %}
-              
+
               === COST TRACKING ===
-              
+
               Net Cost Today: ${{ states('sensor.localshift_cost_electricity_net') }}
-              
+
               Import Cost: ${{ state_attr('sensor.localshift_cost_electricity_net', 'grid_import_cost') | default(0) }}
-              
+
               Export Revenue: ${{ state_attr('sensor.localshift_cost_electricity_net', 'grid_export_revenue') | default(0) }}
-              
+
               Battery Savings: ${{ state_attr('sensor.localshift_cost_electricity_net', 'battery_savings') | default(0) }}
-              
+
               Battery Charge Cost: ${{ state_attr('sensor.localshift_cost_electricity_net', 'battery_charge_cost') | default(0) }}
-              
+
               === WEATHER CORRELATION (from forecast_diagnostics) ===
-              
+
               Weather Entity: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_entity_id') | default('not configured') }}
-              
+
               Current Temperature: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_temperature_current') | default('N/A') }}°C
-              
+
               Weather Condition: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_condition') | default('unknown') }}
-              
+
               Learning Enabled: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_learning_enabled') }}
-              
+
               Confidence: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_correlation_confidence') | default('low') }}
-              
+
               Total Samples: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_sample_count') | default(0) }}
-              
+
               Cooling Coefficient: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_cooling_coefficient') | default(0) }} kW/°C
-              
+
               Heating Coefficient: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_heating_coefficient') | default(0) }} kW/°C
-              
+
               Adjustment Applied: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_adjustment_applied') | default(false) }}
-              
+
               Temperature Forecast: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_temperature_forecast') | default({}) }}
-              
+
               === SYSTEM INFO ===
-              
+
               Operation Mode: {{ states('select.my_home_operation_mode') }}
-              
+
               Backup Reserve: {{ states('number.my_home_backup_reserve') }}%
-              
+
               Allow Export: {{ states('select.my_home_allow_export') }}
-              
+
               === LEARNING SYSTEM ===
-              
+
               Learning Status: {{ states('sensor.localshift_learning_status') }}
-              
+
               Decision Quality: {{ states('sensor.localshift_decision_quality') }}%
-              
+
               Decisions Today: {{ state_attr('sensor.localshift_learning_status', 'total_decisions_today') | default(0) }}
-              
+
               Avg Score Today: {{ state_attr('sensor.localshift_learning_status', 'avg_decision_score_today') | default(0) }}
-              
+
               Avg Score 7d: {{ state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | default(0) }}
-              
+
               Cost Trend: {{ state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') }}
-              
+
               Grid Charge Efficiency: {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
-              
+
               Export Loss Ratio: {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
-              
+
               Unnecessary Grid Charge: {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
-              
+
               Mode Durations Today: {{ state_attr('sensor.localshift_learning_status', 'mode_durations_today') | default({}) }}
-              
+
               Mode Cost Attribution: {{ state_attr('sensor.localshift_learning_status', 'mode_cost_attribution') | default({}) }}
-              
+
               Decision History Count: {{ states('sensor.localshift_learning_decision_history') }}
-              
+
               === BINARY SENSORS SUMMARY ===
-              
+
               Price Spike Coming: {{ states('binary_sensor.localshift_price_spike_coming') }}
-              
+
               Discharge Forced: {{ states('binary_sensor.localshift_discharge_forced') }}
-              
+
               Charge Forced: {{ states('binary_sensor.localshift_charge_forced') }}
-              
+
               Charge Boost: {{ states('binary_sensor.localshift_charge_boost') }}
-              
+
               Price Expensive Coming: {{ states('binary_sensor.localshift_price_expensive_coming') }}
-              
+
               Solar Can Reach Target: {{ states('binary_sensor.localshift_solar_can_reach_target') }}
-              
+
               Charge Boost Needed: {{ states('binary_sensor.localshift_charge_boost_needed') }}
-              
+
               Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
-              
+
               Excess Solar Available: {{ states('binary_sensor.localshift_excess_solar_available') }}
-              
+
               Tesla Override Active: {{ states('binary_sensor.localshift_tesla_override_active') }}
-              
+
               === SWITCHES SUMMARY ===
-              
+
               Automation Enabled: {{ states('switch.localshift_automation_enabled') }}
-              
+
               Spike Discharge Enabled: {{ states('switch.localshift_spike_discharge_enabled') }}
-              
+
               Spike Discharge Conservative: {{ states('switch.localshift_spike_discharge_conservative') }}
-              
+
               Dry Run: {{ states('switch.localshift_dry_run') }}
-              
+
               Demand Window Block: {{ states('switch.localshift_demand_window_block') }}
-              
+
               Allow DW Entry Under Target: {{ states('switch.localshift_allow_dw_entry_under_target') }}
-              
+
               Notify Mode Transitions: {{ states('switch.localshift_notify_mode_transitions') }}
-              
+
               Notify Daily Summary: {{ states('switch.localshift_notify_daily_summary') }}
-              
+
               Notify Manual Actions: {{ states('switch.localshift_notify_manual_actions') }}
-              
+
               Notify Alerts: {{ states('switch.localshift_notify_alerts') }}
-              
+
               Enable Learning: {{ states('switch.localshift_enable_learning') }}
-              
+
               === END OF DEBUG SUMMARY ===
               ```
 
@@ -877,120 +959,83 @@ views:
               entity_id:
                 - select.localshift_battery_mode
 
-      - cards:
-        - type: markdown
-          content: >
-            **Grid Summary:** {{ state_attr('sensor.localshift_forecast_grid',
-            'grid_charge_slots') | default(0) }} grid charge slots, {{
-            state_attr('sensor.localshift_forecast_grid',
-            'proactive_export_slots') | default(0) }} proactive export slots |
-            **Total Import:** {{ state_attr('sensor.localshift_forecast_grid',
-            'total_grid_import_kwh') | default(0) }} kWh | **Total Export:** {{
-            state_attr('sensor.localshift_forecast_grid', 'total_grid_export_kwh')
-            | default(0) }} kWh
+      # --- DP Optimizer Slot Detail Table ---
+      # Replaces the deleted legacy Grid Summary table.
+      # Source: sensor.localshift_optimizer_plan_detailed.decisions[]
+      - type: grid
+        cards:
+          - type: heading
+            heading: DP Optimizer Slot Detail
+            heading_style: title
 
+          - type: markdown
+            content: >
+              {%- set summary = 'sensor.localshift_optimizer_summary' %}
+              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
+              {%- set decisions = state_attr('sensor.localshift_optimizer_plan_detailed', 'decisions') | default([]) %}
+              {%- set opt_enabled = state_attr(summary, 'enabled') | default(false) %}
+              {%- set success = state_attr(summary, 'success') | default(false) %}
 
-            **Price Thresholds:** Effective Cheap Price: ${{
-            state_attr('sensor.localshift_forecast_prices',
-            'effective_cheap_price') | default(0) }}/kWh | Cheap Charge Stop
-            Price: ${{ state_attr('sensor.localshift_forecast_prices',
-            'cheap_charge_stop_price') | default(0) }}/kWh
+              **Price Thresholds:** Effective Cheap: ${{ states('sensor.localshift_price_cheap_effective') | default(0) }}/kWh · Stop: ${{ states('sensor.localshift_price_cheap_charge_stop') | default(0) }}/kWh
 
+              **Grid:** Import {{ state_attr(plan, 'projected_import_kwh') | default(0) | round(3) }} kWh · Export {{ state_attr(plan, 'projected_export_kwh') | default(0) | round(3) }} kWh · Net ${{ states(plan) | default(0) | float(0) | round(3) }}
 
-            {%- set forecast_slots =
-            state_attr('sensor.localshift_forecast_daily', 'forecast_slots') |
-            default([]) %}
+              {% if not opt_enabled %}
+              **Optimizer disabled**
+              {% elif not success %}
+              **Optimizer error** — check error_message attribute
+              {% elif decisions | length == 0 %}
+              **No decisions available**
+              {% else %}
 
-            {%- set grid_data = state_attr('sensor.localshift_forecast_grid',
-            'grid_interaction') | default([]) %}
+              **{{ decisions | length }} slots** · Planner: {{ state_attr(plan, 'planner') | default('unknown') }} · Computed: {{ state_attr('sensor.localshift_optimizer_plan_detailed', 'computed_at') | default('-') }}
 
-            {%- set buy_prices = state_attr('sensor.localshift_forecast_prices',
-            'buy_prices') | default([]) %}
+              | Time | Int | SOC% | Solar | Load | Buy$ | Sell$ | Action | Reason | Import | Export |
 
-            {%- set sell_prices = state_attr('sensor.localshift_forecast_prices',
-            'sell_prices') | default([]) %}
+              | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: |
 
+              {% for d in decisions -%}
+              | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ d.slot_interval_minutes | default(5) }}m | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ "%.3f"|format(d.solar_kwh | float) }} | {{ "%.3f"|format(d.consumption_kwh | float) }} | {{ "%.3f"|format(d.buy_price | float) }} | {{ "%.3f"|format(d.sell_price | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(22, true, '…') }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
 
-            | Time | SOC% | Solar | Load | Net | Buy$ | Sell$ | GridIn | GridOut |
-            GC | Boost | PE | Export |
+              {% endfor %}
 
-            | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---:
-            | :---: | :---: | ---: |
+              {% endif %}
 
-            {%- for item in forecast_slots %}
+          - type: markdown
+            content: |
+              {%- set s = 'sensor.localshift_optimizer_summary' %}
+              {%- set _slots_detailed = state_attr('sensor.localshift_optimizer_plan_detailed', 'total_slots') %}
+              {%- set slots = _slots_detailed if _slots_detailed is not none else state_attr(s, 'total_slots') | default(0) %}
+              {%- set defaulted = state_attr(s, 'parity_defaulted_fields') | default({}) %}
+              {%- set cfg = state_attr(s, 'config_options') | default({}) %}
 
-            {%- set grid_item = grid_data[loop.index0] | default({}) %}
+              **Optimizer Summary**
 
-            {%- set buy_item = buy_prices[loop.index0] | default({}) %}
+              | Field | Value |
+              | :--- | :--- |
+              | Total Slots | {{ slots }} |
+              | Planner Version | {{ state_attr(s, 'planner_version') | default('unknown') }} |
+              | Solve Time | {{ state_attr(s, 'solve_time_seconds') | default(0) }}s |
+              | Projected Net | ${{ state_attr(s, 'projected_net_cost') | default(0) | round(3) }} |
+              | Parity Completeness | {{ state_attr(s, 'parity_completeness_pct') | default(0) }}% |
+              | Terminal Shortfall | {{ state_attr(s, 'terminal_shortfall_pct') | default(0) }}% |
+              | Cycle ID | {{ state_attr(s, 'cycle_id') | default('-') }} |
 
-            {%- set sell_item = sell_prices[loop.index0] | default({}) %}
+              **Parity Defaulted Fields**
 
-            | {{ item.time }} | {{ "%.1f"|format(item.predicted_soc | float) }} |
-            {{ "%.3f"|format(item.solar_kwh | float) }} | {{
-            "%.3f"|format(item.consumption_kwh | float) }} | {{
-            "%.3f"|format(item.net_kwh | float) }} | {{
-            "%.3f"|format(item.buy_price | float(0)) }} | {{
-            "%.3f"|format(item.sell_price | float(0)) }} | {{
-            "%.4f"|format(grid_item.grid_import_kwh | float) }} | {{
-            "%.4f"|format(grid_item.grid_export_kwh | float) }} | {{ 'Y' if
-            grid_item.grid_charge else '-' }} | {{ 'Y' if
-            grid_item.grid_charge_boost else '-' }} | {{ 'Y' if
-            grid_item.proactive_export else '-' }} | {{
-            "%.4f"|format(grid_item.export_amount_kwh | float) }} |
+              | Field | Count |
+              | :--- | ---: |
+              {%- for k, v in defaulted.items() %}
+              | {{ k }} | {{ v }} |
+              {%- endfor %}
 
-            {%- endfor %}
+              **Config**
 
-        - type: markdown
-          content: >
-            {% set decisions = state_attr('sensor.localshift_optimizer_shadow_plan', 'decisions') | default([]) %}
-            {% set opt_enabled = state_attr('sensor.localshift_optimizer_shadow_plan', 'enabled') | default(false) %}
-            {% set success = state_attr('sensor.localshift_optimizer_shadow_plan', 'success') | default(false) %}
-
-            {% if not opt_enabled %}
-            **Optimizer disabled**
-            {% elif not success %}
-            **Optimizer error** — check error_message attribute
-            {% elif decisions | length == 0 %}
-            **No decisions available**
-            {% else %}
-
-            **Optimizer Summary:** {{ state_attr('sensor.localshift_optimizer_shadow_summary', 'total_slots') | default(0) }} slots |
-            {{ state_attr('sensor.localshift_optimizer_comparison', 'total_slots') | default(0) }} legacy slots |
-            {{ state_attr('sensor.localshift_optimizer_comparison', 'aligned_slots') | default(0) }} optimizer slots
-
-            **Projected Cost:** Legacy: ${{ state_attr('sensor.localshift_optimizer_comparison', 'legacy_projected_net_cost') | default(0) | round(2) }} |
-            Optimizer: ${{ state_attr('sensor.localshift_optimizer_comparison', 'optimizer_projected_net_cost') | default(0) | round(2) }}
-
-            | Time | SOC% | Solar | Load | Buy$ | Sell$ | Action | Reason | Import | Export |
-
-            | :--- | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: |
-
-            {% for d in decisions %}
-            | {{ d.timestamp_iso[11:16] if d.timestamp_iso else '-' }} | {{ "%.1f"|format(d.predicted_soc_pct | float) }} | {{ "%.3f"|format(d.solar_kwh | float) }} | {{ "%.3f"|format(d.consumption_kwh | float) }} | {{ "%.3f"|format(d.buy_price | float) }} | {{ "%.3f"|format(d.sell_price | float) }} | {{ d.action | replace('_', ' ') | title }} | {{ d.reason_code | replace('_', ' ') | truncate(20) }} | {{ "%.3f"|format(d.grid_import_kwh | float) }} | {{ "%.3f"|format(d.grid_export_kwh | float) }} |
-            
-            {% endfor %}
-
-            {% endif %}
-
-        - type: markdown
-          content: >
-            {% set top = state_attr('sensor.localshift_optimizer_comparison', 'top_mismatches') | default([]) %}
-
-            {% if top | length > 0 %}
-
-            **Top Mismatches:**
-
-            | Slot | Time | Type | Legacy | Optimizer | Savings |
-
-            | :--- | :--- | :--- | :--- | :--- | ---: |
-
-            {% for m in top[:5] %}
-            | {{ m.slot_index }} | {{ m.timestamp_iso[11:16] if m.timestamp_iso else '-' }} | {{ m.mismatch_type | replace('_MISMATCH', '') }} | {{ m.legacy_action }} | {{ m.optimizer_action }} | ${{ (m.legacy_net_cost | default(0) - m.optimizer_net_cost | default(0)) | round(3) }} |
-            
-            {% endfor %}
-
-            {% else %}
-
-            *No mismatches or optimizer disabled*
-
-            {% endif %}
+              | Option | Value |
+              | :--- | :--- |
+              | Optimization Mode | {{ cfg.get('optimization_mode', '-') }} |
+              | Control Mode | {{ cfg.get('optimizer_control_mode', '-') }} |
+              | Min Target SOC | {{ cfg.get('minimum_target_soc', '-') }}% |
+              | Battery Target | {{ cfg.get('battery_target', '-') }}% |
+              | Allow DW Entry Under Target | {{ cfg.get('allow_dw_entry_under_target', '-') }} |
+              | Export Price Margin | {{ cfg.get('export_price_margin', '-') }} |
