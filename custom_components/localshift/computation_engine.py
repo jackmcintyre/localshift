@@ -29,7 +29,7 @@ from .computation_engine_lib import (
 from .computation_engine_lib.excess_solar import ExcessSolarEngine
 from .computation_engine_lib.load_forecaster import LoadForecaster
 from .computation_engine_lib.optimizer_dp import DPPlanner
-from .computation_engine_lib.optimizer_shadow_runner import (
+from .computation_engine_lib.optimizer_runner import (
     OptimizerSafetyGate,
     _build_optimizer_config,
     _build_summary,
@@ -52,8 +52,6 @@ from .const import (
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
-    CONF_OPTIMIZER_CONTROL_MODE,
-    CONF_OPTIMIZER_ENABLED,
     CONF_SUN_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -66,8 +64,6 @@ from .const import (
     DEFAULT_LOAD_WEIGHT_RECENT,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
-    DEFAULT_OPTIMIZER_CONTROL_MODE,
-    DEFAULT_OPTIMIZER_ENABLED,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 )
@@ -776,14 +772,9 @@ class ComputationEngine:
         """Build config_options dict for optimizer and safety gate.
 
         Phase 3 (#441): Consolidates config options construction.
+        Phase 6 (#448): Removed optimizer_enabled and control_mode options.
         """
         return {
-            "optimizer_enabled": self.entry.options.get(
-                CONF_OPTIMIZER_ENABLED, DEFAULT_OPTIMIZER_ENABLED
-            ),
-            CONF_OPTIMIZER_CONTROL_MODE: self.entry.options.get(
-                CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
-            ),
             CONF_MINIMUM_TARGET_SOC: self.entry.options.get(
                 CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
             ),
@@ -817,19 +808,6 @@ class ComputationEngine:
 
         # Read config once for this cycle
         config_options = self._build_optimizer_config_options()
-
-        # Gate: only proceed if optimizer is enabled
-        optimizer_enabled = config_options.get("optimizer_enabled", False)
-        if not optimizer_enabled:
-            # Optimizer disabled — active_mode will be set by legacy path (_compute_active_mode)
-            return
-
-        control_mode = config_options.get(
-            CONF_OPTIMIZER_CONTROL_MODE, DEFAULT_OPTIMIZER_CONTROL_MODE
-        )
-
-        # Set runtime mode for sensor visibility
-        data.optimizer_runtime_mode = control_mode
 
         try:
             # Step A: Build slots from raw data (Phase 2 SlotBuilder)
@@ -877,9 +855,8 @@ class ComputationEngine:
                 data, result, slot_metadata, config_options, cycle_id
             )
 
-            # Steps D+E: Derive apply plan and assign active_mode (only if control is active)
-            if control_mode == "active":
-                self._assign_active_mode(data, result, optimizer_config)
+            # Steps D+E: Derive apply plan and assign active_mode
+            self._assign_active_mode(data, result, optimizer_config)
 
         except Exception as e:
             _LOGGER.warning(
@@ -950,7 +927,9 @@ class ComputationEngine:
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "blocked"
             data.optimizer_safety_block_reason = gate_result.block_reason or ""
-            data.optimizer_fallback_count = data.optimizer_fallback_count + 1
+            _LOGGER.warning(
+                "Optimizer safety gate failed — defaulting to SELF_CONSUMPTION"
+            )
             return
 
         # Gate passed — derive apply plan from current slot
@@ -960,32 +939,21 @@ class ComputationEngine:
         )
         data.optimizer_apply_plan = apply_plan
 
-        if apply_plan.get("fallback_to_legacy", True):
-            _LOGGER.info(
-                "DP optimizer: apply plan requests fallback — defaulting to SELF_CONSUMPTION"
-            )
-
-            data.active_mode = _BatteryMode.SELF_CONSUMPTION
-            data.optimizer_last_apply_status = "fallback"
-            data.optimizer_fallback_count = data.optimizer_fallback_count + 1
-            return
-
         # Map battery_mode string → BatteryMode enum
         battery_mode_str = apply_plan.get("battery_mode", "")
         try:
             data.active_mode = _BatteryMode(battery_mode_str)
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
-            data.optimizer_fallback_count = 0
             _LOGGER.info(
-                "DP optimizer (same-cycle): selected %s (action=%s, slot=%d)",
+                "DP optimizer: selected %s (action=%s, slot=%d)",
                 battery_mode_str,
                 apply_plan.get("action"),
                 current_slot_idx,
             )
         except ValueError:
             _LOGGER.warning(
-                "DP optimizer: invalid battery_mode '%s' — SELF_CONSUMPTION",
+                "DP optimizer: invalid battery_mode '%s' — defaulting to SELF_CONSUMPTION",
                 battery_mode_str,
             )
 

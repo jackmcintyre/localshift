@@ -507,38 +507,10 @@ EXTENDED_HISTORY_MAX_DAYS = 365  # Maximum days (1 year)
 PLATFORMS = ["sensor", "binary_sensor", "number", "switch", "button", "select"]
 
 # -----------------------------------------------------------------------------
-# DP Optimizer rollout configuration (#403)
+# DP Optimizer configuration (Phase 6 #448)
 # -----------------------------------------------------------------------------
-
-CONF_OPTIMIZER_ENABLED = "optimizer_enabled"
-"""Feature flag — set True to run the DP optimizer in shadow mode each cycle."""
-
-CONF_OPTIMIZER_CONTROL_MODE = "optimizer_control_mode"
-"""
-Controls how the optimizer result is used:
-  'shadow'  — optimizer runs but does NOT affect runtime control (default)
-  'assist'  — optimizer result is logged and compared; legacy planner controls
-  'active'  — (future) optimizer result drives runtime control
-"""
-
-DEFAULT_OPTIMIZER_ENABLED = False
-"""Optimizer is disabled by default; enabled via config flow / options."""
-
-DEFAULT_OPTIMIZER_CONTROL_MODE = "shadow"
-"""Always start in shadow mode; never silently assume active control."""
-
-OPTIMIZER_CONTROL_MODES = ["shadow", "assist", "active"]
-"""Valid optimizer control mode values."""
-
-CONF_OPTIMIZER_ACTIVE_MIN_SHADOW_SUCCESS_RATE = (
-    "optimizer_active_min_shadow_success_rate"
-)
-"""Config key for minimum shadow success rate before enabling active mode."""
-DEFAULT_OPTIMIZER_ACTIVE_MIN_SHADOW_SUCCESS_RATE = 0.0
-"""Default: require no minimum success rate (0.0 = disabled check)."""
-
-OPTIMIZER_COOLDOWN_CYCLES = 3
-"""Number of cycles to stay in fallback cooldown after repeated failures."""
+# Optimizer is always active after Phase 4 — shadow/assist modes removed.
+# All optimizer_control_mode and optimizer_enabled config removed.
 
 OPTIMIZER_FORECAST_FRESHNESS_MINUTES = 30
 """Maximum forecast age in minutes for active mode admission."""
