@@ -790,6 +790,9 @@ class ComputationEngine:
             CONF_EXPORT_PRICE_MARGIN: self.entry.options.get(
                 CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN
             ),
+            # ha_timezone override: if present in entry.options (e.g. injected by tests
+            # via config_overrides), use it to avoid relying on dt_util.DEFAULT_TIME_ZONE.
+            "ha_timezone": self.entry.options.get("ha_timezone", None),
         }
 
     def _run_dp_optimizer_inline(self, data: CoordinatorData, now_dt: datetime) -> None:
@@ -811,7 +814,9 @@ class ComputationEngine:
 
         try:
             # Step A: Build slots from raw data (Phase 2 SlotBuilder)
-            ha_timezone = (
+            # Allow config_options to override timezone (used in tests to inject the
+            # scenario's local timezone without needing to mock dt_util.DEFAULT_TIME_ZONE).
+            ha_timezone = config_options.get("ha_timezone") or (
                 str(dt_util.DEFAULT_TIME_ZONE)
                 if dt_util.DEFAULT_TIME_ZONE
                 else "Australia/Sydney"
@@ -819,7 +824,9 @@ class ComputationEngine:
             slot_builder = SlotBuilder(
                 config_options=config_options, ha_timezone=ha_timezone
             )
-            slots, slot_metadata = slot_builder.build_slots(data, data.adaptive_params)
+            slots, slot_metadata = slot_builder.build_slots(
+                data, data.adaptive_params, now_dt=now_dt
+            )
 
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")

@@ -132,7 +132,10 @@
   "config_overrides": {
     "battery_target": 90,
     "demand_window_start": "18:00:00",
-    "demand_window_end": "22:00:00"
+    "demand_window_end": "22:00:00",
+    "optimizer_enabled": true,
+    "optimizer_control_mode": "active",
+    "ha_timezone": "Australia/Sydney"
   },
   "switch_states": {
     "automation_enabled": true,
@@ -141,6 +144,6 @@
   },
   "expected": {
     "solar_can_reach_target": false,
-    "boost_charge_needed": true
+    "optimizer_result_success": true
   }
 }

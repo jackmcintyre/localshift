@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..coordinator_data import AdaptiveParameters
 from .optimizer_dp import SlotContext
@@ -131,12 +132,16 @@ class SlotBuilder:
         self,
         data: Any,  # CoordinatorData — avoid circular import
         adaptive_params: AdaptiveParameters | None,
+        now_dt: datetime | None = None,
     ) -> tuple[list[SlotContext], SlotBuildMetadata]:
         """Build SlotContext list from raw coordinator data.
 
         Args:
             data: CoordinatorData instance with raw forecast fields.
             adaptive_params: AdaptiveParameters from learning system, or None.
+            now_dt: Reference "now" datetime. When provided (e.g. in tests that
+                mock time), slots are filtered relative to this time rather than
+                the real wall-clock. Defaults to datetime.now().astimezone().
 
         Returns:
             (contexts, metadata) tuple where:
@@ -144,7 +149,9 @@ class SlotBuilder:
             - metadata: SlotBuildMetadata with diagnostic counts
         """
         # Step 1: Get hybrid slot schedule from general_forecast
-        now_local = datetime.now().astimezone()
+        now_local = (
+            now_dt.astimezone() if now_dt is not None else datetime.now().astimezone()
+        )
         hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
             now_local=now_local,
             general_forecast=data.general_forecast,
@@ -170,6 +177,14 @@ class SlotBuilder:
         # Step 5: Compute base slot for load_forecast_slots indexing
         base_slot = now_local.replace(second=0, microsecond=0)
 
+        # Resolve local timezone object once for DW time comparisons.
+        # DW start/end times are always in the HA local timezone, so we must
+        # convert each slot_start to local time before comparing.
+        try:
+            local_tz = ZoneInfo(self._ha_timezone)
+        except Exception:
+            local_tz = None
+
         # Step 6: Build SlotContext for each hybrid slot
         contexts: list[SlotContext] = []
         five_min_count = 0
@@ -183,7 +198,14 @@ class SlotBuilder:
         for i, slot in enumerate(hybrid_slots):
             slot_start: datetime = slot["start"]
             interval_minutes: int = slot["interval_minutes"]
-            slot_time = slot_start.time()
+
+            # Convert to local timezone for DW comparison.
+            # slot_start may be in any tz (UTC when ha_timezone is not set in tests,
+            # or local otherwise). DW times are always in HA local tz.
+            if local_tz is not None and slot_start.tzinfo is not None:
+                slot_time = slot_start.astimezone(local_tz).time()
+            else:
+                slot_time = slot_start.time()
 
             # Track slot duration counts
             if interval_minutes == 5:

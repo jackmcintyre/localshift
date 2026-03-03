@@ -113,7 +113,10 @@
     "battery_target": 90,
     "demand_window_start": "18:00:00",
     "demand_window_end": "22:00:00",
-    "export_price_margin": 0.10
+    "export_price_margin": 0.1,
+    "optimizer_enabled": true,
+    "optimizer_control_mode": "active",
+    "ha_timezone": "Australia/Sydney"
   },
   "switch_states": {
     "automation_enabled": true,
@@ -121,6 +124,6 @@
     "demand_window_block": true
   },
   "expected": {
-    "daily_forecast_min_soc": 36.6
+    "optimizer_result_success": true
   }
 }

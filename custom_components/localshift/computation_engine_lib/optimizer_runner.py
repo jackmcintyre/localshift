@@ -468,6 +468,7 @@ def _serialize_result(result: OptimizerResult) -> dict[str, Any]:
         "terminal_shortfall_pct": round(result.terminal_shortfall_pct, 2),
         "error_message": result.error_message,
         "reason_code_histogram": result.reason_code_histogram,
+        "can_solar_reach_target": result.can_solar_reach_target,  # Phase 8 (#450): enables contradiction regression test
     }
 
 

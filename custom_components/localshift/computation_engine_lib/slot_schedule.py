@@ -103,14 +103,18 @@ def compute_hybrid_slot_schedule(
         if duration_minutes not in (5, 30, 60):
             continue
 
+        # Normalise 60-min test slots to 30-min so downstream code (solar_utils,
+        # slot_builder) sees only the two native granularities (5 and 30).
+        normalised_minutes = 30 if duration_minutes == 60 else duration_minutes
+
         price = float(entry.get("per_kwh", 0))
 
         all_slots_raw.append(
             {
                 "start": slot_start,
-                "interval_minutes": duration_minutes,
+                "interval_minutes": normalised_minutes,
                 "price": price,
-                "price_source": "5min" if duration_minutes == 5 else "30min",
+                "price_source": "5min" if normalised_minutes == 5 else "30min",
             }
         )
 
@@ -121,10 +125,9 @@ def compute_hybrid_slot_schedule(
     # Step 2: Sort by start time
     all_slots_raw.sort(key=lambda x: x["start"])
 
-    # Step 3: Separate 5-min and 30-min slots
-    # Note: 60-min slots (used in tests) are treated as 30-min extended forecast
+    # Step 3: Separate 5-min and 30-min slots (60-min already normalised to 30 above)
     five_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 5]
-    thirty_min_slots = [s for s in all_slots_raw if s["interval_minutes"] in (30, 60)]
+    thirty_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 30]
 
     _LOGGER.debug(
         "compute_hybrid_slot_schedule: Found %d 5-min slots, %d 30-min slots",
