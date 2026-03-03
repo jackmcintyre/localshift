@@ -68,6 +68,7 @@ async def async_setup_entry(
             coordinator, entry
         ),  # Was OptimizerShadowPlanSensor
         OptimizerSummarySensor(coordinator, entry),  # Was OptimizerShadowSummarySensor
+        SolarForecastAccuracySensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -1214,3 +1215,22 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             return "mdi:alert-circle-outline"
         else:
             return "mdi:minus-circle-outline"
+
+
+class SolarForecastAccuracySensor(LocalShiftSensorBase):
+    """Solar forecast accuracy metrics for learning system."""
+
+    _attr_unique_id = "localshift_solar_forecast_accuracy"
+    _attr_name = "Solar Forecast Accuracy"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:solar-power-variant"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = getattr(
+            self.coordinator.data, "solar_forecast_accuracy", 100.0
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        return getattr(self.coordinator.data, "solar_bias_metrics", {})

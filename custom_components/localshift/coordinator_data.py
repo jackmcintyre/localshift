@@ -427,6 +427,10 @@ class CoordinatorData:
     active_bias_corrections: list[dict[str, Any]] = field(
         default_factory=list
     )  # Currently active corrections
+    solar_bias_metrics: dict[str, Any] = field(
+        default_factory=dict
+    )  # Solar forecast bias metrics and correction factors
+    solar_forecast_accuracy: float = 100.0  # Overall solar forecast accuracy percentage
 
     # --- Optimization controller (Issue #170 Phase 4) ---
     optimization_weights: dict[str, float] = field(
