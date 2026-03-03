@@ -18,6 +18,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN, OPTIMIZABLE_PARAMS
+from .optimizer_dp import PlannerAction
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -405,13 +406,18 @@ class PatternAnalyzer:
             std_score = 0.0
 
         # Over-charge rate: grid charge decisions that resulted in export
+        # Issue #449 Phase 7: compare against PlannerAction (DP-native) values
+        _grid_charge_actions = {
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        }
         grid_charge_count = sum(
-            1 for d in decisions if d.mode_chosen.value == "grid_charging"
+            1 for d in decisions if d.mode_chosen in _grid_charge_actions
         )
         over_charge_count = sum(
             1
             for d in decisions
-            if d.mode_chosen.value == "grid_charging"
+            if d.mode_chosen in _grid_charge_actions
             and d.actual_export_kwh is not None
             and d.actual_export_kwh > 0.5
         )

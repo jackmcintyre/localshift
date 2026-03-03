@@ -3,6 +3,8 @@
 Issue #170 Phase 1: Records mode decisions and backfills outcomes to create
 a ground-truth dataset for optimization. This phase is observation-only —
 no behavioral changes.
+
+Issue #449 Phase 7: Updated to use DP-native PlannerAction instead of legacy BatteryMode.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import BatteryMode
 from ..coordinator_data import PerformanceMetrics
+from .optimizer_dp import PlannerAction
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -25,6 +28,23 @@ if TYPE_CHECKING:
     from ..coordinator_data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
+
+# Legacy mode to DP action mapping for backward compatibility
+LEGACY_MODE_TO_ACTION = {
+    BatteryMode.SELF_CONSUMPTION: PlannerAction.HOLD,
+    BatteryMode.GRID_CHARGING: PlannerAction.CHARGE_GRID_NORMAL,
+    BatteryMode.BOOST_CHARGING: PlannerAction.CHARGE_GRID_BOOST,
+    BatteryMode.SPIKE_DISCHARGE: PlannerAction.EXPORT_PROACTIVE,
+    BatteryMode.PROACTIVE_EXPORT: PlannerAction.EXPORT_PROACTIVE,
+}
+
+# DP action to legacy mode mapping for observability
+ACTION_TO_LEGACY_MODE = {
+    PlannerAction.HOLD: BatteryMode.SELF_CONSUMPTION,
+    PlannerAction.CHARGE_GRID_NORMAL: BatteryMode.GRID_CHARGING,
+    PlannerAction.CHARGE_GRID_BOOST: BatteryMode.BOOST_CHARGING,
+    PlannerAction.EXPORT_PROACTIVE: BatteryMode.PROACTIVE_EXPORT,
+}
 
 # Maximum number of completed decisions to keep in memory
 MAX_COMPLETED_DECISIONS = 500
@@ -39,12 +59,14 @@ class DecisionRecord:
 
     Context is captured at decision time. Outcomes are backfilled after
     the decision period ends (mode changes or max duration elapsed).
+
+    Issue #449 Phase 7: Uses DP-native PlannerAction instead of legacy BatteryMode.
     """
 
     # Context at decision time
     timestamp: datetime
-    mode_chosen: BatteryMode
-    previous_mode: BatteryMode
+    mode_chosen: PlannerAction
+    previous_mode: PlannerAction
     soc_at_decision: float
     general_price_at_decision: float
     feed_in_price_at_decision: float
@@ -63,7 +85,7 @@ class DecisionRecord:
     actual_export_kwh: float | None = None
     actual_import_kwh: float | None = None
     duration_minutes: float | None = None
-    next_mode: BatteryMode | None = None
+    next_mode: PlannerAction | None = None
     outcome_score: float | None = None  # 0.0-1.0, computed quality score
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,12 +115,36 @@ class DecisionRecord:
         }
 
     @classmethod
+    def _parse_action(cls, value: str) -> PlannerAction:
+        """Parse a PlannerAction from a stored string value.
+
+        Handles both current DP action strings and legacy BatteryMode strings,
+        mapping the latter to their DP equivalents for backward compatibility
+        with records stored before Issue #449.
+        """
+        # Try PlannerAction first (current format)
+        try:
+            return PlannerAction(value)
+        except ValueError:
+            pass
+        # Fall back: try as legacy BatteryMode and map to PlannerAction
+        try:
+            legacy = BatteryMode(value)
+            return LEGACY_MODE_TO_ACTION.get(legacy, PlannerAction.HOLD)
+        except ValueError:
+            _LOGGER.warning(
+                "Unknown mode/action value %r in stored record; defaulting to HOLD",
+                value,
+            )
+            return PlannerAction.HOLD
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> DecisionRecord:
         """Create from dictionary (deserialization)."""
         return cls(
             timestamp=datetime.fromisoformat(data["timestamp"]),
-            mode_chosen=BatteryMode(data["mode_chosen"]),
-            previous_mode=BatteryMode(data["previous_mode"]),
+            mode_chosen=cls._parse_action(data["mode_chosen"]),
+            previous_mode=cls._parse_action(data["previous_mode"]),
             soc_at_decision=data["soc_at_decision"],
             general_price_at_decision=data["general_price_at_decision"],
             feed_in_price_at_decision=data["feed_in_price_at_decision"],
@@ -117,7 +163,9 @@ class DecisionRecord:
             actual_export_kwh=data.get("actual_export_kwh"),
             actual_import_kwh=data.get("actual_import_kwh"),
             duration_minutes=data.get("duration_minutes"),
-            next_mode=BatteryMode(data["next_mode"]) if data.get("next_mode") else None,
+            next_mode=cls._parse_action(data["next_mode"])
+            if data.get("next_mode")
+            else None,
             outcome_score=data.get("outcome_score"),
         )
 
@@ -165,30 +213,45 @@ class DecisionOutcomeTracker:
     def record_decision(
         self,
         data: CoordinatorData,
-        mode: BatteryMode,
-        prev_mode: BatteryMode,
+        mode: PlannerAction | BatteryMode,
+        prev_mode: PlannerAction | BatteryMode,
     ) -> None:
         """Record a mode transition with full context.
 
         Called by StateMachine on every mode transition. Also triggers
         backfill of any pending decision that just ended.
 
+        Accepts either PlannerAction (DP-native, preferred) or legacy BatteryMode,
+        mapping BatteryMode to PlannerAction automatically.
+
         Args:
             data: Current coordinator data with context
-            mode: New mode being transitioned to
-            prev_mode: Previous mode before transition
+            mode: New mode being transitioned to (PlannerAction or BatteryMode)
+            prev_mode: Previous mode before transition (PlannerAction or BatteryMode)
         """
         now = dt_util.now()
 
+        # Normalise to PlannerAction
+        action = (
+            mode
+            if isinstance(mode, PlannerAction)
+            else LEGACY_MODE_TO_ACTION.get(mode, PlannerAction.HOLD)
+        )
+        prev_action = (
+            prev_mode
+            if isinstance(prev_mode, PlannerAction)
+            else LEGACY_MODE_TO_ACTION.get(prev_mode, PlannerAction.HOLD)
+        )
+
         # First, backfill any pending decision (this transition ends it)
         if self._pending_decisions:
-            self._backfill_pending_decision(data, mode, now)
+            self._backfill_pending_decision(data, action, now)
 
         # Capture context for the new decision
         record = DecisionRecord(
             timestamp=now,
-            mode_chosen=mode,
-            previous_mode=prev_mode,
+            mode_chosen=action,
+            previous_mode=prev_action,
             soc_at_decision=data.soc,
             general_price_at_decision=data.general_price,
             feed_in_price_at_decision=data.feed_in_price,
@@ -232,14 +295,14 @@ class DecisionOutcomeTracker:
     def _backfill_pending_decision(
         self,
         data: CoordinatorData,
-        next_mode: BatteryMode,
+        next_mode: PlannerAction,
         now: datetime,
     ) -> None:
         """Backfill outcome for a pending decision that just ended.
 
         Args:
             data: Current coordinator data
-            next_mode: The mode being transitioned to (ends the pending decision)
+            next_mode: The DP action being transitioned to (ends the pending decision)
             now: Current timestamp
         """
         if not self._pending_decisions:
@@ -264,7 +327,10 @@ class DecisionOutcomeTracker:
         if soc_change < 0:  # Battery discharged
             cost = 0.0  # Discharging is "free"
         else:  # Battery charged
-            if pending.mode_chosen == BatteryMode.GRID_CHARGING:
+            if pending.mode_chosen in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
                 cost = (
                     -soc_change / 100.0 * 13.5 * pending.general_price_at_decision / 100
                 )
@@ -386,21 +452,17 @@ class DecisionOutcomeTracker:
         # 1. Cost Score (weight: 40%)
         # Lower cost = better score
         if record.actual_cost_during_period is not None:
-            if record.mode_chosen == BatteryMode.GRID_CHARGING:
+            if record.mode_chosen in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
                 # Grid charging: positive cost is expected
                 # Penalize if we charged and then exported (waste)
                 if record.actual_export_kwh and record.actual_export_kwh > 0.5:
                     cost_score = 0.2  # Penalize grid-charge-then-export
                 else:
                     cost_score = 0.7  # Normal grid charge
-            elif record.mode_chosen == BatteryMode.SPIKE_DISCHARGE:
-                # Spike discharge: should save money
-                # Negative cost (revenue) is good
-                if record.actual_cost_during_period < 0:
-                    cost_score = 0.9  # Made money
-                else:
-                    cost_score = 0.5  # Neutral
-            elif record.mode_chosen == BatteryMode.PROACTIVE_EXPORT:
+            elif record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
                 # Proactive export: should make money
                 if (
                     record.actual_cost_during_period
@@ -410,7 +472,7 @@ class DecisionOutcomeTracker:
                 else:
                     cost_score = 0.4  # Didn't make expected profit
             else:
-                # Self consumption, demand block: neutral on cost
+                # HOLD / self-consumption: neutral on cost
                 cost_score = 0.6
             score = score * 0.6 + cost_score * 0.4
 
@@ -422,16 +484,16 @@ class DecisionOutcomeTracker:
             grid_imported = (
                 record.actual_import_kwh is not None and record.actual_import_kwh > 0.1
             )
-            if record.mode_chosen == BatteryMode.GRID_CHARGING:
+            if record.mode_chosen in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
                 if grid_imported:
                     # Bad: imported from grid then exported
                     score -= 0.15
                 # else: solar-driven export is acceptable, no penalty
-            elif record.mode_chosen in (
-                BatteryMode.PROACTIVE_EXPORT,
-                BatteryMode.SPIKE_DISCHARGE,
-            ):
-                # Good: these modes are supposed to export
+            elif record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
+                # Good: this mode is supposed to export
                 score += 0.05
 
         # 3. Target Score (weight: 25%)
