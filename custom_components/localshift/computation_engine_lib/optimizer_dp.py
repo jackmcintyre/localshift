@@ -979,7 +979,7 @@ class DPPlanner:
         - Price thresholds for self-consumption mode
         - Solar surplus gate: suppresses grid charging when solar will cover
           the full SOC deficit before the demand window (self_consumption mode only)
-        - Slot duration vs transfer limits (TODO: implement fully in Phase C)
+        - Slot duration vs transfer limits
 
         Args:
             soc_pct: Current battery SOC percentage.

@@ -61,7 +61,6 @@ class WeatherDiagnosticsEngine:
         if has_medium_confidence:
             data.weather_correlation_confidence = "medium"
 
-        # ForecastComputer sets this flag during forecast generation.
         data.weather_adjustment_applied = False
 
         _LOGGER.debug(

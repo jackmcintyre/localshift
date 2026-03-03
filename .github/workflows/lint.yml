@@ -91,4 +91,46 @@ jobs:
         run: uv sync
 
       - name: Run pyright
-        run: npx pyright custom_components/localshift || true  # Pre-existing type issues
+        run: npx pyright custom_components/localshift
+
+  interrogate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run interrogate
+        run: uv run interrogate custom_components/localshift --fail-under 50
+
+  deptry:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run deptry
+        run: uv run deptry custom_components/localshift --ignore DEP002,DEP003 || true  # Pre-existing type issues

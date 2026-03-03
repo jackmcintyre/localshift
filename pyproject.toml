@@ -38,6 +38,14 @@ min_confidence = 80
 paths = ["custom_components/localshift"]
 exclude = ["tests/"]
 
+[tool.deptry]
+known_first_party = ["custom_components.localshift"]
+
+[tool.interrogate]
+fail-under = 50
+exclude = ["tests/"]
+ignore-init-module = true
+
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "basic"
@@ -70,4 +78,6 @@ dev = [
     "safety>=3.7.0",
     "vulture>=2.14",
     "ruff>=0.15.2",
+    "deptry>=0.20.0",
+    "interrogate>=1.7.0",
 ]

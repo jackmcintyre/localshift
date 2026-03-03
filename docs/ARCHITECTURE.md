@@ -126,11 +126,10 @@ The architecture was designed to solve several problems from the original YAML-b
 
 2. **Computation Engine** (`computation_engine.py`)
    - Computes derived values (directional power, mode detection, forecasts)
-   - Delegates to `ForecastComputer` for 15-minute SOC simulation
+   - Delegates to DP optimizer (`optimizer_dp.py`) for 24-hour SOC simulation and control decisions
    - Delegates focused responsibilities to `computation_engine_lib/` helpers:
      - `change_tracker.py` → `ForecastChangeTracker`
      - `price_calculator.py` → effective cheap price + solar-weighted FIT
-     - `mode_decision.py` → active mode + decision-log maintenance
      - `spike_analyzer.py` → conservative spike analysis + reserve SOC
      - `excess_solar_signals.py` → excess-solar/load-shift signal orchestration
      - `forecast_accuracy.py` → planned-vs-actual forecast accuracy comparisons
@@ -146,61 +145,54 @@ The architecture was designed to solve several problems from the original YAML-b
    - Issues commands to Teslemetry (operation mode, backup reserve, export mode)
    - Validates transitions completed successfully
 
-5. **Forecast Computer** (`forecast_computer.py`)
-   - Simulates 24-hour battery behavior with hybrid granularity
-   - Near-term (2 h): 24 × 5-minute slots for accurate current-period decisions
-   - Long-term (22 h): 88 × 15-minute slots for planning further ahead
-   - Models solar, consumption, grid charging, and proactive exports
-   - Provides `daily_forecast` with 112 entries; each entry carries `slot_interval_minutes`
+5. **DP Optimizer** (`computation_engine_lib/optimizer_dp.py`)
+   - Core DP solver with SOC discretization (50 bins by default)
+   - Computes optimal 24-hour battery control decisions
+   - Handles demand window target preparation
+   - Provides `optimizer_result` with per-slot decisions
+
+6. **Slot Builder** (`computation_engine_lib/slot_builder.py`)
+   - Builds `SlotContext` objects from raw coordinator data
+   - Applies adaptive parameters (consumption bias, solar factor, etc.)
+   - Shared between DP optimizer and load forecaster
 
 ## Current Architecture Issues
 
-### Issue 1: Duplicate Grid Charging Logic
+> **Note:** The following issues were addressed during the DP optimizer migration (#441). This section is retained as historical reference.
 
-**Location 1: `forecast_computer.py` (lines 200-320)**
-- Simulates grid charging for forecast
-- Sets `should_grid_charge` and `should_boost` flags
+### Issue 1: Duplicate Grid Charging Logic (RESOLVED)
 
-**Location 2: `computation_engine.py` (lines 680-730)**
-- Decides WHEN to grid charge (sets `active_mode`)
-- Uses different logic (current state vs forecast)
+**Status:** ✅ Resolved — DP optimizer is now the single source of truth for all battery decisions.
 
-**Problem:** Independent logic can diverge
+### Issue 2: No Change Detection for Forecasts (RESOLVED)
 
-### Issue 2: No Change Detection for Forecasts
+**Status:** ✅ Resolved — Change detection implemented via `ForecastChangeTracker`.
 
-**Current behavior:**
-- Forecast recomputed on EVERY state change
-- Forecast recomputed on EVERY 1-minute tick
-- Most changes don't materially affect forecast
+### Issue 3: No Proactive Export Logic (RESOLVED)
 
-**Problem:** Unnecessary computation (~70% waste)
-
-### Issue 3: No Proactive Export Logic
-
-**Current behavior:**
-- Battery only exports when full + excess solar
-- No logic to export before negative prices
-
-**Problem:** Missed revenue, paying to export
+**Status:** ✅ Resolved — DP optimizer handles proactive export decisions.
 
 ## Target Architecture
+
+> **Note:** This target architecture is now implemented. The DP optimizer serves as the single source of truth.
 
 ### Single Source of Truth
 
 ```
 Decision Logic (single source)
-    └─> forecast_computer.py
-        ├─> _should_grid_charge_at_slot()
-        └─> _should_proactive_export_at_slot()
+    └─> optimizer_dp.py (DPPlanner)
+        ├─> Computes optimal 24-hour plan
+        └─> Outputs per-slot decisions with reason codes
 
-Forecast uses decision logic
-    └─> Simulates behavior for 96 slots
-    └─> Marks planned actions in forecast data
+Slot Builder prepares inputs
+    └─> slot_builder.py (SlotBuilder)
+        ├─> Builds SlotContext from raw coordinator data
+        └─> Applies adaptive parameters
 
-Control follows forecast plan
-    └─> Checks forecast for current time slot
-    └─> Executes mode transitions as planned
+Control follows optimizer plan
+    └─> computation_engine._derive_runtime_apply_plan()
+        ├─> Maps optimizer actions to battery modes
+        └─> State machine executes transitions
 ```
 
 ### Key Principles
@@ -223,109 +215,71 @@ This ensures the system captures real-time price opportunities rather than relyi
 
 ### Benefits
 
-| Aspect | Current | Target |
+| Aspect | Before Migration | After Migration |
 |---------|---------|---------|
-| Grid charging logic | 2 places, independent | 1 place, shared |
+| Decision logic | Multiple places, independent | DP optimizer (single source) |
 | Forecast updates | Every change (wasteful) | On significant changes |
-| Control decisions | Current state only | Forecast-driven |
-| Proactive exports | Not implemented | Follows same pattern |
+| Control decisions | Current state only | Optimizer-driven plan |
+| Proactive exports | Not implemented | Built into optimizer |
 | Maintainability | High risk of divergence | Single source of truth |
-| Debugging | Hard to correlate | Forecast = plan |
+| Debugging | Hard to correlate | Optimizer output = plan |
 
-## Migration Strategy
+## Migration History
 
-### Phase 1: Architecture Refactoring (Grid Charging)
-1. Extract grid charging logic to `_should_grid_charge_at_slot()`
-2. Add `grid_charge` and `grid_charge_boost` flags to forecast entries
-3. Implement forecast-driven control in `_compute_active_mode()`
-4. Test: behavior matches current system
+The following migration phases were completed as part of #441:
 
-### Phase 2: Change Detection
-1. Add `ForecastChangeTracker` class
-2. Implement `_should_recompute_forecast()` with thresholds:
-   - Buy price: ANY change
-   - Feed-in price: ANY change
-   - SOC: ≥1% change
-   - Age: >1 minute (backup)
-3. Update computation flow with caching
-4. Test: forecast regeneration is efficient
-
-### Phase 3: Proactive Export ✅ IMPLEMENTED
-1. ✅ Add `_should_proactive_export_at_slot()` decision logic
-2. ✅ Add `proactive_export` and `export_amount_kwh` to forecast
-3. ✅ Implement forecast-driven export switching
-4. ✅ Use PROACTIVE_EXPORT mode with **dynamic throttling reserve**
-5. ✅ Test: exports before negative prices
-
-#### Proactive Export Safety Features
-
-**Overnight Drain Simulation:**
-- `_simulate_overnight_drain_after_export()` simulates battery drain from export slot until solar production starts
-- Blocks exports that would cause overnight minimum SOC to drop below `export_min_soc_pct`
-- Returns `solar_found_in_forecast` flag to detect late forecast slots without solar visibility
-
-**Late Forecast Slot Protection:**
-- Exports blocked when solar cannot be found in remaining forecast data
-- This prevents exports in last 6-8 hours of 24h forecast window where overnight simulation is unreliable
-
-**Dynamic Throttling:**
-- Reserve set to `max(4, SOC - 5)` instead of fixed minimum
-- Limits each export session to ~5% of battery capacity (~0.675 kWh)
-- Creates "trickle export" behavior instead of full 8kW discharge
-- Forecast incorporates throttling to show realistic export amounts
+- **Phase 1:** Extract load forecast as shared intermediate
+- **Phase 2:** SlotBuilder replaces legacy `_build_slot_contexts`
+- **Phase 3:** Eliminate one-cycle lag by inlining DP optimizer
+- **Phase 4:** Remove ForecastComputer and ModeDecisionEngine
+- **Phase 5:** Migrate HA sensor entities to DP optimizer
+- **Phase 6:** Config cleanup — retire shadow/assist modes
+- **Phase 7:** Wire learning system into DP optimizer
+- **Phase 8:** Scenario tests against DP optimizer outputs
+- **Phase 9:** Dashboard updates for DP optimizer entities
 
 ## Component Details
 
-### Forecast Data Structure
+### Optimizer Data Structures
 
-The `daily_forecast` list contains 112 entries: 24 × 5-minute near-term slots followed by 88 × 15-minute long-term slots. The `slot_interval_minutes` field identifies the granularity of each entry.
+The DP optimizer produces `OptimizerResult` containing:
+- `decisions`: List of `PlannedSlotDecision` objects (one per forecast slot)
+- `net_cost`: Projected total cost for the plan
+- `solve_time_seconds`: Optimization runtime
+- `can_reach_target`: Whether demand window target is achievable
 
-### Hybrid Timescale Architecture
+Each `PlannedSlotDecision` includes:
+- `action`: CHARGE, DISCHARGE, EXPORT, or HOLD
+- `predicted_soc_pct`: Projected SOC after this slot
+- `grid_import_kwh` / `grid_export_kwh`: Energy quantities
+- `reason_code`: Why this action was chosen (e.g., CHEAP_SLOT, DW_PREP)
 
-The forecast system uses a **hybrid timescale** approach that balances accuracy and efficiency:
+### Slot Context
 
-**Design Rationale:**
-- **Near-term (0-2h):** 24 × 5-minute slots for high-accuracy decisions
-  - Matches Amber 5-minute pricing granularity
-  - Ensures "now" is always covered in forecast
-  - Critical for grid charging and export decisions
-- **Long-term (2-24h):** 88 × 15-minute slots for efficient planning
-  - Sufficient granularity for forward planning
-  - Reduces computational complexity
-  - Matches original 15-minute design for consistency
+`SlotContext` objects are built by `SlotBuilder` from raw coordinator data:
+- Timestamp and interval
+- Buy/sell prices
+- Solar forecast (kWh)
+- Consumption forecast (kWh)
+- Demand window flags
 
-**Total Coverage:** 24×5min + 88×15min = 120min + 1320min = 1440min = 24 hours (112 slots)
+### Optimizer Integration
 
-**Critical Bug Fix:**
-Prior to this implementation, helper functions (`_find_battery_fill_point`, `_calculate_solar_energy_between_slots`) assumed uniform 15-minute slots throughout the entire 24-hour forecast. This caused SOC accumulation to be calculated **3× too fast** in the near-term window (0-2h), leading to:
-- Battery fill point predicted 2-3 hours too early
-- Grid charging decisions incorrectly delayed
-- System predicting rapid charging while battery actually draining
+The DP optimizer is called during the medium tick (every 5 minutes):
+1. `SlotBuilder` constructs `SlotContext` objects from coordinator data
+2. `DPPlanner.plan()` computes optimal decisions
+3. `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
+4. State machine executes the derived plan
 
-**Solution Implemented:**
-All helper functions now use the same hybrid timescale as the main forecast loop:
-- `_find_battery_fill_point()` - Returns elapsed minutes using hybrid loops
-- `_calculate_solar_energy_between_slots()` - Uses elapsed minutes parameters
-- `_should_proactive_export_at_slot()` - Accepts `current_elapsed_minutes` and `fill_point_elapsed_minutes`
+### Change Detection
 
-**Solar Retrieval:**
-- Near-term (5-min): `get_solar_for_5min_slot()` returns 1/6 of 30-min Solcast period
-- Long-term (15-min): `get_solar_for_15min_slot()` returns 1/2 of 30-min Solcast period
+The `ForecastChangeTracker` determines when to re-run the optimizer:
+- Price changes (any change in buy/sell price)
+- SOC changes (≥1% threshold)
+- Forecast age (>5 minutes)
+- Solar forecast updates
 
-**Time-Based Comparisons:**
-Helper functions return elapsed minutes rather than slot offsets, enabling clean time-based comparisons that are agnostic to slot duration:
-
-```python
-# Fill point calculation returns minutes
-fill_point_elapsed_minutes = self._find_battery_fill_point(...)
-
-# Main loop calculates elapsed time
-elapsed_minutes = (slot_start - base_slot).total_seconds() / 60
-
-# Comparison is duration-based, not slot-based
-if elapsed_minutes >= fill_point_elapsed_minutes:
-    # Block export - battery would fill before we can use more solar
-```
+This ensures efficient computation without missing critical changes.
 
 This architecture ensures accurate near-term decisions while maintaining computational efficiency for long-term planning.
 
@@ -865,93 +819,51 @@ The integration includes a DP (Dynamic Programming) optimizer subsystem that com
 | Component | File | Purpose |
 |-----------|------|---------|
 | **DPPlanner** | `optimizer_dp.py` | Core DP solver with SOC discretization |
-| **PlannerComparator** | `planner_comparator.py` | Side-by-side plan comparison |
-| **run_shadow_optimizer()** | `optimizer_shadow_runner.py` | Coordinator integration entry point |
+| **SlotBuilder** | `slot_builder.py` | Builds SlotContext from coordinator data |
+| **run_optimizer()** | `optimizer_runner.py` | Coordinator integration entry point |
 
 ### Data Flow
 
-1. **Legacy Planner** (Authoritative)
-   - `ForecastComputer` computes 24-hour plan as `daily_forecast`
-   - State machine uses this for control decisions
+1. **Optimizer Execution** (every medium tick)
+   - `SlotBuilder.build_slot_contexts()` constructs `SlotContext` objects
+   - `run_optimizer()` builds `OptimizerConfig` from integration options
+   - `DPPlanner.plan()` computes optimal decisions
+   - Populates optimizer fields in `CoordinatorData`
 
-2. **Shadow Optimizer** (Non-invasive)
-   - `run_shadow_optimizer()` called after legacy planner completes
-   - Converts `daily_forecast` slots to `SlotContext` objects
-   - Builds `OptimizerConfig` from integration options
-   - Runs `DPPlanner.plan()` to compute optimal decisions
-   - Populates shadow fields in `CoordinatorData`
-
-3. **Plan Comparison**
-   - `PlannerComparator.compare()` produces `PlannerComparisonRecord`
-   - Classifies mismatches by type (ACTION, QUANTITY, PROFITABILITY, etc.)
-   - Ranks mismatches by significance score
-   - Stores comparison in `optimizer_comparison`
-
-4. **Active Mode** (when enabled)
-   - `OptimizerSafetyGate.admit()` validates all prerequisites
-   - On success: `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
-   - On failure: falls back to legacy control for this cycle
-   - Tracks `optimizer_fallback_count` for cooldown logic
+2. **Apply Plan Derivation**
+   - `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
+   - Safety gate validates prerequisites
+   - On failure: falls back to SELF_CONSUMPTION for this cycle
+   - Tracks `optimizer_last_apply_status` for diagnostics
 
 ### CoordinatorData Optimizer Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `optimizer_shadow_result` | `dict` | OptimizerResult metadata (success, solve_time, net_cost) |
-| `optimizer_shadow_decisions` | `list[dict]` | Per-slot decisions from optimizer |
-| `optimizer_shadow_summary` | `dict` | Compact summary for diagnostics sensor |
-| `optimizer_comparison` | `dict` | Legacy vs optimizer comparison record |
-| `optimizer_apply_plan` | `list[dict]` | Apply plan derived from optimizer for active mode execution |
-| `optimizer_last_apply_status` | `dict` | Active-mode apply status (success/failure/block_reason) |
-| `optimizer_last_apply_timestamp` | `str` | ISO timestamp of last successful active-mode apply |
-| `optimizer_fallback_count` | `int` | Number of consecutive fallback-to-legacy cycles |
+| `optimizer_result` | `OptimizerResult` | Full optimizer result (success, solve_time, net_cost, decisions) |
+| `optimizer_apply_plan` | `list[dict]` | Apply plan derived from optimizer for execution |
+| `optimizer_last_apply_status` | `dict` | Apply status (success/failure/block_reason) |
+| `optimizer_last_apply_timestamp` | `str` | ISO timestamp of last successful apply |
 
 ### Optimizer Sensors
 
-| Sensor | State | Purpose |
-|--------|-------|---------|
-| `sensor.localshift_optimizer_shadow_plan` | disabled/computed/error | Per-slot optimizer decisions |
-| `sensor.localshift_optimizer_shadow_summary` | disabled/success/failed | Aggregate optimizer metrics |
-| `sensor.localshift_optimizer_comparison` | mismatch_count | Legacy vs optimizer comparison |
-
-### Modes
-
-| Mode | Control Behavior | Status |
-|------|------------------|--------|
-| `shadow` | Legacy planner controls | ✅ Supported |
-| `assist` | Legacy planner controls, optimizer recommends | ✅ Supported |
-| `active` | Optimizer controls (with safety gate) | ✅ Supported |
-
-### Phase Rollout Status
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| A | Scaffold baseline | ✅ Complete |
-| B | Input/config parity | ✅ Complete |
-| C | DP solver implementation | ✅ Complete |
-| D | Comparator hardening | ✅ Complete |
-| E | Assist-mode UX | ✅ Complete |
-| F | Active-control pilot | ✅ Complete |
-| G | Stabilization/release | 🔄 In Progress |
+| Sensor | Purpose |
+|--------|---------|
+| `sensor.localshift_optimizer_plan_detailed` | Per-slot optimizer decisions |
+| `sensor.localshift_optimizer_summary` | Aggregate optimizer metrics |
 
 ### Safety Guarantees
 
-**Shadow/Assist Mode:**
-- Optimizer runs in **isolation** — no battery control commands issued
-- Legacy planner remains **authoritative** for all control decisions
-- Shadow exceptions are **caught and logged** — never block coordinator
-
-**Active Mode:**
-- All shadow/assist guarantees apply
-- **Safety gate** validates prerequisites each cycle: feature enabled, control mode active, solve success, slot alignment valid, forecast freshness acceptable
-- Any failed gate triggers immediate **fallback to legacy control**
+**Always Active:**
+- **Safety gate** validates prerequisites each cycle: solve success, slot alignment valid, forecast freshness acceptable
+- Any failed gate triggers immediate **fallback to SELF_CONSUMPTION**
 - **Cooldown period** after repeated failures prevents rapid re-attempts
-- Unsupported/ambiguous optimizer actions fall back to legacy decisions
+- Unsupported/ambiguous optimizer actions fall back to safe defaults
 - Feature can be **disabled** at any time via configuration
 
 ### Related Documentation
 
-- [OPTIMIZER_DP_ROLLOUT.md](OPTIMIZER_DP_ROLLOUT.md) - Rollout guide for operators
+- [OPTIMIZER_DP_ROLLOUT.md](OPTIMIZER_DP_ROLLOUT.md) - Rollout history (completed)
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Optimizer troubleshooting
 
 ---

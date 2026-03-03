@@ -1,13 +1,12 @@
 """SlotBuilder — construct SlotContext list from raw CoordinatorData.
 
-Part of #441 — Phase 2: Retire legacy ForecastComputer/ModeDecisionEngine planner.
 This module builds SlotContext objects directly from raw coordinator data fields,
-removing the hard dependency on data.daily_forecast.
+serving as the input preparation layer for the DP optimizer.
 
 Design principles:
 - Read raw data: general_forecast, feed_in_forecast, solcast_today/tomorrow, load_forecast_slots
 - Apply adaptive param transforms: solar_confidence_factor to solar_kwh
-- DO NOT apply consumption_forecast_bias (already applied by LoadForecaster in Phase 1)
+- DO NOT apply consumption_forecast_bias (already applied by LoadForecaster)
 - Compute demand window flags independently
 - Return typed SlotBuildMetadata for diagnostics
 """

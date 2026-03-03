@@ -254,8 +254,7 @@ class CoordinatorData:
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
-    # TODO(#441 Phase 5): Deprecated - populated by ForecastComputer which is deleted in Phase 4.
-    # Sensors reading these are migrated in Phase 5. Currently always empty list.
+    # Legacy forecast fields — retained for compatibility, always empty after #441 migration.
     daily_forecast: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast_hourly: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
@@ -283,12 +282,11 @@ class CoordinatorData:
     recent_load_1hr_last_error: str = ""
     consumption_weighting: float = 0.67
 
-    # Shared load forecast slots — populated before ForecastComputer runs (Issue #441 Phase 1)
+    # Shared load forecast slots for DP optimizer
     # 96 entries, one per 15-min slot starting from the current 5-min boundary.
-    # Index aligns with slot_idx in ForecastComputer.compute_forecast() hybrid slot loop.
     load_forecast_slots: list[float] = field(default_factory=list)
 
-    # Cost accumulators (Phase 4)
+    # Cost accumators
     grid_import_cost: float = 0.0
     grid_export_revenue: float = 0.0
     battery_savings: float = 0.0
