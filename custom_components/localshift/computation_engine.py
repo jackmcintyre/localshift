@@ -638,12 +638,16 @@ class ComputationEngine:
         for i in range(TOTAL_SLOTS):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
+            hours_ahead = i / 4.0
+            temperature = data.weather_temperature_forecast.get(slot_hour)
             load_kw, _ = self._load_forecaster.estimate_hourly_consumption_kw(
                 hourly_avg_kw=historical_avg_kw,
                 slot_hour=slot_hour,
                 current_hour=current_hour,
                 current_load_kw=data.load_power_kw,
                 recent_load_kw=recent_load_kw,
+                temperature=temperature,
+                hours_ahead=hours_ahead,
             )
             slots.append(load_kw)
 

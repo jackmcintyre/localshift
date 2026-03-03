@@ -161,6 +161,7 @@ class SocSimulator:
                     break
 
                 slot_hour = slot_start.hour
+                hours_ahead = (slot_start - base_slot).total_seconds() / 3600
 
                 # Use variable-duration solar function
                 solar_kwh = get_solar_for_slot_by_interval(
@@ -169,11 +170,12 @@ class SocSimulator:
 
                 # ISSUE #137: Use baseline load profile when provided
                 load_kw, _ = self._estimate_hourly_consumption_kw(
-                    load_profile,  # Uses baseline_avg_kw if provided
+                    load_profile,
                     slot_hour,
                     current_hour,
                     current_load_kw,
                     recent_load_kw,
+                    hours_ahead=hours_ahead,
                 )
                 consumption_kwh = load_kw * slot_fraction
                 net_kwh = solar_kwh - consumption_kwh
@@ -202,17 +204,19 @@ class SocSimulator:
             while slot_time < sim_end:
                 slot_time += timedelta(minutes=15)
                 slot_hour = slot_time.hour
+                hours_ahead = (slot_time - base_slot).total_seconds() / 3600
 
                 # Get solar and load for this 15-min slot
                 solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
 
                 # ISSUE #137: Use baseline load profile when provided
                 load_kw, _ = self._estimate_hourly_consumption_kw(
-                    load_profile,  # Uses baseline_avg_kw if provided
+                    load_profile,
                     slot_hour,
                     current_hour,
                     current_load_kw,
                     recent_load_kw,
+                    hours_ahead=hours_ahead,
                 )
                 consumption_kwh = load_kw * slot_fraction
                 net_kwh = solar_kwh - consumption_kwh
@@ -282,6 +286,7 @@ class SocSimulator:
         slot_time = base_slot
         while slot_time < solar_start:
             slot_hour = slot_time.hour
+            hours_ahead = (slot_time - base_slot).total_seconds() / 3600
 
             # Get solar (should be ~0 overnight) and load
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
@@ -289,9 +294,10 @@ class SocSimulator:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
-                None,  # current_hour - not available in this simulation
+                None,
                 current_load_kw,
                 recent_load_kw,
+                hours_ahead=hours_ahead,
             )
             consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
@@ -356,6 +362,7 @@ class SocSimulator:
         for i in range(total_slots):
             slot_time = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_time.hour
+            hours_ahead = i / 4.0
 
             # Get solar and load for this 15-min slot
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
@@ -363,9 +370,10 @@ class SocSimulator:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
-                None,  # current_hour - not available in this simulation
+                None,
                 current_load_kw,
                 recent_load_kw,
+                hours_ahead=hours_ahead,
             )
             consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
@@ -443,6 +451,7 @@ class SocSimulator:
         slot_time = base_slot
         while slot_time < solar_start_slot:
             slot_hour = slot_time.hour
+            hours_ahead = (slot_time - base_slot).total_seconds() / 3600
 
             # Get solar (should be ~0 overnight) and load
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_time)
@@ -450,9 +459,10 @@ class SocSimulator:
             load_kw, _ = self._estimate_hourly_consumption_kw(
                 historical_avg_kw,
                 slot_hour,
-                None,  # current_hour - not available in this simulation
+                None,
                 current_load_kw,
                 recent_load_kw,
+                hours_ahead=hours_ahead,
             )
             consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
@@ -535,6 +545,7 @@ class SocSimulator:
         for offset in range(slots_to_simulate):
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
+            hours_ahead = offset / 4.0
 
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
             load_kw, _ = self._estimate_hourly_consumption_kw(
@@ -543,6 +554,7 @@ class SocSimulator:
                 current_hour,
                 current_load_kw,
                 recent_load_kw,
+                hours_ahead=hours_ahead,
             )
 
             # Add the additional load we're testing
@@ -629,6 +641,7 @@ class SocSimulator:
                 interval_minutes = slot["interval_minutes"]
                 slot_fraction = interval_minutes / 60.0
                 slot_hour = slot_start.hour
+                hours_ahead = (slot_start - base_slot).total_seconds() / 3600
 
                 # Use variable-duration solar function
                 solar_kwh = get_solar_for_slot_by_interval(
@@ -640,6 +653,7 @@ class SocSimulator:
                     current_hour,
                     current_load_kw,
                     recent_load_kw,
+                    hours_ahead=hours_ahead,
                 )
                 # Scale consumption to slot duration
                 consumption_kwh = load_kw * slot_fraction
@@ -669,6 +683,7 @@ class SocSimulator:
             for i in range(TOTAL_SLOTS):
                 slot_start = base_slot + timedelta(minutes=15 * i)
                 slot_hour = slot_start.hour
+                hours_ahead = i / 4.0
 
                 solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
                 load_kw, _ = self._estimate_hourly_consumption_kw(
@@ -677,6 +692,7 @@ class SocSimulator:
                     current_hour,
                     current_load_kw,
                     recent_load_kw,
+                    hours_ahead=hours_ahead,
                 )
                 consumption_kwh = load_kw * slot_fraction
                 net_kwh = solar_kwh - consumption_kwh
