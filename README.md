@@ -81,7 +81,7 @@ These are also available as number entities on the dashboard for quick adjustmen
 
 All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
 
-### Sensors (26)
+### Sensors (27)
 
 | Entity ID | Description |
 |---|---|
@@ -128,7 +128,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `binary_sensor.localshift_tesla_override_active` | Whether Tesla has taken control (Storm Watch, Grid Event, VPP) |
 | `binary_sensor.localshift_forecast_expensive_period` | Whether expensive period is forecast within lookahead |
 
-### Switches (11)
+### Switches (8)
 
 | Entity ID | Default | Description |
 |---|---|---|
@@ -138,23 +138,16 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
 | `switch.localshift_demand_window_block` | ON | Block grid charging during demand window |
 | `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
-| `switch.localshift_notify_transitions` | ON | Enable mode transition notifications |
-| `switch.localshift_notify_daily_summary` | ON | Enable daily summary notification |
-| `switch.localshift_notify_manual_actions` | ON | Enable manual action notifications |
-| `switch.localshift_notify_alerts` | ON | Enable alert notifications |
+| `switch.localshift_notifications_enabled` | ON | Enable all notifications (transitions, summaries, manual actions, alerts) |
 | `switch.localshift_enable_learning` | OFF | Enable learning system parameter optimization |
 
-### Numbers (8)
+### Numbers (4)
 
 | Entity ID | Description |
 |---|---|
 | `number.localshift_cheap_price_percentile` | Forecast price percentile used for cheap-charge baseline (%) |
 | `number.localshift_max_pre_charge_price` | Maximum pre-charge price ($/kWh) |
-| `number.localshift_cheap_price_deadband` | Price deadband ($/kWh) |
-| `number.localshift_forecast_lookahead_hours` | Forecast lookahead window (hours) |
 | `number.localshift_battery_target` | Battery target SOC (%) |
-| `number.localshift_load_weight_recent` | Weight for recent vs historical consumption |
-| `number.localshift_spike_price_percentile` | Price percentile for spike discharge activation |
 | `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes |
 
 ### Selects (2)
@@ -164,13 +157,12 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `select.localshift_battery_mode` | Select battery operating mode (self_consumption, grid_charging, boost_charging, spike_discharge, proactive_export). Changing this disables automation and applies manual control. |
 | `select.localshift_optimization_mode` | Select optimizer objective mode (`self_consumption` or `arbitrage`). Changes take effect on the next recompute cycle. |
 
-### Buttons (3)
+### Buttons (2)
 
 | Entity ID | Description |
 |---|---|
 | `button.localshift_update_forecast` | Force forecast update and clear historical load cache |
 | `button.localshift_reset_learning` | Reset learning system data and restart observation |
-| `button.localshift_learn_hvac_power` | Proactively learn HVAC power consumption by running each climate entity briefly |
 
 ## Dashboard
 

@@ -5,10 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.localshift.const import (
-    SWITCH_NOTIFY_ALERTS,
-    SWITCH_NOTIFY_DAILY_SUMMARY,
-    SWITCH_NOTIFY_MANUAL_ACTIONS,
-    SWITCH_NOTIFY_TRANSITIONS,
+    SWITCH_NOTIFICATIONS_ENABLED,
     BatteryMode,
 )
 from custom_components.localshift.coordinator_data import CoordinatorData
@@ -57,10 +54,7 @@ def notification_service(mock_hass, mock_entry, mock_get_entity_id):
 def notification_service_with_switches(mock_hass, mock_entry, mock_get_entity_id):
     """Create a NotificationService with switch state function."""
     switch_states = {
-        SWITCH_NOTIFY_TRANSITIONS: True,
-        SWITCH_NOTIFY_ALERTS: True,
-        SWITCH_NOTIFY_DAILY_SUMMARY: True,
-        SWITCH_NOTIFY_MANUAL_ACTIONS: True,
+        SWITCH_NOTIFICATIONS_ENABLED: True,
         "dry_run": False,
     }
 
@@ -152,14 +146,14 @@ class TestSendNotification:
 
 
 class TestNotificationPreferences:
-    """Tests for notification preference switches."""
+    """Tests for notification preferences (consolidated switch)."""
 
     @pytest.mark.asyncio
-    async def test_transition_notification_disabled(
+    async def test_all_notifications_disabled(
         self, mock_hass, mock_entry, mock_get_entity_id, coordinator_data
     ):
-        """Test that transition notifications are skipped when disabled."""
-        switch_states = {SWITCH_NOTIFY_TRANSITIONS: False}
+        """Test that all notifications are skipped when disabled."""
+        switch_states = {SWITCH_NOTIFICATIONS_ENABLED: False}
 
         def get_switch_state(key):
             return switch_states.get(key, False)
@@ -171,76 +165,24 @@ class TestNotificationPreferences:
             get_switch_state_func=get_switch_state,
         )
 
+        # Test transition notification is skipped
         await service.send_transition_notification(
             BatteryMode.SELF_CONSUMPTION, BatteryMode.SPIKE_DISCHARGE, coordinator_data
         )
-
-        # No notification should be sent
         mock_hass.services.async_call.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_daily_summary_disabled(
-        self, mock_hass, mock_entry, mock_get_entity_id, coordinator_data
-    ):
-        """Test that daily summary is skipped when disabled."""
-        switch_states = {SWITCH_NOTIFY_DAILY_SUMMARY: False}
-
-        def get_switch_state(key):
-            return switch_states.get(key, False)
-
-        service = NotificationService(
-            mock_hass,
-            mock_entry,
-            mock_get_entity_id,
-            get_switch_state_func=get_switch_state,
-        )
-
+        # Test daily summary is skipped
         await service.send_daily_summary(coordinator_data)
-
         mock_hass.services.async_call.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_alert_notification_disabled(
-        self, mock_hass, mock_entry, mock_get_entity_id, coordinator_data
-    ):
-        """Test that alert notifications are skipped when disabled."""
-        switch_states = {SWITCH_NOTIFY_ALERTS: False}
-
-        def get_switch_state(key):
-            return switch_states.get(key, False)
-
-        service = NotificationService(
-            mock_hass,
-            mock_entry,
-            mock_get_entity_id,
-            get_switch_state_func=get_switch_state,
-        )
-
+        # Test health correction is skipped
         await service.send_health_correction_notification(
             BatteryMode.SELF_CONSUMPTION, coordinator_data
         )
-
         mock_hass.services.async_call.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_manual_action_disabled(
-        self, mock_hass, mock_entry, mock_get_entity_id, coordinator_data
-    ):
-        """Test that manual action notifications are skipped when disabled."""
-        switch_states = {SWITCH_NOTIFY_MANUAL_ACTIONS: False}
-
-        def get_switch_state(key):
-            return switch_states.get(key, False)
-
-        service = NotificationService(
-            mock_hass,
-            mock_entry,
-            mock_get_entity_id,
-            get_switch_state_func=get_switch_state,
-        )
-
+        # Test manual action is skipped
         await service.send_manual_action_notification("Force Charge", coordinator_data)
-
         mock_hass.services.async_call.assert_not_called()
 
 
@@ -438,7 +380,7 @@ class TestDailySummary:
         self, mock_hass, mock_entry, mock_get_entity_id, coordinator_data
     ):
         """Test daily summary includes dry run prefix."""
-        switch_states = {"dry_run": True, SWITCH_NOTIFY_DAILY_SUMMARY: True}
+        switch_states = {"dry_run": True, SWITCH_NOTIFICATIONS_ENABLED: True}
 
         def get_switch_state(key):
             return switch_states.get(key, False)
@@ -669,7 +611,7 @@ class TestHelperMethods:
         """Test notification enabled when no switch function provided."""
         # When get_switch_state_func is None, should default to True
         result = notification_service._is_notification_enabled(
-            SWITCH_NOTIFY_TRANSITIONS
+            SWITCH_NOTIFICATIONS_ENABLED
         )
         assert result is True
 
@@ -677,7 +619,7 @@ class TestHelperMethods:
         self, mock_hass, mock_entry, mock_get_entity_id
     ):
         """Test notification enabled with switch function."""
-        switch_states = {SWITCH_NOTIFY_TRANSITIONS: True}
+        switch_states = {SWITCH_NOTIFICATIONS_ENABLED: True}
 
         def get_switch_state(key):
             return switch_states.get(key, False)
@@ -689,8 +631,11 @@ class TestHelperMethods:
             get_switch_state_func=get_switch_state,
         )
 
-        assert service._is_notification_enabled(SWITCH_NOTIFY_TRANSITIONS) is True
-        assert service._is_notification_enabled(SWITCH_NOTIFY_ALERTS) is False
+        assert service._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED) is True
+
+        # Test with notifications disabled
+        switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
+        assert service._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED) is False
 
     def test_get_dry_run_prefix_disabled(self, notification_service):
         """Test dry run prefix when disabled."""

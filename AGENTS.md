@@ -90,4 +90,4 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 - No Cursor or Copilot rules found in repository
 - Follow existing code patterns when modifying files
 - Update documentation (`docs/ENTITY_REFERENCE.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPER_GUIDE.md`) when adding/removing entities
-- Entity counts: Sensors 29, Binary Sensors 13, Switches 13, Numbers 6, Selects 1, Buttons 3 (Total 64)
+- Entity counts: Sensors 27, Binary Sensors 10, Switches 8, Numbers 4, Selects 2, Buttons 2 (Total 53)

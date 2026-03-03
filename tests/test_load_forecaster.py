@@ -176,20 +176,24 @@ class TestLoadForecasterExponentialDecay:
         assert source == "live_load_fallback"
         assert kw == 0.45
 
-    def test_no_historical_no_live_fallback(self):
-        """Test when no historical and no live load, uses 0.6 default."""
+    def test_no_historical_no_live_fallback(self, caplog):
+        """Test when no historical and no live load, returns 0.0 with warning."""
+        import logging
+
         forecaster = _create_load_forecaster()
 
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={},
-            slot_hour=10,
-            current_hour=11,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-        )
+        with caplog.at_level(logging.WARNING):
+            kw, source = forecaster.estimate_hourly_consumption_kw(
+                hourly_avg_kw={},
+                slot_hour=10,
+                current_hour=11,
+                current_load_kw=0.0,
+                recent_load_kw=0.0,
+            )
 
         assert source == "live_load_fallback"
-        assert kw == 0.6
+        assert kw == 0.0
+        assert "NO_LOAD_DATA" in caplog.text
 
     def test_weather_correlation_applied(self, mock_weather_correlation):
         """Test weather correlation adjustment when confidence is high.
@@ -271,6 +275,85 @@ class TestLoadForecasterExponentialDecay:
         expected_kw = round(max(0.0, base_kw + 0.1), 3)
 
         assert abs(kw - expected_kw) < 0.001
+
+    def test_midnight_wrap_far_future_uses_historical(self):
+        """Test hours_ahead prevents spurious live-blending for distant slots.
+
+        Without hours_ahead, slot_hour=21 with current_hour=22 would appear
+        1 hour away due to midnight wrap (24 - 22 + 21 = wrong).
+        With hours_ahead=23, correctly uses historical profile only.
+        """
+        forecaster = _create_load_forecaster()
+        hourly_avg = {21: 0.5, 22: 0.6, 23: 0.7, 0: 0.4, 1: 0.3}
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=hourly_avg,
+            slot_hour=21,
+            current_hour=22,
+            current_load_kw=1.0,
+            recent_load_kw=1.0,
+            hours_ahead=23.0,
+        )
+
+        assert source == "profile_hour"
+        assert kw == 0.5
+
+    def test_hours_ahead_near_slots_decay_correctly(self):
+        """Test hours_ahead correctly controls decay for near-term slots."""
+        forecaster = _create_load_forecaster()
+        hourly_avg = {10: 0.5, 11: 0.6, 12: 0.7}
+
+        for hours_ahead_val, expected_source in [
+            (0.0, "live_load"),
+            (1.0, "decay_load_d1"),
+            (2.0, "decay_load_d2"),
+            (3.0, "decay_load_d3"),
+            (4.0, "profile_hour"),
+        ]:
+            kw, source = forecaster.estimate_hourly_consumption_kw(
+                hourly_avg_kw=hourly_avg,
+                slot_hour=10,
+                current_hour=11,
+                current_load_kw=1.0,
+                recent_load_kw=1.0,
+                hours_ahead=hours_ahead_val,
+            )
+            assert source == expected_source, f"Failed at hours_ahead={hours_ahead_val}"
+
+    def test_fallback_uses_historical_mean_when_available(self):
+        """Test fallback uses mean of available historical hours when slot_hour missing."""
+        forecaster = _create_load_forecaster()
+        hourly_avg = {8: 0.4, 9: 0.6}
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=hourly_avg,
+            slot_hour=15,
+            current_hour=15,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+
+        assert source == "live_load_fallback"
+        assert kw == 0.5
+
+    def test_cold_start_returns_zero_with_warning(self, caplog):
+        """Test cold start returns 0.0 and logs warning when no data available."""
+        import logging
+
+        forecaster = _create_load_forecaster()
+
+        with caplog.at_level(logging.WARNING):
+            kw, source = forecaster.estimate_hourly_consumption_kw(
+                hourly_avg_kw={},
+                slot_hour=10,
+                current_hour=10,
+                current_load_kw=0.0,
+                recent_load_kw=0.0,
+            )
+
+        assert source == "live_load_fallback"
+        assert kw == 0.0
+        assert "NO_LOAD_DATA" in caplog.text
 
 
 @pytest.fixture

@@ -77,6 +77,7 @@ class ExcessSolarEngine:
         for offset in range(16):  # 4 hours = 16 slots
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
+            hours_ahead = offset / 4.0
 
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
             load_kw, _ = self._estimate_hourly_consumption_kw(
@@ -85,6 +86,7 @@ class ExcessSolarEngine:
                 current_hour,
                 current_load_kw,
                 recent_load_kw,
+                hours_ahead=hours_ahead,
             )
             consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh
@@ -200,6 +202,7 @@ class ExcessSolarEngine:
         for offset in range(slots_until_fit):
             slot_start = base_slot + timedelta(minutes=15 * offset)
             slot_hour = slot_start.hour
+            hours_ahead = offset / 4.0
 
             solar_kwh = get_solar_for_15min_slot(all_solcast, slot_start)
             load_kw, _ = self._estimate_hourly_consumption_kw(
@@ -208,6 +211,7 @@ class ExcessSolarEngine:
                 current_hour,
                 current_load_kw,
                 recent_load_kw,
+                hours_ahead=hours_ahead,
             )
             consumption_kwh = load_kw * slot_fraction
             net_kwh = solar_kwh - consumption_kwh

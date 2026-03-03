@@ -21,7 +21,6 @@ from custom_components.localshift.const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
-    CONF_SUN_ENTITY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -389,8 +388,6 @@ class TestSolcastStep:
 
         # Mock valid entity states
         def mock_get_state(entity_id):
-            if "sun" in entity_id:
-                return create_mock_state(entity_id, "above_horizon", "sun")
             return create_mock_state(entity_id, "10", "sensor")
 
         mock_hass.states.get = mock_get_state
@@ -399,7 +396,6 @@ class TestSolcastStep:
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_tomorrow",
             CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
-            CONF_SUN_ENTITY: "sun.sun",
         }
 
         result = await flow.async_step_solcast(user_input)
@@ -417,8 +413,6 @@ class TestSolcastStep:
 
         # Mock valid entity states for sensors
         def mock_get_state(entity_id):
-            if "sun" in entity_id:
-                return create_mock_state(entity_id, "above_horizon", "sun")
             return create_mock_state(entity_id, "10", "sensor")
 
         mock_hass.states.get = mock_get_state
@@ -427,7 +421,6 @@ class TestSolcastStep:
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_tomorrow",
             CONF_NOTIFY_SERVICE: "invalid_service",  # Invalid - no notify. prefix
-            CONF_SUN_ENTITY: "sun.sun",
         }
 
         result = await flow.async_step_solcast(user_input)
@@ -462,14 +455,40 @@ class TestOptionsFlow:
         # This is needed because OptionsFlow.config_entry property uses it
         type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
 
+        # Mock config_entry.data with entity mappings for entity_mappings step
+        mock_config_entry.data = {
+            CONF_TESLEMETRY_OPERATION_MODE: "select.teslemetry_operation_mode",
+            CONF_TESLEMETRY_SOC: "sensor.teslemetry_soc",
+            CONF_TESLEMETRY_GRID_POWER: "sensor.teslemetry_grid_power",
+            CONF_TESLEMETRY_BATTERY_POWER: "sensor.teslemetry_battery_power",
+            CONF_TESLEMETRY_SOLAR_POWER: "sensor.teslemetry_solar_power",
+            CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
+            CONF_PRICING_GENERAL_PRICE: "sensor.amber_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.amber_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.amber_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.amber_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_price_spike",
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
+            CONF_SUN_ENTITY: "sun.sun",
+        }
+
+        # First step: entity mappings - provide entity data
+        entity_input = dict(mock_config_entry.data)
+        result = await flow.async_step_entity_mappings(entity_input)
+
+        # Should proceed to settings step
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "settings"
+
+        # Second step: settings - provide settings data
         user_input = {
             CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
             CONF_DEMAND_WINDOW_START: "14:00:00",
             CONF_DEMAND_WINDOW_END: "20:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: 4,
         }
-
-        result = await flow.async_step_init(user_input)
+        result = await flow.async_step_settings(user_input)
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         # The result merges with existing options, so check that our input is included
@@ -840,6 +859,24 @@ class TestOptionsFlowMigration:
         """Test options flow with empty initial options."""
         mock_config_entry.options = {}
 
+        # Mock config_entry.data with entity mappings for entity_mappings step
+        mock_config_entry.data = {
+            CONF_TESLEMETRY_OPERATION_MODE: "select.teslemetry_operation_mode",
+            CONF_TESLEMETRY_SOC: "sensor.teslemetry_soc",
+            CONF_TESLEMETRY_GRID_POWER: "sensor.teslemetry_grid_power",
+            CONF_TESLEMETRY_BATTERY_POWER: "sensor.teslemetry_battery_power",
+            CONF_TESLEMETRY_SOLAR_POWER: "sensor.teslemetry_solar_power",
+            CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
+            CONF_PRICING_GENERAL_PRICE: "sensor.amber_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.amber_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.amber_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.amber_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_price_spike",
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
+            CONF_SUN_ENTITY: "sun.sun",
+        }
+
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
 
         mock_config_entries = MagicMock()
@@ -849,14 +886,20 @@ class TestOptionsFlowMigration:
         mock_hass.config_entries = mock_config_entries
         flow.hass = mock_hass
 
+        # First step: entity mappings
+        entity_input = dict(mock_config_entry.data)
+        result = await flow.async_step_entity_mappings(entity_input)
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "settings"
+
+        # Second step: settings
         user_input = {
             CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
             CONF_DEMAND_WINDOW_START: "18:00:00",
             CONF_DEMAND_WINDOW_END: "22:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
         }
-
-        result = await flow.async_step_init(user_input)
+        result = await flow.async_step_settings(user_input)
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
 

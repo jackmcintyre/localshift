@@ -140,7 +140,6 @@ def mock_get_entity_id():
             "solcast_tomorrow": "sensor.solcast_tomorrow",
             "general_forecast": "sensor.general_forecast",
             "feed_in_forecast": "sensor.feed_in_forecast",
-            "sun": "sun.sun",
         }
         return entity_map.get(key)
 
