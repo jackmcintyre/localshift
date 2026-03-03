@@ -165,7 +165,6 @@ CONF_FORECAST_LOOKAHEAD_HOURS = "forecast_lookahead_hours"
 CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
-CONF_LOAD_WEIGHT_RECENT = "load_weight_recent"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
@@ -189,9 +188,6 @@ DEFAULT_BATTERY_TARGET = 100  # %
 DEFAULT_DEMAND_WINDOW_START = "15:00:00"
 DEFAULT_DEMAND_WINDOW_END = "21:00:00"
 DEFAULT_MANUAL_OVERRIDE_TIMEOUT = 4  # hours
-DEFAULT_LOAD_WEIGHT_RECENT = (
-    0.67  # 2/3 weighting to recent usage (legacy, kept for compatibility)
-)
 DEFAULT_LOAD_DECAY_FACTOR = 0.8  # 20% reduction per hour for exponential decay
 DEFAULT_LOAD_INITIAL_WEIGHT = (
     0.8  # Initial weight for current hour (80% recent, 20% historical)

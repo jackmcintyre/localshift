@@ -291,10 +291,6 @@
         "name": "Battery Target",
         "description": "Target SOC % for demand window (battery reserved for evening peak)"
       },
-      "load_weight_recent": {
-        "name": "Recent Load Weight",
-        "description": "Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical)"
-      },
       "spike_price_percentile": {
         "name": "Spike Price Percentile",
         "description": "Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices)"
