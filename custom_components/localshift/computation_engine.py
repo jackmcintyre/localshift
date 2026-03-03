@@ -14,15 +14,11 @@ from homeassistant.util import dt as dt_util
 from .computation_engine_lib import (
     ExcessSolarSignalsEngine,
     ForecastAccuracyEngine,
-    ForecastChangeTracker,
-    ForecastComputer,
     HistoryFetcher,
-    ModeDecisionEngine,
     PriceCalculator,
     SpikeAnalyzer,
     WeatherDiagnosticsEngine,
     analyze_spike_window,
-    build_hourly_forecast_summary,
     calculate_spike_price_threshold,
     max_forecast_price,
     parse_forecast_dt,
@@ -30,6 +26,8 @@ from .computation_engine_lib import (
     scan_forecast_for_spike,
     sum_solar_before_target,
 )
+from .computation_engine_lib.excess_solar import ExcessSolarEngine
+from .computation_engine_lib.load_forecaster import LoadForecaster
 from .computation_engine_lib.optimizer_dp import DPPlanner
 from .computation_engine_lib.optimizer_shadow_runner import (
     OptimizerSafetyGate,
@@ -43,6 +41,7 @@ from .computation_engine_lib.optimizer_shadow_runner import (
 )
 from .computation_engine_lib.slot_builder import SlotBuilder
 from .computation_engine_lib.slot_schedule import TOTAL_SLOTS
+from .computation_engine_lib.soc_simulator import SocSimulator
 from .const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_GRID_KW,
@@ -118,14 +117,17 @@ class ComputationEngine:
         # Weather correlation for temperature-based consumption prediction
         self._weather_correlation: WeatherCorrelation | None = None
 
-        # Forecast computer for 15-minute battery SOC forecasting
-        # Pass day-aware profile function for issue-60
-        self._forecast_computer = ForecastComputer(
-            entry,
-            get_entity_id_func,
-            self._get_historical_hourly_averages,
-            self._get_profile_for_day,
-            weather_correlation=self._weather_correlation,
+        # Phase 4 (#441): Create engines directly (no ForecastComputer wrapper)
+        self._load_forecaster = LoadForecaster(
+            entry=entry, weather_correlation=self._weather_correlation
+        )
+        self._soc_simulator = SocSimulator(
+            estimate_hourly_consumption_kw=self._load_forecaster.estimate_hourly_consumption_kw
+        )
+        self._excess_solar_engine = ExcessSolarEngine(
+            entry=entry,
+            estimate_hourly_consumption_kw=self._load_forecaster.estimate_hourly_consumption_kw,
+            simulate_with_additional_load=self._soc_simulator._simulate_with_additional_load,
         )
 
         self._price_calculator = PriceCalculator(
@@ -133,11 +135,7 @@ class ComputationEngine:
             parse_forecast_dt=self._parse_forecast_dt,
             percentile_func=self._percentile,
             sum_solar_before_target=self._sum_solar_before_target,
-            get_expected_load_kw=self._get_expected_load_kw,
-        )
-        self._mode_decision = ModeDecisionEngine(
-            get_switch_state=self._get_switch_state,
-            get_forecast_entry_for_now=self._get_forecast_entry_for_now,
+            get_expected_load_kw=self._get_expected_load_kw_from_slots,
         )
         self._spike_analyzer = SpikeAnalyzer(
             entry=entry,
@@ -148,7 +146,12 @@ class ComputationEngine:
         )
         self._excess_solar_signals = ExcessSolarSignalsEngine(
             entry=entry,
-            forecast_computer=self._forecast_computer,
+            calculate_excess_by_windows=self._excess_solar_engine._calculate_excess_by_windows,
+            find_nearest_negative_fit_window=self._excess_solar_engine._find_nearest_negative_fit_window,
+            calculate_excess_until_negative_fit=self._excess_solar_engine._calculate_excess_until_negative_fit,
+            find_battery_fill_point=self._soc_simulator._find_battery_fill_point,
+            calculate_safe_additional_load=self._excess_solar_engine._calculate_safe_additional_load,
+            compute_load_shift_signal=self._excess_solar_engine._compute_load_shift_signal,
             get_entity_id=self._get_entity_id,
             get_historical_hourly_averages=self._get_historical_hourly_averages,
             recent_load_1hr_getter=lambda: self._recent_load_1hr_kw,
@@ -159,9 +162,6 @@ class ComputationEngine:
 
         # DP Planner for Phase 3 (#441) - eliminates one-cycle lag
         self._dp_planner = DPPlanner()
-
-        # Change tracker for forecast regeneration
-        self._forecast_change_tracker = ForecastChangeTracker()
 
         # Local cache properties (delegated to history_fetcher for storage)
         self._last_weighting: float = DEFAULT_LOAD_WEIGHT_RECENT
@@ -184,8 +184,8 @@ class ComputationEngine:
         """
         now_dt = dt_util.now()
 
-        # Pass adaptive parameters to forecast computer (Issue #170 Phase 2)
-        self._forecast_computer.set_adaptive_params(data.adaptive_params)
+        # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
+        self._load_forecaster.set_adaptive_params(data.adaptive_params)
 
         # Common time values used by multiple steps
         dw_start_time = self._parse_time_option(
@@ -217,6 +217,14 @@ class ComputationEngine:
             dw_block_enabled and now_t >= dw_start_time and now_t < dw_end_time
         )
 
+        # ---- Manual override check (Phase 4, #441: moved from deleted ModeDecisionEngine) ----
+        # Always respect manual override first — user is in control
+        if data.manual_override:
+            data.active_mode = _BatteryMode.MANUAL
+            data.debug_mode_source = "manual_override"
+            # Skip DP optimizer and other mode decisions when in manual mode
+            return
+
         # Get target percentage for later use
         target_pct = float(
             self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
@@ -239,129 +247,27 @@ class ComputationEngine:
         data.allow_dw_entry_under_target = allow_dw_under_target and before_dw
 
         # ---- Phase 1 (#441): Shared load forecast slots ----
-        # Must run before _compute_daily_15min_forecast so load_forecast_slots
-        # is available for both the legacy planner and (from Phase 2) the DP optimizer.
+        # Builds data.load_forecast_slots for use by DP optimizer and other helpers.
         load_entity_id = self._get_entity_id("teslemetry_load_power")
         hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
         recent_load_kw = self._recent_load_1hr_kw
         self._compute_load_forecast_slots(data, now_dt, hourly_avg_kw, recent_load_kw)
 
-        # ---- Step 4/16: daily_forecast (detailed 15-min forecast) ----
-        # Compute detailed forecast AFTER effective_cheap_price is set
-        # This is the single source of truth
-        # Pass current charging state for hysteresis (Issue #34)
-        self._compute_daily_15min_forecast(data, now_dt)
+        # ---- Step DP: Inline DP optimizer (Phase 4, #441) ----
+        # Runs before effective_cheap_price final update so solar_can_reach_target
+        # is populated from DP result (not legacy solar-only simulation).
+        self._run_dp_optimizer_inline(data, now_dt)
 
-        # ---- Step 5: solar_can_reach_target (solar-only simulation) ----
-        # Use dedicated solar-only simulation to break circular dependency.
-        # The forecast-derived check includes grid charging effects, which creates
-        # a circular dependency: forecast depends on effective_cheap_price which
-        # depends on solar_can_reach_target which depends on forecast.
-        # Fix #399: Use solar-only simulation (same pattern as #392).
-        if before_dw:
-            # Get all Solcast forecasts
-            all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-
-            # Get historical averages and recent load for simulation
-            load_entity_id = self._get_entity_id("teslemetry_load_power")
-            hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-            recent_load_kw = self._recent_load_1hr_kw
-
-            # Simulate to DW start (not through DW - that's solar_can_reach_target_in_dw)
-            sim_end = self._forecast_computer._next_demand_window_start_dt(
-                now_dt, dw_start_time
-            )
-
-            soc_at_end, max_soc, can_reach_solar_only, _ = (
-                self._forecast_computer._simulate_future_soc_with_solar_only(
-                    actual_current_soc=data.soc,
-                    start_slot=now_dt,
-                    target_pct=target_pct,
-                    all_solcast=all_solcast,
-                    historical_avg_kw=hourly_avg_kw,
-                    current_load_kw=data.load_power_kw,
-                    recent_load_kw=recent_load_kw,
-                    dw_start_time=dw_start_time,
-                    end_time=sim_end,
-                )
-            )
-            data.solar_can_reach_target = can_reach_solar_only
-
-            _LOGGER.info(
-                "Solar-only simulation for solar_can_reach_target: current SOC=%.1f%%, target=%d%%, "
-                "sim_end=%s, can_reach=%s",
-                data.soc,
-                target_pct,
-                sim_end.strftime("%H:%M"),
-                can_reach_solar_only,
+        # ---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
+        # Read from current-slot DP decision (not forecast_computer).
+        current_slot_idx = _find_current_slot_index(data)
+        decisions = data.optimizer_shadow_decisions or []
+        if decisions and 0 <= current_slot_idx < len(decisions):
+            data.boost_charge_needed = decisions[current_slot_idx].get(
+                "grid_charge_boost", False
             )
         else:
-            # After DW start: use current SOC as conservative estimate
-            data.solar_can_reach_target = data.soc >= target_pct
-
-        # ---- Step 6: boost_charge_needed ----
-        # Read from CURRENT forecast slot (not DW entry) - fixes #44
-        # The boost_charge_needed flag indicates if boost charging is needed NOW,
-        # which is determined by the current slot's grid_charge_boost flag.
-        current_entry = self._get_forecast_entry_for_now(data, now_dt)
-        data.boost_charge_needed = (
-            current_entry.get("grid_charge_boost", False) if current_entry else False
-        )
-
-        # ---- Step 6b: solar_can_reach_target_in_dw ----
-        # MOVED BEFORE solar_battery_forecast so boost_needed can use this flag.
-        # This ensures the diagnostic boost_needed matches the actual decision logic.
-        # Read from switch state (device-level toggle)
-        allow_dw_under_target = self._get_switch_state(
-            SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
-        )
-
-        if allow_dw_under_target and before_dw:
-            # Simulate solar-only charging through entire DW period
-            dw_end_time_obj = self._parse_time_option(
-                CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
-            )
-            sim_end = now_dt.replace(
-                hour=dw_end_time_obj.hour,
-                minute=dw_end_time_obj.minute,
-                second=0,
-                microsecond=0,
-            )
-
-            # Get historical averages and recent load for simulation
-            load_entity_id = self._get_entity_id("teslemetry_load_power")
-            hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-            recent_load_kw = self._recent_load_1hr_kw
-
-            # Get all Solcast forecasts
-            all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-
-            # Simulate solar-only charging through DW period
-            soc_at_end, max_soc, can_reach, _ = (
-                self._forecast_computer._simulate_future_soc_with_solar_only(
-                    actual_current_soc=data.soc,
-                    start_slot=now_dt,
-                    target_pct=target_pct,
-                    all_solcast=all_solcast,
-                    historical_avg_kw=hourly_avg_kw,
-                    current_load_kw=data.load_power_kw,
-                    recent_load_kw=recent_load_kw,
-                    dw_start_time=dw_start_time,
-                    end_time=sim_end,
-                )
-            )
-            data.solar_can_reach_target_in_dw = can_reach
-
-            _LOGGER.info(
-                "DW entry check: current SOC=%.1f%%, target=%d%%, "
-                "DW end=%s, solar can reach=%s",
-                data.soc,
-                target_pct,
-                dw_end_time_obj.strftime("%H:%M"),
-                can_reach,
-            )
-        else:
-            data.solar_can_reach_target_in_dw = False
+            data.boost_charge_needed = False
 
         # ---- Step 7: effective_cheap_price (final update) ----
         # Update effective_cheap_price with actual solar_can_reach_target from forecast
@@ -405,15 +311,10 @@ class ComputationEngine:
         # ---- Step 11: solar_weighted_avg_fit ----
         self._compute_solar_weighted_avg_fit(data, now_dt, target_hour, after_dw)
 
-        # ---- Step 12: active_mode ----
-        # Phase 3 (#441): Run DP optimizer inline BEFORE legacy active_mode computation
-        # This eliminates the one-cycle lag by setting data.active_mode in the same cycle
+        # ---- Step 12: decision_log ----
+        # Phase 4 (#441): active_mode is set by _run_dp_optimizer_inline (Phase 3).
+        # _compute_active_mode is removed in Phase 4.
 
-        self._run_dp_optimizer_inline(data, now_dt)
-
-        self._compute_active_mode(data, now_dt, dw_start_time)
-
-        # ---- Step 15: decision_log ----
         # Add entry when mode changes OR periodically for status updates
         mode_changed = (
             data.active_mode != self._previous_active_mode
@@ -468,11 +369,10 @@ class ComputationEngine:
             sun_state = self.hass.states.get(sun_entity_id)
             sun_up = sun_state is not None and sun_state.state == "above_horizon"
 
-            # Use detailed forecast if available (includes grid charging)
-            # This aligns with the binary sensor solar_can_reach_target
-            dw_entry = self._get_forecast_at_demand_window(data, target_hour)
+            # Use DP decision if available (Phase 4, #441)
+            dw_entry = self._get_dp_decision_at_demand_window(data, target_hour)
             if dw_entry:
-                predicted_soc = dw_entry["predicted_soc"]
+                predicted_soc = dw_entry["predicted_soc_pct"]
                 can_reach = predicted_soc >= target_pct
             else:
                 # Fallback to current SOC
@@ -508,14 +408,12 @@ class ComputationEngine:
                 "target_reached_today": target_reached,
             }
         else:
-            # Before DW: use detailed 15-min forecast for consistency
-            # This ensures can_reach_target matches the binary sensor
-            # (both now include grid charging effects)
-            dw_entry = self._get_forecast_at_demand_window(data, target_hour)
+            # Before DW: use DP decision (Phase 4, #441)
+            dw_entry = self._get_dp_decision_at_demand_window(data, target_hour)
 
             if dw_entry:
-                # Use detailed forecast - includes grid charging effects
-                predicted_soc = dw_entry["predicted_soc"]
+                # Use DP decision - includes grid charging effects
+                predicted_soc = dw_entry["predicted_soc_pct"]
                 can_reach = predicted_soc >= target_pct
 
                 # For boost_needed: calculate if solar ALONE can reach target
@@ -537,8 +435,10 @@ class ComputationEngine:
                 )
                 hours_to_target = max((target_dt - now_dt).total_seconds() / 3600, 0)
 
-                # Consumption estimate
-                expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
+                # Consumption estimate from load_forecast_slots (Phase 4)
+                expected_load_kw = self._get_expected_load_kw_from_slots(
+                    data, hours_to_target
+                )
                 consumption_kwh = expected_load_kw * hours_to_target
 
                 # Net solar (after consumption) - solar only, no grid charging
@@ -562,7 +462,7 @@ class ComputationEngine:
                     # Standard calculation: boost needed if solar alone can't reach target before DW
                     boost_needed = data.soc < target_pct and net_solar < deficit_kwh
             else:
-                # Fallback if detailed forecast unavailable (shouldn't normally happen)
+                # Fallback if DP decision unavailable
                 # Hours remaining until DW start
                 target_dt = now_dt.replace(
                     hour=target_hour, minute=0, second=0, microsecond=0
@@ -582,7 +482,9 @@ class ComputationEngine:
                 )
 
                 # Consumption estimate: current load extrapolated
-                expected_load_kw = self._get_expected_load_kw(data, hours_to_target)
+                expected_load_kw = self._get_expected_load_kw_from_slots(
+                    data, hours_to_target
+                )
                 consumption_kwh = expected_load_kw * hours_to_target
 
                 # Net solar (after consumption)
@@ -633,20 +535,15 @@ class ComputationEngine:
                 self._last_forecast_hour is None
                 or current_hour != self._last_forecast_hour
             ):
-                self._store_forecast_history(
-                    data, now_dt, predicted_soc, solar_kwh, consumption_kwh
-                )
+                self._store_forecast_history(data, now_dt)
                 self._last_forecast_hour = current_hour
 
     def _store_forecast_history(
         self,
         data: CoordinatorData,
         now_dt: datetime,
-        predicted_soc: float,
-        solar_kwh: float,
-        consumption_kwh: float,
     ) -> None:
-        """Store forecast prediction to history for planned vs actual comparison.
+        """Store DP optimizer predictions to history for planned vs actual comparison (Phase 4, #441).
 
         Stores predictions at specific future times for accuracy tracking:
         - What SOC we predict for 15 minutes from now
@@ -656,8 +553,8 @@ class ComputationEngine:
         Each prediction has a target_time so we can later compare:
         "What did we predict for time T?" vs "What was actual at time T?"
         """
-        # Find forecast entries for specific future times
-        slots = data.daily_forecast
+        # Find DP decision entries for specific future times
+        slots = data.optimizer_shadow_decisions or []
         if not slots:
             return
 
@@ -672,9 +569,9 @@ class ComputationEngine:
             else:
                 target_dt = dt_util.as_local(target_dt)
 
-            # Find the forecast slot that covers target_dt
+            # Find the DP decision slot that covers target_dt
             for slot in slots:
-                ts = slot.get("timestamp", "")
+                ts = slot.get("timestamp_iso", "")
                 if not ts:
                     continue
                 try:
@@ -697,21 +594,12 @@ class ComputationEngine:
                         "prediction_time": now_dt.isoformat(),
                         "target_time": target_dt.isoformat(),
                         "offset_minutes": offset_minutes,
-                        "predicted_soc": slot.get("predicted_soc", 0),
+                        "predicted_soc": slot.get("predicted_soc_pct", 0),
                         "predicted_buy_price": slot.get("buy_price", 0),
                         "predicted_sell_price": slot.get("sell_price", 0),
                     }
                     data.forecast_history.append(entry)
                     break
-
-        # Also store the legacy DW prediction for compatibility
-        entry = {
-            "timestamp": now_dt.isoformat(),
-            "predicted_soc": round(predicted_soc, 1),
-            "solar_before_dw_kwh": round(solar_kwh, 2),
-            "consumption_estimate_kwh": round(consumption_kwh, 2),
-        }
-        data.forecast_history.append(entry)
 
         # Keep last 200 entries (allows 4+ hours of predictions across multiple days)
         if len(data.forecast_history) > 200:
@@ -759,14 +647,12 @@ class ComputationEngine:
         for i in range(TOTAL_SLOTS):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
-            load_kw, _ = (
-                self._forecast_computer._load_forecaster.estimate_hourly_consumption_kw(
-                    hourly_avg_kw=historical_avg_kw,
-                    slot_hour=slot_hour,
-                    current_hour=current_hour,
-                    current_load_kw=data.load_power_kw,
-                    recent_load_kw=recent_load_kw,
-                )
+            load_kw, _ = self._load_forecaster.estimate_hourly_consumption_kw(
+                hourly_avg_kw=historical_avg_kw,
+                slot_hour=slot_hour,
+                current_hour=current_hour,
+                current_load_kw=data.load_power_kw,
+                recent_load_kw=recent_load_kw,
             )
             slots.append(load_kw)
 
@@ -777,128 +663,6 @@ class ComputationEngine:
             slots[0] if slots else 0.0,
             slots[-1] if slots else 0.0,
         )
-
-    def _compute_daily_15min_forecast(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-    ) -> None:
-        """Compute full 24-hour forecast with 15-minute breakdown (delegates to ForecastComputer).
-
-        Provides 4x granularity over hourly forecast, capturing meaningful
-        price variations from 5-minute pricing data.
-
-        Uses change detection to skip unnecessary recomputations.
-
-        Issue #137: Uses baseline load (non-HVAC) for grid charging decisions
-        when available, preventing the feedback loop where HVAC spikes trigger
-        unnecessary grid charging.
-
-        Price Block Stability: Uses price sensor update timestamps to ensure
-        ONE decision per price block, preventing flip-flopping within the same
-        5-minute price period.
-        """
-        # Get price sensor update timestamps for stable decisions
-        price_update_time = self._get_price_sensor_update_time()
-
-        # Check if recompute is needed
-        should_recompute, reason = (
-            self._forecast_change_tracker.should_recompute_forecast(
-                soc=data.soc,
-                price=data.general_price,
-                feed_in_price=data.feed_in_price,
-                now_dt=now_dt,
-                price_update_time=price_update_time,
-            )
-        )
-
-        if should_recompute:
-            _LOGGER.info("Recomputing forecast: %s", reason)
-
-            try:
-                # Get historical hourly averages
-                load_entity_id = self._get_entity_id("teslemetry_load_power")
-                hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-
-                # Get recent 1-hour load for weighted forecasting
-                recent_load_kw = self._recent_load_1hr_kw
-
-                # Issue #137: Use baseline load if available for grid charging decisions
-                # This prevents HVAC spikes from triggering unnecessary grid charging
-                baseline_for_forecast = (
-                    self._baseline_avg_kw if self._baseline_avg_kw else None
-                )
-
-                if baseline_for_forecast:
-                    _LOGGER.info(
-                        "Using baseline load for forecast (Issue #137): avg=%.2f kW vs historical %.2f kW",
-                        sum(baseline_for_forecast.values())
-                        / len(baseline_for_forecast),
-                        sum(hourly_avg_kw.values()) / len(hourly_avg_kw)
-                        if hourly_avg_kw
-                        else 0,
-                    )
-
-                # Delegate to ForecastComputer
-                (
-                    data.daily_forecast,
-                    data.daily_forecast_soc_15min,
-                    data.forecast_consumption_source_counts,
-                ) = self._forecast_computer.compute_forecast(
-                    data=data,
-                    now_dt=now_dt,
-                    historical_avg_kw=hourly_avg_kw,
-                    recent_load_kw=recent_load_kw,
-                    historical_load_source=self._historical_load_source,
-                    historical_load_sample_counts=self._historical_load_sample_counts,
-                    baseline_avg_kw=baseline_for_forecast,  # Issue #137
-                )
-
-                # Also keep a compact 24-entry hourly view for markdown table
-                data.daily_forecast_hourly = build_hourly_forecast_summary(
-                    data.daily_forecast
-                )
-
-                # Propagate recent load diagnostic fields for dashboard debugging
-                data.recent_load_1hr_statistic_id = self._recent_load_1hr_statistic_id
-                data.recent_load_1hr_samples = self._recent_load_1hr_samples
-                data.recent_load_1hr_last_error = self._recent_load_1hr_last_error
-
-                # Propagate day-of-week profile diagnostics (issue-60)
-                weekday_avg, weekday_counts = (
-                    self._history_fetcher.get_weekday_profile()
-                )
-                weekend_avg, weekend_counts = (
-                    self._history_fetcher.get_weekend_profile()
-                )
-                data.consumption_profile_type = (
-                    self._history_fetcher.get_profile_source()
-                )
-                # Determine which profile is selected for TODAY's forecast
-                now_local = dt_util.now()
-                day_of_week = now_local.weekday()  # Monday=0, Sunday=6
-                if day_of_week >= 5:  # Saturday or Sunday
-                    data.forecast_profile_selected = "weekend"
-                else:
-                    data.forecast_profile_selected = "weekday"
-                data.weekday_sample_counts = weekday_counts
-                data.weekend_sample_counts = weekend_counts
-                data.weekday_hourly_profile_kw = weekday_avg
-                data.weekend_hourly_profile_kw = weekend_avg
-
-                # Store forecast history on every recompute (Issue #131)
-                # This ensures predictions are available for accuracy tracking
-                self._store_forecast_history_every_update(data, now_dt)
-
-            except Exception as e:
-                _LOGGER.error("Forecast computation failed: %s", e, exc_info=True)
-                # Keep existing forecast if it exists, otherwise set empty
-                if not data.daily_forecast:
-                    data.daily_forecast = []
-                if not data.daily_forecast_soc_15min:
-                    data.daily_forecast_soc_15min = []
-        else:
-            _LOGGER.debug("Forecast unchanged, skipping recompute")
 
     def _compute_effective_cheap_price_preliminary(
         self,
@@ -939,145 +703,70 @@ class ComputationEngine:
             after_dw=after_dw,
         )
 
-    def _get_forecast_entry_for_now(
-        self, data: CoordinatorData, now_dt: datetime
-    ) -> dict | None:
-        """Get the forecast entry whose slot covers the current moment.
-
-        Strategy: find the most-recent entry whose timestamp ≤ now.  Because
-        ``compute_forecast`` now starts from the rounded-down 5-minute boundary
-        there is always an entry whose start time ≤ now, so no fallback gap
-        logic is required.
-
-        This is granularity-agnostic: it works correctly whether the forecast
-        contains 5-minute near-term slots, 15-minute long-term slots, or any
-        future mix thereof.
-
-        Also populates debug fields on ``data`` for dashboard troubleshooting.
-        """
-        # Initialise debug fields
-        data.debug_forecast_slot_found = False
-        data.debug_forecast_slot_time = ""
-        data.debug_first_forecast_slot_time = ""
-        data.debug_time_gap_seconds = 0.0
-
-        if not data.daily_forecast:
-            return None
-
-        # Record first forecast slot time for debugging
-        first_entry = data.daily_forecast[0]
-        first_slot_dt = datetime.fromisoformat(first_entry.get("timestamp", ""))
-        first_slot_local = dt_util.as_local(first_slot_dt)
-        data.debug_first_forecast_slot_time = first_slot_local.strftime("%H:%M:%S")
-
-        # Ensure now_dt is timezone-aware for comparison with tz-aware slot timestamps.
-        if now_dt.tzinfo is None:
-            now_local = dt_util.as_local(dt_util.as_utc(now_dt))
-        else:
-            now_local = dt_util.as_local(now_dt)
-
-        # Walk the forecast list and keep track of the most-recent entry whose
-        # start time is at or before now.  The list is chronological so we can
-        # stop as soon as we pass now.
-        best_entry: dict | None = None
-        best_slot_local: datetime | None = None
-
-        for entry in data.daily_forecast:
-            ts = entry.get("timestamp", "")
-            if not ts:
-                continue
-            slot_dt = datetime.fromisoformat(ts)
-            slot_local = dt_util.as_local(slot_dt)
-
-            if slot_local <= now_local:
-                best_entry = entry
-                best_slot_local = slot_local
-            else:
-                # List is sorted chronologically; once we're past now we're done.
-                break
-
-        if best_entry is not None and best_slot_local is not None:
-            data.debug_forecast_slot_found = True
-            data.debug_forecast_slot_time = best_slot_local.strftime("%H:%M:%S")
-            data.debug_time_gap_seconds = (now_local - best_slot_local).total_seconds()
-            _LOGGER.debug(
-                "Forecast lookup: now=%s → slot=%s (age=%.0fs, interval=%dmin)",
-                now_local.strftime("%H:%M:%S"),
-                best_slot_local.strftime("%H:%M:%S"),
-                data.debug_time_gap_seconds,
-                best_entry.get("slot_interval_minutes", 15),
-            )
-            return best_entry
-
-        # Forecast hasn't started yet (now_dt is before all slots) — this is
-        # theoretically impossible with round-down base_slot but guard anyway.
-        time_diff = (first_slot_local - now_local).total_seconds()
-        data.debug_time_gap_seconds = time_diff
-        _LOGGER.warning(
-            "Forecast lookup: now=%s is before first slot %s (gap=%.0fs) — returning None",
-            now_local.strftime("%H:%M:%S"),
-            first_slot_local.strftime("%H:%M:%S"),
-            time_diff,
-        )
-        return None
-
-    def _get_forecast_at_demand_window(
+    def _get_dp_decision_at_demand_window(
         self, data: CoordinatorData, target_hour: int
     ) -> dict | None:
-        """Get the forecast entry at or just after the demand window start time.
+        """Get the DP decision at or just after the demand window start time (Phase 4, #441).
 
-        Finds the first forecast slot whose timestamp is at or after the DW start
-        (target_hour:00:00). This handles the case where 15-minute forecast slots
-        don't align exactly with the hour boundary (e.g., slots at 14:55, 15:10
-        when forecast starts at 09:55).
-
-        This correctly handles the post-DW period: if it is currently 17:00
-        and the DW started at 15:00, today's 15:xx entry is in the past and
-        is skipped. The next qualifying entry is tomorrow's 15:xx slot.
-        If the forecast doesn't span far enough to include a future DW entry,
-        ``None`` is returned and callers fall back to the current SOC.
+        Finds the first decision whose timestamp_iso is at or after the DW start
+        (target_hour:00:00). Handles post-DW period by looking for tomorrow's DW
+        if today's has passed.
         """
-        if not data.daily_forecast:
+        from datetime import datetime, timedelta  # noqa: PLC0415
+
+        decisions = data.optimizer_shadow_decisions or []
+        if not decisions:
             return None
 
-        # Normalise now to tz-aware local time (test mocks may return naive datetimes).
+        # Normalise now to tz-aware local time
         now_raw = dt_util.now()
-        if now_raw.tzinfo is None:
-            now_local = dt_util.as_local(dt_util.as_utc(now_raw))
-        else:
-            now_local = dt_util.as_local(now_raw)
+        now_local = (
+            dt_util.as_local(dt_util.as_utc(now_raw))
+            if now_raw.tzinfo is None
+            else dt_util.as_local(now_raw)
+        )
 
-        # Calculate the DW start datetime for comparison
-        # DW start is at target_hour:00:00
+        # Calculate DW start datetime
         dw_start_dt = now_local.replace(
             hour=target_hour, minute=0, second=0, microsecond=0
         )
-        # If DW start is in the past, look for tomorrow's DW
         if dw_start_dt <= now_local:
             dw_start_dt += timedelta(days=1)
 
-        # Find the first slot at or after the DW start time
-        # This handles non-aligned forecast slots (e.g., 15:10 instead of 15:00)
-        for entry in data.daily_forecast:
-            ts = entry.get("timestamp", "")
+        # Find first decision at or after DW start
+        for decision in decisions:
+            ts = decision.get("timestamp_iso", "")
             if not ts:
                 continue
             try:
                 slot_dt = datetime.fromisoformat(ts)
             except ValueError:
-                continue  # Malformed timestamp — skip
-            # Normalise slot to tz-aware local time.
+                continue
             if slot_dt.tzinfo is None:
                 slot_local = dt_util.as_local(dt_util.as_utc(slot_dt))
             else:
                 slot_local = dt_util.as_local(slot_dt)
 
-            # Find first slot at or after DW start
             if slot_local >= dw_start_dt:
-                return entry
+                return decision
 
-        # No future DW slot found in the current forecast window
         return None
+
+    def _get_expected_load_kw_from_slots(
+        self, data: CoordinatorData, hours_to_target: float
+    ) -> float:
+        """Estimate average load kW until DW using data.load_forecast_slots (Phase 4, #441).
+
+        Averages slots from current slot to DW entry slot. Falls back to current
+        load if no forecast slots available.
+        """
+        if not data.load_forecast_slots:
+            return data.load_power_kw if data.load_power_kw > 0 else 0.5
+
+        # Number of 15-min slots until DW (4 slots per hour)
+        slots_until_dw = max(1, int(hours_to_target * 4))
+        relevant = data.load_forecast_slots[:slots_until_dw]
+        return sum(relevant) / len(relevant) if relevant else 0.5
 
     # ========================================================================
     # PHASE 3 (#441): INLINE DP OPTIMIZER - ELIMINATE ONE-CYCLE LAG
@@ -1221,6 +910,18 @@ class ComputationEngine:
             config_options=config_options,
         )
 
+        # Derive solar_can_reach_target from DP result (Phase 4, #441)
+        # Replaces the legacy _simulate_future_soc_with_solar_only() calls.
+        data.solar_can_reach_target = result.can_solar_reach_target
+        # solar_can_reach_target_in_dw: when allow_dw_entry_under_target is True,
+        # terminal_penalty_idx is DW end — so can_solar_reach_target already reflects
+        # the extended horizon. Mirror the value and set False when the switch is off
+        # (same as the legacy path which set it to False when allow_dw_under_target=False).
+        allow_dw_under_target = config_options.get("allow_dw_entry_under_target", False)
+        data.solar_can_reach_target_in_dw = (
+            result.can_solar_reach_target if allow_dw_under_target else False
+        )
+
     def _assign_active_mode(
         self,
         data: CoordinatorData,
@@ -1247,7 +948,6 @@ class ComputationEngine:
                 "DP optimizer safety gate blocked: %s — defaulting to SELF_CONSUMPTION",
                 gate_result.block_reason,
             )
-            from .coordinator_data import _BatteryMode  # noqa: PLC0415
 
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "blocked"
@@ -1266,7 +966,6 @@ class ComputationEngine:
             _LOGGER.info(
                 "DP optimizer: apply plan requests fallback — defaulting to SELF_CONSUMPTION"
             )
-            from .coordinator_data import _BatteryMode  # noqa: PLC0415
 
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "fallback"
@@ -1276,8 +975,6 @@ class ComputationEngine:
         # Map battery_mode string → BatteryMode enum
         battery_mode_str = apply_plan.get("battery_mode", "")
         try:
-            from .coordinator_data import _BatteryMode  # noqa: PLC0415
-
             data.active_mode = _BatteryMode(battery_mode_str)
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
@@ -1293,184 +990,40 @@ class ComputationEngine:
                 "DP optimizer: invalid battery_mode '%s' — SELF_CONSUMPTION",
                 battery_mode_str,
             )
-            from .coordinator_data import _BatteryMode  # noqa: PLC0415
 
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "fallback"
 
-    def _compute_active_mode(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-        dw_start_time: time | None = None,
-    ) -> None:
-        """Compute active battery mode.
-
-        Phase F (#403): In active mode, check if optimizer apply plan is ready
-        and use its recommendation instead of running the legacy logic.
-        """
-        # Check if active mode is enabled and optimizer has an apply plan ready
-        if self._check_active_mode_optimizer_override(data):
-            _LOGGER.info("Active mode: using optimizer decision for battery mode")
-            return  # active_mode already set by active mode handler
-
-        # Fall back to legacy mode decision
-        self._mode_decision.compute_active_mode(data, now_dt, dw_start_time)
-
-    def _check_active_mode_optimizer_override(self, data: CoordinatorData) -> bool:
-        """Check if active mode should override legacy with optimizer decision.
-
-        Phase F (#403): When control_mode is "active" and the optimizer apply
-        plan is ready, use the optimizer's battery mode recommendation.
-
-        Args:
-            data: CoordinatorData instance
-
-        Returns:
-            True if active mode override was applied, False otherwise
-        """
-        # Get optimizer control mode from data (set by coordinator)
-        runtime_mode = getattr(data, "optimizer_runtime_mode", "shadow")
-        if runtime_mode != "active":
-            return False
-
-        # Check if optimizer apply plan is ready
-        apply_plan = getattr(data, "optimizer_apply_plan", None)
-        if not apply_plan:
-            _LOGGER.debug("Active mode: no apply plan available, using legacy")
-            return False
-
-        # Check if apply plan indicates fallback needed
-        if apply_plan.get("fallback_to_legacy", True):
-            _LOGGER.debug("Active mode: apply plan requests fallback to legacy")
-            return False
-
-        # Get the optimizer's recommended battery mode
-        battery_mode_str = apply_plan.get("battery_mode")
-        if not battery_mode_str:
-            _LOGGER.warning("Active mode: no battery_mode in apply plan, using legacy")
-            return False
-
-        # Map string back to BatteryMode enum
-        try:
-            optimizer_mode = _BatteryMode(battery_mode_str)
-        except ValueError:
-            _LOGGER.warning(
-                "Active mode: invalid battery_mode '%s', using legacy",
-                battery_mode_str,
-            )
-            return False
-
-        # Set the active mode to optimizer's recommendation
-        data.active_mode = optimizer_mode
-        _LOGGER.info(
-            "Active mode: optimizer selected %s (action=%s)",
-            optimizer_mode.value,
-            apply_plan.get("action"),
-        )
-
-        return True
-
     def _add_to_decision_log(
         self, data: CoordinatorData, now_dt: datetime, mode_change: bool
     ) -> None:
-        """Add entry to decision log when mode changes or periodically."""
-        self._previous_active_mode = self._mode_decision.add_to_decision_log(
-            data=data,
-            now_dt=now_dt,
-            previous_active_mode=self._previous_active_mode,
-            mode_change=mode_change,
+        """Add entry to decision log when mode changes or periodically (inlined from ModeDecisionEngine, Phase 4 #441)."""
+        old_mode = self._previous_active_mode
+        new_mode = data.active_mode
+        old_display = old_mode.display_name if old_mode else "Unknown"
+        new_display = new_mode.display_name if new_mode else "Unknown"
+        reason = (
+            f"Mode changed: {old_display} -> {new_display}"
+            if mode_change
+            else f"Status update: {new_display}"
         )
+        entry = {
+            "timestamp": now_dt.isoformat(),
+            "old_mode": old_mode.value if old_mode else "unknown",
+            "new_mode": new_mode.value if new_mode else "unknown",
+            "old_mode_display": old_display,
+            "new_mode_display": new_display,
+            "buy_price": round(data.general_price, 2),
+            "sell_price": round(data.feed_in_price, 2),
+            "soc": round(data.soc),
+            "effective_threshold": data.effective_cheap_price,
+            "reason": reason,
+        }
+        data.decision_log.append(entry)
+        if len(data.decision_log) > 50:
+            data.decision_log = data.decision_log[-50:]
+        self._previous_active_mode = new_mode
         self._last_decision_log_time = now_dt
-
-    def _get_expected_load_kw(
-        self, data: CoordinatorData, hours_to_target: float
-    ) -> float:
-        """Calculate expected load based on 7-day historical averages with time-distance weighting.
-
-        Uses time-distance weighting consistent with forecast slots:
-        - For hours close to current time: blend recent load with historical
-        - For distant hours: use historical profile only
-
-        This prevents overestimation when recent load is much lower than historical averages.
-        """
-        load_entity_id = self._get_entity_id("teslemetry_load_power")
-
-        # Get cached historical hourly averages
-        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-
-        # Get recent 1-hour load for weighted blending
-        recent_load_kw = self._recent_load_1hr_kw
-
-        # Get weighting configuration (hardcoded default - Issue #214)
-        recent_weight = DEFAULT_LOAD_WEIGHT_RECENT
-        historical_weight = 1.0 - recent_weight
-
-        if hourly_avg_kw:
-            # Sum hourly averages from current hour until demand window
-            now_dt = dt_util.now()
-            dw_start_time = self._parse_time_option(
-                CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
-            )
-            target_hour = dw_start_time.hour
-            current_hour = now_dt.hour
-
-            total_expected_kwh = 0.0
-            hour = current_hour
-            hours_counted = 0
-
-            # Sum hours from now until target hour with time-distance weighting
-            while hour != target_hour:
-                historical_kw = hourly_avg_kw.get(hour, 0.0)
-
-                # TIME-DISTANCE WEIGHTING: Only blend recent load for hours close to now
-                # Calculate distance from current hour (handles midnight wrap)
-                hour_distance = abs(hour - current_hour)
-                hour_distance = min(hour_distance, 24 - hour_distance)
-
-                # Only apply weighted blend for hours within 3 hours of current time
-                # Beyond that, recent load is NOT predictive
-                max_blend_distance = 3
-
-                if (
-                    hour_distance <= max_blend_distance
-                    and recent_load_kw > 0
-                    and recent_weight > 0
-                    and historical_kw > 0
-                ):
-                    # Blend recent load with historical for nearby hours
-                    load_kw = (recent_weight * recent_load_kw) + (
-                        historical_weight * historical_kw
-                    )
-                    _LOGGER.debug(
-                        "Load estimate for hour %d: %.2f kW (blended: recent=%.2f, hist=%.2f, distance=%d)",
-                        hour,
-                        load_kw,
-                        recent_load_kw,
-                        historical_kw,
-                        hour_distance,
-                    )
-                else:
-                    # Use historical only for distant hours
-                    load_kw = historical_kw
-
-                total_expected_kwh += load_kw
-                hours_counted += 1
-                hour = (hour + 1) % 24
-                # Safety: don't loop forever
-                if hour == current_hour:
-                    break
-
-            # Add 10% buffer to be conservative
-            total_expected_kwh *= 1.1
-
-            if total_expected_kwh > 0 and hours_counted > 0:
-                # Return average kW
-                return total_expected_kwh / max(hours_to_target, 1)
-
-        # Fallback to current load or default
-        current_load = data.load_power_kw if hasattr(data, "load_power_kw") else 0
-        return current_load if current_load > 0 else 0.5
 
     async def async_get_historical_hourly_averages(
         self, entity_id: str
@@ -1711,91 +1264,6 @@ class ComputationEngine:
         except Exception as e:
             _LOGGER.warning("Failed to save forecast history: %s", e)
 
-    def _store_forecast_history_every_update(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-    ) -> None:
-        """Store forecast predictions on every forecast recompute.
-
-        This ensures we always have predictions available for accuracy tracking,
-        not just on hour boundaries.
-
-        Args:
-            data: CoordinatorData to update
-            now_dt: Current datetime
-        """
-        slots = data.daily_forecast
-        if not slots:
-            return
-
-        # Track if this is the first prediction
-        is_first_prediction = len(data.forecast_history) == 0
-
-        # Store predictions for 15min, 1h, and 4h into the future
-        for offset_minutes in [15, 60, 240]:
-            target_dt = now_dt + timedelta(minutes=offset_minutes)
-
-            # Normalize target_dt timezone
-            if target_dt.tzinfo is None:
-                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-            else:
-                target_dt = dt_util.as_local(target_dt)
-
-            # Find the forecast slot that covers target_dt
-            for slot in slots:
-                ts = slot.get("timestamp", "")
-                if not ts:
-                    continue
-                try:
-                    slot_dt = datetime.fromisoformat(ts)
-                except ValueError:
-                    continue
-
-                # Normalize timezone
-                if slot_dt.tzinfo is None:
-                    slot_dt = dt_util.as_local(dt_util.as_utc(slot_dt))
-                else:
-                    slot_dt = dt_util.as_local(slot_dt)
-
-                # Check if this slot covers target_dt
-                slot_interval = slot.get("slot_interval_minutes", 15)
-                slot_end = slot_dt + timedelta(minutes=slot_interval)
-
-                if slot_dt <= target_dt < slot_end:
-                    # Check if we already have a prediction for this target_time
-                    # Avoid duplicates by checking target_time + offset combination
-                    target_key = f"{target_dt.isoformat()}_{offset_minutes}"
-                    existing_keys = {
-                        f"{e.get('target_time')}_{e.get('offset_minutes')}"
-                        for e in data.forecast_history
-                        if "target_time" in e and "offset_minutes" in e
-                    }
-
-                    if target_key not in existing_keys:
-                        entry = {
-                            "prediction_time": now_dt.isoformat(),
-                            "target_time": target_dt.isoformat(),
-                            "offset_minutes": offset_minutes,
-                            "predicted_soc": slot.get("predicted_soc", 0),
-                            "predicted_buy_price": slot.get("buy_price", 0),
-                            "predicted_sell_price": slot.get("sell_price", 0),
-                        }
-                        data.forecast_history.append(entry)
-
-                        # Track first prediction time
-                        if is_first_prediction:
-                            data.forecast_first_prediction_time = now_dt.isoformat()
-                            is_first_prediction = False
-                    break
-
-        # Update count
-        data.forecast_history_count = len(data.forecast_history)
-
-        # Keep last 200 entries
-        if len(data.forecast_history) > 200:
-            data.forecast_history = data.forecast_history[-200:]
-
     # ========================================================================
     # WEATHER CORRELATION (Issue #61)
     # ========================================================================
@@ -1816,12 +1284,12 @@ class ComputationEngine:
         try:
             self._weather_correlation = WeatherCorrelation(self.hass, self.entry)
             await self._weather_correlation.async_initialize()
-            self._forecast_computer.set_weather_correlation(self._weather_correlation)
+            self._load_forecaster.set_weather_correlation(self._weather_correlation)
             _LOGGER.info("Weather correlation initialized successfully")
         except Exception as e:
             _LOGGER.error("Failed to initialize weather correlation: %s", e)
             self._weather_correlation = None
-            self._forecast_computer.set_weather_correlation(None)
+            self._load_forecaster.set_weather_correlation(None)
 
     async def async_learn_weather_sample(self, data: CoordinatorData) -> None:
         """Learn from current temperature/load observation.

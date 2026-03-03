@@ -1,6 +1,5 @@
 """Computation engine library modules."""
 
-from .change_tracker import ForecastChangeTracker
 from .decision_outcome_tracker import (
     DecisionOutcomeTracker,
     DecisionRecord,
@@ -10,10 +9,7 @@ from .excess_solar import ExcessSolarEngine
 from .excess_solar_signals import ExcessSolarSignalsEngine
 from .fit_analyzer import FitAnalyzer
 from .forecast_accuracy import ForecastAccuracyEngine
-from .forecast_computer import ForecastComputer
-from .grid_charge_decision import GridChargeDecisionEngine
 from .history_fetcher import HistoryFetcher
-from .mode_decision import ModeDecisionEngine
 from .optimization_controller import (
     ContextualAdjustment,
     ObjectiveWeights,
@@ -31,7 +27,6 @@ from .price_calculator import (
     get_price_for_slot,
     get_price_for_slot_or_none,
 )
-from .proactive_export import ProactiveExportEngine
 from .slot_builder import SlotBuilder, SlotBuildMetadata
 from .soc_simulator import SocSimulator
 from .solar_utils import (
@@ -57,7 +52,6 @@ __all__ = [
     "ContextualAdjustment",
     "DecisionOutcomeTracker",
     "DecisionRecord",
-    "ForecastChangeTracker",
     "ObjectiveWeights",
     "OptimizationController",
     "ParameterOptimizer",
@@ -68,13 +62,9 @@ __all__ = [
     "ExcessSolarSignalsEngine",
     "FitAnalyzer",
     "ForecastAccuracyEngine",
-    "ForecastComputer",
-    "GridChargeDecisionEngine",
     "HistoryFetcher",
-    "ModeDecisionEngine",
     "PerformanceMetrics",
     "PriceCalculator",
-    "ProactiveExportEngine",
     "SlotBuilder",
     "SlotBuildMetadata",
     "SocSimulator",

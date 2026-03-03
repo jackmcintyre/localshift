@@ -857,39 +857,40 @@ def _derive_runtime_apply_plan(
         }
 
     decision = decisions[current_slot_idx]
-    action = decision.action
+    # Phase 4 (#446): decisions are now dicts (serialized), not PlannedSlotDecision objects
+    action_str = decision.get("action", "")
 
-    # Map PlannerAction to BatteryMode
-    if action == PlannerAction.HOLD:
+    # Map PlannerAction string to BatteryMode
+    if action_str == "hold":
         return {
-            "action": action.value,
+            "action": action_str,
             "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
             "target_soc": None,
             "fallback_to_legacy": False,
             "reason": "optimizer_hold",
         }
 
-    if action == PlannerAction.CHARGE_GRID_NORMAL:
+    if action_str == "charge_grid_normal":
         return {
-            "action": action.value,
+            "action": action_str,
             "battery_mode": BatteryMode.GRID_CHARGING.value,
             "target_soc": config.demand_window_target_soc_pct,
             "fallback_to_legacy": False,
             "reason": "optimizer_charge_grid_normal",
         }
 
-    if action == PlannerAction.CHARGE_GRID_BOOST:
+    if action_str == "charge_grid_boost":
         return {
-            "action": action.value,
+            "action": action_str,
             "battery_mode": BatteryMode.BOOST_CHARGING.value,
             "target_soc": config.demand_window_target_soc_pct,
             "fallback_to_legacy": False,
             "reason": "optimizer_charge_grid_boost",
         }
 
-    if action == PlannerAction.EXPORT_PROACTIVE:
+    if action_str == "export_proactive":
         return {
-            "action": action.value,
+            "action": action_str,
             "battery_mode": BatteryMode.PROACTIVE_EXPORT.value,
             "target_soc": None,
             "fallback_to_legacy": False,
@@ -898,11 +899,11 @@ def _derive_runtime_apply_plan(
 
     # Unknown action - fall back to legacy
     return {
-        "action": str(action),
+        "action": action_str or "unknown",
         "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
         "target_soc": None,
         "fallback_to_legacy": True,
-        "reason": f"unknown_action_{action}",
+        "reason": f"unknown_action_{action_str}",
     }
 
 

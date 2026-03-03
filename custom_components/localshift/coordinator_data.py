@@ -254,6 +254,8 @@ class CoordinatorData:
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
+    # TODO(#441 Phase 5): Deprecated - populated by ForecastComputer which is deleted in Phase 4.
+    # Sensors reading these are migrated in Phase 5. Currently always empty list.
     daily_forecast: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast_hourly: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
