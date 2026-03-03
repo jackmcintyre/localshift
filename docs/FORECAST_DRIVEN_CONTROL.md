@@ -540,39 +540,34 @@ The DP optimizer (Issue #403) runs alongside the legacy planner. This section cl
 
 ```
 Coordinator Cycle:
-1. Legacy Planner (ForecastComputer) → produces daily_forecast
-2. Shadow Optimizer (DPPlanner) → produces optimizer_shadow_decisions
-3. Planner Comparator → produces optimizer_comparison
-4. [if active mode] Safety Gate → validates optimizer can control
-5. [if active mode] Apply Plan → maps optimizer actions to battery modes
-6. [fallback] Legacy active_mode → used if optimizer fails any check
+1. DP Optimizer (DPPlanner) → produces optimizer_result with decisions
+2. Safety Gate → validates optimizer can control
+3. Apply Plan → maps optimizer actions to battery modes
+4. [fallback] SELF_CONSUMPTION → used if optimizer fails any check
 ```
 
-### When Optimizer Controls (Active Mode)
+### Optimizer Control Path
 
-In active mode, the optimizer makes control decisions but:
+The DP optimizer is the sole control path:
 
 1. **Safety gate validates** all prerequisites before applying
-2. **Fallback to legacy** occurs if:
-   - Optimizer is disabled
-   - Control mode is not "active"
+2. **Fallback to SELF_CONSUMPTION** occurs if:
    - Last solve failed
    - Slot alignment is invalid
    - No decisions available
    - In cooldown after repeated failures
+   - Forecast data is stale
 
-3. **Legacy remains authoritative** for all non-optimizer paths:
-   - Manual overrides
+3. **Manual overrides** bypass optimizer:
+   - User-initiated mode changes
    - Button handlers (force charge, etc.)
-   - State machine transitions
    - Error recovery
 
-### Ownership During Transitions
+### Error Recovery
 
-- **Shadow → Assist**: No control behavior change; more logging
-- **Assist → Active**: Optimizer begins controlling; legacy on fallback
-- **Active → Shadow/Assist**: Legacy regains full control immediately
-- **Active → Disabled**: Optimizer stops; legacy controls
+- **Optimizer failure**: Falls back to SELF_CONSUMPTION
+- **Repeated failures**: Cooldown period prevents rapid re-attempts
+- **Manual override**: User can always control via HA UI
 
 ## Risks and Mitigations
 

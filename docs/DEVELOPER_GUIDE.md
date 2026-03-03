@@ -208,51 +208,28 @@ class ComputationEngine:
 - `_compute_effective_cheap_price()`: Dynamic price threshold with urgency
 - `_compute_solar_forecast()`: SOC projection using Solcast data
 - `_compute_active_mode()`: State machine priority evaluation
-- `_compute_daily_15min_forecast()`: Full 24-hour simulation
 
-### ForecastComputer (`forecast_computer.py`)
+### DP Optimizer (`computation_engine_lib/optimizer_dp.py`)
 
-Simulates battery behavior over 24 hours:
+Computes optimal battery decisions over 24 hours:
 
 ```python
-def compute_forecast(self, data, now_dt, historical_avg_kw, ...):
-    """Compute 24-hour forecast with 15-minute granularity.
+def plan(self, inputs: OptimizerInputs, config: OptimizerConfig) -> OptimizerResult:
+    """Compute optimal 24-hour plan with DP.
 
     Returns:
-        daily_forecast: List of 96 dicts (one per 15-min slot)
-        soc_15min: List of SOC percentages
+        OptimizerResult with decisions, net_cost, solve_time, etc.
     """
-    daily_forecast = []
-    predicted_soc = data.soc
-
-    for slot_idx in range(96):  # 24 hours × 4 slots/hour
-        slot_start = now_dt + timedelta(minutes=15 * slot_idx)
-
-        # Get solar for this slot
-        solar_kwh = self._get_solar_for_15min_slot(data, slot_start)
-
-        # Get consumption estimate
-        consumption_kwh = self._estimate_consumption(slot_start, ...)
-
-        # Get price for this slot
-        slot_price = self._get_price_for_slot(data.general_forecast, slot_start)
-
-        # Simulate grid charging if needed
-        should_charge, should_boost = self._should_grid_charge_at_slot(...)
-
-        # Update predicted SOC
-        predicted_soc += (solar_kwh - consumption_kwh) - charge_delta
-
-        daily_forecast.append({
-            "hour": slot_start.hour,
-            "minute": slot_start.minute,
-            "predicted_soc": predicted_soc,
-            "solar_kwh": solar_kwh,
-            "consumption_kwh": consumption_kwh,
-            "grid_charge": should_charge,
-            "grid_charge_boost": should_boost,
-        })
+    # Build SOC grid (50 bins by default)
+    # Forward pass: compute cost-to-go for all (slot, soc_bin) states
+    # Backward pass: reconstruct optimal action sequence
+    return OptimizerResult(...)
 ```
+
+The optimizer is invoked via `run_optimizer()` in `optimizer_runner.py`:
+1. `SlotBuilder` constructs `SlotContext` objects from coordinator data
+2. `DPPlanner.plan()` computes optimal decisions
+3. `_derive_runtime_apply_plan()` maps actions to battery modes
 
 ### StateMachine (`state_machine.py`)
 
@@ -516,16 +493,23 @@ def _should_grid_charge_at_slot(self, ...):
     adjusted_value = base_value + new_param
 ```
 
-#### 3. Update `ForecastComputer.set_adaptive_params()`
+#### 3. Update `SlotBuilder` and `OptimizerConfig`
 
-Ensure the new parameter is propagated to the relevant sub-engines:
+Ensure the new parameter is applied during slot building:
 
 ```python
-def set_adaptive_params(self, params: AdaptiveParameters | None) -> None:
-    self._adaptive_params = params
-    if self._grid_charge_decision:
-        self._grid_charge_decision.set_adaptive_params(params)
-    # Propagate to other engines as needed
+# In slot_builder.py
+def _apply_adaptive_params(self, slot: SlotContext) -> SlotContext:
+    if self._adaptive_params:
+        slot.consumption_kwh *= (1 + self._adaptive_params.consumption_forecast_bias)
+    return slot
+
+# In optimizer_dp.py or optimizer_runner.py
+config = OptimizerConfig(
+    battery_capacity_kwh=...,
+    demand_window_target_soc_pct=self._adaptive_params.demand_window_buffer_pct,
+    # ... other adaptive params
+)
 ```
 
 ### Testing the Feedback Loop

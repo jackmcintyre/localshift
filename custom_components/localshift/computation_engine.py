@@ -113,7 +113,7 @@ class ComputationEngine:
         # Weather correlation for temperature-based consumption prediction
         self._weather_correlation: WeatherCorrelation | None = None
 
-        # Phase 4 (#441): Create engines directly (no ForecastComputer wrapper)
+        # Create core engines for DP optimizer pipeline
         self._load_forecaster = LoadForecaster(
             entry=entry, weather_correlation=self._weather_correlation
         )
@@ -213,7 +213,7 @@ class ComputationEngine:
             dw_block_enabled and now_t >= dw_start_time and now_t < dw_end_time
         )
 
-        # ---- Manual override check (Phase 4, #441: moved from deleted ModeDecisionEngine) ----
+        # ---- Manual override check ----
         # Always respect manual override first — user is in control
         if data.manual_override:
             data.active_mode = _BatteryMode.MANUAL
@@ -628,11 +628,7 @@ class ComputationEngine:
     ) -> None:
         """Populate data.load_forecast_slots with per-slot kW estimates.
 
-        Runs before ForecastComputer.compute_forecast() so both the legacy planner
-        and the DP optimizer can read from a shared intermediate (Issue #441 Phase 1).
-
-        Uses LoadForecaster (exponential decay, Issue #381) to produce the same
-        values that ForecastComputer._estimate_hourly_consumption_kw() would produce.
+        Shared intermediate for DP optimizer slot building (extracted in #441 Phase 1).
         Slots are fixed 15-min (TOTAL_SLOTS = 96) aligned to the current 5-min boundary.
         """
         current_5min = (now_dt.minute // 5) * 5
@@ -970,7 +966,7 @@ class ComputationEngine:
     def _add_to_decision_log(
         self, data: CoordinatorData, now_dt: datetime, mode_change: bool
     ) -> None:
-        """Add entry to decision log when mode changes or periodically (inlined from ModeDecisionEngine, Phase 4 #441)."""
+        """Add entry to decision log when mode changes or periodically."""
         old_mode = self._previous_active_mode
         new_mode = data.active_mode
         old_display = old_mode.display_name if old_mode else "Unknown"

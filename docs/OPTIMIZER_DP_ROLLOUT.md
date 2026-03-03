@@ -1,5 +1,7 @@
 # DP Optimizer Rollout Guide
 
+> **Rollout Complete (March 2026)** — The DP optimizer migration is finished. The optimizer is now the sole control path. Shadow and assist modes were removed in #448. This document remains as a historical reference for the rollout process and comparison methodology.
+
 This document describes the DP (Dynamic Programming) optimizer rollout phases and how to interpret the optimizer comparison data.
 
 ## Overview
@@ -154,9 +156,8 @@ The safety gate validates:
 
 | Sensor | Purpose |
 |--------|---------|
-| `sensor.localshift_optimizer_shadow_plan` | Per-slot optimizer decisions |
-| `sensor.localshift_optimizer_shadow_summary` | Aggregate optimizer metrics |
-| `sensor.localshift_optimizer_comparison` | Legacy vs optimizer comparison |
+| `sensor.localshift_optimizer_plan_detailed` | Per-slot optimizer decisions |
+| `sensor.localshift_optimizer_summary` | Aggregate optimizer metrics |
 
 ## Related Documentation
 
