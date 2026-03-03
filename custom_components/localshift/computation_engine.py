@@ -54,7 +54,6 @@ from .const import (
     CONF_OPTIMIZATION_MODE,
     CONF_SUN_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
-    DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_DEMAND_WINDOW_END,
@@ -777,8 +776,8 @@ class ComputationEngine:
             CONF_BATTERY_TARGET: self.entry.options.get(
                 CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
             ),
-            CONF_ALLOW_DW_ENTRY_UNDER_TARGET: self.entry.options.get(
-                SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
+            CONF_ALLOW_DW_ENTRY_UNDER_TARGET: self._get_switch_state(
+                SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
             ),
             CONF_OPTIMIZATION_MODE: self.entry.options.get(
                 CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE
