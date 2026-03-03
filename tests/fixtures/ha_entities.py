@@ -364,39 +364,6 @@ def create_binary_sensor_state(
     )
 
 
-def create_sun_state(
-    elevation: float = 45.0,
-    rising: bool = True,
-    entity_id: str = "sun.sun",
-) -> MockState:
-    """Create a realistic sun.sun state.
-
-    Args:
-        elevation: Sun elevation in degrees
-        rising: Whether the sun is rising
-        entity_id: Entity ID for the sun entity
-
-    Returns:
-        MockState with realistic sun attributes
-    """
-    return MockState(
-        entity_id=entity_id,
-        state="above_horizon" if elevation > 0 else "below_horizon",
-        attributes={
-            "elevation": elevation,
-            "rising": rising,
-            "azimuth": 180.0,
-            "next_dawn": "2026-02-17T05:30:00",
-            "next_dusk": "2026-02-17T19:30:00",
-            "next_noon": "2026-02-17T12:00:00",
-            "next_rising": "2026-02-17T06:00:00",
-            "next_setting": "2026-02-17T18:00:00",
-            "friendly_name": "Sun",
-            "icon": "mdi:white-balance-sunny",
-        },
-    )
-
-
 # =============================================================================
 # Pre-built Entity Sets
 # =============================================================================
@@ -507,8 +474,6 @@ def create_default_entity_states(
             "binary_sensor.100h_price_spike",
             price_spike,
         ),
-        # Sun entity
-        "sun.sun": create_sun_state(),
     }
 
 

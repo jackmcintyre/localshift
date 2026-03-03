@@ -121,9 +121,6 @@ def setup_mock_hass(input_data: dict) -> MagicMock:
         elif "feed_in_forecast" in entity_id:
             state.state = "unknown"
             state.attributes = {"forecasts": input_data.get("feed_in_forecast", [])}
-        elif "sun" in entity_id:
-            state.state = input_data.get("sun_state", "above_horizon")
-            state.attributes = {}
         else:
             state.state = "unknown"
             state.attributes = {}
@@ -180,7 +177,6 @@ def create_mock_get_entity_id() -> callable:
             "solcast_tomorrow": "sensor.solcast_tomorrow",
             "general_forecast": "sensor.amber_general_forecast",
             "feed_in_forecast": "sensor.amber_feed_in_forecast",
-            "sun": "sun.sun",
         }
         return entity_map.get(key, f"sensor.{key}")
 

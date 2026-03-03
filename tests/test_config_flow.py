@@ -21,7 +21,6 @@ from custom_components.localshift.const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
-    CONF_SUN_ENTITY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -389,8 +388,6 @@ class TestSolcastStep:
 
         # Mock valid entity states
         def mock_get_state(entity_id):
-            if "sun" in entity_id:
-                return create_mock_state(entity_id, "above_horizon", "sun")
             return create_mock_state(entity_id, "10", "sensor")
 
         mock_hass.states.get = mock_get_state
@@ -399,7 +396,6 @@ class TestSolcastStep:
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_tomorrow",
             CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
-            CONF_SUN_ENTITY: "sun.sun",
         }
 
         result = await flow.async_step_solcast(user_input)
@@ -417,8 +413,6 @@ class TestSolcastStep:
 
         # Mock valid entity states for sensors
         def mock_get_state(entity_id):
-            if "sun" in entity_id:
-                return create_mock_state(entity_id, "above_horizon", "sun")
             return create_mock_state(entity_id, "10", "sensor")
 
         mock_hass.states.get = mock_get_state
@@ -427,7 +421,6 @@ class TestSolcastStep:
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_tomorrow",
             CONF_NOTIFY_SERVICE: "invalid_service",  # Invalid - no notify. prefix
-            CONF_SUN_ENTITY: "sun.sun",
         }
 
         result = await flow.async_step_solcast(user_input)

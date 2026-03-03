@@ -52,7 +52,6 @@ from .const import (
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
-    CONF_SUN_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -359,20 +358,15 @@ class ComputationEngine:
 
         if after_dw:
             # After DW start: report current SOC, safe defaults
-            # Check if sun is down for accurate overnight assessment
-            sun_entity_id = self._get_entity_id(CONF_SUN_ENTITY)
-            sun_state = self.hass.states.get(sun_entity_id)
-            sun_up = sun_state is not None and sun_state.state == "above_horizon"
-
             # Use DP decision if available (Phase 4, #441)
             dw_entry = self._get_dp_decision_at_demand_window(data, target_hour)
             if dw_entry:
                 predicted_soc = dw_entry["predicted_soc_pct"]
                 can_reach = predicted_soc >= target_pct
             else:
-                # Fallback to current SOC
+                # Fallback to current SOC (conservative - assumes no solar)
                 predicted_soc = data.soc
-                can_reach = data.soc >= target_pct or sun_up
+                can_reach = data.soc >= target_pct
 
             # Boost_needed indicates if solar alone can reach target (for dashboard display)
             # After DW, boost is not applicable
@@ -638,12 +632,16 @@ class ComputationEngine:
         for i in range(TOTAL_SLOTS):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
+            hours_ahead = i / 4.0
+            temperature = data.weather_temperature_forecast.get(slot_hour)
             load_kw, _ = self._load_forecaster.estimate_hourly_consumption_kw(
                 hourly_avg_kw=historical_avg_kw,
                 slot_hour=slot_hour,
                 current_hour=current_hour,
                 current_load_kw=data.load_power_kw,
                 recent_load_kw=recent_load_kw,
+                temperature=temperature,
+                hours_ahead=hours_ahead,
             )
             slots.append(load_kw)
 
