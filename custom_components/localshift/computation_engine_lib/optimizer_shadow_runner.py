@@ -845,7 +845,6 @@ def _derive_runtime_apply_plan(
             - fallback_to_legacy: True if action cannot be applied
     """
     from ..const import BatteryMode  # noqa: PLC0415
-    from .optimizer_dp import PlannerAction  # noqa: PLC0415
 
     if not decisions or current_slot_idx < 0 or current_slot_idx >= len(decisions):
         return {
