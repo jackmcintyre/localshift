@@ -1274,6 +1274,69 @@ Buttons trigger utility actions
 
 ---
 
+## Phase 5 Migration (#447)
+
+### Entity Renames
+
+The following entity IDs were changed in Phase 5 when migrating to the DP optimizer:
+
+| Old Entity ID | New Entity ID | Notes |
+|--------------|---------------|-------|
+| `sensor.localshift_forecast_daily` | `sensor.localshift_optimizer_plan` | Now reads from DP optimizer decisions |
+| `sensor.localshift_forecast_grid` | `sensor.localshift_optimizer_plan_grid` | Now reads projected import/export from optimizer |
+| `sensor.localshift_optimizer_shadow_plan` | `sensor.localshift_optimizer_plan_detailed` | Removed "shadow" naming |
+| `sensor.localshift_optimizer_shadow_summary` | `sensor.localshift_optimizer_summary` | Removed "shadow" naming |
+| `sensor.localshift_optimizer_comparison` | **DELETED** | No legacy planner to compare against |
+
+### Attribute Changes
+
+#### sensor.localshift_optimizer_plan (was forecast_daily)
+
+New attributes structure:
+```yaml
+slots:
+  - slot_idx: 0
+    action: "hold"
+    reason_code: "IDLE"
+    objective_terms:
+      import_cost: 0.0
+      export_revenue: 0.0
+      cycle_penalty: 0.0
+      shortfall_penalty: 0.0
+total_slots: 96
+forecast_horizon_hours: 24.0
+planner: "DP_OPTIMIZER"
+```
+
+#### sensor.localshift_optimizer_plan_grid (was forecast_grid)
+
+New attributes structure:
+```yaml
+projected_import_kwh: 12.5
+projected_export_kwh: 8.3
+projected_net_cost: 2.45
+action_breakdown:
+  HOLD: 70
+  CHARGE_GRID_NORMAL: 10
+  EXPORT_PROACTIVE: 8
+  CHARGE_FOR_DEMAND_WINDOW: 8
+planner: "DP_OPTIMIZER"
+```
+
+### Binary Sensor Notes
+
+`binary_sensor.localshift_solar_can_reach_target` now reads from `optimizer_result.can_solar_reach_target` — powered by DP optimizer terminal shortfall analysis.
+
+### Dashboard Migration
+
+If you have dashboards or automations referencing the old entity IDs:
+
+1. **Update entity IDs** in your dashboard YAML/configuration
+2. **Update attribute references** - the attribute structures have changed
+3. **Remove comparison sensor** - delete any references to `sensor.localshift_optimizer_comparison`
+
+---
+
 ## Debugging Tips
 
 1. **Start with `sensor.localshift_battery_mode`** — This tells you what the automation thinks it should be doing.

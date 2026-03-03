@@ -468,39 +468,32 @@ class CoordinatorData:
     )  # List of missing/invalid inputs
 
     # ---------------------------------------------------------------------------
-    # --- DP Optimizer shadow outputs (#403 Phase 1)
+    # --- DP Optimizer outputs (#403 Phase 1, #447 Phase 5)
     # ---------------------------------------------------------------------------
-    # The optimizer runs in shadow mode alongside the legacy planner.
+    # The DP optimizer is now the primary planner (Phase 5).
     # None when optimizer is disabled or not yet run this cycle.
-    # These fields are read-only from the runtime perspective;
-    # the legacy planner (daily_forecast) remains the source of truth for control.
 
-    optimizer_shadow_result: dict[str, Any] | None = None
+    optimizer_result: dict[str, Any] | None = None
     """Serialized OptimizerResult from DPPlanner.plan() for this cycle.
     Keys: success, planner_version, solve_time_seconds, total_slots,
     states_explored, projected_import_kwh, projected_export_kwh,
     projected_net_cost, terminal_shortfall_pct, error_message, reason_code_histogram.
-    Decisions are stored separately in optimizer_shadow_decisions.
+    Decisions are stored separately in optimizer_decisions.
     """
 
-    optimizer_shadow_decisions: list[dict[str, Any]] = field(default_factory=list)
-    """Per-slot shadow decisions from the optimizer.
+    optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
+    """Per-slot decisions from the optimizer.
     Each dict mirrors PlannedSlotDecision fields including:
     slot_index, timestamp_iso, slot_interval_minutes, action, reason_code,
-    objective_terms (dict), predicted_soc_pct, grid_import_kwh, grid_export_kwh.
+    objective_terms (dict), predicted_soc_pct, grid_import_kwh, grid_export_kwh,
+    solar_kwh, consumption_kwh, buy_price, sell_price.
     """
 
-    optimizer_shadow_summary: dict[str, Any] = field(default_factory=dict)
-    """Compact summary of shadow run for diagnostics sensor.
-    Keys: enabled, shadow_mode, planner_version, success, solve_time_seconds,
+    optimizer_summary: dict[str, Any] = field(default_factory=dict)
+    """Compact summary of optimizer run for diagnostics sensor.
+    Keys: enabled, planner_version, success, solve_time_seconds,
     projected_net_cost, projected_import_kwh, projected_export_kwh,
     total_slots, reason_code_histogram, error_message.
-    """
-
-    optimizer_comparison: dict[str, Any] = field(default_factory=dict)
-    """Side-by-side comparison of legacy vs optimizer plans.
-    Populated by PlannerComparator each cycle.
-    See PlannerComparisonRecord for full schema.
     """
 
     # ---------------------------------------------------------------------------

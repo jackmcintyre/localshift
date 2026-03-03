@@ -521,10 +521,9 @@ def test_shadow_mode_no_actuation():
     class MockCoordinatorData:
         soc: float = 50.0
         daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_shadow_result: dict[str, Any] | None = None
-        optimizer_shadow_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_shadow_summary: dict[str, Any] = field(default_factory=dict)
-        optimizer_comparison: dict[str, Any] = field(default_factory=dict)
+        optimizer_result: dict[str, Any] | None = None
+        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
+        optimizer_summary: dict[str, Any] = field(default_factory=dict)
         forecast_net_cost: float = 0.0
         forecast_import_cost: float = 0.0
         forecast_export_revenue: float = 0.0
@@ -550,9 +549,9 @@ def test_shadow_mode_no_actuation():
     # The function mutates data in-place and returns None
     run_shadow_optimizer(data, config_options)
 
-    # Verify shadow result was produced (mutation on data)
-    assert data.optimizer_shadow_summary is not None
-    assert data.optimizer_shadow_summary.get("enabled") is True
+    # Verify result was produced (mutation on data)
+    assert data.optimizer_summary is not None
+    assert data.optimizer_summary.get("enabled") is True
 
     # The key guarantee: shadow mode only writes to shadow_* fields
     # It never calls battery_controller or state_machine methods
@@ -577,10 +576,9 @@ def test_shadow_failure_fallback(default_config):
     class MockCoordinatorData:
         soc: float = 50.0
         daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_shadow_result: dict[str, Any] | None = None
-        optimizer_shadow_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_shadow_summary: dict[str, Any] = field(default_factory=dict)
-        optimizer_comparison: dict[str, Any] = field(default_factory=dict)
+        optimizer_result: dict[str, Any] | None = None
+        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
+        optimizer_summary: dict[str, Any] = field(default_factory=dict)
         forecast_net_cost: float = 0.0
         forecast_import_cost: float = 0.0
         forecast_export_revenue: float = 0.0
@@ -593,10 +591,10 @@ def test_shadow_failure_fallback(default_config):
     run_shadow_optimizer(data, config_options)
 
     # Verify error state is captured in summary
-    assert data.optimizer_shadow_summary is not None
+    assert data.optimizer_summary is not None
     # Empty slots results in success=False with error_message
-    assert data.optimizer_shadow_summary.get("success") is False
-    assert "error_message" in data.optimizer_shadow_summary
+    assert data.optimizer_summary.get("success") is False
+    assert "error_message" in data.optimizer_summary
 
 
 def test_shadow_result_serialization_safe(default_config, multi_slots):
@@ -618,10 +616,9 @@ def test_shadow_result_serialization_safe(default_config, multi_slots):
     class MockCoordinatorData:
         soc: float = 50.0
         daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_shadow_result: dict[str, Any] | None = None
-        optimizer_shadow_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_shadow_summary: dict[str, Any] = field(default_factory=dict)
-        optimizer_comparison: dict[str, Any] = field(default_factory=dict)
+        optimizer_result: dict[str, Any] | None = None
+        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
+        optimizer_summary: dict[str, Any] = field(default_factory=dict)
         forecast_net_cost: float = 0.0
         forecast_import_cost: float = 0.0
         forecast_export_revenue: float = 0.0
@@ -645,23 +642,18 @@ def test_shadow_result_serialization_safe(default_config, multi_slots):
     # Run shadow optimizer
     run_shadow_optimizer(data, config_options)
 
-    # Attempt to serialize all shadow output fields to JSON
+    # Attempt to serialize all output fields to JSON
     # This will raise TypeError if any values are not JSON-compatible
     try:
         # Serialize summary
-        json_str = json.dumps(data.optimizer_shadow_summary)
+        json_str = json.dumps(data.optimizer_summary)
         parsed = json.loads(json_str)
         assert parsed is not None
 
         # Serialize decisions
-        json_str = json.dumps(data.optimizer_shadow_decisions)
+        json_str = json.dumps(data.optimizer_decisions)
         parsed = json.loads(json_str)
         assert isinstance(parsed, list)
-
-        # Serialize comparison
-        json_str = json.dumps(data.optimizer_comparison)
-        parsed = json.loads(json_str)
-        assert parsed is not None
 
     except (TypeError, ValueError) as e:
         pytest.fail(f"Shadow result is not JSON-serializable: {e}")
