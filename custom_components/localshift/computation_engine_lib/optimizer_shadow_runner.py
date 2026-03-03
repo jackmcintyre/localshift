@@ -1,16 +1,15 @@
 """
-optimizer_shadow_runner.py — Dual-run entrypoint for shadow-mode optimizer.
+optimizer_shadow_runner.py — DP optimizer entrypoint.
 
 Phase F (#403): Active-control pilot with safety gates.
-Status: Supports shadow, assist, and active modes.
+Phase 5 (#447): Renamed fields, removed comparison sensor.
 
 This module is the single entry point called by the coordinator each compute
-cycle AFTER the legacy planner has finished. It:
-  1. Converts legacy forecast slots + coordinator data into OptimizerInputs.
-  2. Runs DPPlanner.plan() (shadow — no side effects).
-  3. Runs PlannerComparator.compare() to produce a side-by-side diff.
-  4. Writes all results back into CoordinatorData shadow fields.
-  5. (Phase F) In active mode: applies optimizer decision via safety gate.
+cycle. It:
+  1. Converts raw coordinator data into OptimizerInputs via SlotBuilder.
+  2. Runs DPPlanner.plan() to compute optimal schedule.
+  3. Writes all results into CoordinatorData optimizer_* fields.
+  4. (Phase F) In active mode: applies optimizer decision via safety gate.
 
 The coordinator calls run_shadow_optimizer(data, config_options) and that
 is the ONLY coupling point. All optimizer internals stay isolated here.
@@ -94,9 +93,8 @@ def run_shadow_optimizer(
     enabled = config_options.get(CONF_OPTIMIZER_ENABLED, DEFAULT_OPTIMIZER_ENABLED)
     if not enabled:
         # Optimizer disabled — write a minimal summary and exit cleanly
-        data.optimizer_shadow_summary = {
+        data.optimizer_summary = {
             "enabled": False,
-            "shadow_mode": True,
             "planner_version": DPPlanner.VERSION,
             "success": False,
             "error_message": "optimizer_enabled=False",
@@ -125,9 +123,8 @@ def run_shadow_optimizer(
         _LOGGER.error(
             "Shadow optimizer failed for cycle %s: %s", cycle_id, exc, exc_info=True
         )
-        data.optimizer_shadow_summary = {
+        data.optimizer_summary = {
             "enabled": True,
-            "shadow_mode": True,
             "planner_version": DPPlanner.VERSION,
             "success": False,
             "error_message": str(exc),
@@ -164,9 +161,8 @@ def _run(
         _LOGGER.debug(
             "Shadow optimizer: no slots available, skipping cycle %s", cycle_id
         )
-        data.optimizer_shadow_summary = {
+        data.optimizer_summary = {
             "enabled": True,
-            "shadow_mode": True,
             "planner_version": DPPlanner.VERSION,
             "success": False,
             "error_message": "no_slots_available",
@@ -185,9 +181,8 @@ def _run(
 
     initial_soc_pct, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
     if initial_soc_pct is None:
-        data.optimizer_shadow_summary = {
+        data.optimizer_summary = {
             "enabled": True,
-            "shadow_mode": True,
             "planner_version": DPPlanner.VERSION,
             "success": False,
             "error_message": "invalid_initial_soc",
@@ -215,10 +210,10 @@ def _run(
     # 2. Run DP optimizer (shadow — pure computation, no side effects)
     result: OptimizerResult = planner.plan(inputs)
 
-    # 3. Write shadow result fields
-    data.optimizer_shadow_result = _serialize_result(result)
-    data.optimizer_shadow_decisions = [_serialize_decision(d) for d in result.decisions]
-    data.optimizer_shadow_summary = _build_summary(
+    # 3. Write result fields
+    data.optimizer_result = _serialize_result(result)
+    data.optimizer_decisions = [_serialize_decision(d) for d in result.decisions]
+    data.optimizer_summary = _build_summary(
         result,
         cycle_id,
         cycle_timestamp_iso,
@@ -237,32 +232,7 @@ def _run(
         result.projected_net_cost,
     )
 
-    # 4. Run comparison against legacy planner
-    legacy_import_kwh, legacy_export_kwh = _compute_legacy_energy_totals(
-        data.daily_forecast
-    )
-
-    comparison_record = comparator.compare(
-        cycle_id=cycle_id,
-        cycle_timestamp_iso=cycle_timestamp_iso,
-        legacy_slots=data.daily_forecast,
-        optimizer_decisions=result.decisions,
-        legacy_projected_net_cost=getattr(data, "forecast_net_cost", 0.0),
-        legacy_projected_import_kwh=legacy_import_kwh,
-        legacy_projected_export_kwh=legacy_export_kwh,
-        optimizer_projected_net_cost=result.projected_net_cost,
-        optimizer_projected_import_kwh=result.projected_import_kwh,
-        optimizer_projected_export_kwh=result.projected_export_kwh,
-        demand_window_target_soc_pct=optimizer_config.demand_window_target_soc_pct,
-    )
-    data.optimizer_comparison = comparison_record.to_dict()
-
-    _LOGGER.debug(
-        "Shadow comparison cycle %s: %d mismatches, net_cost_delta=%.4f",
-        cycle_id,
-        comparison_record.mismatch_count,
-        comparison_record.net_cost_delta,
-    )
+    # Phase 5 (#447): Comparison removed - legacy planner no longer exists
 
 
 # ---------------------------------------------------------------------------
@@ -568,10 +538,9 @@ def _build_summary(
     config_options: dict[str, Any] | None = None,
     initial_soc_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the compact optimizer_shadow_summary dict for the diagnostics sensor."""
+    """Build the compact optimizer_summary dict for the diagnostics sensor."""
     summary = {
         "enabled": True,
-        "shadow_mode": True,
         "planner_version": result.planner_version,
         "success": result.success,
         "cycle_id": cycle_id,
@@ -800,7 +769,7 @@ class OptimizerSafetyGate:
         Returns:
             Age in minutes, or None if not determinable
         """
-        cycle_timestamp_str = getattr(data, "optimizer_shadow_summary", {}).get(
+        cycle_timestamp_str = getattr(data, "optimizer_summary", {}).get(
             "cycle_timestamp_iso"
         )
         if not cycle_timestamp_str:
@@ -845,7 +814,6 @@ def _derive_runtime_apply_plan(
             - fallback_to_legacy: True if action cannot be applied
     """
     from ..const import BatteryMode  # noqa: PLC0415
-    from .optimizer_dp import PlannerAction  # noqa: PLC0415
 
     if not decisions or current_slot_idx < 0 or current_slot_idx >= len(decisions):
         return {
@@ -919,7 +887,7 @@ def _find_current_slot_index(data: Any) -> int:
     """
     now = datetime.now(UTC)
 
-    decisions = data.optimizer_shadow_decisions
+    decisions = data.optimizer_decisions
     if not decisions:
         return 0
 

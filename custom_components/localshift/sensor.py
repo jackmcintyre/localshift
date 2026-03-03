@@ -34,10 +34,11 @@ async def async_setup_entry(
         NetElectricityCostSensor(coordinator, entry),
         DecisionLogSensor(coordinator, entry),
         ForecastHistorySensor(coordinator, entry),
-        DailyForecastSensor(coordinator, entry),
-        # New split sensors for Issue #37 (forecast history collection)
+        # Phase 5 (#447): Renamed/migrated sensors
+        OptimizerPlanSensor(coordinator, entry),  # Was DailyForecastSensor
+        # Price and grid sensors
         ForecastPricesSensor(coordinator, entry),
-        ForecastGridSensor(coordinator, entry),
+        OptimizerPlanGridSensor(coordinator, entry),  # Was ForecastGridSensor
         ForecastDiagnosticsSensor(coordinator, entry),
         MinimumTargetSOCSensor(coordinator, entry),
         # Excess solar load shifting sensors (backlog-high-017)
@@ -62,10 +63,11 @@ async def async_setup_entry(
         ForecastStatusSensor(coordinator, entry),
         # Automation ready sensor (Issue #349)
         AutomationReadySensor(coordinator, entry),
-        # Optimizer shadow telemetry sensors (Issue #403)
-        OptimizerShadowPlanSensor(coordinator, entry),
-        OptimizerShadowSummarySensor(coordinator, entry),
-        OptimizerComparisonSensor(coordinator, entry),
+        # Optimizer sensors (Phase 5 #447: renamed, comparison deleted)
+        OptimizerPlanDetailedSensor(
+            coordinator, entry
+        ),  # Was OptimizerShadowPlanSensor
+        OptimizerSummarySensor(coordinator, entry),  # Was OptimizerShadowSummarySensor
     ]
 
     async_add_entities(entities)
@@ -265,76 +267,43 @@ class ForecastHistorySensor(LocalShiftSensorBase):
         return {"history": self.coordinator.data.forecast_history}
 
 
-class DailyForecastSensor(LocalShiftSensorBase):
-    """Full 24-hour forecast with SOC, solar, and consumption data.
+class OptimizerPlanSensor(LocalShiftSensorBase):
+    """DP optimizer plan summary.
 
-    This sensor provides the core forecast data for dashboards and history.
-    Split from the original monolithic sensor to stay under 16KB limit (Issue #37).
+    Shows the plan computed by the DP optimizer with slot actions and reason codes.
+    Replaces the legacy daily_forecast-based sensor (Phase 5, #447).
     """
 
-    _attr_unique_id = "localshift_forecast_daily"
-    _attr_name = "Forecast Daily"
+    _attr_unique_id = "localshift_optimizer_plan"
+    _attr_name = "Optimizer Plan"
     _attr_icon = "mdi:chart-bar"
 
     def _update_from_coordinator(self) -> None:
-        """Update with count of forecast slots."""
-        self._attr_native_value = len(self.coordinator.data.daily_forecast)
+        """Update with slot count."""
+        self._attr_native_value = len(self.coordinator.data.optimizer_decisions or [])
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return daily forecast with descriptive key names for clarity."""
-        # Build forecast slots with descriptive keys
-        # Each slot contains the essential time-series data for dashboards
-        forecast_slots = []
-        slot_intervals = {"5min": 0, "30min": 0, "15min": 0}
+        """Return optimizer plan details."""
+        decisions = self.coordinator.data.optimizer_decisions or []
+        d = self.coordinator.data
 
-        for slot in self.coordinator.data.daily_forecast:
-            ts = slot.get("timestamp", "")
-            interval = slot.get("slot_interval_minutes", 15)
-            price_source = slot.get("price_source", "unknown")
-
-            # Track slot interval counts
-            if interval == 5:
-                slot_intervals["5min"] += 1
-            elif interval == 30:
-                slot_intervals["30min"] += 1
-            else:
-                slot_intervals["15min"] += 1
-
-            forecast_slots.append(
+        slots = []
+        for dec in decisions:
+            slots.append(
                 {
-                    "time": ts[11:16] if len(ts) >= 16 else "",  # "HH:MM"
-                    "hour": slot.get("hour", 0),
-                    "minute": slot.get("minute", 0),
-                    "slot_interval_minutes": interval,
-                    "predicted_soc": slot.get("predicted_soc"),
-                    "solar_kwh": slot.get("solar_kwh"),
-                    "consumption_kwh": slot.get("consumption_kwh"),
-                    "net_kwh": slot.get("net_kwh"),
-                    "buy_price": slot.get("buy_price"),
-                    "sell_price": slot.get("sell_price"),
-                    "price_source": price_source,
+                    "slot_idx": dec.get("slot_index"),
+                    "action": dec.get("action"),
+                    "reason_code": dec.get("reason_code"),
+                    "objective_terms": dec.get("objective_terms", {}),
                 }
             )
 
-        # SOC series for graphing (lightweight format)
-        soc_series = []
-        for slot in self.coordinator.data.daily_forecast_soc_15min:
-            if len(slot) >= 2:
-                soc_series.append({"time": slot[0], "soc": slot[1]})
-
         return {
-            # Core forecast data (96 slots × 10 fields ≈ 10KB)
-            "forecast_slots": forecast_slots,
-            # SOC time series for graphing
-            "soc_series": soc_series,
-            # Summary counts
-            "slot_count": len(self.coordinator.data.daily_forecast),
-            "slot_intervals": slot_intervals,
-            "solcast_today_entries": len(self.coordinator.data.solcast_today),
-            "solcast_tomorrow_entries": len(self.coordinator.data.solcast_tomorrow),
-            # Hourly summary for quick reference
-            "forecast_hourly": self.coordinator.data.daily_forecast_hourly,
+            "slots": slots,
+            "total_slots": len(slots),
+            "forecast_horizon_hours": d.forecast_horizon_hours,
+            "planner": "DP_OPTIMIZER",
         }
 
 
@@ -343,6 +312,7 @@ class ForecastPricesSensor(LocalShiftSensorBase):
 
     Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
     Provides buy/sell price time series for analysis and dashboards.
+    Phase 5 (#447): Reads from optimizer_decisions with fallback to raw forecasts.
     """
 
     _attr_unique_id = "localshift_forecast_prices"
@@ -357,129 +327,102 @@ class ForecastPricesSensor(LocalShiftSensorBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return price forecast data."""
-        # Build price time series with descriptive keys
+        d = self.coordinator.data
+        decisions = d.optimizer_decisions or []
+
         buy_prices = []
         sell_prices = []
 
-        for slot in self.coordinator.data.daily_forecast:
-            ts = slot.get("timestamp", "")
-            time_str = ts[11:16] if len(ts) >= 16 else ""
-            buy_prices.append(
-                {
-                    "time": time_str,
-                    "hour": slot.get("hour", 0),
-                    "minute": slot.get("minute", 0),
-                    "price": slot.get("buy_price"),
-                }
-            )
-            sell_prices.append(
-                {
-                    "time": time_str,
-                    "hour": slot.get("hour", 0),
-                    "minute": slot.get("minute", 0),
-                    "price": slot.get("sell_price"),
-                }
-            )
+        if decisions:
+            for dec in decisions:
+                ts = dec.get("timestamp_iso", "")
+                time_str = ts[11:16] if len(ts) >= 16 else ""
+                buy_prices.append(
+                    {
+                        "time": time_str,
+                        "price": dec.get("buy_price"),
+                    }
+                )
+                sell_prices.append(
+                    {
+                        "time": time_str,
+                        "price": dec.get("sell_price"),
+                    }
+                )
+        else:
+            for slot in d.general_forecast:
+                ts = slot.get("timestamp", "")
+                time_str = ts[11:16] if len(ts) >= 16 else ""
+                buy_prices.append(
+                    {
+                        "time": time_str,
+                        "price": slot.get("price"),
+                    }
+                )
+            for slot in d.feed_in_forecast:
+                ts = slot.get("timestamp", "")
+                time_str = ts[11:16] if len(ts) >= 16 else ""
+                sell_prices.append(
+                    {
+                        "time": time_str,
+                        "price": slot.get("price"),
+                    }
+                )
 
         return {
-            # Price time series (96 slots each ≈ 3KB total)
             "buy_prices": buy_prices,
             "sell_prices": sell_prices,
-            # Price thresholds
-            "effective_cheap_price": round(
-                self.coordinator.data.effective_cheap_price, 4
-            ),
-            "cheap_charge_stop_price": round(
-                self.coordinator.data.cheap_charge_stop_price, 4
-            ),
-            # Forecast cost totals (rest of today)
-            "forecast_import_cost": round(
-                self.coordinator.data.forecast_import_cost or 0.0, 2
-            ),
-            "forecast_export_revenue": round(
-                self.coordinator.data.forecast_export_revenue or 0.0, 2
-            ),
-            "forecast_net_cost": round(
-                self.coordinator.data.forecast_net_cost or 0.0, 2
-            ),
-            "forecast_grid_charge_cost": round(
-                self.coordinator.data.forecast_grid_charge_cost or 0.0, 2
-            ),
+            "effective_cheap_price": round(d.effective_cheap_price, 4),
+            "cheap_charge_stop_price": round(d.cheap_charge_stop_price, 4),
+            "forecast_import_cost": round(d.forecast_import_cost or 0.0, 2),
+            "forecast_export_revenue": round(d.forecast_export_revenue or 0.0, 2),
+            "forecast_net_cost": round(d.forecast_net_cost or 0.0, 2),
+            "forecast_grid_charge_cost": round(d.forecast_grid_charge_cost or 0.0, 2),
             "forecast_proactive_export_revenue": round(
-                self.coordinator.data.forecast_proactive_export_revenue or 0.0, 2
+                d.forecast_proactive_export_revenue or 0.0, 2
             ),
         }
 
 
-class ForecastGridSensor(LocalShiftSensorBase):
-    """Grid interaction forecast data for history collection.
+class OptimizerPlanGridSensor(LocalShiftSensorBase):
+    """Grid interaction projections from DP optimizer.
 
-    Split from DailyForecastSensor to stay under 16KB limit (Issue #37).
-    Provides grid import/export time series for analysis and dashboards.
+    Shows projected import/export from the optimizer plan.
+    Replaces the legacy forecast_grid sensor (Phase 5, #447).
     """
 
-    _attr_unique_id = "localshift_forecast_grid"
-    _attr_name = "Forecast Grid"
+    _attr_unique_id = "localshift_optimizer_plan_grid"
+    _attr_name = "Optimizer Plan Grid"
     _attr_icon = "mdi:transmission-tower"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
-        """Update with total forecast grid import."""
-        total_import = sum(
-            slot.get("grid_import_kwh", 0) or 0
-            for slot in self.coordinator.data.daily_forecast
-        )
-        self._attr_native_value = round(total_import, 3)
+        """Update with projected net cost."""
+        summary = self.coordinator.data.optimizer_summary or {}
+        self._attr_native_value = round(summary.get("projected_net_cost", 0.0), 3)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return grid interaction forecast data."""
-        # Build grid interaction time series with descriptive keys
-        grid_interaction = []
-        total_import = 0.0
-        total_export = 0.0
-        grid_charge_slots = 0
-        proactive_export_slots = 0
+        """Return grid interaction projections."""
+        d = self.coordinator.data
+        decisions = d.optimizer_decisions or []
+        summary = d.optimizer_summary or {}
 
-        for slot in self.coordinator.data.daily_forecast:
-            ts = slot.get("timestamp", "")
-            time_str = ts[11:16] if len(ts) >= 16 else ""
-            import_kwh = slot.get("grid_import_kwh", 0) or 0
-            export_kwh = slot.get("grid_export_kwh", 0) or 0
-            is_grid_charge = slot.get("grid_charge", False)
-            is_proactive_export = slot.get("proactive_export", False)
+        projected_import = summary.get("projected_import_kwh", 0.0)
+        projected_export = summary.get("projected_export_kwh", 0.0)
+        projected_net_cost = summary.get("projected_net_cost", 0.0)
 
-            total_import += import_kwh
-            total_export += export_kwh
-            if is_grid_charge:
-                grid_charge_slots += 1
-            if is_proactive_export:
-                proactive_export_slots += 1
-
-            grid_interaction.append(
-                {
-                    "time": time_str,
-                    "hour": slot.get("hour", 0),
-                    "minute": slot.get("minute", 0),
-                    "grid_import_kwh": round(import_kwh, 4),
-                    "grid_export_kwh": round(export_kwh, 4),
-                    "grid_charge": is_grid_charge,
-                    "grid_charge_boost": slot.get("grid_charge_boost", False),
-                    "proactive_export": is_proactive_export,
-                    "export_amount_kwh": round(
-                        slot.get("export_amount_kwh", 0) or 0, 4
-                    ),
-                }
-            )
+        action_counts: dict[str, int] = {}
+        for dec in decisions:
+            action = dec.get("action", "UNKNOWN")
+            action_counts[action] = action_counts.get(action, 0) + 1
 
         return {
-            # Grid interaction time series (96 slots × 8 fields ≈ 4KB)
-            "grid_interaction": grid_interaction,
-            # Summary totals
-            "total_grid_import_kwh": round(total_import, 3),
-            "total_grid_export_kwh": round(total_export, 3),
-            "grid_charge_slots": grid_charge_slots,
-            "proactive_export_slots": proactive_export_slots,
+            "projected_import_kwh": round(projected_import, 3),
+            "projected_export_kwh": round(projected_export, 3),
+            "projected_net_cost": round(projected_net_cost, 3),
+            "action_breakdown": action_counts,
+            "planner": "DP_OPTIMIZER",
         }
 
 
@@ -1166,20 +1109,20 @@ class AutomationReadySensor(LocalShiftSensorBase):
 # ---------------------------------------------------------------------------
 
 
-class OptimizerShadowPlanSensor(LocalShiftSensorBase):
-    """DP optimizer shadow plan for comparison.
+class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
+    """DP optimizer detailed plan with full per-slot data.
 
-    Issue #403: Shows the plan computed by the DP optimizer in shadow mode.
-    Used for A/B comparison with the legacy planner before switching control.
+    Shows the complete plan with all slot details for diagnostics.
+    Phase 5 (#447): Renamed from OptimizerShadowPlanSensor, reads optimizer_decisions.
     """
 
-    _attr_unique_id = "localshift_optimizer_shadow_plan"
-    _attr_name = "Optimizer Shadow Plan"
-    _attr_icon = "mdi:shadow"
+    _attr_unique_id = "localshift_optimizer_plan_detailed"
+    _attr_name = "Optimizer Plan Detailed"
+    _attr_icon = "mdi:format-list-bulleted"
 
     def _update_from_coordinator(self) -> None:
-        """Update with shadow plan summary."""
-        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        """Update with plan status."""
+        summary = self.coordinator.data.optimizer_summary or {}
         if not summary or not summary.get("enabled", False):
             self._attr_native_value = "disabled"
         elif not summary.get("success", False):
@@ -1189,11 +1132,10 @@ class OptimizerShadowPlanSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return shadow plan details."""
+        """Return detailed plan data."""
         d = self.coordinator.data
-        # Use the decisions list which contains per-slot shadow decisions
-        decisions = d.optimizer_shadow_decisions or []
-        summary = d.optimizer_shadow_summary or {}
+        decisions = d.optimizer_decisions or []
+        summary = d.optimizer_summary or {}
 
         return {
             "enabled": summary.get("enabled", False),
@@ -1211,27 +1153,26 @@ class OptimizerShadowPlanSensor(LocalShiftSensorBase):
         """Return icon based on status."""
         status = self._attr_native_value
         if status == "computed":
-            return "mdi:shadow"
+            return "mdi:format-list-bulleted"
         elif status == "error":
-            return "mdi:shadow-off"
-        else:  # disabled
-            return "mdi:shadow-off"
+            return "mdi:alert-circle-outline"
+        else:
+            return "mdi:minus-circle-outline"
 
 
-class OptimizerShadowSummarySensor(LocalShiftSensorBase):
-    """DP optimizer shadow run summary.
+class OptimizerSummarySensor(LocalShiftSensorBase):
+    """DP optimizer run summary.
 
-    Issue #403: Shows aggregate metrics from the shadow optimizer run.
-    Includes timing, success/failure, and comparison statistics.
+    Phase 5 (#447): Renamed from OptimizerShadowSummarySensor, reads optimizer_summary.
     """
 
-    _attr_unique_id = "localshift_optimizer_shadow_summary"
-    _attr_name = "Optimizer Shadow Summary"
+    _attr_unique_id = "localshift_optimizer_summary"
+    _attr_name = "Optimizer Summary"
     _attr_icon = "mdi:chart-box-outline"
 
     def _update_from_coordinator(self) -> None:
-        """Update with shadow run summary."""
-        summary = self.coordinator.data.optimizer_shadow_summary or {}
+        """Update with optimizer run summary."""
+        summary = self.coordinator.data.optimizer_summary or {}
         if not summary or not summary.get("enabled", False):
             self._attr_native_value = "disabled"
         elif summary.get("success", False):
@@ -1241,10 +1182,8 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return shadow run summary details."""
-        summary = self.coordinator.data.optimizer_shadow_summary or {}
-        # Expose parity/alignment diagnostics so basic triage can be done
-        # from Home Assistant state without digging into logs.
+        """Return optimizer summary details."""
+        summary = self.coordinator.data.optimizer_summary or {}
         return {
             "enabled": summary.get("enabled", False),
             "success": summary.get("success", False),
@@ -1252,14 +1191,11 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
             "computed_at": summary.get("cycle_timestamp_iso")
             or summary.get("computed_at"),
             "config_options": summary.get("config_options", {}),
-            # Parity diagnostics (Issue #419)
             "parity_completeness_pct": summary.get("parity_completeness_pct"),
             "parity_defaulted_fields": summary.get("parity_defaulted_fields", {}),
-            # Alignment diagnostics (Issue #419)
             "alignment_valid": summary.get("alignment_valid"),
             "alignment_issues": summary.get("alignment_issues", []),
             "alignment_warnings": summary.get("alignment_warnings", []),
-            # Additional helpful triage fields
             "planner_version": summary.get("planner_version"),
             "cycle_id": summary.get("cycle_id"),
             "solve_time_seconds": summary.get("solve_time_seconds"),
@@ -1276,100 +1212,5 @@ class OptimizerShadowSummarySensor(LocalShiftSensorBase):
             return "mdi:check-circle-outline"
         elif status == "failed":
             return "mdi:alert-circle-outline"
-        else:  # disabled
-            return "mdi:minus-circle-outline"
-
-
-class OptimizerComparisonSensor(LocalShiftSensorBase):
-    """DP optimizer vs legacy planner comparison.
-
-    Issue #403 Phase E: Shows side-by-side comparison metrics for operator trust.
-    Exposes mismatch counts, cost deltas, and top mismatches for debugging.
-    """
-
-    _attr_unique_id = "localshift_optimizer_comparison"
-    _attr_name = "Optimizer Comparison"
-    _attr_icon = "mdi:compare-horizontal"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def _update_from_coordinator(self) -> None:
-        """Update with comparison metrics."""
-        comparison = self.coordinator.data.optimizer_comparison or {}
-        shadow_summary = self.coordinator.data.optimizer_shadow_summary or {}
-
-        if not shadow_summary.get("enabled", False):
-            self._attr_native_value = None
-        elif not comparison:
-            self._attr_native_value = None
-        elif not comparison.get("comparison_succeeded", True):
-            self._attr_native_value = -1
         else:
-            self._attr_native_value = comparison.get("mismatch_count", 0)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return comparison details."""
-        comparison = self.coordinator.data.optimizer_comparison or {}
-        shadow_summary = self.coordinator.data.optimizer_shadow_summary or {}
-
-        if not shadow_summary.get("enabled", False):
-            return {"enabled": False}
-
-        if not comparison:
-            return {"enabled": True, "comparison_available": False}
-
-        return {
-            "enabled": True,
-            "comparison_available": True,
-            "comparison_succeeded": comparison.get("comparison_succeeded", True),
-            "error_message": comparison.get("error_message"),
-            "cycle_id": comparison.get("cycle_id"),
-            "cycle_timestamp_iso": comparison.get("cycle_timestamp_iso"),
-            "net_cost_delta": comparison.get("net_cost_delta"),
-            "import_kwh_delta": comparison.get("import_kwh_delta"),
-            "export_kwh_delta": comparison.get("export_kwh_delta"),
-            "legacy_projected_net_cost": comparison.get("legacy_projected_net_cost"),
-            "optimizer_projected_net_cost": comparison.get(
-                "optimizer_projected_net_cost"
-            ),
-            "legacy_projected_import_kwh": comparison.get(
-                "legacy_projected_import_kwh"
-            ),
-            "optimizer_projected_import_kwh": comparison.get(
-                "optimizer_projected_import_kwh"
-            ),
-            "legacy_projected_export_kwh": comparison.get(
-                "legacy_projected_export_kwh"
-            ),
-            "optimizer_projected_export_kwh": comparison.get(
-                "optimizer_projected_export_kwh"
-            ),
-            "legacy_meets_dw_target": comparison.get("legacy_meets_dw_target"),
-            "optimizer_meets_dw_target": comparison.get("optimizer_meets_dw_target"),
-            "total_slots": comparison.get("total_slots"),
-            "aligned_slots": comparison.get("aligned_slots"),
-            "mismatch_count": comparison.get("mismatch_count"),
-            "mismatch_by_type": comparison.get("mismatch_by_type", {}),
-            "top_mismatches": comparison.get("top_mismatches", []),
-            "summary": comparison.get("summary", {}),
-            "comparison_time_ms": comparison.get("comparison_time_ms"),
-        }
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on comparison state."""
-        comparison = self.coordinator.data.optimizer_comparison or {}
-        shadow_summary = self.coordinator.data.optimizer_shadow_summary or {}
-
-        if not shadow_summary.get("enabled", False):
             return "mdi:minus-circle-outline"
-        if not comparison or not comparison.get("comparison_succeeded", True):
-            return "mdi:alert-circle-outline"
-
-        mismatch_count = comparison.get("mismatch_count", 0)
-        if mismatch_count == 0:
-            return "mdi:check-circle-outline"
-        elif mismatch_count <= 3:
-            return "mdi:compare-horizontal"
-        else:
-            return "mdi:compare"

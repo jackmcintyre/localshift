@@ -261,7 +261,7 @@ class ComputationEngine:
         # ---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
         # Read from current-slot DP decision (not forecast_computer).
         current_slot_idx = _find_current_slot_index(data)
-        decisions = data.optimizer_shadow_decisions or []
+        decisions = data.optimizer_decisions or []
         if decisions and 0 <= current_slot_idx < len(decisions):
             data.boost_charge_needed = decisions[current_slot_idx].get(
                 "grid_charge_boost", False
@@ -554,7 +554,7 @@ class ComputationEngine:
         "What did we predict for time T?" vs "What was actual at time T?"
         """
         # Find DP decision entries for specific future times
-        slots = data.optimizer_shadow_decisions or []
+        slots = data.optimizer_decisions or []
         if not slots:
             return
 
@@ -714,7 +714,7 @@ class ComputationEngine:
         """
         from datetime import datetime, timedelta  # noqa: PLC0415
 
-        decisions = data.optimizer_shadow_decisions or []
+        decisions = data.optimizer_decisions or []
         if not decisions:
             return None
 
@@ -895,14 +895,12 @@ class ComputationEngine:
         config_options: dict[str, Any],
         cycle_id: str,
     ) -> None:
-        """Write DP result to CoordinatorData shadow fields (Step C)."""
+        """Write DP result to CoordinatorData fields (Step C)."""
         from homeassistant.util import dt as dt_util  # noqa: PLC0415
 
-        data.optimizer_shadow_result = _serialize_result(result)
-        data.optimizer_shadow_decisions = [
-            _serialize_decision(d) for d in result.decisions
-        ]
-        data.optimizer_shadow_summary = _build_summary(
+        data.optimizer_result = _serialize_result(result)
+        data.optimizer_decisions = [_serialize_decision(d) for d in result.decisions]
+        data.optimizer_summary = _build_summary(
             result=result,
             cycle_id=cycle_id,
             cycle_timestamp_iso=dt_util.utcnow().isoformat(),
@@ -958,7 +956,7 @@ class ComputationEngine:
         # Gate passed — derive apply plan from current slot
         current_slot_idx = _find_current_slot_index(data)
         apply_plan = _derive_runtime_apply_plan(
-            data.optimizer_shadow_decisions, current_slot_idx, optimizer_config
+            data.optimizer_decisions, current_slot_idx, optimizer_config
         )
         data.optimizer_apply_plan = apply_plan
 

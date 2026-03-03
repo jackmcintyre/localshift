@@ -10,8 +10,8 @@ from homeassistant.components.sensor import SensorStateClass
 
 from custom_components.localshift.sensor import (
     ForecastAccuracySensor,
-    ForecastGridSensor,
     ForecastPricesSensor,
+    OptimizerPlanGridSensor,
     SolarBatteryForecastSensor,
 )
 
@@ -21,7 +21,7 @@ from custom_components.localshift.sensor import (
     [
         (SolarBatteryForecastSensor, SensorStateClass.MEASUREMENT),
         (ForecastAccuracySensor, SensorStateClass.MEASUREMENT),
-        (ForecastGridSensor, SensorStateClass.MEASUREMENT),
+        (OptimizerPlanGridSensor, SensorStateClass.MEASUREMENT),
         (ForecastPricesSensor, SensorStateClass.MEASUREMENT),
     ],
 )
@@ -59,13 +59,13 @@ def test_forecast_accuracy_sensor_has_measurement_state_class():
     assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
 
 
-def test_forecast_grid_sensor_has_measurement_state_class():
-    """Verify ForecastGridSensor has MEASUREMENT state_class."""
+def test_optimizer_plan_grid_sensor_has_measurement_state_class():
+    """Verify OptimizerPlanGridSensor has MEASUREMENT state_class."""
     mock_coordinator = Mock()
     mock_coordinator.data = Mock()
     mock_entry = Mock()
 
-    sensor = ForecastGridSensor(mock_coordinator, mock_entry)
+    sensor = OptimizerPlanGridSensor(mock_coordinator, mock_entry)
 
     assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
 
