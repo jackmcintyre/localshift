@@ -174,7 +174,8 @@ class SlotBuilder:
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
 
         # Step 5: Compute base slot for load_forecast_slots indexing
-        base_slot = now_local.replace(second=0, microsecond=0)
+        current_5min = (now_local.minute // 5) * 5
+        base_slot = now_local.replace(minute=current_5min, second=0, microsecond=0)
 
         # Resolve local timezone object once for DW time comparisons.
         # DW start/end times are always in the HA local timezone, so we must
