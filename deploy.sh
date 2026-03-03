@@ -18,6 +18,7 @@
 #   ./deploy.sh --no-reload        # Deploy without reloading HA integration
 #   ./deploy.sh --dry-run          # Preview changes without deploying
 #   ./deploy.sh --watch            # Watch for changes and auto-deploy
+#   ./deploy.sh --restart          # Deploy + restart HA (requires user confirmation)
 #
 # ⚠️  REQUIRED WORKFLOW (strict mode enabled):
 #   1. Reserve HA: ./deploy.sh --reserve
@@ -49,6 +50,7 @@ RESERVE_MODE=false
 RELEASE_MODE=false
 FORCE_MODE=false
 STATUS_MODE=false
+RESTART_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -80,9 +82,13 @@ while [[ $# -gt 0 ]]; do
             STATUS_MODE=true
             shift
             ;;
+        --restart)
+            RESTART_MODE=true
+            shift
+            ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--no-reload] [--dry-run] [--watch] [--reserve] [--release] [--force] [--status]"
+            echo "Usage: $0 [--no-reload] [--dry-run] [--watch] [--reserve] [--release] [--force] [--status] [--restart]"
             exit 1
             ;;
     esac
@@ -340,6 +346,9 @@ if [ "$DRY_RUN" = true ]; then
     if [ "$NO_RELOAD" = false ] && [ -n "$HA_TOKEN" ]; then
         echo "  4. Reload integration via API: $HA_URL"
     fi
+    if [ "$RESTART_MODE" = true ]; then
+        echo "  5. Restart Home Assistant (requires user confirmation): $HA_URL"
+    fi
     echo ""
     echo "Current branch: $CURRENT_BRANCH"
     exit 0
@@ -415,6 +424,15 @@ fi
 # Normal deploy - check reservation first
 check_reservation
 
+# Restart mode - validate prerequisites
+if [ "$RESTART_MODE" = true ]; then
+    if [ -z "$HA_TOKEN" ]; then
+        log_error "HA_LONG_LIVED_TOKEN is required for --restart"
+        log_info "Set the environment variable to enable API access"
+        exit 1
+    fi
+fi
+
 # =============================================================================
 # END RESERVATION MODE HANDLERS
 # =============================================================================
@@ -450,8 +468,10 @@ log_success "Files copied successfully"
 log_info "Setting permissions..."
 chmod -R 755 "$DEST_DIR" 2>/dev/null || log_warning "Could not set permissions"
 
-# Reload integration via HA API
-if [ "$NO_RELOAD" = true ]; then
+# Reload integration via HA API (skip if restart mode - full restart handles it)
+if [ "$RESTART_MODE" = true ]; then
+    log_info "Skipping API reload (--restart flag - full restart will be triggered after deploy)"
+elif [ "$NO_RELOAD" = true ]; then
     log_info "Skipping reload (--no-reload flag)"
 elif [ -z "$HA_TOKEN" ]; then
     log_warning "No HA_LONG_LIVED_TOKEN set - skipping API reload"
@@ -533,8 +553,38 @@ else
     fi
 fi
 
-echo ""
-log_deploy "Deployment complete!"
+# Restart Home Assistant if requested
+if [ "$RESTART_MODE" = true ]; then
+    echo ""
+    log_warning "HOME ASSISTANT RESTART REQUESTED"
+    echo "This will restart the entire Home Assistant instance."
+    echo "All automations will be unavailable for 1-5 minutes."
+    echo ""
+    read -p "Restart Home Assistant now? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        log_info "Initiating Home Assistant restart..."
+        RESTART_RESULT=$(curl -s -X POST \
+            -H "Authorization: Bearer $HA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$HA_URL/api/services/homeassistant/restart" \
+            -d '{}' 2>/dev/null || true)
+        
+        if [ -z "$RESTART_RESULT" ]; then
+            log_success "Home Assistant restart initiated"
+        else
+            log_success "Home Assistant restart initiated"
+        fi
+        log_info "Deployment complete - HA is restarting"
+    else
+        log_info "Restart declined"
+        log_deploy "Deployment complete (restart skipped)"
+    fi
+else
+    echo ""
+    log_deploy "Deployment complete!"
+fi
+
 log_info "Branch: $CURRENT_BRANCH"
 log_info "Version: $(grep '"version"' "$DEST_DIR/manifest.json" | sed 's/.*"version": *"\([^"]*\)".*/\1/')"
 

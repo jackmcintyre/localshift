@@ -27,8 +27,14 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 1. Lint: `uv run ruff check custom_components/localshift`
 2. Format check: `uv run ruff format --check custom_components/localshift`
 3. Test: `uv run pytest`
-4. Deploy: `./deploy.sh --reserve && ./deploy.sh`
+4. **Deploy: Ask user to run** `./deploy.sh --reserve && ./deploy.sh` (do NOT auto-deploy)
 5. Check logs: `tail -100 /homeassistant/home-assistant.log | grep -i localshift`
+
+### Deployment Protocol
+- **Agents do NOT run deploy.sh directly** - always ask the user to deploy
+- When ready to test: "Ready to deploy. Please run: `./deploy.sh --reserve && ./deploy.sh`"
+- For HA restart: "Restart recommended. Please run: `./deploy.sh --restart` (you'll be prompted to confirm)"
+- User controls all deployments - ensures human-in-the-loop before HA changes
 
 ### Commit Guidelines
 - Reference issue: `Fixes #NNN` or `Closes #NNN`
