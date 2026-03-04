@@ -905,6 +905,10 @@ class ComputationEngine:
             config_options=config_options,
         )
 
+        # Update forecast horizon from slot metadata (Issue #522)
+        # This bridges the actual horizon computed by slot_builder to the optimizer config
+        data.forecast_horizon_hours = slot_metadata.horizon_hours
+
         # Derive solar_can_reach_target from DP result (Phase 4, #441)
         # Replaces the legacy _simulate_future_soc_with_solar_only() calls.
         data.solar_can_reach_target = result.can_solar_reach_target

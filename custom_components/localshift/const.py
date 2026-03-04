@@ -24,6 +24,7 @@ class BatteryMode(StrEnum):
     SPIKE_DISCHARGE = "spike_discharge"
     PROACTIVE_EXPORT = "proactive_export"
     DEMAND_BLOCK = "demand_block"
+    HOLD = "hold"
     MANUAL = "manual"
 
     @property
@@ -36,6 +37,7 @@ class BatteryMode(StrEnum):
             BatteryMode.SPIKE_DISCHARGE: "Spike Discharge",
             BatteryMode.PROACTIVE_EXPORT: "Proactive Export",
             BatteryMode.DEMAND_BLOCK: "Demand Block",
+            BatteryMode.HOLD: "Hold",
             BatteryMode.MANUAL: "Manual",
         }
         return names[self]

@@ -233,7 +233,10 @@ class BatteryController:
         return False
 
     async def set_self_consumption(
-        self, data: CoordinatorData, dry_run: bool = False
+        self,
+        data: CoordinatorData,
+        dry_run: bool = False,
+        preserve_soc: float | None = None,
     ) -> bool:
         """Set battery to self consumption mode (reserve=10, self_consumption).
 
@@ -241,14 +244,26 @@ class BatteryController:
         instead of the default 10%. This prevents battery discharge when
         charging is needed to meet a demand window target.
 
+        Issue #522: preserve_soc parameter allows state machine to override
+        data.preserve_soc for HOLD mode (preserve current SOC).
+
+        Args:
+            data: Coordinator data
+            dry_run: If True, log action without executing
+            preserve_soc: Optional override for backup reserve percentage
+
         Returns:
             True if successful, False otherwise.
         """
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
 
-        # Determine backup reserve: use preserve_soc if set, otherwise default to 10%
-        reserve = data.preserve_soc if data.preserve_soc is not None else 10
+        # Determine backup reserve: use parameter override, then data.preserve_soc, else default to 10%
+        reserve = (
+            preserve_soc
+            if preserve_soc is not None
+            else (data.preserve_soc if data.preserve_soc is not None else 10)
+        )
 
         if dry_run:
             _LOGGER.info(
