@@ -198,7 +198,7 @@ class TestBuildOptimizerConfig:
         # 0.12 * 13.5 / 100 * 1.5 = 0.02430
         assert config.target_shortfall_penalty_per_pct != 1.0
         assert 0.010 <= config.target_shortfall_penalty_per_pct <= 0.100
-        assert config.cycle_penalty_per_kwh == 0.005
+        assert config.cycle_penalty_per_kwh == 0.05
 
     def test_config_penalty_calibrated_to_tariff(
         self, mock_coordinator_data, config_options

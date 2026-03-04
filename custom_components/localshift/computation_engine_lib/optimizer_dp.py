@@ -201,8 +201,20 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
-    cycle_penalty_per_kwh: float = 0.005
-    """Mild penalty per kWh cycled to discourage unnecessary grid arbitrage."""
+    cycle_penalty_per_kwh: float = 0.05
+    """Penalty per kWh cycled to reflect true battery cycling cost.
+
+    True cost components:
+    - Efficiency loss (13% round-trip × avg price): ~$0.02/kWh
+    - Battery degradation: ~$0.01-0.03/kWh
+    - Total: $0.03-0.05/kWh
+
+    Using the upper bound ($0.05) ensures cheap-import arbitrage is only
+    attractive for spreads > 5¢/kWh, eliminating marginal trades that waste
+    cycle life for minimal savings.
+
+    Fixes #516.
+    """
 
     # --- SOC discretization ---
     soc_bins: int = 50
