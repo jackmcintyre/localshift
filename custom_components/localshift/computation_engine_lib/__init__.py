@@ -31,7 +31,6 @@ from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_5min_slot,
     get_solar_for_15min_slot,
-    get_solar_for_slot,
     sum_solar_before_target,
 )
 from .spike_analyzer import SpikeAnalyzer
@@ -73,7 +72,6 @@ __all__ = [
     "get_price_for_slot_or_none",
     "get_solar_for_15min_slot",
     "get_solar_for_5min_slot",
-    "get_solar_for_slot",
     "max_forecast_price",
     "parse_forecast_dt",
     "percentile",

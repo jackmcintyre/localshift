@@ -317,64 +317,6 @@ def get_solar_for_slot_by_interval(
         return get_solar_for_15min_slot(solcast_forecasts, slot_start)
 
 
-def get_solar_for_slot(
-    solcast_forecasts: list[dict[str, Any]],
-    slot_start: datetime,
-) -> float:
-    """Get solar forecast (kWh) for one hourly slot from Solcast half-hour periods."""
-    if not solcast_forecasts:
-        return 0.0
-
-    # Ensure slot boundaries are timezone-aware local datetimes
-    if slot_start.tzinfo is None:
-        slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
-    else:
-        slot_start = dt_util.as_local(slot_start)
-
-    slot_end = slot_start + timedelta(hours=1)
-    period_duration = timedelta(minutes=30)
-
-    total_solar = 0.0
-
-    for entry in solcast_forecasts:
-        try:
-            if not isinstance(entry, dict):
-                continue
-
-            period_start_raw = entry.get("period_start") or entry.get("start")
-            if period_start_raw is None:
-                continue
-
-            start_dt = dt_util.parse_datetime(str(period_start_raw))
-            if not start_dt:
-                continue
-
-            start_local = dt_util.as_local(start_dt)
-            end_local = start_local + period_duration
-
-            # overlap between [start_local, end_local) and [slot_start, slot_end)
-            overlap_start = max(start_local, slot_start)
-            overlap_end = min(end_local, slot_end)
-            overlap_seconds = (overlap_end - overlap_start).total_seconds()
-
-            if overlap_seconds > 0:
-                # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
-                period_kwh = float(
-                    entry.get("pv_estimate")
-                    or entry.get("estimate")
-                    or entry.get("pv_estimate10")
-                    or entry.get("estimate10")
-                    or 0.0
-                )
-                # pv_estimate is kWh per HOUR, so divide by 3600 seconds
-                overlap_fraction = overlap_seconds / 3600.0
-                total_solar += period_kwh * overlap_fraction
-        except (ValueError, TypeError):
-            continue
-
-    return total_solar
-
-
 def sum_solar_before_target(
     solcast: list[dict[str, Any]],
     now_dt: datetime,
