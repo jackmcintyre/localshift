@@ -515,3 +515,26 @@ class CoordinatorData:
     """Apply plan derived from optimizer decisions.
     Contains: action, battery_mode, target_soc, reason.
     """
+
+    # ---------------------------------------------------------------------------
+    # --- Decision-to-Implementation Lag Tracking (Issue #501) ---
+    # ---------------------------------------------------------------------------
+    # Measures time from decision made to hardware validation passed.
+
+    decision_timestamp: datetime | None = None
+    """When active_mode was set to a new value (decision made)."""
+
+    decision_mode: BatteryMode | None = None
+    """The mode that was decided (for lag tracking)."""
+
+    implementation_timestamp: datetime | None = None
+    """When validation passed for the decision."""
+
+    decision_lag_seconds: float | None = None
+    """Calculated lag from decision to implementation (seconds)."""
+
+    decision_lag_history: list[dict[str, Any]] = field(default_factory=list)
+    """History of recent decision-to-implementation lag measurements.
+    Each entry: {from_mode, to_mode, lag_seconds, decision_time, implementation_time}.
+    Max 50 entries.
+    """
