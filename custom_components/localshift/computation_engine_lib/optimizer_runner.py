@@ -760,7 +760,7 @@ def _derive_runtime_apply_plan(
     if action_str == "hold":
         return {
             "action": action_str,
-            "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
+            "battery_mode": BatteryMode.HOLD.value,
             "target_soc": None,
             "reason": "optimizer_hold",
         }

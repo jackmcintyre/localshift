@@ -568,19 +568,39 @@ class StateMachine:
                     _LOGGER.error("Spike discharge mode transition FAILED")
 
             elif target == BatteryMode.PROACTIVE_EXPORT:
+                _LOGGER.info("Executing PROACTIVE_EXPORT mode transition")
+                self._proactive_export_reserve = max(4.0, data.soc - 5.0)
                 transition_success = (
                     await self._battery_controller.set_proactive_export(data, dry_run)
                 )
                 if transition_success:
-                    # Track the dynamic reserve for health checks
-                    self._proactive_export_reserve = max(4.0, (data.soc or 0.0) - 5.0)
                     _LOGGER.info(
-                        "Proactive export mode transition completed (throttled reserve=%s)",
+                        "Proactive export mode transition successful (reserve=%s)",
                         self._proactive_export_reserve,
                     )
                 else:
                     _LOGGER.error("Proactive export mode transition FAILED")
                     self._proactive_export_reserve = None
+
+            elif target == BatteryMode.HOLD:
+                _LOGGER.info("Executing HOLD mode transition")
+                # Preserve current SOC by setting reserve to max(min_soc, current_soc)
+                min_soc = float(self._get_option("minimum_target_soc") or 10.0)
+                preserve_soc = max(min_soc, data.soc)
+                # Use self_consumption mode with elevated reserve
+                transition_success = (
+                    await self._battery_controller.set_self_consumption(
+                        data, dry_run, preserve_soc=preserve_soc
+                    )
+                )
+                if transition_success:
+                    self._self_consumption_reserve = preserve_soc
+                    _LOGGER.info(
+                        "HOLD mode transition successful (preserve_soc=%s)",
+                        preserve_soc,
+                    )
+                else:
+                    _LOGGER.error("HOLD mode transition FAILED")
 
             elif target == BatteryMode.MANUAL:
                 pass  # No command — user is controlling manually
@@ -695,6 +715,15 @@ class StateMachine:
             # The actual reserve will be set based on current SOC
             # Export modes don't need grid charging
             return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK, False)
+        elif mode == BatteryMode.HOLD:
+            # HOLD uses self_consumption mode with elevated reserve (preserve_soc)
+            # The actual reserve is tracked in _self_consumption_reserve
+            reserve = (
+                int(self._self_consumption_reserve)
+                if self._self_consumption_reserve is not None
+                else 10
+            )
+            return ("self_consumption", reserve, TESLEMETRY_EXPORT_PV_ONLY, False)
         else:  # MANUAL or unknown
             return ("", -1, "", False)
 
