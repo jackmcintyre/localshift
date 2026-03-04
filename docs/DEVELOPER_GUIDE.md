@@ -78,6 +78,23 @@ The state machine uses debounce timers to prevent rapid mode switching:
 | Grid charging | 5 minutes |
 | Self consumption | 5 minutes |
 
+### Objective Function Calibration
+
+The optimizer's objective function balances multiple cost terms. The calibration
+reflects physical and economic realities, not user preferences.
+
+| Parameter | Value | Rationale | Issue |
+|-----------|-------|-----------|-------|
+| `target_shortfall_penalty_per_pct` | `effective_cheap_price × battery_kwh / 100 × 1.5` | Cost to import 1% SOC at cheapest price | #438 |
+| `cycle_penalty_per_kwh` | `$0.05/kWh` | Efficiency loss + battery degradation | #516 |
+
+The cycle penalty represents the true cost of cycling battery energy through the grid:
+- **Round-trip efficiency loss**: ~13% (92% charge × 95% discharge) at average prices
+- **Battery degradation**: Each cycle reduces lifespan; amortized cost per kWh
+
+These values prevent the optimizer from making marginal trades that appear profitable
+but result in net losses after accounting for wear and inefficiency.
+
 ## Core Classes
 
 ### Coordinator (`coordinator.py`)

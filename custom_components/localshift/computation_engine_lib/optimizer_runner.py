@@ -316,7 +316,7 @@ def _build_optimizer_config(
             / 100.0
             * _SHORTFALL_PENALTY_SAFETY_FACTOR
         ),
-        cycle_penalty_per_kwh=0.005,
+        cycle_penalty_per_kwh=0.05,  # True cycle cost (Fixes #516)
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---
