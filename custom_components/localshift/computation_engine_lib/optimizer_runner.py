@@ -27,6 +27,7 @@ from .optimizer_dp import (
     OptimizerConfig,
     OptimizerInputs,
     OptimizerResult,
+    PlannerAction,
     SlotContext,
 )
 from .slot_builder import SlotBuilder
@@ -55,6 +56,29 @@ def _get_ha_timezone() -> str:
         return str(tz) if tz else "UTC"
     except Exception:
         return "UTC"
+
+
+def _map_mode_to_action(mode: Any) -> PlannerAction | None:
+    """Map BatteryMode to PlannerAction for switching penalty calculation.
+
+    Args:
+        mode: BatteryMode enum value (or string).
+
+    Returns:
+        PlannerAction or None if mode is not actionable by optimizer.
+    """
+    from ..const import BatteryMode  # noqa: PLC0415
+
+    if mode == BatteryMode.SELF_CONSUMPTION:
+        return PlannerAction.HOLD
+    if mode == BatteryMode.GRID_CHARGING:
+        return PlannerAction.CHARGE_GRID_NORMAL
+    if mode == BatteryMode.BOOST_CHARGING:
+        return PlannerAction.CHARGE_GRID_BOOST
+    if mode == BatteryMode.PROACTIVE_EXPORT:
+        return PlannerAction.EXPORT_PROACTIVE
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +199,7 @@ def _run(
     inputs = OptimizerInputs(
         cycle_id=cycle_id,
         initial_soc_pct=initial_soc_pct,
+        current_action=_map_mode_to_action(data.active_mode),
         slots=slots,
         config=optimizer_config,
     )
@@ -229,11 +254,13 @@ def _build_optimizer_config(
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
+        CONF_SWITCHING_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
+        DEFAULT_SWITCHING_PENALTY,
     )
 
     # User-configurable target SOC for demand window
@@ -262,6 +289,10 @@ def _build_optimizer_config(
 
     export_price_margin = float(
         config_options.get(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
+    )
+
+    switching_penalty = float(
+        config_options.get(CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY)
     )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
@@ -323,6 +354,7 @@ def _build_optimizer_config(
         optimization_mode=optimization_mode,
         self_consumption_value_per_kwh=self_consumption_value_per_kwh,
         effective_cheap_price=effective_cheap_price,
+        switching_penalty=switching_penalty,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )

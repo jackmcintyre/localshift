@@ -52,6 +52,7 @@ from .const import (
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
+    CONF_SWITCHING_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -61,6 +62,7 @@ from .const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_SWITCHING_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 )
@@ -802,6 +804,9 @@ class ComputationEngine:
             ),
             CONF_EXPORT_PRICE_MARGIN: self.entry.options.get(
                 CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN
+            ),
+            CONF_SWITCHING_PENALTY: self.entry.options.get(
+                CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY
             ),
             # ha_timezone override: if present in entry.options (e.g. injected by tests
             # via config_overrides), use it to avoid relying on dt_util.DEFAULT_TIME_ZONE.
