@@ -23,8 +23,6 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 MAX_PERIOD_RECORDS = 1440
-MIN_SAMPLES_FOR_CONTEXT = 5
-MIN_SAMPLES_FOR_PARTIAL = 10
 BIAS_HALF_LIFE_DAYS = 7.0
 
 
@@ -128,15 +126,13 @@ class SolarBiasMetrics:
 
 
 class SolarAccuracyTracker:
-    """Tracks solar forecast accuracy and provides bias corrections.
+    """Tracks solar forecast accuracy and provides bias metrics.
 
     Flow:
     1. record_forecast(): Store forecast when period starts (called from slot_builder)
     2. backfill_actual(): Compare when period ends, calculate bias (called from coordinator)
-    3. get_bias_correction(): Return context-weighted bias for planning
 
     Uses time-weighted average with exponential decay to favor recent data.
-    Falls back from specific context to partial to overall as needed.
     """
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -267,72 +263,6 @@ class SolarAccuracyTracker:
             actual_kwh,
             pending.bias * 100,
         )
-
-    def get_bias_correction(
-        self,
-        time_of_day: str | None = None,
-        weather_condition: str | None = None,
-        season: str | None = None,
-    ) -> float:
-        """Get bias correction for the given context.
-
-        Priority:
-        - Try specific context (time + weather + season) with 5+ samples
-        - Try context (time + weather) with 10+ samples
-        - Return overall bias if none of the above apply
-
-        Returns:
-            Bias correction factor (-1.0 to 1.0 where positive = over-prediction, negative = under-prediction)
-        """
-        # Step 1: Check for specific context (time + weather + season)
-        if time_of_day and weather_condition and season:
-            records = [
-                record
-                for record in self._period_records
-                if (
-                    record.time_of_day == time_of_day
-                    and record.weather_condition == weather_condition
-                    and record.season == season
-                )
-            ]
-            if len(records) >= MIN_SAMPLES_FOR_CONTEXT:
-                # Apply time-weighted average
-                now = dt_util.now()
-                total_weight = 0.0
-                weighted_bias = 0.0
-                for record in records:
-                    age_days = (now - record.period_start).total_seconds() / 86400.0
-                    weight = math.exp(-age_days / BIAS_HALF_LIFE_DAYS)
-                    weighted_bias += record.bias * weight
-                    total_weight += weight
-                if total_weight > 0:
-                    return weighted_bias / total_weight
-
-        # Step 2: Check for partial context (time + weather) only if both provided
-        if time_of_day and weather_condition:
-            records = [
-                record
-                for record in self._period_records
-                if (
-                    record.time_of_day == time_of_day
-                    and record.weather_condition == weather_condition
-                )
-            ]
-            if len(records) >= MIN_SAMPLES_FOR_PARTIAL:
-                # Apply time-weighted average
-                now = dt_util.now()
-                total_weight = 0.0
-                weighted_bias = 0.0
-                for record in records:
-                    age_days = (now - record.period_start).total_seconds() / 86400.0
-                    weight = math.exp(-age_days / BIAS_HALF_LIFE_DAYS)
-                    weighted_bias += record.bias * weight
-                    total_weight += weight
-                if total_weight > 0:
-                    return weighted_bias / total_weight
-
-        # Step 3: Return overall bias as fallback
-        return self._metrics.overall_bias
 
     def _recompute_metrics(self) -> None:
         """Recompute aggregated metrics from all period records."""

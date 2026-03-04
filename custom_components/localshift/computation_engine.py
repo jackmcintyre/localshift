@@ -631,24 +631,6 @@ class ComputationEngine:
         if len(data.forecast_history) > 200:
             data.forecast_history = data.forecast_history[-200:]
 
-    def set_baseline_load(self, baseline_avg_kw: dict[int, float]) -> None:
-        """Set the baseline load profile for Issue #137 feedback loop fix.
-
-        Called by coordinator to provide the estimated non-HVAC baseline
-        consumption. This is used for grid charging decisions to prevent
-        the feedback loop where HVAC load triggers unnecessary charging.
-
-        Args:
-            baseline_avg_kw: Dict of hour -> baseline load in kW.
-        """
-        self._baseline_avg_kw = baseline_avg_kw
-        if baseline_avg_kw:
-            _LOGGER.debug(
-                "Baseline load set: %d hours, avg=%.2f kW",
-                len(baseline_avg_kw),
-                sum(baseline_avg_kw.values()) / len(baseline_avg_kw),
-            )
-
     def _compute_load_forecast_slots(
         self,
         data: CoordinatorData,
@@ -1434,66 +1416,3 @@ class ComputationEngine:
             data=data,
             weather_correlation=self._weather_correlation,
         )
-
-    # ========================================================================
-    # PRICE SENSOR UPDATE TIME (Price Block Stability)
-    # ========================================================================
-
-    def _get_price_sensor_update_time(self) -> datetime | None:
-        """Get the most recent update timestamp from price sensors.
-
-        Watches both general_price and feed_in_price sensors.
-        Returns the later of the two timestamps, which indicates when
-        the price BLOCK changed (both update simultaneously from Amber).
-
-        Returns:
-            datetime of the most recent price sensor update, or None if unavailable.
-        """
-        try:
-            # Get both price sensors (using correct config keys)
-            general_price_entity_id = self._get_entity_id("pricing_general_price")
-            feed_in_price_entity_id = self._get_entity_id("pricing_feed_in_price")
-
-            _LOGGER.debug(
-                "Price sensor entity IDs: general=%s, feed_in=%s",
-                general_price_entity_id,
-                feed_in_price_entity_id,
-            )
-
-            general_price_state = self.hass.states.get(general_price_entity_id)
-            feed_in_price_state = self.hass.states.get(feed_in_price_entity_id)
-
-            # Get the later of the two update timestamps
-            # Both should update simultaneously from Amber, but use max to be safe
-            update_times = []
-
-            if general_price_state is not None:
-                update_times.append(general_price_state.last_updated)
-                _LOGGER.debug(
-                    "General price sensor last_updated: %s",
-                    general_price_state.last_updated,
-                )
-
-            if feed_in_price_state is not None:
-                update_times.append(feed_in_price_state.last_updated)
-                _LOGGER.debug(
-                    "Feed-in price sensor last_updated: %s",
-                    feed_in_price_state.last_updated,
-                )
-
-            if not update_times:
-                _LOGGER.warning(
-                    "No price sensor states found: general=%s, feed_in=%s",
-                    general_price_state,
-                    feed_in_price_state,
-                )
-                return None
-
-            # Return the most recent update time
-            result = max(update_times)
-            _LOGGER.debug("Price sensor update time: %s", result)
-            return result
-
-        except Exception as e:
-            _LOGGER.warning("Could not get price sensor update time: %s", e)
-            return None

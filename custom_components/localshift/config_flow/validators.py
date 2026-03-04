@@ -7,61 +7,6 @@ and validate notify services.
 from __future__ import annotations
 
 
-async def validate_entity_exists(hass, entity_id: str) -> str | None:
-    """Validate that an entity exists in Home Assistant.
-
-    Args:
-        hass: Home Assistant instance
-        entity_id: Entity ID to validate
-
-    Returns:
-        None if valid, or error message string
-    """
-    state = hass.states.get(entity_id)
-    if state is None:
-        return f"Entity '{entity_id}' does not exist"
-    return None
-
-
-async def validate_entity_available(hass, entity_id: str) -> str | None:
-    """Validate that an entity is available (not unavailable/unknown).
-
-    Args:
-        hass: Home Assistant instance
-        entity_id: Entity ID to validate
-
-    Returns:
-        None if available, or error message string
-    """
-    state = hass.states.get(entity_id)
-    if state is None:
-        return f"Entity '{entity_id}' does not exist"
-    if state.state in ("unavailable", "unknown"):
-        return f"Entity '{entity_id}' is {state.state}"
-    return None
-
-
-async def validate_entity_domain(
-    hass, entity_id: str, expected_domain: str
-) -> str | None:
-    """Validate that an entity has the expected domain.
-
-    Args:
-        hass: Home Assistant instance
-        entity_id: Entity ID to validate
-        expected_domain: Expected domain (e.g., "sensor", "select")
-
-    Returns:
-        None if valid, or error message string
-    """
-    state = hass.states.get(entity_id)
-    if state is None:
-        return f"Entity '{entity_id}' does not exist"
-    if state.domain != expected_domain:
-        return f"Expected {expected_domain} entity, got {state.domain}"
-    return None
-
-
 async def validate_all_entities(
     hass, entities: dict[str, tuple[str, str]]
 ) -> dict[str, str] | None:
@@ -158,23 +103,6 @@ async def get_weather_entities(hass) -> list[str]:
             weather_entities.append(state.entity_id)
 
     return sorted(weather_entities)
-
-
-async def get_climate_entities(hass) -> list[str]:
-    """Get list of available climate entities.
-
-    Args:
-        hass: Home Assistant instance
-
-    Returns:
-        List of climate entity IDs like ["climate.living_room", "climate.bedroom"]
-    """
-    climate_entities = []
-    for state in hass.states.async_all():
-        if state.domain == "climate":
-            climate_entities.append(state.entity_id)
-
-    return sorted(climate_entities)
 
 
 def get_current_notify_service(config_entry) -> str:

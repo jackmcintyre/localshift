@@ -224,12 +224,6 @@ class TestOptimizationController:
 
         assert isinstance(adjustments, list)
 
-    def test_get_weight_history(self, controller):
-        """Test getting weight history."""
-        history = controller.get_weight_history()
-
-        assert isinstance(history, list)
-
 
 class TestOptimizationControllerIntegration:
     """Integration tests for OptimizationController with real-ish data."""
@@ -314,30 +308,6 @@ class TestOptimizationControllerIntegration:
         # Verify params were computed
         assert isinstance(params, AdaptiveParameters)
 
-    def test_update_weights_from_decisions(self, real_components):
-        """Test that weights update based on decision outcomes."""
-        controller, tracker, optimizer, analyzer = real_components
-        controller.set_learning_enabled(True)
-
-        data = CoordinatorData()
-        data.soc = 60.0
-
-        # Get decisions and update weights
-        decisions = tracker.get_recent_decisions()
-        controller.update_weights(decisions)
-
-        # Get final weights
-        final_weights = controller.weights
-
-        # Weights should still be valid
-        total = (
-            final_weights.cost_minimization
-            + final_weights.export_avoidance
-            + final_weights.target_achievement
-            + final_weights.cycle_reduction
-        )
-        assert abs(total - 1.0) < 0.01
-
 
 class TestOptimizationControllerEdgeCases:
     """Edge case tests for OptimizationController."""
@@ -416,33 +386,4 @@ class TestOptimizationControllerEdgeCases:
         # Should not crash
         params = minimal_controller.evaluate(data)
 
-        assert params is not None
-
-    def test_score_decision(self, minimal_controller):
-        """Test scoring a decision."""
-        minimal_controller.set_learning_enabled(True)
-
-        # Create a decision record
-        decision = DecisionRecord(
-            timestamp=datetime.now(),
-            mode_chosen=BatteryMode.GRID_CHARGING,
-            previous_mode=BatteryMode.SELF_CONSUMPTION,
-            soc_at_decision=20.0,
-            general_price_at_decision=0.10,
-            feed_in_price_at_decision=0.05,
-            forecast_solar_remaining_kwh=5.0,
-            forecast_consumption_remaining_kwh=8.0,
-            cheap_price_threshold=0.12,
-            battery_target_soc=80.0,
-            weather_condition="sunny",
-            day_of_week=2,
-            hour_of_day=14,
-            is_demand_window=False,
-            outcome_score=0.8,
-        )
-
-        # Score the decision
-        score = minimal_controller.score_decision(decision)
-
-        # Score should be a float
-        assert isinstance(score, float)
+        assert isinstance(params, AdaptiveParameters)

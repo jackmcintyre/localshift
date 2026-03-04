@@ -7,7 +7,6 @@ from .decision_outcome_tracker import (
 )
 from .excess_solar import ExcessSolarEngine
 from .excess_solar_signals import ExcessSolarSignalsEngine
-from .fit_analyzer import FitAnalyzer
 from .forecast_accuracy import ForecastAccuracyEngine
 from .history_fetcher import HistoryFetcher
 from .optimization_controller import (
@@ -32,13 +31,11 @@ from .soc_simulator import SocSimulator
 from .solar_utils import (
     get_solar_for_5min_slot,
     get_solar_for_15min_slot,
-    get_solar_for_slot,
     sum_solar_before_target,
 )
 from .spike_analyzer import SpikeAnalyzer
 from .utils import (
     analyze_spike_window,
-    build_hourly_forecast_summary,
     calculate_spike_price_threshold,
     max_forecast_price,
     parse_forecast_dt,
@@ -60,7 +57,6 @@ __all__ = [
     "PatternReport",
     "ExcessSolarEngine",
     "ExcessSolarSignalsEngine",
-    "FitAnalyzer",
     "ForecastAccuracyEngine",
     "HistoryFetcher",
     "PerformanceMetrics",
@@ -71,13 +67,11 @@ __all__ = [
     "SpikeAnalyzer",
     "WeatherDiagnosticsEngine",
     "analyze_spike_window",
-    "build_hourly_forecast_summary",
     "calculate_spike_price_threshold",
     "get_price_for_slot",
     "get_price_for_slot_or_none",
     "get_solar_for_15min_slot",
     "get_solar_for_5min_slot",
-    "get_solar_for_slot",
     "max_forecast_price",
     "parse_forecast_dt",
     "percentile",

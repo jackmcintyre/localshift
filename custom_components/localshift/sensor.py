@@ -55,8 +55,6 @@ async def async_setup_entry(
         LearningDecisionHistorySensor(coordinator, entry),
         # Decision-to-implementation lag sensor (Issue #501)
         DecisionLagSensor(coordinator, entry),
-        # Statistics backfiller sensor (Issue #267)
-        BackfillStatusSensor(coordinator, entry),
         # Cost reconciliation sensor (Issue #269)
         CostReconciliationSensor(coordinator, entry),
         # Extended forecast accuracy sensor (Issue #270)
@@ -956,59 +954,6 @@ class DecisionLagSensor(LocalShiftSensorBase):
         if self.coordinator.data.decision_timestamp is not None:
             return "mdi:timer-sand"  # Decision pending
         return "mdi:timer-outline"  # Completed
-
-
-# ---------------------------------------------------------------------------
-# Statistics Backfiller Sensor (Issue #267)
-# ---------------------------------------------------------------------------
-
-
-class BackfillStatusSensor(LocalShiftSensorBase):
-    """Statistics backfill validation status.
-
-    Shows the status of the last backfill operation that validates
-    decision outcomes against metered statistics from Home Assistant.
-    """
-
-    _attr_unique_id = "localshift_backfill_status"
-    _attr_name = "Backfill Status"
-    _attr_icon = "mdi:database-check"
-
-    def _update_from_coordinator(self) -> None:
-        """Update with backfill status."""
-        report = self.coordinator.data.backfill_report
-        if report is None:
-            self._attr_native_value = "not_run"
-        elif report.errors:
-            self._attr_native_value = "error"
-        elif report.discrepancies_found > 0:
-            self._attr_native_value = "discrepancies"
-        else:
-            self._attr_native_value = "validated"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return backfill report details."""
-        report = self.coordinator.data.backfill_report
-        if report is None:
-            return {
-                "status": "No backfill has been run yet",
-                "last_run": None,
-            }
-        return report.to_dict()
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on status."""
-        status = self._attr_native_value
-        if status == "validated":
-            return "mdi:check-circle"
-        elif status == "discrepancies":
-            return "mdi:alert-circle"
-        elif status == "error":
-            return "mdi:close-circle"
-        else:  # not_run
-            return "mdi:database-clock"
 
 
 class CostReconciliationSensor(LocalShiftSensorBase):

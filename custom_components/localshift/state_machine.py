@@ -276,13 +276,7 @@ class StateMachine:
                             )
                             # Do NOT call compute_derived_values() again here.
                             # A full recompute already ran at the top of this lock
-                            # (Item 5 fix).  A second nested compute would double-fire
-                            # the forecast tracker age-check and potentially append a
-                            # duplicate decision log entry.
-                            # Instead, flag the forecast tracker to force a recompute
-                            # on the next evaluation cycle so that active_mode is
-                            # re-derived without the manual_override flag set.
-                            computation_engine._forecast_change_tracker._last_forecast_time = None  # noqa: SLF001
+                            # (Item 5 fix).
                             # desired remains MANUAL this cycle; the next periodic tick
                             # (at most 1 minute away) will recompute the correct mode.
 
@@ -907,14 +901,6 @@ class StateMachine:
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
         """Set startup grace period to wait for entities to populate."""
         self._startup_grace_until = dt_util.now() + timedelta(seconds=grace_seconds)
-
-    def set_manual_override_timestamp(self) -> None:
-        """Record when manual override was set for auto-clear timeout."""
-        self._manual_override_set_at = dt_util.now()
-
-    def clear_manual_override_timestamp(self) -> None:
-        """Clear manual override timestamp when returning to automated control."""
-        self._manual_override_set_at = None
 
     def set_commanded_mode(self, mode: BatteryMode) -> None:
         """Set the commanded mode directly (used by manual button presses).

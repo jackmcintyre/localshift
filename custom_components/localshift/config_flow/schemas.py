@@ -12,17 +12,7 @@ import voluptuous as vol
 from homeassistant.helpers import selector
 
 from ..const import (
-    CONF_BATTERY_TARGET,
-    CONF_CHEAP_PRICE_DEADBAND,
-    CONF_CHEAP_PRICE_PERCENTILE,
-    CONF_DEMAND_WINDOW_END,
-    CONF_DEMAND_WINDOW_START,
-    CONF_EXPORT_PRICE_MARGIN,
-    CONF_MANUAL_OVERRIDE_TIMEOUT,
-    CONF_MAX_PRECHARGE_PRICE,
-    CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
-    CONF_OPTIMIZATION_MODE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -30,7 +20,6 @@ from ..const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
-    CONF_SPIKE_PRICE_PERCENTILE,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -39,23 +28,8 @@ from ..const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_WEATHER_ENTITY,
-    CONF_WEATHER_LEARNING_ENABLED,
-    DEFAULT_BATTERY_TARGET,
-    DEFAULT_CHEAP_PRICE_DEADBAND,
-    DEFAULT_CHEAP_PRICE_PERCENTILE,
-    DEFAULT_DEMAND_WINDOW_END,
-    DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_ENTITY_IDS,
-    DEFAULT_EXPORT_PRICE_MARGIN,
-    DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
-    DEFAULT_MAX_PRECHARGE_PRICE,
-    DEFAULT_MINIMUM_TARGET_SOC,
-    DEFAULT_OPTIMIZATION_MODE,
-    DEFAULT_SPIKE_PRICE_PERCENTILE,
     DEFAULT_WEATHER_ENTITY,
-    DEFAULT_WEATHER_LEARNING_ENABLED,
-    OPTIMIZATION_MODE_OPTIONS,
-    THRESHOLD_RANGES,
 )
 
 
@@ -257,225 +231,3 @@ def build_solcast_schema(
         )
 
     return vol.Schema(schema_fields)
-
-
-def build_options_schema(
-    values: dict[str, Any],
-    notify_services: list[str],
-    weather_entities: list[str],
-    climate_entities: list[str] | None = None,
-) -> vol.Schema:
-    """Build the options form schema.
-
-    Args:
-        values: Current/default values for the form fields
-        notify_services: List of available notify services
-        weather_entities: List of available weather entities
-        climate_entities: List of available climate entities
-
-    Returns:
-        Voluptuous schema for the options form
-    """
-    if climate_entities is None:
-        climate_entities = []
-
-    return vol.Schema(
-        {
-            # Notification settings
-            vol.Required(
-                CONF_NOTIFY_SERVICE,
-                default=values.get(CONF_NOTIFY_SERVICE, ""),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=notify_services,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            # Demand window timing
-            vol.Required(
-                CONF_DEMAND_WINDOW_START,
-                default=values.get(
-                    CONF_DEMAND_WINDOW_START,
-                    DEFAULT_DEMAND_WINDOW_START,
-                ),
-            ): selector.TimeSelector(),
-            vol.Required(
-                CONF_DEMAND_WINDOW_END,
-                default=values.get(
-                    CONF_DEMAND_WINDOW_END,
-                    DEFAULT_DEMAND_WINDOW_END,
-                ),
-            ): selector.TimeSelector(),
-            vol.Required(
-                CONF_MANUAL_OVERRIDE_TIMEOUT,
-                default=values.get(
-                    CONF_MANUAL_OVERRIDE_TIMEOUT,
-                    DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0,
-                    max=24,
-                    step=1,
-                    unit_of_measurement="hours",
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            # Price thresholds
-            vol.Required(
-                CONF_CHEAP_PRICE_PERCENTILE,
-                default=values.get(
-                    CONF_CHEAP_PRICE_PERCENTILE,
-                    DEFAULT_CHEAP_PRICE_PERCENTILE,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE]["min"],
-                    max=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE]["max"],
-                    step=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_CHEAP_PRICE_PERCENTILE][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Required(
-                CONF_MAX_PRECHARGE_PRICE,
-                default=values.get(
-                    CONF_MAX_PRECHARGE_PRICE,
-                    DEFAULT_MAX_PRECHARGE_PRICE,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE]["min"],
-                    max=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE]["max"],
-                    step=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_MAX_PRECHARGE_PRICE][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
-                CONF_CHEAP_PRICE_DEADBAND,
-                default=values.get(
-                    CONF_CHEAP_PRICE_DEADBAND,
-                    DEFAULT_CHEAP_PRICE_DEADBAND,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND]["min"],
-                    max=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND]["max"],
-                    step=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_CHEAP_PRICE_DEADBAND][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
-                CONF_SPIKE_PRICE_PERCENTILE,
-                default=values.get(
-                    CONF_SPIKE_PRICE_PERCENTILE,
-                    DEFAULT_SPIKE_PRICE_PERCENTILE,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE]["min"],
-                    max=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE]["max"],
-                    step=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_SPIKE_PRICE_PERCENTILE][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            # Battery settings
-            vol.Required(
-                CONF_BATTERY_TARGET,
-                default=values.get(
-                    CONF_BATTERY_TARGET,
-                    DEFAULT_BATTERY_TARGET,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["min"],
-                    max=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["max"],
-                    step=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_BATTERY_TARGET]["unit"],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Required(
-                CONF_MINIMUM_TARGET_SOC,
-                default=values.get(
-                    CONF_MINIMUM_TARGET_SOC,
-                    DEFAULT_MINIMUM_TARGET_SOC,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["min"],
-                    max=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["max"],
-                    step=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_MINIMUM_TARGET_SOC][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            # Weather correlation settings
-            vol.Optional(
-                CONF_WEATHER_ENTITY,
-                default=values.get(
-                    CONF_WEATHER_ENTITY,
-                    DEFAULT_WEATHER_ENTITY,
-                ),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=weather_entities
-                    if weather_entities
-                    else [DEFAULT_WEATHER_ENTITY],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                CONF_WEATHER_LEARNING_ENABLED,
-                default=values.get(
-                    CONF_WEATHER_LEARNING_ENABLED,
-                    DEFAULT_WEATHER_LEARNING_ENABLED,
-                ),
-            ): selector.BooleanSelector(),
-            # Export price margin for arbitrage
-            vol.Optional(
-                CONF_EXPORT_PRICE_MARGIN,
-                default=values.get(
-                    CONF_EXPORT_PRICE_MARGIN,
-                    DEFAULT_EXPORT_PRICE_MARGIN,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN]["min"],
-                    max=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN]["max"],
-                    step=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN]["step"],
-                    unit_of_measurement=THRESHOLD_RANGES[CONF_EXPORT_PRICE_MARGIN][
-                        "unit"
-                    ],
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            # Optimization mode (Issue #406)
-            vol.Optional(
-                CONF_OPTIMIZATION_MODE,
-                default=values.get(
-                    CONF_OPTIMIZATION_MODE,
-                    DEFAULT_OPTIMIZATION_MODE,
-                ),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=OPTIMIZATION_MODE_OPTIONS,
-                    translation_key="optimization_mode",
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-        }
-    )
