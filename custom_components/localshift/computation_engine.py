@@ -665,11 +665,12 @@ class ComputationEngine:
             slots.append(load_kw)
 
         data.load_forecast_slots = slots
-        _LOGGER.debug(
-            "load_forecast_slots: %d slots computed, first=%.3f kW, last=%.3f kW",
+        _LOGGER.info(
+            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f",
             len(slots),
-            slots[0] if slots else 0.0,
-            slots[-1] if slots else 0.0,
+            [round(slots[i], 3) for i in range(4, min(9, len(slots)))],
+            recent_load_kw,
+            historical_avg_kw.get(12, -1),
         )
 
     def _compute_effective_cheap_price_preliminary(
@@ -961,7 +962,22 @@ class ComputationEngine:
         # Map battery_mode string → BatteryMode enum
         battery_mode_str = apply_plan.get("battery_mode", "")
         try:
-            data.active_mode = _BatteryMode(battery_mode_str)
+            new_mode = _BatteryMode(battery_mode_str)
+            # Record decision timestamp when mode changes (Issue #501)
+            if new_mode != data.active_mode:
+                from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
+                decision_time = dt_util.now()
+                if decision_time is not None:
+                    data.decision_timestamp = decision_time
+                    data.decision_mode = new_mode
+                    _LOGGER.info(
+                        "Decision lag tracking: mode change %s → %s at %s",
+                        data.active_mode.value,
+                        new_mode.value,
+                        decision_time.isoformat(),
+                    )
+            data.active_mode = new_mode
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
             _LOGGER.info(

@@ -79,6 +79,9 @@ class BatteryModeSelect(SelectEntity):
         self._attr_options = SELECT_OPTIONS[SELECT_BATTERY_MODE]
         self._previous_mode: str = "self_consumption"
         self._internal_update: bool = False
+        self._last_committed_mode: str | None = None
+        self._update_count: int = 0
+        self._change_count: int = 0
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -159,26 +162,34 @@ class BatteryModeSelect(SelectEntity):
         if self._internal_update:
             return
 
+        self._update_count += 1
+        current_mode = self.current_option
+
         if self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
             mode = self.coordinator.data.active_mode
             if mode != BatteryMode.MANUAL and mode != BatteryMode.DEMAND_BLOCK:
-                self._previous_mode = mode.value
+                current_mode = mode.value
 
-        self.async_write_ha_state()
-
-    def set_mode_from_automation(self, mode: BatteryMode) -> None:
-        """Update select from automation mode changes."""
-        if mode in (
-            BatteryMode.SELF_CONSUMPTION,
-            BatteryMode.GRID_CHARGING,
-            BatteryMode.BOOST_CHARGING,
-            BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.PROACTIVE_EXPORT,
-        ):
-            self._previous_mode = mode.value
-            self._internal_update = True
+        if current_mode != self._last_committed_mode:
+            self._change_count += 1
+            _LOGGER.debug(
+                "Battery mode select changed: %s → %s (update #%d, change #%d)",
+                self._last_committed_mode,
+                current_mode,
+                self._update_count,
+                self._change_count,
+            )
+            self._last_committed_mode = current_mode
+            self._previous_mode = current_mode or "self_consumption"
             self.async_write_ha_state()
-            self._internal_update = False
+        else:
+            if self._update_count % 60 == 0:
+                _LOGGER.debug(
+                    "Battery mode select: %d updates, %d changes (mode stable at %s)",
+                    self._update_count,
+                    self._change_count,
+                    current_mode,
+                )
 
 
 class OptimizationModeSelect(SelectEntity):

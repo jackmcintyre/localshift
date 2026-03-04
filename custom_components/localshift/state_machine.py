@@ -603,10 +603,49 @@ class StateMachine:
 
         # Track successful transition time for health check grace period
         if transition_success and not dry_run:
+            from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
             transition_time = dt_util.now()
             self._last_successful_transition = transition_time
             # Track when mode was established for minimum duration check (Issue #279)
             self._mode_established_at = transition_time
+
+            # Issue #501: Record implementation timestamp and calculate lag
+            if data.decision_timestamp is not None and data.decision_mode == target:
+                data.implementation_timestamp = transition_time
+                lag_seconds = (
+                    transition_time - data.decision_timestamp
+                ).total_seconds()
+                data.decision_lag_seconds = lag_seconds
+                from_mode = data.active_mode.value if data.active_mode else "unknown"
+                to_mode = target.value
+                decision_mode_value = (
+                    data.decision_mode.value if data.decision_mode else "unknown"
+                )
+
+                # Add to history
+                history_entry = {
+                    "from_mode": from_mode,
+                    "to_mode": to_mode,
+                    "lag_seconds": round(lag_seconds, 2),
+                    "decision_time": data.decision_timestamp.isoformat(),
+                    "implementation_time": transition_time.isoformat(),
+                }
+                data.decision_lag_history.append(history_entry)
+                if len(data.decision_lag_history) > 50:
+                    data.decision_lag_history = data.decision_lag_history[-50:]
+
+                _LOGGER.info(
+                    "Decision lag: %s → %s completed in %.2fs",
+                    decision_mode_value,
+                    to_mode,
+                    lag_seconds,
+                )
+
+                # Clear decision tracking fields
+                data.decision_timestamp = None
+                data.decision_mode = None
+
             _LOGGER.debug(
                 "Recorded successful transition to %s at %s",
                 target.value,

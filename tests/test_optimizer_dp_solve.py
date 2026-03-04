@@ -23,6 +23,7 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     SlotContext,
     _build_soc_grid,
     _map_soc_to_bin,
+    _simulate_max_soc_in_demand_window,
 )
 
 # ---------------------------------------------------------------------------
@@ -1194,3 +1195,217 @@ def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar(
             PlannerAction.CHARGE_GRID_NORMAL,
             PlannerAction.CHARGE_GRID_BOOST,
         ), f"Unexpected grid charge at slot {decision.slot_index}: {decision.action}"
+
+
+def test_allow_dw_entry_under_target_suppresses_charge_when_solar_reaches_target_mid_dw():
+    """Issue #505: When allow_dw_entry_under_target=True, no grid charging if solar
+    reaches target at ANY point during DW (not just at DW end)."""
+    # Scenario:
+    # - Initial SOC: 50%
+    # - Target: 80%
+    # - Pre-DW (slots 0-3): Low solar, cheap prices - could charge
+    # - DW (slots 4-7): High solar - will reach target at slot 5
+    # - Expected: NO grid charging because solar reaches target mid-DW
+
+    pre_dw_slots = [
+        SlotContext(
+            slot_index=i,
+            timestamp_iso=f"2026-01-03T{10 + i}:00:00",
+            slot_interval_minutes=60,
+            buy_price=0.10,  # cheap enough to grid charge
+            sell_price=0.05,
+            solar_kwh=0.5,  # low solar
+            consumption_kwh=0.5,
+        )
+        for i in range(4)
+    ]
+    dw_slots = [
+        SlotContext(
+            slot_index=4 + i,
+            timestamp_iso=f"2026-01-03T{14 + i}:00:00",
+            slot_interval_minutes=60,
+            buy_price=0.15,
+            sell_price=0.05,
+            solar_kwh=3.0 if i < 2 else 1.0,  # high solar early in DW
+            consumption_kwh=0.5,
+            is_demand_window_entry=(i == 0),
+            is_demand_window_slot=True,
+        )
+        for i in range(4)
+    ]
+    slots = pre_dw_slots + dw_slots
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.12,
+        allow_dw_entry_under_target=True,  # Enable the new behavior
+        optimization_mode="self_consumption",
+        soc_bins=20,
+        target_shortfall_penalty_per_pct=0.030,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="test-dw-target-anywhere",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=config,
+    )
+
+    result = DPPlanner().plan(inputs)
+    assert result.success
+
+    # Solar should reach ~80%+ during DW, so no grid charging needed
+    # Check pre-DW slots (0-3) don't grid charge
+    for decision in result.decisions[:4]:
+        assert decision.action not in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ), (
+            f"Pre-DW slot {decision.slot_index} should not grid-charge when solar will reach target in DW"
+        )
+
+    # Verify solar reaches target in DW
+    assert result.can_solar_reach_target_in_dw is True
+
+
+def test_allow_dw_entry_under_target_charges_when_solar_insufficient():
+    """Issue #505: Grid charging still occurs when solar cannot reach target during DW."""
+    # Scenario:
+    # - Initial SOC: 50%
+    # - Target: 80%
+    # - Pre-DW (slots 0-3): Cheap prices
+    # - DW (slots 4-7): Low solar - will NOT reach target
+    # - Expected: Grid charging occurs because solar insufficient
+
+    pre_dw_slots = [
+        SlotContext(
+            slot_index=i,
+            timestamp_iso=f"2026-01-03T{10 + i}:00:00",
+            slot_interval_minutes=60,
+            buy_price=0.10,  # cheap
+            sell_price=0.05,
+            solar_kwh=0.3,  # low solar
+            consumption_kwh=0.5,
+        )
+        for i in range(4)
+    ]
+    dw_slots = [
+        SlotContext(
+            slot_index=4 + i,
+            timestamp_iso=f"2026-01-03T{14 + i}:00:00",
+            slot_interval_minutes=60,
+            buy_price=0.20,
+            sell_price=0.05,
+            solar_kwh=0.3,  # consistently low solar
+            consumption_kwh=0.5,
+            is_demand_window_entry=(i == 0),
+            is_demand_window_slot=True,
+        )
+        for i in range(4)
+    ]
+    slots = pre_dw_slots + dw_slots
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.12,
+        allow_dw_entry_under_target=True,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+        target_shortfall_penalty_per_pct=0.030,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="test-dw-target-anywhere-insufficient",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=config,
+    )
+
+    result = DPPlanner().plan(inputs)
+    assert result.success
+
+    # Solar cannot reach target, so grid charging should occur
+    grid_charge_actions = [
+        d.action
+        for d in result.decisions
+        if d.action
+        in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+    ]
+    assert len(grid_charge_actions) > 0, "Should grid-charge when solar insufficient"
+
+    # Verify solar cannot reach target in DW
+    assert result.can_solar_reach_target_in_dw is False
+
+
+def test_allow_dw_entry_under_target_false_uses_original_behavior():
+    """Issue #505: When allow_dw_entry_under_target=False, use original gate logic.
+
+    This test verifies the two modes behave differently:
+    - allow_dw_entry_under_target=False: Target must be reached BY DW ENTRY
+    - allow_dw_entry_under_target=True: Target must be reached AT ANY POINT in DW
+
+    With False mode, high terminal penalty, and pre-DW discharge, optimizer
+    grid-charges to meet target by DW entry.
+    """
+    # Pre-DW: Net discharge (solar < consumption) to create SOC deficit
+    pre_dw_slots = [
+        SlotContext(
+            slot_index=i,
+            timestamp_iso=f"2026-01-03T{10 + i}:00:00",
+            slot_interval_minutes=60,
+            buy_price=0.10,  # cheap enough to grid charge
+            sell_price=0.05,
+            solar_kwh=0.0,  # No solar pre-DW
+            consumption_kwh=1.0,  # Net discharge
+        )
+        for i in range(4)
+    ]
+    # DW: High solar that would reach target mid-DW (but not by DW entry)
+    dw_slots = [
+        SlotContext(
+            slot_index=4 + i,
+            timestamp_iso=f"2026-01-03T{14 + i}:00:00",
+            slot_interval_minutes=60,
+            buy_price=0.15,
+            sell_price=0.05,
+            solar_kwh=3.0 if i < 2 else 1.0,  # High solar early in DW
+            consumption_kwh=0.5,
+            is_demand_window_entry=(i == 0),
+            is_demand_window_slot=True,
+        )
+        for i in range(4)
+    ]
+    slots = pre_dw_slots + dw_slots
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.12,
+        allow_dw_entry_under_target=False,  # Must reach target BY DW entry
+        optimization_mode="self_consumption",
+        soc_bins=20,
+        target_shortfall_penalty_per_pct=0.150,  # High penalty to incentivize charging
+    )
+    inputs = OptimizerInputs(
+        cycle_id="test-dw-target-at-entry",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=config,
+    )
+
+    result = DPPlanner().plan(inputs)
+    assert result.success
+
+    # With allow_dw_entry_under_target=False, target must be met BY DW entry.
+    # Pre-DW discharge creates deficit, high penalty forces grid charging.
+    pre_dw_grid_charges = [
+        d.action
+        for d in result.decisions[:4]
+        if d.action
+        in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+    ]
+    assert len(pre_dw_grid_charges) > 0, (
+        "With allow_dw_entry_under_target=False and high penalty, "
+        "should grid-charge when solar won't reach target by DW entry. "
+        f"Got decisions: {[d.action.name for d in result.decisions[:4]]}"
+    )

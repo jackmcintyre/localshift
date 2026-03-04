@@ -238,8 +238,20 @@ class SlotBuilder:
                 fixed_idx = min(int(elapsed_min // 15), TOTAL_SLOTS - 1)
                 if 0 <= fixed_idx < len(data.load_forecast_slots):
                     consumption_kw = data.load_forecast_slots[fixed_idx]
-                    # Scale kW to kWh based on slot duration
                     consumption_kwh = consumption_kw * interval_minutes / 60.0
+                    if interval_minutes == 30 and 11 <= slot_start.hour <= 14:
+                        _LOGGER.info(
+                            "ISSUE_500 slot_builder: slot=%d time=%s interval=%d fixed_idx=%d "
+                            "slots_len=%d kw_idx_%d=%.3f kwh=%.3f",
+                            i,
+                            slot_start.strftime("%H:%M"),
+                            interval_minutes,
+                            fixed_idx,
+                            len(data.load_forecast_slots),
+                            fixed_idx,
+                            consumption_kw,
+                            consumption_kwh,
+                        )
 
             if consumption_kwh < 0.001:
                 slots_with_defaulted_consumption += 1
