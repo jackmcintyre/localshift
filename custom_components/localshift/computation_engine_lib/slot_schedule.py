@@ -103,20 +103,41 @@ def compute_hybrid_slot_schedule(
         if duration_minutes not in (5, 30, 60):
             continue
 
-        # Normalise 60-min test slots to 30-min so downstream code (solar_utils,
-        # slot_builder) sees only the two native granularities (5 and 30).
-        normalised_minutes = 30 if duration_minutes == 60 else duration_minutes
-
         price = float(entry.get("per_kwh", 0))
 
-        all_slots_raw.append(
-            {
-                "start": slot_start,
-                "interval_minutes": normalised_minutes,
-                "price": price,
-                "price_source": "5min" if normalised_minutes == 5 else "30min",
-            }
-        )
+        # Issue #519: Split 60-min slots into TWO 30-min slots to avoid gaps.
+        # Previously, normalizing 60-min to 30-min kept the same start time,
+        # creating 30-min gaps (e.g., 02:00-02:30, then gap, then 03:00-03:30).
+        # Now we emit two 30-min slots per 60-min input slot.
+        if duration_minutes == 60:
+            # First half: start to start+30min
+            all_slots_raw.append(
+                {
+                    "start": slot_start,
+                    "interval_minutes": 30,
+                    "price": price,
+                    "price_source": "30min",
+                }
+            )
+            # Second half: start+30min to end
+            all_slots_raw.append(
+                {
+                    "start": slot_start + timedelta(minutes=30),
+                    "interval_minutes": 30,
+                    "price": price,
+                    "price_source": "30min",
+                }
+            )
+        else:
+            # 5-min and 30-min slots pass through unchanged
+            all_slots_raw.append(
+                {
+                    "start": slot_start,
+                    "interval_minutes": duration_minutes,
+                    "price": price,
+                    "price_source": "5min" if duration_minutes == 5 else "30min",
+                }
+            )
 
     if not all_slots_raw:
         _LOGGER.warning("compute_hybrid_slot_schedule: No valid slots after parsing")
