@@ -53,6 +53,8 @@ async def async_setup_entry(
         LearningStatusSensor(coordinator, entry),
         DecisionQualitySensor(coordinator, entry),
         LearningDecisionHistorySensor(coordinator, entry),
+        # Decision-to-implementation lag sensor (Issue #501)
+        DecisionLagSensor(coordinator, entry),
         # Statistics backfiller sensor (Issue #267)
         BackfillStatusSensor(coordinator, entry),
         # Cost reconciliation sensor (Issue #269)
@@ -885,6 +887,75 @@ class LearningDecisionHistorySensor(LocalShiftSensorBase):
         return {
             "decisions": self.coordinator.data.recent_decision_log[-20:],
         }
+
+
+# ---------------------------------------------------------------------------
+# Decision-to-Implementation Lag Sensor (Issue #501)
+# ---------------------------------------------------------------------------
+
+
+class DecisionLagSensor(LocalShiftSensorBase):
+    """Measures time from decision to validated implementation.
+
+    Shows the lag in seconds between when a battery mode decision is made
+    and when the hardware validates the change.
+    """
+
+    _attr_unique_id = "localshift_decision_lag"
+    _attr_name = "Decision Lag"
+    _attr_icon = "mdi:timer-outline"
+    _attr_native_unit_of_measurement = "s"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        """Update with current lag in seconds."""
+        lag = self.coordinator.data.decision_lag_seconds
+        if lag is not None:
+            self._attr_native_value = round(lag, 2)
+        else:
+            self._attr_native_value = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return lag history and statistics."""
+        d = self.coordinator.data
+        history = d.decision_lag_history or []
+
+        # Calculate statistics from history
+        if history:
+            lag_values = [h["lag_seconds"] for h in history]
+            avg_lag = sum(lag_values) / len(lag_values)
+            max_lag = max(lag_values)
+            min_lag = min(lag_values)
+        else:
+            avg_lag = None
+            max_lag = None
+            min_lag = None
+
+        return {
+            "current_lag": round(d.decision_lag_seconds, 2)
+            if d.decision_lag_seconds is not None
+            else None,
+            "last_transition": history[-1] if history else None,
+            "history": history[-20:],  # Last 20 entries
+            "avg_lag_24h": round(avg_lag, 2) if avg_lag is not None else None,
+            "max_lag_24h": round(max_lag, 2) if max_lag is not None else None,
+            "min_lag_24h": round(min_lag, 2) if min_lag is not None else None,
+            "total_transitions": len(history),
+            "decision_timestamp": d.decision_timestamp.isoformat()
+            if d.decision_timestamp
+            else None,
+            "implementation_timestamp": d.implementation_timestamp.isoformat()
+            if d.implementation_timestamp
+            else None,
+        }
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on lag status."""
+        if self.coordinator.data.decision_timestamp is not None:
+            return "mdi:timer-sand"  # Decision pending
+        return "mdi:timer-outline"  # Completed
 
 
 # ---------------------------------------------------------------------------
