@@ -32,10 +32,17 @@ except Exception:
 
         time_zone: str = "UTC"
 
+    class _StatesStub:
+        """Stub for HA states when homeassistant is not available."""
+
+        def get(self, entity_id: str):  # noqa: ARG002
+            return None
+
     class HomeAssistant:
         """Stub for HomeAssistant when homeassistant is not available."""
 
         config = _ConfigStub()
+        states = _StatesStub()
 
     class _DTUtilStub:
         @staticmethod
