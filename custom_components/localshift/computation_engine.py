@@ -683,11 +683,12 @@ class ComputationEngine:
             slots.append(load_kw)
 
         data.load_forecast_slots = slots
-        _LOGGER.debug(
-            "load_forecast_slots: %d slots computed, first=%.3f kW, last=%.3f kW",
+        _LOGGER.info(
+            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f",
             len(slots),
-            slots[0] if slots else 0.0,
-            slots[-1] if slots else 0.0,
+            [round(slots[i], 3) for i in range(4, min(9, len(slots)))],
+            recent_load_kw,
+            historical_avg_kw.get(12, -1),
         )
 
     def _compute_effective_cheap_price_preliminary(

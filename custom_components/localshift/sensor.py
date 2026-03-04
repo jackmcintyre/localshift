@@ -525,6 +525,28 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
                 self.coordinator.data.weather_heating_coefficient, 4
             ),
             "weather_sample_count": self.coordinator.data.weather_sample_count,
+            # Issue #500: Load forecast slots runtime data
+            "load_forecast_slots_sample": {
+                "count": len(self.coordinator.data.load_forecast_slots),
+                "first_5": [
+                    round(v, 3) for v in self.coordinator.data.load_forecast_slots[:5]
+                ]
+                if self.coordinator.data.load_forecast_slots
+                else [],
+                "noon_idx_4": round(self.coordinator.data.load_forecast_slots[4], 3)
+                if len(self.coordinator.data.load_forecast_slots) > 4
+                else None,
+                "noon_idx_5": round(self.coordinator.data.load_forecast_slots[5], 3)
+                if len(self.coordinator.data.load_forecast_slots) > 5
+                else None,
+                "idx_8": round(self.coordinator.data.load_forecast_slots[8], 3)
+                if len(self.coordinator.data.load_forecast_slots) > 8
+                else None,
+            },
+            # Issue #500: Adaptive params values
+            "adaptive_params_values": dict(self.coordinator.data.adaptive_params.values)
+            if self.coordinator.data.adaptive_params
+            else {},
         }
 
 
