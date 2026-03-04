@@ -341,8 +341,4 @@ class SlotBuilder:
                     continue
 
         # Fallback to default
-        return (
-            defaults.get(key, "18:00:00")
-            if isinstance(defaults.get(key), str)
-            else defaults.get(key, time(18, 0))
-        )
+        return time(18, 0)
