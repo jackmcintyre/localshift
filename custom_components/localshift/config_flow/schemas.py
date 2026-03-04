@@ -228,11 +228,6 @@ def build_solcast_schema(
             default=default_tomorrow,
             description="Tomorrow's solar forecast (kWh)",
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-        vol.Required(
-            CONF_SUN_ENTITY,
-            default=default_sun,
-            description="Sun entity for sunrise/sunset times",
-        ): selector.EntitySelector(),
         vol.Optional(
             CONF_WEATHER_ENTITY,
             default=default_weather,
