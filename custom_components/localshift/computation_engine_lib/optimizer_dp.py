@@ -230,6 +230,9 @@ class OptimizerConfig:
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
 
+    switching_penalty: float = 0.02
+    """Penalty applied when switching away from the currently commanded action ($/switch)."""
+
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
 
@@ -261,6 +264,9 @@ class ObjectiveTerms:
     self_consumption_value: float = 0.0
     """Value of battery energy used for household load (benefit, subtracted from cost)."""
 
+    switching_penalty: float = 0.0
+    """Penalty applied if the action involves a mode switch."""
+
     uncertainty_penalty: float = 0.0
     """Penalty for grid actions when forecast horizon is restricted (Issue #431)."""
 
@@ -274,6 +280,7 @@ class ObjectiveTerms:
             + self.cycle_penalty
             + self.shortfall_penalty
             + self.uncertainty_penalty
+            + self.switching_penalty
         )
 
     def to_dict(self) -> dict:
@@ -285,6 +292,7 @@ class ObjectiveTerms:
             "shortfall_penalty": self.shortfall_penalty,
             "self_consumption_value": self.self_consumption_value,
             "uncertainty_penalty": self.uncertainty_penalty,
+            "switching_penalty": self.switching_penalty,
             "net_cost": self.net_cost,
         }
 
@@ -424,6 +432,9 @@ class OptimizerInputs:
 
     slots: list[SlotContext]
     """Ordered list of forecast slots from now to end of horizon."""
+
+    current_action: PlannerAction | None = None
+    """Currently commanded action (to apply switching penalty against first slot)."""
 
     config: OptimizerConfig = field(default_factory=OptimizerConfig)
     """Optimizer configuration and constraints."""
@@ -728,6 +739,11 @@ class DPPlanner:
                         )
 
                     # Compute stage cost
+                    is_switch = (
+                        slot_idx == 0
+                        and inputs.current_action is not None
+                        and action != inputs.current_action
+                    )
                     stage = DPPlanner.stage_cost(
                         action,
                         grid_import,
@@ -735,6 +751,7 @@ class DPPlanner:
                         slot,
                         config,
                         soc_pct=soc,
+                        is_switch=is_switch,
                     )
                     total_cost = stage.net_cost + future_cost
 
@@ -802,6 +819,11 @@ class DPPlanner:
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
 
             # Compute stage cost for this decision
+            is_switch = (
+                slot_idx == 0
+                and inputs.current_action is not None
+                and action != inputs.current_action
+            )
             stage = DPPlanner.stage_cost(
                 action,
                 grid_import,
@@ -809,6 +831,7 @@ class DPPlanner:
                 slot,
                 config,
                 soc_pct=current_soc,
+                is_switch=is_switch,
             )
 
             # Determine reason code
@@ -1323,6 +1346,7 @@ class DPPlanner:
         config: OptimizerConfig,
         *,
         soc_pct: float | None = None,
+        is_switch: bool = False,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -1335,11 +1359,17 @@ class DPPlanner:
             soc_pct: Current SOC percentage *before* this slot's transition.
                      When provided, caps self-consumption credit by the
                      battery's physical discharge capacity (Fixes #417).
+            is_switch: True if this action represents a mode switch from the
+                       currently active hardware state (Issue #524).
         """
         import_cost = grid_import_kwh * slot.buy_price
         export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
         cycle_kwh = grid_import_kwh + grid_export_kwh
         cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
+
+        # Switching penalty (Issue #524)
+        # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
+        switching_penalty = config.switching_penalty if is_switch else 0.0
 
         # Issue #431: uncertainty penalty for grid charging when horizon is short.
         # This biases the optimizer toward HOLD (waiting for more data) when blind.
@@ -1400,6 +1430,7 @@ class DPPlanner:
             cycle_penalty=cycle_penalty,
             self_consumption_value=self_consumption_value,
             uncertainty_penalty=uncertainty_penalty,
+            switching_penalty=switching_penalty,
         )
 
     @staticmethod

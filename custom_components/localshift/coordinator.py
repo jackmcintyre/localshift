@@ -34,7 +34,6 @@ from .const import (
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_TESLEMETRY_LOAD_POWER,
-    CONF_TESLEMETRY_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     SWITCH_DEFAULTS,
@@ -296,7 +295,7 @@ class LocalShiftCoordinator:
             self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
             self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
             # SOC - trigger target stop when battery reaches target
-            self._get_entity_id(CONF_TESLEMETRY_SOC),
+            # self._get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
         ]
 
         # Subscribe to state changes
@@ -738,6 +737,13 @@ class LocalShiftCoordinator:
             self.hass.async_create_task(
                 self._evaluate_state_machine(),
                 "localshift_evaluate_stale_price",
+            )
+        else:
+            # Trigger state machine evaluation periodically (every minute)
+            # This replaces the reactive SOC triggers (Issue #524)
+            self.hass.async_create_task(
+                self._evaluate_state_machine(),
+                "localshift_evaluate_periodic",
             )
 
     @callback

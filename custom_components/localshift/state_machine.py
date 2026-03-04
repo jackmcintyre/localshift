@@ -602,15 +602,17 @@ class StateMachine:
             self._in_mode_transition = False
 
         # Track successful transition time for health check grace period
-        if transition_success and not dry_run:
+        if transition_success:
             from homeassistant.util import dt as dt_util  # noqa: PLC0415
 
             transition_time = dt_util.now()
-            self._last_successful_transition = transition_time
             # Track when mode was established for minimum duration check (Issue #279)
             self._mode_established_at = transition_time
 
-            # Issue #501: Record implementation timestamp and calculate lag
+            if not dry_run:
+                self._last_successful_transition = transition_time
+
+                # Issue #501: Record implementation timestamp and calculate lag
             if data.decision_timestamp is not None and data.decision_mode == target:
                 data.implementation_timestamp = transition_time
                 lag_seconds = (

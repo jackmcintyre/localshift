@@ -167,6 +167,7 @@ CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
+CONF_SWITCHING_PENALTY = "switching_penalty"
 
 # Optimization mode options
 OPTIMIZATION_MODE_SELF_CONSUMPTION = "self_consumption"
@@ -198,6 +199,7 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
+DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -277,6 +279,13 @@ THRESHOLD_RANGES = {
         "step": 0.01,
         "unit": "$/kWh",
         "icon": "mdi:currency-usd",
+    },
+    CONF_SWITCHING_PENALTY: {
+        "min": 0.00,
+        "max": 0.10,
+        "step": 0.01,
+        "unit": "$/switch",
+        "icon": "mdi:swap-vertical-variant",
     },
 }
 
