@@ -10,7 +10,6 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceEntry
 
 from .const import DOMAIN
 
@@ -47,23 +46,6 @@ async def async_get_config_entry_diagnostics(
     }
 
     return diagnostics
-
-
-async def async_get_device_diagnostics(
-    hass: HomeAssistant, entry: ConfigEntry, _device: DeviceEntry
-) -> dict[str, Any]:
-    """Return diagnostics for a device.
-
-    Args:
-        hass: Home Assistant instance
-        entry: Config entry
-        _device: Device entry (unused - same as config entry diagnostics)
-
-    Returns:
-        Dictionary with device-specific diagnostics
-    """
-    # For this integration, device diagnostics is same as config entry
-    return await async_get_config_entry_diagnostics(hass, entry)
 
 
 def _get_integration_status(coordinator: Any) -> dict[str, Any]:
