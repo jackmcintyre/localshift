@@ -470,7 +470,6 @@ class TestOptionsFlow:
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
-            CONF_SUN_ENTITY: "sun.sun",
         }
 
         # First step: entity mappings - provide entity data
@@ -874,7 +873,6 @@ class TestOptionsFlowMigration:
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
-            CONF_SUN_ENTITY: "sun.sun",
         }
 
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)

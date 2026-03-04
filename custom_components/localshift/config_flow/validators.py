@@ -160,23 +160,6 @@ async def get_weather_entities(hass) -> list[str]:
     return sorted(weather_entities)
 
 
-async def get_climate_entities(hass) -> list[str]:
-    """Get list of available climate entities.
-
-    Args:
-        hass: Home Assistant instance
-
-    Returns:
-        List of climate entity IDs like ["climate.living_room", "climate.bedroom"]
-    """
-    climate_entities = []
-    for state in hass.states.async_all():
-        if state.domain == "climate":
-            climate_entities.append(state.entity_id)
-
-    return sorted(climate_entities)
-
-
 def get_current_notify_service(config_entry) -> str:
     """Get the current notify service from options or data (for backward compatibility).
 
