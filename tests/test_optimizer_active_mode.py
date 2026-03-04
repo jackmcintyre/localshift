@@ -162,8 +162,8 @@ class TestOptimizerSafetyGate:
 class TestApplyPathMapping:
     """Tests for _derive_runtime_apply_plan mapping."""
 
-    def test_hold_maps_to_self_consumption(self):
-        """HOLD action should map to SELF_CONSUMPTION mode."""
+    def test_hold_maps_to_hold_mode(self):
+        """HOLD action should map to HOLD mode (Issue #522)."""
         config = OptimizerConfig(demand_window_target_soc_pct=80.0)
         decisions = [
             {
@@ -176,7 +176,7 @@ class TestApplyPathMapping:
 
         result = _derive_runtime_apply_plan(decisions, 0, config)
 
-        assert result["battery_mode"] == "self_consumption"
+        assert result["battery_mode"] == "hold"
         assert "fallback_to_legacy" not in result
 
     def test_charge_grid_normal_maps_to_grid_charging(self):
