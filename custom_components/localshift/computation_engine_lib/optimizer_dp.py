@@ -380,6 +380,9 @@ class OptimizerResult:
     can_solar_reach_target: bool = False
     """True if solar alone can reach DW target (no grid charge, no export). Phase 4, #441."""
 
+    can_solar_reach_target_in_dw: bool = False
+    """True if solar alone reaches target at any point during DW (allow_dw_entry_under_target mode). Issue #505."""
+
     error_message: str | None = None
     """Error description if success=False."""
 
@@ -612,6 +615,17 @@ class DPPlanner:
         if in_demand_window and demand_window_end_idx is None:
             demand_window_end_idx = n_slots - 1
 
+        # Pre-compute whether solar can reach target during DW (Issue #505)
+        # Used to conditionally zero out terminal penalty when allow_dw_entry_under_target=True
+        solar_can_reach_target_in_dw = False
+        if config.allow_dw_entry_under_target and demand_window_entry_idx is not None:
+            max_soc_in_dw = _simulate_max_soc_in_demand_window(
+                inputs.initial_soc_pct, slots, config
+            )
+            solar_can_reach_target_in_dw = (
+                max_soc_in_dw >= config.demand_window_target_soc_pct
+            )
+
         # Determine where to apply terminal penalty
         # If allow_dw_entry_under_target is True, apply at DW end (allows solar during DW)
         # Otherwise, apply at DW entry (must meet target by DW start)
@@ -633,7 +647,12 @@ class DPPlanner:
             # Apply shortfall penalty at terminal penalty index
             target = config.demand_window_target_soc_pct
             for bin_idx, soc in enumerate(soc_grid):
-                shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
+                # Issue #505: When allow_dw_entry_under_target=True and solar can reach
+                # target during DW, zero out the terminal penalty (trust solar)
+                if config.allow_dw_entry_under_target and solar_can_reach_target_in_dw:
+                    shortfall_penalty = 0.0
+                else:
+                    shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
                 dp[n_slots][bin_idx] = (
                     shortfall_penalty,
                     PlannerAction.HOLD,
@@ -823,10 +842,18 @@ class DPPlanner:
 
         # Calculate terminal shortfall at the terminal penalty index
         terminal_shortfall = 0.0
-        if terminal_penalty_idx is not None and terminal_penalty_idx < len(decisions):
-            terminal_soc = decisions[terminal_penalty_idx].predicted_soc_pct
+        if terminal_penalty_idx is not None:
             target = config.demand_window_target_soc_pct
-            terminal_shortfall = max(0.0, target - terminal_soc)
+            if config.allow_dw_entry_under_target:
+                # Issue #505: Shortfall based on max SOC during DW
+                max_soc_in_dw = _simulate_max_soc_in_demand_window(
+                    inputs.initial_soc_pct, slots, config
+                )
+                terminal_shortfall = max(0.0, target - max_soc_in_dw)
+            elif terminal_penalty_idx < len(decisions):
+                # Original: shortfall at fixed checkpoint
+                terminal_soc = decisions[terminal_penalty_idx].predicted_soc_pct
+                terminal_shortfall = max(0.0, target - terminal_soc)
 
         # Determine if solar alone can reach the DW target (Phase 4, #441)
         can_solar = (
@@ -850,6 +877,7 @@ class DPPlanner:
             projected_net_cost=total_net_cost,
             terminal_shortfall_pct=terminal_shortfall,
             can_solar_reach_target=can_solar,
+            can_solar_reach_target_in_dw=solar_can_reach_target_in_dw,
             reason_code_histogram=reason_histogram,
         )
 
@@ -1010,14 +1038,23 @@ class DPPlanner:
         ):
             soc_deficit_pct = config.demand_window_target_soc_pct - soc_pct
             if soc_deficit_pct > 0:
-                solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
-                    slot_idx=slot_idx,
-                    slots=slots,
-                    terminal_penalty_idx=terminal_penalty_idx,
-                    battery_capacity_kwh=config.battery_capacity_kwh,
-                )
-                if solar_gain_pct >= soc_deficit_pct:
-                    _solar_covers_deficit = True
+                if config.allow_dw_entry_under_target:
+                    # Issue #505: Check if solar reaches target at any point during DW
+                    max_soc_in_dw = _simulate_max_soc_in_demand_window(
+                        soc_pct, slots, config
+                    )
+                    if max_soc_in_dw >= config.demand_window_target_soc_pct:
+                        _solar_covers_deficit = True
+                else:
+                    # Original: solar must cover deficit to DW entry
+                    solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
+                        slot_idx=slot_idx,
+                        slots=slots,
+                        terminal_penalty_idx=terminal_penalty_idx,
+                        battery_capacity_kwh=config.battery_capacity_kwh,
+                    )
+                    if solar_gain_pct >= soc_deficit_pct:
+                        _solar_covers_deficit = True
 
         # Grid charging constraints (Issue #406)
         if can_charge and not slot.is_demand_window_slot and not _solar_covers_deficit:
@@ -1396,3 +1433,44 @@ def _simulate_solar_only_terminal_soc(
         if terminal_penalty_idx is not None and i == terminal_penalty_idx:
             return soc
     return soc
+
+
+def _simulate_max_soc_in_demand_window(
+    initial_soc_pct: float,
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+) -> float:
+    """Simulate solar-only SOC and return max SOC within demand window slots.
+
+    Used when allow_dw_entry_under_target=True to determine if solar
+    will reach target at any point during DW (Issue #505).
+
+    Args:
+        initial_soc_pct: Starting SOC percentage.
+        slots: List of slot contexts to simulate.
+        config: Optimizer configuration.
+
+    Returns:
+        Maximum SOC percentage reached within any demand window slot.
+        Returns initial_soc_pct if no DW slots exist.
+    """
+    soc = initial_soc_pct
+    max_soc_in_dw = soc
+
+    for slot in slots:
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        slot_hours = slot.slot_interval_minutes / 60.0
+        max_transfer_kwh = config.charge_rate_kw * slot_hours
+
+        if net_kwh >= 0:
+            delta = min(net_kwh, max_transfer_kwh) * config.charge_efficiency
+        else:
+            delta = max(net_kwh, -max_transfer_kwh) / config.discharge_efficiency
+
+        soc += delta / config.battery_capacity_kwh * 100
+        soc = max(config.min_soc_pct, min(100.0, soc))
+
+        if slot.is_demand_window_slot:
+            max_soc_in_dw = max(max_soc_in_dw, soc)
+
+    return max_soc_in_dw
