@@ -425,22 +425,3 @@ class StateReader:
             _LOGGER.info("Automation ready - all required inputs valid")
 
         return is_ready, status, missing
-
-    def _read_float_attr(self, state: Any, attr: str, default: float = 0.0) -> float:
-        """Read a float value from a state's attributes.
-
-        Args:
-            state: Home Assistant state object.
-            attr: Attribute name to read.
-            default: Default value if attribute missing or invalid.
-
-        Returns:
-            Float value from attribute, or default.
-        """
-        try:
-            value = state.attributes.get(attr)
-            if value is None:
-                return default
-            return float(value)
-        except (ValueError, TypeError):
-            return default

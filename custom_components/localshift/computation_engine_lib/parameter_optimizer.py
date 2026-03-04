@@ -477,24 +477,6 @@ class ParameterOptimizer:
 
         self._consecutive_degrading_days = 0
 
-    def get_current_params(self) -> AdaptiveParameters:
-        """Return current optimized parameters.
-
-        Returns:
-            Current AdaptiveParameters instance
-        """
-        return self._current_params
-
-    def reset(self) -> None:
-        """Reset all learned parameters to defaults."""
-        self._current_params = AdaptiveParameters()
-        self._param_history.clear()
-        self._adjustment_log.clear()
-        self._consecutive_degrading_days = 0
-        self._last_7d_score = 0.0
-        self._last_update = None
-        _LOGGER.info("Parameter optimizer reset to defaults")
-
     async def async_save(self) -> None:
         """Persist optimizer state to storage."""
         data = {

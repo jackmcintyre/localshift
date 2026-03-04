@@ -61,11 +61,6 @@ class TestParameterOptimizer:
         optimizer._last_update = datetime.now() - timedelta(hours=12)
         assert optimizer.should_update(100) is False
 
-    def test_get_current_params(self, optimizer):
-        """Test getting current parameters."""
-        params = optimizer.get_current_params()
-        assert isinstance(params, AdaptiveParameters)
-
     def test_optimize_returns_adaptive_params(self, optimizer):
         """Test that optimize returns AdaptiveParameters."""
         # Create mock decisions

@@ -631,24 +631,6 @@ class ComputationEngine:
         if len(data.forecast_history) > 200:
             data.forecast_history = data.forecast_history[-200:]
 
-    def set_baseline_load(self, baseline_avg_kw: dict[int, float]) -> None:
-        """Set the baseline load profile for Issue #137 feedback loop fix.
-
-        Called by coordinator to provide the estimated non-HVAC baseline
-        consumption. This is used for grid charging decisions to prevent
-        the feedback loop where HVAC load triggers unnecessary charging.
-
-        Args:
-            baseline_avg_kw: Dict of hour -> baseline load in kW.
-        """
-        self._baseline_avg_kw = baseline_avg_kw
-        if baseline_avg_kw:
-            _LOGGER.debug(
-                "Baseline load set: %d hours, avg=%.2f kW",
-                len(baseline_avg_kw),
-                sum(baseline_avg_kw.values()) / len(baseline_avg_kw),
-            )
-
     def _compute_load_forecast_slots(
         self,
         data: CoordinatorData,
