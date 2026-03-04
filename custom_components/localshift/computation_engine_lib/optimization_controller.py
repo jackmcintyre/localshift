@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from ..coordinator_data import CoordinatorData
-    from .decision_outcome_tracker import DecisionOutcomeTracker, DecisionRecord
+    from .decision_outcome_tracker import DecisionOutcomeTracker
     from .parameter_optimizer import ParameterOptimizer
     from .pattern_analyzer import PatternAnalyzer
 

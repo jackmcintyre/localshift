@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any
 
 from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
-from .computation_engine_lib.statistics_backfiller import BackfillReport
 from .const import BatteryMode
 
 
@@ -436,9 +435,6 @@ class CoordinatorData:
     contextual_adjustments_active: list[dict[str, Any]] = field(
         default_factory=list
     )  # Active contextual adjustments
-
-    # --- Statistics backfiller (Issue #267) ---
-    backfill_report: BackfillReport | None = None  # Last backfill validation report
 
     # --- Cost reconciliation (Issue #269) ---
     reconciliation_report: ReconciliationReport | None = (
