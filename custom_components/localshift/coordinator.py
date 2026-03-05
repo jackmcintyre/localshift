@@ -304,8 +304,9 @@ class LocalShiftCoordinator:
 
         # Issue #349: Check if automation is ready before proceeding
         # This validates that all required inputs are populated
+        # Issue #551: Suppress warning during startup grace to reduce log noise
         if self._state_reader is not None:
-            self._state_reader.check_automation_ready(self.data)
+            self._state_reader.check_automation_ready(self.data, suppress_warning=True)
 
         # Fetch historical load data in background (runs in thread pool, won't block)
         load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
@@ -507,6 +508,14 @@ class LocalShiftCoordinator:
         # Cost accumulation uses the raw state we just read (sync, no lock needed)
         self._accumulate_costs()
 
+        # Skip evaluation dispatch during startup grace period
+        # This prevents errors when entities haven't populated yet (Issue #551)
+        if self._is_in_startup_grace():
+            _LOGGER.debug(
+                "Skipping state machine evaluation during startup grace period"
+            )
+            return
+
         if self._evaluation_dispatcher is not None:
             self._evaluation_dispatcher.on_fast_tick(now)
 
@@ -523,6 +532,12 @@ class LocalShiftCoordinator:
         """
         # Read raw entity values
         self._read_all_external_state()
+
+        # Skip expensive operations during startup grace period
+        # This prevents errors when entities haven't populated yet (Issue #551)
+        if self._is_in_startup_grace():
+            _LOGGER.debug("Skipping medium tick operations during startup grace period")
+            return
 
         # Check entity health
         self._check_entity_health()
@@ -605,6 +620,17 @@ class LocalShiftCoordinator:
         self._backfill_solar_actual()
 
         _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
+
+    def _is_in_startup_grace(self) -> bool:
+        """Check if we're still in the startup grace period.
+
+        Returns True if the state machine has an active startup grace period,
+        False otherwise. Used to skip expensive operations during initialization
+        when entities may not be populated yet (Issue #551).
+        """
+        if self._state_machine is None:
+            return False
+        return self._state_machine._startup_grace_until is not None
 
     def _backfill_solar_actual(self) -> None:
         """Backfill actual solar energy for completed 30-min periods.

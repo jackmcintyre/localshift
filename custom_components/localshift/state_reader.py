@@ -347,7 +347,7 @@ class StateReader:
         )
 
     def check_automation_ready(
-        self, data: CoordinatorData
+        self, data: CoordinatorData, suppress_warning: bool = False
     ) -> tuple[bool, dict[str, bool], list[str]]:
         """Check if all required inputs are valid for automation decisions.
 
@@ -356,9 +356,11 @@ class StateReader:
         populated, leading to incorrect mode inference.
 
         Issue #349: Prevents boost_charging inference from stale hardware state.
+        Issue #551: Added suppress_warning to reduce log noise during startup.
 
         Args:
             data: CoordinatorData with current state values.
+            suppress_warning: If True, log at DEBUG instead of WARNING level.
 
         Returns:
             Tuple of (is_ready, status_dict, missing_list):
@@ -417,7 +419,9 @@ class StateReader:
         data.automation_ready_missing = missing
 
         if not is_ready:
-            _LOGGER.warning(
+            log_level = logging.DEBUG if suppress_warning else logging.WARNING
+            _LOGGER.log(
+                log_level,
                 "Automation not ready - missing inputs: %s",
                 ", ".join(missing) if missing else "none",
             )
