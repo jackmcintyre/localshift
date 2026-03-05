@@ -11,6 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.localshift.const import (
+    BACKUP_RESERVE_MAX_VALID,
+    CONF_BATTERY_TARGET,
+    DEFAULT_BATTERY_TARGET,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
@@ -136,6 +139,199 @@ def coordinator_data():
     # Issue #349: Mark automation as ready for tests
     data.automation_ready = True
     return data
+
+
+class TestModeConfig:
+    """Test ModeConfig generation for each mode."""
+
+    def test_get_mode_config_self_consumption_with_preserve_soc(
+        self, state_machine, coordinator_data
+    ):
+        """SELF_CONSUMPTION uses preserve_soc when set."""
+        coordinator_data.preserve_soc = 25.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        assert config.operation_mode == "self_consumption"
+        assert config.backup_reserve == 25.0
+        assert config.export_mode == TESLEMETRY_EXPORT_PV_ONLY
+        assert config.grid_charging_allowed is False
+        assert config.self_consumption_reserve == 25.0
+        assert config.grid_charging_reserve is None
+        assert config.proactive_export_reserve is None
+
+    def test_get_mode_config_self_consumption_without_preserve_soc(
+        self, state_machine, coordinator_data
+    ):
+        """SELF_CONSUMPTION defaults to 10 when preserve_soc missing."""
+        coordinator_data.preserve_soc = None
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        assert config.backup_reserve == 10.0
+        assert config.self_consumption_reserve == 10.0
+
+    def test_get_mode_config_demand_block(self, state_machine, coordinator_data):
+        """DEMAND_BLOCK mirrors self consumption settings."""
+        coordinator_data.preserve_soc = 20.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.DEMAND_BLOCK, coordinator_data
+        )
+
+        assert config.operation_mode == "self_consumption"
+        assert config.backup_reserve == 20.0
+        assert config.self_consumption_reserve == 20.0
+
+    def test_get_mode_config_grid_charging_clamps_reserve(
+        self, state_machine, coordinator_data
+    ):
+        """GRID_CHARGING clamps reserve for 81-99% targets."""
+
+        def _get_option(key, default):
+            if key == CONF_BATTERY_TARGET:
+                return 85
+            return default
+
+        state_machine._get_option = _get_option
+
+        config = state_machine._get_mode_config(
+            BatteryMode.GRID_CHARGING, coordinator_data
+        )
+
+        assert config.operation_mode == "backup"
+        assert config.backup_reserve == BACKUP_RESERVE_MAX_VALID
+        assert config.export_mode == TESLEMETRY_EXPORT_PV_ONLY
+        assert config.grid_charging_allowed is True
+        assert config.grid_charging_reserve == BACKUP_RESERVE_MAX_VALID
+
+    def test_get_mode_config_grid_charging_default_target(
+        self, state_machine, coordinator_data
+    ):
+        """GRID_CHARGING uses default target when option missing."""
+        config = state_machine._get_mode_config(
+            BatteryMode.GRID_CHARGING, coordinator_data
+        )
+
+        assert config.operation_mode == "backup"
+        assert config.backup_reserve in (
+            DEFAULT_BATTERY_TARGET,
+            BACKUP_RESERVE_MAX_VALID,
+        )
+
+    def test_get_mode_config_boost_charging(self, state_machine, coordinator_data):
+        """BOOST_CHARGING sets autonomous + full reserve."""
+        config = state_machine._get_mode_config(
+            BatteryMode.BOOST_CHARGING, coordinator_data
+        )
+
+        assert config.operation_mode == "autonomous"
+        assert config.backup_reserve == 100.0
+        assert config.grid_charging_allowed is True
+
+    def test_get_mode_config_spike_discharge_conservative(
+        self, state_machine, coordinator_data
+    ):
+        """SPIKE_DISCHARGE uses spike_reserve_soc in conservative mode."""
+        coordinator_data.spike_in_conservative_mode = True
+        coordinator_data.spike_reserve_soc = 15.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SPIKE_DISCHARGE, coordinator_data
+        )
+
+        assert config.operation_mode == "autonomous"
+        assert config.backup_reserve == 15.0
+        assert config.export_mode == TESLEMETRY_EXPORT_BATTERY_OK
+
+    def test_get_mode_config_spike_discharge_default_minimum(
+        self, state_machine, coordinator_data
+    ):
+        """SPIKE_DISCHARGE uses minimum_target_soc when not conservative."""
+
+        def _get_option(key, default):
+            if key == "minimum_target_soc":
+                return 12.0
+            return default
+
+        state_machine._get_option = _get_option
+        coordinator_data.spike_in_conservative_mode = False
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SPIKE_DISCHARGE, coordinator_data
+        )
+
+        assert config.backup_reserve == 12.0
+
+    def test_get_mode_config_proactive_export(self, state_machine, coordinator_data):
+        """PROACTIVE_EXPORT uses dynamic reserve based on SOC."""
+        coordinator_data.soc = 50.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.PROACTIVE_EXPORT, coordinator_data
+        )
+
+        assert config.operation_mode == "autonomous"
+        assert config.backup_reserve == 45.0
+        assert config.export_mode == TESLEMETRY_EXPORT_BATTERY_OK
+        assert config.proactive_export_reserve == 45.0
+
+    def test_get_mode_config_proactive_export_minimum(
+        self, state_machine, coordinator_data
+    ):
+        """PROACTIVE_EXPORT reserve never below 4%."""
+        coordinator_data.soc = 6.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.PROACTIVE_EXPORT, coordinator_data
+        )
+
+        assert config.backup_reserve == 4.0
+
+    def test_get_mode_config_hold(self, state_machine, coordinator_data):
+        """HOLD preserves current SOC via elevated reserve."""
+
+        def _get_option(key, default):
+            if key == "minimum_target_soc":
+                return 10.0
+            return default
+
+        state_machine._get_option = _get_option
+        coordinator_data.soc = 60.0
+
+        config = state_machine._get_mode_config(BatteryMode.HOLD, coordinator_data)
+
+        assert config.operation_mode == "self_consumption"
+        assert config.backup_reserve == 60.0
+        assert config.self_consumption_reserve == 60.0
+
+    def test_get_mode_config_hold_respects_minimum_soc(
+        self, state_machine, coordinator_data
+    ):
+        """HOLD respects minimum_target_soc if higher than SOC."""
+
+        def _get_option(key, default):
+            if key == "minimum_target_soc":
+                return 15.0
+            return default
+
+        state_machine._get_option = _get_option
+        coordinator_data.soc = 8.0
+
+        config = state_machine._get_mode_config(BatteryMode.HOLD, coordinator_data)
+
+        assert config.backup_reserve == 15.0
+        assert config.self_consumption_reserve == 15.0
+
+    def test_get_mode_config_manual_returns_none(self, state_machine, coordinator_data):
+        """MANUAL mode returns None (no config)."""
+        config = state_machine._get_mode_config(BatteryMode.MANUAL, coordinator_data)
+
+        assert config is None
 
 
 # =============================================================================

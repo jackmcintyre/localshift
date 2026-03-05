@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,26 @@ _LOGGER = logging.getLogger(__name__)
 TESLA_OVERRIDE_RESERVE = 80.0  # Reserve level that indicates Tesla control
 TESLA_OVERRIDE_RESERVE_TOLERANCE = 1.0  # Tolerance for reserve comparison
 TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)  # Extended cooldown during override
+
+
+@dataclass
+class ModeConfig:
+    """Complete configuration for a mode transition.
+
+    Contains all parameters needed for a mode, ensuring atomic updates
+    to both Tesla hardware state and internal tracking state.
+    """
+
+    # Tesla hardware state (set via battery_controller)
+    operation_mode: str
+    backup_reserve: int | float
+    export_mode: str
+    grid_charging_allowed: bool
+
+    # Internal tracking state (for health checks and sensors)
+    self_consumption_reserve: float | None = None
+    grid_charging_reserve: int | None = None
+    proactive_export_reserve: float | None = None
 
 
 class StateMachine:
@@ -137,6 +158,81 @@ class StateMachine:
         """
         return self._tesla_override_detected
 
+    def _get_mode_config(
+        self, target: BatteryMode, data: CoordinatorData
+    ) -> ModeConfig | None:
+        """Get complete configuration for a mode transition.
+
+        Returns None for MANUAL mode (no commands, no state tracking).
+        """
+        if target == BatteryMode.MANUAL:
+            return None
+
+        op_mode = "self_consumption"
+        backup_reserve = 10.0
+        export_mode = TESLEMETRY_EXPORT_PV_ONLY
+        grid_charging = False
+        sc_reserve: float | None = None
+        gc_reserve: int | None = None
+        pe_reserve: float | None = None
+
+        if target in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
+            backup_reserve = (
+                data.preserve_soc if data.preserve_soc is not None else 10.0
+            )
+            sc_reserve = backup_reserve
+
+        elif target == BatteryMode.GRID_CHARGING:
+            op_mode = "backup"
+            battery_target = float(
+                self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+            )
+            if battery_target <= BACKUP_RESERVE_MAX_VALID:
+                backup_reserve = int(battery_target)
+            elif battery_target >= 100:
+                backup_reserve = 100
+            else:
+                backup_reserve = BACKUP_RESERVE_MAX_VALID
+            grid_charging = True
+            gc_reserve = int(backup_reserve)
+
+        elif target == BatteryMode.BOOST_CHARGING:
+            op_mode = "autonomous"
+            backup_reserve = 100.0
+            grid_charging = True
+
+        elif target == BatteryMode.SPIKE_DISCHARGE:
+            op_mode = "autonomous"
+            min_target_soc = float(self._get_option("minimum_target_soc", 10.0))
+            backup_reserve = (
+                data.spike_reserve_soc
+                if data.spike_in_conservative_mode
+                and data.spike_reserve_soc is not None
+                else min_target_soc
+            )
+            export_mode = TESLEMETRY_EXPORT_BATTERY_OK
+
+        elif target == BatteryMode.PROACTIVE_EXPORT:
+            op_mode = "autonomous"
+            backup_reserve = max(4.0, data.soc - 5.0)
+            export_mode = TESLEMETRY_EXPORT_BATTERY_OK
+            pe_reserve = backup_reserve
+
+        elif target == BatteryMode.HOLD:
+            min_soc = float(self._get_option("minimum_target_soc", 10.0))
+            backup_reserve = max(min_soc, data.soc)
+            sc_reserve = backup_reserve
+
+        return ModeConfig(
+            operation_mode=op_mode,
+            backup_reserve=backup_reserve,
+            export_mode=export_mode,
+            grid_charging_allowed=grid_charging,
+            self_consumption_reserve=sc_reserve,
+            grid_charging_reserve=gc_reserve,
+            proactive_export_reserve=pe_reserve,
+        )
+
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
 
@@ -166,6 +262,212 @@ class StateMachine:
 
         # All other transitions: immediate (hysteresis prevents oscillation)
         return timedelta(0)
+
+    def _handle_startup_grace_period(
+        self, data: CoordinatorData, now: datetime
+    ) -> bool:
+        """Handle startup grace period logic.
+
+        Returns True if evaluation should return early.
+        """
+        if self._startup_grace_until is None:
+            return False
+
+        if now < self._startup_grace_until:
+            _LOGGER.debug("State machine in startup grace period, skipping")
+            return True
+
+        self._startup_grace_until = None
+
+        # Issue #349: Check if automation is ready before inferring mode
+        # At startup, entities may not be populated, leading to incorrect mode inference
+        if not data.automation_ready:
+            _LOGGER.warning(
+                "Startup grace ended but automation not ready - missing: %s. "
+                "Staying in SELF_CONSUMPTION mode until inputs are valid.",
+                ", ".join(data.automation_ready_missing)
+                if data.automation_ready_missing
+                else "unknown",
+            )
+            # Stay in SELF_CONSUMPTION mode - don't infer from potentially stale hardware state
+            self._commanded_mode = BatteryMode.SELF_CONSUMPTION
+            self._skip_next_debounce = True
+            return True
+
+        self._commanded_mode = self.infer_current_hardware_mode(data)
+        # Skip debounce on first transition after startup to quickly
+        # correct any mismatch between hardware state and desired mode
+        self._skip_next_debounce = True
+        _LOGGER.info(
+            "Startup grace ended, inferred mode: %s (skip_next_debounce=True)",
+            self._commanded_mode.value,
+        )
+        return False
+
+    def _handle_automation_disabled(self) -> bool:
+        """Handle automation disabled state.
+
+        Returns True if evaluation should return early.
+        """
+        if self._get_switch_state("automation_enabled"):
+            return False
+
+        self._commanded_mode = BatteryMode.MANUAL
+        self._mode_desired_since.clear()
+        return True
+
+    async def _handle_manual_override_timeout(
+        self, data: CoordinatorData, now: datetime
+    ) -> None:
+        """Handle automatic manual override timeout clearing."""
+        if not data.manual_override or self._manual_override_set_at is None:
+            return
+
+        timeout_hours = float(
+            self._get_option(
+                CONF_MANUAL_OVERRIDE_TIMEOUT,
+                DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+            )
+        )
+        if timeout_hours <= 0:
+            return
+
+        elapsed = now - self._manual_override_set_at
+        if elapsed < timedelta(hours=timeout_hours):
+            return
+
+        _LOGGER.info(
+            "Manual override timeout (%.1f hours) elapsed, clearing",
+            timeout_hours,
+        )
+        data.manual_override = False
+        self._manual_override_set_at = None
+        # Send notification about manual override timeout
+        await self._notification_service.send_manual_override_timeout_notification(
+            data, timeout_hours
+        )
+        # Do NOT call compute_derived_values() again here.
+        # A full recompute already ran at the top of this lock
+        # (Item 5 fix).
+        # desired remains MANUAL this cycle; the next periodic tick
+        # (at most 1 minute away) will recompute the correct mode.
+
+    async def _handle_soc_monitoring(self, data: CoordinatorData) -> bool:
+        """Handle SOC-based charge target enforcement.
+
+        Returns True if a transition was executed and evaluation should return.
+        """
+        if self._commanded_mode not in (
+            BatteryMode.GRID_CHARGING,
+            BatteryMode.BOOST_CHARGING,
+        ):
+            return False
+
+        battery_target = float(
+            self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+
+        # Determine if SOC monitoring is needed:
+        # - BOOST_CHARGING: always (uses reserve=100)
+        # - GRID_CHARGING: only when target is 81-99% (reserve clamped to 80)
+        needs_soc_monitoring = self._commanded_mode == BatteryMode.BOOST_CHARGING or (
+            self._commanded_mode == BatteryMode.GRID_CHARGING
+            and BACKUP_RESERVE_MAX_VALID < battery_target < 100
+        )
+
+        if not (
+            needs_soc_monitoring and data.soc is not None and data.soc >= battery_target
+        ):
+            return False
+
+        _LOGGER.info(
+            "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
+            data.soc,
+            battery_target,
+            self._commanded_mode.value,
+        )
+        transition_success = await self._execute_mode_transition(
+            data, BatteryMode.SELF_CONSUMPTION
+        )
+        if transition_success:
+            old_mode = self._commanded_mode
+            self._commanded_mode = BatteryMode.SELF_CONSUMPTION
+            self._mode_desired_since.clear()
+            await self._notification_service.send_transition_notification(
+                old_mode, BatteryMode.SELF_CONSUMPTION, data
+            )
+        return True
+
+    def _should_defer_for_minimum_duration(
+        self, desired: BatteryMode, now: datetime
+    ) -> bool:
+        """Check if minimum mode duration requires deferring transition."""
+        if self._mode_established_at is None:
+            return False
+
+        time_in_current_mode = now - self._mode_established_at
+        if time_in_current_mode >= self._MIN_MODE_DURATION:
+            return False
+
+        _LOGGER.info(
+            "Mode %s active for %s, need %s minimum — deferring transition to %s",
+            self._commanded_mode.value,
+            time_in_current_mode,
+            self._MIN_MODE_DURATION,
+            desired.value,
+        )
+        return True
+
+    def _get_debounce_duration(self, desired: BatteryMode) -> timedelta:
+        """Get debounce duration for a desired transition."""
+        if self._skip_next_debounce:
+            self._skip_next_debounce = False
+            _LOGGER.info("Skipping debounce (first transition after startup)")
+            return timedelta(0)
+
+        return self.get_debounce_for_transition(self._commanded_mode, desired)
+
+    def _handle_debounce_timing(
+        self, desired: BatteryMode, now: datetime, debounce: timedelta
+    ) -> bool:
+        """Handle debounce tracking for desired transitions.
+
+        Returns True if evaluation should return early.
+        """
+        # Clear timers for modes no longer desired.
+        # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
+        # desired at t=0, flipped away at t=2min, then desired again at t=3min,
+        # the old t=0 timer would make the debounce appear nearly satisfied.
+        # Clearing stale timers ensures the full debounce is always served from
+        # a continuous period of desire.
+        for mode in list(self._mode_desired_since.keys()):
+            if mode != desired:
+                self._mode_desired_since.pop(mode, None)
+
+        if desired not in self._mode_desired_since:
+            # First time this mode is (continuously) desired — start the timer
+            self._mode_desired_since[desired] = now
+            if debounce > timedelta(0):
+                _LOGGER.info(
+                    "Mode %s desired, debounce %s starts now",
+                    desired.value,
+                    debounce,
+                )
+                return True
+
+        desired_since = self._mode_desired_since[desired]
+        elapsed = now - desired_since
+
+        if elapsed < debounce:
+            _LOGGER.info(
+                "Mode %s desired for %s, need %s — waiting",
+                desired.value,
+                elapsed,
+                debounce,
+            )
+            return True
+
+        return False
 
     async def evaluate_state_machine(
         self,
@@ -217,68 +519,15 @@ class StateMachine:
                 desired = data.active_mode
 
                 # --- Startup grace period (30 s) ---
-                if self._startup_grace_until is not None:
-                    if now < self._startup_grace_until:
-                        _LOGGER.debug("State machine in startup grace period, skipping")
-                        return
-                    self._startup_grace_until = None
-
-                    # Issue #349: Check if automation is ready before inferring mode
-                    # At startup, entities may not be populated, leading to incorrect mode inference
-                    if not data.automation_ready:
-                        _LOGGER.warning(
-                            "Startup grace ended but automation not ready - missing: %s. "
-                            "Staying in SELF_CONSUMPTION mode until inputs are valid.",
-                            ", ".join(data.automation_ready_missing)
-                            if data.automation_ready_missing
-                            else "unknown",
-                        )
-                        # Stay in SELF_CONSUMPTION mode - don't infer from potentially stale hardware state
-                        self._commanded_mode = BatteryMode.SELF_CONSUMPTION
-                        self._skip_next_debounce = True
-                        return
-
-                    self._commanded_mode = self.infer_current_hardware_mode(data)
-                    # Skip debounce on first transition after startup to quickly
-                    # correct any mismatch between hardware state and desired mode
-                    self._skip_next_debounce = True
-                    _LOGGER.info(
-                        "Startup grace ended, inferred mode: %s (skip_next_debounce=True)",
-                        self._commanded_mode.value,
-                    )
+                if self._handle_startup_grace_period(data, now):
+                    return
 
                 # --- Automation disabled ---
-                if not self._get_switch_state("automation_enabled"):
-                    self._commanded_mode = BatteryMode.MANUAL
-                    self._mode_desired_since.clear()
+                if self._handle_automation_disabled():
                     return
 
                 # --- Auto-clear manual override after timeout ---
-                if data.manual_override and self._manual_override_set_at is not None:
-                    timeout_hours = float(
-                        self._get_option(
-                            CONF_MANUAL_OVERRIDE_TIMEOUT,
-                            DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
-                        )
-                    )
-                    if timeout_hours > 0:
-                        elapsed = now - self._manual_override_set_at
-                        if elapsed >= timedelta(hours=timeout_hours):
-                            _LOGGER.info(
-                                "Manual override timeout (%.1f hours) elapsed, clearing",
-                                timeout_hours,
-                            )
-                            data.manual_override = False
-                            self._manual_override_set_at = None
-                            # Send notification about manual override timeout
-                            await self._notification_service.send_manual_override_timeout_notification(
-                                data, timeout_hours
-                            )
-                            # Do NOT call compute_derived_values() again here.
-                            # A full recompute already ran at the top of this lock
-                            # (Item 5 fix).
-                            # desired remains MANUAL this cycle; the next periodic tick
-                            # (at most 1 minute away) will recompute the correct mode.
+                await self._handle_manual_override_timeout(data, now)
 
                 # --- No change needed ---
                 if desired == self._commanded_mode:
@@ -291,47 +540,8 @@ class StateMachine:
                     # For BOOST_CHARGING: Always uses autonomous+100, so SOC monitoring stops at target.
                     # For GRID_CHARGING: Uses backup mode with clamped reserve (80 for targets 81-99),
                     # so SOC monitoring is only needed when target is in 81-99% range.
-                    if self._commanded_mode in (
-                        BatteryMode.GRID_CHARGING,
-                        BatteryMode.BOOST_CHARGING,
-                    ):
-                        battery_target = float(
-                            self._get_option(
-                                CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
-                            )
-                        )
-                        # Determine if SOC monitoring is needed:
-                        # - BOOST_CHARGING: always (uses reserve=100)
-                        # - GRID_CHARGING: only when target is 81-99% (reserve clamped to 80)
-                        needs_soc_monitoring = (
-                            self._commanded_mode == BatteryMode.BOOST_CHARGING
-                            or (
-                                self._commanded_mode == BatteryMode.GRID_CHARGING
-                                and BACKUP_RESERVE_MAX_VALID < battery_target < 100
-                            )
-                        )
-                        if (
-                            needs_soc_monitoring
-                            and data.soc is not None
-                            and data.soc >= battery_target
-                        ):
-                            _LOGGER.info(
-                                "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
-                                data.soc,
-                                battery_target,
-                                self._commanded_mode.value,
-                            )
-                            transition_success = await self._execute_mode_transition(
-                                data, BatteryMode.SELF_CONSUMPTION
-                            )
-                            if transition_success:
-                                old_mode = self._commanded_mode
-                                self._commanded_mode = BatteryMode.SELF_CONSUMPTION
-                                self._mode_desired_since.clear()
-                                await self._notification_service.send_transition_notification(
-                                    old_mode, BatteryMode.SELF_CONSUMPTION, data
-                                )
-                            return
+                    if await self._handle_soc_monitoring(data):
+                        return
 
                     # --- Periodic health check (every minute) ---
                     # Verify hardware state matches commanded state
@@ -344,63 +554,18 @@ class StateMachine:
                 # --- Minimum mode duration check (Issue #279) ---
                 # Prevent rapid cycling by requiring current mode to be active for minimum duration
                 # This prevents the learning system's cycling penalty from being triggered
-                if self._mode_established_at is not None:
-                    time_in_current_mode = now - self._mode_established_at
-                    if time_in_current_mode < self._MIN_MODE_DURATION:
-                        _LOGGER.info(
-                            "Mode %s active for %s, need %s minimum — deferring transition to %s",
-                            self._commanded_mode.value,
-                            time_in_current_mode,
-                            self._MIN_MODE_DURATION,
-                            desired.value,
-                        )
-                        return
+                if self._should_defer_for_minimum_duration(desired, now):
+                    return
 
                 # --- Debounce tracking ---
                 # Skip debounce if flag is set (first transition after startup grace)
-                if self._skip_next_debounce:
-                    debounce = timedelta(0)
-                    self._skip_next_debounce = False
-                    _LOGGER.info("Skipping debounce (first transition after startup)")
-                else:
-                    debounce = self.get_debounce_for_transition(
-                        self._commanded_mode, desired
-                    )
-
-                # Clear timers for modes no longer desired.
-                # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
-                # desired at t=0, flipped away at t=2min, then desired again at t=3min,
-                # the old t=0 timer would make the debounce appear nearly satisfied.
-                # Clearing stale timers ensures the full debounce is always served from
-                # a continuous period of desire.
-                for mode in list(self._mode_desired_since.keys()):
-                    if mode != desired:
-                        self._mode_desired_since.pop(mode, None)
-
-                if desired not in self._mode_desired_since:
-                    # First time this mode is (continuously) desired — start the timer
-                    self._mode_desired_since[desired] = now
-                    if debounce > timedelta(0):
-                        _LOGGER.info(
-                            "Mode %s desired, debounce %s starts now",
-                            desired.value,
-                            debounce,
-                        )
-                        return
-
-                desired_since = self._mode_desired_since[desired]
-                elapsed = now - desired_since
-
-                if elapsed < debounce:
-                    _LOGGER.info(
-                        "Mode %s desired for %s, need %s — waiting",
-                        desired.value,
-                        elapsed,
-                        debounce,
-                    )
+                debounce = self._get_debounce_duration(desired)
+                if self._handle_debounce_timing(desired, now, debounce):
                     return
 
                 # --- Debounce satisfied — execute transition ---
+                desired_since = self._mode_desired_since[desired]
+                elapsed = now - desired_since
                 old_mode = self._commanded_mode
                 _LOGGER.info(
                     "State machine transition: %s → %s (desired for %s)",
@@ -442,10 +607,6 @@ class StateMachine:
                 self._commanded_mode = desired
                 self._mode_desired_since.clear()
 
-                # Clear proactive export reserve when leaving that mode
-                if desired != BatteryMode.PROACTIVE_EXPORT:
-                    self._proactive_export_reserve = None
-
                 # Record decision for learning system (Issue #170 Phase 1)
                 if self._decision_tracker is not None and not self._get_switch_state(
                     "dry_run"
@@ -481,130 +642,70 @@ class StateMachine:
             _LOGGER.info(
                 "Executing mode transition to %s (dry_run=%s)", target.value, dry_run
             )
-
-            if target == BatteryMode.SELF_CONSUMPTION:
-                transition_success = (
-                    await self._battery_controller.set_self_consumption(data, dry_run)
-                )
-                if transition_success:
-                    # Track the reserve for health checks (preserve_soc when set, otherwise 10)
-                    self._self_consumption_reserve = (
-                        data.preserve_soc if data.preserve_soc is not None else 10
-                    )
-                    _LOGGER.info(
-                        "Self consumption mode transition completed (reserve=%.1f)",
-                        self._self_consumption_reserve,
-                    )
-                else:
-                    _LOGGER.error("Self consumption mode transition FAILED")
-
-            elif target == BatteryMode.DEMAND_BLOCK:
-                # Demand block is self_consumption with extra protection
-                transition_success = (
-                    await self._battery_controller.set_self_consumption(data, dry_run)
-                )
-                if transition_success:
-                    # Track the reserve for health checks (preserve_soc when set, otherwise 10)
-                    self._self_consumption_reserve = (
-                        data.preserve_soc if data.preserve_soc is not None else 10
-                    )
-                    _LOGGER.info(
-                        "Demand block mode transition completed (reserve=%.1f)",
-                        self._self_consumption_reserve,
-                    )
-                else:
-                    _LOGGER.error("Demand block mode transition FAILED")
-
-            elif target == BatteryMode.GRID_CHARGING:
-                # Get battery target for grid charging
-                battery_target = float(
-                    self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-                )
-                # Calculate clamped reserve for Tesla firmware compatibility
-                if battery_target <= BACKUP_RESERVE_MAX_VALID:
-                    reserve = int(battery_target)
-                elif battery_target >= 100:
-                    reserve = 100
-                else:
-                    reserve = BACKUP_RESERVE_MAX_VALID  # 81-99% clamped to 80
-
-                transition_success = await self._battery_controller.set_force_charge(
-                    data, dry_run, target_soc=battery_target
-                )
-                if transition_success:
-                    # Track the reserve for health checks
-                    self._grid_charging_reserve = reserve
-                    _LOGGER.info(
-                        "Grid charging mode transition completed (target=%.0f%%, reserve=%d%%)",
-                        battery_target,
-                        reserve,
-                    )
-                else:
-                    _LOGGER.error("Grid charging mode transition FAILED")
-
-            elif target == BatteryMode.BOOST_CHARGING:
-                transition_success = await self._battery_controller.set_boost_charge(
-                    data, dry_run
-                )
-                if transition_success:
-                    _LOGGER.info("Boost charging mode transition completed")
-                else:
-                    _LOGGER.error("Boost charging mode transition FAILED")
-
-            elif target == BatteryMode.SPIKE_DISCHARGE:
-                # Check if conservative mode is enabled and use spike_reserve_soc if available
-                reserve_soc = (
-                    data.spike_reserve_soc if data.spike_in_conservative_mode else None
-                )
-                transition_success = await self._battery_controller.set_force_discharge(
-                    data, dry_run, reserve_soc=reserve_soc
-                )
-                if transition_success:
-                    _LOGGER.info(
-                        "Spike discharge mode transition completed (reserve=%s)",
-                        reserve_soc,
-                    )
-                else:
-                    _LOGGER.error("Spike discharge mode transition FAILED")
-
-            elif target == BatteryMode.PROACTIVE_EXPORT:
-                _LOGGER.info("Executing PROACTIVE_EXPORT mode transition")
-                self._proactive_export_reserve = max(4.0, data.soc - 5.0)
-                transition_success = (
-                    await self._battery_controller.set_proactive_export(data, dry_run)
-                )
-                if transition_success:
-                    _LOGGER.info(
-                        "Proactive export mode transition successful (reserve=%s)",
-                        self._proactive_export_reserve,
-                    )
-                else:
-                    _LOGGER.error("Proactive export mode transition FAILED")
-                    self._proactive_export_reserve = None
-
-            elif target == BatteryMode.HOLD:
-                _LOGGER.info("Executing HOLD mode transition")
-                # Preserve current SOC by setting reserve to max(min_soc, current_soc)
-                min_soc = float(self._get_option("minimum_target_soc") or 10.0)
-                preserve_soc = max(min_soc, data.soc)
-                # Use self_consumption mode with elevated reserve
-                transition_success = (
-                    await self._battery_controller.set_self_consumption(
-                        data, dry_run, preserve_soc=preserve_soc
-                    )
-                )
-                if transition_success:
-                    self._self_consumption_reserve = preserve_soc
-                    _LOGGER.info(
-                        "HOLD mode transition successful (preserve_soc=%s)",
-                        preserve_soc,
-                    )
-                else:
-                    _LOGGER.error("HOLD mode transition FAILED")
-
-            elif target == BatteryMode.MANUAL:
-                pass  # No command — user is controlling manually
+            config = self._get_mode_config(target, data)
+            if config is None:
                 _LOGGER.info("Manual mode transition completed (no commands)")
+                transition_success = True
+            else:
+                if target in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
+                    transition_success = (
+                        await self._battery_controller.set_self_consumption(
+                            data, dry_run, preserve_soc=config.backup_reserve
+                        )
+                    )
+
+                elif target == BatteryMode.GRID_CHARGING:
+                    battery_target = float(
+                        self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+                    )
+                    transition_success = (
+                        await self._battery_controller.set_force_charge(
+                            data, dry_run, target_soc=battery_target
+                        )
+                    )
+
+                elif target == BatteryMode.BOOST_CHARGING:
+                    transition_success = (
+                        await self._battery_controller.set_boost_charge(data, dry_run)
+                    )
+
+                elif target == BatteryMode.SPIKE_DISCHARGE:
+                    reserve_soc = (
+                        data.spike_reserve_soc
+                        if data.spike_in_conservative_mode
+                        else None
+                    )
+                    transition_success = (
+                        await self._battery_controller.set_force_discharge(
+                            data, dry_run, reserve_soc=reserve_soc
+                        )
+                    )
+
+                elif target == BatteryMode.PROACTIVE_EXPORT:
+                    transition_success = (
+                        await self._battery_controller.set_proactive_export(
+                            data, dry_run
+                        )
+                    )
+
+                elif target == BatteryMode.HOLD:
+                    transition_success = (
+                        await self._battery_controller.set_self_consumption(
+                            data, dry_run, preserve_soc=config.backup_reserve
+                        )
+                    )
+
+                if transition_success:
+                    self._self_consumption_reserve = config.self_consumption_reserve
+                    self._grid_charging_reserve = config.grid_charging_reserve
+                    self._proactive_export_reserve = config.proactive_export_reserve
+                    _LOGGER.info(
+                        "%s mode transition completed (reserve=%s)",
+                        target.value,
+                        config.backup_reserve,
+                    )
+                else:
+                    _LOGGER.error("%s mode transition FAILED", target.value)
 
         except Exception as e:
             _LOGGER.error(
@@ -729,26 +830,13 @@ class StateMachine:
         else:  # MANUAL or unknown
             return ("", -1, "", False)
 
-    async def _perform_health_check(self, data: CoordinatorData) -> None:
-        """Verify hardware state matches commanded mode.
+    def _handle_tesla_override_state(
+        self, data: CoordinatorData, now: datetime
+    ) -> bool:
+        """Handle Tesla override detection and cooldown.
 
-        This runs every minute to detect drift from manual changes,
-        power outages, or other issues that might cause the hardware
-        state to diverge from what we think it is.
-
-        If drift is detected, we attempt to correct it, unless Tesla
-        has taken control (Storm Watch, Grid Event, VPP).
-
-        SKIPPED when manual_override is True - user is in control and
-        health checks would fight against their manual commands.
+        Returns True if health checks should be skipped.
         """
-        # Skip health check during manual override - user is in control
-        if data.manual_override:
-            _LOGGER.debug("[HEALTH CHECK] Skipping - manual override active")
-            return
-
-        now = dt_util.now()
-
         # --- Tesla Override Detection ---
         # Check if Tesla has taken control (Storm Watch, Grid Event, VPP)
         if self._detect_tesla_override(data):
@@ -772,60 +860,95 @@ class StateMachine:
                         duration,
                     )
             # Skip all health check corrections while Tesla has control
-            return
-        else:
-            # Tesla override has ended
-            if self._tesla_override_detected:
-                duration = (
-                    now - self._tesla_override_detected_at
-                    if self._tesla_override_detected_at
-                    else timedelta(0)
-                )
-                _LOGGER.info(
-                    "[TESLA OVERRIDE] Tesla has released control after %s. "
-                    "Applying %s cooldown before resuming health checks.",
-                    duration,
-                    TESLA_OVERRIDE_COOLDOWN,
-                )
-                self._tesla_override_detected = False
-                self._tesla_override_released_at = (
-                    now  # Track when Tesla released control
-                )
-                self._tesla_override_detected_at = None
+            return True
+
+        # Tesla override has ended
+        if self._tesla_override_detected:
+            duration = (
+                now - self._tesla_override_detected_at
+                if self._tesla_override_detected_at
+                else timedelta(0)
+            )
+            _LOGGER.info(
+                "[TESLA OVERRIDE] Tesla has released control after %s. "
+                "Applying %s cooldown before resuming health checks.",
+                duration,
+                TESLA_OVERRIDE_COOLDOWN,
+            )
+            self._tesla_override_detected = False
+            self._tesla_override_released_at = now
+            self._tesla_override_detected_at = None
 
         # --- Tesla Override Cooldown ---
-        # After Tesla releases control, wait for the cooldown period before resuming
-        # health check corrections. This prevents conflicts during the transition.
-        if self._tesla_override_released_at is not None:
-            time_since_release = now - self._tesla_override_released_at
-            if time_since_release < TESLA_OVERRIDE_COOLDOWN:
-                remaining = (
-                    TESLA_OVERRIDE_COOLDOWN - time_since_release
-                ).total_seconds()
-                _LOGGER.debug(
-                    "[HEALTH CHECK] Skipping - in Tesla override cooldown (%.0fs remaining)",
-                    remaining,
-                )
-                return
-            else:
-                # Cooldown period has elapsed, clear the timestamp
-                _LOGGER.info(
-                    "[TESLA OVERRIDE] Cooldown period elapsed, resuming normal health checks"
-                )
-                self._tesla_override_released_at = None
+        # After Tesla releases control, wait for cooldown period before resuming
+        if self._tesla_override_released_at is None:
+            return False
 
-        # Skip health check during transition grace period
-        # This prevents false positives when Tesla API is still propagating
-        if self._last_successful_transition is not None:
-            time_since_transition = now - self._last_successful_transition
-            if time_since_transition < self._TRANSITION_GRACE_PERIOD:
-                _LOGGER.debug(
-                    "[HEALTH CHECK] Skipping - in transition grace period (%.0fs remaining)",
-                    (
-                        self._TRANSITION_GRACE_PERIOD - time_since_transition
-                    ).total_seconds(),
-                )
-                return
+        time_since_release = now - self._tesla_override_released_at
+        if time_since_release < TESLA_OVERRIDE_COOLDOWN:
+            remaining = (TESLA_OVERRIDE_COOLDOWN - time_since_release).total_seconds()
+            _LOGGER.debug(
+                "[HEALTH CHECK] Skipping - in Tesla override cooldown (%.0fs remaining)",
+                remaining,
+            )
+            return True
+
+        # Cooldown period has elapsed, clear the timestamp
+        _LOGGER.info(
+            "[TESLA OVERRIDE] Cooldown period elapsed, resuming normal health checks"
+        )
+        self._tesla_override_released_at = None
+        return False
+
+    def _should_skip_transition_grace(self, now: datetime) -> bool:
+        """Check if health checks should be skipped during transition grace."""
+        if self._last_successful_transition is None:
+            return False
+
+        time_since_transition = now - self._last_successful_transition
+        if time_since_transition >= self._TRANSITION_GRACE_PERIOD:
+            return False
+
+        remaining = (
+            self._TRANSITION_GRACE_PERIOD - time_since_transition
+        ).total_seconds()
+        _LOGGER.debug(
+            "[HEALTH CHECK] Skipping - in transition grace period (%.0fs remaining)",
+            remaining,
+        )
+        return True
+
+    def _should_skip_health_check(self, data: CoordinatorData, now: datetime) -> bool:
+        """Check if health check should be skipped."""
+        # Skip health check during manual override - user is in control
+        if data.manual_override:
+            _LOGGER.debug("[HEALTH CHECK] Skipping - manual override active")
+            return True
+
+        if self._handle_tesla_override_state(data, now):
+            return True
+
+        if self._should_skip_transition_grace(now):
+            return True
+
+        return False
+
+    async def _perform_health_check(self, data: CoordinatorData) -> None:
+        """Verify hardware state matches commanded mode.
+
+        This runs every minute to detect drift from manual changes,
+        power outages, or other issues that might cause the hardware
+        state to diverge from what we think it is.
+
+        If drift is detected, we attempt to correct it, unless Tesla
+        has taken control (Storm Watch, Grid Event, VPP).
+
+        SKIPPED when manual_override is True - user is in control and
+        health checks would fight against their manual commands.
+        """
+        now = dt_util.now()
+        if self._should_skip_health_check(data, now):
+            return
 
         expected_op, expected_reserve, expected_export, expected_grid_charging = (
             self._get_expected_state_for_mode(self._commanded_mode)
