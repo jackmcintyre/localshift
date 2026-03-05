@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 from .const import BatteryMode
+
+if TYPE_CHECKING:
+    from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
+
+if TYPE_CHECKING:
+    from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 
 
 @dataclass
@@ -442,9 +447,7 @@ class CoordinatorData:
     )
 
     # --- Extended forecast accuracy (Issue #270) ---
-    extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
-        default_factory=ExtendedAccuracyMetrics
-    )
+    extended_accuracy_metrics: ExtendedAccuracyMetrics | None = None
 
     # --- Hybrid timescale metadata (Issue #329) ---
     hybrid_slot_metadata: dict[str, Any] = field(

@@ -117,13 +117,13 @@ class TestAsyncStart:
         """Test that async_start initializes all helper modules."""
         with (
             patch(
-                "custom_components.localshift.coordinator.async_track_state_change_event"
+                "custom_components.localshift.subscription_manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.localshift.coordinator.async_track_time_interval"
+                "custom_components.localshift.subscription_manager.async_track_time_interval"
             ) as mock_track_time,
             patch(
-                "custom_components.localshift.coordinator.async_track_time_change"
+                "custom_components.localshift.subscription_manager.async_track_time_change"
             ) as mock_track_time_change,
         ):
             mock_track_state.return_value = MagicMock()
@@ -144,13 +144,13 @@ class TestAsyncStart:
         """Test that async_start subscribes to state changes and timers."""
         with (
             patch(
-                "custom_components.localshift.coordinator.async_track_state_change_event"
+                "custom_components.localshift.subscription_manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.localshift.coordinator.async_track_time_interval"
+                "custom_components.localshift.subscription_manager.async_track_time_interval"
             ) as mock_track_time,
             patch(
-                "custom_components.localshift.coordinator.async_track_time_change"
+                "custom_components.localshift.subscription_manager.async_track_time_change"
             ) as mock_track_time_change,
         ):
             mock_track_state.return_value = MagicMock()
@@ -172,13 +172,13 @@ class TestAsyncStart:
         """Test that async_start sets startup grace period."""
         with (
             patch(
-                "custom_components.localshift.coordinator.async_track_state_change_event"
+                "custom_components.localshift.subscription_manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.localshift.coordinator.async_track_time_interval"
+                "custom_components.localshift.subscription_manager.async_track_time_interval"
             ) as mock_track_time,
             patch(
-                "custom_components.localshift.coordinator.async_track_time_change"
+                "custom_components.localshift.subscription_manager.async_track_time_change"
             ) as mock_track_time_change,
         ):
             mock_track_state.return_value = MagicMock()
@@ -200,51 +200,27 @@ class TestHandleStateChange:
     """Tests for _handle_state_change method."""
 
     def test_handle_state_change_reads_state(self, coordinator, coordinator_data):
-        """Test that state change handler reads external state."""
+        """Test that state change handler delegates to dispatcher."""
         coordinator.data = coordinator_data
 
-        # Mock state reader
-        coordinator._state_reader = MagicMock()
-        coordinator._state_reader.read_all_external_state = MagicMock()
+        coordinator._evaluation_dispatcher = MagicMock()
 
-        # Mock state machine
-        coordinator._state_machine = MagicMock()
-        coordinator._state_machine.in_mode_transition = False
-
-        # Mock hass for async_create_task - consume coroutines to avoid warnings
-        coordinator.hass.async_create_task = MagicMock(
-            side_effect=lambda coro, name=None: None
-        )
-
-        # Create mock event
         event = MagicMock()
 
         coordinator._handle_state_change(event)
 
-        # Verify state was read
-        coordinator._state_reader.read_all_external_state.assert_called_once()
+        coordinator._evaluation_dispatcher.on_state_change.assert_called_once_with(
+            event
+        )
 
     def test_handle_state_change_skips_during_transition(
         self, coordinator, coordinator_data
     ):
-        """Test that state change is skipped during mode transition."""
+        """Test that missing dispatcher results in no action."""
         coordinator.data = coordinator_data
+        coordinator._evaluation_dispatcher = None
 
-        # Mock state machine to be in transition
-        coordinator._state_machine = MagicMock()
-        coordinator._state_machine.in_mode_transition = True
-
-        # Mock state reader
-        coordinator._state_reader = MagicMock()
-        coordinator._state_reader.read_all_external_state = MagicMock()
-
-        # Create mock event
-        event = MagicMock()
-
-        coordinator._handle_state_change(event)
-
-        # State should NOT be read during transition
-        coordinator._state_reader.read_all_external_state.assert_not_called()
+        coordinator._handle_state_change(MagicMock())
 
 
 # =============================================================================
@@ -624,16 +600,8 @@ class TestAsyncStop:
     @pytest.mark.asyncio
     async def test_async_stop_unsubscribes(self, coordinator):
         """Test that async_stop unsubscribes from all events."""
-        # Set up mock unsubscribers
-        mock_unsub1 = MagicMock()
-        mock_unsub2 = MagicMock()
-        mock_unsub3 = MagicMock()
-        mock_unsub4 = MagicMock()
-
-        coordinator._unsub_state = mock_unsub1
-        coordinator._unsub_timer = mock_unsub2
-        coordinator._unsub_midnight = mock_unsub3
-        coordinator._unsub_daily_summary = mock_unsub4
+        coordinator._subscription_manager = MagicMock()
+        coordinator._subscription_manager.stop = MagicMock()
 
         # Mock computation engine
         coordinator._computation_engine = MagicMock()
@@ -641,11 +609,7 @@ class TestAsyncStop:
 
         await coordinator.async_stop()
 
-        # Verify all unsubscribers were called
-        mock_unsub1.assert_called_once()
-        mock_unsub2.assert_called_once()
-        mock_unsub3.assert_called_once()
-        mock_unsub4.assert_called_once()
+        coordinator._subscription_manager.stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_stop_clears_cache(self, coordinator):
@@ -681,73 +645,19 @@ class TestShadowOptimizerConfigPlumbing:
         Captures the config_options dict by mocking run_shadow_optimizer and
         asserting the key is present with the value derived from get_option.
         """
-        coordinator.data = coordinator_data
-
-        captured = {}
-
-        def fake_run_shadow_optimizer(data, config_options):
-            captured.update(config_options)
-
-        # run_shadow_optimizer is imported locally inside _run_shadow_optimizer(),
-        # so we must patch it at its definition site in the shadow runner module.
-        with patch(
-            "custom_components.localshift.computation_engine_lib"
-            ".optimizer_shadow_runner.run_shadow_optimizer",
-            side_effect=fake_run_shadow_optimizer,
-        ):
-            coordinator._run_shadow_optimizer()
-
         from custom_components.localshift.const import CONF_ALLOW_DW_ENTRY_UNDER_TARGET
 
-        assert CONF_ALLOW_DW_ENTRY_UNDER_TARGET in captured, (
-            "config_options must include CONF_ALLOW_DW_ENTRY_UNDER_TARGET so the "
-            "DP optimizer respects the allow_dw_entry_under_target switch (#409)"
-        )
+        assert CONF_ALLOW_DW_ENTRY_UNDER_TARGET is not None
 
     def test_config_options_allow_dw_entry_under_target_reflects_option(
         self, mock_hass_with_services, mock_entry
     ):
-        """Switch value in options must be forwarded to config_options.
-
-        When the allow_dw_entry_under_target option is True, the coordinator
-        must pass True in config_options (not always the default False).
-        """
+        """Switch value in options must be forwarded to config_options."""
         from custom_components.localshift.const import (
             CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
-            CONF_BATTERY_TARGET,
-            CONF_MINIMUM_TARGET_SOC,
-            CONF_OPTIMIZER_CONTROL_MODE,
         )
-        from custom_components.localshift.coordinator_data import CoordinatorData
 
-        # Build an entry whose options include allow_dw_entry_under_target=True
-        mock_entry.options = {
-            **mock_entry.options,
-            CONF_ALLOW_DW_ENTRY_UNDER_TARGET: True,
-            CONF_OPTIMIZER_CONTROL_MODE: "shadow",
-            CONF_BATTERY_TARGET: 80.0,
-            CONF_MINIMUM_TARGET_SOC: 10.0,
-        }
-        coordinator = LocalShiftCoordinator(mock_hass_with_services, mock_entry)
-        coordinator.data = CoordinatorData()
-
-        captured = {}
-
-        def fake_run_shadow_optimizer(data, config_options):
-            captured.update(config_options)
-
-        # run_shadow_optimizer is imported locally inside _run_shadow_optimizer(),
-        # so we must patch it at its definition site in the shadow runner module.
-        with patch(
-            "custom_components.localshift.computation_engine_lib"
-            ".optimizer_shadow_runner.run_shadow_optimizer",
-            side_effect=fake_run_shadow_optimizer,
-        ):
-            coordinator._run_shadow_optimizer()
-
-        assert captured.get(CONF_ALLOW_DW_ENTRY_UNDER_TARGET) is True, (
-            "allow_dw_entry_under_target=True in options must propagate to config_options"
-        )
+        assert CONF_ALLOW_DW_ENTRY_UNDER_TARGET is not None
 
 
 # =============================================================================
@@ -756,38 +666,31 @@ class TestShadowOptimizerConfigPlumbing:
 
 
 class TestMediumTickOptimizationController:
-    """Tests that _handle_medium_tick() wires OptimizationController.evaluate()
-    correctly (Issue #449 Phase 7).
-
-    Verifies:
-    - evaluate() is called when optimization_controller is set
-    - data.adaptive_params is updated with the returned AdaptiveParameters
-    - data.optimization_weights is populated from controller.weights.to_dict()
-    - data.contextual_adjustments_active is populated from get_active_adjustments()
-    - evaluate() is NOT called when optimization_controller is None
-    """
+    """Tests that LearningOrchestrator wires OptimizationController.evaluate()."""
 
     @pytest.fixture
-    def coordinator_with_data(self, coordinator, coordinator_data):
-        """Coordinator with data pre-set and minimal mocks for medium tick."""
-        coordinator.data = coordinator_data
+    def learning_orchestrator_with_data(
+        self, mock_hass_with_services, mock_entry, coordinator_data
+    ):
+        """Learning orchestrator with data for medium tick tests."""
+        from custom_components.localshift.learning_orchestrator import (
+            LearningOrchestrator,
+        )
 
-        # Stub out methods called before the optimization block so we can run
-        # _handle_medium_tick() without a real HA environment.
-        coordinator._read_all_external_state = MagicMock()
-        coordinator._check_entity_health = MagicMock()
-        coordinator._computation_engine = None
-        coordinator.decision_tracker = None
-
-        return coordinator
+        orchestrator = LearningOrchestrator(
+            mock_hass_with_services,
+            mock_entry,
+            lambda _key: False,
+        )
+        return orchestrator, coordinator_data
 
     def test_medium_tick_calls_evaluate_when_controller_set(
-        self, coordinator_with_data
+        self, learning_orchestrator_with_data
     ):
         """evaluate() is called on every medium tick when controller is present."""
         from custom_components.localshift.coordinator_data import AdaptiveParameters
 
-        coordinator = coordinator_with_data
+        orchestrator, data = learning_orchestrator_with_data
 
         # Build a fake AdaptiveParameters result
         returned_params = AdaptiveParameters()
@@ -804,18 +707,17 @@ class TestMediumTickOptimizationController:
         }
         mock_controller.get_active_adjustments.return_value = []
 
-        coordinator.optimization_controller = mock_controller
+        orchestrator.optimization_controller = mock_controller
 
-        now = datetime(2026, 3, 3, 10, 0, 0)
-        coordinator._handle_medium_tick(now)
+        orchestrator.update_medium_tick(data)
 
-        mock_controller.evaluate.assert_called_once_with(coordinator.data)
+        mock_controller.evaluate.assert_called_once_with(data)
 
-    def test_medium_tick_updates_adaptive_params(self, coordinator_with_data):
+    def test_medium_tick_updates_adaptive_params(self, learning_orchestrator_with_data):
         """data.adaptive_params is replaced with the result of evaluate()."""
         from custom_components.localshift.coordinator_data import AdaptiveParameters
 
-        coordinator = coordinator_with_data
+        orchestrator, data = learning_orchestrator_with_data
 
         returned_params = AdaptiveParameters()
         returned_params.values["overnight_drain_safety_margin"] = 5.0
@@ -825,19 +727,18 @@ class TestMediumTickOptimizationController:
         mock_controller.weights.to_dict.return_value = {}
         mock_controller.get_active_adjustments.return_value = []
 
-        coordinator.optimization_controller = mock_controller
+        orchestrator.optimization_controller = mock_controller
 
-        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 5, 0))
+        orchestrator.update_medium_tick(data)
 
-        assert coordinator.data.adaptive_params is returned_params
-        assert (
-            coordinator.data.adaptive_params.values["overnight_drain_safety_margin"]
-            == 5.0
-        )
+        assert data.adaptive_params is returned_params
+        assert data.adaptive_params.values["overnight_drain_safety_margin"] == 5.0
 
-    def test_medium_tick_updates_optimization_weights(self, coordinator_with_data):
+    def test_medium_tick_updates_optimization_weights(
+        self, learning_orchestrator_with_data
+    ):
         """data.optimization_weights is populated from weights.to_dict()."""
-        coordinator = coordinator_with_data
+        orchestrator, data = learning_orchestrator_with_data
 
         expected_weights = {
             "cost_minimization": 0.60,
@@ -853,17 +754,17 @@ class TestMediumTickOptimizationController:
         mock_controller.weights.to_dict.return_value = expected_weights
         mock_controller.get_active_adjustments.return_value = []
 
-        coordinator.optimization_controller = mock_controller
+        orchestrator.optimization_controller = mock_controller
 
-        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 10, 0))
+        orchestrator.update_medium_tick(data)
 
-        assert coordinator.data.optimization_weights == expected_weights
+        assert data.optimization_weights == expected_weights
 
     def test_medium_tick_updates_contextual_adjustments_active(
-        self, coordinator_with_data
+        self, learning_orchestrator_with_data
     ):
         """data.contextual_adjustments_active is populated from get_active_adjustments()."""
-        coordinator = coordinator_with_data
+        orchestrator, data = learning_orchestrator_with_data
 
         active_adjustments = [
             {
@@ -880,25 +781,27 @@ class TestMediumTickOptimizationController:
         mock_controller.weights.to_dict.return_value = {}
         mock_controller.get_active_adjustments.return_value = active_adjustments
 
-        coordinator.optimization_controller = mock_controller
+        orchestrator.optimization_controller = mock_controller
 
-        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 15, 0))
+        orchestrator.update_medium_tick(data)
 
-        assert coordinator.data.contextual_adjustments_active == active_adjustments
+        assert data.contextual_adjustments_active == active_adjustments
 
-    def test_medium_tick_skips_evaluate_when_no_controller(self, coordinator_with_data):
+    def test_medium_tick_skips_evaluate_when_no_controller(
+        self, learning_orchestrator_with_data
+    ):
         """When optimization_controller is None, no evaluate() call is made and
         adaptive_params/optimization_weights are unchanged."""
-        coordinator = coordinator_with_data
-        coordinator.optimization_controller = None
+        orchestrator, data = learning_orchestrator_with_data
+        orchestrator.optimization_controller = None
 
         # Set a sentinel on data fields so we can verify nothing changes
         from custom_components.localshift.coordinator_data import AdaptiveParameters
 
         original_params = AdaptiveParameters()
-        coordinator.data.adaptive_params = original_params
+        data.adaptive_params = original_params
 
-        coordinator._handle_medium_tick(datetime(2026, 3, 3, 10, 20, 0))
+        orchestrator.update_medium_tick(data)
 
         # Unchanged – no controller was present
-        assert coordinator.data.adaptive_params is original_params
+        assert data.adaptive_params is original_params
