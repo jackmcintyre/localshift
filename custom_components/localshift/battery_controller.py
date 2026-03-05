@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Awaitable, Callable, Sequence
+from typing import TYPE_CHECKING
 
 from .const import (
     BACKUP_RESERVE_MAX_VALID,
@@ -610,8 +611,7 @@ class BatteryController:
                 TransitionStep(
                     action=lambda: self._service_client.set_backup_reserve(reserve),
                     failure_message=(
-                        "Aborting proactive export: Failed to set backup reserve to %s"
-                        % reserve
+                        f"Aborting proactive export: Failed to set backup reserve to {reserve}"
                     ),
                 ),
                 TransitionStep(
