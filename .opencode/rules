@@ -7,6 +7,7 @@
 Git hooks in `.githooks/` automatically block:
 - Direct commits on main (pre-commit hook)
 - Pushes from main branch (pre-push hook)
+- Checkout to main with uncommitted changes (post-checkout hook)
 
 Bypass attempts are logged to `.git-bypass.log` for audit.
 
@@ -39,6 +40,19 @@ Before any git operation, check:
 git branch --show-current  # Should show issue/* or feature/*, NOT main
 git worktree list          # Should show you're in a worktree
 ```
+
+## HARD STOP SIGNALS
+
+**When user issues any of these commands, IMMEDIATELY stop all work:**
+
+| Trigger | Response |
+|---------|----------|
+| "wrong branch" | Check git branch immediately |
+| "stop" / "wait" / "hold on" | Halt all operations |
+| "not on main" | Verify branch status |
+| ALL CAPS warnings | Treat as urgent hard stop |
+
+**Protocol:** Acknowledge → Verify → Wait for direction
 
 ## Emergency Bypass
 
