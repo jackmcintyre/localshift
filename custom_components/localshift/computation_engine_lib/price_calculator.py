@@ -508,12 +508,14 @@ class PriceCalculator:
         # Include tomorrow's forecast when target is tomorrow morning
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
 
+        # Compute target datetime (demand window start)
+        target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
         for period in all_solcast:
             period_start = self._parse_forecast_dt(period.get("period_start"))
             if period_start is None:
                 continue
             period_start_local = dt_util.as_local(period_start)
-            if period_start_local >= now_dt and period_start_local.hour <= target_hour:
+            if period_start_local >= now_dt and period_start_local < target_dt:
                 solar_kwh_val = float(period.get("pv_estimate", 0))
                 if solar_kwh_val <= 0:
                     continue
