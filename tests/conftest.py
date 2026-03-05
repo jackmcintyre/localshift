@@ -37,6 +37,7 @@ except ImportError:
 # =============================================================================
 
 # Import asyncio for sleep mocking
+from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -79,12 +80,22 @@ def mock_battery_sleep():
             # validate_transition will return instantly
             ...
     """
-    with patch(
-        "custom_components.localshift.battery_controller.asyncio.sleep",
-        new_callable=AsyncMock,
-    ) as mock:
-        mock.return_value = None
-        yield mock
+    with ExitStack() as stack:
+        transition_sleep = stack.enter_context(
+            patch(
+                "custom_components.localshift.transition_validator.asyncio.sleep",
+                new_callable=AsyncMock,
+            )
+        )
+        service_sleep = stack.enter_context(
+            patch(
+                "custom_components.localshift.powerwall_service_client.asyncio.sleep",
+                new_callable=AsyncMock,
+            )
+        )
+        transition_sleep.return_value = None
+        service_sleep.return_value = None
+        yield transition_sleep
 
 
 # =============================================================================

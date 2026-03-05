@@ -12,16 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers.event import (
-    async_track_state_change_event,
-    async_track_time_change,
-    async_track_time_interval,
-)
 
-from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
-from .computation_engine_lib.optimization_controller import OptimizationController
-from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
-from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
@@ -40,6 +31,10 @@ from .const import (
     BatteryMode,
 )
 from .coordinator_data import CoordinatorData
+from .evaluation_dispatcher import EvaluationDispatcher
+from .forecast_bootstrapper import ForecastBootstrapper
+from .learning_orchestrator import LearningOrchestrator
+from .subscription_manager import SubscriptionManager
 
 if TYPE_CHECKING:
     from .battery_controller import BatteryController
@@ -89,17 +84,6 @@ class LocalShiftCoordinator:
         self.entry = entry
         self.data = CoordinatorData()
         self._listeners: list[CALLBACK_TYPE] = []
-        self._unsub_state: CALLBACK_TYPE | None = None
-        self._unsub_timer: CALLBACK_TYPE | None = (
-            None  # Legacy - kept for compatibility
-        )
-        self._unsub_midnight: CALLBACK_TYPE | None = None
-        self._unsub_daily_summary: CALLBACK_TYPE | None = None
-        self._unsub_learning_save: CALLBACK_TYPE | None = None
-        # Tiered periodic task timers (Issue #291)
-        self._unsub_timer_fast: CALLBACK_TYPE | None = None
-        self._unsub_timer_medium: CALLBACK_TYPE | None = None
-        self._unsub_timer_slow: CALLBACK_TYPE | None = None
         self._update_callbacks: list[CALLBACK_TYPE] = []
 
         # Switch state bridge — switches read/write via these methods
@@ -115,25 +99,22 @@ class LocalShiftCoordinator:
         self._entity_validator: EntityValidator | None = None
 
         # Decision outcome tracker for learning system (Issue #170 Phase 1)
-        self.decision_tracker: DecisionOutcomeTracker | None = None
+        self.decision_tracker = None
 
         # Parameter optimizer for learning system (Issue #170 Phase 2)
-        self.param_optimizer: ParameterOptimizer | None = None
+        self.param_optimizer = None
 
         # Pattern analyzer for learning system (Issue #170 Phase 3)
-        self.pattern_analyzer: PatternAnalyzer | None = None
+        self.pattern_analyzer = None
 
         # Optimization controller for learning system (Issue #170 Phase 4)
-        self.optimization_controller: OptimizationController | None = None
+        self.optimization_controller = None
 
-        # Pattern analysis tracking
-        self._last_pattern_analysis: datetime | None = None
-        self._days_since_pattern_analysis: int = 0
-
-        # Solcast startup retry tracking
-        self._solcast_retry_count: int = 0
-        self._solcast_ready: bool = False
-        self._forecast_computed_on_startup: bool = False
+        # Orchestrators
+        self._learning_orchestrator: LearningOrchestrator | None = None
+        self._forecast_bootstrapper: ForecastBootstrapper | None = None
+        self._evaluation_dispatcher: EvaluationDispatcher | None = None
+        self._subscription_manager: SubscriptionManager | None = None
 
         # Solar energy tracking for backfill (Issue #513)
         self._last_solar_power_kw: float = 0.0
@@ -226,39 +207,19 @@ class LocalShiftCoordinator:
             decision_tracker=None,  # Will be set after tracker is initialized
         )
 
-        # Initialize decision outcome tracker for learning system (Issue #170 Phase 1)
-        self.decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
-        await self.decision_tracker.async_load()
+        self._learning_orchestrator = LearningOrchestrator(
+            self.hass,
+            self.entry,
+            self.get_switch_state,
+        )
+        await self._learning_orchestrator.async_initialize()
 
-        # Initialize parameter optimizer for learning system (Issue #170 Phase 2)
-        self.param_optimizer = ParameterOptimizer(self.hass, self.entry.entry_id)
-        await self.param_optimizer.async_load()
-
-        # Initialize pattern analyzer for learning system (Issue #170 Phase 3)
-        self.pattern_analyzer = PatternAnalyzer(self.hass, self.entry.entry_id)
-        await self.pattern_analyzer.async_load()
-
-        # Initialize optimization controller for learning system (Issue #170 Phase 4)
-        # Requires all three learning components to be initialized first
-        if (
-            self.decision_tracker is not None
-            and self.param_optimizer is not None
-            and self.pattern_analyzer is not None
-        ):
-            self.optimization_controller = OptimizationController(
-                self.hass,
-                self.entry.entry_id,
-                self.decision_tracker,
-                self.param_optimizer,
-                self.pattern_analyzer,
-            )
-            await self.optimization_controller.async_load()
-
-            # Sync learning enabled state from switch
-            from .const import SWITCH_ENABLE_LEARNING
-
-            learning_enabled = self.get_switch_state(SWITCH_ENABLE_LEARNING)
-            self.optimization_controller.set_learning_enabled(learning_enabled)
+        self.decision_tracker = self._learning_orchestrator.decision_tracker
+        self.param_optimizer = self._learning_orchestrator.param_optimizer
+        self.pattern_analyzer = self._learning_orchestrator.pattern_analyzer
+        self.optimization_controller = (
+            self._learning_orchestrator.optimization_controller
+        )
 
         # Initialize solar forecast accuracy tracker (Issue #378)
         from .computation_engine_lib.solar_accuracy import SolarAccuracyTracker
@@ -274,8 +235,8 @@ class LocalShiftCoordinator:
                 self.solar_accuracy_tracker
             )
 
-        # Wire the decision tracker to the state machine
-        self._state_machine._decision_tracker = self.decision_tracker
+        if self._learning_orchestrator is not None:
+            self._learning_orchestrator.attach_state_machine(self._state_machine)
 
         # Set battery target SOC in coordinator data for decision scoring
         self.data.battery_target_soc = float(
@@ -308,48 +269,35 @@ class LocalShiftCoordinator:
             # self._get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
         ]
 
-        # Subscribe to state changes
-        self._unsub_state = async_track_state_change_event(
-            self.hass, monitored_entities, self._handle_state_change
+        self._evaluation_dispatcher = EvaluationDispatcher(
+            self.hass,
+            self._get_entity_id,
+            self._read_all_external_state,
+            self._notify_listeners,
+            self._evaluate_state_machine,
+            self._state_machine,
+            STALE_PRICE_THRESHOLD,
         )
 
-        # Tiered periodic task timers (Issue #291)
-        # FAST: 1-minute - time-sensitive control tasks
-        self._unsub_timer_fast = async_track_time_interval(
-            self.hass, self._handle_fast_tick, PERIODIC_INTERVAL_FAST
-        )
-        # MEDIUM: 5-minute - learning and monitoring tasks
-        self._unsub_timer_medium = async_track_time_interval(
-            self.hass, self._handle_medium_tick, PERIODIC_INTERVAL_MEDIUM
-        )
-        # SLOW: 30-minute - slow-changing data tasks
-        self._unsub_timer_slow = async_track_time_interval(
-            self.hass, self._handle_slow_tick, PERIODIC_INTERVAL_SLOW
-        )
-
-        # Midnight reset (replaces A12): reset cost accumulators + target flag
-        self._unsub_midnight = async_track_time_change(
-            self.hass, self._handle_midnight_reset, hour=0, minute=0, second=0
-        )
-
-        # Daily summary notification (replaces A15): fires at DW end time
         dw_end = self._parse_time_option(
-            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+            CONF_DEMAND_WINDOW_END,
+            DEFAULT_DEMAND_WINDOW_END,
         )
-        self._unsub_daily_summary = async_track_time_change(
+        self._subscription_manager = SubscriptionManager(
             self.hass,
+            self._handle_state_change,
+            self._handle_fast_tick,
+            self._handle_medium_tick,
+            self._handle_slow_tick,
+            self._handle_midnight_reset,
             self._handle_daily_summary,
-            hour=dw_end.hour,
-            minute=dw_end.minute,
-            second=0,
-        )
-
-        # Periodic learning data save (every 5 minutes) to prevent data loss on restart
-        self._unsub_learning_save = async_track_time_interval(
-            self.hass,
             self._handle_learning_save,
+            PERIODIC_INTERVAL_FAST,
+            PERIODIC_INTERVAL_MEDIUM,
+            PERIODIC_INTERVAL_SLOW,
             LEARNING_SAVE_INTERVAL,
         )
+        self._subscription_manager.start(monitored_entities, dw_end)
 
         # Read initial state and compute
         self._read_all_external_state()
@@ -376,9 +324,21 @@ class LocalShiftCoordinator:
         await self._computation_engine.async_initialize_forecast_history_storage()
         await self._computation_engine.async_load_forecast_history(self.data)
 
+        self._forecast_bootstrapper = ForecastBootstrapper(
+            self.hass,
+            self.data,
+            self._get_entity_id,
+            self._read_all_external_state,
+            self._compute_derived_values,
+            self._notify_listeners,
+            self._evaluate_state_machine,
+            SOLCAST_STARTUP_RETRY_DELAY,
+            SOLCAST_MAX_STARTUP_RETRIES,
+        )
+
         # Wait for Solcast data to be ready before computing forecasts
         # This prevents errors when Solcast hasn't initialized yet
-        await self._wait_for_solcast_and_compute()
+        await self._forecast_bootstrapper.wait_for_solcast_and_compute()
 
         # Refresh weather forecast (startup catch-up)
         await self._refresh_weather_forecast()
@@ -395,10 +355,13 @@ class LocalShiftCoordinator:
         )
 
         # Log if forecast was computed during startup
-        if self._forecast_computed_on_startup:
+        if (
+            self._forecast_bootstrapper is not None
+            and self._forecast_bootstrapper.forecast_computed_on_startup
+        ):
             _LOGGER.info(
                 "Initial forecast computed successfully on startup (after %d Solcast retries)",
-                self._solcast_retry_count,
+                self._forecast_bootstrapper.retry_count,
             )
 
     async def async_stop(self) -> None:
@@ -406,27 +369,8 @@ class LocalShiftCoordinator:
 
         Saves all learning data to storage before shutdown to prevent data loss.
         """
-        # Unsubscribe all timers (including tiered timers from Issue #291)
-        for unsub in (
-            self._unsub_state,
-            self._unsub_timer,  # Legacy
-            self._unsub_midnight,
-            self._unsub_daily_summary,
-            self._unsub_learning_save,
-            self._unsub_timer_fast,
-            self._unsub_timer_medium,
-            self._unsub_timer_slow,
-        ):
-            if unsub:
-                unsub()
-        self._unsub_state = None
-        self._unsub_timer = None
-        self._unsub_midnight = None
-        self._unsub_daily_summary = None
-        self._unsub_learning_save = None
-        self._unsub_timer_fast = None
-        self._unsub_timer_medium = None
-        self._unsub_timer_slow = None
+        if self._subscription_manager is not None:
+            self._subscription_manager.stop()
 
         # Save all learning data to storage before shutdown
         await self._save_learning_data()
@@ -442,44 +386,8 @@ class LocalShiftCoordinator:
 
         Called on shutdown and periodically to prevent data loss.
         """
-        saved_components = []
-
-        # Save decision outcomes
-        if self.decision_tracker is not None:
-            try:
-                await self.decision_tracker.async_save()
-                saved_components.append(
-                    f"decisions:{self.decision_tracker.completed_count}"
-                )
-            except Exception as e:
-                _LOGGER.error("Failed to save decision tracker: %s", e)
-
-        # Save parameter optimizer
-        if self.param_optimizer is not None:
-            try:
-                await self.param_optimizer.async_save()
-                saved_components.append("param_optimizer")
-            except Exception as e:
-                _LOGGER.error("Failed to save parameter optimizer: %s", e)
-
-        # Save pattern analyzer
-        if self.pattern_analyzer is not None:
-            try:
-                await self.pattern_analyzer.async_save()
-                saved_components.append("pattern_analyzer")
-            except Exception as e:
-                _LOGGER.error("Failed to save pattern analyzer: %s", e)
-
-        # Save optimization controller
-        if self.optimization_controller is not None:
-            try:
-                await self.optimization_controller.async_save()
-                saved_components.append("optimization_controller")
-            except Exception as e:
-                _LOGGER.error("Failed to save optimization controller: %s", e)
-
-        if saved_components:
-            _LOGGER.info("Learning data saved: %s", ", ".join(saved_components))
+        if self._learning_orchestrator is not None:
+            await self._learning_orchestrator.async_save_all()
 
     @callback
     def _handle_learning_save(self, now: datetime) -> None:
@@ -488,10 +396,8 @@ class LocalShiftCoordinator:
         Fires every 5 minutes to ensure data is persisted even if HA
         restarts unexpectedly.
         """
-        self.hass.async_create_task(
-            self._save_learning_data(),
-            "localshift_periodic_learning_save",
-        )
+        if self._learning_orchestrator is not None:
+            self._learning_orchestrator.handle_periodic_save()
 
     # ------------------------------------------------------------------
     # Entity update subscription (for sensor/binary_sensor entities)
@@ -565,124 +471,6 @@ class LocalShiftCoordinator:
             for warning in self.data.entity_warnings:
                 _LOGGER.debug("Entity health warning: %s", warning)
 
-    def _check_solcast_ready(self) -> bool:
-        """Check if Solcast forecast data is available and valid.
-
-        Returns True if Solcast data is ready, False otherwise.
-        Also updates forecast_ready and forecast_status in CoordinatorData (Issue #319).
-        """
-        # Check if today's forecast has valid data
-        today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)
-        today_state = self.hass.states.get(today_entity)
-
-        if today_state is None:
-            _LOGGER.debug("Solcast today entity not found: %s", today_entity)
-            self.data.forecast_ready = False
-            self.data.forecast_status = "stale"
-            return False
-
-        if today_state.state in ("unknown", "unavailable", None, ""):
-            _LOGGER.debug(
-                "Solcast today entity state is %s, waiting for data",
-                today_state.state,
-            )
-            self.data.forecast_ready = False
-            self.data.forecast_status = "stale"
-            return False
-
-        # Check if the forecast attribute has actual forecast data
-        forecast_data = today_state.attributes.get("detailedForecast")
-        if not forecast_data or not isinstance(forecast_data, list):
-            _LOGGER.debug("Solcast today forecast attribute is empty or invalid")
-            self.data.forecast_ready = False
-            self.data.forecast_status = "partial"
-            return False
-
-        # Check if we have at least some forecast entries
-        if len(forecast_data) == 0:
-            _LOGGER.debug("Solcast today forecast has no entries")
-            self.data.forecast_ready = False
-            self.data.forecast_status = "partial"
-            return False
-
-        # Check if we have enough entries for meaningful forecasting (at least 4 hours = 8 entries)
-        if len(forecast_data) < 8:
-            _LOGGER.debug(
-                "Solcast today forecast has only %d entries (need 8+ for full forecast)",
-                len(forecast_data),
-            )
-            self.data.forecast_ready = True  # Partial but usable
-            self.data.forecast_status = "partial"
-            return True
-
-        _LOGGER.info(
-            "Solcast forecast data is ready (%d entries for today)",
-            len(forecast_data),
-        )
-        self.data.forecast_ready = True
-        self.data.forecast_status = "ready"
-        return True
-
-    async def _wait_for_solcast_and_compute(self) -> None:
-        """Wait for Solcast data to be ready, then compute derived values.
-
-        This is called at startup and retries if Solcast data is not immediately available.
-        """
-        if self._check_solcast_ready():
-            self._solcast_ready = True
-            _LOGGER.info("Solcast data available, proceeding with forecast computation")
-            self._compute_derived_values()
-            self._notify_listeners()
-
-            # Trigger immediate state machine evaluation for fast battery control on startup
-            await self._evaluate_state_machine()
-
-            self._forecast_computed_on_startup = True
-            return
-
-        # Solcast not ready - check if we can retry
-        if self._solcast_retry_count >= SOLCAST_MAX_STARTUP_RETRIES:
-            _LOGGER.warning(
-                "Solcast data not available after %d retries. "
-                "Forecast will use 0 kWh solar until Solcast provides data. "
-                "Check Solcast integration status.",
-                SOLCAST_MAX_STARTUP_RETRIES,
-            )
-            # Still compute with whatever data we have
-            self._compute_derived_values()
-            self._notify_listeners()
-
-            # Trigger state machine evaluation even with incomplete data
-            await self._evaluate_state_machine()
-
-            self._forecast_computed_on_startup = True
-            return
-
-        self._solcast_retry_count += 1
-        _LOGGER.info(
-            "Solcast data not ready yet (attempt %d/%d), retrying in %d seconds",
-            self._solcast_retry_count,
-            SOLCAST_MAX_STARTUP_RETRIES,
-            SOLCAST_STARTUP_RETRY_DELAY.total_seconds(),
-        )
-
-        # Schedule a retry
-        self.hass.async_create_task(
-            self._retry_solcast_check(),
-            "localshift_solcast_retry",
-        )
-
-    async def _retry_solcast_check(self) -> None:
-        """Retry checking Solcast data after a delay."""
-        import asyncio
-
-        await asyncio.sleep(SOLCAST_STARTUP_RETRY_DELAY.total_seconds())
-
-        # Re-read state before checking
-        self._read_all_external_state()
-
-        await self._wait_for_solcast_and_compute()
-
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -690,27 +478,10 @@ class LocalShiftCoordinator:
     @callback
     def _handle_state_change(self, _event: Event) -> None:
         """Handle a state change from a monitored entity."""
-        if self._state_machine is None:
+        if self._evaluation_dispatcher is None:
             return
 
-        # Skip re-evaluation if we're in the middle of a mode transition
-        # This prevents feedback loops when we programmatically change entities
-        if self._state_machine.in_mode_transition:
-            _LOGGER.debug("Skipping re-evaluation during mode transition")
-            return
-
-        # Read raw entity values immediately so sensors reflect the new state.
-        # Derived-value computation (_compute_derived_values) is intentionally
-        # NOT called here — it happens inside the evaluate lock in
-        # _evaluate_state_machine() so that queued evaluations always use
-        # fresh post-transition state rather than a stale snapshot.
-        self._read_all_external_state()
-        self._notify_listeners()
-
-        self.hass.async_create_task(
-            self._evaluate_state_machine(),
-            "localshift_evaluate_state_change",
-        )
+        self._evaluation_dispatcher.on_state_change(_event)
 
     @callback
     def _handle_periodic_tick(self, now: datetime) -> None:
@@ -737,7 +508,7 @@ class LocalShiftCoordinator:
         # Cost accumulation uses the raw state we just read (sync, no lock needed)
         self._accumulate_costs()
 
-        # Skip state machine evaluation during startup grace period
+        # Skip evaluation dispatch during startup grace period
         # This prevents errors when entities haven't populated yet (Issue #551)
         if self._is_in_startup_grace():
             _LOGGER.debug(
@@ -745,25 +516,8 @@ class LocalShiftCoordinator:
             )
             return
 
-        # Check for stale price sensor (Issue #291)
-        # If price hasn't updated in 10+ minutes, trigger state machine evaluation
-        stale_price = self._check_stale_price()
-
-        # Trigger state machine evaluation if price is stale
-        # This is a safety net - normally state changes trigger evaluation
-        if stale_price:
-            _LOGGER.info("Stale price detected, triggering state machine evaluation")
-            self.hass.async_create_task(
-                self._evaluate_state_machine(),
-                "localshift_evaluate_stale_price",
-            )
-        else:
-            # Trigger state machine evaluation periodically (every minute)
-            # This replaces the reactive SOC triggers (Issue #524)
-            self.hass.async_create_task(
-                self._evaluate_state_machine(),
-                "localshift_evaluate_periodic",
-            )
+        if self._evaluation_dispatcher is not None:
+            self._evaluation_dispatcher.on_fast_tick(now)
 
     @callback
     def _handle_medium_tick(self, now: datetime) -> None:
@@ -802,34 +556,8 @@ class LocalShiftCoordinator:
                 "localshift_fetch_historical_load",
             )
 
-        # Backfill decision outcomes and update performance metrics (Issue #170 Phase 1)
-        if self.decision_tracker is not None:
-            self.decision_tracker.backfill_outcomes(self.data)
-
-            self.data.performance_metrics = self.decision_tracker.get_daily_summary()
-            self.data.recent_decision_log = self.decision_tracker.get_decision_log(
-                limit=20
-            )
-
-            # Save decisions if backfill occurred
-            if self.decision_tracker.save_pending:
-                self.hass.async_create_task(
-                    self.decision_tracker.async_save(),
-                    "localshift_save_decision_outcomes",
-                )
-                self.decision_tracker.clear_save_pending()
-
-            # Run parameter optimization (Issue #170 Phase 2)
-            if self.param_optimizer is not None:
-                completed_count = len(self.decision_tracker._completed_decisions)
-                if self.param_optimizer.should_update(completed_count):
-                    decisions = self.decision_tracker.get_recent_decisions(hours=168)
-                    current_7d_score = (
-                        self.data.performance_metrics.avg_decision_score_7d
-                    )
-                    self.data.adaptive_params = self.param_optimizer.optimize(
-                        decisions, current_7d_score
-                    )
+        if self._learning_orchestrator is not None:
+            self._learning_orchestrator.update_medium_tick(self.data)
 
         # Backfill solar forecast accuracy for completed periods (Issue #378)
         if (
@@ -842,23 +570,6 @@ class LocalShiftCoordinator:
             # For updating solar bias metrics from tracker and handling backfills if needed
             # (backfills would happen somewhere when we have historical energy data)
             pass
-
-        # Apply contextual overrides from OptimizationController (Issue #449 Phase 7)
-        # This merges real-time adjustments on top of Thompson-sampled base params
-        if self.optimization_controller is not None:
-            self.data.adaptive_params = self.optimization_controller.evaluate(self.data)
-            # Update observability fields for sensors
-            self.data.optimization_weights = (
-                self.optimization_controller.weights.to_dict()
-            )
-            # Get and update active adjustments
-            active_adjustments = self.optimization_controller.get_active_adjustments()
-            self.data.contextual_adjustments_active = active_adjustments
-            if active_adjustments:
-                _LOGGER.debug(
-                    "Contextual overrides applied: %d adjustments active",
-                    len(active_adjustments),
-                )
 
         # Update solar bias metrics from tracker (Issue #378)
         if (
@@ -963,45 +674,6 @@ class LocalShiftCoordinator:
         self._last_solar_power_timestamp = now
         self._last_solar_power_kw = current_power
 
-    def _check_stale_price(self) -> bool:
-        """Check if price sensor hasn't updated in STALE_PRICE_THRESHOLD.
-
-        This is a safety net that triggers state machine evaluation if the
-        price sensor stops updating. Normally, state changes trigger evaluation
-        automatically, but if the sensor becomes stale, we need to catch it.
-
-        Returns:
-            True if price sensor is stale, False otherwise.
-        """
-        price_entity = self._get_entity_id(CONF_PRICING_GENERAL_PRICE)
-        price_state = self.hass.states.get(price_entity)
-
-        if price_state is None:
-            _LOGGER.debug("Price entity not found: %s", price_entity)
-            return False
-
-        if price_state.state in ("unknown", "unavailable", None, ""):
-            _LOGGER.debug("Price entity state is invalid: %s", price_state.state)
-            return False
-
-        # Check last_updated time
-        if price_state.last_updated:
-            from homeassistant.util import dt as dt_util
-
-            now = dt_util.now()
-            age = now - price_state.last_updated
-
-            if age > STALE_PRICE_THRESHOLD:
-                _LOGGER.warning(
-                    "Price sensor %s is stale (last updated %s ago). "
-                    "This may indicate an issue with the pricing integration.",
-                    price_entity,
-                    age,
-                )
-                return True
-
-        return False
-
     @callback
     def _handle_midnight_reset(self, now: datetime) -> None:
         """Reset daily cost accumulators and target flag at midnight.
@@ -1014,40 +686,8 @@ class LocalShiftCoordinator:
         self.data.battery_charge_cost = 0.0
         self.data.target_reached_today = False
 
-        # Save decision outcomes to storage (Issue #170 Phase 1)
-        if self.decision_tracker is not None:
-            self.hass.async_create_task(
-                self.decision_tracker.async_save(),
-                "localshift_save_decision_outcomes",
-            )
-
-        # Save parameter optimizer state (Issue #170 Phase 2)
-        if self.param_optimizer is not None:
-            self.hass.async_create_task(
-                self.param_optimizer.async_save(),
-                "localshift_save_param_optimizer",
-            )
-
-        # Run weekly pattern analysis (Issue #170 Phase 3)
-        # Analyze patterns every 7 days to generate bias corrections
-        self._days_since_pattern_analysis += 1
-        if (
-            self.pattern_analyzer is not None
-            and self.decision_tracker is not None
-            and self._days_since_pattern_analysis >= 7
-        ):
-            self._days_since_pattern_analysis = 0
-            self.hass.async_create_task(
-                self._run_pattern_analysis(),
-                "localshift_pattern_analysis",
-            )
-
-        # Save pattern analyzer state (Issue #170 Phase 3)
-        if self.pattern_analyzer is not None:
-            self.hass.async_create_task(
-                self.pattern_analyzer.async_save(),
-                "localshift_save_pattern_analyzer",
-            )
+        if self._learning_orchestrator is not None:
+            self._learning_orchestrator.handle_midnight_reset(self.data)
 
         self._notify_listeners()
         _LOGGER.info("Midnight reset: cost accumulators and target flag")
@@ -1135,27 +775,14 @@ class LocalShiftCoordinator:
         Called when options are updated to pick up new notification time
         without requiring a restart.
         """
-        # Unsubscribe existing timer if present
-        if self._unsub_daily_summary is not None:
-            self._unsub_daily_summary()
-            self._unsub_daily_summary = None
+        if self._subscription_manager is None:
+            return
 
-        # Schedule new timer with updated time
         dw_end = self._parse_time_option(
-            CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+            CONF_DEMAND_WINDOW_END,
+            DEFAULT_DEMAND_WINDOW_END,
         )
-        self._unsub_daily_summary = async_track_time_change(
-            self.hass,
-            self._handle_daily_summary,
-            hour=dw_end.hour,
-            minute=dw_end.minute,
-            second=0,
-        )
-        _LOGGER.info(
-            "Daily summary timer rescheduled for %02d:%02d",
-            dw_end.hour,
-            dw_end.minute,
-        )
+        self._subscription_manager.reschedule_daily_summary(dw_end)
 
     async def _evaluate_state_machine(self) -> None:
         """Compare desired mode with commanded mode and execute transitions."""
@@ -1296,57 +923,3 @@ class LocalShiftCoordinator:
                 "Updated weather forecast: %d hours of temperature data",
                 len(self.data.weather_temperature_forecast),
             )
-
-    async def _run_pattern_analysis(self) -> None:
-        """Run weekly pattern analysis to generate bias corrections.
-
-        Issue #170 Phase 3: Analyzes decision outcomes by dimension buckets
-        to identify systematic biases and generate corrections for the
-        parameter optimizer.
-        """
-        if self.pattern_analyzer is None or self.decision_tracker is None:
-            return
-
-        # Get recent decisions for analysis (last 30 days)
-        decisions = self.decision_tracker.get_recent_decisions(hours=720)
-
-        if len(decisions) < 50:
-            _LOGGER.info(
-                "Pattern analysis skipped: only %d decisions (need 50+)",
-                len(decisions),
-            )
-            return
-
-        # Run analysis (PatternAnalyzer.analyze only takes decisions)
-        report = self.pattern_analyzer.analyze(decisions)
-
-        # Update coordinator data with results
-        self.data.pattern_report_summary = report.get_summary()
-        self.data.active_bias_corrections = [
-            bc.to_dict() for bc in report.biases_detected
-        ]
-
-        # Update learning status based on data quality
-        total_samples = report.data_points_analyzed
-        if total_samples >= 100:
-            self.data.learning_status = "optimizing"
-        elif total_samples >= 50:
-            self.data.learning_status = "tuning"
-        else:
-            self.data.learning_status = "observing"
-
-        # Pass bias corrections to parameter optimizer
-        if self.param_optimizer is not None and report.biases_detected:
-            self.param_optimizer.set_bias_corrections(report.biases_detected)
-            _LOGGER.info(
-                "Pattern analysis complete: %d bias corrections applied",
-                len(report.biases_detected),
-            )
-
-        self._last_pattern_analysis = datetime.now()
-
-        _LOGGER.info(
-            "Pattern analysis complete: %d decisions analyzed, %d biases detected",
-            report.data_points_analyzed,
-            len(report.biases_detected),
-        )

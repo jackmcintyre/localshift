@@ -546,14 +546,12 @@ def create_sample_solcast_forecast(
         if hour >= 24:
             period_start = period_start.replace(day=period_start.day + 1)
 
-        forecasts.append(
-            {
-                "period_start": period_start.isoformat(),
-                "pv_estimate": round(pv_estimate, 3),
-                "pv_estimate10": round(pv_estimate * 0.9, 3),
-                "pv_estimate90": round(pv_estimate * 1.1, 3),
-            }
-        )
+        forecasts.append({
+            "period_start": period_start.isoformat(),
+            "pv_estimate": round(pv_estimate, 3),
+            "pv_estimate10": round(pv_estimate * 0.9, 3),
+            "pv_estimate90": round(pv_estimate * 1.1, 3),
+        })
 
     return forecasts
 
@@ -607,17 +605,15 @@ def create_sample_amber_price_forecast(
         from datetime import timedelta
 
         end_time = period_start + timedelta(minutes=30)
-        forecasts.append(
-            {
-                "duration_minutes": 30,
-                "date": period_start.strftime("%Y-%m-%d"),
-                "nem_time": period_start.strftime("%H:%M"),
-                "start_time": period_start.isoformat(),
-                "end_time": end_time.isoformat(),
-                "per_kwh": round(price, 4),
-                "spot_per_kwh": round(price * 0.9, 4),
-                "renewables": 0.5,
-            }
-        )
+        forecasts.append({
+            "duration_minutes": 30,
+            "date": period_start.strftime("%Y-%m-%d"),
+            "nem_time": period_start.strftime("%H:%M"),
+            "start_time": period_start.isoformat(),
+            "end_time": end_time.isoformat(),
+            "per_kwh": round(price, 4),
+            "spot_per_kwh": round(price * 0.9, 4),
+            "renewables": 0.5,
+        })
 
     return forecasts

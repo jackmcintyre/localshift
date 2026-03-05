@@ -23,7 +23,6 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     SlotContext,
     _build_soc_grid,
     _map_soc_to_bin,
-    _simulate_max_soc_in_demand_window,
 )
 
 # ---------------------------------------------------------------------------

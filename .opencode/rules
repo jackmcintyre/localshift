@@ -27,6 +27,28 @@ Bypass attempts are logged to `.git-bypass.log` for audit.
 
 4. **Push and create a PR** when done
 
+5. **Monitor CI checks** after PR creation (see `.agents/rules/pr-ci-checks.md`)
+
+## PR Creation & CI Monitoring
+
+**After creating a PR with `gh pr create`:**
+
+1. **Extract PR number** from output URL
+2. **Check CI status immediately:**
+   ```bash
+   gh pr checks <PR_NUMBER>
+   ```
+
+3. **Ask user preference:**
+   - Wait for CI results (monitor every 30s)
+   - Continue working (check periodically)
+
+4. **Report results when checks complete:**
+   - ✅ All passed: PR ready for review
+   - ❌ Failed: Show failure details, offer to fix
+
+**See `.agents/rules/pr-ci-checks.md` for full workflow details.**
+
 ## If You See Changes on Main
 
 - DO NOT commit them
