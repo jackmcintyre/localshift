@@ -291,14 +291,12 @@ class OptimizerPlanSensor(LocalShiftSensorBase):
 
         slots = []
         for dec in decisions:
-            slots.append(
-                {
-                    "slot_idx": dec.get("slot_index"),
-                    "action": dec.get("action"),
-                    "reason_code": dec.get("reason_code"),
-                    "objective_terms": dec.get("objective_terms", {}),
-                }
-            )
+            slots.append({
+                "slot_idx": dec.get("slot_index"),
+                "action": dec.get("action"),
+                "reason_code": dec.get("reason_code"),
+                "objective_terms": dec.get("objective_terms", {}),
+            })
 
         return {
             "slots": slots,
@@ -338,37 +336,29 @@ class ForecastPricesSensor(LocalShiftSensorBase):
             for dec in decisions:
                 ts = dec.get("timestamp_iso", "")
                 time_str = ts[11:16] if len(ts) >= 16 else ""
-                buy_prices.append(
-                    {
-                        "time": time_str,
-                        "price": dec.get("buy_price"),
-                    }
-                )
-                sell_prices.append(
-                    {
-                        "time": time_str,
-                        "price": dec.get("sell_price"),
-                    }
-                )
+                buy_prices.append({
+                    "time": time_str,
+                    "price": dec.get("buy_price"),
+                })
+                sell_prices.append({
+                    "time": time_str,
+                    "price": dec.get("sell_price"),
+                })
         else:
             for slot in d.general_forecast:
                 ts = slot.get("timestamp", "")
                 time_str = ts[11:16] if len(ts) >= 16 else ""
-                buy_prices.append(
-                    {
-                        "time": time_str,
-                        "price": slot.get("price"),
-                    }
-                )
+                buy_prices.append({
+                    "time": time_str,
+                    "price": slot.get("price"),
+                })
             for slot in d.feed_in_forecast:
                 ts = slot.get("timestamp", "")
                 time_str = ts[11:16] if len(ts) >= 16 else ""
-                sell_prices.append(
-                    {
-                        "time": time_str,
-                        "price": slot.get("price"),
-                    }
-                )
+                sell_prices.append({
+                    "time": time_str,
+                    "price": slot.get("price"),
+                })
 
         return {
             "buy_prices": buy_prices,
