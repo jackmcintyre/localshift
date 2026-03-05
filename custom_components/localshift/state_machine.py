@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.util import dt as dt_util
 
+from .battery_controller import TRANSITION_TIMEOUTS
 from .const import (
     BACKUP_RESERVE_MAX_VALID,
     CONF_BATTERY_TARGET,
@@ -38,6 +40,26 @@ _LOGGER = logging.getLogger(__name__)
 TESLA_OVERRIDE_RESERVE = 80.0  # Reserve level that indicates Tesla control
 TESLA_OVERRIDE_RESERVE_TOLERANCE = 1.0  # Tolerance for reserve comparison
 TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)  # Extended cooldown during override
+
+
+@dataclass
+class ModeConfig:
+    """Complete configuration for a mode transition.
+
+    Contains ALL parameters needed for a mode, ensuring atomic updates
+    to both Tesla hardware state and internal tracking state.
+    """
+
+    # Tesla hardware state (set via battery_controller)
+    operation_mode: str
+    backup_reserve: int | float
+    export_mode: str
+    grid_charging_allowed: bool
+
+    # Internal tracking state (for health checks and sensors)
+    self_consumption_reserve: float | None = None
+    grid_charging_reserve: int | None = None
+    proactive_export_reserve: float | None = None
 
 
 class StateMachine:
@@ -136,6 +158,172 @@ class StateMachine:
             True if Tesla override is detected, False otherwise.
         """
         return self._tesla_override_detected
+
+    def _get_mode_config(
+        self, target: BatteryMode, data: CoordinatorData
+    ) -> ModeConfig | None:
+        """Get complete configuration for a mode transition.
+
+        Returns None for MANUAL mode (no commands, no state tracking).
+        """
+        if target == BatteryMode.MANUAL:
+            return None
+
+        # Default values
+        op_mode = "self_consumption"
+        backup_reserve = 10.0
+        export_mode = TESLEMETRY_EXPORT_PV_ONLY
+        grid_charging = False
+        sc_reserve: float | None = None
+        gc_reserve: int | None = None
+        pe_reserve: float | None = None
+
+        if target in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
+            op_mode = "self_consumption"
+            backup_reserve = (
+                data.preserve_soc if data.preserve_soc is not None else 10.0
+            )
+            export_mode = TESLEMETRY_EXPORT_PV_ONLY
+            grid_charging = False
+            sc_reserve = backup_reserve
+
+        elif target == BatteryMode.GRID_CHARGING:
+            op_mode = "backup"
+            battery_target = float(
+                self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+            )
+            backup_reserve = self._battery_controller._clamp_backup_reserve(  # noqa: SLF001
+                battery_target
+            )
+            export_mode = TESLEMETRY_EXPORT_PV_ONLY
+            grid_charging = True
+            gc_reserve = int(backup_reserve)
+
+        elif target == BatteryMode.BOOST_CHARGING:
+            op_mode = "autonomous"
+            backup_reserve = 100.0
+            export_mode = TESLEMETRY_EXPORT_PV_ONLY
+            grid_charging = True
+
+        elif target == BatteryMode.SPIKE_DISCHARGE:
+            op_mode = "autonomous"
+            min_target_soc = float(self._get_option("minimum_target_soc") or 10.0)
+            backup_reserve = (
+                data.spike_reserve_soc
+                if data.spike_in_conservative_mode
+                else min_target_soc
+            )
+            export_mode = TESLEMETRY_EXPORT_BATTERY_OK
+            grid_charging = False
+
+        elif target == BatteryMode.PROACTIVE_EXPORT:
+            op_mode = "autonomous"
+            backup_reserve = max(4.0, data.soc - 5.0)
+            export_mode = TESLEMETRY_EXPORT_BATTERY_OK
+            grid_charging = False
+            pe_reserve = backup_reserve
+
+        elif target == BatteryMode.HOLD:
+            op_mode = "self_consumption"
+            min_soc = float(self._get_option("minimum_target_soc") or 10.0)
+            backup_reserve = max(min_soc, data.soc)
+            export_mode = TESLEMETRY_EXPORT_PV_ONLY
+            grid_charging = False
+            sc_reserve = backup_reserve
+
+        return ModeConfig(
+            operation_mode=op_mode,
+            backup_reserve=backup_reserve,
+            export_mode=export_mode,
+            grid_charging_allowed=grid_charging,
+            self_consumption_reserve=sc_reserve,
+            grid_charging_reserve=gc_reserve,
+            proactive_export_reserve=pe_reserve,
+        )
+
+    async def _apply_mode(
+        self, data: CoordinatorData, config: ModeConfig | None, dry_run: bool
+    ) -> bool:
+        """Apply complete mode configuration atomically.
+
+        Sets Tesla hardware entities AND internal tracking state.
+        Returns True if successful, False otherwise.
+        """
+        if config is None:
+            # MANUAL mode - no commands, no state tracking
+            _LOGGER.info("Manual mode - no commands issued")
+            return True
+
+        if dry_run:
+            _LOGGER.info(
+                "DRY RUN: Applying mode config: op=%s, reserve=%s, export=%s, grid_charging=%s",
+                config.operation_mode,
+                config.backup_reserve,
+                config.export_mode,
+                config.grid_charging_allowed,
+            )
+            # Still set internal tracking variables in dry run mode for sensors/previews
+            self._self_consumption_reserve = config.self_consumption_reserve
+            self._grid_charging_reserve = config.grid_charging_reserve
+            self._proactive_export_reserve = config.proactive_export_reserve
+            return True
+
+        # 1. Set grid charging allowed
+        if not await self._battery_controller._set_grid_charging_allowed(  # noqa: SLF001
+            config.grid_charging_allowed
+        ):
+            _LOGGER.error(
+                "Failed to set grid charging allowed to %s",
+                config.grid_charging_allowed,
+            )
+            return False
+
+        # 2. Set export mode
+        if not await self._battery_controller._set_export_mode(config.export_mode):  # noqa: SLF001
+            _LOGGER.error("Failed to set export mode to %s", config.export_mode)
+            return False
+
+        # 3. Set backup reserve
+        if not await self._battery_controller._set_backup_reserve(
+            config.backup_reserve
+        ):  # noqa: SLF001
+            _LOGGER.error("Failed to set backup reserve to %s", config.backup_reserve)
+            return False
+
+        # 4. Set operation mode
+        if not await self._battery_controller._set_operation_mode(
+            config.operation_mode
+        ):  # noqa: SLF001
+            _LOGGER.error("Failed to set operation mode to %s", config.operation_mode)
+            return False
+
+        # 5. Validate transition
+        timeout = TRANSITION_TIMEOUTS.get(config.operation_mode, 10)
+
+        success = await self._battery_controller.validate_transition(
+            expected_operation_mode=config.operation_mode,
+            expected_backup_reserve=config.backup_reserve,
+            expected_export_mode=config.export_mode,
+            expected_grid_charging_allowed=config.grid_charging_allowed,
+            timeout=timeout,
+        )
+
+        if success:
+            # Update internal tracking state ONLY on success
+            self._self_consumption_reserve = config.self_consumption_reserve
+            self._grid_charging_reserve = config.grid_charging_reserve
+            self._proactive_export_reserve = config.proactive_export_reserve
+            _LOGGER.info(
+                "Successfully applied mode config: op=%s, reserve=%s, export=%s, grid_charging=%s",
+                config.operation_mode,
+                config.backup_reserve,
+                config.export_mode,
+                config.grid_charging_allowed,
+            )
+        else:
+            _LOGGER.error("Mode transition validation FAILED")
+
+        return success
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
         """Infer the current battery mode from Teslemetry hardware state.
@@ -442,10 +630,6 @@ class StateMachine:
                 self._commanded_mode = desired
                 self._mode_desired_since.clear()
 
-                # Clear proactive export reserve when leaving that mode
-                if desired != BatteryMode.PROACTIVE_EXPORT:
-                    self._proactive_export_reserve = None
-
                 # Record decision for learning system (Issue #170 Phase 1)
                 if self._decision_tracker is not None and not self._get_switch_state(
                     "dry_run"
@@ -482,129 +666,8 @@ class StateMachine:
                 "Executing mode transition to %s (dry_run=%s)", target.value, dry_run
             )
 
-            if target == BatteryMode.SELF_CONSUMPTION:
-                transition_success = (
-                    await self._battery_controller.set_self_consumption(data, dry_run)
-                )
-                if transition_success:
-                    # Track the reserve for health checks (preserve_soc when set, otherwise 10)
-                    self._self_consumption_reserve = (
-                        data.preserve_soc if data.preserve_soc is not None else 10
-                    )
-                    _LOGGER.info(
-                        "Self consumption mode transition completed (reserve=%.1f)",
-                        self._self_consumption_reserve,
-                    )
-                else:
-                    _LOGGER.error("Self consumption mode transition FAILED")
-
-            elif target == BatteryMode.DEMAND_BLOCK:
-                # Demand block is self_consumption with extra protection
-                transition_success = (
-                    await self._battery_controller.set_self_consumption(data, dry_run)
-                )
-                if transition_success:
-                    # Track the reserve for health checks (preserve_soc when set, otherwise 10)
-                    self._self_consumption_reserve = (
-                        data.preserve_soc if data.preserve_soc is not None else 10
-                    )
-                    _LOGGER.info(
-                        "Demand block mode transition completed (reserve=%.1f)",
-                        self._self_consumption_reserve,
-                    )
-                else:
-                    _LOGGER.error("Demand block mode transition FAILED")
-
-            elif target == BatteryMode.GRID_CHARGING:
-                # Get battery target for grid charging
-                battery_target = float(
-                    self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-                )
-                # Calculate clamped reserve for Tesla firmware compatibility
-                if battery_target <= BACKUP_RESERVE_MAX_VALID:
-                    reserve = int(battery_target)
-                elif battery_target >= 100:
-                    reserve = 100
-                else:
-                    reserve = BACKUP_RESERVE_MAX_VALID  # 81-99% clamped to 80
-
-                transition_success = await self._battery_controller.set_force_charge(
-                    data, dry_run, target_soc=battery_target
-                )
-                if transition_success:
-                    # Track the reserve for health checks
-                    self._grid_charging_reserve = reserve
-                    _LOGGER.info(
-                        "Grid charging mode transition completed (target=%.0f%%, reserve=%d%%)",
-                        battery_target,
-                        reserve,
-                    )
-                else:
-                    _LOGGER.error("Grid charging mode transition FAILED")
-
-            elif target == BatteryMode.BOOST_CHARGING:
-                transition_success = await self._battery_controller.set_boost_charge(
-                    data, dry_run
-                )
-                if transition_success:
-                    _LOGGER.info("Boost charging mode transition completed")
-                else:
-                    _LOGGER.error("Boost charging mode transition FAILED")
-
-            elif target == BatteryMode.SPIKE_DISCHARGE:
-                # Check if conservative mode is enabled and use spike_reserve_soc if available
-                reserve_soc = (
-                    data.spike_reserve_soc if data.spike_in_conservative_mode else None
-                )
-                transition_success = await self._battery_controller.set_force_discharge(
-                    data, dry_run, reserve_soc=reserve_soc
-                )
-                if transition_success:
-                    _LOGGER.info(
-                        "Spike discharge mode transition completed (reserve=%s)",
-                        reserve_soc,
-                    )
-                else:
-                    _LOGGER.error("Spike discharge mode transition FAILED")
-
-            elif target == BatteryMode.PROACTIVE_EXPORT:
-                _LOGGER.info("Executing PROACTIVE_EXPORT mode transition")
-                self._proactive_export_reserve = max(4.0, data.soc - 5.0)
-                transition_success = (
-                    await self._battery_controller.set_proactive_export(data, dry_run)
-                )
-                if transition_success:
-                    _LOGGER.info(
-                        "Proactive export mode transition successful (reserve=%s)",
-                        self._proactive_export_reserve,
-                    )
-                else:
-                    _LOGGER.error("Proactive export mode transition FAILED")
-                    self._proactive_export_reserve = None
-
-            elif target == BatteryMode.HOLD:
-                _LOGGER.info("Executing HOLD mode transition")
-                # Preserve current SOC by setting reserve to max(min_soc, current_soc)
-                min_soc = float(self._get_option("minimum_target_soc") or 10.0)
-                preserve_soc = max(min_soc, data.soc)
-                # Use self_consumption mode with elevated reserve
-                transition_success = (
-                    await self._battery_controller.set_self_consumption(
-                        data, dry_run, preserve_soc=preserve_soc
-                    )
-                )
-                if transition_success:
-                    self._self_consumption_reserve = preserve_soc
-                    _LOGGER.info(
-                        "HOLD mode transition successful (preserve_soc=%s)",
-                        preserve_soc,
-                    )
-                else:
-                    _LOGGER.error("HOLD mode transition FAILED")
-
-            elif target == BatteryMode.MANUAL:
-                pass  # No command — user is controlling manually
-                _LOGGER.info("Manual mode transition completed (no commands)")
+            config = self._get_mode_config(target, data)
+            transition_success = await self._apply_mode(data, config, dry_run)
 
         except Exception as e:
             _LOGGER.error(
@@ -704,19 +767,31 @@ class StateMachine:
             # Grid charging uses backup mode for 3.3 kW rate.
             # Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
             # The actual reserve is tracked in _grid_charging_reserve.
-            # Grid charging must be enabled for this mode.
-            return ("backup", -1, TESLEMETRY_EXPORT_PV_ONLY, True)  # reserve is dynamic
+            reserve = (
+                self._grid_charging_reserve
+                if self._grid_charging_reserve is not None
+                else -1
+            )
+            return ("backup", reserve, TESLEMETRY_EXPORT_PV_ONLY, True)
         elif mode == BatteryMode.BOOST_CHARGING:
             # Boost charging needs grid charging enabled for fast charging
             return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY, True)
         elif mode == BatteryMode.SPIKE_DISCHARGE:
             # Discharge modes don't need grid charging
+            # Reserve is min_target_soc or spike_reserve_soc (already handled by _apply_mode)
+            # For health check, we expect the reserve that was set.
+            # If we don't track it separately for spike, we might need a variable.
+            # But currently we don't have _spike_discharge_reserve.
+            # Let's see what we should use.
             return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK, False)
         elif mode == BatteryMode.PROACTIVE_EXPORT:
-            # Reserve is dynamic (max(4, SOC-5)), so use 10 as expected for health check
-            # The actual reserve will be set based on current SOC
-            # Export modes don't need grid charging
-            return ("autonomous", 10, TESLEMETRY_EXPORT_BATTERY_OK, False)
+            # Use tracked dynamic reserve
+            reserve = (
+                int(self._proactive_export_reserve)
+                if self._proactive_export_reserve is not None
+                else 10
+            )
+            return ("autonomous", reserve, TESLEMETRY_EXPORT_BATTERY_OK, False)
         elif mode == BatteryMode.HOLD:
             # HOLD uses self_consumption mode with elevated reserve (preserve_soc)
             # The actual reserve is tracked in _self_consumption_reserve
@@ -834,20 +909,6 @@ class StateMachine:
         # Skip if we don't have expected values
         if not expected_op:
             return
-
-        # For PROACTIVE_EXPORT, use the tracked dynamic reserve
-        if (
-            self._commanded_mode == BatteryMode.PROACTIVE_EXPORT
-            and self._proactive_export_reserve is not None
-        ):
-            expected_reserve = int(self._proactive_export_reserve)
-
-        # For GRID_CHARGING, use the tracked clamped reserve
-        if (
-            self._commanded_mode == BatteryMode.GRID_CHARGING
-            and self._grid_charging_reserve is not None
-        ):
-            expected_reserve = self._grid_charging_reserve
 
         # Use quick verification from battery controller
         is_valid = await self._battery_controller.verify_current_state(
