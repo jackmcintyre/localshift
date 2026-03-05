@@ -240,7 +240,6 @@ class CostTracker:
             return 0.0
 
         try:
-            # Use statistics_during_period which is the correct API
             stats = statistics_during_period(
                 self.hass,
                 start_time,
@@ -250,29 +249,43 @@ class CostTracker:
                 ["sum"],
             )
 
-            if not stats:
+            if not stats or not isinstance(stats, dict):
                 return 0.0
 
-            if isinstance(stats, dict) and entity_id in stats:
-                rows = stats[entity_id]
-                if isinstance(rows, list):
-                    # Sum all 'sum' values
-                    total = 0.0
-                    for row in rows:
-                        if isinstance(row, dict):
-                            val = row.get("sum")
-                            if val is not None:
-                                try:
-                                    total += float(val)
-                                except (TypeError, ValueError):
-                                    pass
-                    return total
+            if entity_id not in stats:
+                return 0.0
 
-            return 0.0
+            rows = stats[entity_id]
+            if not isinstance(rows, list):
+                return 0.0
+
+            return self._sum_statistics_rows(rows)
 
         except Exception as e:
             _LOGGER.warning("Error fetching statistics: %s", e)
             return 0.0
+
+    def _sum_statistics_rows(self, rows: list) -> float:
+        """Sum 'sum' values from statistics rows.
+
+        Args:
+            rows: List of statistics row dictionaries
+
+        Returns:
+            Total sum of 'sum' values
+        """
+        total = 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            val = row.get("sum")
+            if val is None:
+                continue
+            try:
+                total += float(val)
+            except (TypeError, ValueError):
+                pass
+        return total
 
     def _calculate_variance_pct(self, estimated: float, actual: float) -> float:
         """Calculate variance percentage between estimated and actual.

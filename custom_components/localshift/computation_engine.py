@@ -1306,54 +1306,87 @@ class ComputationEngine:
 
         try:
             stored_data = await self._forecast_history_store.async_load()
-            if stored_data and isinstance(stored_data, dict):
-                history = stored_data.get("forecast_history", [])
-                first_prediction = stored_data.get("first_prediction_time", "")
+            if not stored_data or not isinstance(stored_data, dict):
+                return
 
-                if history:
-                    # Filter out entries with target_time in the past (older than 4 hours)
-                    # These are no longer useful for accuracy tracking
-                    now_dt = dt_util.now()
-                    cutoff = now_dt - timedelta(hours=4)
+            history = stored_data.get("forecast_history", [])
+            first_prediction = stored_data.get("first_prediction_time", "")
 
-                    valid_entries = []
-                    for entry in history:
-                        if "target_time" not in entry:
-                            continue
-                        try:
-                            target_dt = datetime.fromisoformat(entry["target_time"])
-                            if target_dt.tzinfo is None:
-                                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-                            else:
-                                target_dt = dt_util.as_local(target_dt)
+            if history:
+                now_dt = dt_util.now()
+                cutoff = now_dt - timedelta(hours=4)
+                valid_entries = self._filter_valid_history_entries(history, cutoff)
 
-                            if target_dt >= cutoff:
-                                valid_entries.append(entry)
-                        except (ValueError, TypeError):
-                            continue
+                data.forecast_history = valid_entries
+                data.forecast_first_prediction_time = first_prediction
+                data.forecast_history_count = len(valid_entries)
 
-                    data.forecast_history = valid_entries
-                    data.forecast_first_prediction_time = first_prediction
-                    data.forecast_history_count = len(valid_entries)
+                _LOGGER.info(
+                    "Loaded %d forecast history entries from storage (filtered from %d)",
+                    len(valid_entries),
+                    len(history),
+                )
 
-                    _LOGGER.info(
-                        "Loaded %d forecast history entries from storage (filtered from %d)",
-                        len(valid_entries),
-                        len(history),
-                    )
+                if not first_prediction and valid_entries:
+                    self._find_first_prediction_time(data, valid_entries)
 
-                    # Find first prediction time from loaded entries if not stored
-                    if not first_prediction and valid_entries:
-                        for entry in valid_entries:
-                            if entry.get("prediction_time"):
-                                data.forecast_first_prediction_time = entry[
-                                    "prediction_time"
-                                ]
-                                break
-
-                self._forecast_history_loaded = True
+            self._forecast_history_loaded = True
         except Exception as e:
             _LOGGER.warning("Failed to load forecast history: %s", e)
+
+    def _filter_valid_history_entries(
+        self, history: list[dict], cutoff: datetime
+    ) -> list[dict]:
+        """Filter history entries to only valid ones within cutoff time.
+
+        Args:
+            history: List of history entry dictionaries
+            cutoff: Cutoff datetime for filtering
+
+        Returns:
+            List of valid entries
+        """
+        valid_entries = []
+        for entry in history:
+            if "target_time" not in entry:
+                continue
+            if self._is_history_entry_valid(entry, cutoff):
+                valid_entries.append(entry)
+        return valid_entries
+
+    def _is_history_entry_valid(self, entry: dict, cutoff: datetime) -> bool:
+        """Check if a history entry is valid and within cutoff time.
+
+        Args:
+            entry: History entry dictionary
+            cutoff: Cutoff datetime
+
+        Returns:
+            True if entry is valid and within cutoff
+        """
+        try:
+            target_dt = datetime.fromisoformat(entry["target_time"])
+            if target_dt.tzinfo is None:
+                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
+            else:
+                target_dt = dt_util.as_local(target_dt)
+            return target_dt >= cutoff
+        except (ValueError, TypeError):
+            return False
+
+    def _find_first_prediction_time(
+        self, data: CoordinatorData, entries: list[dict]
+    ) -> None:
+        """Find first prediction time from loaded entries.
+
+        Args:
+            data: CoordinatorData to update
+            entries: List of valid history entries
+        """
+        for entry in entries:
+            if entry.get("prediction_time"):
+                data.forecast_first_prediction_time = entry["prediction_time"]
+                break
 
     async def async_save_forecast_history(self, data: CoordinatorData) -> None:
         """Persist forecast history to storage.
