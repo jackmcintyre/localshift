@@ -21,6 +21,7 @@ include = ["custom_components.localshift*"]
 [tool.ruff]
 line-length = 88
 target-version = "py313"
+preview = true
 
 [tool.ruff.lint]
 select = [
@@ -28,7 +29,12 @@ select = [
   "I",
   "B",
   "UP",
+  "PLR1702",
+  "C901",
 ]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
 "custom_components/localshift/*.py" = ["D"]
