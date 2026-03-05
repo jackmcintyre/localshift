@@ -207,6 +207,11 @@ class LocalShiftCoordinator:
             decision_tracker=None,  # Will be set after tracker is initialized
         )
 
+        # Issue #551: Set startup grace period IMMEDIATELY after creating state machine
+        # This prevents state machine evaluation during startup before entities populate
+        # The grace period must be set before ANY computation that might trigger evaluation
+        self._state_machine.set_startup_grace(30)
+
         self._learning_orchestrator = LearningOrchestrator(
             self.hass,
             self.entry,
@@ -343,8 +348,8 @@ class LocalShiftCoordinator:
         # Refresh weather forecast (startup catch-up)
         await self._refresh_weather_forecast()
 
-        # Startup grace: wait 30 s for entities to populate before acting
-        self._state_machine.set_startup_grace(30)
+        # Note: Startup grace period was set earlier (line 213) immediately after
+        # state machine creation to prevent evaluation during startup computation
 
         inferred_mode = self._state_machine.infer_current_hardware_mode(self.data)
 
