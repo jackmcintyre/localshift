@@ -11,8 +11,12 @@ from .const import BatteryMode
 if TYPE_CHECKING:
     from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 
-if TYPE_CHECKING:
+
+def _default_extended_accuracy_metrics() -> Any:
+    """Factory for ExtendedAccuracyMetrics that avoids circular import at module load."""
     from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
+
+    return ExtendedAccuracyMetrics()
 
 
 @dataclass
@@ -447,7 +451,9 @@ class CoordinatorData:
     )
 
     # --- Extended forecast accuracy (Issue #270) ---
-    extended_accuracy_metrics: ExtendedAccuracyMetrics | None = None
+    extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
+        default_factory=_default_extended_accuracy_metrics
+    )
 
     # --- Hybrid timescale metadata (Issue #329) ---
     hybrid_slot_metadata: dict[str, Any] = field(
