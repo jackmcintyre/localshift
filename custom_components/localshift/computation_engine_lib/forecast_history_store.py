@@ -153,6 +153,7 @@ class ForecastHistoryStore:
         if len(data.forecast_history) > 200:
             data.forecast_history = data.forecast_history[-200:]
 
+        data.forecast_history_count = len(data.forecast_history)
         self._last_forecast_hour = current_hour
 
     def _filter_valid_history_entries(
