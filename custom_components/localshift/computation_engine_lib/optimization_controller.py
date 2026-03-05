@@ -270,11 +270,12 @@ class OptimizationController:
 
         # Rule 3: Forecast Confidence
         # If forecast accuracy is low, be more pessimistic about solar
-        avg_accuracy = (
-            (data.forecast_accuracy_soc_1h + data.forecast_accuracy_soc_4h) / 2.0
-            if data.forecast_accuracy_soc_1h > 0
-            else 100.0
-        )
+        acc_1h = data.forecast_accuracy_soc_1h
+        acc_4h = data.forecast_accuracy_soc_4h
+        if acc_1h is not None and acc_4h is not None:
+            avg_accuracy = (acc_1h + acc_4h) / 2.0
+        else:
+            avg_accuracy = 100.0  # Default when no accuracy data available
 
         if avg_accuracy < 50.0:
             # Reduce solar confidence factor (be more pessimistic)
