@@ -528,104 +528,291 @@ class PatternAnalyzer:
         Returns:
             BiasCorrection or None if no mapping exists
         """
-        # Calculate confidence based on:
-        # 1. How far below global mean (further = more confident)
-        # 2. Sample count (more = more confident)
-        # 3. Standard deviation (lower = more confident)
+        confidence = self._calculate_bias_confidence(bucket, stats)
+
+        for check_fn in [
+            self._check_over_charge_adjustment,
+            self._check_export_loss_adjustment,
+            self._check_under_charge_adjustment,
+            self._check_generic_low_score_adjustment,
+        ]:
+            result = check_fn(dimension, key, bucket, stats, confidence)
+            if result is not None:
+                return result
+        return None
+
+    def _calculate_bias_confidence(
+        self, bucket: PatternBucket, stats: DimensionStats
+    ) -> float:
+        """Calculate confidence for bias correction.
+
+        Args:
+            bucket: Bucket statistics
+            stats: Full dimension stats
+
+        Returns:
+            Confidence score (0.0 to 1.0)
+        """
         score_diff = stats.global_mean - bucket.mean_score
         severity = (
             score_diff / (stats.global_std * BIAS_STD_DEV_THRESHOLD)
             if stats.global_std > 0
             else 0
         )
-
         sample_confidence = min(1.0, bucket.sample_count / 50.0)
         variance_confidence = 1.0 - min(1.0, bucket.std_score * 2)
-
-        confidence = min(
+        return min(
             1.0, (severity * 0.4 + sample_confidence * 0.4 + variance_confidence * 0.2)
         )
 
-        # Determine parameter and adjustment based on the type of problem
-        param_name = None
-        adjustment = 0.0
-        condition = ""
+    def _check_over_charge_adjustment(
+        self,
+        dimension: str,
+        key: str,
+        bucket: PatternBucket,
+        stats: DimensionStats,
+        confidence: float,
+    ) -> BiasCorrection | None:
+        """Check for over-charge rate adjustments.
 
-        # High over-charge rate suggests we're too aggressive with grid charging
-        if bucket.over_charge_rate > 0.3:
-            if dimension == "weather_condition" and key in ("cloudy", "rainy"):
-                param_name = "solar_confidence_factor"
-                adjustment = -0.1  # Trust solar forecasts less
-                condition = f"{key.title()} weather has {bucket.over_charge_rate:.0%} over-charge rate"
-            elif dimension == "day_of_week":
-                param_name = "solar_confidence_factor"
-                adjustment = -0.05
-                condition = f"{key.title()}s have {bucket.over_charge_rate:.0%} over-charge rate"
-            elif dimension == "solar_availability" and key == "low":
-                param_name = "solar_confidence_factor"
-                adjustment = -0.1
-                condition = "Low solar days have high over-charge rate"
+        Args:
+            dimension: Dimension name
+            key: Group key
+            bucket: Bucket statistics
+            stats: Dimension stats
+            confidence: Calculated confidence
 
-        # High export loss rate suggests we're buying then exporting
-        elif bucket.export_loss_rate > 0.2:
-            if dimension == "price_regime" and key == "low":
-                param_name = "cheap_price_bias"
-                adjustment = -1.0  # Be more conservative about cheap price
-                condition = "Low price periods have high export loss"
-            else:
-                param_name = "grid_charge_soc_headroom"
-                adjustment = -2.0  # Don't charge as much
-                condition = f"{key} has {bucket.export_loss_rate:.0%} export loss rate"
-
-        # Low mean score with high under-charge suggests not charging enough
-        elif bucket.under_charge_rate > 0.2:
-            if dimension == "weather_condition" and key in ("sunny", "clear"):
-                param_name = "solar_confidence_factor"
-                adjustment = 0.1  # Trust solar more
-                condition = f"{key.title()} weather has {bucket.under_charge_rate:.0%} under-charge rate"
-            elif dimension == "solar_availability" and key == "high":
-                param_name = "overnight_drain_safety_margin"
-                adjustment = -2.0  # Less margin needed when solar is good
-                condition = "High solar days have under-charge issues"
-            else:
-                param_name = "cheap_price_bias"
-                adjustment = 0.5  # Be more willing to grid charge
-                condition = (
-                    f"{key} has {bucket.under_charge_rate:.0%} under-charge rate"
-                )
-
-        # Generic low score - adjust based on dimension
-        elif score_diff > stats.global_std * 1.5:
-            if dimension == "hour_of_day":
-                # Morning hours - might need different strategy
-                hour = int(key.split("_")[0]) if "_" in key else int(key)
-                if 6 <= hour <= 10:
-                    param_name = "consumption_forecast_bias"
-                    adjustment = 0.1
-                    condition = f"Hour {hour} has consistently low scores"
-                elif 17 <= hour <= 21:
-                    param_name = "overnight_drain_safety_margin"
-                    adjustment = 2.0
-                    condition = f"Evening hour {hour} has consistently low scores"
-            elif dimension == "season":
-                if key == "winter":
-                    param_name = "overnight_drain_safety_margin"
-                    adjustment = 3.0
-                    condition = "Winter has consistently low decision scores"
-                elif key == "summer":
-                    param_name = "solar_confidence_factor"
-                    adjustment = 0.1
-                    condition = "Summer has consistently low decision scores"
-
-        if param_name is None:
+        Returns:
+            BiasCorrection or None
+        """
+        if bucket.over_charge_rate <= 0.3:
             return None
 
-        # Validate parameter exists
+        if dimension == "weather_condition" and key in ("cloudy", "rainy"):
+            return self._create_correction(
+                "solar_confidence_factor",
+                -0.1,
+                f"{key.title()} weather has {bucket.over_charge_rate:.0%} over-charge rate",
+                dimension,
+                key,
+                bucket,
+                confidence,
+            )
+        elif dimension == "day_of_week":
+            return self._create_correction(
+                "solar_confidence_factor",
+                -0.05,
+                f"{key.title()}s have {bucket.over_charge_rate:.0%} over-charge rate",
+                dimension,
+                key,
+                bucket,
+                confidence,
+            )
+        elif dimension == "solar_availability" and key == "low":
+            return self._create_correction(
+                "solar_confidence_factor",
+                -0.1,
+                "Low solar days have high over-charge rate",
+                dimension,
+                key,
+                bucket,
+                confidence,
+            )
+        return None
+
+    def _check_export_loss_adjustment(
+        self,
+        dimension: str,
+        key: str,
+        bucket: PatternBucket,
+        stats: DimensionStats,
+        confidence: float,
+    ) -> BiasCorrection | None:
+        """Check for export loss adjustments.
+
+        Args:
+            dimension: Dimension name
+            key: Group key
+            bucket: Bucket statistics
+            stats: Dimension stats
+            confidence: Calculated confidence
+
+        Returns:
+            BiasCorrection or None
+        """
+        if bucket.export_loss_rate <= 0.2:
+            return None
+
+        if dimension == "price_regime" and key == "low":
+            return self._create_correction(
+                "cheap_price_bias",
+                -1.0,
+                "Low price periods have high export loss",
+                dimension,
+                key,
+                bucket,
+                confidence,
+            )
+        return self._create_correction(
+            "grid_charge_soc_headroom",
+            -2.0,
+            f"{key} has {bucket.export_loss_rate:.0%} export loss rate",
+            dimension,
+            key,
+            bucket,
+            confidence,
+        )
+
+    def _check_under_charge_adjustment(
+        self,
+        dimension: str,
+        key: str,
+        bucket: PatternBucket,
+        stats: DimensionStats,
+        confidence: float,
+    ) -> BiasCorrection | None:
+        """Check for under-charge adjustments.
+
+        Args:
+            dimension: Dimension name
+            key: Group key
+            bucket: Bucket statistics
+            stats: Dimension stats
+            confidence: Calculated confidence
+
+        Returns:
+            BiasCorrection or None
+        """
+        if bucket.under_charge_rate <= 0.2:
+            return None
+
+        if dimension == "weather_condition" and key in ("sunny", "clear"):
+            return self._create_correction(
+                "solar_confidence_factor",
+                0.1,
+                f"{key.title()} weather has {bucket.under_charge_rate:.0%} under-charge rate",
+                dimension,
+                key,
+                bucket,
+                confidence,
+            )
+        elif dimension == "solar_availability" and key == "high":
+            return self._create_correction(
+                "overnight_drain_safety_margin",
+                -2.0,
+                "High solar days have under-charge issues",
+                dimension,
+                key,
+                bucket,
+                confidence,
+            )
+        return self._create_correction(
+            "cheap_price_bias",
+            0.5,
+            f"{key} has {bucket.under_charge_rate:.0%} under-charge rate",
+            dimension,
+            key,
+            bucket,
+            confidence,
+        )
+
+    def _check_generic_low_score_adjustment(
+        self,
+        dimension: str,
+        key: str,
+        bucket: PatternBucket,
+        stats: DimensionStats,
+        confidence: float,
+    ) -> BiasCorrection | None:
+        """Check for generic low score adjustments.
+
+        Args:
+            dimension: Dimension name
+            key: Group key
+            bucket: Bucket statistics
+            stats: Dimension stats
+            confidence: Calculated confidence
+
+        Returns:
+            BiasCorrection or None
+        """
+        score_diff = stats.global_mean - bucket.mean_score
+        if score_diff <= stats.global_std * 1.5:
+            return None
+
+        if dimension == "hour_of_day":
+            hour = int(key.split("_")[0]) if "_" in key else int(key)
+            if 6 <= hour <= 10:
+                return self._create_correction(
+                    "consumption_forecast_bias",
+                    0.1,
+                    f"Hour {hour} has consistently low scores",
+                    dimension,
+                    key,
+                    bucket,
+                    confidence,
+                )
+            elif 17 <= hour <= 21:
+                return self._create_correction(
+                    "overnight_drain_safety_margin",
+                    2.0,
+                    f"Evening hour {hour} has consistently low scores",
+                    dimension,
+                    key,
+                    bucket,
+                    confidence,
+                )
+        elif dimension == "season":
+            if key == "winter":
+                return self._create_correction(
+                    "overnight_drain_safety_margin",
+                    3.0,
+                    "Winter has consistently low decision scores",
+                    dimension,
+                    key,
+                    bucket,
+                    confidence,
+                )
+            elif key == "summer":
+                return self._create_correction(
+                    "solar_confidence_factor",
+                    0.1,
+                    "Summer has consistently low decision scores",
+                    dimension,
+                    key,
+                    bucket,
+                    confidence,
+                )
+        return None
+
+    def _create_correction(
+        self,
+        param_name: str,
+        adjustment: float,
+        condition: str,
+        dimension: str,
+        key: str,
+        bucket: PatternBucket,
+        confidence: float,
+    ) -> BiasCorrection | None:
+        """Create a bias correction after validation.
+
+        Args:
+            param_name: Parameter to adjust
+            adjustment: Adjustment value
+            condition: Condition description
+            dimension: Dimension name
+            key: Group key
+            bucket: Bucket statistics
+            confidence: Confidence score
+
+        Returns:
+            BiasCorrection or None if invalid
+        """
         if param_name not in OPTIMIZABLE_PARAMS:
             _LOGGER.warning("Unknown parameter %s in bias mapping", param_name)
             return None
 
-        # Clamp adjustment to parameter bounds
         param_def = OPTIMIZABLE_PARAMS[param_name]
         adjustment = max(
             param_def.min_val - param_def.default,

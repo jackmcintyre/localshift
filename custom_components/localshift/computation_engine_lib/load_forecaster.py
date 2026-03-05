@@ -97,135 +97,252 @@ class LoadForecaster:
 
         Returns tuple of (kW, source_tag).
         """
-        historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
-        historical_kw = (
-            float(historical_raw) if isinstance(historical_raw, int | float) else 0.0
+        historical_kw = self._get_historical(hourly_avg_kw, slot_hour)
+        base_load_kw, base_source = self._calculate_base_load(
+            historical_kw,
+            slot_hour,
+            current_hour,
+            current_load_kw,
+            recent_load_kw,
+            hours_ahead,
+            hourly_avg_kw,
         )
+        adjusted_load_kw, adjusted_source = self._apply_weather_correlation(
+            base_load_kw, base_source, slot_hour, temperature
+        )
+        final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
+        return round(final_load_kw, 3), adjusted_source
 
-        # Check if we have valid historical data
-        has_historical = historical_kw > 0
+    def _get_historical(self, hourly_avg_kw: dict[int, float], slot_hour: int) -> float:
+        """Get historical load for a specific hour.
 
-        # Calculate base load using exponential decay weighting
+        Args:
+            hourly_avg_kw: Historical hourly averages
+            slot_hour: Hour to lookup
+
+        Returns:
+            Historical load in kW (0.0 if not available)
+        """
+        historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
+        return float(historical_raw) if isinstance(historical_raw, int | float) else 0.0
+
+    def _calculate_base_load(
+        self,
+        historical_kw: float,
+        slot_hour: int,
+        current_hour: int | None,
+        current_load_kw: float,
+        recent_load_kw: float,
+        hours_ahead: float | None,
+        hourly_avg_kw: dict[int, float],
+    ) -> tuple[float, str]:
+        """Calculate base load with exponential decay weighting.
+
+        Args:
+            historical_kw: Historical load for this hour
+            slot_hour: Slot hour
+            current_hour: Current hour of day
+            current_load_kw: Instantaneous live load
+            recent_load_kw: 1-hour rolling average
+            hours_ahead: Actual hours ahead
+            hourly_avg_kw: Full historical profile
+
+        Returns:
+            Tuple of (base_load_kw, source_tag)
+        """
         base_load_kw = 0.0
         base_source = ""
+        has_historical = historical_kw > 0
 
-        # EXPONENTIAL DECAY WEIGHTING (Issue #381)
-        # When current_hour is None (simulations without time context), skip blending
         if current_hour is not None:
-            # Calculate distance for decay weighting
-            # Prefer hours_ahead (actual time distance) over clock-hour distance
-            # This fixes the midnight wrap bug where slots 20-23h away appeared "close"
-            if hours_ahead is not None:
-                hour_distance = int(hours_ahead)
-            else:
-                hour_distance = abs(slot_hour - current_hour)
-                hour_distance = min(hour_distance, 24 - hour_distance)
+            hour_distance = self._calculate_hour_distance(
+                slot_hour, current_hour, hours_ahead
+            )
+            base_load_kw, base_source = self._apply_exponential_decay(
+                hour_distance,
+                current_load_kw,
+                recent_load_kw,
+                historical_kw,
+                has_historical,
+                slot_hour,
+            )
 
-            # CURRENT SLOT: Use live load directly
-            # This ensures immediate accuracy for the current time slot
-            if hour_distance == 0 and current_load_kw > 0:
-                base_load_kw = current_load_kw
-                base_source = "live_load"
-            # NEAR-TERM SLOTS: Apply exponential decay weighting
-            # Weight decays by DEFAULT_LOAD_DECAY_FACTOR per hour
-            elif hour_distance <= 3 and recent_load_kw > 0 and has_historical:
-                # Calculate decayed weight: initial_weight * (decay_factor ^ distance)
-                # e.g., distance=1: 0.8 * 0.8 = 0.64, distance=2: 0.8 * 0.64 = 0.51
-                live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
-                    DEFAULT_LOAD_DECAY_FACTOR**hour_distance
-                )
-                historical_weight = 1.0 - live_weight
-
-                base_load_kw = (live_weight * recent_load_kw) + (
-                    historical_weight * historical_kw
-                )
-                base_source = f"decay_load_d{hour_distance}"
-                _LOGGER.debug(
-                    "DECAY_WEIGHT: hour=%d, distance=%d, live_weight=%.2f, recent=%.2f, hist=%.2f, result=%.2f",
-                    slot_hour,
-                    hour_distance,
-                    live_weight,
-                    recent_load_kw,
-                    historical_kw,
-                    base_load_kw,
-                )
-
-        # Fallback to historical if available (primary path for distant hours)
         if not base_source and has_historical:
-            base_load_kw = historical_kw
-            base_source = "profile_hour"
+            return historical_kw, "profile_hour"
 
-        # Fallback: no historical for this specific hour, no live-load blending applicable
         if not base_source:
-            # Try mean of available historical hours first
-            if hourly_avg_kw:
-                values = [v for v in hourly_avg_kw.values() if v > 0]
-                if values:
-                    base_load_kw = sum(values) / len(values)
-                    base_source = "live_load_fallback"
-            # Then try current live load
-            if not base_source and current_load_kw > 0:
-                base_load_kw = current_load_kw
-                base_source = "live_load_fallback"
-            # No data available - log warning and return 0.0
-            if not base_source:
-                _LOGGER.warning(
-                    "NO_LOAD_DATA: No historical or live load data available for slot_hour=%d. "
-                    "Check load sensor availability and recorder history.",
-                    slot_hour,
-                )
-                base_load_kw = 0.0
-                base_source = "live_load_fallback"
+            return self._fallback_to_available_data(
+                hourly_avg_kw, current_load_kw, slot_hour
+            )
 
-        # WEATHER CORRELATION: Apply temperature-based adjustment if available
-        # Only apply when:
-        # 1. Weather correlation is initialized
-        # 2. Temperature is provided
-        # 3. We have base load to adjust
-        # 4. Confidence is medium or high (not low)
+        return base_load_kw, base_source
+
+    def _calculate_hour_distance(
+        self, slot_hour: int, current_hour: int, hours_ahead: float | None
+    ) -> int:
+        """Calculate hour distance for decay weighting.
+
+        Args:
+            slot_hour: Slot hour
+            current_hour: Current hour
+            hours_ahead: Actual hours ahead (if provided)
+
+        Returns:
+            Hour distance
+        """
+        if hours_ahead is not None:
+            return int(hours_ahead)
+        hour_distance = abs(slot_hour - current_hour)
+        return min(hour_distance, 24 - hour_distance)
+
+    def _apply_exponential_decay(
+        self,
+        hour_distance: int,
+        current_load_kw: float,
+        recent_load_kw: float,
+        historical_kw: float,
+        has_historical: bool,
+        slot_hour: int,
+    ) -> tuple[float, str]:
+        """Apply exponential decay weighting for near-term slots.
+
+        Args:
+            hour_distance: Hours away from current time
+            current_load_kw: Current live load
+            recent_load_kw: Recent average load
+            historical_kw: Historical load
+            has_historical: Whether historical data exists
+            slot_hour: Slot hour for logging
+
+        Returns:
+            Tuple of (load_kw, source_tag)
+        """
+        if hour_distance == 0 and current_load_kw > 0:
+            return current_load_kw, "live_load"
+
+        if hour_distance <= 3 and recent_load_kw > 0 and has_historical:
+            live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
+                DEFAULT_LOAD_DECAY_FACTOR**hour_distance
+            )
+            historical_weight = 1.0 - live_weight
+            base_load_kw = (live_weight * recent_load_kw) + (
+                historical_weight * historical_kw
+            )
+            _LOGGER.debug(
+                "DECAY_WEIGHT: hour=%d, distance=%d, live_weight=%.2f, recent=%.2f, hist=%.2f, result=%.2f",
+                slot_hour,
+                hour_distance,
+                live_weight,
+                recent_load_kw,
+                historical_kw,
+                base_load_kw,
+            )
+            return base_load_kw, f"decay_load_d{hour_distance}"
+
+        return 0.0, ""
+
+    def _fallback_to_available_data(
+        self, hourly_avg_kw: dict[int, float], current_load_kw: float, slot_hour: int
+    ) -> tuple[float, str]:
+        """Fallback to any available data when primary methods fail.
+
+        Args:
+            hourly_avg_kw: Historical hourly averages
+            current_load_kw: Current live load
+            slot_hour: Slot hour for logging
+
+        Returns:
+            Tuple of (load_kw, source_tag)
+        """
+        base_load_kw = 0.0
+        base_source = "live_load_fallback"
+
+        if hourly_avg_kw:
+            values = [v for v in hourly_avg_kw.values() if v > 0]
+            if values:
+                base_load_kw = sum(values) / len(values)
+                return base_load_kw, base_source
+
+        if current_load_kw > 0:
+            base_load_kw = current_load_kw
+            return base_load_kw, base_source
+
+        _LOGGER.warning(
+            "NO_LOAD_DATA: No historical or live load data available for slot_hour=%d. "
+            "Check load sensor availability and recorder history.",
+            slot_hour,
+        )
+
+        return base_load_kw, base_source
+
+    def _apply_weather_correlation(
+        self,
+        base_load_kw: float,
+        base_source: str,
+        slot_hour: int,
+        temperature: float | None,
+    ) -> tuple[float, str]:
+        """Apply weather correlation adjustment.
+
+        Args:
+            base_load_kw: Base load before weather adjustment
+            base_source: Source tag before adjustment
+            slot_hour: Hour for coefficient lookup
+            temperature: Temperature for adjustment
+
+        Returns:
+            Tuple of (adjusted_load_kw, adjusted_source)
+        """
         adjusted_load_kw = base_load_kw
         adjusted_source = base_source
 
         if (
-            self._weather_correlation is not None
-            and temperature is not None
-            and base_load_kw > 0
+            self._weather_correlation is None
+            or temperature is None
+            or base_load_kw <= 0
         ):
-            # Get coefficients for this hour
-            coef = self._weather_correlation.get_coefficients_for_hour(slot_hour)
-            if coef is not None and coef.confidence in ("medium", "high"):
-                # Apply weather-based prediction
-                weather_adjusted, adjustment_source = (
-                    self._weather_correlation.predict_load(
-                        hour=slot_hour,
-                        temperature=temperature,
-                        base_load_kw=base_load_kw,
-                    )
-                )
-                # Only use adjustment if it's not a fallback
-                if adjustment_source not in (
-                    "no_coefficients",
-                    "low_confidence",
-                    "invalid_hour",
-                ):
-                    adjusted_load_kw = weather_adjusted
-                    adjusted_source = adjustment_source
+            return adjusted_load_kw, adjusted_source
 
-        # Issue #170 Phase 2: Apply consumption_forecast_bias adaptive parameter
-        # Positive = assume higher consumption (more conservative for grid charging)
-        # Negative = assume lower consumption (more optimistic for grid charging)
-        if self._adaptive_params is not None:
-            consumption_bias = self._adaptive_params.get(
-                "consumption_forecast_bias", 0.0
-            )
-            if consumption_bias != 0.0:
-                adjusted_load_kw = max(0.0, adjusted_load_kw + consumption_bias)
-                _LOGGER.debug(
-                    "CONSUMPTION_BIAS: hour=%d, base=%.2f kW, bias=%.2f kW, final=%.2f kW",
-                    slot_hour,
-                    base_load_kw,
-                    consumption_bias,
-                    adjusted_load_kw,
-                )
+        coef = self._weather_correlation.get_coefficients_for_hour(slot_hour)
+        if coef is None or coef.confidence not in ("medium", "high"):
+            return adjusted_load_kw, adjusted_source
 
-        return round(adjusted_load_kw, 3), adjusted_source
+        weather_adjusted, adjustment_source = self._weather_correlation.predict_load(
+            hour=slot_hour, temperature=temperature, base_load_kw=base_load_kw
+        )
+
+        if adjustment_source not in (
+            "no_coefficients",
+            "low_confidence",
+            "invalid_hour",
+        ):
+            return weather_adjusted, adjustment_source
+
+        return adjusted_load_kw, adjusted_source
+
+    def _apply_consumption_bias(self, load_kw: float, slot_hour: int) -> float:
+        """Apply consumption forecast bias adjustment.
+
+        Args:
+            load_kw: Load before bias adjustment
+            slot_hour: Hour for logging
+
+        Returns:
+            Adjusted load
+        """
+        if self._adaptive_params is None:
+            return load_kw
+
+        consumption_bias = self._adaptive_params.get("consumption_forecast_bias", 0.0)
+        if consumption_bias == 0.0:
+            return load_kw
+
+        adjusted = max(0.0, load_kw + consumption_bias)
+        _LOGGER.debug(
+            "CONSUMPTION_BIAS: hour=%d, base=%.2f kW, bias=%.2f kW, final=%.2f kW",
+            slot_hour,
+            load_kw,
+            consumption_bias,
+            adjusted,
+        )
+        return adjusted
