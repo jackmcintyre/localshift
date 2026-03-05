@@ -5,8 +5,7 @@ at Solcast period boundaries were returning 0.0 due to containment check
 instead of overlap-weighted accumulation.
 """
 
-from datetime import datetime, timezone, timedelta
-
+from datetime import datetime, timedelta, timezone
 
 from custom_components.localshift.computation_engine_lib.solar_utils import (
     get_solar_for_5min_slot,

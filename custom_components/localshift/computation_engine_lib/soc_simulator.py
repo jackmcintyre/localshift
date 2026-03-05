@@ -246,3 +246,7 @@ class SocSimulator:
                 elapsed_minutes += 15
 
             return None  # Never fills
+
+    def find_battery_fill_point(self, *args, **kwargs) -> int | None:
+        """Public wrapper for battery fill point calculation."""
+        return self._find_battery_fill_point(*args, **kwargs)

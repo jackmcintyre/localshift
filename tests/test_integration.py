@@ -49,13 +49,11 @@ def integration_data():
     for i in range(48):  # 48 x 30-min slots = 24 hours
         start = base_time + timedelta(minutes=i * 30)
         end = start + timedelta(minutes=30)
-        data.general_forecast.append(
-            {
-                "start_time": start.isoformat(),
-                "end_time": end.isoformat(),
-                "per_kwh": 0.25,  # Default price
-            }
-        )
+        data.general_forecast.append({
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "per_kwh": 0.25,  # Default price
+        })
     data.feed_in_forecast = []
     data.solcast_today = []
     data.solcast_tomorrow = []
@@ -471,14 +469,12 @@ class TestDecisionLog:
 
         # Pre-populate with 60 entries
         for i in range(60):
-            integration_data.decision_log.append(
-                {
-                    "timestamp": test_time.isoformat(),
-                    "old_mode": "test",
-                    "new_mode": "test",
-                    "reason": f"test entry {i}",
-                }
-            )
+            integration_data.decision_log.append({
+                "timestamp": test_time.isoformat(),
+                "old_mode": "test",
+                "new_mode": "test",
+                "reason": f"test entry {i}",
+            })
 
         # Provide a forecast entry
         forecast_entry = {

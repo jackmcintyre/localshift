@@ -406,3 +406,27 @@ class ExcessSolarEngine:
             "Current balance is optimal",
             "medium",
         )
+
+    def calculate_excess_by_windows(self, *args, **kwargs) -> dict[str, float]:
+        """Public wrapper for excess-by-window calculation."""
+        return self._calculate_excess_by_windows(*args, **kwargs)
+
+    def find_nearest_negative_fit_window(
+        self, *args, **kwargs
+    ) -> tuple[datetime | None, int]:
+        """Public wrapper for negative FIT window lookup."""
+        return self._find_nearest_negative_fit_window(*args, **kwargs)
+
+    def calculate_excess_until_negative_fit(self, *args, **kwargs) -> float:
+        """Public wrapper for excess-before-negative-FIT calculation."""
+        return self._calculate_excess_until_negative_fit(*args, **kwargs)
+
+    def calculate_safe_additional_load(self, *args, **kwargs) -> tuple[float, bool]:
+        """Public wrapper for safe additional load calculation."""
+        return self._calculate_safe_additional_load(*args, **kwargs)
+
+    def compute_load_shift_signal(
+        self, *args, **kwargs
+    ) -> tuple[str, float, int, str, str]:
+        """Public wrapper for load-shift signal calculation."""
+        return self._compute_load_shift_signal(*args, **kwargs)

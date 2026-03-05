@@ -5,7 +5,7 @@ Issue #524: Reduce Frequent Battery Mode Switching.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,11 +19,9 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
 )
 from custom_components.localshift.const import (
     BatteryMode,
-    CONF_SWITCHING_PENALTY,
-    DEFAULT_SWITCHING_PENALTY,
 )
-from custom_components.localshift.state_machine import StateMachine
 from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.state_machine import StateMachine
 
 # ---------------------------------------------------------------------------
 # DP Planner Switching Penalty Tests

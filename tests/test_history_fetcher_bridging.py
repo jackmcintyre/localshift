@@ -1,7 +1,7 @@
 """Tests for HistoryFetcher bridging to CoordinatorData (Issue #493)."""
 
 from datetime import datetime
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 

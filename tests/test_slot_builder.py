@@ -107,7 +107,9 @@ class TestSlotBuilderInit:
         assert builder._ha_timezone == "Australia/Sydney"
 
 
-@pytest.mark.skip("Mock data timezone issue - implementation verified via manual testing")
+@pytest.mark.skip(
+    "Mock data timezone issue - implementation verified via manual testing"
+)
 class TestSlotBuilderBuildSlots:
     """Tests for SlotBuilder.build_slots() method."""
 
@@ -254,7 +256,9 @@ class TestSlotBuilderBuildSlots:
         assert metadata.slots_with_defaulted_consumption > 0
 
 
-@pytest.mark.skip("Mock data timezone issue - implementation verified via manual testing")
+@pytest.mark.skip(
+    "Mock data timezone issue - implementation verified via manual testing"
+)
 class TestDemandWindowFlags:
     """Tests for demand window flag computation."""
 
@@ -332,7 +336,9 @@ class TestDemandWindowFlags:
             )
 
 
-@pytest.mark.skip("Mock data timezone issue - implementation verified via manual testing")
+@pytest.mark.skip(
+    "Mock data timezone issue - implementation verified via manual testing"
+)
 class TestAdaptiveParameters:
     """Tests for adaptive parameter handling."""
 
@@ -395,7 +401,9 @@ class TestAdaptiveParameters:
         assert metadata.solar_confidence_factor == 1.5
 
 
-@pytest.mark.skip("Mock data timezone issue - implementation verified via manual testing")
+@pytest.mark.skip(
+    "Mock data timezone issue - implementation verified via manual testing"
+)
 class TestSlotBuilderMetadata:
     """Tests for SlotBuildMetadata tracking."""
 
