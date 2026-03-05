@@ -573,6 +573,106 @@ class TestModeTransitions:
 
 
 # =============================================================================
+# RESERVE TRACKING TESTS (Issue #532)
+# =============================================================================
+
+
+class TestReserveTracking:
+    """Tests for clearing reserve variables on mode exit (Issue #532)."""
+
+    def test_grid_charging_to_self_consumption_clears_grid_charging_reserve(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """GRID_CHARGING -> SELF_CONSUMPTION should clear _grid_charging_reserve."""
+        # Set up: currently in GRID_CHARGING with a reserve value set
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+        state_machine._grid_charging_reserve = 80
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # _grid_charging_reserve should be cleared when leaving GRID_CHARGING
+        assert state_machine._grid_charging_reserve is None
+
+    def test_self_consumption_to_grid_charging_clears_self_consumption_reserve(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """SELF_CONSUMPTION -> GRID_CHARGING should clear _self_consumption_reserve."""
+        # Set up: currently in SELF_CONSUMPTION with a reserve value set
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._self_consumption_reserve = 75
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # _self_consumption_reserve should be cleared when leaving SELF_CONSUMPTION
+        assert state_machine._self_consumption_reserve is None
+
+    def test_hold_to_grid_charging_clears_self_consumption_reserve(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """HOLD -> GRID_CHARGING should clear _self_consumption_reserve."""
+        # Set up: currently in HOLD with a reserve value set (preserve_soc)
+        state_machine._commanded_mode = BatteryMode.HOLD
+        state_machine._self_consumption_reserve = 75
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # _self_consumption_reserve should be cleared when leaving HOLD
+        assert state_machine._self_consumption_reserve is None
+
+    def test_proactive_export_to_grid_charging_clears_proactive_export_reserve(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """PROACTIVE_EXPORT -> GRID_CHARGING should clear _proactive_export_reserve."""
+        # Set up: currently in PROACTIVE_EXPORT with a reserve value set
+        state_machine._commanded_mode = BatteryMode.PROACTIVE_EXPORT
+        state_machine._proactive_export_reserve = 20
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 16, 16, 5, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # _proactive_export_reserve should be cleared when leaving PROACTIVE_EXPORT
+        assert state_machine._proactive_export_reserve is None
+
+    def test_demand_block_to_grid_charging_clears_self_consumption_reserve(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """DEMAND_BLOCK -> GRID_CHARGING should clear _self_consumption_reserve."""
+        # Set up: currently in DEMAND_BLOCK (uses same reserve as SELF_CONSUMPTION)
+        state_machine._commanded_mode = BatteryMode.DEMAND_BLOCK
+        state_machine._self_consumption_reserve = 50
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        # _self_consumption_reserve should be cleared when leaving DEMAND_BLOCK
+        assert state_machine._self_consumption_reserve is None
+
+
+# =============================================================================
 # DEBOUNCE BEHAVIOR TESTS
 # =============================================================================
 

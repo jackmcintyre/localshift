@@ -442,9 +442,17 @@ class StateMachine:
                 self._commanded_mode = desired
                 self._mode_desired_since.clear()
 
-                # Clear proactive export reserve when leaving that mode
+                # Clear mode-specific reserve tracking when leaving that mode
                 if desired != BatteryMode.PROACTIVE_EXPORT:
                     self._proactive_export_reserve = None
+                if desired != BatteryMode.GRID_CHARGING:
+                    self._grid_charging_reserve = None
+                if desired not in (
+                    BatteryMode.SELF_CONSUMPTION,
+                    BatteryMode.DEMAND_BLOCK,
+                    BatteryMode.HOLD,
+                ):
+                    self._self_consumption_reserve = None
 
                 # Record decision for learning system (Issue #170 Phase 1)
                 if self._decision_tracker is not None and not self._get_switch_state(
@@ -705,7 +713,12 @@ class StateMachine:
             # Reserve is clamped for Tesla firmware compatibility (81-99% → 80).
             # The actual reserve is tracked in _grid_charging_reserve.
             # Grid charging must be enabled for this mode.
-            return ("backup", -1, TESLEMETRY_EXPORT_PV_ONLY, True)  # reserve is dynamic
+            reserve = (
+                int(self._grid_charging_reserve)
+                if self._grid_charging_reserve is not None
+                else -1
+            )
+            return ("backup", reserve, TESLEMETRY_EXPORT_PV_ONLY, True)
         elif mode == BatteryMode.BOOST_CHARGING:
             # Boost charging needs grid charging enabled for fast charging
             return ("autonomous", 100, TESLEMETRY_EXPORT_PV_ONLY, True)
