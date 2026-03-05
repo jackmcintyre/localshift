@@ -1,10 +1,16 @@
 #!/bin/bash
-# Post-checkout hook: Display warning when on main branch
-# Informational only - does not block
+# Post-checkout hook: Enforce worktree-only workflow
+# - Warn when checking out main
+# - Block checkout to main if uncommitted changes exist
 
 PREV_BRANCH="$1"
 NEW_BRANCH="$2"
 CHECKOUT_TYPE="$3"
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
 
 # Only run on branch checkouts (not file checkouts)
 if [ "$CHECKOUT_TYPE" != "1" ]; then
@@ -13,11 +19,36 @@ fi
 
 if [ "$NEW_BRANCH" = "main" ]; then
     echo ""
-    echo "=========================================="
-    echo "WARNING: You are now on the main branch"
-    echo "=========================================="
+    echo -e "${RED}==========================================${NC}"
+    echo -e "${RED}WARNING: You are now on the main branch${NC}"
+    echo -e "${RED}==========================================${NC}"
     echo ""
-    echo "Direct commits to main are blocked. All changes require a pull request."
+    
+    # Check for uncommitted changes
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+        echo -e "${RED}ERROR: Uncommitted changes detected!${NC}"
+        echo ""
+        echo "You have uncommitted changes that would be stranded on main."
+        echo ""
+        echo "Recommended action:"
+        echo "  1. Stash changes: git stash push -m 'work in progress'"
+        echo "  2. Create worktree: git worktree add worktrees/issue-{NNN} -b issue/{NNN}"
+        echo "  3. Checkout worktree: cd worktrees/issue-{NNN}"
+        echo "  4. Restore changes: git stash pop"
+        echo ""
+        echo -e "${YELLOW}Checkout blocked due to uncommitted changes${NC}"
+        echo -e "${RED}==========================================${NC}"
+        
+        # Attempt to go back to previous branch
+        if [ -n "$PREV_BRANCH" ] && [ "$PREV_BRANCH" != "main" ]; then
+            echo ""
+            echo "Returning to previous branch: $PREV_BRANCH"
+            git checkout "$PREV_BRANCH" 2>/dev/null
+        fi
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}Direct commits to main are blocked. All changes require a pull request.${NC}"
     echo ""
     echo "Recommended workflow:"
     echo "  git worktree add worktrees/issue-{NNN} -b issue/{NNN}"
@@ -25,7 +56,8 @@ if [ "$NEW_BRANCH" = "main" ]; then
     echo "Recent main branch activity:"
     git log --oneline -3 --decorate 2>/dev/null | sed 's/^/  /'
     echo ""
-    echo "=========================================="
+    echo -e "${GREEN}Tip: Create a worktree to continue working${NC}"
+    echo -e "${RED}==========================================${NC}"
 fi
 
 exit 0

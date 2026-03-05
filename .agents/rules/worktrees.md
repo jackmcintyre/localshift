@@ -33,6 +33,29 @@ git worktree list
 
 ---
 
+## ⚠️ HARD STOP SIGNALS
+
+**When user issues any of these commands, IMMEDIATELY stop all work and respond:**
+
+| Trigger Phrase | Action |
+|---------------|--------|
+| "wrong branch" | Stop editing, check git branch, create worktree if needed |
+| "stop" | Halt all operations, await further instructions |
+| "wait" | Pause operations, ask user for clarification |
+| "hold on" | Stop and confirm what to do next |
+| "not on main" | Verify branch immediately, create worktree if on main |
+| "check branch" | Run `git branch --show-current` and `git worktree list` |
+| ALL CAPS warnings | Treat as urgent - stop and acknowledge |
+
+**Response protocol:**
+1. STOP immediately - no further edits
+2. Acknowledge the signal
+3. Run verification commands
+4. Explain current state and what action will be taken
+5. Wait for user confirmation before proceeding
+
+---
+
 ## ⚠️ FOUND CHANGES ON MAIN (Crashed Session / Orphaned Changes)
 
 **If you discover staged or unstaged changes on main (e.g., from a crashed session):**

@@ -2,6 +2,10 @@
 # Pre-push hook: Block all pushes from main branch
 # Emergency override: GIT_EMERGENCY_PUSH=1 (logged)
 
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
 REMOTE="$1"
 URL="$2"
 
@@ -11,13 +15,14 @@ if [ "$BRANCH" = "main" ]; then
     # Check for emergency override
     if [ "$GIT_EMERGENCY_PUSH" = "1" ]; then
         echo "$(date -Iseconds) - pre-push EMERGENCY OVERRIDE: push from main to $REMOTE" >> .git-bypass.log
-        echo "WARNING: Emergency push from main branch logged for audit"
+        echo -e "${YELLOW}WARNING: Emergency push from main branch logged for audit${NC}"
         exit 0
     fi
     
-    echo "=========================================="
-    echo "ERROR: Pushes from 'main' branch are blocked!"
-    echo "=========================================="
+    echo ""
+    echo -e "${RED}==========================================${NC}"
+    echo -e "${RED}ERROR: Pushes from 'main' branch are blocked!${NC}"
+    echo -e "${RED}==========================================${NC}"
     echo ""
     echo "The main branch is protected. Push from feature branches only."
     echo ""
@@ -29,7 +34,7 @@ if [ "$BRANCH" = "main" ]; then
     echo "Emergency override (logged, audit required):"
     echo "  GIT_EMERGENCY_PUSH=1 git push origin main"
     echo ""
-    echo "=========================================="
+    echo -e "${RED}==========================================${NC}"
     
     # Log the attempt
     echo "$(date -Iseconds) - pre-push blocked push from main to $REMOTE" >> .git-bypass.log
