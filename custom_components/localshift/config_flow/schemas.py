@@ -53,45 +53,43 @@ def build_user_schema(
     if user_input is not None:
         defaults = user_input
 
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_TESLEMETRY_OPERATION_MODE,
-                default=defaults.get(CONF_TESLEMETRY_OPERATION_MODE, ""),
-                description="Current battery mode (e.g., self_consumption, grid_charging)",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="select")),
-            vol.Required(
-                CONF_TESLEMETRY_BACKUP_RESERVE,
-                default=defaults.get(CONF_TESLEMETRY_BACKUP_RESERVE, ""),
-                description="Backup reserve setting (percentage)",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="number")),
-            vol.Required(
-                CONF_TESLEMETRY_SOC,
-                default=defaults.get(CONF_TESLEMETRY_SOC, ""),
-                description="Battery state of charge",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_TESLEMETRY_GRID_POWER,
-                default=defaults.get(CONF_TESLEMETRY_GRID_POWER, ""),
-                description="Grid import/export power",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_TESLEMETRY_BATTERY_POWER,
-                default=defaults.get(CONF_TESLEMETRY_BATTERY_POWER, ""),
-                description="Battery charge/discharge power",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_TESLEMETRY_SOLAR_POWER,
-                default=defaults.get(CONF_TESLEMETRY_SOLAR_POWER, ""),
-                description="Solar production power",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_TESLEMETRY_LOAD_POWER,
-                default=defaults.get(CONF_TESLEMETRY_LOAD_POWER, ""),
-                description="Home load power",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-        }
-    )
+    return vol.Schema({
+        vol.Required(
+            CONF_TESLEMETRY_OPERATION_MODE,
+            default=defaults.get(CONF_TESLEMETRY_OPERATION_MODE, ""),
+            description="Current battery mode (e.g., self_consumption, grid_charging)",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="select")),
+        vol.Required(
+            CONF_TESLEMETRY_BACKUP_RESERVE,
+            default=defaults.get(CONF_TESLEMETRY_BACKUP_RESERVE, ""),
+            description="Backup reserve setting (percentage)",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="number")),
+        vol.Required(
+            CONF_TESLEMETRY_SOC,
+            default=defaults.get(CONF_TESLEMETRY_SOC, ""),
+            description="Battery state of charge",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_TESLEMETRY_GRID_POWER,
+            default=defaults.get(CONF_TESLEMETRY_GRID_POWER, ""),
+            description="Grid import/export power",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_TESLEMETRY_BATTERY_POWER,
+            default=defaults.get(CONF_TESLEMETRY_BATTERY_POWER, ""),
+            description="Battery charge/discharge power",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_TESLEMETRY_SOLAR_POWER,
+            default=defaults.get(CONF_TESLEMETRY_SOLAR_POWER, ""),
+            description="Solar production power",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_TESLEMETRY_LOAD_POWER,
+            default=defaults.get(CONF_TESLEMETRY_LOAD_POWER, ""),
+            description="Home load power",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+    })
 
 
 def build_pricing_schema(
@@ -114,37 +112,35 @@ def build_pricing_schema(
     if user_input is not None:
         defaults = user_input
 
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_PRICING_GENERAL_PRICE,
-                default=defaults.get(CONF_PRICING_GENERAL_PRICE, ""),
-                description="Grid import price ($/kWh)",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_PRICING_FEED_IN_PRICE,
-                default=defaults.get(CONF_PRICING_FEED_IN_PRICE, ""),
-                description="Solar export/feed-in price ($/kWh)",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_PRICING_GENERAL_FORECAST,
-                default=defaults.get(CONF_PRICING_GENERAL_FORECAST, ""),
-                description="Grid import price forecast",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_PRICING_FEED_IN_FORECAST,
-                default=defaults.get(CONF_PRICING_FEED_IN_FORECAST, ""),
-                description="Feed-in price forecast",
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_PRICING_PRICE_SPIKE,
-                default=defaults.get(CONF_PRICING_PRICE_SPIKE, ""),
-                description="Price spike alert (binary sensor)",
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="binary_sensor")
-            ),
-        }
-    )
+    return vol.Schema({
+        vol.Required(
+            CONF_PRICING_GENERAL_PRICE,
+            default=defaults.get(CONF_PRICING_GENERAL_PRICE, ""),
+            description="Grid import price ($/kWh)",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_PRICING_FEED_IN_PRICE,
+            default=defaults.get(CONF_PRICING_FEED_IN_PRICE, ""),
+            description="Solar export/feed-in price ($/kWh)",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_PRICING_GENERAL_FORECAST,
+            default=defaults.get(CONF_PRICING_GENERAL_FORECAST, ""),
+            description="Grid import price forecast",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_PRICING_FEED_IN_FORECAST,
+            default=defaults.get(CONF_PRICING_FEED_IN_FORECAST, ""),
+            description="Feed-in price forecast",
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_PRICING_PRICE_SPIKE,
+            default=defaults.get(CONF_PRICING_PRICE_SPIKE, ""),
+            description="Price spike alert (binary sensor)",
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="binary_sensor")
+        ),
+    })
 
 
 def build_solcast_schema(

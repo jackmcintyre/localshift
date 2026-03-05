@@ -460,90 +460,88 @@ class LocalShiftOptionsFlow(OptionsFlow):
         import voluptuous as vol
         from homeassistant.helpers import selector
 
-        return vol.Schema(
-            {
-                # Notification settings
-                vol.Required(
-                    CONF_NOTIFY_SERVICE,
-                    default=values.get(CONF_NOTIFY_SERVICE, ""),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=notify_services,
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                        custom_value=True,
-                    )
-                ),
-                # Demand window timing
-                vol.Required(
+        return vol.Schema({
+            # Notification settings
+            vol.Required(
+                CONF_NOTIFY_SERVICE,
+                default=values.get(CONF_NOTIFY_SERVICE, ""),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=notify_services,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=True,
+                )
+            ),
+            # Demand window timing
+            vol.Required(
+                CONF_DEMAND_WINDOW_START,
+                default=values.get(
                     CONF_DEMAND_WINDOW_START,
-                    default=values.get(
-                        CONF_DEMAND_WINDOW_START,
-                        DEFAULT_DEMAND_WINDOW_START,
-                    ),
-                    description="Start of evening peak period (grid imports blocked)",
-                ): selector.TimeSelector(),
-                vol.Required(
+                    DEFAULT_DEMAND_WINDOW_START,
+                ),
+                description="Start of evening peak period (grid imports blocked)",
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_DEMAND_WINDOW_END,
+                default=values.get(
                     CONF_DEMAND_WINDOW_END,
-                    default=values.get(
-                        CONF_DEMAND_WINDOW_END,
-                        DEFAULT_DEMAND_WINDOW_END,
-                    ),
-                    description="End of evening peak period",
-                ): selector.TimeSelector(),
-                vol.Required(
+                    DEFAULT_DEMAND_WINDOW_END,
+                ),
+                description="End of evening peak period",
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_MANUAL_OVERRIDE_TIMEOUT,
+                default=values.get(
                     CONF_MANUAL_OVERRIDE_TIMEOUT,
-                    default=values.get(
-                        CONF_MANUAL_OVERRIDE_TIMEOUT,
-                        DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
-                    ),
-                    description="Auto-clear manual mode after this time",
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0,
-                        max=24,
-                        step=1,
-                        unit_of_measurement="hours",
-                        mode=selector.NumberSelectorMode.SLIDER,
-                    )
+                    DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
                 ),
-                # Weather entity (optional)
-                vol.Optional(
+                description="Auto-clear manual mode after this time",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=24,
+                    step=1,
+                    unit_of_measurement="hours",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            # Weather entity (optional)
+            vol.Optional(
+                CONF_WEATHER_ENTITY,
+                default=values.get(
                     CONF_WEATHER_ENTITY,
-                    default=values.get(
-                        CONF_WEATHER_ENTITY,
-                        DEFAULT_WEATHER_ENTITY,
-                    ),
-                    description="For solar forecast correlation (optional)",
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=weather_entities
-                        if weather_entities
-                        else [DEFAULT_WEATHER_ENTITY],
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
+                    DEFAULT_WEATHER_ENTITY,
                 ),
-                # Optimization mode
-                vol.Optional(
+                description="For solar forecast correlation (optional)",
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=weather_entities
+                    if weather_entities
+                    else [DEFAULT_WEATHER_ENTITY],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            # Optimization mode
+            vol.Optional(
+                CONF_OPTIMIZATION_MODE,
+                default=values.get(
                     CONF_OPTIMIZATION_MODE,
-                    default=values.get(
-                        CONF_OPTIMIZATION_MODE,
-                        DEFAULT_OPTIMIZATION_MODE,
-                    ),
-                    description="Optimizer objective: minimize cost or maximize self-use",
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            {
-                                "label": "Self Consumption (maximize solar use)",
-                                "value": "self_consumption",
-                            },
-                            {
-                                "label": "Arbitrage (minimize total cost)",
-                                "value": "arbitrage",
-                            },
-                        ],
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
+                    DEFAULT_OPTIMIZATION_MODE,
                 ),
-            }
-        )
+                description="Optimizer objective: minimize cost or maximize self-use",
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {
+                            "label": "Self Consumption (maximize solar use)",
+                            "value": "self_consumption",
+                        },
+                        {
+                            "label": "Arbitrage (minimize total cost)",
+                            "value": "arbitrage",
+                        },
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        })

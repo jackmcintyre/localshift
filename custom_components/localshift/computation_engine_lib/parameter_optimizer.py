@@ -161,15 +161,13 @@ class ParameterOptimizer:
                         optimal_value,
                         confidence,
                     )
-                    self._adjustment_log.append(
-                        {
-                            "timestamp": datetime.now().isoformat(),
-                            "param": param_name,
-                            "old_value": old_value,
-                            "new_value": optimal_value,
-                            "confidence": confidence,
-                        }
-                    )
+                    self._adjustment_log.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "param": param_name,
+                        "old_value": old_value,
+                        "new_value": optimal_value,
+                        "confidence": confidence,
+                    })
 
         # Apply bias corrections from pattern analysis (Issue #170 Phase 3)
         if bias_corrections:

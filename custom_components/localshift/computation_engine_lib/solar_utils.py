@@ -109,16 +109,14 @@ def get_solar_for_15min_slot(
             contribution = period_kwh * overlap_fraction
             total_solar += contribution
 
-            matched_entries.append(
-                {
-                    "period_start": start_local.strftime("%Y-%m-%d %H:%M"),
-                    "pv_estimate": pv_estimate,
-                    "pv_estimate10": pv_estimate10,
-                    "selected_value": period_kwh,
-                    "overlap_pct": overlap_fraction * 100,
-                    "contribution": contribution,
-                }
-            )
+            matched_entries.append({
+                "period_start": start_local.strftime("%Y-%m-%d %H:%M"),
+                "pv_estimate": pv_estimate,
+                "pv_estimate10": pv_estimate10,
+                "selected_value": period_kwh,
+                "overlap_pct": overlap_fraction * 100,
+                "contribution": contribution,
+            })
 
     # Debug: log detailed match info for afternoon slots (14:00-18:00)
     slot_hour = slot_start.hour
