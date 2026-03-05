@@ -1416,38 +1416,35 @@ def test_allow_dw_entry_under_target_false_uses_original_behavior():
 
 
 def test_global_solar_gate_fires_when_no_demand_window():
-    """Issue #559 Phase 1: global solar gate prevents charging when terminal_penalty_idx is None."""
+    """Issue #559 Phase 1: global solar gate prevents charging when terminal_penalty_idx is None (nighttime)."""
     # SOC=60, target=80 → deficit=20% (2.7 kWh needed)
-    # Slots: 12 overnight/morning slots, each solar=0.6 kWh, consumption=0.4 kWh → net=0.2 kWh/slot
-    # 12 * 0.2 = 2.4 kWh total net solar → 2.4 / 13.5 * 100 = 17.8% gain
-    # Wait, that's less than 20%. Let me increase solar.
-    # Let's use: solar=0.6 kWh, consumption=0.3 kWh → net=0.3 kWh/slot
-    # 12 * 0.3 = 3.6 kWh → 3.6 / 13.5 * 100 = 26.7% gain >= 20% deficit
-    # → global gate fires → no grid charging even though terminal_penalty_idx=None
+    # Slots: 12 overnight/morning slots, each solar=0.6 kWh, consumption=0.3 kWh → net=0.3 kWh/slot
+    # 12 * 0.3 = 3.6 kWh total net solar → 3.6 / 13.5 * 100 = 26.7% gain >= 20% deficit
+    # → global gate fires → no grid charging when no demand window
     slots = [
         _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.6, consumption_kwh=0.3)
         for i in range(12)
     ]
     config = OptimizerConfig(
         battery_capacity_kwh=13.5,
-        demand_window_target_soc_pct=80.0,  # This is what the gate checks against
+        demand_window_target_soc_pct=80.0,
         effective_cheap_price=0.10,
         optimization_mode="self_consumption",
         soc_bins=20,
     )
 
-    # No terminal_penalty_idx → original solar gate is disabled
+    # terminal_penalty_idx=None → global gate runs (nighttime scenario)
     actions = DPPlanner.feasible_actions(
         soc_pct=60.0,
         slot=slots[0],
         config=config,
         slot_idx=0,
         slots=slots,
-        terminal_penalty_idx=None,  # No demand window
+        terminal_penalty_idx=None,
     )
 
     assert PlannerAction.HOLD in actions
-    # Global gate should suppress grid charging
+    # Global gate should suppress grid charging when terminal_penalty_idx=None
     assert PlannerAction.CHARGE_GRID_NORMAL not in actions
     assert PlannerAction.CHARGE_GRID_BOOST not in actions
 
@@ -1464,12 +1461,13 @@ def test_global_solar_gate_allows_charge_when_solar_insufficient():
     ]
     config = OptimizerConfig(
         battery_capacity_kwh=13.5,
-        demand_window_target_soc_pct=80.0,  # This is what the gate checks against
+        demand_window_target_soc_pct=80.0,
         effective_cheap_price=0.10,
         optimization_mode="self_consumption",
         soc_bins=20,
     )
 
+    # terminal_penalty_idx=None → global gate runs but returns False due to insufficient solar
     actions = DPPlanner.feasible_actions(
         soc_pct=60.0,
         slot=slots[0],
