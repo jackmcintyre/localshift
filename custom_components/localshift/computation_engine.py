@@ -158,6 +158,9 @@ class ComputationEngine:
         # DP Planner for Phase 3 (#441) - eliminates one-cycle lag
         self._dp_planner = DPPlanner()
 
+        # Solar accuracy tracker for Issue #378/#513 - bias correction
+        self._solar_accuracy_tracker: Any = None
+
         # Local cache properties (delegated to history_fetcher for storage)
         self._previous_active_mode = None
         self._last_forecast_hour: int | None = None
@@ -165,6 +168,107 @@ class ComputationEngine:
 
         # Baseline load profile for Issue #137 (set by coordinator)
         self._baseline_avg_kw: dict[int, float] = {}
+
+    def set_solar_accuracy_tracker(self, tracker: Any) -> None:
+        """Set the solar accuracy tracker for bias correction.
+
+        Args:
+            tracker: SolarAccuracyTracker instance
+        """
+        self._solar_accuracy_tracker = tracker
+        _LOGGER.info("Solar accuracy tracker connected to computation engine")
+
+    def _record_forecasts_for_slots(
+        self,
+        slots: list[Any],
+        weather_condition: str,
+    ) -> None:
+        """Record solar forecasts for all slots with solar production.
+
+        Called after building slots to track forecasts for later bias analysis.
+
+        Args:
+            slots: List of SlotContext objects from slot_builder
+            weather_condition: Current weather condition string
+        """
+        if self._solar_accuracy_tracker is None:
+            return
+
+        recorded = 0
+        for slot in slots:
+            if slot.solar_kwh > 0.01:
+                period_start = datetime.fromisoformat(slot.timestamp_iso)
+                self._solar_accuracy_tracker.record_forecast(
+                    period_start=period_start,
+                    forecast_kwh=slot.solar_kwh,
+                    weather_condition=weather_condition,
+                )
+                recorded += 1
+
+        if recorded > 0:
+            _LOGGER.debug("Recorded %d solar forecasts for accuracy tracking", recorded)
+
+    def _apply_bias_correction_to_slots(
+        self,
+        slots: list[Any],
+        weather_condition: str,
+    ) -> None:
+        """Apply bias correction to solar forecasts for each slot.
+
+        Uses the solar accuracy tracker to get context-specific bias
+        and adjusts solar_kwh accordingly. Rounds down to avoid over-charging.
+
+        Args:
+            slots: List of SlotContext objects from slot_builder
+            weather_condition: Current weather condition string
+        """
+        if self._solar_accuracy_tracker is None:
+            return
+
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        hour = now.hour
+        if 6 <= hour < 12:
+            time_of_day = "morning"
+        elif 12 <= hour < 18:
+            time_of_day = "afternoon"
+        elif 18 <= hour < 21:
+            time_of_day = "evening"
+        else:
+            time_of_day = "night"
+
+        month = now.month
+        if month in (12, 1, 2):
+            season = "summer"
+        elif month in (3, 4, 5):
+            season = "autumn"
+        elif month in (6, 7, 8):
+            season = "winter"
+        else:
+            season = "spring"
+
+        bias_multiplier = self._solar_accuracy_tracker.get_bias_correction(
+            time_of_day, weather_condition, season
+        )
+
+        if bias_multiplier != 1.0:
+            corrected = 0
+            for slot in slots:
+                if slot.solar_kwh > 0.01:
+                    original = slot.solar_kwh
+                    slot.solar_kwh = max(0.0, slot.solar_kwh * bias_multiplier)
+                    if abs(slot.solar_kwh - original) > 0.001:
+                        corrected += 1
+            if corrected > 0:
+                _LOGGER.info(
+                    "Applied bias correction: multiplier=%.2f (%s/%s/%s), corrected %d slots",
+                    bias_multiplier,
+                    time_of_day,
+                    weather_condition,
+                    season,
+                    corrected,
+                )
 
     # ========================================================================
     # MAIN ENTRY POINT
@@ -845,6 +949,13 @@ class ComputationEngine:
             slots, slot_metadata = slot_builder.build_slots(
                 data, data.adaptive_params, now_dt=now_dt
             )
+
+            # Record forecasts for solar accuracy tracking (Issue #513)
+            weather_condition = getattr(data, "weather_condition", None) or "unknown"
+            self._record_forecasts_for_slots(slots, weather_condition)
+
+            # Apply bias correction to solar forecasts if tracker has data (Issue #513)
+            self._apply_bias_correction_to_slots(slots, weather_condition)
 
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")

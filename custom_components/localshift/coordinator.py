@@ -135,6 +135,10 @@ class LocalShiftCoordinator:
         self._solcast_ready: bool = False
         self._forecast_computed_on_startup: bool = False
 
+        # Solar energy tracking for backfill (Issue #513)
+        self._last_solar_power_kw: float = 0.0
+        self._last_solar_power_timestamp: datetime | None = None
+
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
@@ -263,6 +267,12 @@ class LocalShiftCoordinator:
             self.hass, self.entry.entry_id
         )
         await self.solar_accuracy_tracker.async_load()
+
+        # Wire solar accuracy tracker to computation engine for forecasting (Issue #513)
+        if self._computation_engine is not None:
+            self._computation_engine.set_solar_accuracy_tracker(
+                self.solar_accuracy_tracker
+            )
 
         # Wire the decision tracker to the state machine
         self._state_machine._decision_tracker = self.decision_tracker
@@ -880,7 +890,52 @@ class LocalShiftCoordinator:
                 "localshift_save_forecast_history",
             )
 
+        # Backfill actual solar energy for completed periods (Issue #513)
+        self._backfill_solar_actual()
+
         _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
+
+    def _backfill_solar_actual(self) -> None:
+        """Backfill actual solar energy for completed 30-min periods.
+
+        Calculates energy produced since last tick using integrated power,
+        then calls backfill_actual() on the tracker for completed periods.
+        """
+        if not hasattr(self, "solar_accuracy_tracker"):
+            return
+
+        tracker = getattr(self, "solar_accuracy_tracker", None)
+        if tracker is None:
+            return
+
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        current_power = self.data.solar_power_kw
+
+        if self._last_solar_power_timestamp is None:
+            self._last_solar_power_timestamp = now
+            self._last_solar_power_kw = current_power
+            return
+
+        time_delta_hours = (
+            now - self._last_solar_power_timestamp
+        ).total_seconds() / 3600.0
+        if time_delta_hours < 0.01:
+            return
+
+        avg_power_kw = (self._last_solar_power_kw + current_power) / 2.0
+        energy_kwh = avg_power_kw * time_delta_hours
+
+        if energy_kwh > 0.001 and current_power > 0.01:
+            now_local = now.astimezone()
+            period_start = now_local.replace(
+                minute=(now_local.minute // 30) * 30, second=0, microsecond=0
+            )
+            tracker.backfill_actual(period_start, energy_kwh)
+
+        self._last_solar_power_timestamp = now
+        self._last_solar_power_kw = current_power
 
     def _check_stale_price(self) -> bool:
         """Check if price sensor hasn't updated in STALE_PRICE_THRESHOLD.
