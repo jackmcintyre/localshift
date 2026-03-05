@@ -447,7 +447,7 @@ class LocalShiftCoordinator:
         if self._entity_validator is None:
             return
 
-        # Check all entities
+        # Check all entities (external dependencies)
         self._entity_validator.check_all_entities()
 
         # Update coordinator data with health status
@@ -465,6 +465,11 @@ class LocalShiftCoordinator:
         health_summary = self._entity_validator.get_health_summary()
         self.data.entity_health = health_summary.get("entities", {})
         self.data.last_entity_check = health_summary.get("last_check", "")
+
+        # Check LocalShift internal entities
+        self.data.localshift_entity_health = (
+            self._entity_validator.check_all_localshift_entities()
+        )
 
         # Log any new errors
         if self.data.entity_errors:
