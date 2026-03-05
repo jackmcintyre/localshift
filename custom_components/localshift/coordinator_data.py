@@ -413,6 +413,9 @@ class CoordinatorData:
     )  # Per-entity health status
     last_entity_check: str = ""  # ISO timestamp of last health check
     required_entities_healthy: bool = True  # Are all required entities available?
+    localshift_entity_health: dict[str, Any] = field(
+        default_factory=dict
+    )  # Health status for LocalShift internal entities
 
     # --- Learning system (Issue #170 Phase 1) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)

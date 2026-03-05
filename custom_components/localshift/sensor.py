@@ -747,18 +747,52 @@ class EntityHealthSensor(LocalShiftSensorBase):
 
     def _update_from_coordinator(self) -> None:
         """Update with count of healthy entities."""
-        health = self.coordinator.data.entity_health
-        healthy_count = sum(1 for e in health.values() if e.get("status") == "ok")
-        total_count = len(health)
+        dep_health = self.coordinator.data.entity_health
+        ls_health = self.coordinator.data.localshift_entity_health
+        all_entities = {**dep_health, **ls_health}
+        healthy_count = sum(1 for e in all_entities.values() if e.get("status") == "ok")
+        total_count = len(all_entities)
         self._attr_native_value = f"{healthy_count}/{total_count}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return detailed entity health."""
+        dep_health = self.coordinator.data.entity_health
+        ls_health = self.coordinator.data.localshift_entity_health
         return {
-            "entities": self.coordinator.data.entity_health,
+            "entities": dep_health,  # legacy key for backward compatibility
+            "dependencies": dep_health,
+            "localshift_entities": ls_health,
             "errors": self.coordinator.data.entity_errors,
             "warnings": self.coordinator.data.entity_warnings,
+            "summary": {
+                "dependencies": {
+                    "total": len(dep_health),
+                    "healthy": sum(
+                        1 for e in dep_health.values() if e.get("status") == "ok"
+                    ),
+                },
+                "localshift": {
+                    "total": len(ls_health),
+                    "healthy": sum(
+                        1 for e in ls_health.values() if e.get("status") == "ok"
+                    ),
+                    "by_category": {
+                        "required": sum(
+                            1
+                            for e in ls_health.values()
+                            if e.get("category") == "required"
+                            and e.get("status") == "ok"
+                        ),
+                        "optional": sum(
+                            1
+                            for e in ls_health.values()
+                            if e.get("category") == "optional"
+                            and e.get("status") == "ok"
+                        ),
+                    },
+                },
+            },
         }
 
 

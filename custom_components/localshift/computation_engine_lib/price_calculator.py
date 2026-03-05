@@ -510,6 +510,7 @@ class PriceCalculator:
 
         # Compute target datetime (demand window start)
         target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+
         for period in all_solcast:
             period_start = self._parse_forecast_dt(period.get("period_start"))
             if period_start is None:
