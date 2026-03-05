@@ -605,74 +605,155 @@ class DPPlanner:
         slots = inputs.slots
         n_slots = len(slots)
 
-        # Handle empty input
         if n_slots == 0:
-            return OptimizerResult(
-                success=True,
-                planner_version=self.VERSION,
-                total_slots=0,
-                states_explored=0,
-                decisions=[],
-                reason_code_histogram={},
-            )
+            return self._empty_result()
 
-        # Build SOC discretization grid
         soc_grid = _build_soc_grid(config)
-        n_bins = len(soc_grid)
+        demand_bounds = self._find_demand_window_bounds(slots)
+        solar_capable = self._check_solar_can_reach_target(inputs, demand_bounds)
+        terminal_penalty_idx = self._determine_terminal_penalty_idx(
+            config, demand_bounds
+        )
 
-        # Find demand window entry and end slots (if any)
-        demand_window_entry_idx = None
-        demand_window_end_idx = None
+        dp = self._initialize_dp_tables(
+            n_slots, soc_grid, config, terminal_penalty_idx, solar_capable
+        )
+        states_explored = self._backward_induction(
+            dp, slots, soc_grid, config, terminal_penalty_idx, inputs
+        )
+        decisions, totals, reason_histogram = self._forward_reconstruct(
+            dp, inputs, slots, soc_grid, config, terminal_penalty_idx
+        )
+
+        terminal_shortfall = self._compute_terminal_shortfall(
+            inputs, decisions, config, terminal_penalty_idx
+        )
+        can_solar = self._can_solar_reach_target(
+            inputs, slots, config, terminal_penalty_idx
+        )
+
+        return OptimizerResult(
+            success=True,
+            planner_version=self.VERSION,
+            total_slots=n_slots,
+            states_explored=states_explored,
+            decisions=decisions,
+            projected_import_kwh=totals["import"],
+            projected_export_kwh=totals["export"],
+            projected_net_cost=totals["net_cost"],
+            terminal_shortfall_pct=terminal_shortfall,
+            can_solar_reach_target=can_solar,
+            can_solar_reach_target_in_dw=solar_capable,
+            reason_code_histogram=reason_histogram,
+        )
+
+    def _empty_result(self) -> OptimizerResult:
+        """Return empty optimizer result."""
+        return OptimizerResult(
+            success=True,
+            planner_version=self.VERSION,
+            total_slots=0,
+            states_explored=0,
+            decisions=[],
+            reason_code_histogram={},
+        )
+
+    def _find_demand_window_bounds(
+        self, slots: list[SlotContext]
+    ) -> dict[str, int | None]:
+        """Find demand window entry and end indices.
+
+        Args:
+            slots: List of slot contexts
+
+        Returns:
+            Dict with 'entry_idx' and 'end_idx' keys
+        """
+        entry_idx = None
+        end_idx = None
         in_demand_window = False
+
         for i, slot in enumerate(slots):
             if slot.is_demand_window_entry:
-                demand_window_entry_idx = i
+                entry_idx = i
             if slot.is_demand_window_slot:
                 in_demand_window = True
-            # DW ends when we see the first slot that's not in DW after being in DW
             if in_demand_window and not slot.is_demand_window_slot:
-                demand_window_end_idx = i - 1
+                end_idx = i - 1
                 break
 
-        # If DW extends to end of horizon, set end to last slot
-        if in_demand_window and demand_window_end_idx is None:
-            demand_window_end_idx = n_slots - 1
+        if in_demand_window and end_idx is None:
+            end_idx = len(slots) - 1
 
-        # Pre-compute whether solar can reach target during DW (Issue #505)
-        # Used to conditionally zero out terminal penalty when allow_dw_entry_under_target=True
-        solar_can_reach_target_in_dw = False
-        if config.allow_dw_entry_under_target and demand_window_entry_idx is not None:
-            max_soc_in_dw = _simulate_max_soc_in_demand_window(
-                inputs.initial_soc_pct, slots, config
-            )
-            solar_can_reach_target_in_dw = (
-                max_soc_in_dw >= config.demand_window_target_soc_pct
-            )
+        return {"entry_idx": entry_idx, "end_idx": end_idx}
 
-        # Determine where to apply terminal penalty
-        # If allow_dw_entry_under_target is True, apply at DW end (allows solar during DW)
-        # Otherwise, apply at DW entry (must meet target by DW start)
-        if config.allow_dw_entry_under_target and demand_window_end_idx is not None:
-            terminal_penalty_idx = demand_window_end_idx
-        else:
-            terminal_penalty_idx = demand_window_entry_idx
+    def _check_solar_can_reach_target(
+        self, inputs: OptimizerInputs, demand_bounds: dict[str, int | None]
+    ) -> bool:
+        """Check if solar can reach target during demand window.
 
-        # ------------------------------------------------------------------
-        # Forward pass: compute cost-to-go tables
-        # dp[slot_idx][soc_bin] = (min_cost, best_action, next_soc_bin)
-        # ------------------------------------------------------------------
+        Args:
+            inputs: Optimizer inputs
+            demand_bounds: Demand window bounds
+
+        Returns:
+            True if solar can reach target
+        """
+        config = inputs.config
+        demand_window_entry_idx = demand_bounds["entry_idx"]
+
+        if not config.allow_dw_entry_under_target or demand_window_entry_idx is None:
+            return False
+
+        max_soc_in_dw = _simulate_max_soc_in_demand_window(
+            inputs.initial_soc_pct, inputs.slots, config
+        )
+        return max_soc_in_dw >= config.demand_window_target_soc_pct
+
+    def _determine_terminal_penalty_idx(
+        self, config: OptimizerConfig, demand_bounds: dict[str, int | None]
+    ) -> int | None:
+        """Determine where to apply terminal penalty.
+
+        Args:
+            config: Optimizer config
+            demand_bounds: Demand window bounds
+
+        Returns:
+            Terminal penalty index or None
+        """
+        if config.allow_dw_entry_under_target and demand_bounds["end_idx"] is not None:
+            return demand_bounds["end_idx"]
+        return demand_bounds["entry_idx"]
+
+    def _initialize_dp_tables(
+        self,
+        n_slots: int,
+        soc_grid: list[float],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        solar_can_reach_target: bool,
+    ) -> list[dict[int, tuple[float, PlannerAction, int, float, float, float]]]:
+        """Initialize DP tables with terminal costs.
+
+        Args:
+            n_slots: Number of slots
+            soc_grid: SOC discretization grid
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+            solar_can_reach_target: Whether solar can reach target
+
+        Returns:
+            Initialized DP tables
+        """
         dp: list[dict[int, tuple[float, PlannerAction, int, float, float, float]]] = [
             {} for _ in range(n_slots + 1)
         ]
 
-        # Initialize terminal costs (after last slot)
         if terminal_penalty_idx is not None:
-            # Apply shortfall penalty at terminal penalty index
             target = config.demand_window_target_soc_pct
             for bin_idx, soc in enumerate(soc_grid):
-                # Issue #505: When allow_dw_entry_under_target=True and solar can reach
-                # target during DW, zero out the terminal penalty (trust solar)
-                if config.allow_dw_entry_under_target and solar_can_reach_target_in_dw:
+                if config.allow_dw_entry_under_target and solar_can_reach_target:
                     shortfall_penalty = 0.0
                 else:
                     shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
@@ -685,140 +766,195 @@ class DPPlanner:
                     0.0,
                 )
         else:
-            # No demand window - no terminal penalty
+            n_bins = len(soc_grid)
             for bin_idx in range(n_bins):
                 dp[n_slots][bin_idx] = (0.0, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
 
+        return dp
+
+    def _backward_induction(
+        self,
+        dp: list[dict],
+        slots: list[SlotContext],
+        soc_grid: list[float],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        inputs: OptimizerInputs,
+    ) -> int:
+        """Perform backward induction to fill DP tables.
+
+        Args:
+            dp: DP tables
+            slots: Slot contexts
+            soc_grid: SOC grid
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+            inputs: Optimizer inputs
+
+        Returns:
+            Number of states explored
+        """
+        n_slots = len(slots)
         states_explored = 0
 
-        # Backward induction: fill DP tables from last slot to first
         for slot_idx in range(n_slots - 1, -1, -1):
             slot = slots[slot_idx]
-
             for bin_idx, soc in enumerate(soc_grid):
-                # Get feasible actions for this state
-                actions = DPPlanner.feasible_actions(
-                    soc,
+                best, action_count = self._compute_best_action(
+                    dp,
+                    slot_idx,
                     slot,
+                    soc,
+                    soc_grid,
                     config,
-                    slot_idx=slot_idx,
-                    slots=slots,
-                    terminal_penalty_idx=terminal_penalty_idx,
+                    terminal_penalty_idx,
+                    slots,
+                    inputs,
+                )
+                dp[slot_idx][bin_idx] = best
+                states_explored += action_count
+
+        return states_explored
+
+    def _compute_best_action(
+        self,
+        dp: list[dict],
+        slot_idx: int,
+        slot: SlotContext,
+        soc: float,
+        soc_grid: list[float],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        slots: list[SlotContext],
+        inputs: OptimizerInputs,
+    ) -> tuple[tuple[float, PlannerAction, int, float, float, float], int]:
+        """Compute best action for a state.
+
+        Args:
+            dp: DP tables
+            slot_idx: Slot index
+            slot: Slot context
+            soc: Current SOC
+            soc_grid: SOC grid
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+            slots: All slots
+            inputs: Optimizer inputs
+
+        Returns:
+            Tuple of (best result tuple, actions explored count)
+        """
+        actions = DPPlanner.feasible_actions(
+            soc,
+            slot,
+            config,
+            slot_idx=slot_idx,
+            slots=slots,
+            terminal_penalty_idx=terminal_penalty_idx,
+        )
+
+        best_cost = float("inf")
+        best_action = PlannerAction.HOLD
+        best_next_bin = 0
+        best_import = 0.0
+        best_export = 0.0
+        best_next_soc = soc
+        states_explored = 0
+
+        for action in actions:
+            next_soc, grid_import, grid_export = DPPlanner.transition(
+                soc, action, slot, config
+            )
+            next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
+            next_bin = _map_soc_to_bin(next_soc, soc_grid)
+            future_cost = dp[slot_idx + 1].get(next_bin, (float("inf"),))[0]
+
+            if future_cost == float("inf") and dp[slot_idx + 1]:
+                future_cost = _interpolate_cost_to_soc(
+                    next_soc, soc_grid, {k: v[0] for k, v in dp[slot_idx + 1].items()}
                 )
 
-                best_cost = float("inf")
-                best_action = PlannerAction.HOLD
-                best_next_bin = bin_idx
-                best_import = 0.0
-                best_export = 0.0
-                best_next_soc = soc
+            is_switch = (
+                slot_idx == 0
+                and inputs.current_action is not None
+                and action != inputs.current_action
+            )
+            stage = DPPlanner.stage_cost(
+                action,
+                grid_import,
+                grid_export,
+                slot,
+                config,
+                soc_pct=soc,
+                is_switch=is_switch,
+            )
+            total_cost = stage.net_cost + future_cost
 
-                for action in actions:
-                    # Compute transition
-                    next_soc, grid_import, grid_export = DPPlanner.transition(
-                        soc, action, slot, config
-                    )
+            if total_cost < best_cost or (
+                total_cost == best_cost
+                and _ACTION_PRIORITY.get(action, 99)
+                < _ACTION_PRIORITY.get(best_action, 99)
+            ):
+                best_cost = total_cost
+                best_action = action
+                best_next_bin = next_bin
+                best_import = grid_import
+                best_export = grid_export
+                best_next_soc = next_soc
 
-                    # Clamp next_soc to valid range
-                    next_soc = max(
-                        config.min_soc_pct, min(config.max_soc_pct, next_soc)
-                    )
+            states_explored += 1
 
-                    # Map next_soc to nearest bin
-                    next_bin = _map_soc_to_bin(next_soc, soc_grid)
+        return (
+            (
+                best_cost,
+                best_action,
+                best_next_bin,
+                best_import,
+                best_export,
+                best_next_soc,
+            ),
+            states_explored,
+        )
 
-                    # Get future cost from next slot
-                    future_cost = dp[slot_idx + 1].get(next_bin, (float("inf"),))[0]
+    def _forward_reconstruct(
+        self,
+        dp: list[dict],
+        inputs: OptimizerInputs,
+        slots: list[SlotContext],
+        soc_grid: list[float],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> tuple[list[PlannedSlotDecision], dict[str, float], dict[str, int]]:
+        """Reconstruct optimal path forward.
 
-                    # If exact bin not found, interpolate
-                    if future_cost == float("inf") and dp[slot_idx + 1]:
-                        future_cost = _interpolate_cost_to_soc(
-                            next_soc,
-                            soc_grid,
-                            {k: v[0] for k, v in dp[slot_idx + 1].items()},
-                        )
+        Args:
+            dp: DP tables
+            inputs: Optimizer inputs
+            slots: Slot contexts
+            soc_grid: SOC grid
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
 
-                    # Compute stage cost
-                    is_switch = (
-                        slot_idx == 0
-                        and inputs.current_action is not None
-                        and action != inputs.current_action
-                    )
-                    stage = DPPlanner.stage_cost(
-                        action,
-                        grid_import,
-                        grid_export,
-                        slot,
-                        config,
-                        soc_pct=soc,
-                        is_switch=is_switch,
-                    )
-                    total_cost = stage.net_cost + future_cost
-
-                    # Deterministic tie-breaking: prefer lower priority index
-                    if total_cost < best_cost or (
-                        total_cost == best_cost
-                        and _ACTION_PRIORITY.get(action, 99)
-                        < _ACTION_PRIORITY.get(best_action, 99)
-                    ):
-                        best_cost = total_cost
-                        best_action = action
-                        best_next_bin = next_bin
-                        best_import = grid_import
-                        best_export = grid_export
-                        best_next_soc = next_soc
-
-                    states_explored += 1
-
-                dp[slot_idx][bin_idx] = (
-                    best_cost,
-                    best_action,
-                    best_next_bin,
-                    best_import,
-                    best_export,
-                    best_next_soc,
-                )
-
-        # ------------------------------------------------------------------
-        # Forward pass: reconstruct optimal path
-        # ------------------------------------------------------------------
+        Returns:
+            Tuple of (decisions, totals, reason_histogram)
+        """
         decisions: list[PlannedSlotDecision] = []
         current_soc = inputs.initial_soc_pct
         current_bin = _map_soc_to_bin(current_soc, soc_grid)
-
-        total_import = 0.0
-        total_export = 0.0
-        total_net_cost = 0.0
+        totals = {"import": 0.0, "export": 0.0, "net_cost": 0.0}
         reason_histogram: dict[str, int] = {}
 
         for slot_idx, slot in enumerate(slots):
             if current_bin not in dp[slot_idx]:
-                # Fallback: should not happen with proper initialization
-                _LOGGER.warning(
-                    "DP state missing at slot %d, bin %d - using HOLD fallback",
-                    slot_idx,
-                    current_bin,
-                )
                 action = PlannerAction.HOLD
             else:
-                # Read optimal action from DP table (determined by backward
-                # induction at the bin-center SOC).
                 _, action, _, _, _, _ = dp[slot_idx][current_bin]
 
-            # Re-compute the transition from the actual current_soc rather
-            # than using the stored bin-center values.  The DP table stores
-            # grid_import/export/next_soc computed at the bin-center SOC,
-            # which can differ from the true SOC tracked through the forward
-            # pass.  This mismatch causes physically incorrect energy
-            # quantities — most visibly, zero grid_import at the SOC floor
-            # when the bin center had just enough headroom to cover load but
-            # the actual SOC does not.  (Fixes #414)
             next_soc, grid_import, grid_export = DPPlanner.transition(
                 current_soc, action, slot, config
             )
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
 
-            # Compute stage cost for this decision
             is_switch = (
                 slot_idx == 0
                 and inputs.current_action is not None
@@ -834,19 +970,17 @@ class DPPlanner:
                 is_switch=is_switch,
             )
 
-            # Determine reason code
             reason = self._classify_reason(
-                action=action,
-                slot=slot,
-                slot_idx=slot_idx,
-                slots=slots,
-                soc=current_soc,
-                next_soc=next_soc,
-                config=config,
-                terminal_penalty_idx=terminal_penalty_idx,
+                action,
+                slot,
+                slot_idx,
+                slots,
+                current_soc,
+                next_soc,
+                config,
+                terminal_penalty_idx,
             )
 
-            # Record decision
             decision = PlannedSlotDecision(
                 slot_index=slot.slot_index,
                 timestamp_iso=slot.timestamp_iso,
@@ -864,34 +998,71 @@ class DPPlanner:
             )
             decisions.append(decision)
 
-            # Update accumulators
-            total_import += grid_import
-            total_export += grid_export
-            total_net_cost += stage.net_cost
+            totals["import"] += grid_import
+            totals["export"] += grid_export
+            totals["net_cost"] += stage.net_cost
             reason_key = reason.value
             reason_histogram[reason_key] = reason_histogram.get(reason_key, 0) + 1
 
-            # Advance state
             current_soc = next_soc
             current_bin = _map_soc_to_bin(current_soc, soc_grid)
 
-        # Calculate terminal shortfall at the terminal penalty index
-        terminal_shortfall = 0.0
-        if terminal_penalty_idx is not None:
-            target = config.demand_window_target_soc_pct
-            if config.allow_dw_entry_under_target:
-                # Issue #505: Shortfall based on max SOC during DW
-                max_soc_in_dw = _simulate_max_soc_in_demand_window(
-                    inputs.initial_soc_pct, slots, config
-                )
-                terminal_shortfall = max(0.0, target - max_soc_in_dw)
-            elif terminal_penalty_idx < len(decisions):
-                # Original: shortfall at fixed checkpoint
-                terminal_soc = decisions[terminal_penalty_idx].predicted_soc_pct
-                terminal_shortfall = max(0.0, target - terminal_soc)
+        return decisions, totals, reason_histogram
 
-        # Determine if solar alone can reach the DW target (Phase 4, #441)
-        can_solar = (
+    def _compute_terminal_shortfall(
+        self,
+        inputs: OptimizerInputs,
+        decisions: list[PlannedSlotDecision],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> float:
+        """Compute terminal shortfall.
+
+        Args:
+            inputs: Optimizer inputs
+            decisions: Planned decisions
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+
+        Returns:
+            Terminal shortfall percentage
+        """
+        if terminal_penalty_idx is None:
+            return 0.0
+
+        target = config.demand_window_target_soc_pct
+
+        if config.allow_dw_entry_under_target:
+            max_soc_in_dw = _simulate_max_soc_in_demand_window(
+                inputs.initial_soc_pct, inputs.slots, config
+            )
+            return max(0.0, target - max_soc_in_dw)
+
+        if terminal_penalty_idx < len(decisions):
+            terminal_soc = decisions[terminal_penalty_idx].predicted_soc_pct
+            return max(0.0, target - terminal_soc)
+
+        return 0.0
+
+    def _can_solar_reach_target(
+        self,
+        inputs: OptimizerInputs,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> bool:
+        """Check if solar alone can reach target.
+
+        Args:
+            inputs: Optimizer inputs
+            slots: Slot contexts
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+
+        Returns:
+            True if solar can reach target
+        """
+        return (
             _simulate_solar_only_terminal_soc(
                 initial_soc_pct=inputs.initial_soc_pct,
                 slots=slots,
@@ -899,21 +1070,6 @@ class DPPlanner:
                 config=config,
             )
             >= config.demand_window_target_soc_pct
-        )
-
-        return OptimizerResult(
-            success=True,
-            planner_version=self.VERSION,
-            total_slots=n_slots,
-            states_explored=states_explored,
-            decisions=decisions,
-            projected_import_kwh=total_import,
-            projected_export_kwh=total_export,
-            projected_net_cost=total_net_cost,
-            terminal_shortfall_pct=terminal_shortfall,
-            can_solar_reach_target=can_solar,
-            can_solar_reach_target_in_dw=solar_can_reach_target_in_dw,
-            reason_code_histogram=reason_histogram,
         )
 
     def _classify_reason(
@@ -932,69 +1088,161 @@ class DPPlanner:
 
         Uses deterministic rules to assign a primary reason code.
         """
-        # SOC constraint checks
         if action == PlannerAction.HOLD:
-            if soc >= config.max_soc_pct - 0.5:
-                return PlannerReasonCode.SOC_CEILING_CONSTRAINT
-            if soc <= config.min_soc_pct + 0.5:
-                return PlannerReasonCode.SOC_FLOOR_CONSTRAINT
-
-        # Export reasoning
+            return self._classify_hold_reason(soc, slot, next_soc, config)
         if action == PlannerAction.EXPORT_PROACTIVE:
-            if slot.sell_price > 0:
-                return PlannerReasonCode.HIGH_SELL_PRICE_EXPORT
-            # Should not reach here if feasible_actions blocks negative FIT
-            return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
-
-        # Grid charge reasoning
+            return self._classify_export_reason(slot)
         if action in (
             PlannerAction.CHARGE_GRID_NORMAL,
             PlannerAction.CHARGE_GRID_BOOST,
         ):
-            # Check if needed for demand window target
-            # Use terminal_penalty_idx which is DW entry (default) or DW end (if allow_dw_entry_under_target)
-            if terminal_penalty_idx is not None and slot_idx < terminal_penalty_idx:
-                soc_deficit = config.demand_window_target_soc_pct - soc
-                if soc_deficit > 0:
-                    # Use shared helper (same calculation as feasible_actions solar gate).
-                    potential_soc_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
-                        slot_idx=slot_idx,
-                        slots=slots,
-                        terminal_penalty_idx=terminal_penalty_idx,
-                        battery_capacity_kwh=config.battery_capacity_kwh,
-                    )
-                    if potential_soc_gain_pct < soc_deficit:
-                        return PlannerReasonCode.TARGET_SHORTFALL_RISK
-
-            # Check for cheap import opportunity
-            if slot.buy_price <= config.effective_cheap_price:
-                # Issue #431: Horizon Guard
-                # If blind to next day's solar, don't use CHEAP_IMPORT_WINDOW reason
-                # unless price is exceptionally cheap (safety net).
-                is_blind = False
-                if terminal_penalty_idx is None:
-                    is_blind = True
-                else:
-                    # Estimate visibility beyond terminal penalty
-                    slots_beyond = len(slots) - terminal_penalty_idx - 1
-                    if slots_beyond < 8:  # < 4 hours visibility into DW
-                        is_blind = True
-
-                if not is_blind or slot.buy_price <= (
-                    config.effective_cheap_price * 0.8
-                ):
-                    return PlannerReasonCode.CHEAP_IMPORT_WINDOW
-
-            return PlannerReasonCode.TARGET_SHORTFALL_RISK
-
-        # HOLD with solar surplus
-        if action == PlannerAction.HOLD:
-            net_kwh = slot.solar_kwh - slot.consumption_kwh
-            if net_kwh > 0 and next_soc > soc:
-                return PlannerReasonCode.SOLAR_SURPLUS_CAPTURE
-
-        # Default
+            return self._classify_charge_reason(
+                slot, slot_idx, slots, soc, config, terminal_penalty_idx
+            )
         return PlannerReasonCode.IDLE
+
+    def _classify_hold_reason(
+        self,
+        soc: float,
+        slot: SlotContext,
+        next_soc: float,
+        config: OptimizerConfig,
+    ) -> PlannerReasonCode:
+        """Classify HOLD action reason.
+
+        Args:
+            soc: Current SOC
+            slot: Slot context
+            next_soc: Next SOC
+            config: Optimizer config
+
+        Returns:
+            Reason code for HOLD action
+        """
+        if soc >= config.max_soc_pct - 0.5:
+            return PlannerReasonCode.SOC_CEILING_CONSTRAINT
+        if soc <= config.min_soc_pct + 0.5:
+            return PlannerReasonCode.SOC_FLOOR_CONSTRAINT
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        if net_kwh > 0 and next_soc > soc:
+            return PlannerReasonCode.SOLAR_SURPLUS_CAPTURE
+        return PlannerReasonCode.IDLE
+
+    def _classify_export_reason(self, slot: SlotContext) -> PlannerReasonCode:
+        """Classify EXPORT action reason.
+
+        Args:
+            slot: Slot context
+
+        Returns:
+            Reason code for EXPORT action
+        """
+        if slot.sell_price > 0:
+            return PlannerReasonCode.HIGH_SELL_PRICE_EXPORT
+        return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
+
+    def _classify_charge_reason(
+        self,
+        slot: SlotContext,
+        slot_idx: int,
+        slots: list[SlotContext],
+        soc: float,
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> PlannerReasonCode:
+        """Classify CHARGE action reason.
+
+        Args:
+            slot: Slot context
+            slot_idx: Slot index
+            slots: All slots
+            soc: Current SOC
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+
+        Returns:
+            Reason code for CHARGE action
+        """
+        if self._is_target_shortfall_risk(
+            slot_idx, slots, soc, config, terminal_penalty_idx
+        ):
+            return PlannerReasonCode.TARGET_SHORTFALL_RISK
+        if self._is_cheap_import_window(slot, config, terminal_penalty_idx, slots):
+            return PlannerReasonCode.CHEAP_IMPORT_WINDOW
+        return PlannerReasonCode.TARGET_SHORTFALL_RISK
+
+    def _is_target_shortfall_risk(
+        self,
+        slot_idx: int,
+        slots: list[SlotContext],
+        soc: float,
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> bool:
+        """Check if grid charge is needed for demand window target.
+
+        Args:
+            slot_idx: Slot index
+            slots: All slots
+            soc: Current SOC
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+
+        Returns:
+            True if target shortfall risk exists
+        """
+        if terminal_penalty_idx is None or slot_idx >= terminal_penalty_idx:
+            return False
+        soc_deficit = config.demand_window_target_soc_pct - soc
+        if soc_deficit <= 0:
+            return False
+        potential_soc_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
+            slot_idx=slot_idx,
+            slots=slots,
+            terminal_penalty_idx=terminal_penalty_idx,
+            battery_capacity_kwh=config.battery_capacity_kwh,
+        )
+        return potential_soc_gain_pct < soc_deficit
+
+    def _is_cheap_import_window(
+        self,
+        slot: SlotContext,
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        slots: list[SlotContext],
+    ) -> bool:
+        """Check if this is a cheap import window opportunity.
+
+        Args:
+            slot: Slot context
+            config: Optimizer config
+            terminal_penalty_idx: Terminal penalty index
+            slots: All slots
+
+        Returns:
+            True if cheap import window
+        """
+        if slot.buy_price > config.effective_cheap_price:
+            return False
+        is_blind = self._is_blind_to_future_solar(terminal_penalty_idx, slots)
+        return not is_blind or slot.buy_price <= (config.effective_cheap_price * 0.8)
+
+    def _is_blind_to_future_solar(
+        self, terminal_penalty_idx: int | None, slots: list[SlotContext]
+    ) -> bool:
+        """Check if optimizer is blind to future solar (Issue #431 Horizon Guard).
+
+        Args:
+            terminal_penalty_idx: Terminal penalty index
+            slots: All slots
+
+        Returns:
+            True if blind to future solar
+        """
+        if terminal_penalty_idx is None:
+            return True
+        slots_beyond = len(slots) - terminal_penalty_idx - 1
+        return slots_beyond < 8
 
     # ------------------------------------------------------------------
     # Pure primitive functions (to be expanded in Phase C of #403)
@@ -1142,200 +1390,245 @@ class DPPlanner:
 
         Phase C: Full implementation with efficiency losses and SOC clipping.
         """
+        if action == PlannerAction.HOLD:
+            return DPPlanner._transition_hold(soc_pct, slot, config)
+        if action == PlannerAction.CHARGE_GRID_NORMAL:
+            return DPPlanner._transition_charge_grid(
+                soc_pct, slot, config, config.charge_rate_kw
+            )
+        if action == PlannerAction.CHARGE_GRID_BOOST:
+            return DPPlanner._transition_charge_grid(
+                soc_pct, slot, config, config.boost_charge_rate_kw
+            )
+        if action == PlannerAction.EXPORT_PROACTIVE:
+            return DPPlanner._transition_export(soc_pct, slot, config)
+        return soc_pct, 0.0, 0.0
+
+    @staticmethod
+    def _transition_hold(
+        soc_pct: float, slot: SlotContext, config: OptimizerConfig
+    ) -> tuple[float, float, float]:
+        """Compute transition for HOLD action.
+
+        Args:
+            soc_pct: Current SOC
+            slot: Slot context
+            config: Optimizer config
+
+        Returns:
+            (next_soc, grid_import, grid_export)
+        """
         slot_hours = slot.slot_interval_minutes / 60.0
-        net_kwh = slot.solar_kwh - slot.consumption_kwh  # positive = surplus
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
         capacity_kwh = config.battery_capacity_kwh
 
-        if action == PlannerAction.HOLD:
-            # Battery passively follows site net flow under HOLD:
-            # - Surplus solar charges battery first, then remaining surplus exports.
-            # - Net load discharges battery first, then remaining deficit imports.
-            # Rate limits, efficiency, and SOC bounds are applied in both directions.
+        if net_kwh >= 0:
+            return DPPlanner._transition_hold_surplus(
+                soc_pct, net_kwh, slot_hours, config, capacity_kwh
+            )
+        return DPPlanner._transition_hold_deficit(
+            soc_pct, net_kwh, slot_hours, config, capacity_kwh
+        )
 
-            if net_kwh >= 0:
-                # Surplus solar can be sent to battery subject to rate + headroom.
-                limit_kwh = config.solar_charge_rate_kw * slot_hours
-                solar_surplus_kwh = net_kwh
-                solar_by_rate_kwh = min(solar_surplus_kwh, limit_kwh)
-                headroom_kwh = max(
-                    0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh
-                )
+    @staticmethod
+    def _transition_hold_surplus(
+        soc_pct: float,
+        net_kwh: float,
+        slot_hours: float,
+        config: OptimizerConfig,
+        capacity_kwh: float,
+    ) -> tuple[float, float, float]:
+        """Handle HOLD with solar surplus."""
+        limit_kwh = config.solar_charge_rate_kw * slot_hours
+        solar_surplus_kwh = net_kwh
+        solar_by_rate_kwh = min(solar_surplus_kwh, limit_kwh)
+        headroom_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
 
-                if config.charge_efficiency <= 0:
-                    solar_to_battery_kwh = 0.0
-                else:
-                    solar_by_soc_kwh = headroom_kwh / config.charge_efficiency
-                    solar_to_battery_kwh = min(solar_by_rate_kwh, solar_by_soc_kwh)
+        if config.charge_efficiency <= 0:
+            solar_to_battery_kwh = 0.0
+        else:
+            solar_by_soc_kwh = headroom_kwh / config.charge_efficiency
+            solar_to_battery_kwh = min(solar_by_rate_kwh, solar_by_soc_kwh)
 
-                stored_kwh = solar_to_battery_kwh * config.charge_efficiency
-                delta_soc = (stored_kwh / capacity_kwh) * 100.0
-                next_soc = soc_pct + delta_soc
-                grid_export_kwh = max(0.0, solar_surplus_kwh - solar_to_battery_kwh)
-                return next_soc, 0.0, grid_export_kwh
-            else:
-                # Net load can be supplied by battery subject to rate + floor.
-                limit_kwh = config.discharge_rate_kw * slot_hours
-                load_deficit_kwh = -net_kwh
-                discharge_by_rate_kwh = min(load_deficit_kwh, limit_kwh)
-                available_battery_kwh = max(
-                    0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
-                )
-                max_load_from_battery_kwh = (
-                    available_battery_kwh * config.discharge_efficiency
-                )
-                battery_to_load_kwh = min(
-                    discharge_by_rate_kwh, max_load_from_battery_kwh
-                )
+        stored_kwh = solar_to_battery_kwh * config.charge_efficiency
+        delta_soc = (stored_kwh / capacity_kwh) * 100.0
+        next_soc = soc_pct + delta_soc
+        grid_export_kwh = max(0.0, solar_surplus_kwh - solar_to_battery_kwh)
+        return next_soc, 0.0, grid_export_kwh
 
-                if config.discharge_efficiency <= 0:
-                    battery_delta_kwh = 0.0
-                else:
-                    battery_delta_kwh = -(
-                        battery_to_load_kwh / config.discharge_efficiency
-                    )
+    @staticmethod
+    def _transition_hold_deficit(
+        soc_pct: float,
+        net_kwh: float,
+        slot_hours: float,
+        config: OptimizerConfig,
+        capacity_kwh: float,
+    ) -> tuple[float, float, float]:
+        """Handle HOLD with load deficit."""
+        limit_kwh = config.discharge_rate_kw * slot_hours
+        load_deficit_kwh = -net_kwh
+        discharge_by_rate_kwh = min(load_deficit_kwh, limit_kwh)
+        available_battery_kwh = max(
+            0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
+        )
+        max_load_from_battery_kwh = available_battery_kwh * config.discharge_efficiency
+        battery_to_load_kwh = min(discharge_by_rate_kwh, max_load_from_battery_kwh)
 
-                delta_soc = (battery_delta_kwh / capacity_kwh) * 100.0
-                next_soc = soc_pct + delta_soc
-                grid_import_kwh = max(0.0, load_deficit_kwh - battery_to_load_kwh)
-                return next_soc, grid_import_kwh, 0.0
+        if config.discharge_efficiency <= 0:
+            battery_delta_kwh = 0.0
+        else:
+            battery_delta_kwh = -(battery_to_load_kwh / config.discharge_efficiency)
 
-        if action == PlannerAction.CHARGE_GRID_NORMAL:
-            # Grid charge at normal rate, plus solar/consumption net effect
-            max_charge_kwh = config.charge_rate_kw * slot_hours
-            effective_charge_kwh = max_charge_kwh * config.charge_efficiency
+        delta_soc = (battery_delta_kwh / capacity_kwh) * 100.0
+        next_soc = soc_pct + delta_soc
+        grid_import_kwh = max(0.0, load_deficit_kwh - battery_to_load_kwh)
+        return next_soc, grid_import_kwh, 0.0
 
-            if net_kwh > 0:
-                # Solar surplus: solar charges battery directly
-                solar_to_battery = net_kwh * config.charge_efficiency
-                soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
-                remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
-                if remaining_headroom > 0:
-                    grid_charge_stored_kwh = min(
-                        effective_charge_kwh,
-                        (remaining_headroom / 100.0) * capacity_kwh,
-                    )
-                else:
-                    grid_charge_stored_kwh = 0.0
-                # Grid import: pre-efficiency energy to charge battery
-                grid_import_kwh = grid_charge_stored_kwh / config.charge_efficiency
-                delta_soc_from_grid = grid_charge_stored_kwh / capacity_kwh * 100.0
-                delta_soc_from_solar = solar_to_battery / capacity_kwh * 100.0
-                next_soc = soc_pct + delta_soc_from_grid + delta_soc_from_solar
-            else:
-                # Net consumption deficit: grid supplies battery charging AND household deficit
-                grid_charge_stored_kwh = effective_charge_kwh
-                # Grid import for battery (pre-efficiency) + household deficit
-                grid_import_kwh = max_charge_kwh + (-net_kwh)
-                delta_soc = (grid_charge_stored_kwh / capacity_kwh) * 100.0
-                next_soc = soc_pct + delta_soc
+    @staticmethod
+    def _transition_charge_grid(
+        soc_pct: float,
+        slot: SlotContext,
+        config: OptimizerConfig,
+        charge_rate_kw: float,
+    ) -> tuple[float, float, float]:
+        """Compute transition for CHARGE_GRID actions.
 
-            # Clip to max SOC if necessary
-            if next_soc > config.max_soc_pct:
-                # Reduce grid charging to hit max_soc exactly
-                total_soc_needed = config.max_soc_pct - soc_pct
-                solar_soc_contrib = 0.0
-                if net_kwh > 0:
-                    solar_soc_contrib = (
-                        net_kwh * config.charge_efficiency / capacity_kwh
-                    ) * 100.0
-                grid_soc_needed = max(0.0, total_soc_needed - solar_soc_contrib)
-                # Pre-efficiency grid energy needed for that SOC increase
-                grid_import_for_charging = (
-                    grid_soc_needed / 100.0 * capacity_kwh
-                ) / config.charge_efficiency
-                grid_import_total = grid_import_for_charging
-                if net_kwh < 0:
-                    grid_import_total += -net_kwh
-                next_soc = config.max_soc_pct
-                return next_soc, grid_import_total, 0.0
+        Args:
+            soc_pct: Current SOC
+            slot: Slot context
+            config: Optimizer config
+            charge_rate_kw: Charge rate (normal or boost)
 
-            return next_soc, grid_import_kwh, 0.0
+        Returns:
+            (next_soc, grid_import, grid_export)
+        """
+        slot_hours = slot.slot_interval_minutes / 60.0
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        capacity_kwh = config.battery_capacity_kwh
+        max_charge_kwh = charge_rate_kw * slot_hours
+        effective_charge_kwh = max_charge_kwh * config.charge_efficiency
 
-        if action == PlannerAction.CHARGE_GRID_BOOST:
-            # Grid charge at boost rate, plus solar/consumption net effect
-            max_charge_kwh = config.boost_charge_rate_kw * slot_hours
-            effective_charge_kwh = max_charge_kwh * config.charge_efficiency
+        if net_kwh > 0:
+            next_soc, grid_import = DPPlanner._charge_grid_with_solar(
+                soc_pct, net_kwh, effective_charge_kwh, capacity_kwh, config
+            )
+        else:
+            next_soc, grid_import = DPPlanner._charge_grid_with_deficit(
+                soc_pct, net_kwh, max_charge_kwh, effective_charge_kwh, capacity_kwh
+            )
 
-            if net_kwh > 0:
-                # Solar surplus: solar charges battery directly
-                solar_to_battery = net_kwh * config.charge_efficiency
-                soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
-                remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
-                if remaining_headroom > 0:
-                    grid_charge_stored_kwh = min(
-                        effective_charge_kwh,
-                        (remaining_headroom / 100.0) * capacity_kwh,
-                    )
-                else:
-                    grid_charge_stored_kwh = 0.0
-                # Grid import: pre-efficiency energy to charge battery
-                grid_import_kwh = grid_charge_stored_kwh / config.charge_efficiency
-                delta_soc_from_grid = grid_charge_stored_kwh / capacity_kwh * 100.0
-                delta_soc_from_solar = solar_to_battery / capacity_kwh * 100.0
-                next_soc = soc_pct + delta_soc_from_grid + delta_soc_from_solar
-            else:
-                # Net consumption deficit: grid supplies battery charging AND household deficit
-                grid_charge_stored_kwh = effective_charge_kwh
-                # Grid import for battery (pre-efficiency) + household deficit
-                grid_import_kwh = max_charge_kwh + (-net_kwh)
-                delta_soc = (grid_charge_stored_kwh / capacity_kwh) * 100.0
-                next_soc = soc_pct + delta_soc
+        if next_soc > config.max_soc_pct:
+            return DPPlanner._clip_charge_to_max_soc(
+                soc_pct, net_kwh, next_soc, capacity_kwh, config
+            )
 
-            # Clip to max SOC if necessary
-            if next_soc > config.max_soc_pct:
-                # Reduce grid charging to hit max_soc exactly
-                total_soc_needed = config.max_soc_pct - soc_pct
-                solar_soc_contrib = 0.0
-                if net_kwh > 0:
-                    solar_soc_contrib = (
-                        net_kwh * config.charge_efficiency / capacity_kwh
-                    ) * 100.0
-                grid_soc_needed = max(0.0, total_soc_needed - solar_soc_contrib)
-                # Pre-efficiency grid energy needed for that SOC increase
-                grid_import_for_charging = (
-                    grid_soc_needed / 100.0 * capacity_kwh
-                ) / config.charge_efficiency
-                grid_import_total = grid_import_for_charging
-                if net_kwh < 0:
-                    grid_import_total += -net_kwh
-                next_soc = config.max_soc_pct
-                return next_soc, grid_import_total, 0.0
+        return next_soc, grid_import, 0.0
 
-            return next_soc, grid_import_kwh, 0.0
+    @staticmethod
+    def _charge_grid_with_solar(
+        soc_pct: float,
+        net_kwh: float,
+        effective_charge_kwh: float,
+        capacity_kwh: float,
+        config: OptimizerConfig,
+    ) -> tuple[float, float]:
+        """Calculate grid charge with solar surplus."""
+        solar_to_battery = net_kwh * config.charge_efficiency
+        soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
+        remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
 
-        if action == PlannerAction.EXPORT_PROACTIVE:
-            # Discharge to grid at max rate
-            max_discharge_kwh = config.discharge_rate_kw * slot_hours
-            # Effective export accounts for discharge efficiency loss
-            effective_export_kwh = max_discharge_kwh * config.discharge_efficiency
+        if remaining_headroom > 0:
+            grid_charge_stored_kwh = min(
+                effective_charge_kwh, (remaining_headroom / 100.0) * capacity_kwh
+            )
+        else:
+            grid_charge_stored_kwh = 0.0
 
-            # Account for solar/consumption net
-            # Solar goes directly to export (not through battery)
-            # Consumption reduces effective export
-            net_export = effective_export_kwh
-            if net_kwh > 0:
-                # Solar surplus adds to export directly
-                net_export += net_kwh
-            else:
-                # Consumption deficit reduces export
-                net_export = max(0.0, net_export + net_kwh)
+        grid_import_kwh = grid_charge_stored_kwh / config.charge_efficiency
+        delta_soc_from_grid = grid_charge_stored_kwh / capacity_kwh * 100.0
+        delta_soc_from_solar = solar_to_battery / capacity_kwh * 100.0
+        next_soc = soc_pct + delta_soc_from_grid + delta_soc_from_solar
+        return next_soc, grid_import_kwh
 
-            delta_soc = -(max_discharge_kwh / capacity_kwh) * 100.0
-            next_soc = soc_pct + delta_soc
+    @staticmethod
+    def _charge_grid_with_deficit(
+        soc_pct: float,
+        net_kwh: float,
+        max_charge_kwh: float,
+        effective_charge_kwh: float,
+        capacity_kwh: float,
+    ) -> tuple[float, float]:
+        """Calculate grid charge with consumption deficit."""
+        grid_charge_stored_kwh = effective_charge_kwh
+        grid_import_kwh = max_charge_kwh + (-net_kwh)
+        delta_soc = (grid_charge_stored_kwh / capacity_kwh) * 100.0
+        next_soc = soc_pct + delta_soc
+        return next_soc, grid_import_kwh
 
-            # Clip to min SOC
-            if next_soc < config.min_soc_pct:
-                # Reduce export to exactly hit min
-                available_kwh = max(
-                    0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
-                )
-                actual_export = available_kwh * config.discharge_efficiency
-                next_soc = config.min_soc_pct
-                return next_soc, 0.0, actual_export
+    @staticmethod
+    def _clip_charge_to_max_soc(
+        soc_pct: float,
+        net_kwh: float,
+        next_soc: float,
+        capacity_kwh: float,
+        config: OptimizerConfig,
+    ) -> tuple[float, float, float]:
+        """Clip grid charging to hit max SOC exactly."""
+        total_soc_needed = config.max_soc_pct - soc_pct
+        solar_soc_contrib = 0.0
+        if net_kwh > 0:
+            solar_soc_contrib = (
+                net_kwh * config.charge_efficiency / capacity_kwh
+            ) * 100.0
+        grid_soc_needed = max(0.0, total_soc_needed - solar_soc_contrib)
+        grid_import_for_charging = (
+            grid_soc_needed / 100.0 * capacity_kwh
+        ) / config.charge_efficiency
+        grid_import_total = grid_import_for_charging
+        if net_kwh < 0:
+            grid_import_total += -net_kwh
+        return config.max_soc_pct, grid_import_total, 0.0
 
-            return next_soc, 0.0, net_export
+    @staticmethod
+    def _transition_export(
+        soc_pct: float, slot: SlotContext, config: OptimizerConfig
+    ) -> tuple[float, float, float]:
+        """Compute transition for EXPORT action.
 
-        return soc_pct, 0.0, 0.0
+        Args:
+            soc_pct: Current SOC
+            slot: Slot context
+            config: Optimizer config
+
+        Returns:
+            (next_soc, grid_import, grid_export)
+        """
+        slot_hours = slot.slot_interval_minutes / 60.0
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        capacity_kwh = config.battery_capacity_kwh
+
+        max_discharge_kwh = config.discharge_rate_kw * slot_hours
+        available_kwh = max(0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh)
+        battery_discharge_kwh = min(
+            max_discharge_kwh, available_kwh * config.discharge_efficiency
+        )
+
+        if config.discharge_efficiency > 0:
+            delta_soc = (
+                -(battery_discharge_kwh / config.discharge_efficiency / capacity_kwh)
+                * 100.0
+            )
+        else:
+            delta_soc = 0.0
+
+        next_soc = soc_pct + delta_soc
+
+        if net_kwh > 0:
+            grid_export_kwh = net_kwh + battery_discharge_kwh
+            return next_soc, 0.0, grid_export_kwh
+
+        grid_export_kwh = max(0.0, battery_discharge_kwh + net_kwh)
+        return next_soc, 0.0, grid_export_kwh
 
     @staticmethod
     def stage_cost(

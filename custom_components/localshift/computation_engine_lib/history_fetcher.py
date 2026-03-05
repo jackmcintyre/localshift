@@ -702,53 +702,95 @@ class HistoryFetcher:
 
     def _fetch_recent_load_sync(self, entity_id: str, now: datetime) -> dict[str, Any]:
         """Fetch recent 1-hour average (runs in thread pool)."""
+        recorder_stats = self._import_recorder_statistics()
+        if recorder_stats is None:
+            return self._error_result("recorder import failed")
+
+        start_time = now - timedelta(hours=1)
+        stat_ids = self._list_statistic_ids(recorder_stats)
+        resolved_entity_id = self._resolve_statistic_id(entity_id, stat_ids)
+
+        fn = self._get_statistics_fn(recorder_stats)
+        if fn is None:
+            return self._error_result(
+                "statistics_during_period not callable", resolved_entity_id
+            )
+
+        statistics_data = self._fetch_statistics_data(
+            fn, resolved_entity_id, start_time, now
+        )
+        if "error" in statistics_data:
+            return statistics_data
+
+        return self._compute_recent_average(statistics_data, resolved_entity_id)
+
+    def _import_recorder_statistics(self) -> Any:
+        """Import recorder statistics module.
+
+        Returns:
+            Module or None if import failed
+        """
         try:
             from homeassistant.components.recorder import (
                 statistics as recorder_statistics,
             )
+
+            return recorder_statistics
         except Exception:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": "",
-                "error": "recorder import failed",
-            }
+            return None
 
-        end_time = now
-        start_time = now - timedelta(hours=1)
+    def _list_statistic_ids(self, recorder_stats: Any) -> list[dict[str, Any]]:
+        """List available statistic IDs.
 
-        # Find matching statistic_id
-        stat_ids: list[dict[str, Any]] = []
+        Args:
+            recorder_stats: Recorder statistics module
+
+        Returns:
+            List of statistic ID dicts
+        """
         try:
-            stat_meta_fn = getattr(recorder_statistics, "list_statistic_ids", None)
-            if callable(stat_meta_fn):
-                stat_ids_raw = stat_meta_fn(self.hass, None) or []
-                if isinstance(stat_ids_raw, list):
-                    stat_ids = [
-                        cast(dict[str, Any], s)
-                        for s in stat_ids_raw
-                        if isinstance(s, dict)
-                    ]
+            stat_meta_fn = getattr(recorder_stats, "list_statistic_ids", None)
+            if not callable(stat_meta_fn):
+                return []
+            stat_ids_raw = stat_meta_fn(self.hass, None) or []
+            if not isinstance(stat_ids_raw, list):
+                return []
+            return [
+                cast(dict[str, Any], s) for s in stat_ids_raw if isinstance(s, dict)
+            ]
         except Exception:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": "",
-                "error": "list_statistic_ids failed",
-            }
+            return []
 
-        resolved_entity_id = self._resolve_statistic_id(entity_id, stat_ids)
+    def _get_statistics_fn(self, recorder_stats: Any) -> Any:
+        """Get statistics_during_period callable.
 
-        # Get statistics for last hour
-        fn = getattr(recorder_statistics, "statistics_during_period", None)
-        if not callable(fn):
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "statistics_during_period not callable",
-            }
+        Args:
+            recorder_stats: Recorder statistics module
 
+        Returns:
+            Callable function or None
+        """
+        fn = getattr(recorder_stats, "statistics_during_period", None)
+        return fn if callable(fn) else None
+
+    def _fetch_statistics_data(
+        self,
+        fn: Any,
+        resolved_entity_id: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> dict[str, Any]:
+        """Fetch statistics data for entity.
+
+        Args:
+            fn: statistics_during_period function
+            resolved_entity_id: Resolved statistic ID
+            start_time: Query start time
+            end_time: Query end time
+
+        Returns:
+            Statistics data dict or error result
+        """
         try:
             statistics_data_raw = fn(
                 self.hass,
@@ -760,53 +802,47 @@ class HistoryFetcher:
                 units=None,
             )
         except Exception:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "statistics_during_period exception",
-            }
+            return self._error_result(
+                "statistics_during_period exception", resolved_entity_id
+            )
 
         if not isinstance(statistics_data_raw, dict):
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "statistics_during_period returned non-dict",
-            }
+            return self._error_result(
+                "statistics_during_period returned non-dict", resolved_entity_id
+            )
 
         statistics_data = cast(dict[str, Any], statistics_data_raw)
 
         if not statistics_data or resolved_entity_id not in statistics_data:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "no statistics data",
-            }
+            return self._error_result("no statistics data", resolved_entity_id)
 
         rows_raw = statistics_data.get(resolved_entity_id)
         if not isinstance(rows_raw, list) or not rows_raw:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "no rows",
-            }
+            return self._error_result("no rows", resolved_entity_id)
 
         rows: list[dict[str, Any]] = [
             cast(dict[str, Any], r) for r in rows_raw if isinstance(r, dict)
         ]
         if not rows:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "no dict rows",
-            }
+            return self._error_result("no dict rows", resolved_entity_id)
 
-        # Calculate mean of available samples in the last hour
-        values = []
+        return {"rows": rows, "statistic_id": resolved_entity_id}
+
+    def _compute_recent_average(
+        self, data: dict[str, Any], resolved_entity_id: str
+    ) -> dict[str, Any]:
+        """Compute recent average from statistics rows.
+
+        Args:
+            data: Dict with 'rows' key
+            resolved_entity_id: Statistic ID
+
+        Returns:
+            Result dict with average or error
+        """
+        rows = data.get("rows", [])
+        values: list[float] = []
+
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -819,18 +855,30 @@ class HistoryFetcher:
                 continue
 
         if not values:
-            return {
-                "recent_avg_kw": 0.0,
-                "samples": 0,
-                "statistic_id": resolved_entity_id,
-                "error": "no numeric mean values",
-            }
+            return self._error_result("no numeric mean values", resolved_entity_id)
 
         return {
             "recent_avg_kw": sum(values) / len(values),
             "samples": len(values),
             "statistic_id": resolved_entity_id,
             "error": "",
+        }
+
+    def _error_result(self, error: str, statistic_id: str = "") -> dict[str, Any]:
+        """Create standardized error result.
+
+        Args:
+            error: Error message
+            statistic_id: Statistic ID (optional)
+
+        Returns:
+            Error result dict
+        """
+        return {
+            "recent_avg_kw": 0.0,
+            "samples": 0,
+            "statistic_id": statistic_id,
+            "error": error,
         }
 
     def get_cached_hourly_averages(self) -> dict[int, float]:

@@ -53,102 +53,20 @@ def compute_hybrid_slot_schedule(
             - total_slots: Total number of slots
             - horizon_hours: Actual time span covered by slots in hours
     """
-    slots: list[dict] = []
-    metadata: dict = {
-        "timezone": ha_timezone,
-        "slot_intervals": {"5min": 0, "30min": 0},
-        "transition_boundary": None,
-        "total_slots": 0,
-        "horizon_hours": 0.0,
-    }
+    metadata = _create_initial_metadata(ha_timezone)
 
     if not general_forecast:
         _LOGGER.warning("compute_hybrid_slot_schedule: Empty general_forecast")
-        return slots, metadata
+        return [], metadata
 
-    # Step 1: Parse all forecast entries and convert to local timezone
-    all_slots_raw: list[dict] = []
-    for entry in general_forecast:
-        if not isinstance(entry, dict):
-            continue
-
-        start_time_str = entry.get("start_time")
-        if not start_time_str:
-            continue
-
-        # Parse and convert to local timezone using our new utility
-        slot_start = parse_slot_time(start_time_str, ha_timezone)
-        if slot_start is None:
-            continue
-
-        # Skip past slots (only skip if strictly before now)
-        if slot_start < now_local:
-            continue
-
-        # Determine duration from entry or calculate from gap to next
-        duration_minutes = get_slot_duration_minutes(entry)
-        if duration_minutes is None:
-            # Try to calculate from end_time
-            end_time_str = entry.get("end_time")
-            if end_time_str:
-                slot_end = parse_slot_time(end_time_str, ha_timezone)
-                if slot_end:
-                    duration_minutes = int((slot_end - slot_start).total_seconds() / 60)
-
-        if duration_minutes is None:
-            continue  # Skip if we can't determine duration
-
-        # Accept 5-min, 30-min, or 60-min slots (60-min for backward compatibility with tests)
-        # Amber native granularities are 5-min and 30-min, but tests may use 60-min
-        if duration_minutes not in (5, 30, 60):
-            continue
-
-        price = float(entry.get("per_kwh", 0))
-
-        # Issue #519: Split 60-min slots into TWO 30-min slots to avoid gaps.
-        # Previously, normalizing 60-min to 30-min kept the same start time,
-        # creating 30-min gaps (e.g., 02:00-02:30, then gap, then 03:00-03:30).
-        # Now we emit two 30-min slots per 60-min input slot.
-        if duration_minutes == 60:
-            # First half: start to start+30min
-            all_slots_raw.append(
-                {
-                    "start": slot_start,
-                    "interval_minutes": 30,
-                    "price": price,
-                    "price_source": "30min",
-                }
-            )
-            # Second half: start+30min to end
-            all_slots_raw.append(
-                {
-                    "start": slot_start + timedelta(minutes=30),
-                    "interval_minutes": 30,
-                    "price": price,
-                    "price_source": "30min",
-                }
-            )
-        else:
-            # 5-min and 30-min slots pass through unchanged
-            all_slots_raw.append(
-                {
-                    "start": slot_start,
-                    "interval_minutes": duration_minutes,
-                    "price": price,
-                    "price_source": "5min" if duration_minutes == 5 else "30min",
-                }
-            )
-
+    all_slots_raw = _parse_forecast_entries(general_forecast, now_local, ha_timezone)
     if not all_slots_raw:
         _LOGGER.warning("compute_hybrid_slot_schedule: No valid slots after parsing")
-        return slots, metadata
+        return [], metadata
 
-    # Step 2: Sort by start time
     all_slots_raw.sort(key=lambda x: x["start"])
 
-    # Step 3: Separate 5-min and 30-min slots (60-min already normalised to 30 above)
-    five_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 5]
-    thirty_min_slots = [s for s in all_slots_raw if s["interval_minutes"] == 30]
+    five_min_slots, thirty_min_slots = _separate_slots_by_duration(all_slots_raw)
 
     _LOGGER.debug(
         "compute_hybrid_slot_schedule: Found %d 5-min slots, %d 30-min slots",
@@ -156,118 +74,310 @@ def compute_hybrid_slot_schedule(
         len(thirty_min_slots),
     )
 
-    # Step 4: Add ALL 5-min slots (no minimum, no maximum)
-    slots.extend(five_min_slots)
-
-    # Step 5: Find first 30-min slot at or after last 5-min slot ends
     cutoff_time = now_local + timedelta(hours=max_forecast_hours)
+    slots, transition_boundary = _build_hybrid_schedule(
+        five_min_slots, thirty_min_slots, cutoff_time
+    )
+
+    _ensure_current_slot_coverage(slots, now_local)
+    _compute_slot_metadata(slots, metadata, transition_boundary)
+
+    return slots, metadata
+
+
+def _create_initial_metadata(ha_timezone: str) -> dict:
+    """Create initial metadata dict.
+
+    Args:
+        ha_timezone: HA timezone string
+
+    Returns:
+        Initial metadata dict
+    """
+    return {
+        "timezone": ha_timezone,
+        "slot_intervals": {"5min": 0, "30min": 0},
+        "transition_boundary": None,
+        "total_slots": 0,
+        "horizon_hours": 0.0,
+    }
+
+
+def _parse_forecast_entries(
+    general_forecast: list[dict], now_local: datetime, ha_timezone: str
+) -> list[dict]:
+    """Parse forecast entries into slot dicts.
+
+    Args:
+        general_forecast: Raw forecast entries
+        now_local: Current local time
+        ha_timezone: HA timezone
+
+    Returns:
+        List of parsed slot dicts
+    """
+    all_slots_raw: list[dict] = []
+
+    for entry in general_forecast:
+        slot = _parse_single_entry(entry, now_local, ha_timezone)
+        if slot:
+            all_slots_raw.extend(slot if isinstance(slot, list) else [slot])
+
+    return all_slots_raw
+
+
+def _parse_single_entry(
+    entry: dict, now_local: datetime, ha_timezone: str
+) -> dict | list[dict] | None:
+    """Parse a single forecast entry.
+
+    Args:
+        entry: Forecast entry dict
+        now_local: Current local time
+        ha_timezone: HA timezone
+
+    Returns:
+        Slot dict, list of slot dicts, or None
+    """
+    if not isinstance(entry, dict):
+        return None
+
+    start_time_str = entry.get("start_time")
+    if not start_time_str:
+        return None
+
+    slot_start = parse_slot_time(start_time_str, ha_timezone)
+    if slot_start is None or slot_start < now_local:
+        return None
+
+    duration_minutes = _get_entry_duration(entry, slot_start, ha_timezone)
+    if duration_minutes is None or duration_minutes not in (5, 30, 60):
+        return None
+
+    price = float(entry.get("per_kwh", 0))
+
+    if duration_minutes == 60:
+        return _split_60min_slot(slot_start, price)
+
+    return {
+        "start": slot_start,
+        "interval_minutes": duration_minutes,
+        "price": price,
+        "price_source": "5min" if duration_minutes == 5 else "30min",
+    }
+
+
+def _get_entry_duration(
+    entry: dict, slot_start: datetime, ha_timezone: str
+) -> int | None:
+    """Get duration for a forecast entry.
+
+    Args:
+        entry: Forecast entry
+        slot_start: Parsed start time
+        ha_timezone: HA timezone
+
+    Returns:
+        Duration in minutes or None
+    """
+    duration_minutes = get_slot_duration_minutes(entry)
+    if duration_minutes is not None:
+        return duration_minutes
+
+    end_time_str = entry.get("end_time")
+    if not end_time_str:
+        return None
+
+    slot_end = parse_slot_time(end_time_str, ha_timezone)
+    if slot_end:
+        return int((slot_end - slot_start).total_seconds() / 60)
+
+    return None
+
+
+def _split_60min_slot(slot_start: datetime, price: float) -> list[dict]:
+    """Split a 60-minute slot into two 30-minute slots.
+
+    Args:
+        slot_start: Slot start time
+        price: Price per kWh
+
+    Returns:
+        List of two 30-min slot dicts
+    """
+    return [
+        {
+            "start": slot_start,
+            "interval_minutes": 30,
+            "price": price,
+            "price_source": "30min",
+        },
+        {
+            "start": slot_start + timedelta(minutes=30),
+            "interval_minutes": 30,
+            "price": price,
+            "price_source": "30min",
+        },
+    ]
+
+
+def _separate_slots_by_duration(slots: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Separate slots into 5-min and 30-min lists.
+
+    Args:
+        slots: All slots
+
+    Returns:
+        Tuple of (5-min slots, 30-min slots)
+    """
+    five_min = [s for s in slots if s["interval_minutes"] == 5]
+    thirty_min = [s for s in slots if s["interval_minutes"] == 30]
+    return five_min, thirty_min
+
+
+def _build_hybrid_schedule(
+    five_min_slots: list[dict], thirty_min_slots: list[dict], cutoff_time: datetime
+) -> tuple[list[dict], datetime | None]:
+    """Build hybrid schedule combining 5-min and 30-min slots.
+
+    Args:
+        five_min_slots: 5-minute slots
+        thirty_min_slots: 30-minute slots
+        cutoff_time: Maximum forecast time
+
+    Returns:
+        Tuple of (combined slots, transition boundary)
+    """
+    slots: list[dict] = []
+    transition_boundary = None
+
+    slots.extend(five_min_slots)
 
     if five_min_slots:
         last_5min_end = five_min_slots[-1]["start"] + timedelta(minutes=5)
-
-        # Find 30-min slot that starts at or after this time
-        transition_boundary = None
-        for slot in thirty_min_slots:
-            if slot["start"] >= last_5min_end:
-                # Found the transition point
-                transition_boundary = slot["start"]
-                # Add this and all subsequent 30-min slots within forecast window
-                idx = thirty_min_slots.index(slot)
-                for s in thirty_min_slots[idx:]:
-                    if s["start"] < cutoff_time:
-                        slots.append(s)
-                break
-
-        metadata["transition_boundary"] = (
-            transition_boundary.strftime("%H:%M") if transition_boundary else None
+        transition_boundary = _add_30min_after_transition(
+            slots, thirty_min_slots, last_5min_end, cutoff_time
         )
     else:
-        # No 5-min data, use 30-min only
-        for slot in thirty_min_slots:
-            if slot["start"] < cutoff_time:
-                slots.append(slot)
+        _add_all_30min_slots(slots, thirty_min_slots, cutoff_time)
         if thirty_min_slots:
-            metadata["transition_boundary"] = thirty_min_slots[0]["start"].strftime(
-                "%H:%M"
-            )
+            transition_boundary = thirty_min_slots[0]["start"]
 
-    # Step 6: Sort final slots by start time
     slots.sort(key=lambda x: x["start"])
+    return slots, transition_boundary
 
-    # Step 6.5: Ensure there's a slot covering "now"
-    # If Amber's first slot is AFTER now, we need a synthetic current slot
-    # This can happen when Amber's forecast starts a few minutes in the future
+
+def _add_30min_after_transition(
+    slots: list[dict],
+    thirty_min_slots: list[dict],
+    last_5min_end: datetime,
+    cutoff_time: datetime,
+) -> datetime | None:
+    """Add 30-min slots starting after 5-min transition.
+
+    Args:
+        slots: Slot list to extend
+        thirty_min_slots: 30-minute slots
+        last_5min_end: End time of last 5-min slot
+        cutoff_time: Maximum forecast time
+
+    Returns:
+        Transition boundary time or None
+    """
+    for slot in thirty_min_slots:
+        if slot["start"] >= last_5min_end:
+            idx = thirty_min_slots.index(slot)
+            for s in thirty_min_slots[idx:]:
+                if s["start"] < cutoff_time:
+                    slots.append(s)
+            return slot["start"]
+    return None
+
+
+def _add_all_30min_slots(
+    slots: list[dict], thirty_min_slots: list[dict], cutoff_time: datetime
+) -> None:
+    """Add all 30-min slots within cutoff.
+
+    Args:
+        slots: Slot list to extend
+        thirty_min_slots: 30-minute slots
+        cutoff_time: Maximum forecast time
+    """
+    for slot in thirty_min_slots:
+        if slot["start"] < cutoff_time:
+            slots.append(slot)
+
+
+def _ensure_current_slot_coverage(slots: list[dict], now_local: datetime) -> None:
+    """Ensure there's a slot covering 'now' by adding synthetic slot if needed.
+
+    Args:
+        slots: Slot list (modified in place)
+        now_local: Current local time
+    """
+    if not slots:
+        return
+
     _LOGGER.info(
         "HYBRID_SLOTS: slots=%d, first_slot=%s, now_local=%s, comparison=%s",
         len(slots),
-        slots[0]["start"].strftime("%H:%M:%S") if slots else "N/A",
+        slots[0]["start"].strftime("%H:%M:%S"),
         now_local.strftime("%H:%M:%S"),
-        "first > now" if slots and slots[0]["start"] > now_local else "first <= now",
+        "first > now" if slots[0]["start"] > now_local else "first <= now",
     )
-    if slots and slots[0]["start"] > now_local:
-        # Create a synthetic slot at the current 5-minute boundary
-        current_5min = (now_local.minute // 5) * 5
-        synthetic_start = now_local.replace(
-            minute=current_5min, second=0, microsecond=0
-        )
-        # Use the first real slot's price as estimate (or 0 if no slots)
-        estimated_price = slots[0]["price"] if slots else 0.0
-        synthetic_slot = {
-            "start": synthetic_start,
-            "interval_minutes": 5,
-            "price": estimated_price,
-            "price_source": "synthetic",  # Mark as synthetic for debugging
-        }
-        slots.insert(0, synthetic_slot)
-        _LOGGER.info(
-            "Created synthetic slot at %s (Amber first slot was at %s, gap=%.0fs)",
-            synthetic_start.strftime("%H:%M:%S"),
-            slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
-            (slots[1]["start"] - synthetic_start).total_seconds()
-            if len(slots) > 1
-            else 0,
-        )
 
-    # Step 7: Calculate counts and metadata
-    # Note: 60-min slots are counted as 30-min for backward compatibility
+    if slots[0]["start"] <= now_local:
+        return
+
+    current_5min = (now_local.minute // 5) * 5
+    synthetic_start = now_local.replace(minute=current_5min, second=0, microsecond=0)
+    estimated_price = slots[0]["price"] if slots else 0.0
+
+    synthetic_slot = {
+        "start": synthetic_start,
+        "interval_minutes": 5,
+        "price": estimated_price,
+        "price_source": "synthetic",
+    }
+    slots.insert(0, synthetic_slot)
+
+    _LOGGER.info(
+        "Created synthetic slot at %s (Amber first slot was at %s, gap=%.0fs)",
+        synthetic_start.strftime("%H:%M:%S"),
+        slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
+        (slots[1]["start"] - synthetic_start).total_seconds() if len(slots) > 1 else 0,
+    )
+
+
+def _compute_slot_metadata(
+    slots: list[dict], metadata: dict, transition_boundary: datetime | None
+) -> None:
+    """Compute and store slot metadata.
+
+    Args:
+        slots: Final slot list
+        metadata: Metadata dict (modified in place)
+        transition_boundary: Transition boundary time
+    """
     five_min_count = len([s for s in slots if s["interval_minutes"] == 5])
     thirty_min_count = len([s for s in slots if s["interval_minutes"] in (30, 60)])
 
-    metadata["slot_intervals"] = {
-        "5min": five_min_count,
-        "30min": thirty_min_count,
-    }
+    metadata["slot_intervals"] = {"5min": five_min_count, "30min": thirty_min_count}
     metadata["total_slots"] = len(slots)
+    metadata["transition_boundary"] = (
+        transition_boundary.strftime("%H:%M") if transition_boundary else None
+    )
 
-    # Calculate actual horizon duration in hours
     if slots:
         horizon_delta = slots[-1]["start"] - slots[0]["start"]
-        # Add the duration of the last slot to get full coverage
         last_slot_duration = slots[-1]["interval_minutes"]
         horizon_hours = (horizon_delta.total_seconds() / 3600.0) + (
             last_slot_duration / 60.0
         )
         metadata["horizon_hours"] = round(horizon_hours, 2)
-    else:
-        metadata["horizon_hours"] = 0.0
 
-    # Log timezone information for first few slots (Issue #455)
-    if slots:
-        _LOGGER.info(
-            "HYBRID_SLOTS: First 5 slots (with TZ): %s",
-            [s["start"].isoformat() for s in slots[:5]],
-        )
-        _LOGGER.info(
-            "HYBRID_SLOTS: Slot 0 TZ info: %s (offset=%s)",
-            slots[0]["start"].isoformat(),
-            slots[0]["start"].utcoffset(),
-        )
-        if len(slots) > 1:
-            _LOGGER.info(
-                "HYBRID_SLOTS: Slot 1 TZ info: %s (offset=%s)",
-                slots[1]["start"].isoformat(),
-                slots[1]["start"].utcoffset(),
-            )
+        _log_slot_details(slots)
 
     _LOGGER.info(
         "Hybrid slot schedule: %d 5-min slots, %d 30-min slots, horizon=%.2fh, transition at %s",
@@ -277,4 +387,25 @@ def compute_hybrid_slot_schedule(
         metadata["transition_boundary"] or "N/A",
     )
 
-    return slots, metadata
+
+def _log_slot_details(slots: list[dict]) -> None:
+    """Log timezone information for slots.
+
+    Args:
+        slots: Slot list
+    """
+    _LOGGER.info(
+        "HYBRID_SLOTS: First 5 slots (with TZ): %s",
+        [s["start"].isoformat() for s in slots[:5]],
+    )
+    _LOGGER.info(
+        "HYBRID_SLOTS: Slot 0 TZ info: %s (offset=%s)",
+        slots[0]["start"].isoformat(),
+        slots[0]["start"].utcoffset(),
+    )
+    if len(slots) > 1:
+        _LOGGER.info(
+            "HYBRID_SLOTS: Slot 1 TZ info: %s (offset=%s)",
+            slots[1]["start"].isoformat(),
+            slots[1]["start"].utcoffset(),
+        )
