@@ -377,3 +377,39 @@ class SolarAccuracyTracker:
             return "foggy"
         else:
             return "unknown"
+
+    def get_bias_correction(
+        self,
+        time_of_day: str,
+        weather: str,
+        season: str | None = None,
+    ) -> float:
+        """Get bias correction factor for given context.
+
+        Returns a multiplier (0.0 to 2.0) to apply to forecasts.
+        A positive bias means forecasts overestimate, so we reduce solar_kwh.
+        A negative bias means forecasts underestimate, so we increase solar_kwh.
+
+        Args:
+            time_of_day: Time bucket ('morning', 'afternoon', 'evening', 'night')
+            weather: Weather condition ('sunny', 'cloudy', 'rainy', etc.)
+            season: Season ('summer', 'autumn', 'winter', 'spring'), optional for coarser granularity
+
+        Returns:
+            Bias correction factor. Returns 1.0 if no historical data available.
+            Values < 1.0 reduce forecast (overestimate), > 1.0 increase (underestimate).
+        """
+        result = self._compute_context_bias(time_of_day, weather, season)
+        if result is None:
+            return 1.0
+
+        weighted_bias, sample_count = result
+        _LOGGER.debug(
+            "Bias correction for %s/%s/%s: bias=%.2f%%, samples=%d",
+            time_of_day,
+            weather,
+            season or "any",
+            weighted_bias * 100,
+            sample_count,
+        )
+        return 1.0 - weighted_bias
