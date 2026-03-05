@@ -1408,3 +1408,131 @@ def test_allow_dw_entry_under_target_false_uses_original_behavior():
         "should grid-charge when solar won't reach target by DW entry. "
         f"Got decisions: {[d.action.name for d in result.decisions[:4]]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #559: Pointless Overnight Battery Cycles
+# ---------------------------------------------------------------------------
+
+
+def test_global_solar_gate_fires_when_no_demand_window():
+    """Issue #559 Phase 1: global solar gate prevents charging when terminal_penalty_idx is None."""
+    # SOC=60, target=80 → deficit=20% (2.7 kWh needed)
+    # Slots: 12 overnight/morning slots, each solar=0.6 kWh, consumption=0.4 kWh → net=0.2 kWh/slot
+    # 12 * 0.2 = 2.4 kWh total net solar → 2.4 / 13.5 * 100 = 17.8% gain
+    # Wait, that's less than 20%. Let me increase solar.
+    # Let's use: solar=0.6 kWh, consumption=0.3 kWh → net=0.3 kWh/slot
+    # 12 * 0.3 = 3.6 kWh → 3.6 / 13.5 * 100 = 26.7% gain >= 20% deficit
+    # → global gate fires → no grid charging even though terminal_penalty_idx=None
+    slots = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.6, consumption_kwh=0.3)
+        for i in range(12)
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,  # This is what the gate checks against
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    # No terminal_penalty_idx → original solar gate is disabled
+    actions = DPPlanner.feasible_actions(
+        soc_pct=60.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=None,  # No demand window
+    )
+
+    assert PlannerAction.HOLD in actions
+    # Global gate should suppress grid charging
+    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
+    assert PlannerAction.CHARGE_GRID_BOOST not in actions
+
+
+def test_global_solar_gate_allows_charge_when_solar_insufficient():
+    """Issue #559 Phase 1: global gate does not fire when solar < deficit."""
+    # SOC=60, target=80 → deficit=20% (2.7 kWh needed)
+    # Slots: 12 slots, each solar=0.1 kWh, consumption=0.3 kWh → net=-0.2 kWh/slot
+    # 12 * -0.2 = -2.4 kWh total → -2.4 / 13.5 * 100 = -17.8% gain < 20% deficit
+    # → global gate does NOT fire → grid charging allowed (price-gated)
+    slots = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.1, consumption_kwh=0.3)
+        for i in range(12)
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,  # This is what the gate checks against
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    actions = DPPlanner.feasible_actions(
+        soc_pct=60.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=None,
+    )
+
+    assert PlannerAction.HOLD in actions
+    # buy_price=0.08 < effective_cheap_price=0.10 → charge allowed
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+    assert PlannerAction.CHARGE_GRID_BOOST in actions
+
+
+def test_hold_soc_enforces_no_discharge():
+    """Issue #559 Phase 3: hold_soc=True prevents discharge during HOLD action."""
+    # SOC=50%, net=-0.5 kWh (load deficit), slot_hours=1
+    # Without hold_soc: battery discharges to cover some load
+    # With hold_soc: entire deficit imported from grid, SOC unchanged
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        discharge_rate_kw=5.0,
+        discharge_efficiency=0.95,
+        min_soc_pct=10.0,
+        hold_soc=True,  # Enforce strict no-discharge
+    )
+
+    next_soc, grid_import, grid_export = DPPlanner._transition_hold_deficit(
+        soc_pct=50.0,
+        net_kwh=-0.5,  # 0.5 kWh load deficit
+        slot_hours=1.0,
+        config=config,
+        capacity_kwh=13.5,
+    )
+
+    # SOC must remain unchanged
+    assert next_soc == 50.0
+    # Entire deficit imported from grid
+    assert grid_import == 0.5
+    assert grid_export == 0.0
+
+
+def test_hold_soc_false_allows_discharge():
+    """Issue #559 Phase 3: hold_soc=False allows normal discharge logic."""
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        discharge_rate_kw=5.0,
+        discharge_efficiency=0.95,
+        min_soc_pct=10.0,
+        hold_soc=False,  # Normal discharge allowed
+    )
+
+    next_soc, grid_import, grid_export = DPPlanner._transition_hold_deficit(
+        soc_pct=50.0,
+        net_kwh=-0.5,
+        slot_hours=1.0,
+        config=config,
+        capacity_kwh=13.5,
+    )
+
+    # SOC should decrease (battery discharges)
+    assert next_soc < 50.0
+    # Grid import should be less than full deficit (battery covered some)
+    assert grid_import < 0.5
+    assert grid_export == 0.0
