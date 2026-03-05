@@ -701,7 +701,7 @@ class TestValidateTransition:
 
         # Use mock_battery_sleep to make this instant
         with patch(
-            "custom_components.localshift.battery_controller.asyncio.sleep",
+            "custom_components.localshift.transition_validator.asyncio.sleep",
             new_callable=AsyncMock,
         ):
             result = await battery_controller.validate_transition(
