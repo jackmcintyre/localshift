@@ -506,8 +506,10 @@ class StateMachine:
             # Issue #468: Re-check automation ready after reading fresh state
             # If automation_ready was set False from stale startup data,
             # re-checking now ensures we use fresh values after state refresh
+            # Issue #551: Suppress warning during startup grace period
             if not data.automation_ready and check_automation_ready_func is not None:
-                check_automation_ready_func(data)
+                in_grace = self._startup_grace_until is not None
+                check_automation_ready_func(data, suppress_warning=in_grace)
             computation_engine.compute_derived_values(data)
 
             # Notify listeners with fresh computed data regardless of which
