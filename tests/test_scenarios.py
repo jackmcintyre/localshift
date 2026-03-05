@@ -22,7 +22,6 @@ from custom_components.localshift.computation_engine import (
 from custom_components.localshift.coordinator_data import CoordinatorData
 from simulations.schema import Scenario, discover_scenarios
 
-
 # ---------------------------------------------------------------------------
 # Timezone helper
 # ---------------------------------------------------------------------------

@@ -1,10 +1,5 @@
 """Tests for decision-to-implementation lag tracking (Issue #501)."""
 
-from datetime import datetime, timedelta
-
-import pytest
-
-from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.coordinator_data import CoordinatorData
 
 

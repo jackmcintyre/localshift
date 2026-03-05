@@ -8,12 +8,15 @@ from .decision_outcome_tracker import (
 from .excess_solar import ExcessSolarEngine
 from .excess_solar_signals import ExcessSolarSignalsEngine
 from .forecast_accuracy import ForecastAccuracyEngine
+from .forecast_history_store import ForecastHistoryStore
+from .forecast_pipeline import ForecastPipeline
 from .history_fetcher import HistoryFetcher
 from .optimization_controller import (
     ContextualAdjustment,
     ObjectiveWeights,
     OptimizationController,
 )
+from .optimizer_facade import OptimizerFacade
 from .parameter_optimizer import ParameterOptimizer
 from .pattern_analyzer import (
     BiasCorrection,
@@ -26,6 +29,7 @@ from .price_calculator import (
     get_price_for_slot,
     get_price_for_slot_or_none,
 )
+from .price_signal_engine import PriceSignalEngine
 from .slot_builder import SlotBuilder, SlotBuildMetadata
 from .soc_simulator import SocSimulator
 from .solar_utils import (
@@ -58,9 +62,13 @@ __all__ = [
     "ExcessSolarEngine",
     "ExcessSolarSignalsEngine",
     "ForecastAccuracyEngine",
+    "ForecastHistoryStore",
+    "ForecastPipeline",
     "HistoryFetcher",
     "PerformanceMetrics",
     "PriceCalculator",
+    "PriceSignalEngine",
+    "OptimizerFacade",
     "SlotBuilder",
     "SlotBuildMetadata",
     "SocSimulator",
