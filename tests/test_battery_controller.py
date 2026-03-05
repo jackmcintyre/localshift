@@ -943,3 +943,53 @@ class TestHelperMethods:
         result = battery_controller._get_minimum_target_soc()
 
         assert result == 10.0
+
+    def test_read_fresh_soc_success(self, battery_controller, mock_hass):
+        """Issue #559 Phase 4: test read_fresh_soc() returns float on valid state."""
+        state = MagicMock()
+        state.state = "67.5"
+        mock_hass.states.get = MagicMock(return_value=state)
+
+        result = battery_controller.read_fresh_soc()
+
+        assert result == 67.5
+        # Verify it used the correct entity ID
+        mock_hass.states.get.assert_called_once_with("sensor.tesla_powerwall_soc")
+
+    def test_read_fresh_soc_unavailable(self, battery_controller, mock_hass):
+        """Issue #559 Phase 4: test read_fresh_soc() returns None when unavailable."""
+        state = MagicMock()
+        state.state = "unavailable"
+        mock_hass.states.get = MagicMock(return_value=state)
+
+        result = battery_controller.read_fresh_soc()
+
+        assert result is None
+
+    def test_read_fresh_soc_unknown(self, battery_controller, mock_hass):
+        """Issue #559 Phase 4: test read_fresh_soc() returns None when unknown."""
+        state = MagicMock()
+        state.state = "unknown"
+        mock_hass.states.get = MagicMock(return_value=state)
+
+        result = battery_controller.read_fresh_soc()
+
+        assert result is None
+
+    def test_read_fresh_soc_no_state(self, battery_controller, mock_hass):
+        """Issue #559 Phase 4: test read_fresh_soc() returns None when state object is None."""
+        mock_hass.states.get = MagicMock(return_value=None)
+
+        result = battery_controller.read_fresh_soc()
+
+        assert result is None
+
+    def test_read_fresh_soc_invalid_float(self, battery_controller, mock_hass):
+        """Issue #559 Phase 4: test read_fresh_soc() returns None on invalid float."""
+        state = MagicMock()
+        state.state = "not_a_number"
+        mock_hass.states.get = MagicMock(return_value=state)
+
+        result = battery_controller.read_fresh_soc()
+
+        assert result is None

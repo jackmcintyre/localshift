@@ -220,7 +220,26 @@ class StateMachine:
 
         elif target == BatteryMode.HOLD:
             min_soc = float(self._get_option("minimum_target_soc", 10.0))
-            backup_reserve = max(min_soc, data.soc)
+            # Issue #559 Root Cause 4: read fresh SOC from hardware to avoid stale
+            # value during transitions.  The coordinator's cached SOC can lag by
+            # minutes, causing the reserve to drop before the API updates.
+            fresh_soc = self._battery_controller.read_fresh_soc()
+            if fresh_soc is not None:
+                backup_reserve = max(min_soc, fresh_soc)
+                _LOGGER.info(
+                    "HOLD mode: using fresh SOC %.1f%% (cached was %.1f%%), reserve=%.1f%%",
+                    fresh_soc,
+                    data.soc,
+                    backup_reserve,
+                )
+            else:
+                # Fallback to cached value if fresh read fails
+                backup_reserve = max(min_soc, data.soc)
+                _LOGGER.warning(
+                    "HOLD mode: fresh SOC read failed, using cached %.1f%%, reserve=%.1f%%",
+                    data.soc,
+                    backup_reserve,
+                )
             sc_reserve = backup_reserve
 
         return ModeConfig(

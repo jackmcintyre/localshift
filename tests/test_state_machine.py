@@ -302,6 +302,8 @@ class TestModeConfig:
 
         state_machine._get_option = _get_option
         coordinator_data.soc = 60.0
+        # Issue #559: mock read_fresh_soc to return the same as cached SOC
+        state_machine._battery_controller.read_fresh_soc = MagicMock(return_value=60.0)
 
         config = state_machine._get_mode_config(BatteryMode.HOLD, coordinator_data)
 
@@ -321,6 +323,8 @@ class TestModeConfig:
 
         state_machine._get_option = _get_option
         coordinator_data.soc = 8.0
+        # Issue #559: mock read_fresh_soc to return the same as cached SOC
+        state_machine._battery_controller.read_fresh_soc = MagicMock(return_value=8.0)
 
         config = state_machine._get_mode_config(BatteryMode.HOLD, coordinator_data)
 

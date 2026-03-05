@@ -347,7 +347,10 @@ class PriceCalculator:
         """
         target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
         hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-        total_window = 8.0
+        # Issue #559 Root Cause 2: shortened from 8h to 4h to reduce urgency creep.
+        # A wider window caused prices to be raised well before any real urgency,
+        # resulting in grid charging at e.g. $0.19 when the threshold was $0.18.
+        total_window = 4.0
         urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
         urgency_price = base + (max_price - base) * urgency
 
@@ -362,7 +365,10 @@ class PriceCalculator:
                 if price < min_forecast:
                     min_forecast = price
 
-        forecast_floor = max(min_forecast + 0.02, base)
+        # Issue #559 Root Cause 2: removed the hard-coded +0.02 buffer.
+        # The buffer created a "ghost" threshold ($0.19 when strict limit was $0.18),
+        # causing the optimizer to charge at prices the user intended to exclude.
+        forecast_floor = max(min_forecast, base)
         final = min(urgency_price, max_price)
         final = max(final, forecast_floor)
         return round(final, 2)

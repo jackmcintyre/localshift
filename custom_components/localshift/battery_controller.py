@@ -82,6 +82,31 @@ class BatteryController:
         self._service_client = PowerwallServiceClient(hass, get_entity_id_func)
         self._validator = TransitionValidator(hass, get_entity_id_func)
 
+    def read_fresh_soc(self) -> float | None:
+        """Read the absolute latest SOC directly from the Home Assistant state machine.
+
+        Bypasses the coordinator's caching delay which can be minutes behind during
+        mode transitions.
+
+        Issue #559 Root Cause 4: during transitions (e.g., GRID_CHARGING -> HOLD),
+        the state machine was using a cached, stale SOC from the coordinator, causing
+        the hardware reserve to drop immediately before the Tesla API updated.  This
+        method reads the live state to avoid that staleness.
+
+        Returns:
+            Current SOC percentage (0-100) if available, None if unavailable.
+        """
+        from .const import CONF_TESLEMETRY_SOC  # noqa: PLC0415
+
+        try:
+            soc_entity_id = self._get_entity_id(CONF_TESLEMETRY_SOC)
+            state = self.hass.states.get(soc_entity_id)
+            if state and state.state not in (None, "unknown", "unavailable"):
+                return float(state.state)
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return None
+
     async def _run_transition(self, recipe: TransitionRecipe) -> bool:
         for step in recipe.steps:
             if not await step.action():
