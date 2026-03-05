@@ -74,6 +74,27 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 - Ask user to commit; do not auto-commit
 - Open PR after commit
 
+### PR Creation & CI Monitoring
+
+**After creating a PR:**
+
+1. **Check CI status immediately:**
+   ```bash
+   ./scripts/check-pr-ci.sh [PR_NUMBER]
+   # Or: gh pr checks <PR_NUMBER>
+   ```
+
+2. **Interactive monitoring:**
+   - Ask user: "Wait for CI results? [W] or Continue [C]"
+   - If wait: Monitor every 30s until complete
+   - If continue: Check periodically, notify when done
+
+3. **Report results:**
+   - ✅ All passed: PR ready for review
+   - ❌ Failed: Show failure details, offer to fix
+
+**Full workflow:** `.agents/rules/pr-ci-checks.md`
+
 ---
 
 ## Testing Best Practices
