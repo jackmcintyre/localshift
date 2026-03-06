@@ -206,7 +206,8 @@ class TestBuildOptimizerConfig:
         """target_shortfall_penalty_per_pct is calibrated from effective_cheap_price."""
         # mock_coordinator_data has effective_cheap_price=0.12
         config = _build_optimizer_config(mock_coordinator_data, config_options)
-        expected = pytest.approx(0.12 * 13.5 / 100.0 * 1.5, rel=1e-4)
+        # Safety factor increased from 1.5 to 3.0 per Issue #562
+        expected = pytest.approx(0.12 * 13.5 / 100.0 * 3.0, rel=1e-4)
         assert config.target_shortfall_penalty_per_pct == expected
 
     def test_config_penalty_not_hardcoded_to_1(
