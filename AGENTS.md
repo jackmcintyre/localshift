@@ -68,11 +68,74 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 - For HA restart: "Restart recommended. Please run: `./deploy.sh --restart` (you'll be prompted to confirm)"
 - User controls all deployments - ensures human-in-the-loop before HA changes
 
+### Deploying to Test Environment
+
+The `test` branch is a persistent branch for continuous testing/deployment. Changes merge into `test` via PR (requires approval), then auto-deploy via watch mode.
+
+#### Workflow
+
+1. **Create worktree from test branch:**
+   ```bash
+   git worktree add worktrees/deploy-test -b test
+   cd worktrees/deploy-test
+   ```
+
+2. **Run watch mode:**
+   ```bash
+   ./deploy.sh --reserve
+   ./deploy.sh --watch
+   ```
+
+   Watch mode will:
+   - Auto-deploy on every code change (file save, etc.)
+   - Auto-release reservation after each deploy
+   - Auto-reload integration via HA API
+   - Wait 2 seconds between deploys (debounce)
+
+3. **Merge changes to test:**
+   - Push your worktree branch: `git push origin issue/NNN`
+   - Create PR targeting `test` branch
+   - PR requires maintainer/lead approval
+   - CI must pass before merge is allowed
+   - Once merged, the watch process will deploy automatically
+
+4. **Stop watch mode:**
+   Press Ctrl+C - the trap will release any active reservation.
+
+**Note:** Only one watch process can run at a time (enforced by reservation system).
+
 ### Commit Guidelines
 
 - Reference issue: `Fixes #NNN` or `Closes #NNN`
 - Ask user to commit; do not auto-commit
-- Open PR after commit
+
+### PR Target Branches
+
+**When to target `main`:**
+- Production-ready changes that should be released
+- Bug fixes, features, refactoring that don't need live testing
+- Default target for most PRs
+
+**When to target `test`:**
+- Changes that need live testing in Home Assistant before production release
+- Changes where you want to use watch mode for rapid iteration
+- Changes where behavior depends on real HA entity states
+- Changes that need to be validated with actual Powerwall/solar data
+
+**How to target test:**
+```bash
+# Create worktree from test branch
+git worktree add worktrees/deploy-test -b test
+cd worktrees/deploy-test
+
+# Make changes, commit, then create PR with base = test
+gh pr create --base test --title "..."
+```
+
+**After PR to test is merged:**
+- Run watch mode to see changes deploy automatically
+- Validate in live HA
+- If successful, create follow-up PR from test to main for production release
 
 ### PR Creation & CI Monitoring
 

@@ -49,6 +49,28 @@ Bypass attempts are logged to `.git-bypass.log` for audit.
 
 **See `.agents/rules/pr-ci-checks.md` for full workflow details.**
 
+## PR Target Branches
+
+**Default: target `main`** for production-ready changes.
+
+**Target `test` when:**
+- Changes need live testing in Home Assistant
+- You want to use watch mode for rapid iteration
+- Behavior depends on real HA entity states
+- Need to validate with actual Powerwall/solar data
+
+**How to target test:**
+```bash
+# Create worktree from test
+git worktree add worktrees/deploy-test -b test
+cd worktrees/deploy-test
+
+# After changes, create PR targeting test
+gh pr create --base test --title "..."
+```
+
+**Workflow:** PR to test → merge → watch mode deploys → validate → PR test→main for production
+
 ## If You See Changes on Main
 
 - DO NOT commit them
