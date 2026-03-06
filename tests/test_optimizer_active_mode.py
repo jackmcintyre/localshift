@@ -164,7 +164,7 @@ class TestApplyPathMapping:
 
     def test_hold_maps_to_hold_mode(self):
         """HOLD action should map to HOLD mode (Issue #522)."""
-        config = OptimizerConfig(demand_window_target_soc_pct=80.0)
+        config = OptimizerConfig(demand_window_target_soc_pct=80.0, hold_soc=True)
         decisions = [
             {
                 "action": "hold",

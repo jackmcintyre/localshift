@@ -802,9 +802,13 @@ def _derive_runtime_apply_plan(
     if action_str == "hold":
         return {
             "action": action_str,
-            "battery_mode": BatteryMode.HOLD.value,
+            "battery_mode": BatteryMode.HOLD.value
+            if config.hold_soc
+            else BatteryMode.SELF_CONSUMPTION.value,
             "target_soc": None,
-            "reason": "optimizer_hold",
+            "reason": "optimizer_hold_strict"
+            if config.hold_soc
+            else "optimizer_self_consumption",
         }
 
     if action_str == "charge_grid_normal":
