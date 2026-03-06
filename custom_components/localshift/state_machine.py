@@ -17,6 +17,13 @@ from .const import (
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+    PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
+    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+    STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
+    STATE_MACHINE_MIN_MODE_DURATION_MINUTES,
+    STATE_MACHINE_TRANSITION_GRACE_SECONDS,
+    TESLA_OVERRIDE_RESERVE_PERCENT,
+    TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
@@ -34,12 +41,8 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # Tesla Override Detection Constants
-# When Tesla activates Storm Watch, Grid Events, or VPP events, they set
-# backup_reserve to 80% and operation_mode to self_consumption, ignoring
-# external API commands until the event ends.
-TESLA_OVERRIDE_RESERVE = 80.0  # Reserve level that indicates Tesla control
-TESLA_OVERRIDE_RESERVE_TOLERANCE = 1.0  # Tolerance for reserve comparison
-TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)  # Extended cooldown during override
+# Extended cooldown during Tesla override events
+TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)
 
 
 @dataclass
@@ -67,7 +70,9 @@ class StateMachine:
 
     # Minimum time a mode must be active before allowing transition (Issue #279)
     # This prevents rapid cycling that triggers the learning system's cycling penalty
-    _MIN_MODE_DURATION: timedelta = timedelta(minutes=5)
+    _MIN_MODE_DURATION: timedelta = timedelta(
+        minutes=STATE_MACHINE_MIN_MODE_DURATION_MINUTES
+    )
 
     def __init__(
         self,
@@ -112,13 +117,17 @@ class StateMachine:
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
-        self._MIN_CORRECTION_INTERVAL = timedelta(minutes=5)
+        self._MIN_CORRECTION_INTERVAL = timedelta(
+            minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
+        )
         # Flag to skip debounce on first transition after startup grace
         self._skip_next_debounce: bool = False
         # Track last successful transition for health check intelligence
         self._last_successful_transition: datetime | None = None
         # Grace period after successful transition before health checks trigger corrections
-        self._TRANSITION_GRACE_PERIOD = timedelta(seconds=30)
+        self._TRANSITION_GRACE_PERIOD = timedelta(
+            seconds=STATE_MACHINE_TRANSITION_GRACE_SECONDS
+        )
         # Tesla Override Detection
         # When Tesla activates Storm Watch, Grid Events, or VPP events, they take
         # control of the Powerwall and ignore external API commands.
@@ -145,8 +154,8 @@ class StateMachine:
             reserve = data.backup_reserve
             if (
                 reserve is not None
-                and abs(reserve - TESLA_OVERRIDE_RESERVE)
-                < TESLA_OVERRIDE_RESERVE_TOLERANCE
+                and abs(reserve - TESLA_OVERRIDE_RESERVE_PERCENT)
+                < TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT
             ):
                 return True
         return False
@@ -215,7 +224,10 @@ class StateMachine:
 
         elif target == BatteryMode.PROACTIVE_EXPORT:
             op_mode = "autonomous"
-            backup_reserve = max(4.0, data.soc - 5.0)
+            backup_reserve = max(
+                PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
+                data.soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+            )
             export_mode = TESLEMETRY_EXPORT_BATTERY_OK
             pe_reserve = backup_reserve
 
