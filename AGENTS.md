@@ -108,7 +108,34 @@ The `test` branch is a persistent branch for continuous testing/deployment. Chan
 
 - Reference issue: `Fixes #NNN` or `Closes #NNN`
 - Ask user to commit; do not auto-commit
-- Open PR after commit
+
+### PR Target Branches
+
+**When to target `main`:**
+- Production-ready changes that should be released
+- Bug fixes, features, refactoring that don't need live testing
+- Default target for most PRs
+
+**When to target `test`:**
+- Changes that need live testing in Home Assistant before production release
+- Changes where you want to use watch mode for rapid iteration
+- Changes where behavior depends on real HA entity states
+- Changes that need to be validated with actual Powerwall/solar data
+
+**How to target test:**
+```bash
+# Create worktree from test branch
+git worktree add worktrees/deploy-test -b test
+cd worktrees/deploy-test
+
+# Make changes, commit, then create PR with base = test
+gh pr create --base test --title "..."
+```
+
+**After PR to test is merged:**
+- Run watch mode to see changes deploy automatically
+- Validate in live HA
+- If successful, create follow-up PR from test to main for production release
 
 ### PR Creation & CI Monitoring
 
