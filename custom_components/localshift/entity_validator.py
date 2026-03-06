@@ -214,6 +214,277 @@ STALENESS_THRESHOLDS: dict[str, timedelta] = {
 FAILURE_THRESHOLD_WARNING = 3  # After 3 failures, log warning
 FAILURE_THRESHOLD_ERROR = 10  # After 10 failures, consider entity broken
 
+# LocalShift internal entity health configuration
+# Maps entity_id to validation and health check parameters
+LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
+    # Sensors - REQUIRED core
+    "sensor.localshift_price_cheap_effective": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_price_cheap_charge_stop": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_solar_weighted_avg_fit": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_forecast_battery": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_cost_electricity_net": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_optimizer_plan": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": int,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_forecast_prices": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_optimizer_plan_grid": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_forecast_diagnostics": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_target_soc_minimum": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
+    "sensor.localshift_excess_solar_kwh": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_load_shift_signal": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_forecast_status": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_automation_ready": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_optimizer_plan_detailed": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_optimizer_summary": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    # Binary sensors - all REQUIRED
+    "binary_sensor.localshift_price_spike_coming": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_discharge_forced": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_charge_forced": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_charge_boost": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_price_expensive_coming": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_solar_can_reach_target": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_charge_boost_needed": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_demand_window": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_excess_solar_available": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    "binary_sensor.localshift_tesla_override_active": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": 15,
+    },
+    # Switches - all REQUIRED (static)
+    "switch.localshift_automation_enabled": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_spike_discharge_enabled": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_spike_discharge_conservative": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_dry_run": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_demand_window_block": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_allow_dw_entry_under_target": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_notifications_enabled": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_enable_learning": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    # Selects - REQUIRED (static)
+    "select.localshift_battery_mode": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": None,
+    },
+    "select.localshift_optimization_mode": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": str,
+        "staleness_minutes": None,
+    },
+    # Numbers - REQUIRED (static)
+    "number.localshift_cheap_price_percentile": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
+    "number.localshift_max_pre_charge_price": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
+    "number.localshift_battery_target": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
+    "number.localshift_minimum_target_soc": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
+    # Optional diagnostic sensors
+    "sensor.localshift_forecast_accuracy": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": float,
+        "staleness_minutes": 60,
+    },
+    "sensor.localshift_extended_forecast_accuracy": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": float,
+        "staleness_minutes": 1440,
+    },
+    "sensor.localshift_solar_forecast_accuracy": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": float,
+        "staleness_minutes": 1440,
+    },
+    "sensor.localshift_decision_lag": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_cost_reconciliation": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": str,
+        "staleness_minutes": 1440,
+    },
+    "sensor.localshift_learning_status": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": str,
+        "staleness_minutes": 60,
+    },
+    "sensor.localshift_decision_quality": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": float,
+        "staleness_minutes": 60,
+    },
+    "sensor.localshift_learning_decision_history": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": int,
+        "staleness_minutes": 60,
+    },
+    "sensor.localshift_decision_log": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": str,
+        "staleness_minutes": 60,
+    },
+    "sensor.localshift_forecast_history": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": int,
+        "staleness_minutes": 1440,
+    },
+    "sensor.localshift_integration_status": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+    "sensor.localshift_entity_health": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": str,
+        "staleness_minutes": 15,
+    },
+}
+
 
 class EntityValidator:
     """Centralized entity validation and health tracking.
@@ -236,6 +507,7 @@ class EntityValidator:
         self.hass = hass
         self._get_entity_id = get_entity_id_func
         self._entity_health: dict[str, EntityHealth] = {}
+        self._localshift_entity_health: dict[str, EntityHealth] = {}
         self._last_full_check: datetime | None = None
         self._cached_status: IntegrationStatus = IntegrationStatus.OK
         self._cached_errors: list[str] = []
@@ -536,6 +808,166 @@ class EntityValidator:
         self._update_cached_status()
 
         return self._entity_health
+
+    def _validate_type_value(
+        self, value_str: str, expected_type: Any, entity_id: str
+    ) -> tuple[bool, Any, str]:
+        """Validate a state value against an expected type.
+
+        Args:
+            value_str: The state value as string
+            expected_type: Type to validate against (bool, int, float, str, or tuple of types)
+            entity_id: Entity ID for error messages
+
+        Returns:
+            Tuple of (is_valid, parsed_value, error_message)
+        """
+        if expected_type is None:
+            return True, value_str, ""
+
+        # Handle boolean
+        if expected_type == bool:
+            bool_value = value_str.lower() in ("on", "true", "yes", "1")
+            return True, bool_value, ""
+
+        # Handle numeric (int or float)
+        if expected_type in ((int, float), int, float):
+            try:
+                num_value = float(value_str)
+            except (ValueError, TypeError):
+                return False, 0.0, f"value '{value_str}' is not a number"
+            return True, num_value, ""
+
+        # Handle string
+        if expected_type == str:
+            return True, value_str, ""
+
+        # Default: accept as is
+        return True, value_str, ""
+
+    def check_all_localshift_entities(self) -> dict[str, dict[str, Any]]:
+        """Check health of all LocalShift internal entities.
+
+        Returns:
+            Dictionary mapping entity_id to serialized health info dict
+        """
+        now = dt_util.now()
+        results: dict[str, EntityHealth] = {}
+
+        for entity_id, config in LOCALSHIFT_ENTITY_CONFIG.items():
+            # Get or create health object
+            health = self._localshift_entity_health.get(entity_id)
+            if health is None:
+                health = EntityHealth(
+                    entity_id=entity_id,
+                    config_key=entity_id,
+                    category=config["category"],
+                    status=EntityStatus.OK,
+                    last_check=now,
+                )
+                self._localshift_entity_health[entity_id] = health
+            else:
+                health.entity_id = entity_id
+                health.last_check = now
+
+            # Check existence
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                health.status = EntityStatus.MISSING
+                health.error_message = f"Entity '{entity_id}' does not exist"
+                health.consecutive_failures += 1
+                self._check_failure_thresholds(health, entity_id)
+                results[entity_id] = health
+                continue
+
+            # Check unavailable/unknown
+            if state.state == "unavailable":
+                health.status = EntityStatus.UNAVAILABLE
+                health.error_message = f"Entity '{entity_id}' is unavailable"
+                health.consecutive_failures += 1
+                self._check_failure_thresholds(health, entity_id)
+                results[entity_id] = health
+                continue
+            if state.state == "unknown":
+                health.status = EntityStatus.UNKNOWN
+                health.error_message = f"Entity '{entity_id}' has unknown state"
+                health.consecutive_failures += 1
+                self._check_failure_thresholds(health, entity_id)
+                results[entity_id] = health
+                continue
+
+            # Type validation
+            expected_type = config.get("expected_type")
+            if expected_type is not None:
+                is_valid, parsed_value, error_msg = self._validate_type_value(
+                    state.state, expected_type, entity_id
+                )
+                if not is_valid:
+                    health.status = EntityStatus.INVALID_VALUE
+                    health.error_message = error_msg
+                    health.consecutive_failures += 1
+                    self._check_failure_thresholds(health, entity_id)
+                    results[entity_id] = health
+                    continue
+            else:
+                parsed_value = state.state
+
+            # Staleness check
+            staleness_minutes = config.get("staleness_minutes")
+            if staleness_minutes is not None:
+                threshold = timedelta(minutes=staleness_minutes)
+                freshness_ts = self._get_freshness_timestamp(state)
+                if freshness_ts is not None:
+                    try:
+                        age = now - freshness_ts
+                    except TypeError:
+                        _LOGGER.debug(
+                            "Skipping staleness for %s due to timestamp mismatch",
+                            entity_id,
+                        )
+                    else:
+                        if age > threshold:
+                            health.status = EntityStatus.STALE
+                            health.error_message = (
+                                f"Entity '{entity_id}' data is stale "
+                                f"({age.total_seconds():.0f}s old)"
+                            )
+                            results[entity_id] = health
+                            continue
+
+            # Entity is healthy
+            if health.is_broken:
+                _LOGGER.info(
+                    "Entity '%s' recovered from BROKEN status - now healthy",
+                    entity_id,
+                )
+                health.is_broken = False
+            health.status = EntityStatus.OK
+            health.error_message = ""
+            health.last_valid_value = parsed_value
+            health.last_valid_time = now
+            health.consecutive_failures = 0
+            results[entity_id] = health
+
+        # Serialize to plain dicts for coordinator data
+        summary: dict[str, dict[str, Any]] = {}
+        for entity_id, health in results.items():
+            summary[entity_id] = {
+                "entity_id": health.entity_id,
+                "status": health.status.value,
+                "category": health.category.value,
+                "last_valid_time": (
+                    health.last_valid_time.isoformat()
+                    if health.last_valid_time
+                    else None
+                ),
+                "consecutive_failures": health.consecutive_failures,
+                "is_broken": health.is_broken,
+                "error_message": health.error_message if health.error_message else None,
+            }
+
+        self._localshift_entity_health = results
+        return summary
 
     def _update_cached_status(self) -> None:
         """Update cached integration status and error messages."""
