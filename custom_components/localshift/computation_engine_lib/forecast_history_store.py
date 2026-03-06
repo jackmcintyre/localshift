@@ -87,8 +87,7 @@ class ForecastHistoryStore:
                 if "target_time" in entry and "offset_minutes" in entry
             ]
 
-            if len(entries_to_save) > 100:
-                entries_to_save = entries_to_save[-100:]
+            entries_to_save = self._truncate_history(entries_to_save, 100)
 
             stored_data = {
                 "forecast_history": entries_to_save,
@@ -113,45 +112,20 @@ class ForecastHistoryStore:
         if not slots:
             return
 
+        # Ensure now_dt is in local timezone
+        now_local = self._ensure_local_datetime(now_dt)
+
         for offset_minutes in [15, 60, 240]:
-            target_dt = now_dt + timedelta(minutes=offset_minutes)
-
-            if target_dt.tzinfo is None:
-                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-            else:
-                target_dt = dt_util.as_local(target_dt)
-
-            for slot in slots:
-                ts = slot.get("timestamp_iso", "")
-                if not ts:
-                    continue
-                try:
-                    slot_dt = datetime.fromisoformat(ts)
-                except ValueError:
-                    continue
-
-                if slot_dt.tzinfo is None:
-                    slot_dt = dt_util.as_local(dt_util.as_utc(slot_dt))
-                else:
-                    slot_dt = dt_util.as_local(slot_dt)
-
-                slot_interval = slot.get("slot_interval_minutes", 15)
-                slot_end = slot_dt + timedelta(minutes=slot_interval)
-
-                if slot_dt <= target_dt < slot_end:
-                    entry = {
-                        "prediction_time": now_dt.isoformat(),
-                        "target_time": target_dt.isoformat(),
-                        "offset_minutes": offset_minutes,
-                        "predicted_soc": slot.get("predicted_soc_pct", 0),
-                        "predicted_buy_price": slot.get("buy_price", 0),
-                        "predicted_sell_price": slot.get("sell_price", 0),
-                    }
-                    data.forecast_history.append(entry)
-                    break
+            target_dt = now_local + timedelta(minutes=offset_minutes)
+            slot = self._find_slot_for_target(slots, target_dt)
+            if slot:
+                entry = self._create_history_entry(
+                    now_local, target_dt, offset_minutes, slot
+                )
+                data.forecast_history.append(entry)
 
         if len(data.forecast_history) > 200:
-            data.forecast_history = data.forecast_history[-200:]
+            data.forecast_history = self._truncate_history(data.forecast_history, 200)
 
         data.forecast_history_count = len(data.forecast_history)
         self._last_forecast_hour = current_hour
@@ -160,25 +134,73 @@ class ForecastHistoryStore:
         self, history: list[dict], cutoff: datetime
     ) -> list[dict]:
         """Filter history entries to only valid ones within cutoff time."""
+        cutoff_local = self._ensure_local_datetime(cutoff)
         valid_entries = []
         for entry in history:
             if "target_time" not in entry:
                 continue
-            if self._is_history_entry_valid(entry, cutoff):
+            target_dt = self._parse_datetime_iso(entry["target_time"])
+            if target_dt is not None and target_dt >= cutoff_local:
                 valid_entries.append(entry)
         return valid_entries
 
-    def _is_history_entry_valid(self, entry: dict, cutoff: datetime) -> bool:
-        """Check if a history entry is valid and within cutoff time."""
+    # -------------------------------------------------------------------------
+    # Helper Methods (Refactoring)
+    # -------------------------------------------------------------------------
+
+    def _ensure_local_datetime(self, dt: datetime) -> datetime:
+        """Ensure datetime is timezone-aware and in local timezone."""
+        if dt.tzinfo is None:
+            return dt_util.as_local(dt_util.as_utc(dt))
+        return dt_util.as_local(dt)
+
+    def _parse_datetime_iso(self, iso_str: str) -> datetime | None:
+        """Parse ISO datetime string and return as local timezone-aware datetime."""
         try:
-            target_dt = datetime.fromisoformat(entry["target_time"])
-            if target_dt.tzinfo is None:
-                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-            else:
-                target_dt = dt_util.as_local(target_dt)
-            return target_dt >= cutoff
+            dt = datetime.fromisoformat(iso_str)
+            return self._ensure_local_datetime(dt)
         except (ValueError, TypeError):
-            return False
+            return None
+
+    def _truncate_history(self, history: list, max_size: int = 100) -> list:
+        """Truncate history to max_size keeping most recent entries."""
+        if len(history) > max_size:
+            return history[-max_size:]
+        return history
+
+    def _create_history_entry(
+        self,
+        now_dt: datetime,
+        target_dt: datetime,
+        offset_minutes: int,
+        slot: dict,
+    ) -> dict:
+        """Create a forecast history entry from slot data."""
+        return {
+            "prediction_time": now_dt.isoformat(),
+            "target_time": target_dt.isoformat(),
+            "offset_minutes": offset_minutes,
+            "predicted_soc": slot.get("predicted_soc_pct", 0),
+            "predicted_buy_price": slot.get("buy_price", 0),
+            "predicted_sell_price": slot.get("sell_price", 0),
+        }
+
+    def _find_slot_for_target(
+        self, slots: list[dict], target_dt: datetime
+    ) -> dict | None:
+        """Find first slot that covers the target datetime."""
+        for slot in slots:
+            ts = slot.get("timestamp_iso", "")
+            if not ts:
+                continue
+            slot_dt = self._parse_datetime_iso(ts)
+            if slot_dt is None:
+                continue
+            slot_interval = slot.get("slot_interval_minutes", 15)
+            slot_end = slot_dt + timedelta(minutes=slot_interval)
+            if slot_dt <= target_dt < slot_end:
+                return slot
+        return None
 
     def _find_first_prediction_time(
         self, data: CoordinatorData, entries: list[dict]

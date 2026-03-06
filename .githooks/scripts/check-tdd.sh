@@ -58,8 +58,8 @@ fi
 echo ""
 echo "🔍 Running tests for modified files..."
 
-# Extract test file paths
-TEST_FILES=$(echo "$STAGED_FILES" | sed 's|custom_components/localshift/\(.*\)\.py|tests/test_\1.py|' | xargs)
+# Extract test file paths (flatten: tests/test_<filename>.py regardless of subdirectory)
+TEST_FILES=$(echo "$STAGED_FILES" | sed 's|custom_components/localshift/.*/\([^/]*\)\.py|tests/test_\1.py|' | xargs)
 
 # Check if test files exist before running
 for TEST_FILE in $TEST_FILES; do
@@ -81,11 +81,12 @@ fi
 
 echo "✅ All tests pass"
 
-# Check coverage threshold (95%)
+# Check coverage threshold (95%) - only for modified modules
 echo ""
-echo "🔍 Checking test coverage..."
+echo "🔍 Checking test coverage for modified files..."
 
-COVERAGE_OUTPUT=$(uv run pytest --cov=custom_components/localshift --cov-report=term-missing --cov-fail-under=95 2>&1)
+# Run coverage only on the test files that correspond to staged changes
+COVERAGE_OUTPUT=$(uv run pytest $TEST_FILES --cov=custom_components/localshift --cov-report=term-missing --cov-fail-under=95 2>&1)
 COVERAGE_EXIT_CODE=$?
 
 if [ $COVERAGE_EXIT_CODE -ne 0 ]; then
