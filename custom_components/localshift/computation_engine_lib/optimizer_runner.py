@@ -40,7 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 # a shortfall, but won't pay more than 1.5x the remediation cost to do so.
 # Do not set above 3.0 without careful testing — higher values cause compulsive
 # pre-charging even when solar will cover the deficit.
-_SHORTFALL_PENALTY_SAFETY_FACTOR = 1.5
+_SHORTFALL_PENALTY_SAFETY_FACTOR = 3.0
 
 
 def _get_ha_timezone() -> str:
