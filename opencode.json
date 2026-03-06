@@ -4,17 +4,11 @@
     ".opencode/rules",
     ".agents/rules/worktrees.md"
   ],
-  "agents": [
-    ".opencode/agents/test-coverage-agent",
-    ".opencode/agents/learning-analyzer-agent"
-  ],
-  "skills": [
-    ".opencode/skills/ha-mcp-debug",
-    ".opencode/skills/python-refactoring",
-    ".opencode/skills/ha-integration-testing"
-  ],
-  "mcps": [
-    ".opencode/mcps/github-automation-mcp",
-    ".opencode/mcps/documentation-sync-mcp"
-  ]
+  "skills": {
+    "paths": [
+      ".opencode/skills/ha-mcp-debug",
+      ".opencode/skills/python-refactoring",
+      ".opencode/skills/ha-integration-testing"
+    ]
+  }
 }
