@@ -659,9 +659,8 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
 
     def _update_from_coordinator(self) -> None:
         """Update with overall accuracy percentage."""
-        self._attr_native_value = round(
-            self.coordinator.data.forecast_accuracy_soc_1h, 1
-        )
+        accuracy = self.coordinator.data.forecast_accuracy_soc_1h
+        self._attr_native_value = round(accuracy, 1) if accuracy is not None else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -673,9 +672,15 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
             "soc_error_1h": round(d.forecast_error_soc_1h, 1),
             "soc_error_4h": round(d.forecast_error_soc_4h, 1),
             # SOC accuracy percentages (100 - abs error, clamped)
-            "soc_accuracy_15min": round(d.forecast_accuracy_soc_15min, 1),
-            "soc_accuracy_1h": round(d.forecast_accuracy_soc_1h, 1),
-            "soc_accuracy_4h": round(d.forecast_accuracy_soc_4h, 1),
+            "soc_accuracy_15min": round(d.forecast_accuracy_soc_15min, 1)
+            if d.forecast_accuracy_soc_15min is not None
+            else None,
+            "soc_accuracy_1h": round(d.forecast_accuracy_soc_1h, 1)
+            if d.forecast_accuracy_soc_1h is not None
+            else None,
+            "soc_accuracy_4h": round(d.forecast_accuracy_soc_4h, 1)
+            if d.forecast_accuracy_soc_4h is not None
+            else None,
             # Price prediction errors
             "buy_price_error_1h": round(d.forecast_error_buy_price_1h, 4),
             "sell_price_error_1h": round(d.forecast_error_sell_price_1h, 4),

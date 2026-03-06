@@ -219,7 +219,7 @@ class TestForecastAccuracyEngine:
 
         # Should set default values
         assert data.forecast_error_soc_15min == 0.0
-        assert data.forecast_accuracy_soc_1h == 100.0
+        assert data.forecast_accuracy_soc_1h is None  # No data available
 
     @pytest.mark.asyncio
     async def test_compute_forecast_accuracy_sets_defaults(self):

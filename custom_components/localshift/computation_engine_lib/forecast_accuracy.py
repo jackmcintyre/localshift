@@ -90,9 +90,9 @@ class ForecastAccuracyEngine:
             ("forecast_error_soc_15min", 0.0),
             ("forecast_error_soc_1h", 0.0),
             ("forecast_error_soc_4h", 0.0),
-            ("forecast_accuracy_soc_15min", 100.0),
-            ("forecast_accuracy_soc_1h", 100.0),
-            ("forecast_accuracy_soc_4h", 100.0),
+            ("forecast_accuracy_soc_15min", None),
+            ("forecast_accuracy_soc_1h", None),
+            ("forecast_accuracy_soc_4h", None),
             ("forecast_error_buy_price_1h", 0.0),
             ("forecast_error_sell_price_1h", 0.0),
         ]
@@ -166,7 +166,7 @@ class ForecastAccuracyEngine:
             target_dt = dt_util.as_local(target_dt)
 
         time_diff = abs((target_dt - now_dt).total_seconds())
-        if time_diff > 60:
+        if time_diff > 300:  # 5 minute window to tolerate scheduling drift
             return None
 
         offset = entry.get("offset_minutes")

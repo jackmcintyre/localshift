@@ -391,9 +391,9 @@ class CoordinatorData:
     forecast_error_soc_1h: float = 0.0  # Error for 1-hour predictions
     forecast_error_soc_4h: float = 0.0  # Error for 4-hour predictions
     # SOC accuracy percentages (100 - abs error, clamped to 0-100)
-    forecast_accuracy_soc_15min: float = 100.0
-    forecast_accuracy_soc_1h: float = 100.0
-    forecast_accuracy_soc_4h: float = 100.0
+    forecast_accuracy_soc_15min: float | None = None  # None = no data yet
+    forecast_accuracy_soc_1h: float | None = None  # None = no data yet
+    forecast_accuracy_soc_4h: float | None = None  # None = no data yet
     # Price prediction errors
     forecast_error_buy_price_1h: float = 0.0  # Buy price error ($/kWh)
     forecast_error_sell_price_1h: float = 0.0  # Sell price error ($/kWh)
