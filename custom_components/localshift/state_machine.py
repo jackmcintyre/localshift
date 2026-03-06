@@ -399,23 +399,16 @@ class StateMachine:
         ):
             return False
 
+        # SOC target reached, but we respect optimizer control.
+        # Hardware will naturally stop charging when backup reserve is reached.
+        # Do not transition; let the optimizer decide when to change modes.
         _LOGGER.info(
-            "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
+            "SOC %.1f%% reached battery target %.0f%% but remaining in %s (optimizer control)",
             data.soc,
             battery_target,
             self._commanded_mode.value,
         )
-        transition_success = await self._execute_mode_transition(
-            data, BatteryMode.SELF_CONSUMPTION
-        )
-        if transition_success:
-            old_mode = self._commanded_mode
-            self._commanded_mode = BatteryMode.SELF_CONSUMPTION
-            self._mode_desired_since.clear()
-            await self._notification_service.send_transition_notification(
-                old_mode, BatteryMode.SELF_CONSUMPTION, data
-            )
-        return True
+        return False
 
     def _should_defer_for_minimum_duration(
         self, desired: BatteryMode, now: datetime
