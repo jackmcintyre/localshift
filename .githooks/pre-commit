@@ -28,4 +28,9 @@ if [ "$BRANCH" = "main" ]; then
     exit 1
 fi
 
+# TDD workflow enforcement
+if ! .githooks/scripts/check-tdd.sh; then
+    exit 1
+fi
+
 exit 0
