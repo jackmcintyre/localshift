@@ -19,7 +19,13 @@ Bypass attempts are logged to `.git-bypass.log` for audit.
    cd worktrees/issue-{NNN}
    ```
 
-2. **Write failing test first** (TDD RED phase):
+2. **Consult planning model** (if modifying optimizer):
+   - Read `docs/PLANNING_MODEL.md` before changing `optimizer_dp.py`
+   - Hard constraints → `feasible_actions()`
+   - Soft penalties → `stage_cost()`
+   - Terminal costs → `terminal_cost()`
+
+3. **Write failing test first** (TDD RED phase):
    - Create test file in `tests/`
    - Write test describing expected behavior
    - Run test to confirm failure
