@@ -85,6 +85,7 @@ class ForecastAccuracyEngine:
 
         Args:
             data: CoordinatorData instance
+
         """
         fields_defaults = [
             ("forecast_error_soc_15min", 0.0),
@@ -111,6 +112,7 @@ class ForecastAccuracyEngine:
 
         Returns:
             Dict mapping offset (15, 60, 240) to comparison result dict
+
         """
         actual_soc = data.soc
         actual_buy_price = data.general_price
@@ -147,6 +149,7 @@ class ForecastAccuracyEngine:
 
         Returns:
             Comparison result dict or None
+
         """
         if "offset_minutes" not in entry:
             return None
@@ -195,6 +198,7 @@ class ForecastAccuracyEngine:
         Args:
             data: CoordinatorData instance
             comparisons: Dict of comparison results by offset
+
         """
         found_15 = self._apply_offset_result(data, comparisons.get(15), 15)
         found_60 = self._apply_offset_result(data, comparisons.get(60), 60)
@@ -230,6 +234,7 @@ class ForecastAccuracyEngine:
 
         Returns:
             True if result was applied
+
         """
         if result is None:
             return False
@@ -269,6 +274,7 @@ class ExtendedForecastAccuracyEngine:
 
         Args:
             storage_path: Path to store accuracy history (optional)
+
         """
         self.storage_path = storage_path
         self._accuracy_history: list[dict[str, Any]] = []

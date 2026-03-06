@@ -47,6 +47,7 @@ def build_user_schema(
 
     Returns:
         Voluptuous schema for the user step form
+
     """
     if defaults is None:
         defaults = DEFAULT_ENTITY_IDS
@@ -106,6 +107,7 @@ def build_pricing_schema(
 
     Returns:
         Voluptuous schema for the pricing step form
+
     """
     if defaults is None:
         defaults = DEFAULT_ENTITY_IDS
@@ -163,6 +165,7 @@ def build_solcast_schema(
 
     Returns:
         Voluptuous schema for the solcast step form
+
     """
     if defaults is None:
         defaults = DEFAULT_ENTITY_IDS

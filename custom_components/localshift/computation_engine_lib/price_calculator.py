@@ -42,6 +42,7 @@ def _compute_price_slot_data(
         - prices_in_slot: List of prices that overlap with the slot.
         - fallback_price: Price from the most recent entry at or before slot_start.
         - fallback_start: Start time of the fallback entry (None if no fallback).
+
     """
     # Ensure slot boundaries are timezone-aware local datetimes
     if slot_start.tzinfo is None:
@@ -139,6 +140,7 @@ def get_price_for_slot_with_source(
         - price: Price in $/kWh for the slot.
         - price_source: "5min" if from 5-min data, "30min" if from 30-min data,
                        "unknown" if no data found.
+
     """
     if not price_forecasts:
         return 0.0, "unknown"
@@ -279,6 +281,7 @@ class PriceCalculator:
 
         Returns:
             Tuple of (forecast_prices, base_price, max_price).
+
         """
         lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
         cutoff = now_dt + timedelta(hours=lookahead)
@@ -344,6 +347,7 @@ class PriceCalculator:
 
         Returns:
             Calculated urgency-adjusted price rounded to 2 decimal places.
+
         """
         target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
         hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
@@ -432,6 +436,7 @@ class PriceCalculator:
 
         Returns:
             The smoothed threshold value.
+
         """
         # First call - initialize with raw value
         if self._smoothed_effective_cheap_price is None:

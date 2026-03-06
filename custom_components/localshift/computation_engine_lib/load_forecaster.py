@@ -29,6 +29,7 @@ class LoadForecaster:
         Args:
             entry: Config entry for accessing options
             weather_correlation: Optional WeatherCorrelation instance for temperature-based adjustments
+
         """
         self.entry = entry
         self._weather_correlation = weather_correlation
@@ -44,6 +45,7 @@ class LoadForecaster:
         Args:
             adaptive_params: AdaptiveParameters instance with tuned values,
                            or None to use defaults.
+
         """
         self._adaptive_params = adaptive_params
 
@@ -96,6 +98,7 @@ class LoadForecaster:
                         Pass i/4.0 where i is the slot index (15-min slots).
 
         Returns tuple of (kW, source_tag).
+
         """
         historical_kw = self._get_historical(hourly_avg_kw, slot_hour)
         base_load_kw, base_source = self._calculate_base_load(
@@ -122,6 +125,7 @@ class LoadForecaster:
 
         Returns:
             Historical load in kW (0.0 if not available)
+
         """
         historical_raw = hourly_avg_kw.get(slot_hour) if hourly_avg_kw else None
         return float(historical_raw) if isinstance(historical_raw, int | float) else 0.0
@@ -149,6 +153,7 @@ class LoadForecaster:
 
         Returns:
             Tuple of (base_load_kw, source_tag)
+
         """
         base_load_kw = 0.0
         base_source = ""
@@ -189,6 +194,7 @@ class LoadForecaster:
 
         Returns:
             Hour distance
+
         """
         if hours_ahead is not None:
             return int(hours_ahead)
@@ -216,6 +222,7 @@ class LoadForecaster:
 
         Returns:
             Tuple of (load_kw, source_tag)
+
         """
         if hour_distance == 0 and current_load_kw > 0:
             return current_load_kw, "live_load"
@@ -253,6 +260,7 @@ class LoadForecaster:
 
         Returns:
             Tuple of (load_kw, source_tag)
+
         """
         base_load_kw = 0.0
         base_source = "live_load_fallback"
@@ -292,6 +300,7 @@ class LoadForecaster:
 
         Returns:
             Tuple of (adjusted_load_kw, adjusted_source)
+
         """
         adjusted_load_kw = base_load_kw
         adjusted_source = base_source
@@ -329,6 +338,7 @@ class LoadForecaster:
 
         Returns:
             Adjusted load
+
         """
         if self._adaptive_params is None:
             return load_kw

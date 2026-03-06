@@ -100,6 +100,7 @@ class HistoryFetcher:
         Args:
             hass: Home Assistant instance
             entry: Config entry
+
         """
         self.hass = hass
         self.entry = entry
@@ -386,6 +387,7 @@ class HistoryFetcher:
         Returns:
             Tuple of (weekday_by_hour, weekend_by_hour) where each is
             {hour: [values]} for hours 0-23.
+
         """
         weekday_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
         weekend_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
@@ -451,6 +453,7 @@ class HistoryFetcher:
 
         Returns:
             Tuple (non_hvac_by_hour, hvac_by_hour) where each is a dict hour -> [power_kw].
+
         """
         # Determine if any HVAC activity is reported in climate_states
         hvac_active_global = False
@@ -498,6 +501,7 @@ class HistoryFetcher:
 
         Returns:
             Hour -> baseline power in kW.
+
         """
 
         baseline: dict[int, float] = {}
@@ -529,6 +533,7 @@ class HistoryFetcher:
 
         Returns:
             "weekday_weekend" if sufficient samples, "combined_fallback" otherwise
+
         """
         # Check if we have minimum samples for most hours in both profiles
         weekday_hours_with_min = sum(
@@ -574,6 +579,7 @@ class HistoryFetcher:
 
         Returns:
             The matching statistic_id, or entity_id if not found
+
         """
         for sid in stat_ids:
             if not isinstance(sid, dict):
@@ -597,6 +603,7 @@ class HistoryFetcher:
         Returns:
             Tuple of (hourly_avg_kw, sample_counts, source) where source is
             "weekday", "weekend", or "combined" (fallback).
+
         """
         # If no profiles available, return empty
         if not self._weekday_hourly_avg_kw and not self._weekend_hourly_avg_kw:
@@ -647,6 +654,7 @@ class HistoryFetcher:
 
         Returns:
             Tuple of (weekday_avg, weekday_counts)
+
         """
         return self._weekday_hourly_avg_kw, self._weekday_sample_counts
 
@@ -655,6 +663,7 @@ class HistoryFetcher:
 
         Returns:
             Tuple of (weekend_avg, weekend_counts)
+
         """
         return self._weekend_hourly_avg_kw, self._weekend_sample_counts
 
@@ -663,6 +672,7 @@ class HistoryFetcher:
 
         Returns:
             "weekday_weekend", "combined_fallback", or "unknown"
+
         """
         return self._profile_source
 
@@ -729,6 +739,7 @@ class HistoryFetcher:
 
         Returns:
             Module or None if import failed
+
         """
         try:
             from homeassistant.components.recorder import (
@@ -747,6 +758,7 @@ class HistoryFetcher:
 
         Returns:
             List of statistic ID dicts
+
         """
         try:
             stat_meta_fn = getattr(recorder_stats, "list_statistic_ids", None)
@@ -769,6 +781,7 @@ class HistoryFetcher:
 
         Returns:
             Callable function or None
+
         """
         fn = getattr(recorder_stats, "statistics_during_period", None)
         return fn if callable(fn) else None
@@ -790,6 +803,7 @@ class HistoryFetcher:
 
         Returns:
             Statistics data dict or error result
+
         """
         try:
             statistics_data_raw = fn(
@@ -839,6 +853,7 @@ class HistoryFetcher:
 
         Returns:
             Result dict with average or error
+
         """
         rows = data.get("rows", [])
         values: list[float] = []
@@ -873,6 +888,7 @@ class HistoryFetcher:
 
         Returns:
             Error result dict
+
         """
         return {
             "recent_avg_kw": 0.0,

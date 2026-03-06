@@ -679,6 +679,7 @@ class DPPlanner:
 
         Returns:
             Dict with 'entry_idx' and 'end_idx' keys
+
         """
         entry_idx = None
         end_idx = None
@@ -709,6 +710,7 @@ class DPPlanner:
 
         Returns:
             True if solar can reach target
+
         """
         config = inputs.config
         demand_window_entry_idx = demand_bounds["entry_idx"]
@@ -732,6 +734,7 @@ class DPPlanner:
 
         Returns:
             Terminal penalty index or None
+
         """
         # Always apply penalty at DW entry to incentivize charging before DW
         return demand_bounds["entry_idx"]
@@ -755,6 +758,7 @@ class DPPlanner:
 
         Returns:
             Initialized DP tables
+
         """
         dp: list[dict[int, tuple[float, PlannerAction, int, float, float, float]]] = [
             {} for _ in range(n_slots + 1)
@@ -800,6 +804,7 @@ class DPPlanner:
 
         Returns:
             Number of states explored
+
         """
         n_slots = len(slots)
         states_explored = 0
@@ -850,6 +855,7 @@ class DPPlanner:
 
         Returns:
             Tuple of (best result tuple, actions explored count)
+
         """
         actions = DPPlanner.feasible_actions(
             soc,
@@ -944,6 +950,7 @@ class DPPlanner:
 
         Returns:
             Tuple of (decisions, totals, reason_histogram)
+
         """
         decisions: list[PlannedSlotDecision] = []
         current_soc = inputs.initial_soc_pct
@@ -1033,6 +1040,7 @@ class DPPlanner:
 
         Returns:
             Terminal shortfall percentage
+
         """
         if terminal_penalty_idx is None:
             return 0.0
@@ -1068,6 +1076,7 @@ class DPPlanner:
 
         Returns:
             True if solar can reach target
+
         """
         return (
             _simulate_solar_only_terminal_soc(
@@ -1125,6 +1134,7 @@ class DPPlanner:
 
         Returns:
             Reason code for HOLD action
+
         """
         if soc >= config.max_soc_pct - 0.5:
             return PlannerReasonCode.SOC_CEILING_CONSTRAINT
@@ -1143,6 +1153,7 @@ class DPPlanner:
 
         Returns:
             Reason code for EXPORT action
+
         """
         if slot.sell_price > 0:
             return PlannerReasonCode.HIGH_SELL_PRICE_EXPORT
@@ -1169,6 +1180,7 @@ class DPPlanner:
 
         Returns:
             Reason code for CHARGE action
+
         """
         if self._is_target_shortfall_risk(
             slot_idx, slots, soc, config, terminal_penalty_idx
@@ -1197,6 +1209,7 @@ class DPPlanner:
 
         Returns:
             True if target shortfall risk exists
+
         """
         if terminal_penalty_idx is None or slot_idx >= terminal_penalty_idx:
             return False
@@ -1228,6 +1241,7 @@ class DPPlanner:
 
         Returns:
             True if cheap import window
+
         """
         if slot.buy_price > config.effective_cheap_price:
             return False
@@ -1245,6 +1259,7 @@ class DPPlanner:
 
         Returns:
             True if blind to future solar
+
         """
         if terminal_penalty_idx is None:
             return True
@@ -1305,6 +1320,7 @@ class DPPlanner:
         Returns:
             True if projected net solar (solar - consumption) from slot_idx to end
             of horizon is sufficient to raise SOC from soc_pct to demand_window_target_soc_pct.
+
         """
         if not slots:
             return False
@@ -1350,6 +1366,7 @@ class DPPlanner:
             slots: Full list of planning slots (None disables solar gate).
             terminal_penalty_idx: Index at which the shortfall penalty is applied
                 (None disables solar gate).
+
         """
         actions = []
 
@@ -1446,6 +1463,7 @@ class DPPlanner:
             (next_soc_pct, grid_import_kwh, grid_export_kwh)
 
         Phase C: Full implementation with efficiency losses and SOC clipping.
+
         """
         if action == PlannerAction.HOLD:
             return DPPlanner._transition_hold(soc_pct, slot, config)
@@ -1474,6 +1492,7 @@ class DPPlanner:
 
         Returns:
             (next_soc, grid_import, grid_export)
+
         """
         slot_hours = slot.slot_interval_minutes / 60.0
         net_kwh = slot.solar_kwh - slot.consumption_kwh
@@ -1567,6 +1586,7 @@ class DPPlanner:
 
         Returns:
             (next_soc, grid_import, grid_export)
+
         """
         slot_hours = slot.slot_interval_minutes / 60.0
         net_kwh = slot.solar_kwh - slot.consumption_kwh
@@ -1668,6 +1688,7 @@ class DPPlanner:
 
         Returns:
             (next_soc, grid_import, grid_export)
+
         """
         slot_hours = slot.slot_interval_minutes / 60.0
         net_kwh = slot.solar_kwh - slot.consumption_kwh
@@ -1720,6 +1741,7 @@ class DPPlanner:
                      battery's physical discharge capacity (Fixes #417).
             is_switch: True if this action represents a mode switch from the
                        currently active hardware state (Issue #524).
+
         """
         import_cost = grid_import_kwh * slot.buy_price
         export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
@@ -1855,6 +1877,7 @@ def _simulate_max_soc_in_demand_window(
     Returns:
         Maximum SOC percentage reached within any demand window slot.
         Returns initial_soc_pct if no DW slots exist.
+
     """
     soc = initial_soc_pct
     max_soc_in_dw = soc

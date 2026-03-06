@@ -38,6 +38,7 @@ class SolarPeriodRecord:
         time_of_day: Time bucket (morning, afternoon, evening)
         season: Season (summer, autumn, winter, spring)
         bias: Calculated bias (forecast - actual) / forecast, or 0 if no forecast
+
     """
 
     period_start: datetime
@@ -53,6 +54,7 @@ class SolarPeriodRecord:
 
         Returns:
             Dictionary with all record fields serialized.
+
         """
         return {
             "period_start": self.period_start.isoformat(),
@@ -73,6 +75,7 @@ class SolarPeriodRecord:
 
         Returns:
             SolarPeriodRecord instance.
+
         """
         period_start = datetime.fromisoformat(data["period_start"])
         return cls(
@@ -98,6 +101,7 @@ class SolarBiasMetrics:
         sample_count: Total number of samples
         mape: Mean Absolute Percentage Error
         accuracy: Overall accuracy percentage (100 - MAPE)
+
     """
 
     overall_bias: float = 0.0
@@ -113,6 +117,7 @@ class SolarBiasMetrics:
 
         Returns:
             Dictionary with all metric fields.
+
         """
         return {
             "overall_bias": self.overall_bias,
@@ -133,6 +138,7 @@ class SolarBiasMetrics:
 
         Returns:
             SolarBiasMetrics instance.
+
         """
         return cls(
             overall_bias=data.get("overall_bias", 0.0),
@@ -161,6 +167,7 @@ class SolarAccuracyTracker:
         Args:
             hass: Home Assistant instance.
             entry_id: Config entry ID for storage key.
+
         """
         self._hass = hass
         self._store = Store(
@@ -424,6 +431,7 @@ class SolarAccuracyTracker:
         Returns:
             Bias correction factor. Returns 1.0 if no historical data available.
             Values < 1.0 reduce forecast (overestimate), > 1.0 increase (underestimate).
+
         """
         result = self._compute_context_bias(time_of_day, weather, season)
         if result is None:

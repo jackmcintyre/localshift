@@ -48,6 +48,7 @@ def _get_ha_timezone() -> str:
 
     Returns:
         Timezone string (e.g., "Australia/Sydney") or "UTC" as fallback.
+
     """
     from homeassistant.util import dt as dt_util
 
@@ -66,6 +67,7 @@ def _map_mode_to_action(mode: Any) -> PlannerAction | None:
 
     Returns:
         PlannerAction or None if mode is not actionable by optimizer.
+
     """
     from ..const import BatteryMode  # noqa: PLC0415
 
@@ -102,6 +104,7 @@ def run_optimizer(
         data:           CoordinatorData instance (mutated for optimizer fields).
         config_options: Integration options dict (from config_entry.options).
         planner:        Optional pre-constructed DPPlanner (for testing / DI).
+
     """
     cycle_id = _make_cycle_id()
     cycle_timestamp_iso = datetime.now(UTC).isoformat()
@@ -444,6 +447,7 @@ def _validate_slot_alignment(
 
     Returns:
         Dict with validation results including any alignment issues.
+
     """
     issues: list[str] = []
     warnings: list[str] = []
@@ -624,6 +628,7 @@ class OptimizerSafetyGate:
 
         Args:
             config_options: Integration options from config_entry.options
+
         """
         from ..const import (  # noqa: PLC0415
             OPTIMIZER_FORECAST_FRESHNESS_MINUTES,
@@ -648,6 +653,7 @@ class OptimizerSafetyGate:
 
         Returns:
             SafetyGateResult with allowed status and block reason
+
         """
         checks: list[dict[str, Any]] = []
         details: dict[str, Any] = {}
@@ -731,6 +737,7 @@ class OptimizerSafetyGate:
 
         Returns:
             Age in minutes, or None if not determinable
+
         """
         cycle_timestamp_str = getattr(data, "optimizer_summary", {}).get(
             "cycle_timestamp_iso"
@@ -775,6 +782,7 @@ def _derive_runtime_apply_plan(
             - battery_mode: BatteryMode string for runtime
             - target_soc: Target SOC percentage (or None)
             - reason: Explanation for the decision
+
     """
     from ..const import BatteryMode  # noqa: PLC0415
 
@@ -841,6 +849,7 @@ def _find_current_slot_index(data: Any) -> int:
 
     Returns:
         Index of current slot, or 0 as fallback
+
     """
     now = datetime.now(UTC)
 

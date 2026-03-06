@@ -42,6 +42,7 @@ def parse_slot_time(time_str: str, ha_timezone: str) -> datetime | None:
 
     Returns:
         datetime in HA local timezone, or None if parsing fails.
+
     """
     if not time_str:
         return None
@@ -94,6 +95,7 @@ def get_slot_duration_minutes(entry: dict[str, Any]) -> int | None:
 
     Returns:
         Duration in minutes, or None if it cannot be determined.
+
     """
     # Check for explicit duration field
     duration = entry.get("duration")
@@ -189,6 +191,7 @@ def analyze_spike_window(
         - spike_end_time: When the spike is predicted to end (None if no spike)
         - max_price: Maximum price within the spike window
         - all_spike_prices: List of all prices during spike window
+
     """
     cutoff = now_dt + timedelta(hours=max_lookahead_hours)
 
@@ -240,6 +243,7 @@ def calculate_spike_price_threshold(
 
     Returns:
         Price threshold - only export when FIT >= this price
+
     """
     if not spike_prices:
         return 0.0

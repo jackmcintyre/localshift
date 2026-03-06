@@ -74,6 +74,7 @@ class StateReader:
 
         Returns:
             Float value if entity is available, None if unavailable or invalid.
+
         """
         state = self.hass.states.get(entity_id)
         if state is None or state.state in ("unknown", "unavailable"):
@@ -301,6 +302,7 @@ class StateReader:
 
         Args:
             data: CoordinatorData instance to populate with weather data.
+
         """
         # Get weather entity from options (preferred) or data (fallback)
         weather_entity = self.entry.options.get(
@@ -367,6 +369,7 @@ class StateReader:
             - is_ready: True if all required inputs are valid
             - status_dict: Dict of input_name -> is_valid
             - missing_list: List of missing/invalid input names
+
         """
         status: dict[str, bool] = {}
         missing: list[str] = []

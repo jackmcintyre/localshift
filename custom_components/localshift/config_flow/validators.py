@@ -18,6 +18,7 @@ async def validate_all_entities(
 
     Returns:
         None if all valid, or dict of {config_key: error_message}
+
     """
     errors = {}
     for config_key, (entity_id, expected_domain) in entities.items():
@@ -43,6 +44,7 @@ async def validate_notify_service(hass, notify_service: str) -> str | None:
 
     Returns:
         None if valid, or error message string
+
     """
     if not notify_service:
         return "Notify service is required"
@@ -77,6 +79,7 @@ async def get_notify_services(hass) -> list[str]:
 
     Returns:
         List of notify service strings like ["notify.mobile_app"]
+
     """
     services = hass.services.async_services()
     notify_services = []
@@ -96,6 +99,7 @@ async def get_weather_entities(hass) -> list[str]:
 
     Returns:
         List of weather entity IDs like ["weather.home", "weather.forecast"]
+
     """
     weather_entities = []
     for state in hass.states.async_all():
@@ -113,6 +117,7 @@ def get_current_notify_service(config_entry) -> str:
 
     Returns:
         Current notify service string, or empty string if not set.
+
     """
     from ..const import CONF_NOTIFY_SERVICE
 

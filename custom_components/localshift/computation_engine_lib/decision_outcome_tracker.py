@@ -188,6 +188,7 @@ class DecisionOutcomeTracker:
         Args:
             hass: Home Assistant instance
             entry_id: Config entry ID for storage key
+
         """
         self._hass = hass
         self._store = Store(
@@ -228,6 +229,7 @@ class DecisionOutcomeTracker:
             data: Current coordinator data with context
             mode: New mode being transitioned to (PlannerAction or BatteryMode)
             prev_mode: Previous mode before transition (PlannerAction or BatteryMode)
+
         """
         now = dt_util.now()
 
@@ -304,6 +306,7 @@ class DecisionOutcomeTracker:
             data: Current coordinator data
             next_mode: The DP action being transitioned to (ends the pending decision)
             now: Current timestamp
+
         """
         if not self._pending_decisions:
             return
@@ -371,6 +374,7 @@ class DecisionOutcomeTracker:
 
         Args:
             data: Current coordinator data
+
         """
         now = dt_util.now()
 
@@ -397,6 +401,7 @@ class DecisionOutcomeTracker:
             pending: The pending decision to backfill
             data: Current coordinator data
             now: Current timestamp
+
         """
         self._pending_decisions.remove(pending)
 
@@ -446,6 +451,7 @@ class DecisionOutcomeTracker:
 
         Returns:
             Score from 0.0 to 1.0
+
         """
         score = 0.5  # Start at neutral
 
@@ -531,6 +537,7 @@ class DecisionOutcomeTracker:
 
         Returns:
             List of decision records within the window
+
         """
         now = dt_util.now()
         cutoff = now - timedelta(hours=hours)
@@ -546,6 +553,7 @@ class DecisionOutcomeTracker:
             PerformanceMetrics with today's aggregated data and 7-day rolling metrics.
             Note: 7-day metrics are calculated even if there are no decisions today,
             to ensure historical data is reflected in the dashboard.
+
         """
         today = dt_util.now().date()
         today_decisions = [
@@ -623,6 +631,7 @@ class DecisionOutcomeTracker:
 
         Returns:
             List of decision dictionaries (most recent first)
+
         """
         decisions = list(self._completed_decisions)[-limit:]
         return [record.to_dict() for record in reversed(decisions)]

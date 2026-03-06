@@ -61,6 +61,7 @@ class ExcessSolarEngine:
             - excess_next_2h_kwh
             - excess_next_4h_kwh
             - excess_until_battery_full_kwh
+
         """
         slot_fraction = 15 / 60.0  # 0.25 hours
         current_kwh = current_soc / 100 * BATTERY_CAPACITY_KWH
@@ -132,6 +133,7 @@ class ExcessSolarEngine:
 
         Returns:
             (window_start, duration_minutes) or (None, 0) if no window found
+
         """
         base_slot = start_time.replace(minute=0, second=0, microsecond=0)
         current_window_start = None
@@ -184,6 +186,7 @@ class ExcessSolarEngine:
 
         Returns:
             Excess kWh available before negative FIT window
+
         """
         if negative_fit_start is None:
             return 0.0
@@ -263,6 +266,7 @@ class ExcessSolarEngine:
 
         Returns:
             (safe_additional_load_kw, grid_charge_risk)
+
         """
         # Quick check: if SOC is below target, adding load is risky
         if current_soc < target_pct - 5:
@@ -321,6 +325,7 @@ class ExcessSolarEngine:
 
         Returns:
             (signal, recommended_kw, duration_minutes, reason, confidence)
+
         """
         # HOLD conditions (highest priority)
         if data.demand_window_active:

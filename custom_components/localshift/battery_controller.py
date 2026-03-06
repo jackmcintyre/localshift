@@ -76,6 +76,7 @@ class BatteryController:
         Args:
             hass: Home Assistant instance
             get_entity_id_func: Function to get entity IDs by config key
+
         """
         self.hass = hass
         self._get_entity_id = get_entity_id_func
@@ -95,6 +96,7 @@ class BatteryController:
 
         Returns:
             Current SOC percentage (0-100) if available, None if unavailable.
+
         """
         from .const import CONF_TESLEMETRY_SOC  # noqa: PLC0415
 
@@ -115,6 +117,7 @@ class BatteryController:
 
         Returns:
             True if transition succeeded and validated, False otherwise.
+
         """
         for step in recipe.steps:
             if not await step.action():
@@ -158,6 +161,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
@@ -252,6 +256,7 @@ class BatteryController:
 
         Returns:
             Clamped reserve value that Tesla firmware will accept.
+
         """
         if target <= BACKUP_RESERVE_MAX_VALID:
             # 0-80%: Tesla accepts these values directly
@@ -285,6 +290,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
@@ -393,6 +399,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
@@ -480,6 +487,7 @@ class BatteryController:
 
         Returns:
             Minimum target SOC percentage (default 10 if entity unavailable).
+
         """
         entity_id = self._get_entity_id("minimum_target_soc")
         return self._validator.read_float(entity_id, default=10.0)
@@ -502,6 +510,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
@@ -595,6 +604,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method is only called automatically (via state machine)

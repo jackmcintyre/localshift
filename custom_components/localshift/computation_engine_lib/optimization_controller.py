@@ -121,6 +121,7 @@ class OptimizationController:
             decision_tracker: Decision outcome tracker (Phase 1)
             param_optimizer: Parameter optimizer (Phase 2)
             pattern_analyzer: Pattern analyzer (Phase 3)
+
         """
         self._hass = hass
         self._store = Store(
@@ -180,6 +181,7 @@ class OptimizationController:
 
         Returns:
             Final AdaptiveParameters to use in decision engines
+
         """
         # Clear previous contextual adjustments
         self._active_contextual_adjustments.clear()
@@ -227,6 +229,7 @@ class OptimizationController:
 
         Returns:
             Adjusted parameters
+
         """
         now = dt_util.now()
 
@@ -347,6 +350,7 @@ class OptimizationController:
 
         Returns:
             Adjusted parameters
+
         """
         if not data.active_bias_corrections:
             return params
@@ -437,6 +441,7 @@ class OptimizationController:
 
         Returns:
             Clamped parameters
+
         """
         from ..const import OPTIMIZABLE_PARAMS
 
@@ -510,6 +515,7 @@ class OptimizationController:
 
         Returns:
             List of adjustment dictionaries with param_name, adjustment, reason
+
         """
         return [
             {
