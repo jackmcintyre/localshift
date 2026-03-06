@@ -162,6 +162,7 @@ def get_solar_for_5min_slot(
 
     Returns:
         Solar energy in kWh for the 5-minute slot, or 0.0 if no data found.
+
     """
     if not solcast_forecasts:
         return 0.0
@@ -233,6 +234,7 @@ def get_solar_for_30min_slot(
 
     Returns:
         Solar energy in kWh for the 30-minute slot, or 0.0 if no data found.
+
     """
     if not solcast_forecasts:
         return 0.0
@@ -300,6 +302,7 @@ def get_solar_for_slot_by_interval(
 
     Returns:
         Solar energy in kWh for the slot, or 0.0 if no data found.
+
     """
     if interval_minutes == 5:
         return get_solar_for_5min_slot(solcast_forecasts, slot_start)

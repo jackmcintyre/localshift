@@ -55,8 +55,6 @@ async def async_setup_entry(
         LearningDecisionHistorySensor(coordinator, entry),
         # Decision-to-implementation lag sensor (Issue #501)
         DecisionLagSensor(coordinator, entry),
-        # Cost reconciliation sensor (Issue #269)
-        CostReconciliationSensor(coordinator, entry),
         # Extended forecast accuracy sensor (Issue #270)
         ExtendedForecastAccuracySensor(coordinator, entry),
         # Forecast status sensor (Issue #319)
@@ -659,9 +657,8 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
 
     def _update_from_coordinator(self) -> None:
         """Update with overall accuracy percentage."""
-        self._attr_native_value = round(
-            self.coordinator.data.forecast_accuracy_soc_1h, 1
-        )
+        accuracy = self.coordinator.data.forecast_accuracy_soc_1h
+        self._attr_native_value = round(accuracy, 1) if accuracy is not None else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -673,9 +670,15 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
             "soc_error_1h": round(d.forecast_error_soc_1h, 1),
             "soc_error_4h": round(d.forecast_error_soc_4h, 1),
             # SOC accuracy percentages (100 - abs error, clamped)
-            "soc_accuracy_15min": round(d.forecast_accuracy_soc_15min, 1),
-            "soc_accuracy_1h": round(d.forecast_accuracy_soc_1h, 1),
-            "soc_accuracy_4h": round(d.forecast_accuracy_soc_4h, 1),
+            "soc_accuracy_15min": round(d.forecast_accuracy_soc_15min, 1)
+            if d.forecast_accuracy_soc_15min is not None
+            else None,
+            "soc_accuracy_1h": round(d.forecast_accuracy_soc_1h, 1)
+            if d.forecast_accuracy_soc_1h is not None
+            else None,
+            "soc_accuracy_4h": round(d.forecast_accuracy_soc_4h, 1)
+            if d.forecast_accuracy_soc_4h is not None
+            else None,
             # Price prediction errors
             "buy_price_error_1h": round(d.forecast_error_buy_price_1h, 4),
             "sell_price_error_1h": round(d.forecast_error_sell_price_1h, 4),
@@ -978,54 +981,6 @@ class DecisionLagSensor(LocalShiftSensorBase):
         if self.coordinator.data.decision_timestamp is not None:
             return "mdi:timer-sand"  # Decision pending
         return "mdi:timer-outline"  # Completed
-
-
-class CostReconciliationSensor(LocalShiftSensorBase):
-    """Cost reconciliation status.
-
-    Issue #269: Shows variance between estimated and actual costs
-    based on metered statistics from Home Assistant.
-    """
-
-    _attr_unique_id = "localshift_cost_reconciliation"
-    _attr_name = "Cost Reconciliation"
-    _attr_icon = "mdi:currency-usd"
-
-    def _update_from_coordinator(self) -> None:
-        """Update with reconciliation status."""
-        report = self.coordinator.data.reconciliation_report
-        if report is None:
-            self._attr_native_value = "not_run"
-        elif report.errors:
-            self._attr_native_value = "error"
-        elif report.is_significant:
-            self._attr_native_value = "variance"
-        else:
-            self._attr_native_value = "validated"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return reconciliation report details."""
-        report = self.coordinator.data.reconciliation_report
-        if report is None:
-            return {
-                "status": "No reconciliation has been run yet",
-                "last_run": None,
-            }
-        return report.to_dict()
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on status."""
-        status = self._attr_native_value
-        if status == "validated":
-            return "mdi:check-circle"
-        elif status == "variance":
-            return "mdi:alert-circle"
-        elif status == "error":
-            return "mdi:close-circle"
-        else:  # not_run
-            return "mdi:currency-usd-off"
 
 
 class ExtendedForecastAccuracySensor(LocalShiftSensorBase):

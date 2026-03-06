@@ -169,6 +169,73 @@ gh pr create --base test --title "..."
 
 ---
 
+## ⚠️ ENFORCED: TEST-DRIVEN DEVELOPMENT
+
+**TDD is REQUIRED for all code changes. No exceptions.**
+
+### TDD Workflow: RED → GREEN → REFACTOR
+
+**You MUST explicitly state each phase:**
+
+1. **RED Phase**: Write failing test first
+   ```bash
+   # Create test file
+   touch tests/test_new_feature.py
+   
+   # Write test describing expected behavior
+   # Run test to confirm failure
+   uv run pytest tests/test_new_feature.py -v
+   ```
+   State: "TDD cycle: RED - test fails as expected"
+
+2. **GREEN Phase**: Implement minimal solution
+   ```bash
+   # Implement in production code
+   vim custom_components/localshift/new_module.py
+   
+   # Run test to confirm pass
+   uv run pytest tests/test_new_feature.py -v
+   ```
+   State: "TDD cycle: GREEN - test passes"
+
+3. **REFACTOR Phase**: Clean up while keeping tests green
+   ```bash
+   # Refactor if needed
+   # Run all tests
+   uv run pytest
+   ```
+   State: "TDD cycle: REFACTOR - all tests pass"
+
+### Coverage Requirement
+
+**Minimum 95% test coverage enforced:**
+
+```bash
+# Check coverage before commit
+uv run pytest --cov=custom_components/localshift --cov-report=term-missing
+```
+
+### Pre-Commit Hook Enforcement
+
+**Automatically checks before commit:**
+- Test file exists for modified code
+- Coverage >= 95%
+- Tests pass
+
+### Integration with Workflow
+
+1. Create worktree (per worktrees.md)
+2. **Write failing test first** (TDD RED)
+3. Implement solution (TDD GREEN)
+4. Refactor if needed (TDD REFACTOR)
+5. Verify coverage >= 95%
+6. Run lint/format
+7. Commit and create PR
+
+**Full workflow:** `.agents/rules/tdd-workflow.md`
+
+---
+
 ## Notes
 
 - No Cursor or Copilot rules found in repository

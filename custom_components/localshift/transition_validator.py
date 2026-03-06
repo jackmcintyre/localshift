@@ -26,6 +26,7 @@ class TransitionValidator:
 
         Returns:
             Dict with operation_mode, backup_reserve, export_mode, and grid_charging_allowed.
+
         """
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")
@@ -84,6 +85,7 @@ class TransitionValidator:
 
         Returns:
             True if validation passes, False otherwise.
+
         """
         validation_start = time.monotonic()
         _LOGGER.info(
@@ -267,6 +269,7 @@ class TransitionValidator:
 
         Returns:
             True if state matches expectations, False otherwise.
+
         """
         operation_mode_entity = self._get_entity_id("teslemetry_operation_mode")
         backup_reserve_entity = self._get_entity_id("teslemetry_backup_reserve")

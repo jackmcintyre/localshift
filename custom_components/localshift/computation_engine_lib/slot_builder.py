@@ -123,6 +123,7 @@ class SlotBuilder:
         Args:
             config_options: Integration config options (for DW start/end parsing).
             ha_timezone: Home Assistant timezone string (e.g., "Australia/Sydney").
+
         """
         self._config_options = config_options
         self._ha_timezone = ha_timezone
@@ -146,6 +147,7 @@ class SlotBuilder:
             (contexts, metadata) tuple where:
             - contexts: list of SlotContext objects for DP optimizer
             - metadata: SlotBuildMetadata with diagnostic counts
+
         """
         # Step 1: Get hybrid slot schedule from general_forecast
         now_local = (
@@ -315,6 +317,7 @@ class SlotBuilder:
 
         Returns:
             time object parsed from "HH:MM:SS" or "HH:MM" format.
+
         """
         from ..const import (  # noqa: PLC0415
             DEFAULT_DEMAND_WINDOW_END,

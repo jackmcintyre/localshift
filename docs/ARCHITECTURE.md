@@ -693,32 +693,11 @@ Decision Log (estimates)     Home Assistant Recorder (actuals)
     └─────────────────────────────────────────┘
                         │
                         ▼
-               BackfillReport
-               - decisions_validated
-               - discrepancies_found
-               - variance metrics
+                BackfillReport
+                - decisions_validated
+                - discrepancies_found
+                - variance metrics
 ```
-
-### Component: Cost Reconciliation (`cost_tracker.py`)
-
-Extended `CostTracker` with reconciliation methods that validate cost estimates against metered statistics.
-
-**Key Methods:**
-
-| Method | Purpose |
-|--------|---------|
-| `async_reconcile_with_statistics()` | Main reconciliation entry point |
-| `_fetch_statistics_for_period()` | Fetch energy data from HA statistics |
-| `_calculate_variance_pct()` | Compute variance percentage |
-
-**ReconciliationReport Fields:**
-
-| Field | Description |
-|-------|-------------|
-| `estimated_cost` | Cost from integration's accumulation |
-| `actual_cost` | Cost computed from metered statistics |
-| `variance_pct` | Percentage difference |
-| `is_significant` | Whether variance exceeds threshold |
 
 ### Component: Extended Forecast Accuracy (`forecast_accuracy.py`)
 
@@ -769,12 +748,11 @@ Statistics validation requires entities with `state_class: measurement` or `stat
 
 ### Storage
 
-Backfill reports and reconciliation data are stored in `CoordinatorData` and exposed via sensors:
+Backfill reports and extended forecast accuracy data are stored in `CoordinatorData` and exposed via sensors:
 
 | Sensor | Data Source |
 |--------|-------------|
 | `sensor.localshift_backfill_status` | `BackfillReport` |
-| `sensor.localshift_cost_reconciliation` | `ReconciliationReport` |
 | `sensor.localshift_extended_forecast_accuracy` | `ExtendedAccuracyMetrics` |
 
 ---

@@ -84,6 +84,7 @@ class ComputationEngine:
             entry: Config entry
             get_entity_id_func: Function to get entity IDs by config key
             get_switch_state_func: Function to get switch states
+
         """
         self.hass = hass
         self.entry = entry
@@ -158,6 +159,7 @@ class ComputationEngine:
 
         Args:
             tracker: SolarAccuracyTracker instance
+
         """
         self._optimizer_facade.set_solar_accuracy_tracker(tracker)
         _LOGGER.info("Solar accuracy tracker connected to computation engine")
@@ -637,6 +639,7 @@ class ComputationEngine:
         Returns:
             Tuple of (hourly_avg_kw, sample_counts, source) where source is
             "weekday", "weekend", or "combined" (fallback).
+
         """
         return self._history_fetcher.get_profile_for_day(target_date)
 
@@ -755,6 +758,7 @@ class ComputationEngine:
 
         Args:
             data: CoordinatorData with current weather and load values
+
         """
         if self._weather_correlation is None:
             return
@@ -798,6 +802,7 @@ class ComputationEngine:
 
         Returns:
             List of TemperatureForecast objects, or None if unavailable.
+
         """
         if self._weather_correlation is None:
             _LOGGER.info(

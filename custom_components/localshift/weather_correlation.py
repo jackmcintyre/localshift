@@ -58,6 +58,7 @@ class HourlyTemperatureCoefficients:
         sample_count: Number of data points used for learning
         last_updated: When coefficients were last recalculated
         confidence: low/medium/high based on sample count
+
     """
 
     base_load_kw: float = 0.0
@@ -102,6 +103,7 @@ class WeatherCorrelationData:
         heating_threshold: Temperature below which heating load increases
         hourly_coefficients: Dict mapping hour (0-23) to coefficients
         learning_stats: Aggregated statistics for diagnostics
+
     """
 
     version: int = 1
@@ -155,6 +157,7 @@ class TemperatureForecast:
         slot_time: The datetime this forecast applies to
         temperature: Forecasted temperature in °C
         condition: Weather condition (sunny, cloudy, etc.)
+
     """
 
     slot_time: datetime
@@ -181,6 +184,7 @@ class WeatherCorrelation:
         Args:
             hass: Home Assistant instance
             entry: Config entry for the integration
+
         """
         self.hass = hass
         self.entry = entry
@@ -239,6 +243,7 @@ class WeatherCorrelation:
 
         Returns:
             List of TemperatureForecast objects for upcoming hours.
+
         """
         weather_entity = self._data.weather_entity_id
         if not weather_entity:
@@ -309,6 +314,7 @@ class WeatherCorrelation:
 
         Returns:
             Current weather entity ID from config, or empty string.
+
         """
         return self.entry.options.get(CONF_WEATHER_ENTITY, "") or self.entry.data.get(
             CONF_WEATHER_ENTITY, ""
@@ -327,6 +333,7 @@ class WeatherCorrelation:
 
         Returns:
             List of TemperatureForecast objects for upcoming hours.
+
         """
         # Always get fresh entity ID from config to pick up user changes
         weather_entity = self._refresh_weather_entity_from_config()
@@ -416,6 +423,7 @@ class WeatherCorrelation:
 
         Returns:
             List of forecast entries or None
+
         """
         forecast_data = response.get(weather_entity)
         if forecast_data is None:
@@ -463,6 +471,7 @@ class WeatherCorrelation:
 
         Returns:
             List of TemperatureForecast objects
+
         """
         forecasts: list[TemperatureForecast] = []
         parse_failed_count = 0
@@ -517,6 +526,7 @@ class WeatherCorrelation:
 
         Returns:
             Tuple of (forecast or None, updated counts) or None if entry invalid
+
         """
         if not isinstance(entry, dict):
             return None
@@ -572,6 +582,7 @@ class WeatherCorrelation:
 
         Returns:
             Parsed datetime or None if parsing failed
+
         """
         try:
             from datetime import datetime as dt
@@ -621,6 +632,7 @@ class WeatherCorrelation:
 
         Returns:
             Current temperature in °C, or None if unavailable.
+
         """
         weather_entity = self._data.weather_entity_id
         if not weather_entity:
@@ -647,6 +659,7 @@ class WeatherCorrelation:
             hour: Hour of day (0-23)
             temperature: Observed temperature in °C
             actual_load_kw: Observed load in kW
+
         """
         if not (0 <= hour <= 23):
             _LOGGER.warning("Invalid hour %d, must be 0-23", hour)
@@ -741,6 +754,7 @@ class WeatherCorrelation:
 
         Returns:
             Tuple of (predicted_load_kw, adjustment_source)
+
         """
         if not (0 <= hour <= 23):
             return base_load_kw, "invalid_hour"
@@ -799,6 +813,7 @@ class WeatherCorrelation:
 
         Returns:
             Confidence level: "low", "medium", or "high"
+
         """
         if sample_count < CONFIDENCE_LOW_THRESHOLD:
             return "low"
@@ -812,6 +827,7 @@ class WeatherCorrelation:
 
         Returns:
             Dictionary with learning stats and coefficient summaries.
+
         """
         total_samples = sum(
             c.sample_count for c in self._data.hourly_coefficients.values()
@@ -868,5 +884,6 @@ class WeatherCorrelation:
 
         Returns:
             HourlyTemperatureCoefficients or None if not available
+
         """
         return self._data.hourly_coefficients.get(hour)

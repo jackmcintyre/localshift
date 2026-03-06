@@ -121,6 +121,7 @@ class OptimizationController:
             decision_tracker: Decision outcome tracker (Phase 1)
             param_optimizer: Parameter optimizer (Phase 2)
             pattern_analyzer: Pattern analyzer (Phase 3)
+
         """
         self._hass = hass
         self._store = Store(
@@ -180,6 +181,7 @@ class OptimizationController:
 
         Returns:
             Final AdaptiveParameters to use in decision engines
+
         """
         # Clear previous contextual adjustments
         self._active_contextual_adjustments.clear()
@@ -227,6 +229,7 @@ class OptimizationController:
 
         Returns:
             Adjusted parameters
+
         """
         now = dt_util.now()
 
@@ -270,11 +273,12 @@ class OptimizationController:
 
         # Rule 3: Forecast Confidence
         # If forecast accuracy is low, be more pessimistic about solar
-        avg_accuracy = (
-            (data.forecast_accuracy_soc_1h + data.forecast_accuracy_soc_4h) / 2.0
-            if data.forecast_accuracy_soc_1h > 0
-            else 100.0
-        )
+        acc_1h = data.forecast_accuracy_soc_1h
+        acc_4h = data.forecast_accuracy_soc_4h
+        if acc_1h is not None and acc_4h is not None:
+            avg_accuracy = (acc_1h + acc_4h) / 2.0
+        else:
+            avg_accuracy = 100.0  # Default when no accuracy data available
 
         if avg_accuracy < 50.0:
             # Reduce solar confidence factor (be more pessimistic)
@@ -346,6 +350,7 @@ class OptimizationController:
 
         Returns:
             Adjusted parameters
+
         """
         if not data.active_bias_corrections:
             return params
@@ -436,6 +441,7 @@ class OptimizationController:
 
         Returns:
             Clamped parameters
+
         """
         from ..const import OPTIMIZABLE_PARAMS
 
@@ -509,6 +515,7 @@ class OptimizationController:
 
         Returns:
             List of adjustment dictionaries with param_name, adjustment, reason
+
         """
         return [
             {

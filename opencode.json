@@ -3,5 +3,12 @@
   "instructions": [
     ".opencode/rules",
     ".agents/rules/worktrees.md"
-  ]
+  ],
+  "skills": {
+    "paths": [
+      ".opencode/skills/ha-mcp-debug",
+      ".opencode/skills/python-refactoring",
+      ".opencode/skills/ha-integration-testing"
+    ]
+  }
 }

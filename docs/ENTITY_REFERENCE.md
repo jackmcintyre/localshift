@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **53 entities** grouped under a single "LocalShift" device:
+The integration creates **52 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 27 | `sensor` |
+| Sensors | 26 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 4 | `number` |
@@ -591,24 +591,7 @@ State: not_run
 
 ---
 
-### 23. sensor.localshift_cost_reconciliation
-
-**Purpose:** Cost reconciliation status.
-
-Added in Issue #269. Shows variance between estimated and actual costs based on metered statistics from Home Assistant.
-
-**State:** One of: `not_run`, `validated`, `variance`, `error`
-
-**Example Data:**
-```
-State: not_run
-```
-
-**Icon:** Dynamic (check-circle for validated, alert-circle for variance, close-circle for error, currency-usd-off for not_run)
-
----
-
-### 24. sensor.localshift_extended_forecast_accuracy
+### 23. sensor.localshift_extended_forecast_accuracy
 
 **Purpose:** Extended forecast accuracy with long-term metrics.
 

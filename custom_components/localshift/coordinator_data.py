@@ -20,73 +20,6 @@ def _default_extended_accuracy_metrics() -> Any:
 
 
 @dataclass
-class ReconciliationReport:
-    """Cost reconciliation report comparing estimated vs actual costs.
-
-    Issue #269: Validates cost estimates against metered statistics.
-    """
-
-    timestamp: datetime
-    period_start: datetime
-    period_end: datetime
-
-    # Import cost comparison
-    estimated_import_cost: float = 0.0
-    actual_import_cost: float = 0.0
-    import_variance_pct: float = 0.0
-
-    # Export revenue comparison
-    estimated_export_revenue: float = 0.0
-    actual_export_revenue: float = 0.0
-    export_variance_pct: float = 0.0
-
-    # Overall metrics
-    total_variance_pct: float = 0.0
-    is_significant: bool = False  # True if variance > 10%
-    significance_threshold: float = 10.0  # Percentage threshold
-
-    # Error tracking
-    errors: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "timestamp": self.timestamp.isoformat(),
-            "period_start": self.period_start.isoformat(),
-            "period_end": self.period_end.isoformat(),
-            "estimated_import_cost": self.estimated_import_cost,
-            "actual_import_cost": self.actual_import_cost,
-            "import_variance_pct": self.import_variance_pct,
-            "estimated_export_revenue": self.estimated_export_revenue,
-            "actual_export_revenue": self.actual_export_revenue,
-            "export_variance_pct": self.export_variance_pct,
-            "total_variance_pct": self.total_variance_pct,
-            "is_significant": self.is_significant,
-            "significance_threshold": self.significance_threshold,
-            "errors": self.errors,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ReconciliationReport:
-        """Create from dictionary (deserialization)."""
-        return cls(
-            timestamp=datetime.fromisoformat(data["timestamp"]),
-            period_start=datetime.fromisoformat(data["period_start"]),
-            period_end=datetime.fromisoformat(data["period_end"]),
-            estimated_import_cost=data.get("estimated_import_cost", 0.0),
-            actual_import_cost=data.get("actual_import_cost", 0.0),
-            import_variance_pct=data.get("import_variance_pct", 0.0),
-            estimated_export_revenue=data.get("estimated_export_revenue", 0.0),
-            actual_export_revenue=data.get("actual_export_revenue", 0.0),
-            export_variance_pct=data.get("export_variance_pct", 0.0),
-            total_variance_pct=data.get("total_variance_pct", 0.0),
-            is_significant=data.get("is_significant", False),
-            significance_threshold=data.get("significance_threshold", 10.0),
-            errors=data.get("errors", []),
-        )
-
-
-@dataclass
 class PerformanceMetrics:
     """Aggregated performance metrics for the learning system.
 
@@ -391,9 +324,9 @@ class CoordinatorData:
     forecast_error_soc_1h: float = 0.0  # Error for 1-hour predictions
     forecast_error_soc_4h: float = 0.0  # Error for 4-hour predictions
     # SOC accuracy percentages (100 - abs error, clamped to 0-100)
-    forecast_accuracy_soc_15min: float = 100.0
-    forecast_accuracy_soc_1h: float = 100.0
-    forecast_accuracy_soc_4h: float = 100.0
+    forecast_accuracy_soc_15min: float | None = None  # None = no data yet
+    forecast_accuracy_soc_1h: float | None = None  # None = no data yet
+    forecast_accuracy_soc_4h: float | None = None  # None = no data yet
     # Price prediction errors
     forecast_error_buy_price_1h: float = 0.0  # Buy price error ($/kWh)
     forecast_error_sell_price_1h: float = 0.0  # Sell price error ($/kWh)
@@ -447,11 +380,6 @@ class CoordinatorData:
     contextual_adjustments_active: list[dict[str, Any]] = field(
         default_factory=list
     )  # Active contextual adjustments
-
-    # --- Cost reconciliation (Issue #269) ---
-    reconciliation_report: ReconciliationReport | None = (
-        None  # Last cost reconciliation report
-    )
 
     # --- Extended forecast accuracy (Issue #270) ---
     extended_accuracy_metrics: ExtendedAccuracyMetrics = field(

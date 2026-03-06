@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
@@ -16,6 +17,13 @@ from .const import (
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+    PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
+    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+    STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
+    STATE_MACHINE_MIN_MODE_DURATION_MINUTES,
+    STATE_MACHINE_TRANSITION_GRACE_SECONDS,
+    TESLA_OVERRIDE_RESERVE_PERCENT,
+    TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
@@ -33,12 +41,8 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # Tesla Override Detection Constants
-# When Tesla activates Storm Watch, Grid Events, or VPP events, they set
-# backup_reserve to 80% and operation_mode to self_consumption, ignoring
-# external API commands until the event ends.
-TESLA_OVERRIDE_RESERVE = 80.0  # Reserve level that indicates Tesla control
-TESLA_OVERRIDE_RESERVE_TOLERANCE = 1.0  # Tolerance for reserve comparison
-TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)  # Extended cooldown during override
+# Extended cooldown during Tesla override events
+TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)
 
 
 @dataclass
@@ -66,14 +70,16 @@ class StateMachine:
 
     # Minimum time a mode must be active before allowing transition (Issue #279)
     # This prevents rapid cycling that triggers the learning system's cycling penalty
-    _MIN_MODE_DURATION: timedelta = timedelta(minutes=5)
+    _MIN_MODE_DURATION: timedelta = timedelta(
+        minutes=STATE_MACHINE_MIN_MODE_DURATION_MINUTES
+    )
 
     def __init__(
         self,
         battery_controller: BatteryController,
         notification_service: NotificationService,
-        get_switch_state_func: callable,
-        get_option_func: callable,
+        get_switch_state_func: Callable[[str], bool],
+        get_option_func: Callable[[str, Any], Any],
         entity_validator: EntityValidator,
         decision_tracker: DecisionOutcomeTracker | None = None,
     ) -> None:
@@ -86,6 +92,7 @@ class StateMachine:
             get_option_func: Function to get configuration options
             entity_validator: Entity validator instance for availability checks
             decision_tracker: Decision outcome tracker for learning system (Issue #170 Phase 1)
+
         """
         self._battery_controller = battery_controller
         self._notification_service = notification_service
@@ -111,13 +118,17 @@ class StateMachine:
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
-        self._MIN_CORRECTION_INTERVAL = timedelta(minutes=5)
+        self._MIN_CORRECTION_INTERVAL = timedelta(
+            minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
+        )
         # Flag to skip debounce on first transition after startup grace
         self._skip_next_debounce: bool = False
         # Track last successful transition for health check intelligence
         self._last_successful_transition: datetime | None = None
         # Grace period after successful transition before health checks trigger corrections
-        self._TRANSITION_GRACE_PERIOD = timedelta(seconds=30)
+        self._TRANSITION_GRACE_PERIOD = timedelta(
+            seconds=STATE_MACHINE_TRANSITION_GRACE_SECONDS
+        )
         # Tesla Override Detection
         # When Tesla activates Storm Watch, Grid Events, or VPP events, they take
         # control of the Powerwall and ignore external API commands.
@@ -137,6 +148,7 @@ class StateMachine:
 
         Returns:
             True if Tesla override is detected, False otherwise.
+
         """
         # Tesla override signature: self_consumption mode with 80% reserve
         # This combination is set by Tesla during Storm Watch, Grid Events, VPP
@@ -144,8 +156,8 @@ class StateMachine:
             reserve = data.backup_reserve
             if (
                 reserve is not None
-                and abs(reserve - TESLA_OVERRIDE_RESERVE)
-                < TESLA_OVERRIDE_RESERVE_TOLERANCE
+                and abs(reserve - TESLA_OVERRIDE_RESERVE_PERCENT)
+                < TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT
             ):
                 return True
         return False
@@ -155,6 +167,7 @@ class StateMachine:
 
         Returns:
             True if Tesla override is detected, False otherwise.
+
         """
         return self._tesla_override_detected
 
@@ -214,7 +227,10 @@ class StateMachine:
 
         elif target == BatteryMode.PROACTIVE_EXPORT:
             op_mode = "autonomous"
-            backup_reserve = max(4.0, data.soc - 5.0)
+            backup_reserve = max(
+                PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
+                data.soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+            )
             export_mode = TESLEMETRY_EXPORT_BATTERY_OK
             pe_reserve = backup_reserve
 
@@ -399,23 +415,16 @@ class StateMachine:
         ):
             return False
 
+        # SOC target reached, but we respect optimizer control.
+        # Hardware will naturally stop charging when backup reserve is reached.
+        # Do not transition; let the optimizer decide when to change modes.
         _LOGGER.info(
-            "SOC %.1f%% reached battery target %.0f%% — stopping %s, transitioning to SELF_CONSUMPTION",
+            "SOC %.1f%% reached battery target %.0f%% but remaining in %s (optimizer control)",
             data.soc,
             battery_target,
             self._commanded_mode.value,
         )
-        transition_success = await self._execute_mode_transition(
-            data, BatteryMode.SELF_CONSUMPTION
-        )
-        if transition_success:
-            old_mode = self._commanded_mode
-            self._commanded_mode = BatteryMode.SELF_CONSUMPTION
-            self._mode_desired_since.clear()
-            await self._notification_service.send_transition_notification(
-                old_mode, BatteryMode.SELF_CONSUMPTION, data
-            )
-        return True
+        return False
 
     def _should_defer_for_minimum_duration(
         self, desired: BatteryMode, now: datetime
@@ -492,9 +501,9 @@ class StateMachine:
         self,
         data: CoordinatorData,
         computation_engine: ComputationEngine,
-        read_state_func: callable | None = None,
-        notify_func: callable | None = None,
-        check_automation_ready_func: callable | None = None,
+        read_state_func: Callable[[], None] | None = None,
+        notify_func: Callable[[], None] | None = None,
+        check_automation_ready_func: Callable[[CoordinatorData], Any] | None = None,
     ) -> None:
         """Compare desired mode with commanded mode and execute transitions.
 
@@ -652,6 +661,7 @@ class StateMachine:
 
         Returns:
             True if transition completed successfully, False otherwise.
+
         """
         dry_run = self._get_switch_state("dry_run")
 
@@ -805,6 +815,7 @@ class StateMachine:
 
         Returns:
             Tuple of (operation_mode, backup_reserve, export_mode, grid_charging_allowed)
+
         """
         if mode == BatteryMode.SELF_CONSUMPTION:
             # Use tracked reserve (preserve_soc when set, otherwise 10)
@@ -1086,6 +1097,7 @@ class StateMachine:
 
         Args:
             mode: The battery mode to set as commanded.
+
         """
         self._commanded_mode = mode
         self._mode_desired_since.clear()
