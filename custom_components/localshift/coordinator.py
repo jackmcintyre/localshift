@@ -822,6 +822,7 @@ class LocalShiftCoordinator:
 
         Returns:
             True if the mode was set successfully, False otherwise.
+
         """
         if self._battery_controller is None:
             _LOGGER.error("Battery controller not available")

@@ -298,6 +298,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
 
         Returns:
             None if all valid, or dict of {config_key: error_message}
+
         """
         errors = {}
         for config_key, entity_id in entities.items():

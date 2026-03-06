@@ -58,6 +58,7 @@ class SocSimulator:
 
         Returns:
             True if grid charging would be needed, False otherwise
+
         """
         soc = current_soc
         slot_fraction = 15 / 60.0  # 0.25 hours
@@ -161,6 +162,7 @@ class SocSimulator:
 
         Returns:
             Elapsed minutes until 100% SOC, or None if it never fills
+
         """
         from .slot_schedule import TOTAL_SLOTS  # noqa: PLC0415
 

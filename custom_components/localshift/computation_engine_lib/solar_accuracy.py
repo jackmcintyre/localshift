@@ -38,6 +38,7 @@ class SolarPeriodRecord:
         time_of_day: Time bucket (morning, afternoon, evening)
         season: Season (summer, autumn, winter, spring)
         bias: Calculated bias (forecast - actual) / forecast, or 0 if no forecast
+
     """
 
     period_start: datetime
@@ -49,12 +50,19 @@ class SolarPeriodRecord:
     bias: float = 0.0
 
     def __post_init__(self) -> None:
+        """Calculate bias after initialization."""
         if self.forecast_kwh > 0.01:
             self.bias = (self.forecast_kwh - self.actual_kwh) / self.forecast_kwh
         else:
             self.bias = 0.0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the record to a dictionary for storage.
+
+        Returns:
+            Dictionary with all record fields serialized.
+
+        """
         return {
             "period_start": self.period_start.isoformat(),
             "forecast_kwh": self.forecast_kwh,
@@ -67,6 +75,15 @@ class SolarPeriodRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SolarPeriodRecord:
+        """Deserialize a record from a dictionary.
+
+        Args:
+            data: Dictionary with serialized record data.
+
+        Returns:
+            SolarPeriodRecord instance.
+
+        """
         period_start = datetime.fromisoformat(data["period_start"])
         return cls(
             period_start=period_start,
@@ -91,6 +108,7 @@ class SolarBiasMetrics:
         sample_count: Total number of samples
         mape: Mean Absolute Percentage Error
         accuracy: Overall accuracy percentage (100 - MAPE)
+
     """
 
     overall_bias: float = 0.0
@@ -102,6 +120,12 @@ class SolarBiasMetrics:
     accuracy: float = 100.0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the metrics to a dictionary for storage.
+
+        Returns:
+            Dictionary with all metric fields.
+
+        """
         return {
             "overall_bias": self.overall_bias,
             "bias_by_time": self.bias_by_time,
@@ -114,6 +138,15 @@ class SolarBiasMetrics:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SolarBiasMetrics:
+        """Deserialize metrics from a dictionary.
+
+        Args:
+            data: Dictionary with serialized metrics.
+
+        Returns:
+            SolarBiasMetrics instance.
+
+        """
         return cls(
             overall_bias=data.get("overall_bias", 0.0),
             bias_by_time=data.get("bias_by_time", {}),
@@ -136,6 +169,13 @@ class SolarAccuracyTracker:
     """
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        """Initialize the solar accuracy tracker.
+
+        Args:
+            hass: Home Assistant instance.
+            entry_id: Config entry ID for storage key.
+
+        """
         self._hass = hass
         self._store = Store(
             hass, version=1, key=f"localshift.solar_accuracy.{entry_id}"
@@ -398,6 +438,7 @@ class SolarAccuracyTracker:
         Returns:
             Bias correction factor. Returns 1.0 if no historical data available.
             Values < 1.0 reduce forecast (overestimate), > 1.0 increase (underestimate).
+
         """
         result = self._compute_context_bias(time_of_day, weather, season)
         if result is None:

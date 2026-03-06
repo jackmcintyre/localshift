@@ -50,6 +50,7 @@ class PatternBucket:
         over_charge_rate: Fraction of grid-charge decisions that were unnecessary
         under_charge_rate: Fraction of decisions where SOC dropped below target
         export_loss_rate: Fraction of decisions with grid-purchased energy exported
+
     """
 
     key: str
@@ -98,6 +99,7 @@ class DimensionStats:
         groups: Mapping of group key to PatternBucket
         global_mean: Mean score across all groups
         global_std: Standard deviation across all groups
+
     """
 
     dimension: str
@@ -141,6 +143,7 @@ class BiasCorrection:
         confidence: 0.0-1.0 confidence in this correction
         sample_count: How many decisions support this
         weeks_observed: How many weeks this pattern has persisted
+
     """
 
     condition: str
@@ -189,6 +192,7 @@ class PatternReport:
         dimensions: Analysis results per dimension
         biases_detected: List of detected biases
         data_points_analyzed: Total decisions analyzed
+
     """
 
     generated_at: datetime = field(default_factory=dt_util.now)
@@ -265,6 +269,7 @@ class PatternAnalyzer:
         Args:
             hass: Home Assistant instance
             entry_id: Config entry ID for storage isolation
+
         """
         self._store = Store(
             hass, version=1, key=f"{DOMAIN}.pattern_analysis.{entry_id}"
@@ -284,6 +289,7 @@ class PatternAnalyzer:
 
         Returns:
             PatternReport with all analysis results
+
         """
         if not decisions:
             _LOGGER.debug("No decisions provided for pattern analysis")
@@ -345,6 +351,7 @@ class PatternAnalyzer:
 
         Returns:
             DimensionStats with grouped analysis
+
         """
         stats = DimensionStats(dimension=dimension)
 
@@ -389,6 +396,7 @@ class PatternAnalyzer:
 
         Returns:
             PatternBucket with computed statistics
+
         """
         scores = [d.outcome_score for d in decisions if d.outcome_score is not None]
         sample_count = len(scores)
@@ -472,6 +480,7 @@ class PatternAnalyzer:
 
         Returns:
             List of BiasCorrection objects
+
         """
         biases: list[BiasCorrection] = []
 
@@ -527,6 +536,7 @@ class PatternAnalyzer:
 
         Returns:
             BiasCorrection or None if no mapping exists
+
         """
         confidence = self._calculate_bias_confidence(bucket, stats)
 
@@ -552,6 +562,7 @@ class PatternAnalyzer:
 
         Returns:
             Confidence score (0.0 to 1.0)
+
         """
         score_diff = stats.global_mean - bucket.mean_score
         severity = (
@@ -584,6 +595,7 @@ class PatternAnalyzer:
 
         Returns:
             BiasCorrection or None
+
         """
         if bucket.over_charge_rate <= 0.3:
             return None
@@ -639,6 +651,7 @@ class PatternAnalyzer:
 
         Returns:
             BiasCorrection or None
+
         """
         if bucket.export_loss_rate <= 0.2:
             return None
@@ -682,6 +695,7 @@ class PatternAnalyzer:
 
         Returns:
             BiasCorrection or None
+
         """
         if bucket.under_charge_rate <= 0.2:
             return None
@@ -735,6 +749,7 @@ class PatternAnalyzer:
 
         Returns:
             BiasCorrection or None
+
         """
         score_diff = stats.global_mean - bucket.mean_score
         if score_diff <= stats.global_std * 1.5:
@@ -808,6 +823,7 @@ class PatternAnalyzer:
 
         Returns:
             BiasCorrection or None if invalid
+
         """
         if param_name not in OPTIMIZABLE_PARAMS:
             _LOGGER.warning("Unknown parameter %s in bias mapping", param_name)
@@ -907,6 +923,7 @@ class PatternAnalyzer:
 
         Returns:
             Last PatternReport or None if never run
+
         """
         return self._last_report
 
@@ -919,6 +936,7 @@ class PatternAnalyzer:
 
         Returns:
             True if analysis should run
+
         """
         # Run at least weekly
         if days_since_last >= 7:
@@ -981,6 +999,7 @@ class PatternAnalyzer:
 
         Returns:
             Dictionary with analyzer state for diagnostics
+
         """
         return {
             "last_analysis": self._last_analysis_time.isoformat()

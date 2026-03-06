@@ -76,6 +76,7 @@ class BatteryController:
         Args:
             hass: Home Assistant instance
             get_entity_id_func: Function to get entity IDs by config key
+
         """
         self.hass = hass
         self._get_entity_id = get_entity_id_func
@@ -95,6 +96,7 @@ class BatteryController:
 
         Returns:
             Current SOC percentage (0-100) if available, None if unavailable.
+
         """
         from .const import CONF_TESLEMETRY_SOC  # noqa: PLC0415
 
@@ -108,6 +110,15 @@ class BatteryController:
         return None
 
     async def _run_transition(self, recipe: TransitionRecipe) -> bool:
+        """Execute a transition recipe and validate the result.
+
+        Args:
+            recipe: Transition recipe containing steps and expectations.
+
+        Returns:
+            True if transition succeeded and validated, False otherwise.
+
+        """
         for step in recipe.steps:
             if not await step.action():
                 _LOGGER.error(step.failure_message)
@@ -150,6 +161,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
@@ -176,6 +188,7 @@ class BatteryController:
         )
 
         def _log_validation_failure() -> None:
+            """Log validation failure for self consumption mode."""
             _LOGGER.error("Self consumption mode validation failed")
 
         recipe = TransitionRecipe(
@@ -243,6 +256,7 @@ class BatteryController:
 
         Returns:
             Clamped reserve value that Tesla firmware will accept.
+
         """
         if target <= BACKUP_RESERVE_MAX_VALID:
             # 0-80%: Tesla accepts these values directly
@@ -276,6 +290,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
@@ -315,6 +330,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("backup", 10)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for force charge mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
@@ -383,6 +399,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
@@ -406,6 +423,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for boost charge mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
@@ -469,6 +487,7 @@ class BatteryController:
 
         Returns:
             Minimum target SOC percentage (default 10 if entity unavailable).
+
         """
         entity_id = self._get_entity_id("minimum_target_soc")
         return self._validator.read_float(entity_id, default=10.0)
@@ -491,6 +510,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method can be called manually (via button) or automatically (via state machine)
@@ -518,6 +538,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for force discharge mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
@@ -583,6 +604,7 @@ class BatteryController:
 
         Returns:
             True if successful, False otherwise.
+
         """
         # Note: manual_override is managed by button handlers and state machine
         # This method is only called automatically (via state machine)
@@ -614,6 +636,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for proactive export mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(

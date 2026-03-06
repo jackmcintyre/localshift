@@ -47,6 +47,7 @@ class NotificationService:
             entry: Config entry
             get_entity_id_func: Function to get entity IDs by config key
             get_switch_state_func: Function to get notification preference switch states
+
         """
         self.hass = hass
         self.entry = entry
@@ -61,6 +62,7 @@ class NotificationService:
 
         Returns:
             True if notifications are enabled for this type, False otherwise
+
         """
         if self._get_switch_state is None:
             return True  # Default to enabled if no switch state function
@@ -71,6 +73,7 @@ class NotificationService:
 
         Returns:
             "[Dry Run] " if dry run is enabled, empty string otherwise
+
         """
         if self._get_switch_state is None:
             return ""
@@ -84,6 +87,7 @@ class NotificationService:
         Args:
             title: Notification title
             message: Notification message body
+
         """
         service_target = self._get_entity_id("notify_service")
         parts = service_target.split(".", 1)
@@ -123,6 +127,7 @@ class NotificationService:
             old_mode: The previous battery mode
             new_mode: The new battery mode
             data: Current coordinator data
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping transition")
@@ -203,6 +208,7 @@ class NotificationService:
 
         Returns:
             Tuple of (title, message)
+
         """
         if old_mode == BatteryMode.SPIKE_DISCHARGE:
             return (
@@ -278,6 +284,7 @@ class NotificationService:
 
         Args:
             data: Current coordinator data
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping daily summary")
@@ -336,6 +343,7 @@ class NotificationService:
             mismatch_details: Dict with what mismatched (operation_mode, backup_reserve,
                             grid_charging_allowed). Used to suppress notifications for
                             expected Tesla cloud sync behavior (Issue #394).
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping health correction")
@@ -380,6 +388,7 @@ class NotificationService:
 
         Returns:
             True if this is just Tesla's grid_charging sync (should suppress notification)
+
         """
         # Only suppress for modes where grid_charging should be False
         if mode not in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
@@ -402,6 +411,7 @@ class NotificationService:
         Args:
             target_mode: The mode that was attempted
             data: Current coordinator data
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping transition failure")
@@ -424,6 +434,7 @@ class NotificationService:
 
         Args:
             data: Current coordinator data
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping automation disabled")
@@ -447,6 +458,7 @@ class NotificationService:
         Args:
             data: Current coordinator data
             timeout_hours: The timeout duration in hours
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping manual override timeout")
@@ -469,6 +481,7 @@ class NotificationService:
         Args:
             action: Description of the manual action
             data: Current coordinator data
+
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
             _LOGGER.debug("Notifications disabled, skipping manual action")

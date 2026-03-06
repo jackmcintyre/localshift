@@ -28,6 +28,7 @@ class PowerwallServiceClient:
 
         Returns:
             True if successful, False otherwise.
+
         """
         if mode not in (TESLEMETRY_EXPORT_PV_ONLY, TESLEMETRY_EXPORT_BATTERY_OK):
             _LOGGER.warning("[TRANSITION] Unknown export mode requested: %s", mode)
@@ -62,6 +63,7 @@ class PowerwallServiceClient:
 
         Returns:
             True if successful, False otherwise.
+
         """
         entity_id = self._get_entity_id("teslemetry_operation_mode")
         start_time = time.monotonic()
@@ -95,6 +97,7 @@ class PowerwallServiceClient:
 
         Returns:
             True if successful, False otherwise.
+
         """
         entity_id = self._get_entity_id("teslemetry_backup_reserve")
         start_time = time.monotonic()
@@ -138,6 +141,7 @@ class PowerwallServiceClient:
 
         Returns:
             True if successful, False otherwise.
+
         """
         entity_id = self._get_entity_id("teslemetry_allow_charging_from_grid")
         service = "turn_on" if allowed else "turn_off"

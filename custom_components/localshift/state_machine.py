@@ -92,6 +92,7 @@ class StateMachine:
             get_option_func: Function to get configuration options
             entity_validator: Entity validator instance for availability checks
             decision_tracker: Decision outcome tracker for learning system (Issue #170 Phase 1)
+
         """
         self._battery_controller = battery_controller
         self._notification_service = notification_service
@@ -147,6 +148,7 @@ class StateMachine:
 
         Returns:
             True if Tesla override is detected, False otherwise.
+
         """
         # Tesla override signature: self_consumption mode with 80% reserve
         # This combination is set by Tesla during Storm Watch, Grid Events, VPP
@@ -165,6 +167,7 @@ class StateMachine:
 
         Returns:
             True if Tesla override is detected, False otherwise.
+
         """
         return self._tesla_override_detected
 
@@ -658,6 +661,7 @@ class StateMachine:
 
         Returns:
             True if transition completed successfully, False otherwise.
+
         """
         dry_run = self._get_switch_state("dry_run")
 
@@ -811,6 +815,7 @@ class StateMachine:
 
         Returns:
             Tuple of (operation_mode, backup_reserve, export_mode, grid_charging_allowed)
+
         """
         if mode == BatteryMode.SELF_CONSUMPTION:
             # Use tracked reserve (preserve_soc when set, otherwise 10)
@@ -1092,6 +1097,7 @@ class StateMachine:
 
         Args:
             mode: The battery mode to set as commanded.
+
         """
         self._commanded_mode = mode
         self._mode_desired_since.clear()

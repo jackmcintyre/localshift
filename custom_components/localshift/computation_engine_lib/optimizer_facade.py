@@ -35,6 +35,13 @@ class OptimizerFacade:
         planner: DPPlanner | None = None,
         slot_builder_cls: type[Any] = SlotBuilder,
     ) -> None:
+        """Initialize the optimizer facade.
+
+        Args:
+            planner: Optional DP planner instance (defaults to new DPPlanner).
+            slot_builder_cls: Slot builder class for creating time slots.
+
+        """
         self._planner = planner or DPPlanner()
         self._slot_builder_cls = slot_builder_cls
         self._solar_accuracy_tracker: Any = None
@@ -46,6 +53,13 @@ class OptimizerFacade:
     def _record_forecasts_for_slots(
         self, slots: list[Any], weather_condition: str
     ) -> None:
+        """Record solar forecasts for accuracy tracking.
+
+        Args:
+            slots: List of time slots with solar forecast data.
+            weather_condition: Current weather condition for tracking.
+
+        """
         if self._solar_accuracy_tracker is None:
             return
 
@@ -66,6 +80,13 @@ class OptimizerFacade:
     def _apply_bias_correction_to_slots(
         self, slots: list[Any], weather_condition: str
     ) -> None:
+        """Apply bias correction to solar forecasts based on historical accuracy.
+
+        Args:
+            slots: List of time slots to correct.
+            weather_condition: Current weather condition for bias lookup.
+
+        """
         if self._solar_accuracy_tracker is None:
             return
 
@@ -165,6 +186,16 @@ class OptimizerFacade:
         config_options: dict[str, Any],
         cycle_id: str,
     ) -> None:
+        """Write optimizer results to coordinator data fields.
+
+        Args:
+            data: Coordinator data to update.
+            result: Optimizer result object.
+            slot_metadata: Metadata about the time slots.
+            config_options: Configuration options dictionary.
+            cycle_id: Unique identifier for this optimization cycle.
+
+        """
         data.optimizer_result = _serialize_result(result)
         data.optimizer_decisions = [_serialize_decision(d) for d in result.decisions]
         data.optimizer_summary = _build_summary(
@@ -190,6 +221,15 @@ class OptimizerFacade:
         optimizer_config: Any,
         config_options: dict[str, Any],
     ) -> None:
+        """Assign active battery mode based on optimizer decisions.
+
+        Args:
+            data: Coordinator data to update.
+            result: Optimizer result with decisions.
+            optimizer_config: Optimizer configuration.
+            config_options: Configuration options dictionary.
+
+        """
         alignment = {
             "valid": True,
             "issues": [],

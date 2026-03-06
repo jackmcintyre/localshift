@@ -503,6 +503,7 @@ class EntityValidator:
         Args:
             hass: Home Assistant instance
             get_entity_id_func: Function to get entity IDs by config key
+
         """
         self.hass = hass
         self._get_entity_id = get_entity_id_func
@@ -532,6 +533,7 @@ class EntityValidator:
 
         Returns:
             EntityHealth with current status
+
         """
         entity_id = self._get_entity_id(config_key)
         config = ENTITY_CONFIG.get(config_key, {})
@@ -663,6 +665,7 @@ class EntityValidator:
         Args:
             health: EntityHealth to check
             config_key: Configuration key for logging
+
         """
         # Log warning at threshold
         if health.consecutive_failures == FAILURE_THRESHOLD_WARNING:
@@ -704,6 +707,7 @@ class EntityValidator:
 
         Returns:
             ValidationResult with validation outcome
+
         """
         config = ENTITY_CONFIG.get(config_key, {})
 
@@ -800,6 +804,7 @@ class EntityValidator:
 
         Returns:
             Dictionary mapping config keys to EntityHealth
+
         """
         for config_key in ENTITY_CONFIG:
             self.check_entity(config_key)
@@ -821,6 +826,7 @@ class EntityValidator:
 
         Returns:
             Tuple of (is_valid, parsed_value, error_message)
+
         """
         if expected_type is None:
             return True, value_str, ""
@@ -850,6 +856,7 @@ class EntityValidator:
 
         Returns:
             Dictionary mapping entity_id to serialized health info dict
+
         """
         now = dt_util.now()
         results: dict[str, EntityHealth] = {}
@@ -1046,6 +1053,7 @@ class EntityValidator:
 
         Returns:
             Dictionary with health summary data
+
         """
         summary = {
             "status": self._cached_status.value,
@@ -1079,6 +1087,7 @@ class EntityValidator:
 
         Returns:
             Dictionary mapping entity config keys to health status (True=healthy)
+
         """
         return {
             key: health.is_healthy
@@ -1091,6 +1100,7 @@ class EntityValidator:
 
         Returns:
             Human-readable status message
+
         """
         if self._cached_status == IntegrationStatus.OK:
             return "All systems operational"
@@ -1110,6 +1120,7 @@ class EntityValidator:
 
         Returns:
             True if automation can proceed, False if critical errors exist
+
         """
         # Check all required entities
         for config_key, health in self._entity_health.items():
@@ -1142,6 +1153,7 @@ class EntityValidator:
 
         Args:
             config_key: Specific entity to reset, or None to reset all
+
         """
         if config_key is not None:
             # Reset specific entity
@@ -1177,6 +1189,7 @@ class EntityValidator:
 
         Args:
             config_key: Configuration key for the entity
+
         """
         health = self._entity_health.get(config_key)
         if health is not None:

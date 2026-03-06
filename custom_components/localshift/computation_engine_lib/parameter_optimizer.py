@@ -50,6 +50,7 @@ class ParameterOptimizer:
         Args:
             hass: Home Assistant instance
             entry_id: Config entry ID for storage isolation
+
         """
         self._store = Store(hass, version=1, key=f"{DOMAIN}.param_optimizer.{entry_id}")
         self._param_history: dict[str, list[tuple[float, float]]] = defaultdict(
@@ -70,6 +71,7 @@ class ParameterOptimizer:
 
         Returns:
             True if optimization should run
+
         """
         if decision_count < LEARNING_MIN_OBSERVATIONS:
             _LOGGER.debug(
@@ -117,6 +119,7 @@ class ParameterOptimizer:
 
         Returns:
             Updated AdaptiveParameters
+
         """
         if not decisions:
             _LOGGER.warning("No decisions provided for optimization")
@@ -205,6 +208,7 @@ class ParameterOptimizer:
 
         Returns:
             Tuple of (updated_values, updated_confidence)
+
         """
         # Group corrections by parameter
         param_corrections: dict[str, list[BiasCorrection]] = {}
@@ -313,6 +317,7 @@ class ParameterOptimizer:
 
         Returns:
             Tuple of (optimal_value, confidence) or (None, 0.0) if no data
+
         """
         # Group decisions by parameter value ranges
         num_bins = 5
@@ -403,6 +408,7 @@ class ParameterOptimizer:
 
         Returns:
             Sample value between 0 and 1
+
         """
         # Use gamma distribution to sample from beta
         # Beta(a, b) = Gamma(a, 1) / (Gamma(a, 1) + Gamma(b, 1))
@@ -419,6 +425,7 @@ class ParameterOptimizer:
 
         Returns:
             Gamma distributed random value
+
         """
         if alpha < 1:
             return self._gamma_variate(1 + alpha, beta) * (
@@ -452,6 +459,7 @@ class ParameterOptimizer:
 
         Returns:
             True if we should rollback
+
         """
         return self._consecutive_degrading_days >= 3
 
@@ -522,6 +530,7 @@ class ParameterOptimizer:
 
         Args:
             bias_corrections: List of bias corrections from pattern analyzer
+
         """
         self._pending_bias_corrections = bias_corrections
         _LOGGER.debug(
@@ -534,6 +543,7 @@ class ParameterOptimizer:
 
         Returns:
             Dictionary with optimizer state for diagnostics
+
         """
         return {
             "current_params": self._current_params.to_dict(),
