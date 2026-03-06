@@ -292,6 +292,13 @@ if [ "$WATCH_MODE" = true ]; then
         exit 1
     fi
     
+    # Setup trap to release reservation on exit (Ctrl+C or unexpected termination)
+    cleanup_on_exit() {
+        log_info "Releasing reservation on exit..."
+        "$SCRIPT_DIR/deploy.sh" --release --no-reload > /dev/null 2>&1 || true
+    }
+    trap cleanup_on_exit INT TERM EXIT
+    
     # Initial deploy
     log_deploy "Performing initial deployment..."
     "$SCRIPT_DIR/deploy.sh" --no-reload
@@ -328,6 +335,14 @@ if [ "$WATCH_MODE" = true ]; then
                 log_success "Integration reloaded"
             fi
         fi
+        
+        # Auto-release after successful deploy (allows next change to proceed)
+        log_info "Auto-releasing reservation..."
+        "$SCRIPT_DIR/deploy.sh" --release --no-reload > /dev/null 2>&1 || true
+        log_success "Reservation released - next change can proceed"
+        
+        # Debounce: wait before processing next change to prevent rapid redeploys
+        sleep 2
         
         log_success "Watch mode active - waiting for changes..."
     done
