@@ -482,3 +482,42 @@ PLATFORMS = ["sensor", "binary_sensor", "number", "switch", "button", "select"]
 
 OPTIMIZER_FORECAST_FRESHNESS_MINUTES = 30
 """Maximum forecast age in minutes for active mode admission."""
+
+# -----------------------------------------------------------------------------
+# State Machine Timing Constants
+# -----------------------------------------------------------------------------
+
+# Minimum time a mode must be active before allowing transition.
+# This prevents rapid cycling that triggers the learning system's cycling penalty.
+# 5 minutes chosen to align with Tesla's learning system update cycle.
+STATE_MACHINE_MIN_MODE_DURATION_MINUTES = 5
+
+# Minimum interval between health check corrections.
+# Prevents command spam when Teslemetry cloud lags in reflecting a legitimate transition.
+STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
+
+# Grace period after successful transition before health checks trigger corrections.
+# Prevents false positives when Tesla API is still propagating state changes.
+STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
+
+# -----------------------------------------------------------------------------
+# Proactive Export Constants
+# -----------------------------------------------------------------------------
+
+# Minimum SOC buffer for proactive export to prevent deep discharge.
+# 4% ensures battery can handle essential loads during grid outage.
+PROACTIVE_EXPORT_MIN_RESERVE_PERCENT = 4.0
+
+# Buffer above current SOC for proactive export reserve setting.
+# 5% prevents immediate discharge below reserve threshold.
+PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
+
+# -----------------------------------------------------------------------------
+# Tesla Override Detection Constants
+# -----------------------------------------------------------------------------
+
+# When Tesla activates Storm Watch, Grid Events, or VPP events, they set
+# backup_reserve to 80% and operation_mode to self_consumption, ignoring
+# external API commands until the event ends.
+TESLA_OVERRIDE_RESERVE_PERCENT = 80.0
+TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT = 1.0
