@@ -49,6 +49,13 @@ class SolarPeriodRecord:
     season: str
     bias: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Calculate bias after initialization."""
+        if self.forecast_kwh > 0.01:
+            self.bias = (self.forecast_kwh - self.actual_kwh) / self.forecast_kwh
+        else:
+            self.bias = 0.0
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize the record to a dictionary for storage.
 
