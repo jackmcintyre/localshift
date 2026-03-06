@@ -16,18 +16,36 @@ Bypass attempts are logged to `.git-bypass.log` for audit.
 1. **Create a worktree** for your task:
    ```bash
    git worktree add worktrees/issue-{NNN} -b issue/{NNN}
-   ```
-
-2. **Work inside the worktree directory**:
-   ```bash
    cd worktrees/issue-{NNN}
    ```
 
-3. **Commit from the issue branch** (not main)
+2. **Write failing test first** (TDD RED phase):
+   - Create test file in `tests/`
+   - Write test describing expected behavior
+   - Run test to confirm failure
+   - State: "TDD cycle: RED - test fails as expected"
+   - See `.agents/rules/tdd-workflow.md`
 
-4. **Push and create a PR** when done
+3. **Implement solution** (TDD GREEN phase):
+   - Write minimal code to make test pass
+   - Run test to confirm success
+   - State: "TDD cycle: GREEN - test passes"
 
-5. **Monitor CI checks** after PR creation (see `.agents/rules/pr-ci-checks.md`)
+4. **Refactor if needed** (TDD REFACTOR phase):
+   - Clean up code structure
+   - Run all tests: `uv run pytest`
+   - State: "TDD cycle: REFACTOR - all tests pass"
+
+5. **Verify coverage >= 95%**:
+   ```bash
+   uv run pytest --cov=custom_components/localshift --cov-report=term-missing
+   ```
+
+6. **Commit from the issue branch** (not main)
+
+7. **Push and create a PR** when done
+
+8. **Monitor CI checks** after PR creation
 
 ## PR Creation & CI Monitoring
 
