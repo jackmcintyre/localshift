@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
@@ -72,8 +73,8 @@ class StateMachine:
         self,
         battery_controller: BatteryController,
         notification_service: NotificationService,
-        get_switch_state_func: callable,
-        get_option_func: callable,
+        get_switch_state_func: Callable[[str], bool],
+        get_option_func: Callable[[str, Any], Any],
         entity_validator: EntityValidator,
         decision_tracker: DecisionOutcomeTracker | None = None,
     ) -> None:
@@ -485,9 +486,9 @@ class StateMachine:
         self,
         data: CoordinatorData,
         computation_engine: ComputationEngine,
-        read_state_func: callable | None = None,
-        notify_func: callable | None = None,
-        check_automation_ready_func: callable | None = None,
+        read_state_func: Callable[[], None] | None = None,
+        notify_func: Callable[[], None] | None = None,
+        check_automation_ready_func: Callable[[CoordinatorData], Any] | None = None,
     ) -> None:
         """Compare desired mode with commanded mode and execute transitions.
 
