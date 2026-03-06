@@ -68,6 +68,42 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 - For HA restart: "Restart recommended. Please run: `./deploy.sh --restart` (you'll be prompted to confirm)"
 - User controls all deployments - ensures human-in-the-loop before HA changes
 
+### Deploying to Test Environment
+
+The `test` branch is a persistent branch for continuous testing/deployment. Changes merge into `test` via PR (requires approval), then auto-deploy via watch mode.
+
+#### Workflow
+
+1. **Create worktree from test branch:**
+   ```bash
+   git worktree add worktrees/deploy-test -b test
+   cd worktrees/deploy-test
+   ```
+
+2. **Run watch mode:**
+   ```bash
+   ./deploy.sh --reserve
+   ./deploy.sh --watch
+   ```
+
+   Watch mode will:
+   - Auto-deploy on every code change (file save, etc.)
+   - Auto-release reservation after each deploy
+   - Auto-reload integration via HA API
+   - Wait 2 seconds between deploys (debounce)
+
+3. **Merge changes to test:**
+   - Push your worktree branch: `git push origin issue/NNN`
+   - Create PR targeting `test` branch
+   - PR requires maintainer/lead approval
+   - CI must pass before merge is allowed
+   - Once merged, the watch process will deploy automatically
+
+4. **Stop watch mode:**
+   Press Ctrl+C - the trap will release any active reservation.
+
+**Note:** Only one watch process can run at a time (enforced by reservation system).
+
 ### Commit Guidelines
 
 - Reference issue: `Fixes #NNN` or `Closes #NNN`
