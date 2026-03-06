@@ -944,11 +944,16 @@ def _make_slot(
 
 
 def test_feasible_actions_suppresses_grid_charge_when_solar_covers_deficit():
-    """Solar surplus >= SOC deficit: no CHARGE_GRID_* in feasible actions (self_consumption mode)."""
+    """Solar surplus >= SOC deficit: grid charging still available but price-gated.
+
+    Note: The solar gate logic was removed (Issue #562) because it incorrectly
+    suppressed grid charging. Now grid charging is controlled by the price gate,
+    and the penalty system determines whether it's optimal to charge.
+    """
     # SOC=70, target=80 → deficit=10%
     # 10% of 13.5 kWh = 1.35 kWh needed
     # Slots: 6 slots each with solar=0.5 kWh, consumption=0.2 kWh → net=0.3 kWh/slot → 1.8 kWh total
-    # 1.8 / 13.5 * 100 = 13.3% solar gain >= 10% deficit → gate fires
+    # Even though solar would cover deficit, we now allow grid charging (price-gated)
     slots = [
         _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.5, consumption_kwh=0.2)
         for i in range(6)
@@ -971,8 +976,8 @@ def test_feasible_actions_suppresses_grid_charge_when_solar_covers_deficit():
     )
 
     assert PlannerAction.HOLD in actions
-    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
-    assert PlannerAction.CHARGE_GRID_BOOST not in actions
+    # Grid charging is now allowed (price-gated), solar gate disabled per Issue #562
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions
 
 
 def test_feasible_actions_allows_grid_charge_when_solar_insufficient():
