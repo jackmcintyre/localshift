@@ -330,8 +330,8 @@ def _build_optimizer_config(
         solar_charge_rate_kw=CHARGE_RATE_SOLAR_KW,  # 5.0 kW solar->battery cap
         discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
         # --- Efficiency defaults (Powerwall typical) ---
-        charge_efficiency=0.92,
-        discharge_efficiency=0.95,
+        charge_efficiency=0.90,
+        discharge_efficiency=0.85,
         # --- SOC constraints ---
         min_soc_pct=min_soc,  # User-configured minimum
         max_soc_pct=100.0,  # Hard ceiling

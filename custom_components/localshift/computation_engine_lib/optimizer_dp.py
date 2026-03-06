@@ -88,6 +88,9 @@ class PlannerReasonCode(StrEnum):
     UNCLASSIFIED = "UNCLASSIFIED"
     """Reason not yet classified (should not appear in stable production)."""
 
+    SHORT_TERM_CYCLING_BLOCKED = "SHORT_TERM_CYCLING_BLOCKED"
+    """Charge blocked or deterred due to inefficient short-term cycling (Issue #598)."""
+
 
 # ---------------------------------------------------------------------------
 # Per-slot context (normalized inputs)
@@ -163,10 +166,10 @@ class OptimizerConfig:
     discharge_rate_kw: float = 5.0
     """Maximum battery discharge rate in kW."""
 
-    charge_efficiency: float = 0.92
+    charge_efficiency: float = 0.90
     """Charging efficiency (energy lost going into battery)."""
 
-    discharge_efficiency: float = 0.95
+    discharge_efficiency: float = 0.85
     """Round-trip discharging efficiency (0–1)."""
 
     min_soc_pct: float = 10.0
@@ -281,6 +284,15 @@ class ObjectiveTerms:
     uncertainty_penalty: float = 0.0
     """Penalty for grid actions when forecast horizon is restricted (Issue #431)."""
 
+    efficiency_penalty: float = 0.0
+    """Penalty for round-trip efficiency loss when charging (Issue #598)."""
+
+    short_term_cycling_penalty: float = 0.0
+    """Penalty for charge-then-discharge within 1 hour (Issue #598)."""
+
+    marginal_cycling_penalty: float = 0.0
+    """Penalty for charging at near-threshold prices where efficiency loss exceeds arbitrage gain (Issue #598)."""
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue - self_consumption_value + penalties."""
@@ -292,6 +304,9 @@ class ObjectiveTerms:
             + self.shortfall_penalty
             + self.uncertainty_penalty
             + self.switching_penalty
+            + self.efficiency_penalty
+            + self.short_term_cycling_penalty
+            + self.marginal_cycling_penalty
         )
 
     def to_dict(self) -> dict:
@@ -304,6 +319,9 @@ class ObjectiveTerms:
             "self_consumption_value": self.self_consumption_value,
             "uncertainty_penalty": self.uncertainty_penalty,
             "switching_penalty": self.switching_penalty,
+            "efficiency_penalty": self.efficiency_penalty,
+            "short_term_cycling_penalty": self.short_term_cycling_penalty,
+            "marginal_cycling_penalty": self.marginal_cycling_penalty,
             "net_cost": self.net_cost,
         }
 
@@ -900,7 +918,27 @@ class DPPlanner:
                 config,
                 soc_pct=soc,
                 is_switch=is_switch,
+                short_term_cycling_penalty=0.0,  # will set below
             )
+
+            # Compute short-term cycling penalty if applicable
+            short_term_penalty = 0.0
+            if action in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
+                short_term_penalty = self._compute_short_term_cycling_penalty(
+                    action=action,
+                    grid_import_kwh=grid_import,
+                    next_soc=next_soc,
+                    slot_idx=slot_idx,
+                    slots=slots,
+                    config=config,
+                    terminal_penalty_idx=terminal_penalty_idx,
+                )
+                # Update stage to include this penalty for accurate net_cost and diagnostics
+                stage.short_term_cycling_penalty = short_term_penalty
+
             total_cost = stage.net_cost + future_cost
 
             if total_cost < best_cost or (
@@ -928,6 +966,84 @@ class DPPlanner:
             ),
             states_explored,
         )
+
+    def _compute_short_term_cycling_penalty(
+        self,
+        action: PlannerAction,
+        grid_import_kwh: float,
+        next_soc: float,
+        slot_idx: int,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> float:
+        """Penalty for charging when energy will be discharged within 1 hour.
+
+        This deters wasteful short-term cycles where efficiency losses
+        and degradation outweigh any price arbitrage benefit.
+
+        Args:
+            action: The action being evaluated (must be a charge action)
+            grid_import_kwh: Grid import amount in this slot
+            next_soc: SOC after this slot's transition
+            slot_idx: Index of current slot
+            slots: Full list of planning slots
+            config: Optimizer configuration
+            terminal_penalty_idx: Index of demand window entry (None if no DW)
+
+        Returns:
+            Penalty amount to add to stage cost (0 if no penalty warranted)
+        """
+        if action not in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            return 0.0
+
+        if grid_import_kwh <= 0:
+            return 0.0
+
+        max_lookahead_minutes = 60
+        elapsed_minutes = 0
+        total_discharge_kwh = 0.0
+        round_trip_efficiency = config.charge_efficiency * config.discharge_efficiency
+
+        # Look ahead from the NEXT slot (i=1) onward
+        for i in range(1, len(slots) - slot_idx):
+            future_slot_idx = slot_idx + i
+
+            # Stop at demand window entry - discharging during/after DW is valid
+            if (
+                terminal_penalty_idx is not None
+                and future_slot_idx >= terminal_penalty_idx
+            ):
+                break
+
+            if elapsed_minutes >= max_lookahead_minutes:
+                break
+
+            future_slot = slots[slot_idx + i]
+            elapsed_minutes += future_slot.slot_interval_minutes
+
+            net_kwh = future_slot.solar_kwh - future_slot.consumption_kwh
+            if net_kwh < 0:
+                # Load deficit means battery would discharge (HOLD with deficit)
+                # Estimate how much of the charged energy would be used
+                remaining_charge = grid_import_kwh - total_discharge_kwh
+                discharge_estimate = min(-net_kwh, remaining_charge)
+                total_discharge_kwh += max(0.0, discharge_estimate)
+
+                if total_discharge_kwh >= grid_import_kwh:
+                    # All the charged energy would be discharged within 1 hour
+                    # This is a short-term cycle - apply penalty
+                    # Penalty = round-trip efficiency loss + deterrent multiplier
+                    efficiency_loss_kwh = grid_import_kwh * (
+                        1.0 - round_trip_efficiency
+                    )
+                    # Multiply by 2.0 to make short-term cycles clearly uneconomical
+                    return efficiency_loss_kwh * slots[slot_idx].buy_price * 2.0
+
+        return 0.0
 
     def _forward_reconstruct(
         self,
@@ -984,6 +1100,22 @@ class DPPlanner:
                 is_switch=is_switch,
             )
 
+            # Compute short-term cycling penalty for diagnostic transparency
+            if action in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
+                short_term_penalty = self._compute_short_term_cycling_penalty(
+                    action=action,
+                    grid_import_kwh=grid_import,
+                    next_soc=next_soc,
+                    slot_idx=slot_idx,
+                    slots=slots,
+                    config=config,
+                    terminal_penalty_idx=terminal_penalty_idx,
+                )
+                stage.short_term_cycling_penalty = short_term_penalty
+
             reason = self._classify_reason(
                 action,
                 slot,
@@ -994,6 +1126,14 @@ class DPPlanner:
                 config,
                 terminal_penalty_idx,
             )
+
+            # Override reason if short-term cycling penalty applies (Issue #598)
+            if (
+                action
+                in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+                and stage.short_term_cycling_penalty > 0
+            ):
+                reason = PlannerReasonCode.SHORT_TERM_CYCLING_BLOCKED
 
             decision = PlannedSlotDecision(
                 slot_index=slot.slot_index,
@@ -1727,6 +1867,7 @@ class DPPlanner:
         *,
         soc_pct: float | None = None,
         is_switch: bool = False,
+        short_term_cycling_penalty: float = 0.0,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -1765,9 +1906,52 @@ class DPPlanner:
                 # Multiply by import amount. 0.05 $/kWh is a strong deterrent.
                 uncertainty_penalty = 0.05 * horizon_penalty_factor * grid_import_kwh
 
+        # Issue #598: Efficiency penalty for charging
+        # Account for round-trip efficiency loss that will occur when this energy is discharged
+        efficiency_penalty = 0.0
+        if action in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            round_trip_efficiency = (
+                config.charge_efficiency * config.discharge_efficiency
+            )
+            efficiency_loss_kwh = grid_import_kwh * (1.0 - round_trip_efficiency)
+            efficiency_penalty = efficiency_loss_kwh * slot.buy_price
+
+        # Issue #598: Marginal cycling penalty
+        # When charging at near-threshold prices, the round-trip efficiency loss
+        # often exceeds the price arbitrage gain. Add penalty to discourage this.
+        # Example: Charge at $0.15 to avoid $0.16 imports
+        # - Price spread: $0.01/kWh (seems profitable)
+        # - Efficiency loss: 23.5% × $0.15 = $0.035/kWh (actual cost)
+        # - Net loss: $0.025/kWh → Should NOT charge
+        marginal_cycling_penalty = 0.0
+        if action in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            # Only apply when price is near threshold (80-100% of cheap price)
+            threshold_min = config.effective_cheap_price * 0.8
+            threshold_max = config.effective_cheap_price
+
+            if threshold_min <= slot.buy_price <= threshold_max:
+                # Penalty scales with price proximity to threshold
+                # At 80% threshold: minimal penalty
+                # At 100% threshold: maximum penalty
+                price_proximity = (slot.buy_price - threshold_min) / (
+                    threshold_max - threshold_min
+                )
+
+                # Penalty should exceed the apparent "profit" from price arbitrage
+                # Typical scenario: 5% price spread, 23.5% efficiency loss
+                # Need ~$0.03/kWh penalty to make cycling uneconomical
+                marginal_cycling_penalty = grid_import_kwh * price_proximity * 0.03
+
         # Calculate self-consumption value (Issue #406)
         # Battery energy used to cover household load has value because it avoids
-        # buying from grid at retail price
+        # buying from grid at retail price. Use the actual slot's buy_price to
+        # reflect true avoided cost, not a fixed threshold.
         self_consumption_value = 0.0
         if config.optimization_mode == "self_consumption":
             # Net load that battery covers = consumption - solar - grid_import
@@ -1801,9 +1985,7 @@ class DPPlanner:
                     )
                     battery_for_load = min(battery_for_load, max_load_kwh)
 
-                self_consumption_value = (
-                    battery_for_load * config.self_consumption_value_per_kwh
-                )
+                self_consumption_value = battery_for_load * slot.buy_price
 
         return ObjectiveTerms(
             import_cost=import_cost,
@@ -1812,6 +1994,9 @@ class DPPlanner:
             self_consumption_value=self_consumption_value,
             uncertainty_penalty=uncertainty_penalty,
             switching_penalty=switching_penalty,
+            efficiency_penalty=efficiency_penalty,
+            short_term_cycling_penalty=short_term_cycling_penalty,
+            marginal_cycling_penalty=marginal_cycling_penalty,
         )
 
     @staticmethod
