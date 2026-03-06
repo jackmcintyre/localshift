@@ -733,8 +733,7 @@ class DPPlanner:
         Returns:
             Terminal penalty index or None
         """
-        if config.allow_dw_entry_under_target and demand_bounds["end_idx"] is not None:
-            return demand_bounds["end_idx"]
+        # Always apply penalty at DW entry to incentivize charging before DW
         return demand_bounds["entry_idx"]
 
     def _initialize_dp_tables(
@@ -764,10 +763,7 @@ class DPPlanner:
         if terminal_penalty_idx is not None:
             target = config.demand_window_target_soc_pct
             for bin_idx, soc in enumerate(soc_grid):
-                if config.allow_dw_entry_under_target and solar_can_reach_target:
-                    shortfall_penalty = 0.0
-                else:
-                    shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
+                shortfall_penalty = DPPlanner.terminal_cost(soc, target, config)
                 dp[n_slots][bin_idx] = (
                     shortfall_penalty,
                     PlannerAction.HOLD,
@@ -1367,31 +1363,10 @@ class DPPlanner:
         # This prevents the solver from grid-charging during solar-peak hours
         # when solar will naturally fill the battery at zero cost.
         _solar_covers_deficit = False
-        if (
-            config.optimization_mode == "self_consumption"
-            and slots is not None
-            and terminal_penalty_idx is not None
-            and slot_idx < terminal_penalty_idx
-        ):
-            soc_deficit_pct = config.demand_window_target_soc_pct - soc_pct
-            if soc_deficit_pct > 0:
-                if config.allow_dw_entry_under_target:
-                    # Issue #505: Check if solar reaches target at any point during DW
-                    max_soc_in_dw = _simulate_max_soc_in_demand_window(
-                        soc_pct, slots, config
-                    )
-                    if max_soc_in_dw >= config.demand_window_target_soc_pct:
-                        _solar_covers_deficit = True
-                else:
-                    # Original: solar must cover deficit to DW entry
-                    solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
-                        slot_idx=slot_idx,
-                        slots=slots,
-                        terminal_penalty_idx=terminal_penalty_idx,
-                        battery_capacity_kwh=config.battery_capacity_kwh,
-                    )
-                    if solar_gain_pct >= soc_deficit_pct:
-                        _solar_covers_deficit = True
+        # DISABLED: The solar gate is too aggressive and incorrectly suppresses
+        # grid charging when solar is insufficient. The penalty-based approach
+        # should be sufficient to handle this case.
+        # Original code removed for Issue #562 fix
 
         # Issue #559 Root Cause 1: global solar gate for no-DW scenarios.
         # The existing gate above is bypassed when terminal_penalty_idx is None
