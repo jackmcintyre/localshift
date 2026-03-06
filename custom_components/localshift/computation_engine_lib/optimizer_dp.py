@@ -293,6 +293,9 @@ class ObjectiveTerms:
     marginal_cycling_penalty: float = 0.0
     """Penalty for charging at near-threshold prices where efficiency loss exceeds arbitrage gain (Issue #598)."""
 
+    solar_opportunity_penalty: float = 0.0
+    """Penalty for grid charging when future solar can charge battery for free (Issue #598)."""
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue - self_consumption_value + penalties."""
@@ -307,6 +310,7 @@ class ObjectiveTerms:
             + self.efficiency_penalty
             + self.short_term_cycling_penalty
             + self.marginal_cycling_penalty
+            + self.solar_opportunity_penalty
         )
 
     def to_dict(self) -> dict:
@@ -322,6 +326,7 @@ class ObjectiveTerms:
             "efficiency_penalty": self.efficiency_penalty,
             "short_term_cycling_penalty": self.short_term_cycling_penalty,
             "marginal_cycling_penalty": self.marginal_cycling_penalty,
+            "solar_opportunity_penalty": self.solar_opportunity_penalty,
             "net_cost": self.net_cost,
         }
 
@@ -939,6 +944,18 @@ class DPPlanner:
                 # Update stage to include this penalty for accurate net_cost and diagnostics
                 stage.short_term_cycling_penalty = short_term_penalty
 
+                # Compute solar opportunity penalty if applicable
+                solar_penalty = self._compute_solar_opportunity_penalty(
+                    action=action,
+                    grid_import_kwh=grid_import,
+                    slot=slot,
+                    slot_idx=slot_idx,
+                    slots=slots,
+                    config=config,
+                    terminal_penalty_idx=terminal_penalty_idx,
+                )
+                stage.solar_opportunity_penalty = solar_penalty
+
             total_cost = stage.net_cost + future_cost
 
             if total_cost < best_cost or (
@@ -1045,6 +1062,66 @@ class DPPlanner:
 
         return 0.0
 
+    def _compute_solar_opportunity_penalty(
+        self,
+        action: PlannerAction,
+        grid_import_kwh: float,
+        slot: SlotContext,
+        slot_idx: int,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+    ) -> float:
+        """Penalty for grid charging when future solar can charge battery for free.
+
+        This represents the opportunity cost of paying for grid energy now
+        vs waiting for solar energy at zero cost. Per PLANNING_MODEL.md,
+        this is a soft penalty for economic trade-offs, not a hard constraint.
+
+        Args:
+            action: The action being evaluated (must be a charge action)
+            grid_import_kwh: Grid import amount in this slot
+            slot: Current slot context
+            slot_idx: Index of current slot
+            slots: Full list of planning slots
+            config: Optimizer configuration
+            terminal_penalty_idx: Index of demand window entry (None if no DW)
+
+        Returns:
+            Penalty amount to add to stage cost (0 if no penalty warranted)
+        """
+        if action not in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            return 0.0
+
+        if grid_import_kwh <= 0:
+            return 0.0
+
+        # Only apply at night when no immediate solar
+        if slot.solar_kwh > 0:
+            return 0.0
+
+        # Don't penalize when demand window exists
+        if terminal_penalty_idx is not None:
+            return 0.0
+
+        # Calculate future solar surplus
+        future_net_solar_kwh = sum(
+            s.solar_kwh - s.consumption_kwh for s in slots[slot_idx:]
+        )
+
+        # Threshold: 10% of battery capacity
+        threshold_kwh = config.battery_capacity_kwh * 0.10
+
+        # If significant solar surplus coming, penalize grid charging
+        if future_net_solar_kwh > threshold_kwh:
+            # $0.03/kWh opportunity cost
+            return grid_import_kwh * 0.03
+
+        return 0.0
+
     def _forward_reconstruct(
         self,
         dp: list[dict],
@@ -1115,6 +1192,18 @@ class DPPlanner:
                     terminal_penalty_idx=terminal_penalty_idx,
                 )
                 stage.short_term_cycling_penalty = short_term_penalty
+
+                # Compute solar opportunity penalty if applicable
+                solar_penalty = self._compute_solar_opportunity_penalty(
+                    action=action,
+                    grid_import_kwh=grid_import,
+                    slot=slot,
+                    slot_idx=slot_idx,
+                    slots=slots,
+                    config=config,
+                    terminal_penalty_idx=terminal_penalty_idx,
+                )
+                stage.solar_opportunity_penalty = solar_penalty
 
             reason = self._classify_reason(
                 action,

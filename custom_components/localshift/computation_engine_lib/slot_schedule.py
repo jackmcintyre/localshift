@@ -22,7 +22,7 @@ def compute_hybrid_slot_schedule(
     now_local: datetime,
     general_forecast: list[dict],
     ha_timezone: str,
-    max_forecast_hours: int = 24,
+    max_forecast_hours: int = 28,  # Issue #598: Extended to include tomorrow's solar
 ) -> tuple[list[dict], dict]:
     """Build hybrid slot schedule: ALL 5-min slots, then 30-min.
 
