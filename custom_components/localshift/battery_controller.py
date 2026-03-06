@@ -108,6 +108,14 @@ class BatteryController:
         return None
 
     async def _run_transition(self, recipe: TransitionRecipe) -> bool:
+        """Execute a transition recipe and validate the result.
+
+        Args:
+            recipe: Transition recipe containing steps and expectations.
+
+        Returns:
+            True if transition succeeded and validated, False otherwise.
+        """
         for step in recipe.steps:
             if not await step.action():
                 _LOGGER.error(step.failure_message)
@@ -176,6 +184,7 @@ class BatteryController:
         )
 
         def _log_validation_failure() -> None:
+            """Log validation failure for self consumption mode."""
             _LOGGER.error("Self consumption mode validation failed")
 
         recipe = TransitionRecipe(
@@ -315,6 +324,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("backup", 10)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for force charge mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
@@ -406,6 +416,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for boost charge mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
@@ -518,6 +529,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for force discharge mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
@@ -614,6 +626,7 @@ class BatteryController:
         timeout = TRANSITION_TIMEOUTS.get("autonomous", 15)
 
         def _log_validation_failure() -> None:
+            """Log validation failure for proactive export mode with state details."""
             final_state = self._validator.get_hardware_state_snapshot()
             elapsed = time.monotonic() - transition_start
             _LOGGER.error(
