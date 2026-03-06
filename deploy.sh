@@ -303,8 +303,38 @@ if [ "$WATCH_MODE" = true ]; then
     log_deploy "Performing initial deployment..."
     "$SCRIPT_DIR/deploy.sh" --no-reload
     
+    # Track local commit for git polling
+    LAST_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    
+    # Background git poller - creates marker file when remote changes detected
+    (
+        while true; do
+            sleep 30
+            git -C "$SCRIPT_DIR" fetch origin test --quiet 2>/dev/null || true
+            REMOTE_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse origin/test 2>/dev/null || echo "")
+            if [ -n "$REMOTE_COMMIT" ] && [ "$REMOTE_COMMIT" != "$LAST_COMMIT" ]; then
+                echo "1" > /tmp/git-poll-$BASHPID
+            fi
+        done
+    ) &
+    GIT_PID=$!
+    
     # Watch for changes
     inotifywait -m -r -e modify,create,delete,move "$SOURCE_DIR" 2>/dev/null | while read -r path action file; do
+        # Check for git poll marker (remote changes from PR merge)
+        if [ -f /tmp/git-poll-$BASHPID ]; then
+            rm -f /tmp/git-poll-$BASHPID
+            git -C "$SCRIPT_DIR" fetch origin test --quiet 2>/dev/null || true
+            REMOTE_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse origin/test 2>/dev/null || echo "")
+            if [ -n "$REMOTE_COMMIT" ] && [ "$REMOTE_COMMIT" != "$LAST_COMMIT" ]; then
+                echo ""
+                log_info "Git remote change detected - updating to latest..."
+                git -C "$SCRIPT_DIR" reset --hard origin/test 2>/dev/null || true
+                LAST_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+                log_success "Updated to: $(git -C "$SCRIPT_DIR" log -1 --oneline 2>/dev/null | cut -d' ' -f1-5)"
+            fi
+        fi
+        
         # Ignore __pycache__ and .pyc files
         if [[ "$path" == *"__pycache__"* ]] || [[ "$file" == *.pyc ]]; then
             continue
@@ -336,16 +366,16 @@ if [ "$WATCH_MODE" = true ]; then
             fi
         fi
         
-        # Auto-release after successful deploy (allows next change to proceed)
-        log_info "Auto-releasing reservation..."
-        "$SCRIPT_DIR/deploy.sh" --release --no-reload > /dev/null 2>&1 || true
-        log_success "Reservation released - next change can proceed"
+        # NOTE: In watch mode, we keep the reservation until Ctrl+C
+        # Only release on exit (handled by cleanup_on_exit trap)
         
         # Debounce: wait before processing next change to prevent rapid redeploys
         sleep 2
         
         log_success "Watch mode active - waiting for changes..."
     done
+    
+    kill $GIT_PID 2>/dev/null || true
     
     exit 0
 fi
