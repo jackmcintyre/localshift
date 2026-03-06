@@ -360,8 +360,6 @@ def _build_optimizer_config(
         switching_penalty=switching_penalty,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
-        # Issue #559 Root Cause 3: map HOLD signal to strict no-discharge constraint.
-        hold_soc=(getattr(data, "load_shift_signal", "HOLD") == "HOLD"),
     )
 
 
