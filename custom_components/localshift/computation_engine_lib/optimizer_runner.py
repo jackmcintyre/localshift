@@ -800,21 +800,11 @@ def _derive_runtime_apply_plan(
 
     # Map PlannerAction string to BatteryMode
     if action_str == "hold":
-        # Issue: HOLD overloading - distinguish between strict SOC preservation
-        # (during demand window) vs default self-consumption behavior
-        battery_mode = (
-            BatteryMode.HOLD.value
-            if config.hold_soc
-            else BatteryMode.SELF_CONSUMPTION.value
-        )
-        reason = (
-            "optimizer_hold_strict" if config.hold_soc else "optimizer_self_consumption"
-        )
         return {
             "action": action_str,
-            "battery_mode": battery_mode,
+            "battery_mode": BatteryMode.HOLD.value,
             "target_soc": None,
-            "reason": reason,
+            "reason": "optimizer_hold",
         }
 
     if action_str == "charge_grid_normal":
