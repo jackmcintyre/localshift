@@ -360,8 +360,6 @@ def _build_optimizer_config(
         switching_penalty=switching_penalty,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
-        # Issue #559 Root Cause 3: map HOLD signal to strict no-discharge constraint.
-        hold_soc=(getattr(data, "load_shift_signal", "HOLD") == "HOLD"),
     )
 
 
@@ -802,9 +800,13 @@ def _derive_runtime_apply_plan(
     if action_str == "hold":
         return {
             "action": action_str,
-            "battery_mode": BatteryMode.HOLD.value,
+            "battery_mode": BatteryMode.HOLD.value
+            if config.hold_soc
+            else BatteryMode.SELF_CONSUMPTION.value,
             "target_soc": None,
-            "reason": "optimizer_hold",
+            "reason": "optimizer_hold_strict"
+            if config.hold_soc
+            else "optimizer_self_consumption",
         }
 
     if action_str == "charge_grid_normal":
