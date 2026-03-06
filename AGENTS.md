@@ -4,16 +4,16 @@
 
 # ⚠️ STOP: MANDATORY FIRST ACTION
 
-**You MUST verify you're NOT on the `main` branch before ANY file edit.**
+**You MUST verify you're NOT on the `main` or `test` branches before ANY file edit.**
 
 ## Verification Steps
 
 1. Run: `git branch --show-current`
-2. If output is `"main"`: **STOP HERE**
-   - Create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
+2. If output is `"main"` or `"test"`: **STOP HERE**
+   - Create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN} test`
    - Change directory: `cd worktrees/issue-{NNN}`
    - Then proceed with edits
-3. If output is NOT `"main"`: Proceed with the task
+3. If output is NOT `"main"` and NOT `"test"`: Proceed with the task
 
 ## Why This Matters
 
@@ -42,12 +42,12 @@ LocalShift is a Home Assistant integration for automated Tesla Powerwall battery
 ### Before Starting ANY Task
 
 1. Run `git worktree list` - verify you're in a worktree
-2. Run `git branch --show-current` - must NOT be `main`
-3. If on main, create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
+2. Run `git branch --show-current` - must NOT be `main` or `test`
+3. If on main or test, create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN} test`
 
 ### Emergency Bypass
 
-**Only in emergencies (logged, audit required):** `GIT_EMERGENCY_PUSH=1 git push origin main`
+**Only in emergencies (logged, audit required):** `GIT_EMERGENCY_PUSH=1 git push origin main` or `GIT_EMERGENCY_PUSH=1 git push origin test`
 
 See `.opencode/rules` and `.githooks/README.md` for full workflow.
 
@@ -105,6 +105,37 @@ See `.opencode/rules` and `.githooks/README.md` for full workflow.
 - Async tests: `async def test_*` (pytest-asyncio auto-detects)
 
 ---
+
+## Test Branch Workflow
+
+The development workflow uses two long-lived branches:
+
+- `test`: Integration branch where all changes must be PR'd first. Auto-deploys to a test Home Assistant instance after merges.
+- `main`: Production branch for stable releases. Manual deployment.
+
+### Feature Development
+
+1. Create a feature branch from `test`:
+   ```bash
+   git worktree add worktrees/issue-{NNN} -b issue/{NNN} test
+   cd worktrees/issue-{NNN}
+   ```
+2. Make changes, lint, test, and deploy from the worktree using `./deploy.sh` (ask user). The same HA instance is used for test deployments.
+3. Push your feature branch and open a PR targeting `test`.
+4. After PR merges to `test`, the **test deployment daemon** automatically deploys to HA (within ~30 seconds). Monitor logs to verify.
+5. Once validated in HA, create a PR from `test` → `main`.
+6. After merge to `main`, deploy to production manually with `./deploy.sh --reserve && ./deploy.sh`.
+
+### Test Deployment Daemon
+
+The daemon runs in `worktrees/test-deploy` and synchronizes `origin/test` to the HA instance automatically.
+
+- Start: `./scripts/start-test-deploy.sh`
+- Stop: `./scripts/stop-test-deploy.sh`
+- Status: `./scripts/status-test-deploy.sh`
+- Logs: `tail -f logs/test-deploy.log`
+
+The daemon checks `origin/test` every 30 seconds. On changes, it merges and runs `deploy.sh --force`. Merge conflicts stop the daemon and require manual resolution.
 
 ## Notes
 

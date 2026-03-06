@@ -13,10 +13,10 @@ fi
 # Read the commit message
 COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
 
-# Check if message mentions main branch or merge
-if echo "$COMMIT_MSG" | grep -qiE "(main branch|merge.*main|main.*merge)"; then
+# Check if message mentions main or test branch or merge
+if echo "$COMMIT_MSG" | grep -qiE "(main branch|test branch|merge.*main|main.*merge|merge.*test|test.*merge)"; then
     # Prepend warning comment
-    echo "# WARNING: This commit references main branch - ensure this is via approved PR" > "$COMMIT_MSG_FILE.tmp"
+    echo "# WARNING: This commit references main/test branch - ensure this is via approved PR" > "$COMMIT_MSG_FILE.tmp"
     echo "$COMMIT_MSG" >> "$COMMIT_MSG_FILE.tmp"
     mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
 fi

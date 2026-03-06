@@ -282,6 +282,82 @@ If button entities show as "missing or not currently available":
    - Sometimes Home Assistant needs a full restart to register new entities
    - Restart Home Assistant and check again
 
+## Development Workflow with Test Branch
+
+This project uses a two-branch workflow with automated testing and deployment:
+
+- `test` branch: Integration environment - all changes must be PR'd here first. Auto-deploys to a test Home Assistant instance.
+- `main` branch: Production - only merged, stable code. Manual deployment.
+
+### Getting Started
+
+1. **Create a feature branch from `test`**:
+   ```bash
+   git worktree add worktrees/issue-{NNN} -b issue/{NNN} test
+   cd worktrees/issue-{NNN}
+   ```
+   Replace `{NNN}` with your issue number.
+
+2. **Make your changes**, then lint and test:
+   ```bash
+   uv run ruff check custom_components/localshift
+   uv run ruff format --check custom_components/localshift
+   uv run pytest
+   ```
+
+3. **Deploy to test HA** (requires HA_LONG_LIVED_TOKEN):
+   ```bash
+   ./deploy.sh --reserve
+   ./deploy.sh
+   # Check logs: tail -f /homeassistant/home-assistant.log | grep -i localshift
+   ./deploy.sh --release
+   ```
+
+4. **Push and open a PR** with your feature branch as the base and `test` as the target (compare across forks if needed). The CI will automatically run lint, tests, and duplicate checks.
+
+5. **After PR merges to `test`**, the automated test deployment daemon will deploy to the test HA instance within ~30 seconds. Monitor the logs to verify.
+
+6. **Validate** the changes in the test HA instance. If everything works, create a PR from `test` → `main`.
+
+7. **After merge to `main`**, deploy to production manually:
+   ```bash
+   ./deploy.sh --reserve
+   ./deploy.sh
+   # Optionally restart: ./deploy.sh --restart
+   ./deploy.sh --release
+   ```
+
+### Test Deployment Daemon
+
+The daemon automatically pulls from `origin/test` and deploys to the test HA instance. It's managed via these scripts:
+
+- **Start**: `./scripts/start-test-deploy.sh`
+- **Stop**: `./scripts/stop-test-deploy.sh`
+- **Status**: `./scripts/status-test-deploy.sh`
+- **Logs**: `tail -f logs/test-deploy.log`
+
+**How it works**:
+
+- The daemon runs in a dedicated worktree at `worktrees/test-deploy`.
+- Every 30 seconds it fetches `origin/test`. If there are new commits, it merges them and runs `deploy.sh --force` to deploy.
+- The `--force` flag bypasses the reservation system since the daemon is the sole test deployer.
+- If a merge conflict occurs, the daemon stops and alerts you to resolve it manually.
+- The daemon uses the `HA_LONG_LIVED_TOKEN`, `HA_URL`, and `HA_CONFIG` environment variables (same as `deploy.sh`).
+
+### Branch Protection
+
+Both `main` and `test` branches are protected:
+- Direct commits are blocked by git hooks.
+- Direct pushes are blocked.
+- All changes must go through pull requests.
+- PRs require CI checks to pass before merging.
+
+### Notes
+
+- You can run `./scripts/status-test-deploy.sh` to see if the daemon is running and view recent logs.
+- If you need to manually trigger a deploy from the test worktree (e.g., after resolving a conflict), run `./deploy.sh --force`.
+- The daemon will automatically resume after a reboot once you run `start-test-deploy.sh`.
+
 ## License
 
 MIT

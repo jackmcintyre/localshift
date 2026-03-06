@@ -17,10 +17,10 @@ if [ "$CHECKOUT_TYPE" != "1" ]; then
     exit 0
 fi
 
-if [ "$NEW_BRANCH" = "main" ]; then
+if [ "$NEW_BRANCH" = "main" ] || [ "$NEW_BRANCH" = "test" ]; then
     echo ""
     echo -e "${RED}==========================================${NC}"
-    echo -e "${RED}WARNING: You are now on the main branch${NC}"
+    echo -e "${RED}WARNING: You are now on the $NEW_BRANCH branch${NC}"
     echo -e "${RED}==========================================${NC}"
     echo ""
     
@@ -28,7 +28,7 @@ if [ "$NEW_BRANCH" = "main" ]; then
     if ! git diff-index --quiet HEAD -- 2>/dev/null; then
         echo -e "${RED}ERROR: Uncommitted changes detected!${NC}"
         echo ""
-        echo "You have uncommitted changes that would be stranded on main."
+        echo "You have uncommitted changes that would be stranded on $NEW_BRANCH."
         echo ""
         echo "Recommended action:"
         echo "  1. Stash changes: git stash push -m 'work in progress'"
@@ -40,7 +40,7 @@ if [ "$NEW_BRANCH" = "main" ]; then
         echo -e "${RED}==========================================${NC}"
         
         # Attempt to go back to previous branch
-        if [ -n "$PREV_BRANCH" ] && [ "$PREV_BRANCH" != "main" ]; then
+        if [ -n "$PREV_BRANCH" ] && [ "$PREV_BRANCH" != "main" ] && [ "$PREV_BRANCH" != "test" ]; then
             echo ""
             echo "Returning to previous branch: $PREV_BRANCH"
             git checkout "$PREV_BRANCH" 2>/dev/null
@@ -48,12 +48,12 @@ if [ "$NEW_BRANCH" = "main" ]; then
         exit 1
     fi
     
-    echo -e "${YELLOW}Direct commits to main are blocked. All changes require a pull request.${NC}"
+    echo -e "${YELLOW}Direct commits to $NEW_BRANCH are blocked. All changes require a pull request.${NC}"
     echo ""
     echo "Recommended workflow:"
     echo "  git worktree add worktrees/issue-{NNN} -b issue/{NNN}"
     echo ""
-    echo "Recent main branch activity:"
+    echo "Recent $NEW_BRANCH branch activity:"
     git log --oneline -3 --decorate 2>/dev/null | sed 's/^/  /'
     echo ""
     echo -e "${GREEN}Tip: Create a worktree to continue working${NC}"
