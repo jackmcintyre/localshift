@@ -305,6 +305,7 @@ if [ "$WATCH_MODE" = true ]; then
     
     # Track local commit for git polling
     LAST_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    COOLDOWN_FILE="/tmp/deploy-cooldown-$BASHPID"
     
     # Background git poller - creates marker file when remote changes detected
     (
@@ -329,10 +330,21 @@ if [ "$WATCH_MODE" = true ]; then
             if [ -n "$REMOTE_COMMIT" ] && [ "$REMOTE_COMMIT" != "$LAST_COMMIT" ]; then
                 echo ""
                 log_info "Git remote change detected - updating to latest..."
+                # Set cooldown to ignore file changes during git reset
+                echo "1" > "$COOLDOWN_FILE"
                 git -C "$SCRIPT_DIR" reset --hard origin/test 2>/dev/null || true
                 LAST_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
                 log_success "Updated to: $(git -C "$SCRIPT_DIR" log -1 --oneline 2>/dev/null | cut -d' ' -f1-5)"
+                # Wait for file system to settle
+                sleep 3
+                rm -f "$COOLDOWN_FILE"
+                log_success "Cooldown complete - resuming normal watch"
             fi
+        fi
+        
+        # Skip file changes during cooldown (git reset causes DELETE/CREATE/MODIFY spam)
+        if [ -f "$COOLDOWN_FILE" ]; then
+            continue
         fi
         
         # Ignore __pycache__ and .pyc files
