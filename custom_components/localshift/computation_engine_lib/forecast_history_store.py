@@ -114,39 +114,15 @@ class ForecastHistoryStore:
             return
 
         for offset_minutes in [15, 60, 240]:
-            target_dt = now_dt + timedelta(minutes=offset_minutes)
-
-            if target_dt.tzinfo is None:
-                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-            else:
-                target_dt = dt_util.as_local(target_dt)
+            target_dt = self._localize_datetime(
+                now_dt + timedelta(minutes=offset_minutes)
+            )
 
             for slot in slots:
-                ts = slot.get("timestamp_iso", "")
-                if not ts:
-                    continue
-                try:
-                    slot_dt = datetime.fromisoformat(ts)
-                except ValueError:
-                    continue
-
-                if slot_dt.tzinfo is None:
-                    slot_dt = dt_util.as_local(dt_util.as_utc(slot_dt))
-                else:
-                    slot_dt = dt_util.as_local(slot_dt)
-
-                slot_interval = slot.get("slot_interval_minutes", 15)
-                slot_end = slot_dt + timedelta(minutes=slot_interval)
-
-                if slot_dt <= target_dt < slot_end:
-                    entry = {
-                        "prediction_time": now_dt.isoformat(),
-                        "target_time": target_dt.isoformat(),
-                        "offset_minutes": offset_minutes,
-                        "predicted_soc": slot.get("predicted_soc_pct", 0),
-                        "predicted_buy_price": slot.get("buy_price", 0),
-                        "predicted_sell_price": slot.get("sell_price", 0),
-                    }
+                entry = self._match_slot_to_target(
+                    slot, target_dt, now_dt, offset_minutes
+                )
+                if entry:
                     data.forecast_history.append(entry)
                     break
 
@@ -172,13 +148,45 @@ class ForecastHistoryStore:
         """Check if a history entry is valid and within cutoff time."""
         try:
             target_dt = datetime.fromisoformat(entry["target_time"])
-            if target_dt.tzinfo is None:
-                target_dt = dt_util.as_local(dt_util.as_utc(target_dt))
-            else:
-                target_dt = dt_util.as_local(target_dt)
+            target_dt = self._localize_datetime(target_dt)
             return target_dt >= cutoff
         except (ValueError, TypeError):
             return False
+
+    def _localize_datetime(self, dt: datetime) -> datetime:
+        """Convert datetime to local timezone."""
+        if dt.tzinfo is None:
+            return dt_util.as_local(dt_util.as_utc(dt))
+        return dt_util.as_local(dt)
+
+    def _match_slot_to_target(
+        self, slot: dict, target_dt: datetime, now_dt: datetime, offset_minutes: int
+    ) -> dict | None:
+        """Match a slot to target time and create history entry."""
+        ts = slot.get("timestamp_iso", "")
+        if not ts:
+            return None
+
+        try:
+            slot_dt = datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+
+        slot_dt = self._localize_datetime(slot_dt)
+        slot_interval = slot.get("slot_interval_minutes", 15)
+        slot_end = slot_dt + timedelta(minutes=slot_interval)
+
+        if slot_dt <= target_dt < slot_end:
+            return {
+                "prediction_time": now_dt.isoformat(),
+                "target_time": target_dt.isoformat(),
+                "offset_minutes": offset_minutes,
+                "predicted_soc": slot.get("predicted_soc_pct", 0),
+                "predicted_buy_price": slot.get("buy_price", 0),
+                "predicted_sell_price": slot.get("sell_price", 0),
+            }
+
+        return None
 
     def _find_first_prediction_time(
         self, data: CoordinatorData, entries: list[dict]
