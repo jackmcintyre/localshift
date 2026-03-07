@@ -169,6 +169,40 @@ gh pr create --base test --title "..."
 
 ---
 
+## ⚠️ REQUIRED: Planning Model for Optimizer Changes
+
+**When modifying the DP optimizer, you MUST consult `docs/PLANNING_MODEL.md`.**
+
+### Core Pattern
+
+The optimizer uses a **Soft-Constrained DP** approach:
+
+```
+Hard Constraints (feasible_actions)  →  What CAN I do?
+Soft Penalties (stage_cost)          →  What SHOULD I do?
+Terminal Cost (terminal_cost)        →  What MUST I achieve?
+```
+
+### Decision Guide
+
+Before adding any optimizer feature:
+
+| Question | Answer Yes → |
+|----------|-------------|
+| Is it impossible/forbidden? | Add to `feasible_actions()` |
+| Is it a requirement by deadline? | Add to `terminal_cost()` |
+| Is it discouraged/preferred? | Add penalty to `stage_cost()` |
+
+### Examples
+
+- **Hard constraint**: Never export during quiet hours → `feasible_actions()`
+- **Soft penalty**: Discourage charging during peak demand → `stage_cost()`
+- **Terminal cost**: Require minimum SOC for overnight → `terminal_cost()`
+
+**Full documentation:** `docs/PLANNING_MODEL.md`
+
+---
+
 ## ⚠️ ENFORCED: TEST-DRIVEN DEVELOPMENT
 
 **TDD is REQUIRED for all code changes. No exceptions.**
@@ -240,5 +274,9 @@ uv run pytest --cov=custom_components/localshift --cov-report=term-missing
 
 - No Cursor or Copilot rules found in repository
 - Follow existing code patterns when modifying files
-- Update documentation (`docs/ENTITY_REFERENCE.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPER_GUIDE.md`) when adding/removing entities
+- Update documentation when adding/removing entities:
+  - `docs/ENTITY_REFERENCE.md` - Entity definitions
+  - `docs/ARCHITECTURE.md` - System architecture
+  - `docs/DEVELOPER_GUIDE.md` - Development guide
+  - `docs/PLANNING_MODEL.md` - Optimizer extension guide (CRITICAL for optimizer changes)
 - Entity counts: Sensors 27, Binary Sensors 10, Switches 8, Numbers 4, Selects 2, Buttons 2 (Total 53)
