@@ -231,11 +231,19 @@ class TestSolarOpportunityPenalty:
 class TestSolarOpportunityPenaltyWithDemandWindow:
     """Tests for solar opportunity penalty interaction with demand window."""
 
-    def test_no_penalty_when_demand_window_exists(self, default_config):
-        """Demand window preparation should override solar opportunity penalty."""
+    def test_penalty_applies_before_demand_window_not_during(self, default_config):
+        """Penalty should apply before demand window, not during/after (Issue #610 bug).
+
+        This test verifies the fix for the bug where solar opportunity penalty was
+        completely disabled whenever a demand window existed anywhere in the horizon.
+
+        Expected behavior:
+        - Slots BEFORE demand window: penalty applies (wait for solar)
+        - Slots DURING/AFTER demand window: no penalty (must charge to meet target)
+        """
         slots = []
         for i in range(24):
-            slot = make_slot(i, 10 + (i // 2), (i % 2) * 30, buy_price=0.10)
+            slot = make_slot(i, 10 + (i // 2), (i % 2) * 30, buy_price=0.13)
             if i == 20:
                 slot.is_demand_window_entry = True
                 slot.is_demand_window_slot = True
@@ -243,10 +251,14 @@ class TestSolarOpportunityPenaltyWithDemandWindow:
                 slot.is_demand_window_slot = True
             slots.append(slot)
 
-        tomorrow_solar = [make_solcast_entry(h, 3.0) for h in range(8, 16)]
+        tomorrow_solar = [
+            make_solcast_entry(8, 3.0),
+            make_solcast_entry(9, 4.0),
+            make_solcast_entry(10, 5.0),
+        ]
 
         inputs = OptimizerInputs(
-            cycle_id="test-dw-override",
+            cycle_id="test-penalty-before-dw",
             initial_soc_pct=30.0,
             slots=slots,
             config=default_config,
@@ -256,10 +268,25 @@ class TestSolarOpportunityPenaltyWithDemandWindow:
         result = DPPlanner().plan(inputs)
         assert result.success
 
-        for d in result.decisions:
-            assert d.objective_terms.solar_opportunity_penalty == 0.0, (
-                "Solar opportunity penalty should not apply when demand window exists"
-            )
+        charge_decisions = [
+            d
+            for d in result.decisions
+            if d.action
+            in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+        ]
+
+        for d in charge_decisions:
+            slot_idx = int(d.slot_index)
+            if slot_idx < 20:
+                assert d.objective_terms.solar_opportunity_penalty >= 0.0, (
+                    f"Slot {slot_idx} is BEFORE demand window (index 20), "
+                    f"should have solar opportunity penalty, but got {d.objective_terms.solar_opportunity_penalty}"
+                )
+            else:
+                assert d.objective_terms.solar_opportunity_penalty == 0.0, (
+                    f"Slot {slot_idx} is DURING/AFTER demand window (index 20), "
+                    f"should NOT have penalty, but got {d.objective_terms.solar_opportunity_penalty}"
+                )
 
 
 class TestHorizonAwareOpportunityCost:

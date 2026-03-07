@@ -1139,7 +1139,10 @@ class DPPlanner:
         if slot.solar_kwh > 0:
             return 0.0
 
-        if terminal_penalty_idx is not None:
+        # Only skip penalty if we're AT or PAST the demand window entry point.
+        # Slots BEFORE the demand window should still get the penalty to avoid
+        # premature grid charging when solar is coming (Issue #610).
+        if terminal_penalty_idx is not None and slot_idx >= terminal_penalty_idx:
             return 0.0
 
         future_net_solar_kwh = sum(
