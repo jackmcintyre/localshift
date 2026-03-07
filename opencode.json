@@ -10,6 +10,5 @@
       ".opencode/skills/python-refactoring",
       ".opencode/skills/ha-integration-testing"
     ]
-  },
-  "plugin": ["openslimedit@latest"]
+  }
 }
