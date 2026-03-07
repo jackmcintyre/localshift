@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -360,6 +361,9 @@ class PlannedSlotDecision:
 
     sell_price: float = 0.0
     """Export (FIT) price ($/kWh), copied from SlotContext."""
+
+    is_solar_opportunity: bool = False
+    """True if this slot was identified as a solar opportunity wait period (#610)."""
 
     # --- Derived compatibility flags (set from action) ---
     @property
@@ -904,7 +908,8 @@ class DPPlanner:
                 and inputs.current_action is not None
                 and action != inputs.current_action
             )
-            solar_opportunity_penalty = self._compute_solar_opportunity_penalty(
+            # Issue #610: horizon-aware solar opportunity cost
+            solar_opp_factor = self._get_solar_opportunity_penalty_factor(
                 action=action,
                 grid_import_kwh=grid_import,
                 slot=slot,
@@ -912,7 +917,6 @@ class DPPlanner:
                 slots=slots,
                 config=config,
                 terminal_penalty_idx=terminal_penalty_idx,
-                all_solcast=inputs.all_solcast,
             )
             stage = DPPlanner.stage_cost(
                 action,
@@ -922,7 +926,7 @@ class DPPlanner:
                 config,
                 soc_pct=soc,
                 is_switch=is_switch,
-                solar_opportunity_penalty=solar_opportunity_penalty,
+                solar_opportunity_penalty_factor=solar_opp_factor,
             )
             total_cost = stage.net_cost + future_cost
 
@@ -997,7 +1001,8 @@ class DPPlanner:
                 and inputs.current_action is not None
                 and action != inputs.current_action
             )
-            solar_opportunity_penalty = self._compute_solar_opportunity_penalty(
+            # Issue #610: horizon-aware solar opportunity cost
+            solar_opp_factor = self._get_solar_opportunity_penalty_factor(
                 action=action,
                 grid_import_kwh=grid_import,
                 slot=slot,
@@ -1005,7 +1010,6 @@ class DPPlanner:
                 slots=slots,
                 config=config,
                 terminal_penalty_idx=terminal_penalty_idx,
-                all_solcast=inputs.all_solcast,
             )
             stage = DPPlanner.stage_cost(
                 action,
@@ -1015,7 +1019,7 @@ class DPPlanner:
                 config,
                 soc_pct=current_soc,
                 is_switch=is_switch,
-                solar_opportunity_penalty=solar_opportunity_penalty,
+                solar_opportunity_penalty_factor=solar_opp_factor,
             )
 
             reason = self._classify_reason(
@@ -1044,6 +1048,7 @@ class DPPlanner:
                 consumption_kwh=slot.consumption_kwh,
                 buy_price=slot.buy_price,
                 sell_price=slot.sell_price,
+                is_solar_opportunity=stage.solar_opportunity_penalty > 0,
             )
             decisions.append(decision)
 
@@ -1094,7 +1099,7 @@ class DPPlanner:
 
         return 0.0
 
-    def _compute_solar_opportunity_penalty(
+    def _get_solar_opportunity_penalty_factor(
         self,
         action: PlannerAction,
         grid_import_kwh: float,
@@ -1103,29 +1108,18 @@ class DPPlanner:
         slots: list[SlotContext],
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
-        all_solcast: list[dict[str, Any]],
+        **kwargs,  # consume extra args like all_solcast
     ) -> float:
-        """Penalty for grid charging when future solar can charge battery for free.
+        """Calculate the solar opportunity penalty factor for a slot (#610).
 
-        This represents the opportunity cost of paying for grid energy now
-        vs waiting for solar energy at zero cost. Per Issue #610, this uses
-        a horizon-aware opportunity cost approach with:
-        - 30% battery capacity threshold (vs. old 10%)
-        - Price-scaled penalty (vs. old flat $0.03/kWh)
-        - Time decay based on hours until solar (vs. old flat penalty)
+        Uses a coverage-ratio formula: the factor scales by how much
+        projected solar surplus is available relative to battery capacity.
+        The DP already handles time through backward induction, so no
+        separate time discount is applied.
 
-        Args:
-            action: The action being evaluated (must be a charge action)
-            grid_import_kwh: Grid import amount in this slot
-            slot: Current slot context
-            slot_idx: Index of current slot
-            slots: Full list of planning slots
-            config: Optimizer configuration
-            terminal_penalty_idx: Index of demand window entry (None if no DW)
-            all_solcast: Full solar forecast (today + tomorrow)
-
-        Returns:
-            Penalty amount to add to stage cost (0 if no penalty warranted)
+        Returns a value in [0.0, 1.0] where:
+        - 0.0 = no significant solar forecast (no penalty)
+        - 1.0 = solar surplus >= battery capacity (full penalty)
         """
         if action not in (
             PlannerAction.CHARGE_GRID_NORMAL,
@@ -1133,10 +1127,7 @@ class DPPlanner:
         ):
             return 0.0
 
-        if grid_import_kwh <= 0:
-            return 0.0
-
-        if slot.solar_kwh > 0:
+        if grid_import_kwh <= 0 or slot.solar_kwh > 0:
             return 0.0
 
         # Only skip penalty if we're AT or PAST the demand window entry point.
@@ -1145,146 +1136,34 @@ class DPPlanner:
         if terminal_penalty_idx is not None and slot_idx >= terminal_penalty_idx:
             return 0.0
 
-        future_net_solar_kwh = sum(
-            s.solar_kwh - s.consumption_kwh for s in slots[slot_idx:]
+        # Sum projected solar surplus from current slot to end of DP horizon
+        total_surplus: float = sum(
+            max(0.0, s.solar_kwh - s.consumption_kwh) for s in slots[slot_idx:]
         )
 
-        if all_solcast and slots:
-            last_slot_time_str = slots[-1].timestamp_iso
+        # Check solcast for solar BEYOND the DP slots horizon (horizon-aware)
+        all_solcast: list[dict[str, Any]] = kwargs.get("all_solcast", [])
+        if all_solcast:
             try:
-                from datetime import datetime
-
-                last_slot_time = datetime.fromisoformat(last_slot_time_str)
-                beyond_horizon_solar = self._sum_solar_after_time(
-                    all_solcast, last_slot_time
-                )
-                future_net_solar_kwh += beyond_horizon_solar
+                last_slot_time = datetime.fromisoformat(slots[-1].timestamp_iso)
+                for period in all_solcast:
+                    period_start_str = period.get("period_start")
+                    if not period_start_str:
+                        continue
+                    period_start = datetime.fromisoformat(str(period_start_str))
+                    if period_start >= last_slot_time:
+                        # Assumes 30-min periods (standard for solcast integrations)
+                        solar_kwh = float(period.get("pv_estimate", 0)) * 0.5
+                        total_surplus += solar_kwh
             except (ValueError, TypeError):
                 pass
 
         threshold_kwh = config.battery_capacity_kwh * 0.30
-
-        if future_net_solar_kwh <= threshold_kwh:
+        if total_surplus < threshold_kwh:
             return 0.0
 
-        hours_to_solar = self._find_hours_to_first_significant_solar(
-            slot.timestamp_iso, all_solcast, threshold_kwh
-        )
-
-        if hours_to_solar is None:
-            return 0.0
-
-        time_discount = 1.0 / (1.0 + hours_to_solar * 0.1)
-
-        buy_price = slot.buy_price if hasattr(slot, "buy_price") else 0.15
-
-        penalty = grid_import_kwh * buy_price * time_discount
-
-        return penalty
-
-    def _find_hours_to_first_significant_solar(
-        self,
-        current_time_iso: str,
-        all_solcast: list[dict[str, Any]],
-        threshold_kwh: float,
-    ) -> float | None:
-        """Find hours until first significant solar exceeds threshold.
-
-        Args:
-            current_time_iso: Current time in ISO format
-            all_solcast: List of solcast forecast entries
-            threshold_kwh: Minimum solar kWh to consider significant
-
-        Returns:
-            Hours until first significant solar, or None if not found
-        """
-        try:
-            from datetime import datetime
-
-            current_time = datetime.fromisoformat(current_time_iso)
-        except (ValueError, TypeError):
-            return None
-
-        cumulative_solar_kwh = 0.0
-        first_solar_time = None
-
-        _LOGGER.debug(
-            "SOLAR_OPPORTUNITY_DEBUG: Finding solar for %s, threshold=%.2f kWh, forecast entries=%d",
-            current_time_iso,
-            threshold_kwh,
-            len(all_solcast),
-        )
-
-        for period in all_solcast:
-            period_start_str = period.get("period_start")
-            if not period_start_str:
-                continue
-
-            try:
-                period_start = datetime.fromisoformat(str(period_start_str))
-            except (ValueError, TypeError):
-                continue
-
-            if period_start < current_time:
-                continue
-
-            pv_estimate = float(period.get("pv_estimate", 0))
-            solar_kwh = pv_estimate * 0.5
-            cumulative_solar_kwh += solar_kwh
-
-            if first_solar_time is None and solar_kwh > 0:
-                first_solar_time = period_start
-                _LOGGER.debug(
-                    "SOLAR_OPPORTUNITY_DEBUG: First solar at %s (%.3f kWh)",
-                    period_start,
-                    solar_kwh,
-                )
-
-            if cumulative_solar_kwh >= threshold_kwh:
-                if first_solar_time:
-                    hours = (first_solar_time - current_time).total_seconds() / 3600
-                    _LOGGER.debug(
-                        "SOLAR_OPPORTUNITY_DEBUG: Threshold met at %s, cumulative=%.2f kWh, hours=%.1f",
-                        period_start,
-                        cumulative_solar_kwh,
-                        hours,
-                    )
-                    return max(0.0, hours)
-
-        _LOGGER.debug(
-            "SOLAR_OPPORTUNITY_DEBUG: Threshold not met, cumulative=%.2f kWh < %.2f kWh",
-            cumulative_solar_kwh,
-            threshold_kwh,
-        )
-        return None
-
-    def _sum_solar_after_time(
-        self, all_solcast: list[dict[str, Any]], after_time: Any
-    ) -> float:
-        """Sum solar kWh from solcast forecast after a given time.
-
-        Args:
-            all_solcast: List of solcast forecast entries
-            after_time: Datetime to sum after
-
-        Returns:
-            Total solar kWh after the given time
-        """
-        total = 0.0
-        for period in all_solcast:
-            period_start_str = period.get("period_start")
-            if not period_start_str:
-                continue
-            try:
-                from datetime import datetime
-
-                period_start = datetime.fromisoformat(str(period_start_str))
-                if period_start > after_time:
-                    kwh_per_hour = float(period.get("pv_estimate", 0))
-                    total += kwh_per_hour * 0.5
-            except (ValueError, TypeError):
-                continue
-        return total
+        # Coverage ratio: how much of battery capacity solar can fill
+        return min(1.0, total_surplus / config.battery_capacity_kwh)
 
     def _can_solar_reach_target(
         self,
@@ -1505,6 +1384,65 @@ class DPPlanner:
     # ------------------------------------------------------------------
     # Pure primitive functions (to be expanded in Phase C of #403)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_first_significant_solar(
+        slot_idx: int,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+    ) -> int | None:
+        """Find the index of the first slot where significant solar arrives (#610).
+
+        Returns the slot index of the first solar surplus slot, provided that the
+        total surplus in the remaining horizon exceeds the 30% battery capacity threshold.
+        """
+        threshold: float = config.battery_capacity_kwh * 0.3
+        total_surplus: float = 0.0
+        first_surplus_idx: int | None = None
+
+        for i in range(slot_idx, len(slots)):
+            surplus: float = slots[i].solar_kwh - slots[i].consumption_kwh
+            if surplus > 0:
+                total_surplus = total_surplus + surplus
+                if first_surplus_idx is None:
+                    first_surplus_idx = i
+
+        if total_surplus >= threshold:
+            return first_surplus_idx
+
+        return None
+
+    def _get_solar_opp_penalty_factor(
+        self,
+        slot_idx: int,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+    ) -> float:
+        """Calculate the solar opportunity penalty factor for a slot (#610).
+
+        Uses a coverage-ratio formula: the factor scales by how much
+        projected solar surplus is available relative to battery capacity.
+        The DP already handles time through backward induction, so no
+        separate time discount is applied.
+
+        Returns a value in [0.0, 1.0] where:
+        - 0.0 = no significant solar forecast (no penalty)
+        - 1.0 = solar surplus >= battery capacity (full penalty)
+        """
+        first_solar_idx = self._find_first_significant_solar(slot_idx, slots, config)
+        if first_solar_idx is None:
+            return 0.0
+
+        if first_solar_idx <= slot_idx:
+            return 0.0  # Already in/past solar window
+
+        # Sum projected solar surplus from current slot to end of horizon
+        total_surplus: float = sum(
+            max(0.0, s.solar_kwh - s.consumption_kwh) for s in slots[slot_idx:]
+        )
+
+        # Coverage ratio: how much of battery capacity solar can fill
+        return min(1.0, total_surplus / config.battery_capacity_kwh)
 
     @staticmethod
     def _projected_solar_soc_gain_pct(
@@ -1963,7 +1901,7 @@ class DPPlanner:
         *,
         soc_pct: float | None = None,
         is_switch: bool = False,
-        solar_opportunity_penalty: float = 0.0,
+        solar_opportunity_penalty_factor: float = 0.0,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -1988,6 +1926,10 @@ class DPPlanner:
         # Switching penalty (Issue #524)
         # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
         switching_penalty = config.switching_penalty if is_switch else 0.0
+
+        # Issue #610: horizon-aware solar opportunity cost
+        # Penalizes grid import when significant solar is expected later in the horizon.
+        solar_opportunity_penalty = import_cost * solar_opportunity_penalty_factor
 
         # Issue #431: uncertainty penalty for grid charging when horizon is short.
         # This biases the optimizer toward HOLD (waiting for more data) when blind.
