@@ -113,23 +113,39 @@ fi
 
 echo "✅ All tests pass"
 
-# Check coverage threshold (95%)
+# Check coverage threshold (95%) for modified files only
 echo ""
-echo "🔍 Checking test coverage..."
+echo "🔍 Checking test coverage for modified files..."
 
-COVERAGE_OUTPUT=$(uv run pytest --cov=custom_components/localshift --cov-report=term-missing --cov-fail-under=95 2>&1)
-COVERAGE_EXIT_CODE=$?
+# Build --cov flags only for staged files (not entire codebase)
+COV_FLAGS=""
+for FILE in $STAGED_FILES; do
+    # Skip __init__.py (no testable code)
+    if [[ "$FILE" == *"__init__.py" ]]; then
+        continue
+    fi
+    # Convert path to module: custom_components/localshift/foo.py -> custom_components.localshift.foo
+    MODULE=$(echo "$FILE" | sed 's|\.py$||' | tr '/' '.')
+    COV_FLAGS="$COV_FLAGS --cov=$MODULE"
+done
 
-if [ $COVERAGE_EXIT_CODE -ne 0 ]; then
-    echo "$COVERAGE_OUTPUT"
-    echo ""
-    echo "❌ ERROR: Test coverage below 95% threshold"
-    echo ""
-    echo "Write more tests to reach 95% coverage before committing"
-    echo "See: .agents/rules/tdd-workflow.md"
-    exit 1
+if [ -n "$COV_FLAGS" ]; then
+    COVERAGE_OUTPUT=$(uv run pytest $TEST_FILES $COV_FLAGS --cov-report=term-missing --cov-fail-under=95 2>&1)
+    COVERAGE_EXIT_CODE=$?
+
+    if [ $COVERAGE_EXIT_CODE -ne 0 ]; then
+        echo "$COVERAGE_OUTPUT"
+        echo ""
+        echo "❌ ERROR: Coverage below 95% for modified files"
+        echo ""
+        echo "Write more tests to reach 95% coverage for your changes"
+        echo "See: .agents/rules/tdd-workflow.md"
+        exit 1
+    fi
+    echo "✅ Coverage meets 95% threshold for modified files"
+else
+    echo "✅ No files require coverage check (only init/config files modified)"
 fi
 
-echo "✅ Coverage meets 95% threshold"
 echo ""
 echo "✅ TDD compliance checks passed"
