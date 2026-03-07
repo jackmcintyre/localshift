@@ -20,10 +20,9 @@ from .const import (
     PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
-    STATE_MACHINE_MIN_MODE_DURATION_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RESERVE_PERCENT,
-    TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT,
+    TESLA_OVERRIDE_TOLERANCE_PERCENT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
@@ -68,12 +67,6 @@ class ModeConfig:
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
 
-    # Minimum time a mode must be active before allowing transition (Issue #279)
-    # This prevents rapid cycling that triggers the learning system's cycling penalty
-    _MIN_MODE_DURATION: timedelta = timedelta(
-        minutes=STATE_MACHINE_MIN_MODE_DURATION_MINUTES
-    )
-
     def __init__(
         self,
         battery_controller: BatteryController,
@@ -106,8 +99,6 @@ class StateMachine:
         self._evaluate_lock = asyncio.Lock()
         self._in_mode_transition: bool = False
         self._manual_override_set_at: datetime | None = None
-        # Track when current mode was established (Issue #279)
-        self._mode_established_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
         # Track grid charging target reserve (clamped for Tesla firmware compatibility)
@@ -157,7 +148,7 @@ class StateMachine:
             if (
                 reserve is not None
                 and abs(reserve - TESLA_OVERRIDE_RESERVE_PERCENT)
-                < TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT
+                < TESLA_OVERRIDE_TOLERANCE_PERCENT
             ):
                 return True
         return False
@@ -426,26 +417,6 @@ class StateMachine:
         )
         return False
 
-    def _should_defer_for_minimum_duration(
-        self, desired: BatteryMode, now: datetime
-    ) -> bool:
-        """Check if minimum mode duration requires deferring transition."""
-        if self._mode_established_at is None:
-            return False
-
-        time_in_current_mode = now - self._mode_established_at
-        if time_in_current_mode >= self._MIN_MODE_DURATION:
-            return False
-
-        _LOGGER.info(
-            "Mode %s active for %s, need %s minimum — deferring transition to %s",
-            self._commanded_mode.value,
-            time_in_current_mode,
-            self._MIN_MODE_DURATION,
-            desired.value,
-        )
-        return True
-
     def _get_debounce_duration(self, desired: BatteryMode) -> timedelta:
         """Get debounce duration for a desired transition."""
         if self._skip_next_debounce:
@@ -579,12 +550,6 @@ class StateMachine:
                     if not self._get_switch_state("dry_run"):
                         await self._perform_health_check(data)
 
-                    return
-
-                # --- Minimum mode duration check (Issue #279) ---
-                # Prevent rapid cycling by requiring current mode to be active for minimum duration
-                # This prevents the learning system's cycling penalty from being triggered
-                if self._should_defer_for_minimum_duration(desired, now):
                     return
 
                 # --- Debounce tracking ---
@@ -758,8 +723,6 @@ class StateMachine:
             from homeassistant.util import dt as dt_util  # noqa: PLC0415
 
             transition_time = dt_util.now()
-            # Track when mode was established for minimum duration check (Issue #279)
-            self._mode_established_at = transition_time
 
             if not dry_run:
                 self._last_successful_transition = transition_time
