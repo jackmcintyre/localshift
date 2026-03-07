@@ -1205,6 +1205,13 @@ class DPPlanner:
         cumulative_solar_kwh = 0.0
         first_solar_time = None
 
+        _LOGGER.debug(
+            "SOLAR_OPPORTUNITY_DEBUG: Finding solar for %s, threshold=%.2f kWh, forecast entries=%d",
+            current_time_iso,
+            threshold_kwh,
+            len(all_solcast),
+        )
+
         for period in all_solcast:
             period_start_str = period.get("period_start")
             if not period_start_str:
@@ -1224,12 +1231,28 @@ class DPPlanner:
 
             if first_solar_time is None and solar_kwh > 0:
                 first_solar_time = period_start
+                _LOGGER.debug(
+                    "SOLAR_OPPORTUNITY_DEBUG: First solar at %s (%.3f kWh)",
+                    period_start,
+                    solar_kwh,
+                )
 
             if cumulative_solar_kwh >= threshold_kwh:
                 if first_solar_time:
                     hours = (first_solar_time - current_time).total_seconds() / 3600
+                    _LOGGER.debug(
+                        "SOLAR_OPPORTUNITY_DEBUG: Threshold met at %s, cumulative=%.2f kWh, hours=%.1f",
+                        period_start,
+                        cumulative_solar_kwh,
+                        hours,
+                    )
                     return max(0.0, hours)
 
+        _LOGGER.debug(
+            "SOLAR_OPPORTUNITY_DEBUG: Threshold not met, cumulative=%.2f kWh < %.2f kWh",
+            cumulative_solar_kwh,
+            threshold_kwh,
+        )
         return None
 
     def _sum_solar_after_time(
