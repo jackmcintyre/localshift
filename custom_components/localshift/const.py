@@ -487,11 +487,6 @@ OPTIMIZER_FORECAST_FRESHNESS_MINUTES = 30
 # State Machine Timing Constants
 # -----------------------------------------------------------------------------
 
-# Minimum time a mode must be active before allowing transition.
-# This prevents rapid cycling that triggers the learning system's cycling penalty.
-# 5 minutes chosen to align with Tesla's learning system update cycle.
-STATE_MACHINE_MIN_MODE_DURATION_MINUTES = 5
-
 # Minimum interval between health check corrections.
 # Prevents command spam when Teslemetry cloud lags in reflecting a legitimate transition.
 STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
@@ -520,4 +515,4 @@ PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
 # backup_reserve to 80% and operation_mode to self_consumption, ignoring
 # external API commands until the event ends.
 TESLA_OVERRIDE_RESERVE_PERCENT = 80.0
-TESLA_OVERRIDE_RESERVE_TOLERANCE_PERCENT = 1.0
+TESLA_OVERRIDE_TOLERANCE_PERCENT = 1.0
