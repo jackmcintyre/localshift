@@ -86,6 +86,9 @@ class PlannerReasonCode(StrEnum):
     IDLE = "IDLE"
     """No economic or constraint reason to act; holding in self-consumption."""
 
+    SOLAR_OPPORTUNITY_WAIT = "SOLAR_OPPORTUNITY_WAIT"
+    """Holding instead of grid charging because solar will be available soon."""
+
     UNCLASSIFIED = "UNCLASSIFIED"
     """Reason not yet classified (should not appear in stable production)."""
 
@@ -1024,6 +1027,7 @@ class DPPlanner:
                 next_soc,
                 config,
                 terminal_penalty_idx,
+                stage,
             )
 
             decision = PlannedSlotDecision(
@@ -1104,8 +1108,11 @@ class DPPlanner:
         """Penalty for grid charging when future solar can charge battery for free.
 
         This represents the opportunity cost of paying for grid energy now
-        vs waiting for solar energy at zero cost. Per PLANNING_MODEL.md,
-        this is a soft penalty for economic trade-offs, not a hard constraint.
+        vs waiting for solar energy at zero cost. Per Issue #610, this uses
+        a horizon-aware opportunity cost approach with:
+        - 30% battery capacity threshold (vs. old 10%)
+        - Price-scaled penalty (vs. old flat $0.03/kWh)
+        - Time decay based on hours until solar (vs. old flat penalty)
 
         Args:
             action: The action being evaluated (must be a charge action)
@@ -1152,12 +1159,78 @@ class DPPlanner:
             except (ValueError, TypeError):
                 pass
 
-        threshold_kwh = config.battery_capacity_kwh * 0.10
+        threshold_kwh = config.battery_capacity_kwh * 0.30
 
-        if future_net_solar_kwh > threshold_kwh:
-            return grid_import_kwh * 0.03
+        if future_net_solar_kwh <= threshold_kwh:
+            return 0.0
 
-        return 0.0
+        hours_to_solar = self._find_hours_to_first_significant_solar(
+            slot.timestamp_iso, all_solcast, threshold_kwh
+        )
+
+        if hours_to_solar is None:
+            return 0.0
+
+        time_discount = 1.0 / (1.0 + hours_to_solar * 0.1)
+
+        buy_price = slot.buy_price if hasattr(slot, "buy_price") else 0.15
+
+        penalty = grid_import_kwh * buy_price * time_discount
+
+        return penalty
+
+    def _find_hours_to_first_significant_solar(
+        self,
+        current_time_iso: str,
+        all_solcast: list[dict[str, Any]],
+        threshold_kwh: float,
+    ) -> float | None:
+        """Find hours until first significant solar exceeds threshold.
+
+        Args:
+            current_time_iso: Current time in ISO format
+            all_solcast: List of solcast forecast entries
+            threshold_kwh: Minimum solar kWh to consider significant
+
+        Returns:
+            Hours until first significant solar, or None if not found
+        """
+        try:
+            from datetime import datetime
+
+            current_time = datetime.fromisoformat(current_time_iso)
+        except (ValueError, TypeError):
+            return None
+
+        cumulative_solar_kwh = 0.0
+        first_solar_time = None
+
+        for period in all_solcast:
+            period_start_str = period.get("period_start")
+            if not period_start_str:
+                continue
+
+            try:
+                period_start = datetime.fromisoformat(str(period_start_str))
+            except (ValueError, TypeError):
+                continue
+
+            if period_start < current_time:
+                continue
+
+            pv_estimate = float(period.get("pv_estimate", 0))
+            solar_kwh = pv_estimate * 0.5
+            cumulative_solar_kwh += solar_kwh
+
+            if first_solar_time is None and solar_kwh > 0:
+                first_solar_time = period_start
+
+            if cumulative_solar_kwh >= threshold_kwh:
+                if first_solar_time:
+                    hours = (first_solar_time - current_time).total_seconds() / 3600
+                    return max(0.0, hours)
+
+        return None
 
     def _sum_solar_after_time(
         self, all_solcast: list[dict[str, Any]], after_time: Any
@@ -1226,6 +1299,7 @@ class DPPlanner:
         next_soc: float,
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
+        objective_terms: ObjectiveTerms | None = None,
     ) -> PlannerReasonCode:
         """
         Classify the reason for a decision based on action and context.
@@ -1233,7 +1307,9 @@ class DPPlanner:
         Uses deterministic rules to assign a primary reason code.
         """
         if action == PlannerAction.HOLD:
-            return self._classify_hold_reason(soc, slot, next_soc, config)
+            return self._classify_hold_reason(
+                soc, slot, next_soc, config, objective_terms
+            )
         if action == PlannerAction.EXPORT_PROACTIVE:
             return self._classify_export_reason(slot)
         if action in (
@@ -1251,6 +1327,7 @@ class DPPlanner:
         slot: SlotContext,
         next_soc: float,
         config: OptimizerConfig,
+        objective_terms: ObjectiveTerms | None = None,
     ) -> PlannerReasonCode:
         """Classify HOLD action reason.
 
@@ -1259,6 +1336,7 @@ class DPPlanner:
             slot: Slot context
             next_soc: Next SOC
             config: Optimizer config
+            objective_terms: Objective terms breakdown (for solar opportunity detection)
 
         Returns:
             Reason code for HOLD action
@@ -1271,6 +1349,10 @@ class DPPlanner:
         net_kwh = slot.solar_kwh - slot.consumption_kwh
         if net_kwh > 0 and next_soc > soc:
             return PlannerReasonCode.SOLAR_SURPLUS_CAPTURE
+
+        if objective_terms and objective_terms.solar_opportunity_penalty > 0:
+            return PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
+
         return PlannerReasonCode.IDLE
 
     def _classify_export_reason(self, slot: SlotContext) -> PlannerReasonCode:
