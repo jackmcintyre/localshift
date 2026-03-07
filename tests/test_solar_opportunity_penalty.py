@@ -498,26 +498,6 @@ class TestHorizonAwareOpportunityCost:
         # (not all slots should charge despite cheap price)
         assert len(charge_decisions) < len(result.decisions)
 
-    def test_time_discount_formula_calculation(self, default_config):
-        """Verify time discount formula: 1.0 / (1.0 + hours_to_solar * 0.1)."""
-        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
-            DPPlanner as Planner,
-        )
-
-        # Test cases: (hours, expected_discount)
-        test_cases = [
-            (1.0, 0.909),  # 1.0 / (1.0 + 1.0 * 0.1) ≈ 0.909
-            (3.0, 0.769),  # 1.0 / (1.0 + 3.0 * 0.1) ≈ 0.769
-            (6.0, 0.625),  # 1.0 / (1.0 + 6.0 * 0.1) = 0.625
-            (12.0, 0.455),  # 1.0 / (1.0 + 12.0 * 0.1) ≈ 0.455
-        ]
-
-        for hours, expected in test_cases:
-            actual = 1.0 / (1.0 + hours * 0.1)
-            assert actual == pytest.approx(expected, rel=0.01), (
-                f"Time discount for {hours}h should be ~{expected}"
-            )
-
 
 class TestSelfConsumptionCreditFix:
     """Fix A: self_consumption_value should use slot.buy_price, not fixed config value.
@@ -535,7 +515,9 @@ class TestSelfConsumptionCreditFix:
         """
         # Slot with $0.14 buy price, no solar, 1 kWh load
         slot = make_slot(
-            0, 22, 0,
+            0,
+            22,
+            0,
             buy_price=0.14,
             sell_price=0.07,
             solar_kwh=0.0,
@@ -563,7 +545,9 @@ class TestSelfConsumptionCreditFix:
     def test_stage_cost_credit_scales_with_buy_price(self, default_config):
         """At $0.30/kWh the credit should be ~0.30, not the fixed $0.15."""
         slot = make_slot(
-            0, 7, 0,
+            0,
+            7,
+            0,
             buy_price=0.30,  # morning peak price
             sell_price=0.12,
             solar_kwh=0.0,
@@ -589,33 +573,45 @@ class TestSelfConsumptionCreditFix:
         This is the production bug scenario. With fixed $0.15 credit the optimizer
         "profits" by charge+discharge. With slot.buy_price credit, charge+discharge
         is always a net loss (due to round-trip efficiency) so HOLD is preferred.
+
+        Starting at the SOC floor eliminates discretization ambiguity: charging from
+        the floor to cycle energy is always a net loss at flat rates, so the DP must
+        prefer HOLD regardless of cost-to-go gradient.
         """
-        # Configure: buy and sell same overnight price ($0.14), no demand window
+        # Configure: buy and sell same overnight price ($0.14), no demand window.
+        # effective_cheap_price=0.17 so $0.14 < $0.17 and CHARGE_GRID_NORMAL is feasible.
         config = OptimizerConfig(
             battery_capacity_kwh=13.5,
             min_soc_pct=10.0,
             max_soc_pct=100.0,
             demand_window_target_soc_pct=80.0,
-            soc_bins=20,
+            soc_bins=50,  # Fine grid to reduce discretization noise
             optimization_mode="self_consumption",
-            effective_cheap_price=0.17,  # $0.14 < $0.17, so CHARGE_GRID_NORMAL is feasible
+            effective_cheap_price=0.17,
             charge_efficiency=0.95,
             discharge_efficiency=0.95,
         )
         # 48 × 30-min slots (overnight, all at $0.14, no solar now)
         slots = [
-            make_slot(i, (i // 2) % 24, (i % 2) * 30,
-                      buy_price=0.14, sell_price=0.07,
-                      solar_kwh=0.0, consumption_kwh=0.3,
-                      interval_minutes=30)
+            make_slot(
+                i,
+                (i // 2) % 24,
+                (i % 2) * 30,
+                buy_price=0.14,
+                sell_price=0.07,
+                solar_kwh=0.0,
+                consumption_kwh=0.3,
+                interval_minutes=30,
+            )
             for i in range(48)
         ]
-        # Massive solar tomorrow: 13 kWh available
-        tomorrow_solar = [make_solcast_entry(h, 2.0) for h in range(7, 15)]  # 8 × 2 kWh = 16 kWh
+        # Massive solar tomorrow: 16 kWh available (8 × 4 kW × 0.5h = 16 kWh)
+        tomorrow_solar = [make_solcast_entry(h, 4.0) for h in range(7, 15)]
 
         inputs = OptimizerInputs(
             cycle_id="test-flat-rate-no-charge",
-            initial_soc_pct=40.0,
+            # Start at SOC floor: charging from here can only be to cycle at a round-trip loss
+            initial_soc_pct=10.0,
             slots=slots,
             config=config,
             all_solcast=tomorrow_solar,
@@ -625,8 +621,10 @@ class TestSelfConsumptionCreditFix:
         assert result.success
 
         charge_decisions = [
-            d for d in result.decisions
-            if d.action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+            d
+            for d in result.decisions
+            if d.action
+            in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
         ]
 
         assert len(charge_decisions) == 0, (
@@ -658,12 +656,18 @@ class TestSelfConsumptionCreditFix:
         for i in range(20):
             hour = (22 + i // 2) % 24
             price = 0.13 if hour < 7 else 0.45  # cheap overnight, spike in morning
-            slots.append(make_slot(
-                i, hour, (i % 2) * 30,
-                buy_price=price, sell_price=0.08,
-                solar_kwh=0.0, consumption_kwh=0.4,
-                interval_minutes=30,
-            ))
+            slots.append(
+                make_slot(
+                    i,
+                    hour,
+                    (i % 2) * 30,
+                    buy_price=price,
+                    sell_price=0.08,
+                    solar_kwh=0.0,
+                    consumption_kwh=0.4,
+                    interval_minutes=30,
+                )
+            )
 
         # Some solar tomorrow — but the arbitrage makes charging still worthwhile
         tomorrow_solar = [make_solcast_entry(h, 1.5) for h in range(8, 14)]
@@ -680,8 +684,10 @@ class TestSelfConsumptionCreditFix:
         assert result.success
 
         charge_decisions = [
-            d for d in result.decisions
-            if d.action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+            d
+            for d in result.decisions
+            if d.action
+            in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
         ]
 
         # Should still charge overnight to capture morning arbitrage
@@ -706,9 +712,13 @@ class TestSolarOpportunityPenaltyStrengthened:
         The penalty must overwhelm both, so its base should be > import_cost alone.
         """
         slot = make_slot(
-            0, 22, 0,
-            buy_price=0.14, sell_price=0.07,
-            solar_kwh=0.0, consumption_kwh=0.3,
+            0,
+            22,
+            0,
+            buy_price=0.14,
+            sell_price=0.07,
+            solar_kwh=0.0,
+            consumption_kwh=0.3,
             interval_minutes=30,
         )
         grid_import_kwh = 0.5

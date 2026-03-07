@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -230,7 +230,11 @@ class OptimizerConfig:
     """Optimization strategy: 'self_consumption' (default) or 'arbitrage'."""
 
     self_consumption_value_per_kwh: float = 0.15
-    """Value of using battery energy for household load ($/kWh). Auto-derived from average buy price."""
+    """Value of using battery energy for household load ($/kWh). Auto-derived from average buy price.
+
+    DEPRECATED (Issue #610): No longer used in optimizer hot path. Replaced by slot.buy_price
+    for slot-specific credit calculation. Kept for backward compatibility with optimizer_runner.py.
+    """
 
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
@@ -1111,7 +1115,7 @@ class DPPlanner:
         slots: list[SlotContext],
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
-        **kwargs,  # consume extra args like all_solcast
+        all_solcast: list[dict[str, Any]] | None = None,
     ) -> float:
         """Calculate the solar opportunity penalty factor for a slot (#610).
 
@@ -1145,7 +1149,6 @@ class DPPlanner:
         )
 
         # Check solcast for solar BEYOND the DP slots horizon (horizon-aware)
-        all_solcast: list[dict[str, Any]] = kwargs.get("all_solcast", [])
         if all_solcast:
             try:
                 last_slot_time = datetime.fromisoformat(slots[-1].timestamp_iso)
@@ -1383,7 +1386,9 @@ class DPPlanner:
         """
         if slot.buy_price > config.effective_cheap_price:
             return False
-        is_blind = self._is_blind_to_future_solar(terminal_penalty_idx, slots, inputs=inputs)
+        is_blind = self._is_blind_to_future_solar(
+            terminal_penalty_idx, slots, inputs=inputs
+        )
         return not is_blind or slot.buy_price <= (config.effective_cheap_price * 0.8)
 
     def _is_blind_to_future_solar(
@@ -1415,33 +1420,6 @@ class DPPlanner:
     # ------------------------------------------------------------------
     # Pure primitive functions (to be expanded in Phase C of #403)
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _find_first_significant_solar(
-        slot_idx: int,
-        slots: list[SlotContext],
-        config: OptimizerConfig,
-    ) -> int | None:
-        """Find the index of the first slot where significant solar arrives (#610).
-
-        Returns the slot index of the first solar surplus slot, provided that the
-        total surplus in the remaining horizon exceeds the 30% battery capacity threshold.
-        """
-        threshold: float = config.battery_capacity_kwh * 0.3
-        total_surplus: float = 0.0
-        first_surplus_idx: int | None = None
-
-        for i in range(slot_idx, len(slots)):
-            surplus: float = slots[i].solar_kwh - slots[i].consumption_kwh
-            if surplus > 0:
-                total_surplus = total_surplus + surplus
-                if first_surplus_idx is None:
-                    first_surplus_idx = i
-
-        if total_surplus >= threshold:
-            return first_surplus_idx
-
-        return None
 
     @staticmethod
     def _projected_solar_soc_gain_pct(
@@ -1930,9 +1908,15 @@ class DPPlanner:
         # Penalizes grid import when significant solar is expected later in the horizon.
         # Penalty reflects the full economic benefit of charging:
         # import cost + the value of the energy stored (self-consumption credit).
-        sc_value = max(0.0, slot.buy_price) if config.optimization_mode == "self_consumption" else 0.0
+        sc_value = (
+            max(0.0, slot.buy_price)
+            if config.optimization_mode == "self_consumption"
+            else 0.0
+        )
         full_economic_benefit = import_cost + grid_import_kwh * sc_value
-        solar_opportunity_penalty = full_economic_benefit * solar_opportunity_penalty_factor
+        solar_opportunity_penalty = (
+            full_economic_benefit * solar_opportunity_penalty_factor
+        )
 
         # Issue #431: uncertainty penalty for grid charging when horizon is short.
         # This biases the optimizer toward HOLD (waiting for more data) when blind.
@@ -1983,9 +1967,7 @@ class DPPlanner:
                     )
                     battery_for_load = min(battery_for_load, max_load_kwh)
 
-                self_consumption_value = (
-                    battery_for_load * max(0.0, slot.buy_price)
-                )
+                self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
 
         return ObjectiveTerms(
             import_cost=import_cost,
