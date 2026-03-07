@@ -14,7 +14,7 @@ Design principles:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -59,6 +59,9 @@ class SlotBuildMetadata:
 
     slots_with_defaulted_consumption: int = 0
     """Slots where load_forecast_slots was unavailable (fallback to 0.0)."""
+
+    all_solcast: list[dict[str, Any]] = field(default_factory=list)
+    """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
 
     def to_parity_dict(self) -> dict[str, Any]:
         """Convert to legacy parity_info dict format for backward compatibility.
@@ -293,6 +296,7 @@ class SlotBuilder:
             slots_with_defaulted_solar=slots_with_defaulted_solar,
             slots_with_defaulted_price=slots_with_defaulted_price,
             slots_with_defaulted_consumption=slots_with_defaulted_consumption,
+            all_solcast=all_solcast,
         )
 
         _LOGGER.debug(

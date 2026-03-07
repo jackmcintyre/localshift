@@ -91,12 +91,13 @@ Encodes preferences, costs, and behavioral biases into a scalar cost.
 
 | Penalty | Formula | Purpose | Code Location |
 |---------|---------|---------|---------------|
-| `import_cost` | `grid_import × buy_price` | Direct cost of buying from grid | L1746 |
-| `export_revenue` | `grid_export × sell_price` | Revenue from selling (negative cost) | L1747 |
-| `cycle_penalty` | `(import + export) × $0.01/kWh` | Anti-wear, discourages frivolous cycling | L1748-1749 |
-| `switching_penalty` | `$0.05` if action ≠ current | Stability, hysteresis against flip-flopping | L1752-1753 |
-| `uncertainty_penalty` | Scales with horizon gap | Risk aversion when forecast is short | L1757-1766 |
-| `self_consumption_value` | `battery_for_load × $0.25/kWh` | Opportunity cost of exporting | L1771-1806 |
+| `import_cost` | `grid_import × buy_price` | Direct cost of buying from grid | L1754 |
+| `export_revenue` | `grid_export × sell_price` | Revenue from selling (negative cost) | L1755 |
+| `cycle_penalty` | `(import + export) × $0.05/kWh` | Anti-wear, discourages frivolous cycling | L1757 |
+| `switching_penalty` | `$0.02` if action ≠ current | Stability, hysteresis against flip-flopping | L1761 |
+| `uncertainty_penalty` | Scales with horizon gap | Risk aversion when forecast is short | L1765-1774 |
+| `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportunity cost of exporting | L1779-1814 |
+| `solar_opportunity_penalty` | `grid_import × $0.03/kWh` when future solar available | Discourage grid charging when solar can charge for free | L1071-1160 |
 
 ### The Net Cost Formula
 
@@ -108,6 +109,7 @@ net_cost = (
     + switching_penalty 
     + uncertainty_penalty 
     - self_consumption_value
+    + solar_opportunity_penalty
 )
 ```
 

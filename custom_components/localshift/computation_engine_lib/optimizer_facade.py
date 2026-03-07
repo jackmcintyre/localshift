@@ -164,6 +164,7 @@ class OptimizerFacade:
                 initial_soc_pct=initial_soc,
                 slots=slots,
                 config=optimizer_config,
+                all_solcast=slot_metadata.all_solcast,
             )
             result = self._planner.plan(inputs)
 
