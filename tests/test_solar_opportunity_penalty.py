@@ -517,3 +517,218 @@ class TestHorizonAwareOpportunityCost:
             assert actual == pytest.approx(expected, rel=0.01), (
                 f"Time discount for {hours}h should be ~{expected}"
             )
+
+
+class TestSelfConsumptionCreditFix:
+    """Fix A: self_consumption_value should use slot.buy_price, not fixed config value.
+
+    Verifies that the optimizer no longer treats charging at $0.14 + discharging at
+    $0.15 self-consumption credit as "profitable" on flat-rate nights. The credit
+    must equal the actual avoided buy_price, not a fixed average.
+    """
+
+    def test_stage_cost_uses_slot_buy_price_for_self_consumption(self, default_config):
+        """stage_cost() self_consumption_value must scale with slot.buy_price, not config value.
+
+        At buy_price=$0.14 the credit should be ~$0.14 * battery_for_load,
+        NOT $0.15 * battery_for_load (the old fixed config.self_consumption_value_per_kwh).
+        """
+        # Slot with $0.14 buy price, no solar, 1 kWh load
+        slot = make_slot(
+            0, 22, 0,
+            buy_price=0.14,
+            sell_price=0.07,
+            solar_kwh=0.0,
+            consumption_kwh=1.0,
+            interval_minutes=30,
+        )
+        # battery_for_load = 1.0 kWh (HOLD, battery covers full load)
+        # With slot.buy_price: credit = 1.0 * 0.14 = 0.14
+        # With fixed config (0.15): credit = 1.0 * 0.15 = 0.15
+        terms = DPPlanner.stage_cost(
+            action=PlannerAction.HOLD,
+            grid_import_kwh=0.0,
+            grid_export_kwh=0.0,
+            slot=slot,
+            config=default_config,
+            soc_pct=80.0,  # plenty of charge so battery covers load
+        )
+        # Credit should equal slot.buy_price * battery_for_load, not fixed config value
+        # battery_for_load ≈ 1.0 (load - import - export = 1.0 - 0 - 0 = 1.0)
+        assert terms.self_consumption_value == pytest.approx(0.14, rel=0.05), (
+            f"Expected credit ~$0.14 (slot price), got ${terms.self_consumption_value:.4f}. "
+            f"self_consumption_value must use slot.buy_price, not fixed config value"
+        )
+
+    def test_stage_cost_credit_scales_with_buy_price(self, default_config):
+        """At $0.30/kWh the credit should be ~0.30, not the fixed $0.15."""
+        slot = make_slot(
+            0, 7, 0,
+            buy_price=0.30,  # morning peak price
+            sell_price=0.12,
+            solar_kwh=0.0,
+            consumption_kwh=1.0,
+            interval_minutes=30,
+        )
+        terms = DPPlanner.stage_cost(
+            action=PlannerAction.HOLD,
+            grid_import_kwh=0.0,
+            grid_export_kwh=0.0,
+            slot=slot,
+            config=default_config,
+            soc_pct=80.0,
+        )
+        # At $0.30 peak, credit must be ~$0.30 * load
+        assert terms.self_consumption_value > 0.25, (
+            f"At $0.30 buy price, credit should be > $0.25, got ${terms.self_consumption_value:.4f}"
+        )
+
+    def test_flat_rate_overnight_no_charge_with_solar_forecast(self, default_config):
+        """Flat-rate overnight ($0.14 all night) + big solar tomorrow → no grid charging.
+
+        This is the production bug scenario. With fixed $0.15 credit the optimizer
+        "profits" by charge+discharge. With slot.buy_price credit, charge+discharge
+        is always a net loss (due to round-trip efficiency) so HOLD is preferred.
+        """
+        # Configure: buy and sell same overnight price ($0.14), no demand window
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=80.0,
+            soc_bins=20,
+            optimization_mode="self_consumption",
+            effective_cheap_price=0.17,  # $0.14 < $0.17, so CHARGE_GRID_NORMAL is feasible
+            charge_efficiency=0.95,
+            discharge_efficiency=0.95,
+        )
+        # 48 × 30-min slots (overnight, all at $0.14, no solar now)
+        slots = [
+            make_slot(i, (i // 2) % 24, (i % 2) * 30,
+                      buy_price=0.14, sell_price=0.07,
+                      solar_kwh=0.0, consumption_kwh=0.3,
+                      interval_minutes=30)
+            for i in range(48)
+        ]
+        # Massive solar tomorrow: 13 kWh available
+        tomorrow_solar = [make_solcast_entry(h, 2.0) for h in range(7, 15)]  # 8 × 2 kWh = 16 kWh
+
+        inputs = OptimizerInputs(
+            cycle_id="test-flat-rate-no-charge",
+            initial_soc_pct=40.0,
+            slots=slots,
+            config=config,
+            all_solcast=tomorrow_solar,
+        )
+
+        result = DPPlanner().plan(inputs)
+        assert result.success
+
+        charge_decisions = [
+            d for d in result.decisions
+            if d.action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+        ]
+
+        assert len(charge_decisions) == 0, (
+            f"Expected 0 grid charge slots on flat-rate night with solar forecast, "
+            f"got {len(charge_decisions)} at slots: "
+            f"{[d.slot_index for d in charge_decisions]}"
+        )
+
+    def test_price_spike_scenario_still_charges(self, default_config):
+        """Cheap overnight then expensive morning → grid charging is correct.
+
+        When buy_price overnight ($0.13) is significantly less than daytime ($0.45),
+        charging overnight is economically correct even if solar is available — the
+        arbitrage profit exceeds any opportunity penalty.
+        """
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=80.0,
+            soc_bins=20,
+            optimization_mode="self_consumption",
+            effective_cheap_price=0.17,
+            charge_efficiency=0.95,
+            discharge_efficiency=0.95,
+        )
+        # Mix: cheap slots overnight, expensive slots in morning
+        slots = []
+        for i in range(20):
+            hour = (22 + i // 2) % 24
+            price = 0.13 if hour < 7 else 0.45  # cheap overnight, spike in morning
+            slots.append(make_slot(
+                i, hour, (i % 2) * 30,
+                buy_price=price, sell_price=0.08,
+                solar_kwh=0.0, consumption_kwh=0.4,
+                interval_minutes=30,
+            ))
+
+        # Some solar tomorrow — but the arbitrage makes charging still worthwhile
+        tomorrow_solar = [make_solcast_entry(h, 1.5) for h in range(8, 14)]
+
+        inputs = OptimizerInputs(
+            cycle_id="test-price-spike",
+            initial_soc_pct=20.0,
+            slots=slots,
+            config=config,
+            all_solcast=tomorrow_solar,
+        )
+
+        result = DPPlanner().plan(inputs)
+        assert result.success
+
+        charge_decisions = [
+            d for d in result.decisions
+            if d.action in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+        ]
+
+        # Should still charge overnight to capture morning arbitrage
+        assert len(charge_decisions) > 0, (
+            "Expected grid charging when morning price ($0.45) >> overnight price ($0.13)"
+        )
+
+
+class TestSolarOpportunityPenaltyStrengthened:
+    """Fix B: solar opportunity penalty base includes downstream self-consumption credit.
+
+    The penalty must overcome both the import cost AND the self-consumption credit
+    that the charged energy will generate. Previously penalty = import_cost * factor,
+    which capped the penalty below the self-consumption credit when credit > import_cost.
+    """
+
+    def test_penalty_base_reflects_full_economic_benefit(self, default_config):
+        """Solar opportunity penalty should exceed import_cost × factor alone.
+
+        When buy_price = $0.14 and self_consumption_value = $0.14 per kWh,
+        the full economic benefit of charging is $0.14 (import) + $0.14*RTE (future credit).
+        The penalty must overwhelm both, so its base should be > import_cost alone.
+        """
+        slot = make_slot(
+            0, 22, 0,
+            buy_price=0.14, sell_price=0.07,
+            solar_kwh=0.0, consumption_kwh=0.3,
+            interval_minutes=30,
+        )
+        grid_import_kwh = 0.5
+
+        import_cost = grid_import_kwh * 0.14  # = $0.07
+
+        terms = DPPlanner.stage_cost(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            grid_import_kwh=grid_import_kwh,
+            grid_export_kwh=0.0,
+            slot=slot,
+            config=default_config,
+            soc_pct=50.0,
+            solar_opportunity_penalty_factor=1.0,  # full penalty for test clarity
+        )
+
+        # With factor=1.0, OLD penalty = import_cost = $0.07
+        # NEW penalty should be larger (includes self-consumption credit component)
+        # Expected: > $0.07 when self-consumption mode is active
+        assert terms.solar_opportunity_penalty > import_cost, (
+            f"Solar opportunity penalty ({terms.solar_opportunity_penalty:.4f}) should exceed "
+            f"import_cost ({import_cost:.4f}) alone — penalty base must include downstream credit"
+        )
