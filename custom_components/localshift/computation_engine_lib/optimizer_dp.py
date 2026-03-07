@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -85,6 +86,9 @@ class PlannerReasonCode(StrEnum):
 
     IDLE = "IDLE"
     """No economic or constraint reason to act; holding in self-consumption."""
+
+    SOLAR_OPPORTUNITY_WAIT = "SOLAR_OPPORTUNITY_WAIT"
+    """Holding instead of grid charging because solar will be available soon."""
 
     UNCLASSIFIED = "UNCLASSIFIED"
     """Reason not yet classified (should not appear in stable production)."""
@@ -226,7 +230,11 @@ class OptimizerConfig:
     """Optimization strategy: 'self_consumption' (default) or 'arbitrage'."""
 
     self_consumption_value_per_kwh: float = 0.15
-    """Value of using battery energy for household load ($/kWh). Auto-derived from average buy price."""
+    """Value of using battery energy for household load ($/kWh). Auto-derived from average buy price.
+
+    DEPRECATED (Issue #610): No longer used in optimizer hot path. Replaced by slot.buy_price
+    for slot-specific credit calculation. Kept for backward compatibility with optimizer_runner.py.
+    """
 
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
@@ -357,6 +365,9 @@ class PlannedSlotDecision:
 
     sell_price: float = 0.0
     """Export (FIT) price ($/kWh), copied from SlotContext."""
+
+    is_solar_opportunity: bool = False
+    """True if this slot was identified as a solar opportunity wait period (#610)."""
 
     # --- Derived compatibility flags (set from action) ---
     @property
@@ -901,7 +912,8 @@ class DPPlanner:
                 and inputs.current_action is not None
                 and action != inputs.current_action
             )
-            solar_opportunity_penalty = self._compute_solar_opportunity_penalty(
+            # Issue #610: horizon-aware solar opportunity cost
+            solar_opp_factor = self._get_solar_opportunity_penalty_factor(
                 action=action,
                 grid_import_kwh=grid_import,
                 slot=slot,
@@ -919,7 +931,7 @@ class DPPlanner:
                 config,
                 soc_pct=soc,
                 is_switch=is_switch,
-                solar_opportunity_penalty=solar_opportunity_penalty,
+                solar_opportunity_penalty_factor=solar_opp_factor,
             )
             total_cost = stage.net_cost + future_cost
 
@@ -994,7 +1006,8 @@ class DPPlanner:
                 and inputs.current_action is not None
                 and action != inputs.current_action
             )
-            solar_opportunity_penalty = self._compute_solar_opportunity_penalty(
+            # Issue #610: horizon-aware solar opportunity cost
+            solar_opp_factor = self._get_solar_opportunity_penalty_factor(
                 action=action,
                 grid_import_kwh=grid_import,
                 slot=slot,
@@ -1012,7 +1025,7 @@ class DPPlanner:
                 config,
                 soc_pct=current_soc,
                 is_switch=is_switch,
-                solar_opportunity_penalty=solar_opportunity_penalty,
+                solar_opportunity_penalty_factor=solar_opp_factor,
             )
 
             reason = self._classify_reason(
@@ -1024,6 +1037,8 @@ class DPPlanner:
                 next_soc,
                 config,
                 terminal_penalty_idx,
+                stage,
+                inputs=inputs,
             )
 
             decision = PlannedSlotDecision(
@@ -1040,6 +1055,7 @@ class DPPlanner:
                 consumption_kwh=slot.consumption_kwh,
                 buy_price=slot.buy_price,
                 sell_price=slot.sell_price,
+                is_solar_opportunity=stage.solar_opportunity_penalty > 0,
             )
             decisions.append(decision)
 
@@ -1090,7 +1106,7 @@ class DPPlanner:
 
         return 0.0
 
-    def _compute_solar_opportunity_penalty(
+    def _get_solar_opportunity_penalty_factor(
         self,
         action: PlannerAction,
         grid_import_kwh: float,
@@ -1099,26 +1115,18 @@ class DPPlanner:
         slots: list[SlotContext],
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
-        all_solcast: list[dict[str, Any]],
+        all_solcast: list[dict[str, Any]] | None = None,
     ) -> float:
-        """Penalty for grid charging when future solar can charge battery for free.
+        """Calculate the solar opportunity penalty factor for a slot (#610).
 
-        This represents the opportunity cost of paying for grid energy now
-        vs waiting for solar energy at zero cost. Per PLANNING_MODEL.md,
-        this is a soft penalty for economic trade-offs, not a hard constraint.
+        Uses a coverage-ratio formula: the factor scales by how much
+        projected solar surplus is available relative to battery capacity.
+        The DP already handles time through backward induction, so no
+        separate time discount is applied.
 
-        Args:
-            action: The action being evaluated (must be a charge action)
-            grid_import_kwh: Grid import amount in this slot
-            slot: Current slot context
-            slot_idx: Index of current slot
-            slots: Full list of planning slots
-            config: Optimizer configuration
-            terminal_penalty_idx: Index of demand window entry (None if no DW)
-            all_solcast: Full solar forecast (today + tomorrow)
-
-        Returns:
-            Penalty amount to add to stage cost (0 if no penalty warranted)
+        Returns a value in [0.0, 1.0] where:
+        - 0.0 = no significant solar forecast (no penalty)
+        - 1.0 = solar surplus >= battery capacity (full penalty)
         """
         if action not in (
             PlannerAction.CHARGE_GRID_NORMAL,
@@ -1126,66 +1134,42 @@ class DPPlanner:
         ):
             return 0.0
 
-        if grid_import_kwh <= 0:
+        if grid_import_kwh <= 0 or slot.solar_kwh > 0:
             return 0.0
 
-        if slot.solar_kwh > 0:
+        # Only skip penalty if we're AT or PAST the demand window entry point.
+        # Slots BEFORE the demand window should still get the penalty to avoid
+        # premature grid charging when solar is coming (Issue #610).
+        if terminal_penalty_idx is not None and slot_idx >= terminal_penalty_idx:
             return 0.0
 
-        if terminal_penalty_idx is not None:
-            return 0.0
-
-        future_net_solar_kwh = sum(
-            s.solar_kwh - s.consumption_kwh for s in slots[slot_idx:]
+        # Sum projected solar surplus from current slot to end of DP horizon
+        total_surplus: float = sum(
+            max(0.0, s.solar_kwh - s.consumption_kwh) for s in slots[slot_idx:]
         )
 
-        if all_solcast and slots:
-            last_slot_time_str = slots[-1].timestamp_iso
+        # Check solcast for solar BEYOND the DP slots horizon (horizon-aware)
+        if all_solcast:
             try:
-                from datetime import datetime
-
-                last_slot_time = datetime.fromisoformat(last_slot_time_str)
-                beyond_horizon_solar = self._sum_solar_after_time(
-                    all_solcast, last_slot_time
-                )
-                future_net_solar_kwh += beyond_horizon_solar
+                last_slot_time = datetime.fromisoformat(slots[-1].timestamp_iso)
+                for period in all_solcast:
+                    period_start_str = period.get("period_start")
+                    if not period_start_str:
+                        continue
+                    period_start = datetime.fromisoformat(str(period_start_str))
+                    if period_start >= last_slot_time:
+                        # Assumes 30-min periods (standard for solcast integrations)
+                        solar_kwh = float(period.get("pv_estimate", 0)) * 0.5
+                        total_surplus += solar_kwh
             except (ValueError, TypeError):
                 pass
 
-        threshold_kwh = config.battery_capacity_kwh * 0.10
+        threshold_kwh = config.battery_capacity_kwh * 0.30
+        if total_surplus < threshold_kwh:
+            return 0.0
 
-        if future_net_solar_kwh > threshold_kwh:
-            return grid_import_kwh * 0.03
-
-        return 0.0
-
-    def _sum_solar_after_time(
-        self, all_solcast: list[dict[str, Any]], after_time: Any
-    ) -> float:
-        """Sum solar kWh from solcast forecast after a given time.
-
-        Args:
-            all_solcast: List of solcast forecast entries
-            after_time: Datetime to sum after
-
-        Returns:
-            Total solar kWh after the given time
-        """
-        total = 0.0
-        for period in all_solcast:
-            period_start_str = period.get("period_start")
-            if not period_start_str:
-                continue
-            try:
-                from datetime import datetime
-
-                period_start = datetime.fromisoformat(str(period_start_str))
-                if period_start > after_time:
-                    kwh_per_hour = float(period.get("pv_estimate", 0))
-                    total += kwh_per_hour * 0.5
-            except (ValueError, TypeError):
-                continue
-        return total
+        # Coverage ratio: how much of battery capacity solar can fill
+        return min(1.0, total_surplus / config.battery_capacity_kwh)
 
     def _can_solar_reach_target(
         self,
@@ -1226,6 +1210,8 @@ class DPPlanner:
         next_soc: float,
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
+        objective_terms: ObjectiveTerms | None = None,
+        inputs: OptimizerInputs | None = None,
     ) -> PlannerReasonCode:
         """
         Classify the reason for a decision based on action and context.
@@ -1233,7 +1219,9 @@ class DPPlanner:
         Uses deterministic rules to assign a primary reason code.
         """
         if action == PlannerAction.HOLD:
-            return self._classify_hold_reason(soc, slot, next_soc, config)
+            return self._classify_hold_reason(
+                soc, slot, next_soc, config, objective_terms
+            )
         if action == PlannerAction.EXPORT_PROACTIVE:
             return self._classify_export_reason(slot)
         if action in (
@@ -1241,7 +1229,14 @@ class DPPlanner:
             PlannerAction.CHARGE_GRID_BOOST,
         ):
             return self._classify_charge_reason(
-                slot, slot_idx, slots, soc, config, terminal_penalty_idx
+                slot,
+                slot_idx,
+                slots,
+                soc,
+                config,
+                terminal_penalty_idx,
+                objective_terms=objective_terms,
+                inputs=inputs,
             )
         return PlannerReasonCode.IDLE
 
@@ -1251,6 +1246,7 @@ class DPPlanner:
         slot: SlotContext,
         next_soc: float,
         config: OptimizerConfig,
+        objective_terms: ObjectiveTerms | None = None,
     ) -> PlannerReasonCode:
         """Classify HOLD action reason.
 
@@ -1259,6 +1255,7 @@ class DPPlanner:
             slot: Slot context
             next_soc: Next SOC
             config: Optimizer config
+            objective_terms: Objective terms breakdown (for solar opportunity detection)
 
         Returns:
             Reason code for HOLD action
@@ -1271,6 +1268,10 @@ class DPPlanner:
         net_kwh = slot.solar_kwh - slot.consumption_kwh
         if net_kwh > 0 and next_soc > soc:
             return PlannerReasonCode.SOLAR_SURPLUS_CAPTURE
+
+        if objective_terms and objective_terms.solar_opportunity_penalty > 0:
+            return PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
+
         return PlannerReasonCode.IDLE
 
     def _classify_export_reason(self, slot: SlotContext) -> PlannerReasonCode:
@@ -1295,6 +1296,9 @@ class DPPlanner:
         soc: float,
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
+        *,
+        objective_terms: ObjectiveTerms | None = None,
+        inputs: OptimizerInputs | None = None,
     ) -> PlannerReasonCode:
         """Classify CHARGE action reason.
 
@@ -1305,6 +1309,8 @@ class DPPlanner:
             soc: Current SOC
             config: Optimizer config
             terminal_penalty_idx: Terminal penalty index
+            objective_terms: Cost breakdown for this slot/action
+            inputs: Full optimizer inputs (optional)
 
         Returns:
             Reason code for CHARGE action
@@ -1314,9 +1320,13 @@ class DPPlanner:
             slot_idx, slots, soc, config, terminal_penalty_idx
         ):
             return PlannerReasonCode.TARGET_SHORTFALL_RISK
-        if self._is_cheap_import_window(slot, config, terminal_penalty_idx, slots):
+        if self._is_cheap_import_window(
+            slot, config, terminal_penalty_idx, slots, inputs=inputs
+        ):
             return PlannerReasonCode.CHEAP_IMPORT_WINDOW
-        return PlannerReasonCode.TARGET_SHORTFALL_RISK
+        if objective_terms and objective_terms.solar_opportunity_penalty > 0:
+            return PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
+        return PlannerReasonCode.UNCLASSIFIED
 
     def _is_target_shortfall_risk(
         self,
@@ -1358,6 +1368,8 @@ class DPPlanner:
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
         slots: list[SlotContext],
+        *,
+        inputs: OptimizerInputs | None = None,
     ) -> bool:
         """Check if this is a cheap import window opportunity.
 
@@ -1366,6 +1378,7 @@ class DPPlanner:
             config: Optimizer config
             terminal_penalty_idx: Terminal penalty index
             slots: All slots
+            inputs: Full optimizer inputs (optional)
 
         Returns:
             True if cheap import window
@@ -1373,22 +1386,32 @@ class DPPlanner:
         """
         if slot.buy_price > config.effective_cheap_price:
             return False
-        is_blind = self._is_blind_to_future_solar(terminal_penalty_idx, slots)
+        is_blind = self._is_blind_to_future_solar(
+            terminal_penalty_idx, slots, inputs=inputs
+        )
         return not is_blind or slot.buy_price <= (config.effective_cheap_price * 0.8)
 
     def _is_blind_to_future_solar(
-        self, terminal_penalty_idx: int | None, slots: list[SlotContext]
+        self,
+        terminal_penalty_idx: int | None,
+        slots: list[SlotContext],
+        inputs: OptimizerInputs | None = None,
     ) -> bool:
         """Check if optimizer is blind to future solar (Issue #431 Horizon Guard).
 
         Args:
             terminal_penalty_idx: Terminal penalty index
             slots: All slots
+            inputs: Full optimizer inputs (to check all_solcast)
 
         Returns:
             True if blind to future solar
 
         """
+        # If we have horizon-aware solar forecast, we aren't blind (Issue #610)
+        if inputs and inputs.all_solcast:
+            return False
+
         if terminal_penalty_idx is None:
             return True
         slots_beyond = len(slots) - terminal_penalty_idx - 1
@@ -1564,7 +1587,7 @@ class DPPlanner:
             # In self-consumption mode, only export if profitable vs keeping energy for load
             if config.optimization_mode == "self_consumption":
                 min_profitable_sell = (
-                    config.self_consumption_value_per_kwh + config.export_price_margin
+                    max(0.0, slot.buy_price) + config.export_price_margin
                 )
                 if slot.sell_price >= min_profitable_sell:
                     actions.append(PlannerAction.EXPORT_PROACTIVE)
@@ -1855,7 +1878,7 @@ class DPPlanner:
         *,
         soc_pct: float | None = None,
         is_switch: bool = False,
-        solar_opportunity_penalty: float = 0.0,
+        solar_opportunity_penalty_factor: float = 0.0,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -1880,6 +1903,20 @@ class DPPlanner:
         # Switching penalty (Issue #524)
         # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
         switching_penalty = config.switching_penalty if is_switch else 0.0
+
+        # Issue #610: horizon-aware solar opportunity cost
+        # Penalizes grid import when significant solar is expected later in the horizon.
+        # Penalty reflects the full economic benefit of charging:
+        # import cost + the value of the energy stored (self-consumption credit).
+        sc_value = (
+            max(0.0, slot.buy_price)
+            if config.optimization_mode == "self_consumption"
+            else 0.0
+        )
+        full_economic_benefit = import_cost + grid_import_kwh * sc_value
+        solar_opportunity_penalty = (
+            full_economic_benefit * solar_opportunity_penalty_factor
+        )
 
         # Issue #431: uncertainty penalty for grid charging when horizon is short.
         # This biases the optimizer toward HOLD (waiting for more data) when blind.
@@ -1930,9 +1967,7 @@ class DPPlanner:
                     )
                     battery_for_load = min(battery_for_load, max_load_kwh)
 
-                self_consumption_value = (
-                    battery_for_load * config.self_consumption_value_per_kwh
-                )
+                self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
 
         return ObjectiveTerms(
             import_cost=import_cost,

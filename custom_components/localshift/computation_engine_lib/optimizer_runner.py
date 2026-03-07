@@ -38,9 +38,10 @@ _LOGGER = logging.getLogger(__name__)
 # The penalty is set to (cheapest_grid_price * battery_kwh / 100) * this factor.
 # A value of 1.5 means the optimizer mildly prefers pre-charging over risking
 # a shortfall, but won't pay more than 1.5x the remediation cost to do so.
-# Do not set above 3.0 without careful testing — higher values cause compulsive
-# pre-charging even when solar will cover the deficit.
-_SHORTFALL_PENALTY_SAFETY_FACTOR = 3.0
+# Reduced from 3.0 → 1.5 (Issue #610): at 3.0 the shortfall penalty overwhelmed
+# the solar opportunity penalty, causing compulsive overnight charging even when
+# large solar surplus was forecast for the next day.
+_SHORTFALL_PENALTY_SAFETY_FACTOR = 1.5
 
 
 def _get_ha_timezone() -> str:
@@ -344,6 +345,8 @@ def _build_optimizer_config(
         # Formula: effective_cheap_price ($/kWh) * battery_kwh / 100 * safety_factor
         # Example at typical Amber overnight rates: 0.15 * 13.5 / 100 * 1.5 = $0.030/%-pt
         # (Fixes #438 — original hardcoded 1.0 was ~53x the actual remediation cost)
+        # (Issue #610 — reduced safety_factor from 3.0→1.5 to avoid overwhelming the
+        #  solar opportunity penalty, which caused compulsive overnight grid charging)
         target_shortfall_penalty_per_pct=(
             effective_cheap_price
             * BATTERY_CAPACITY_KWH
