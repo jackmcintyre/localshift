@@ -26,6 +26,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -281,6 +282,9 @@ class ObjectiveTerms:
     uncertainty_penalty: float = 0.0
     """Penalty for grid actions when forecast horizon is restricted (Issue #431)."""
 
+    solar_opportunity_penalty: float = 0.0
+    """Penalty for grid charging when future solar can charge battery for free (Issue #607)."""
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue - self_consumption_value + penalties."""
@@ -292,6 +296,7 @@ class ObjectiveTerms:
             + self.shortfall_penalty
             + self.uncertainty_penalty
             + self.switching_penalty
+            + self.solar_opportunity_penalty
         )
 
     def to_dict(self) -> dict:
@@ -304,6 +309,7 @@ class ObjectiveTerms:
             "self_consumption_value": self.self_consumption_value,
             "uncertainty_penalty": self.uncertainty_penalty,
             "switching_penalty": self.switching_penalty,
+            "solar_opportunity_penalty": self.solar_opportunity_penalty,
             "net_cost": self.net_cost,
         }
 
@@ -449,6 +455,9 @@ class OptimizerInputs:
 
     config: OptimizerConfig = field(default_factory=OptimizerConfig)
     """Optimizer configuration and constraints."""
+
+    all_solcast: list[dict[str, Any]] = field(default_factory=list)
+    """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
 
 
 # ---------------------------------------------------------------------------
@@ -892,6 +901,16 @@ class DPPlanner:
                 and inputs.current_action is not None
                 and action != inputs.current_action
             )
+            solar_opportunity_penalty = self._compute_solar_opportunity_penalty(
+                action=action,
+                grid_import_kwh=grid_import,
+                slot=slot,
+                slot_idx=slot_idx,
+                slots=slots,
+                config=config,
+                terminal_penalty_idx=terminal_penalty_idx,
+                all_solcast=inputs.all_solcast,
+            )
             stage = DPPlanner.stage_cost(
                 action,
                 grid_import,
@@ -900,6 +919,7 @@ class DPPlanner:
                 config,
                 soc_pct=soc,
                 is_switch=is_switch,
+                solar_opportunity_penalty=solar_opportunity_penalty,
             )
             total_cost = stage.net_cost + future_cost
 
@@ -974,6 +994,16 @@ class DPPlanner:
                 and inputs.current_action is not None
                 and action != inputs.current_action
             )
+            solar_opportunity_penalty = self._compute_solar_opportunity_penalty(
+                action=action,
+                grid_import_kwh=grid_import,
+                slot=slot,
+                slot_idx=slot_idx,
+                slots=slots,
+                config=config,
+                terminal_penalty_idx=terminal_penalty_idx,
+                all_solcast=inputs.all_solcast,
+            )
             stage = DPPlanner.stage_cost(
                 action,
                 grid_import,
@@ -982,6 +1012,7 @@ class DPPlanner:
                 config,
                 soc_pct=current_soc,
                 is_switch=is_switch,
+                solar_opportunity_penalty=solar_opportunity_penalty,
             )
 
             reason = self._classify_reason(
@@ -1058,6 +1089,103 @@ class DPPlanner:
             return max(0.0, target - terminal_soc)
 
         return 0.0
+
+    def _compute_solar_opportunity_penalty(
+        self,
+        action: PlannerAction,
+        grid_import_kwh: float,
+        slot: SlotContext,
+        slot_idx: int,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        all_solcast: list[dict[str, Any]],
+    ) -> float:
+        """Penalty for grid charging when future solar can charge battery for free.
+
+        This represents the opportunity cost of paying for grid energy now
+        vs waiting for solar energy at zero cost. Per PLANNING_MODEL.md,
+        this is a soft penalty for economic trade-offs, not a hard constraint.
+
+        Args:
+            action: The action being evaluated (must be a charge action)
+            grid_import_kwh: Grid import amount in this slot
+            slot: Current slot context
+            slot_idx: Index of current slot
+            slots: Full list of planning slots
+            config: Optimizer configuration
+            terminal_penalty_idx: Index of demand window entry (None if no DW)
+            all_solcast: Full solar forecast (today + tomorrow)
+
+        Returns:
+            Penalty amount to add to stage cost (0 if no penalty warranted)
+        """
+        if action not in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            return 0.0
+
+        if grid_import_kwh <= 0:
+            return 0.0
+
+        if slot.solar_kwh > 0:
+            return 0.0
+
+        if terminal_penalty_idx is not None:
+            return 0.0
+
+        future_net_solar_kwh = sum(
+            s.solar_kwh - s.consumption_kwh for s in slots[slot_idx:]
+        )
+
+        if all_solcast and slots:
+            last_slot_time_str = slots[-1].timestamp_iso
+            try:
+                from datetime import datetime
+
+                last_slot_time = datetime.fromisoformat(last_slot_time_str)
+                beyond_horizon_solar = self._sum_solar_after_time(
+                    all_solcast, last_slot_time
+                )
+                future_net_solar_kwh += beyond_horizon_solar
+            except (ValueError, TypeError):
+                pass
+
+        threshold_kwh = config.battery_capacity_kwh * 0.10
+
+        if future_net_solar_kwh > threshold_kwh:
+            return grid_import_kwh * 0.03
+
+        return 0.0
+
+    def _sum_solar_after_time(
+        self, all_solcast: list[dict[str, Any]], after_time: Any
+    ) -> float:
+        """Sum solar kWh from solcast forecast after a given time.
+
+        Args:
+            all_solcast: List of solcast forecast entries
+            after_time: Datetime to sum after
+
+        Returns:
+            Total solar kWh after the given time
+        """
+        total = 0.0
+        for period in all_solcast:
+            period_start_str = period.get("period_start")
+            if not period_start_str:
+                continue
+            try:
+                from datetime import datetime
+
+                period_start = datetime.fromisoformat(str(period_start_str))
+                if period_start > after_time:
+                    kwh_per_hour = float(period.get("pv_estimate", 0))
+                    total += kwh_per_hour * 0.5
+            except (ValueError, TypeError):
+                continue
+        return total
 
     def _can_solar_reach_target(
         self,
@@ -1727,6 +1855,7 @@ class DPPlanner:
         *,
         soc_pct: float | None = None,
         is_switch: bool = False,
+        solar_opportunity_penalty: float = 0.0,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -1812,6 +1941,7 @@ class DPPlanner:
             self_consumption_value=self_consumption_value,
             uncertainty_penalty=uncertainty_penalty,
             switching_penalty=switching_penalty,
+            solar_opportunity_penalty=solar_opportunity_penalty,
         )
 
     @staticmethod
