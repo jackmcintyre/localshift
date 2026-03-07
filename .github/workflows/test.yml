@@ -26,6 +26,22 @@ jobs:
       - name: Run tests
         run: uv run pytest --tb=short -q
 
+      - name: Check coverage baseline
+        run: |
+          uv run pytest --cov=custom_components/localshift --cov-report=json -q 2>/dev/null || true
+          if [ -f coverage.json ]; then
+            CURRENT=$(python3 -c "import json; c=json.load(open('coverage.json')); print(round(c['totals']['percent_covered'], 1))")
+            echo "Current coverage: ${CURRENT}%"
+            # Fail if coverage drops below baseline (23%)
+            if (( $(echo "$CURRENT < 23" | bc -l) )); then
+              echo "❌ Coverage regression: ${CURRENT}% < 23% baseline"
+              exit 1
+            fi
+            echo "✅ Coverage above baseline"
+          else
+            echo "⚠️ Coverage report not generated (pytest-cov may not be installed)"
+          fi
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
