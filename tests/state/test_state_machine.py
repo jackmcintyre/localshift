@@ -18,7 +18,7 @@ from custom_components.localshift.const import (
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
 )
-from custom_components.localshift.state_machine import StateMachine
+from custom_components.localshift.state.machine import StateMachine
 
 
 def dt_aware(year, month, day, hour, minute=0, second=0):
@@ -693,7 +693,7 @@ class TestModeTransitions:
 
         # Mock dt_util.now to return a time far enough in the past to satisfy debounce
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             # First call starts debounce, second call returns time after debounce
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 5, 0)  # 5 min later
@@ -712,7 +712,7 @@ class TestModeTransitions:
         mock_engine.compute_derived_values = MagicMock()
 
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 5, 0)
             asyncio.run(
@@ -744,7 +744,7 @@ class TestModeTransitions:
         mock_engine.compute_derived_values = MagicMock()
 
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(
                 2026, 2, 16, 16, 3, 0
@@ -792,7 +792,7 @@ class TestDebounceBehavior:
 
         # First evaluation should start debounce timer (but not transition yet)
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 0, 0)
             asyncio.run(
@@ -823,7 +823,7 @@ class TestDebounceBehavior:
         mock_engine.compute_derived_values = MagicMock()
 
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 0, 0)
             asyncio.run(
@@ -1141,7 +1141,7 @@ class TestSkipDebounceFlagReset:
         mock_engine.compute_derived_values = MagicMock()
 
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 27, 9, 26, 0)
             asyncio.run(
@@ -1155,7 +1155,7 @@ class TestSkipDebounceFlagReset:
         coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
 
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             # First call starts debounce
             mock_now.return_value = dt_aware(2026, 2, 27, 9, 30, 0)
@@ -1443,7 +1443,7 @@ class TestModeTransitionGating:
 
         # First evaluation: starts debounce (PROACTIVE_EXPORT has 2-min debounce)
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 0, 0)
             asyncio.run(
@@ -1462,7 +1462,7 @@ class TestModeTransitionGating:
         # Second evaluation: 1 minute later, prices UNCHANGED
         # Debounce should continue (not restart) even though price unchanged
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 1, 0)
             asyncio.run(
@@ -1475,7 +1475,7 @@ class TestModeTransitionGating:
         # Third evaluation: 2+ minutes later, prices STILL UNCHANGED
         # Debounce should now be satisfied and transition should happen
         with patch(
-            "custom_components.localshift.state_machine.dt_util.now"
+            "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
             mock_now.return_value = dt_aware(2026, 2, 16, 16, 2, 1)
             asyncio.run(

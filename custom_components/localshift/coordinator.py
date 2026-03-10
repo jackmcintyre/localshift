@@ -40,8 +40,8 @@ if TYPE_CHECKING:
     from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
     from .services.notification_service import NotificationService
-    from .state_machine import StateMachine
-    from .state_reader import StateReader
+    from .state.machine import StateMachine
+    from .state.reader import StateReader
     from .utils.costs import CostTracker
     from .utils.validation import EntityValidator
 
@@ -183,8 +183,8 @@ class LocalShiftCoordinator:
         from .battery_controller import BatteryController
         from .computation_engine import ComputationEngine
         from .services.notification_service import NotificationService
-        from .state_machine import StateMachine
-        from .state_reader import StateReader
+        from .state.machine import StateMachine
+        from .state.reader import StateReader
         from .utils.costs import CostTracker
         from .utils.validation import EntityValidator
 

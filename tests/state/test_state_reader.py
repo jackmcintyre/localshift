@@ -16,7 +16,7 @@ from custom_components.localshift.const import (
     DEFAULT_ENTITY_IDS,
 )
 from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.state_reader import StateReader
+from custom_components.localshift.state.reader import StateReader
 
 
 @pytest.fixture
@@ -1178,7 +1178,7 @@ class TestForecastExtensionIntegration:
             return state
 
         mock_hass.states.get = mock_get_state
-        with patch("custom_components.localshift.state_reader.dt_util") as mock_dt_util:
+        with patch("custom_components.localshift.state.reader.dt_util") as mock_dt_util:
             mock_dt_util.now.return_value = now
             state_reader.read_all_external_state(coordinator_data)
 
@@ -1216,7 +1216,7 @@ class TestForecastExtensionIntegration:
             return state
 
         mock_hass.states.get = mock_get_state
-        with patch("custom_components.localshift.state_reader.dt_util") as mock_dt_util:
+        with patch("custom_components.localshift.state.reader.dt_util") as mock_dt_util:
             mock_dt_util.now.return_value = now
             state_reader.read_all_external_state(coordinator_data)
 

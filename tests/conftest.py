@@ -83,7 +83,7 @@ def mock_battery_sleep():
     with ExitStack() as stack:
         transition_sleep = stack.enter_context(
             patch(
-                "custom_components.localshift.transition_validator.asyncio.sleep",
+                "custom_components.localshift.state.validator.asyncio.sleep",
                 new_callable=AsyncMock,
             )
         )
@@ -595,7 +595,7 @@ def state_reader(mock_hass_with_states, mock_entry, mock_entity_validator):
 
     Use this for testing state reading functionality with realistic entity states.
     """
-    from custom_components.localshift.state_reader import StateReader
+    from custom_components.localshift.state.reader import StateReader
 
     return StateReader(mock_hass_with_states, mock_entry, mock_entity_validator)
 
@@ -605,7 +605,7 @@ def state_reader_unavailable(
     mock_hass_unavailable_entities, mock_entry, mock_entity_validator
 ):
     """Create a StateReader with all entities unavailable."""
-    from custom_components.localshift.state_reader import StateReader
+    from custom_components.localshift.state.reader import StateReader
 
     return StateReader(
         mock_hass_unavailable_entities, mock_entry, mock_entity_validator
@@ -615,7 +615,7 @@ def state_reader_unavailable(
 @pytest.fixture
 def state_reader_missing(mock_hass_missing_entities, mock_entry, mock_entity_validator):
     """Create a StateReader with missing entities."""
-    from custom_components.localshift.state_reader import StateReader
+    from custom_components.localshift.state.reader import StateReader
 
     return StateReader(mock_hass_missing_entities, mock_entry, mock_entity_validator)
 

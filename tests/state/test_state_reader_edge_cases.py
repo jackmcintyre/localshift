@@ -10,7 +10,7 @@ These tests verify that the StateReader correctly handles:
 """
 
 from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.state_reader import StateReader
+from custom_components.localshift.state.reader import StateReader
 
 # =============================================================================
 # BASIC STATE READ TESTS

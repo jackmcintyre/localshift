@@ -14,7 +14,7 @@ from .const import (
     TESLEMETRY_EXPORT_PV_ONLY,
 )
 from .powerwall_service_client import PowerwallServiceClient
-from .transition_validator import TransitionValidator
+from .state.validator import TransitionValidator
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

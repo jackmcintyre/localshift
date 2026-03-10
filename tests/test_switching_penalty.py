@@ -21,7 +21,7 @@ from custom_components.localshift.const import (
     BatteryMode,
 )
 from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.state_machine import StateMachine
+from custom_components.localshift.state.machine import StateMachine
 
 # ---------------------------------------------------------------------------
 # DP Planner Switching Penalty Tests

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import (
+from ..const import (
     BACKUP_RESERVE_MAX_VALID,
     CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
@@ -27,14 +27,14 @@ from .const import (
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
 )
-from .coordinator_data import CoordinatorData
+from ..coordinator_data import CoordinatorData
 
 if TYPE_CHECKING:
-    from .battery_controller import BatteryController
-    from .computation_engine import ComputationEngine
-    from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
-    from .services.notification_service import NotificationService
-    from .utils.validation import EntityValidator
+    from ..battery_controller import BatteryController
+    from ..computation_engine import ComputationEngine
+    from ..computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
+    from ..services.notification_service import NotificationService
+    from ..utils.validation import EntityValidator
 
 
 _LOGGER = logging.getLogger(__name__)
