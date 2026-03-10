@@ -67,6 +67,26 @@ class ModeConfig:
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
 
+    _MODE_CONFIG_BUILDERS: dict[BatteryMode, str] = {
+        BatteryMode.SELF_CONSUMPTION: "_build_self_consumption_config",
+        BatteryMode.DEMAND_BLOCK: "_build_self_consumption_config",
+        BatteryMode.GRID_CHARGING: "_build_grid_charging_config",
+        BatteryMode.BOOST_CHARGING: "_build_boost_charging_config",
+        BatteryMode.SPIKE_DISCHARGE: "_build_spike_discharge_config",
+        BatteryMode.PROACTIVE_EXPORT: "_build_proactive_export_config",
+        BatteryMode.HOLD: "_build_hold_config",
+    }
+
+    _MODE_EXECUTORS: dict[BatteryMode, str] = {
+        BatteryMode.SELF_CONSUMPTION: "_execute_self_consumption_transition",
+        BatteryMode.DEMAND_BLOCK: "_execute_self_consumption_transition",
+        BatteryMode.GRID_CHARGING: "_execute_grid_charging_transition",
+        BatteryMode.BOOST_CHARGING: "_execute_boost_charging_transition",
+        BatteryMode.SPIKE_DISCHARGE: "_execute_spike_discharge_transition",
+        BatteryMode.PROACTIVE_EXPORT: "_execute_proactive_export_transition",
+        BatteryMode.HOLD: "_execute_hold_transition",
+    }
+
     def __init__(
         self,
         battery_controller: BatteryController,
@@ -195,92 +215,102 @@ class StateMachine:
         """
         if target == BatteryMode.MANUAL:
             return None
+        builder_name = self._MODE_CONFIG_BUILDERS.get(target)
+        return getattr(self, builder_name)(data) if builder_name else None
 
-        op_mode = "self_consumption"
-        backup_reserve = 10.0
-        export_mode = TESLEMETRY_EXPORT_PV_ONLY
-        grid_charging = False
-        sc_reserve: float | None = None
-        gc_reserve: int | None = None
-        pe_reserve: float | None = None
-
-        if target in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
-            backup_reserve = (
-                data.preserve_soc if data.preserve_soc is not None else 10.0
-            )
-            sc_reserve = backup_reserve
-
-        elif target == BatteryMode.GRID_CHARGING:
-            op_mode = "backup"
-            battery_target = float(
-                self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-            )
-            if battery_target <= BACKUP_RESERVE_MAX_VALID:
-                backup_reserve = int(battery_target)
-            elif battery_target >= 100:
-                backup_reserve = 100
-            else:
-                backup_reserve = BACKUP_RESERVE_MAX_VALID
-            grid_charging = True
-            gc_reserve = int(backup_reserve)
-
-        elif target == BatteryMode.BOOST_CHARGING:
-            op_mode = "autonomous"
-            backup_reserve = 100.0
-            grid_charging = True
-
-        elif target == BatteryMode.SPIKE_DISCHARGE:
-            op_mode = "autonomous"
-            min_target_soc = float(self._get_option("minimum_target_soc", 10.0))
-            backup_reserve = (
-                data.spike_reserve_soc
-                if data.spike_in_conservative_mode
-                and data.spike_reserve_soc is not None
-                else min_target_soc
-            )
-            export_mode = TESLEMETRY_EXPORT_BATTERY_OK
-
-        elif target == BatteryMode.PROACTIVE_EXPORT:
-            op_mode = "autonomous"
-            backup_reserve = max(
-                PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
-                data.soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
-            )
-            export_mode = TESLEMETRY_EXPORT_BATTERY_OK
-            pe_reserve = backup_reserve
-
-        elif target == BatteryMode.HOLD:
-            min_soc = float(self._get_option("minimum_target_soc", 10.0))
-            # Issue #559 Root Cause 4: read fresh SOC from hardware to avoid stale
-            # value during transitions.  The coordinator's cached SOC can lag by
-            # minutes, causing the reserve to drop before the API updates.
-            fresh_soc = self._battery_controller.read_fresh_soc()
-            if fresh_soc is not None:
-                backup_reserve = max(min_soc, fresh_soc)
-                _LOGGER.info(
-                    "HOLD mode: using fresh SOC %.1f%% (cached was %.1f%%), reserve=%.1f%%",
-                    fresh_soc,
-                    data.soc,
-                    backup_reserve,
-                )
-            else:
-                # Fallback to cached value if fresh read fails
-                backup_reserve = max(min_soc, data.soc)
-                _LOGGER.warning(
-                    "HOLD mode: fresh SOC read failed, using cached %.1f%%, reserve=%.1f%%",
-                    data.soc,
-                    backup_reserve,
-                )
-            sc_reserve = backup_reserve
-
+    def _build_self_consumption_config(self, data: CoordinatorData) -> ModeConfig:
+        """Build SELF_CONSUMPTION / DEMAND_BLOCK config."""
+        backup_reserve = data.preserve_soc if data.preserve_soc is not None else 10.0
         return ModeConfig(
-            operation_mode=op_mode,
+            operation_mode="self_consumption",
             backup_reserve=backup_reserve,
-            export_mode=export_mode,
-            grid_charging_allowed=grid_charging,
-            self_consumption_reserve=sc_reserve,
-            grid_charging_reserve=gc_reserve,
-            proactive_export_reserve=pe_reserve,
+            export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            grid_charging_allowed=False,
+            self_consumption_reserve=backup_reserve,
+        )
+
+    def _build_grid_charging_config(self, data: CoordinatorData) -> ModeConfig:
+        """Build GRID_CHARGING config."""
+        battery_target = float(
+            self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+        if battery_target <= BACKUP_RESERVE_MAX_VALID:
+            backup_reserve = int(battery_target)
+        elif battery_target >= 100:
+            backup_reserve = 100
+        else:
+            backup_reserve = BACKUP_RESERVE_MAX_VALID
+        return ModeConfig(
+            operation_mode="backup",
+            backup_reserve=float(backup_reserve),
+            export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            grid_charging_allowed=True,
+            grid_charging_reserve=backup_reserve,
+        )
+
+    def _build_boost_charging_config(self, data: CoordinatorData) -> ModeConfig:
+        """Build BOOST_CHARGING config."""
+        return ModeConfig(
+            operation_mode="autonomous",
+            backup_reserve=100.0,
+            export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            grid_charging_allowed=True,
+        )
+
+    def _build_spike_discharge_config(self, data: CoordinatorData) -> ModeConfig:
+        """Build SPIKE_DISCHARGE config."""
+        min_target_soc = float(self._get_option("minimum_target_soc", 10.0))
+        backup_reserve = (
+            data.spike_reserve_soc
+            if data.spike_in_conservative_mode and data.spike_reserve_soc is not None
+            else min_target_soc
+        )
+        return ModeConfig(
+            operation_mode="autonomous",
+            backup_reserve=backup_reserve,
+            export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+            grid_charging_allowed=False,
+        )
+
+    def _build_proactive_export_config(self, data: CoordinatorData) -> ModeConfig:
+        """Build PROACTIVE_EXPORT config."""
+        backup_reserve = max(
+            PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
+            data.soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+        )
+        return ModeConfig(
+            operation_mode="autonomous",
+            backup_reserve=backup_reserve,
+            export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+            grid_charging_allowed=False,
+            proactive_export_reserve=backup_reserve,
+        )
+
+    def _build_hold_config(self, data: CoordinatorData) -> ModeConfig:
+        """Build HOLD config."""
+        min_soc = float(self._get_option("minimum_target_soc", 10.0))
+        fresh_soc = self._battery_controller.read_fresh_soc()
+        if fresh_soc is not None:
+            backup_reserve = max(min_soc, fresh_soc)
+            _LOGGER.info(
+                "HOLD mode: using fresh SOC %.1f%% (cached was %.1f%%), reserve=%.1f%%",
+                fresh_soc,
+                data.soc,
+                backup_reserve,
+            )
+        else:
+            backup_reserve = max(min_soc, data.soc)
+            _LOGGER.warning(
+                "HOLD mode: fresh SOC read failed, using cached %.1f%%, reserve=%.1f%%",
+                data.soc,
+                backup_reserve,
+            )
+        return ModeConfig(
+            operation_mode="self_consumption",
+            backup_reserve=backup_reserve,
+            export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            grid_charging_allowed=False,
+            self_consumption_reserve=backup_reserve,
         )
 
     def infer_current_hardware_mode(self, data: CoordinatorData) -> BatteryMode:
@@ -513,194 +543,179 @@ class StateMachine:
 
         """
         async with self._evaluate_lock:
-            # DIAGNOSTIC: Log current state machine state at INFO level
             _LOGGER.info(
                 "State machine evaluate: desired=%s, commanded=%s, hardware_op=%s",
                 data.active_mode.value if hasattr(data, "active_mode") else "unknown",
                 self._commanded_mode.value,
                 data.operation_mode,
             )
-            # Re-read external state and recompute derived values while holding
-            # the lock.  If multiple evaluations were queued, each one now
-            # operates on hardware state that reflects any transitions made by
-            # the previous evaluation — preventing stale-state reversions.
             if read_state_func is not None:
                 read_state_func()
-            # Issue #468: Re-check automation ready after reading fresh state
-            # If automation_ready was set False from stale startup data,
-            # re-checking now ensures we use fresh values after state refresh
-            # Issue #551: Suppress warning during startup grace period
             if not data.automation_ready and check_automation_ready_func is not None:
                 in_grace = self._startup_grace_until is not None
                 check_automation_ready_func(data, suppress_warning=in_grace)
             computation_engine.compute_derived_values(data)
 
-            # Notify listeners with fresh computed data regardless of which
-            # code path is taken below (transition, debounce, no-change, etc.).
-            # The try/finally guarantees notify_func() is always called after
-            # compute_derived_values(), even on early returns.
             try:
-                now = dt_util.now()
-                desired = data.active_mode
-
-                # --- Startup grace period (30 s) ---
-                if self._handle_startup_grace_period(data, now):
-                    return
-
-                # --- Automation disabled ---
-                if self._handle_automation_disabled():
-                    return
-
-                # --- Auto-clear manual override after timeout ---
-                await self._handle_manual_override_timeout(data, now)
-
-                # --- No change needed ---
-                if desired == self._commanded_mode:
-                    self._mode_desired_since.clear()
-                    # Reset skip_next_debounce flag to prevent it persisting
-                    # incorrectly across evaluation cycles (Issue #340)
-                    self._skip_next_debounce = False
-
-                    # --- SOC-based charge target enforcement ---
-                    # For BOOST_CHARGING: Always uses autonomous+100, so SOC monitoring stops at target.
-                    # For GRID_CHARGING: Uses backup mode with clamped reserve (80 for targets 81-99),
-                    # so SOC monitoring is only needed when target is in 81-99% range.
-                    if await self._handle_soc_monitoring(data):
-                        return
-
-                    # --- Periodic health check (every minute) ---
-                    # Verify hardware state matches commanded state
-                    # This catches drift from manual changes, power outages, etc.
-                    if not self._get_switch_state("dry_run"):
-                        await self._perform_health_check(data)
-
-                    return
-
-                # --- Debounce tracking ---
-                # Clear timers for modes no longer desired.
-                # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
-                # desired at t=0, flipped away at t=2min, then desired again at t=3min,
-                # the old t=0 timer would make the debounce appear nearly satisfied.
-                # Clearing stale timers ensures the full debounce is always served from
-                # a continuous period of desire.
-                for mode in list(self._mode_desired_since.keys()):
-                    if mode != desired:
-                        self._mode_desired_since.pop(mode, None)
-
-                # Get debounce duration (skip if flag is set)
-                debounce = self._get_debounce_duration(desired)
-
-                # --- Issue #622: Price fingerprint gate ---
-                # Only gate NEW mode transitions on price changes. This prevents
-                # mode oscillation when optimizer re-runs with stable prices.
-                # However, if a debounce timer is already running, we must continue
-                # to allow the transition to complete even if price is unchanged.
-                debounce_in_progress = desired in self._mode_desired_since
-
-                if not debounce_in_progress:
-                    # New desired mode - gate on fingerprint
-                    fingerprint = self._get_decision_fingerprint(data)
-                    price_changed = (
-                        fingerprint != self._last_decision_fingerprint
-                        or self._last_decision_fingerprint is None  # First evaluation
-                    )
-
-                    if not price_changed:
-                        _LOGGER.debug(
-                            "Price unchanged (fingerprint=%s), skipping new mode transition %s → %s",
-                            fingerprint,
-                            self._commanded_mode.value,
-                            desired.value,
-                        )
-                        # Still run health check before returning
-                        if not self._get_switch_state("dry_run"):
-                            await self._perform_health_check(data)
-
-                        return
-
-                    # Price changed - update fingerprint and start debounce
-                    self._last_decision_fingerprint = fingerprint
-                    self._mode_desired_since[desired] = now
-                    if debounce > timedelta(0):
-                        _LOGGER.info(
-                            "Mode %s desired, debounce %s starts now",
-                            desired.value,
-                            debounce,
-                        )
-                        return
-
-                # Debounce timer exists - check if satisfied
-                desired_since = self._mode_desired_since[desired]
-                elapsed = now - desired_since
-
-                if elapsed < debounce:
-                    _LOGGER.info(
-                        "Mode %s desired for %s, need %s — waiting",
-                        desired.value,
-                        elapsed,
-                        debounce,
-                    )
-                    return
-
-                # --- Debounce satisfied — execute transition ---
-                elapsed = now - desired_since
-                old_mode = self._commanded_mode
-                _LOGGER.info(
-                    "State machine transition: %s → %s (desired for %s)",
-                    old_mode.value,
-                    desired.value,
-                    elapsed,
-                )
-
-                # --- Check entity availability before transition ---
-                if not self.entity_validator.should_allow_automation():
-                    _LOGGER.warning(
-                        "Automation blocked: Required entities unavailable. Maintaining current mode %s.",
-                        old_mode.value,
-                    )
-                    # Do not transition, keep current mode
-                    return
-
-                # Execute the transition and check if it succeeded
-                transition_success = await self._execute_mode_transition(data, desired)
-
-                # Only update commanded_mode if transition was successful
-                if not transition_success:
-                    _LOGGER.warning(
-                        "Mode transition from %s to %s failed - keeping previous commanded mode",
-                        old_mode.value,
-                        desired.value,
-                    )
-                    # Send notification about failed transition
-                    await (
-                        self._notification_service.send_transition_failed_notification(
-                            desired, data
-                        )
-                    )
-                    # Clear only the failed mode's timer so it will retry on next evaluation
-                    # Keep other mode timers intact - they may be needed if forecast flips back
-                    self._mode_desired_since.pop(desired, None)
-                    return
-
-                self._commanded_mode = desired
-                self._mode_desired_since.clear()
-
-                # Record decision for learning system (Issue #170 Phase 1)
-                if self._decision_tracker is not None and not self._get_switch_state(
-                    "dry_run"
-                ):
-                    self._decision_tracker.record_decision(data, desired, old_mode)
-
-                # Send notification
-                await self._notification_service.send_transition_notification(
-                    old_mode, desired, data
-                )
-
+                await self._evaluate_core(data, computation_engine)
             finally:
-                # Always notify listeners after compute_derived_values(), so
-                # sensors reflect fresh computed state on every code path.
                 if notify_func is not None:
                     notify_func()
+
+    async def _evaluate_core(
+        self, data: CoordinatorData, computation_engine: ComputationEngine
+    ) -> None:
+        """Core evaluation logic extracted from evaluate_state_machine."""
+        now = dt_util.now()
+        desired = data.active_mode
+
+        if self._handle_startup_grace_period(data, now):
+            return
+        if self._handle_automation_disabled():
+            return
+
+        await self._handle_manual_override_timeout(data, now)
+
+        if desired == self._commanded_mode:
+            await self._handle_stable_mode(data)
+        else:
+            await self._handle_desired_mode_transition(data, desired, now)
+
+    async def _handle_stable_mode(self, data: CoordinatorData) -> None:
+        """Handle case where desired mode matches commanded mode."""
+        self._mode_desired_since.clear()
+        self._skip_next_debounce = False
+
+        if await self._handle_soc_monitoring(data):
+            return
+
+        if not self._get_switch_state("dry_run"):
+            await self._perform_health_check(data)
+
+    async def _handle_desired_mode_transition(
+        self, data: CoordinatorData, desired: BatteryMode, now: datetime
+    ) -> None:
+        """Handle mode transition with debounce logic."""
+        for mode in list(self._mode_desired_since.keys()):
+            if mode != desired:
+                self._mode_desired_since.pop(mode, None)
+
+        debounce = self._get_debounce_duration(desired)
+        debounce_in_progress = desired in self._mode_desired_since
+
+        if not debounce_in_progress:
+            if self._should_skip_price_unchanged(data, desired):
+                if not self._get_switch_state("dry_run"):
+                    await self._perform_health_check(data)
+                return
+            if self._start_debounce(data, desired, now, debounce):
+                return
+
+        if not await self._check_debounce_and_transition(data, desired, now, debounce):
+            return
+
+        old_mode = self._commanded_mode
+        _LOGGER.info(
+            "State machine transition: %s → %s (desired for %s)",
+            old_mode.value,
+            desired.value,
+            now - self._mode_desired_since[desired],
+        )
+
+        if not self.entity_validator.should_allow_automation():
+            _LOGGER.warning(
+                "Automation blocked: Required entities unavailable. Maintaining current mode %s.",
+                old_mode.value,
+            )
+            return
+
+        transition_success = await self._execute_mode_transition(data, desired)
+
+        if not transition_success:
+            _LOGGER.warning(
+                "Mode transition from %s to %s failed - keeping previous commanded mode",
+                old_mode.value,
+                desired.value,
+            )
+            await self._notification_service.send_transition_failed_notification(
+                desired, data
+            )
+            self._mode_desired_since.pop(desired, None)
+            return
+
+        self._commanded_mode = desired
+        self._mode_desired_since.clear()
+
+        if self._decision_tracker is not None and not self._get_switch_state("dry_run"):
+            self._decision_tracker.record_decision(data, desired, old_mode)
+
+        await self._notification_service.send_transition_notification(
+            old_mode, desired, data
+        )
+
+    def _should_skip_price_unchanged(
+        self, data: CoordinatorData, desired: BatteryMode
+    ) -> bool:
+        """Check if transition should be skipped due to unchanged price."""
+        fingerprint = self._get_decision_fingerprint(data)
+        price_changed = (
+            fingerprint != self._last_decision_fingerprint
+            or self._last_decision_fingerprint is None
+        )
+
+        if not price_changed:
+            _LOGGER.debug(
+                "Price unchanged (fingerprint=%s), skipping new mode transition %s → %s",
+                fingerprint,
+                self._commanded_mode.value,
+                desired.value,
+            )
+            return True
+        return False
+
+    def _start_debounce(
+        self,
+        data: CoordinatorData,
+        desired: BatteryMode,
+        now: datetime,
+        debounce: timedelta,
+    ) -> bool:
+        """Start debounce timer for new desired mode.
+
+        Returns True if caller should return (wait for debounce), False if debounce is 0.
+        """
+        fingerprint = self._get_decision_fingerprint(data)
+        self._last_decision_fingerprint = fingerprint
+        self._mode_desired_since[desired] = now
+        if debounce > timedelta(0):
+            _LOGGER.info(
+                "Mode %s desired, debounce %s starts now",
+                desired.value,
+                debounce,
+            )
+            return True
+        return False
+
+    async def _check_debounce_and_transition(
+        self,
+        data: CoordinatorData,
+        desired: BatteryMode,
+        now: datetime,
+        debounce: timedelta,
+    ) -> bool:
+        """Check if debounce is satisfied. Returns False if still waiting."""
+        desired_since = self._mode_desired_since[desired]
+        elapsed = now - desired_since
+
+        if elapsed < debounce:
+            _LOGGER.info(
+                "Mode %s desired for %s, need %s — waiting",
+                desired.value,
+                elapsed,
+                debounce,
+            )
+            return False
+        return True
 
     async def _execute_mode_transition(
         self, data: CoordinatorData, target: BatteryMode
@@ -712,8 +727,6 @@ class StateMachine:
 
         """
         dry_run = self._get_switch_state("dry_run")
-
-        # Set flag to prevent re-evaluation during mode transition
         self._in_mode_transition = True
         transition_success = True
 
@@ -726,58 +739,11 @@ class StateMachine:
                 _LOGGER.info("Manual mode transition completed (no commands)")
                 transition_success = True
             else:
-                if target in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
-                    transition_success = (
-                        await self._battery_controller.set_self_consumption(
-                            data, dry_run, preserve_soc=config.backup_reserve
-                        )
-                    )
-
-                elif target == BatteryMode.GRID_CHARGING:
-                    battery_target = float(
-                        self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-                    )
-                    transition_success = (
-                        await self._battery_controller.set_force_charge(
-                            data, dry_run, target_soc=battery_target
-                        )
-                    )
-
-                elif target == BatteryMode.BOOST_CHARGING:
-                    transition_success = (
-                        await self._battery_controller.set_boost_charge(data, dry_run)
-                    )
-
-                elif target == BatteryMode.SPIKE_DISCHARGE:
-                    reserve_soc = (
-                        data.spike_reserve_soc
-                        if data.spike_in_conservative_mode
-                        else None
-                    )
-                    transition_success = (
-                        await self._battery_controller.set_force_discharge(
-                            data, dry_run, reserve_soc=reserve_soc
-                        )
-                    )
-
-                elif target == BatteryMode.PROACTIVE_EXPORT:
-                    transition_success = (
-                        await self._battery_controller.set_proactive_export(
-                            data, dry_run
-                        )
-                    )
-
-                elif target == BatteryMode.HOLD:
-                    transition_success = (
-                        await self._battery_controller.set_self_consumption(
-                            data, dry_run, preserve_soc=config.backup_reserve
-                        )
-                    )
-
+                transition_success = await self._dispatch_mode_transition(
+                    target, data, config, dry_run
+                )
                 if transition_success:
-                    self._self_consumption_reserve = config.self_consumption_reserve
-                    self._grid_charging_reserve = config.grid_charging_reserve
-                    self._proactive_export_reserve = config.proactive_export_reserve
+                    self._update_transition_reserves(config)
                     _LOGGER.info(
                         "%s mode transition completed (reserve=%s)",
                         target.value,
@@ -794,65 +760,122 @@ class StateMachine:
                 exc_info=True,
             )
             transition_success = False
-            # Note: We still clear _in_mode_transition in the finally block
-            # so the state machine can retry the transition on the next evaluation
         finally:
-            # Always clear the flag, even if an exception occurs
             _LOGGER.debug("Mode transition flag cleared, allowing re-evaluation")
             self._in_mode_transition = False
 
-        # Track successful transition time for health check grace period
         if transition_success:
-            from homeassistant.util import dt as dt_util  # noqa: PLC0415
-
-            transition_time = dt_util.now()
-
-            if not dry_run:
-                self._last_successful_transition = transition_time
-
-                # Issue #501: Record implementation timestamp and calculate lag
-            if data.decision_timestamp is not None and data.decision_mode == target:
-                data.implementation_timestamp = transition_time
-                lag_seconds = (
-                    transition_time - data.decision_timestamp
-                ).total_seconds()
-                data.decision_lag_seconds = lag_seconds
-                from_mode = data.active_mode.value if data.active_mode else "unknown"
-                to_mode = target.value
-                decision_mode_value = (
-                    data.decision_mode.value if data.decision_mode else "unknown"
-                )
-
-                # Add to history
-                history_entry = {
-                    "from_mode": from_mode,
-                    "to_mode": to_mode,
-                    "lag_seconds": round(lag_seconds, 2),
-                    "decision_time": data.decision_timestamp.isoformat(),
-                    "implementation_time": transition_time.isoformat(),
-                }
-                data.decision_lag_history.append(history_entry)
-                if len(data.decision_lag_history) > 50:
-                    data.decision_lag_history = data.decision_lag_history[-50:]
-
-                _LOGGER.info(
-                    "Decision lag: %s → %s completed in %.2fs",
-                    decision_mode_value,
-                    to_mode,
-                    lag_seconds,
-                )
-
-                # Clear decision tracking fields
-                data.decision_timestamp = None
-                data.decision_mode = None
-
-            _LOGGER.debug(
-                "Recorded successful transition to %s at %s",
-                target.value,
-                transition_time.strftime("%H:%M:%S"),
-            )
+            self._record_transition_metrics(data, target, dry_run)
 
         return transition_success
+
+    async def _dispatch_mode_transition(
+        self,
+        target: BatteryMode,
+        data: CoordinatorData,
+        config: ModeConfig,
+        dry_run: bool,
+    ) -> bool:
+        """Dispatch to the appropriate transition executor."""
+        executor_name = self._MODE_EXECUTORS.get(target)
+        if executor_name:
+            return await getattr(self, executor_name)(data, config, dry_run)
+        return False
+
+    async def _execute_self_consumption_transition(
+        self, data: CoordinatorData, config: ModeConfig, dry_run: bool
+    ) -> bool:
+        """Execute SELF_CONSUMPTION / DEMAND_BLOCK transition."""
+        return await self._battery_controller.set_self_consumption(
+            data, dry_run, preserve_soc=config.backup_reserve
+        )
+
+    async def _execute_grid_charging_transition(
+        self, data: CoordinatorData, config: ModeConfig, dry_run: bool
+    ) -> bool:
+        """Execute GRID_CHARGING transition."""
+        battery_target = float(
+            self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+        return await self._battery_controller.set_force_charge(
+            data, dry_run, target_soc=battery_target
+        )
+
+    async def _execute_boost_charging_transition(
+        self, data: CoordinatorData, config: ModeConfig, dry_run: bool
+    ) -> bool:
+        """Execute BOOST_CHARGING transition."""
+        return await self._battery_controller.set_boost_charge(data, dry_run)
+
+    async def _execute_spike_discharge_transition(
+        self, data: CoordinatorData, config: ModeConfig, dry_run: bool
+    ) -> bool:
+        """Execute SPIKE_DISCHARGE transition."""
+        reserve_soc = (
+            data.spike_reserve_soc if data.spike_in_conservative_mode else None
+        )
+        return await self._battery_controller.set_force_discharge(
+            data, dry_run, reserve_soc=reserve_soc
+        )
+
+    async def _execute_proactive_export_transition(
+        self, data: CoordinatorData, config: ModeConfig, dry_run: bool
+    ) -> bool:
+        """Execute PROACTIVE_EXPORT transition."""
+        return await self._battery_controller.set_proactive_export(data, dry_run)
+
+    async def _execute_hold_transition(
+        self, data: CoordinatorData, config: ModeConfig, dry_run: bool
+    ) -> bool:
+        """Execute HOLD transition."""
+        return await self._battery_controller.set_self_consumption(
+            data, dry_run, preserve_soc=config.backup_reserve
+        )
+
+    def _update_transition_reserves(self, config: ModeConfig) -> None:
+        """Update reserve tracking after successful transition."""
+        self._self_consumption_reserve = config.self_consumption_reserve
+        self._grid_charging_reserve = config.grid_charging_reserve
+        self._proactive_export_reserve = config.proactive_export_reserve
+
+    def _record_transition_metrics(
+        self, data: CoordinatorData, target: BatteryMode, dry_run: bool
+    ) -> None:
+        """Record transition timing metrics for telemetry."""
+        transition_time = dt_util.now()
+        if not dry_run:
+            self._last_successful_transition = transition_time
+
+        if data.decision_timestamp is not None and data.decision_mode == target:
+            data.implementation_timestamp = transition_time
+            lag_seconds = (transition_time - data.decision_timestamp).total_seconds()
+            data.decision_lag_seconds = lag_seconds
+
+            history_entry = {
+                "from_mode": data.active_mode.value if data.active_mode else "unknown",
+                "to_mode": target.value,
+                "lag_seconds": round(lag_seconds, 2),
+                "decision_time": data.decision_timestamp.isoformat(),
+                "implementation_time": transition_time.isoformat(),
+            }
+            data.decision_lag_history.append(history_entry)
+            if len(data.decision_lag_history) > 50:
+                data.decision_lag_history = data.decision_lag_history[-50:]
+
+            _LOGGER.info(
+                "Decision lag: %s → %s completed in %.2fs",
+                data.decision_mode.value if data.decision_mode else "unknown",
+                target.value,
+                lag_seconds,
+            )
+            data.decision_timestamp = None
+            data.decision_mode = None
+
+        _LOGGER.debug(
+            "Recorded successful transition to %s at %s",
+            target.value,
+            transition_time.strftime("%H:%M:%S"),
+        )
 
     def _get_expected_state_for_mode(
         self, mode: BatteryMode
