@@ -1193,3 +1193,294 @@ class TestSkipDebounceFlagReset:
 
         # Flag should now be False
         assert state_machine._skip_next_debounce == False
+
+
+class TestDecisionFingerprint:
+    """Test fingerprint generation for gating mode transitions.
+
+    Issue #622: Mode transitions are gated on price changes to prevent
+    oscillation when optimizer re-runs with stable prices.
+    """
+
+    def test_fingerprint_includes_general_price(self, state_machine, coordinator_data):
+        """Fingerprint changes when general_price changes."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+
+        fp1 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        coordinator_data.general_price = 0.30
+        fp2 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        assert fp1 != fp2
+        assert "0.2500" in fp1
+        assert "0.3000" in fp2
+
+    def test_fingerprint_includes_feed_in_price(self, state_machine, coordinator_data):
+        """Fingerprint changes when feed_in_price changes."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+
+        fp1 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        coordinator_data.feed_in_price = 0.10
+        fp2 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        assert fp1 != fp2
+        assert "0.0800" in fp1
+        assert "0.1000" in fp2
+
+    def test_fingerprint_includes_spike(self, state_machine, coordinator_data):
+        """Fingerprint changes when price_spike changes."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+
+        fp1 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        coordinator_data.price_spike = True
+        fp2 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        assert fp1 != fp2
+        assert "|False" in fp1
+        assert "|True" in fp2
+
+    def test_fingerprint_returns_none_if_general_price_missing(
+        self, state_machine, coordinator_data
+    ):
+        """Returns None when general_price is unavailable."""
+        coordinator_data.general_price = None
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+
+        assert state_machine._get_decision_fingerprint(coordinator_data) is None
+
+    def test_fingerprint_returns_none_if_feed_in_price_missing(
+        self, state_machine, coordinator_data
+    ):
+        """Returns None when feed_in_price is unavailable."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = None
+        coordinator_data.price_spike = False
+
+        assert state_machine._get_decision_fingerprint(coordinator_data) is None
+
+    def test_fingerprint_stable_with_same_prices(self, state_machine, coordinator_data):
+        """Same prices produce same fingerprint."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+
+        fp1 = state_machine._get_decision_fingerprint(coordinator_data)
+        fp2 = state_machine._get_decision_fingerprint(coordinator_data)
+
+        assert fp1 == fp2
+        assert fp1 == "0.2500|0.0800|False"
+
+
+class TestModeTransitionGating:
+    """Test that mode transitions are gated on fingerprint.
+
+    Issue #622: Mode transitions only occur when price fingerprint changes.
+    Optimizer always runs to update plan data.
+    """
+
+    @pytest.mark.asyncio
+    async def test_optimizer_runs_even_if_price_unchanged(
+        self,
+        state_machine,
+        coordinator_data,
+        computation_engine,
+    ):
+        """Optimizer always runs even if price unchanged."""
+        # Set up data with prices and a different desired mode
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+        # Set desired mode different from commanded mode (which is SELF_CONSUMPTION)
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        # First evaluation sets fingerprint and transitions
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            computation_engine,
+        )
+
+        # Verify fingerprint was set
+        fingerprint = state_machine._get_decision_fingerprint(coordinator_data)
+        assert fingerprint is not None
+        assert state_machine._last_decision_fingerprint is not None
+
+    @pytest.mark.asyncio
+    async def test_mode_transition_skipped_if_price_unchanged(
+        self,
+        state_machine,
+        coordinator_data,
+        computation_engine,
+        mock_battery_controller,
+    ):
+        """Mode transition is skipped when fingerprint unchanged."""
+        # Set up data with prices and different desired mode
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        # First evaluation to set fingerprint and transition
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            computation_engine,
+        )
+
+        # Verify fingerprint was set
+        fingerprint = state_machine._get_decision_fingerprint(coordinator_data)
+        assert fingerprint is not None
+        assert state_machine._last_decision_fingerprint is not None
+
+        # Reset mock to track second call
+        mock_battery_controller.set_force_charge.reset_mock()
+
+        # Change desired mode but keep same prices
+        coordinator_data.active_mode = BatteryMode.BOOST_CHARGING
+
+        # Second evaluation should skip transition due to same prices
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            computation_engine,
+        )
+
+        # Mode transition should be skipped (no new calls)
+        mock_battery_controller.set_force_charge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_first_evaluation_allows_transition(
+        self,
+        state_machine,
+        coordinator_data,
+        computation_engine,
+        mock_battery_controller,
+    ):
+        """First evaluation (fingerprint=None) always allows transition."""
+        # Set up data with prices
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+        coordinator_data.active_mode = BatteryMode.GRID_CHARGING
+
+        # Skip debounce for first transition after startup grace
+        state_machine._skip_next_debounce = True
+
+        # First evaluation should allow transition
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            computation_engine,
+        )
+
+        # Mode transition should proceed on first evaluation
+        mock_battery_controller.set_force_charge.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_health_check_runs_even_if_price_unchanged(
+        self,
+        state_machine,
+        coordinator_data,
+        computation_engine,
+        mock_battery_controller,
+    ):
+        """Health checks run regardless of fingerprint."""
+        # Set up data with prices and same mode (no transition needed)
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+
+        # First evaluation
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            computation_engine,
+        )
+
+        # Reset mock
+        mock_battery_controller.verify_current_state.reset_mock()
+
+        # Second evaluation with same prices, same mode
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            computation_engine,
+        )
+
+        # Health check (verify_current_state) should still be called
+        mock_battery_controller.verify_current_state.assert_called()
+
+    def test_debounce_completes_with_stable_prices(
+        self,
+        state_machine,
+        coordinator_data,
+        mock_battery_controller,
+    ):
+        """Debounce timer completes even when prices unchanged.
+
+        Issue #622: PROACTIVE_EXPORT has 2-minute debounce. If prices are
+        stable during the debounce period, the transition should still complete
+        once debounce is satisfied.
+        """
+        import asyncio
+        from unittest.mock import patch, MagicMock
+
+        # Set up data with prices
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.price_spike = False
+
+        # Start in SELF_CONSUMPTION, desire PROACTIVE_EXPORT
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        # First evaluation: starts debounce (PROACTIVE_EXPORT has 2-min debounce)
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 16, 16, 0, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # Should NOT have transitioned yet (debounce started)
+        mock_battery_controller.set_proactive_export.assert_not_called()
+
+        # Verify debounce timer started
+        assert BatteryMode.PROACTIVE_EXPORT in state_machine._mode_desired_since
+
+        # Reset mock
+        mock_battery_controller.set_proactive_export.reset_mock()
+
+        # Second evaluation: 1 minute later, prices UNCHANGED
+        # Debounce should continue (not restart) even though price unchanged
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 16, 16, 1, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # Should NOT have transitioned yet (1 min < 2 min debounce)
+        mock_battery_controller.set_proactive_export.assert_not_called()
+
+        # Third evaluation: 2+ minutes later, prices STILL UNCHANGED
+        # Debounce should now be satisfied and transition should happen
+        with patch(
+            "custom_components.localshift.state_machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = dt_aware(2026, 2, 16, 16, 2, 1)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # NOW transition should have happened despite unchanged prices
+        mock_battery_controller.set_proactive_export.assert_called_once()
