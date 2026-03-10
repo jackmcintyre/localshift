@@ -17,14 +17,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from ..const import (
+from .const import (
     BUTTON_ICONS,
     BUTTON_NAMES,
     BUTTON_RESET_LEARNING,
     BUTTON_UPDATE_FORECAST,
     DOMAIN,
 )
-from ..coordinator import LocalShiftCoordinator
+from .coordinator import LocalShiftCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 

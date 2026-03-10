@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from ..const import (
+from .const import (
     CONF_OPTIMIZATION_MODE,
     DEFAULT_OPTIMIZATION_MODE,
     DOMAIN,
@@ -27,7 +27,7 @@ from ..const import (
     SWITCH_AUTOMATION_ENABLED,
     BatteryMode,
 )
-from ..coordinator import LocalShiftCoordinator
+from .coordinator import LocalShiftCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
