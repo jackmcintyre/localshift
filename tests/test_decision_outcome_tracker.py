@@ -13,7 +13,7 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     PlannerAction,
 )
 from custom_components.localshift.const import BatteryMode
-from custom_components.localshift.coordinator_data import (
+from custom_components.localshift.coordinator import (
     CoordinatorData,
     PerformanceMetrics,
 )

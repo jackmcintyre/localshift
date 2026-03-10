@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.localshift.const import BatteryMode
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 # Helper to create timezone-aware datetimes

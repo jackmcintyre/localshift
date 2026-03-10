@@ -16,7 +16,7 @@ from ..const import (
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_MINIMUM_TARGET_SOC,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

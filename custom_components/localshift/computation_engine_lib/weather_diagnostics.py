@@ -10,7 +10,7 @@ from ..const import (
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_WEATHER_LEARNING_ENABLED,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from ..learning.correlation import WeatherCorrelation
 
 _LOGGER = logging.getLogger(__name__)

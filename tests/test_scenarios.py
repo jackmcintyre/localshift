@@ -19,7 +19,7 @@ from custom_components.localshift.computation_engine import (
     BatteryMode,
     ComputationEngine,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 from simulations.schema import Scenario, discover_scenarios
 
 # ---------------------------------------------------------------------------

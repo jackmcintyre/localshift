@@ -13,7 +13,7 @@ from ..const import (
     CONF_BATTERY_TARGET,
     DEFAULT_BATTERY_TARGET,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from .price_calculator import get_price_for_slot_or_none
 from .solar_utils import get_solar_for_15min_slot
 

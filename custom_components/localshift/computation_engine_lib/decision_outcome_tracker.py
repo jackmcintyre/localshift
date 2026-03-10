@@ -19,13 +19,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import BatteryMode
-from ..coordinator_data import PerformanceMetrics
+from ..coordinator.data import PerformanceMetrics
 from .optimizer_dp import PlannerAction
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from ..coordinator_data import CoordinatorData
+    from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

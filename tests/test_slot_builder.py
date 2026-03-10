@@ -19,7 +19,7 @@ from custom_components.localshift.computation_engine_lib.slot_builder import (
     SlotBuilder,
     SlotBuildMetadata,
 )
-from custom_components.localshift.coordinator_data import AdaptiveParameters
+from custom_components.localshift.coordinator import AdaptiveParameters
 
 
 class TestSlotBuildMetadata:

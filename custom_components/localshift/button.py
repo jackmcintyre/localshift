@@ -129,7 +129,7 @@ class ResetLearningDataButton(LocalShiftButtonBase):
         self.coordinator.data.recent_decision_log.clear()
 
         # Reset performance metrics to defaults
-        from .coordinator_data import PerformanceMetrics
+        from .coordinator import PerformanceMetrics
 
         self.coordinator.data.performance_metrics = PerformanceMetrics()
 

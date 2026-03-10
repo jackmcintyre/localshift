@@ -266,7 +266,7 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
 
     def test_no_fallback_count_field_on_coordinator_data(self):
         """CoordinatorData must not have optimizer_fallback_count field (Phase 6)."""
-        from custom_components.localshift.coordinator_data import CoordinatorData
+        from custom_components.localshift.coordinator import CoordinatorData
 
         data = CoordinatorData()
         assert not hasattr(data, "optimizer_fallback_count"), (
@@ -275,7 +275,7 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
 
     def test_no_optimizer_runtime_mode_field_on_coordinator_data(self):
         """CoordinatorData must not have optimizer_runtime_mode field (Phase 6)."""
-        from custom_components.localshift.coordinator_data import CoordinatorData
+        from custom_components.localshift.coordinator import CoordinatorData
 
         data = CoordinatorData()
         assert not hasattr(data, "optimizer_runtime_mode"), (

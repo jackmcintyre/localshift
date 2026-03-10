@@ -6,15 +6,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from .const import BatteryMode
+from ..const import BatteryMode
 
 if TYPE_CHECKING:
-    from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
+    from ..computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 
 
 def _default_extended_accuracy_metrics() -> Any:
     """Factory for ExtendedAccuracyMetrics that avoids circular import at module load."""
-    from .computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
+    from ..computation_engine_lib.forecast_accuracy import ExtendedAccuracyMetrics
 
     return ExtendedAccuracyMetrics()
 

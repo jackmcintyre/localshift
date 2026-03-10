@@ -117,7 +117,7 @@ def state_machine(
 @pytest.fixture
 def coordinator_data():
     """Create basic CoordinatorData for state machine tests."""
-    from custom_components.localshift.coordinator_data import CoordinatorData
+    from custom_components.localshift.coordinator import CoordinatorData
 
     data = CoordinatorData()
     data.soc = 50.0

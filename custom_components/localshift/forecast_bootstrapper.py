@@ -9,7 +9,7 @@ from collections.abc import Callable
 from homeassistant.core import HomeAssistant
 
 from .const import CONF_SOLCAST_FORECAST_TODAY
-from .coordinator_data import CoordinatorData
+from .coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

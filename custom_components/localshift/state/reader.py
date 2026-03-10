@@ -29,7 +29,7 @@ from ..const import (
     CONF_WEATHER_ENTITY,
     DEFAULT_ENTITY_IDS,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)

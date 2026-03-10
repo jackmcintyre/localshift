@@ -57,7 +57,7 @@ from .const import (
 from .const import (
     BatteryMode as _BatteryMode,
 )
-from .coordinator_data import CoordinatorData
+from .coordinator import CoordinatorData
 from .learning.correlation import WeatherCorrelation
 
 # Backward-compatible re-export for tests/importers that import BatteryMode

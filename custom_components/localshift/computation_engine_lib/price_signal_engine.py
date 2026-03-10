@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from .price_calculator import PriceCalculator
 from .solar_utils import sum_solar_before_target
 from .spike_analyzer import SpikeAnalyzer

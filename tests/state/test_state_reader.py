@@ -15,7 +15,7 @@ from custom_components.localshift.const import (
     CONF_TESLEMETRY_SOC,
     DEFAULT_ENTITY_IDS,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.state.reader import StateReader
 
 

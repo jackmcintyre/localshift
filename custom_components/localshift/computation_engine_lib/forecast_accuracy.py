@@ -11,7 +11,7 @@ from homeassistant.util import dt as dt_util
 
 # Avoid circular import - only import for type hints
 if TYPE_CHECKING:
-    from ..coordinator_data import CoordinatorData
+    from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

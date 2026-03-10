@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from ..coordinator_data import CoordinatorData
+    from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ import pytest
 from custom_components.localshift.computation_engine_lib.forecast_history_store import (
     ForecastHistoryStore,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 def test_store_forecast_history_appends_entries():

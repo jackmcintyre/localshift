@@ -47,7 +47,7 @@ import pytest
 from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 # Import realistic HA state simulation
 from tests.fixtures.ha_entities import (

@@ -18,7 +18,7 @@ from ..const import (
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

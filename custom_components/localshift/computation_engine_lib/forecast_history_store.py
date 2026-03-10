@@ -9,7 +9,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
 from custom_components.localshift.const import (
     BatteryMode,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.state.machine import StateMachine
 
 # ---------------------------------------------------------------------------

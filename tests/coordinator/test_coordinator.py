@@ -31,7 +31,7 @@ def coordinator(mock_hass_with_services, mock_entry):
 @pytest.fixture
 def coordinator_data():
     """Create basic CoordinatorData for coordinator tests."""
-    from custom_components.localshift.coordinator_data import CoordinatorData
+    from custom_components.localshift.coordinator import CoordinatorData
 
     data = CoordinatorData()
     data.soc = 50.0
@@ -688,7 +688,7 @@ class TestMediumTickOptimizationController:
         self, learning_orchestrator_with_data
     ):
         """evaluate() is called on every medium tick when controller is present."""
-        from custom_components.localshift.coordinator_data import AdaptiveParameters
+        from custom_components.localshift.coordinator import AdaptiveParameters
 
         orchestrator, data = learning_orchestrator_with_data
 
@@ -715,7 +715,7 @@ class TestMediumTickOptimizationController:
 
     def test_medium_tick_updates_adaptive_params(self, learning_orchestrator_with_data):
         """data.adaptive_params is replaced with the result of evaluate()."""
-        from custom_components.localshift.coordinator_data import AdaptiveParameters
+        from custom_components.localshift.coordinator import AdaptiveParameters
 
         orchestrator, data = learning_orchestrator_with_data
 
@@ -747,7 +747,7 @@ class TestMediumTickOptimizationController:
             "cycle_reduction": 0.10,
         }
 
-        from custom_components.localshift.coordinator_data import AdaptiveParameters
+        from custom_components.localshift.coordinator import AdaptiveParameters
 
         mock_controller = MagicMock()
         mock_controller.evaluate.return_value = AdaptiveParameters()
@@ -774,7 +774,7 @@ class TestMediumTickOptimizationController:
             }
         ]
 
-        from custom_components.localshift.coordinator_data import AdaptiveParameters
+        from custom_components.localshift.coordinator import AdaptiveParameters
 
         mock_controller = MagicMock()
         mock_controller.evaluate.return_value = AdaptiveParameters()
@@ -796,7 +796,7 @@ class TestMediumTickOptimizationController:
         orchestrator.optimization_controller = None
 
         # Set a sentinel on data fields so we can verify nothing changes
-        from custom_components.localshift.coordinator_data import AdaptiveParameters
+        from custom_components.localshift.coordinator import AdaptiveParameters
 
         original_params = AdaptiveParameters()
         data.adaptive_params = original_params

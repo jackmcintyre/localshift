@@ -22,7 +22,7 @@ from ..const import (
     LEARNING_UPDATE_INTERVAL_HOURS,
     OPTIMIZABLE_PARAMS,
 )
-from ..coordinator_data import AdaptiveParameters
+from ..coordinator.data import AdaptiveParameters
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

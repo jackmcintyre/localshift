@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 
-from .const import (
+from ..const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
     CONF_NOTIFY_SERVICE,
@@ -30,20 +30,20 @@ from .const import (
     SWITCH_DEFAULTS,
     BatteryMode,
 )
-from .coordinator_data import CoordinatorData
-from .forecast_bootstrapper import ForecastBootstrapper
-from .learning.orchestrator import LearningOrchestrator
-from .services.evaluation_dispatcher import EvaluationDispatcher
-from .services.subscription_manager import SubscriptionManager
+from ..forecast_bootstrapper import ForecastBootstrapper
+from ..learning.orchestrator import LearningOrchestrator
+from ..services.evaluation_dispatcher import EvaluationDispatcher
+from ..services.subscription_manager import SubscriptionManager
+from .data import CoordinatorData
 
 if TYPE_CHECKING:
-    from .computation_engine import ComputationEngine
-    from .integration.controller import BatteryController
-    from .services.notification_service import NotificationService
-    from .state.machine import StateMachine
-    from .state.reader import StateReader
-    from .utils.costs import CostTracker
-    from .utils.validation import EntityValidator
+    from ..computation_engine import ComputationEngine
+    from ..integration.controller import BatteryController
+    from ..services.notification_service import NotificationService
+    from ..state.machine import StateMachine
+    from ..state.reader import StateReader
+    from ..utils.costs import CostTracker
+    from ..utils.validation import EntityValidator
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -149,7 +149,7 @@ class LocalShiftCoordinator:
             return self.entry.data[key]
 
         # Fallback to default if key not in entry data
-        from .const import DEFAULT_ENTITY_IDS
+        from ..const import DEFAULT_ENTITY_IDS
 
         return DEFAULT_ENTITY_IDS.get(key, "")
 
@@ -180,13 +180,13 @@ class LocalShiftCoordinator:
     async def async_start(self) -> None:
         """Start listening to entity changes and periodic timer."""
         # Initialize helper modules
-        from .computation_engine import ComputationEngine
-        from .integration.controller import BatteryController
-        from .services.notification_service import NotificationService
-        from .state.machine import StateMachine
-        from .state.reader import StateReader
-        from .utils.costs import CostTracker
-        from .utils.validation import EntityValidator
+        from ..computation_engine import ComputationEngine
+        from ..integration.controller import BatteryController
+        from ..services.notification_service import NotificationService
+        from ..state.machine import StateMachine
+        from ..state.reader import StateReader
+        from ..utils.costs import CostTracker
+        from ..utils.validation import EntityValidator
 
         self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
         self._state_reader = StateReader(self.hass, self.entry, self._entity_validator)
@@ -227,7 +227,7 @@ class LocalShiftCoordinator:
         )
 
         # Initialize solar forecast accuracy tracker (Issue #378)
-        from .computation_engine_lib.solar_accuracy import SolarAccuracyTracker
+        from ..computation_engine_lib.solar_accuracy import SolarAccuracyTracker
 
         self.solar_accuracy_tracker = SolarAccuracyTracker(
             self.hass, self.entry.entry_id
@@ -711,7 +711,7 @@ class LocalShiftCoordinator:
 
         Replaces YAML A15 (localshift_daily_summary).
         """
-        from .const import SWITCH_AUTOMATION_ENABLED
+        from ..const import SWITCH_AUTOMATION_ENABLED
 
         if not self.get_switch_state(SWITCH_AUTOMATION_ENABLED):
             return
@@ -776,7 +776,7 @@ class LocalShiftCoordinator:
             return
 
         # Reset tracking for weather entity (most commonly reconfigured optional entity)
-        from .const import CONF_WEATHER_ENTITY
+        from ..const import CONF_WEATHER_ENTITY
 
         self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
 

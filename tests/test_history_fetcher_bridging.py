@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.localshift.computation_engine import ComputationEngine
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 @pytest.fixture

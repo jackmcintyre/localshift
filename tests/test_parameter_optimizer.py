@@ -16,7 +16,7 @@ from custom_components.localshift.const import (
     OPTIMIZABLE_PARAMS,
     BatteryMode,
 )
-from custom_components.localshift.coordinator_data import AdaptiveParameters
+from custom_components.localshift.coordinator import AdaptiveParameters
 
 
 class TestParameterOptimizer:

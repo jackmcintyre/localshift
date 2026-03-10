@@ -9,7 +9,7 @@ These tests verify that the StateReader correctly handles:
 - Missing attributes
 """
 
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.state.reader import StateReader
 
 # =============================================================================

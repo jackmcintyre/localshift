@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from custom_components.localshift.computation_engine_lib.forecast_pipeline import (
     ForecastPipeline,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 class _StubLoadForecaster:

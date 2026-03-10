@@ -19,7 +19,7 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..coordinator_data import AdaptiveParameters
+from ..coordinator.data import AdaptiveParameters
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import TOTAL_SLOTS, compute_hybrid_slot_schedule

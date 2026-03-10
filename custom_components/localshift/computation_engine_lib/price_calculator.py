@@ -17,7 +17,7 @@ from ..const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MAX_PRECHARGE_PRICE,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from .utils import parse_forecast_dt
 
 

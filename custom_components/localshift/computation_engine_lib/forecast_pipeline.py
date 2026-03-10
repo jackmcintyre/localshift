@@ -13,7 +13,7 @@ from ..const import (
     CHARGE_RATE_GRID_KW,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from .solar_utils import sum_solar_before_target
 
 _LOGGER = logging.getLogger(__name__)

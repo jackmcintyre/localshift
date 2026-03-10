@@ -27,7 +27,7 @@ from ..const import (
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
 )
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 
 if TYPE_CHECKING:
     from ..computation_engine import ComputationEngine

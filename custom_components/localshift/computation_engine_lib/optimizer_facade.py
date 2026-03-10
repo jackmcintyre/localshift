@@ -10,7 +10,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from ..const import BatteryMode as _BatteryMode
-from ..coordinator_data import CoordinatorData
+from ..coordinator.data import CoordinatorData
 from .optimizer_dp import DPPlanner, OptimizerInputs
 from .optimizer_runner import (
     OptimizerSafetyGate,

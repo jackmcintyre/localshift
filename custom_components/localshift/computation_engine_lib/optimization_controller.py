@@ -18,12 +18,12 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from ..coordinator_data import AdaptiveParameters
+from ..coordinator.data import AdaptiveParameters
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from ..coordinator_data import CoordinatorData
+    from ..coordinator.data import CoordinatorData
     from .decision_outcome_tracker import DecisionOutcomeTracker
     from .parameter_optimizer import ParameterOptimizer
     from .pattern_analyzer import PatternAnalyzer

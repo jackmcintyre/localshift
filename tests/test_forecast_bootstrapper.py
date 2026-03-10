@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.forecast_bootstrapper import ForecastBootstrapper
 from tests.fixtures.ha_entities import MockState, MockStates
 

@@ -49,7 +49,7 @@ def battery_controller(mock_hass, mock_get_entity_id):
 @pytest.fixture
 def coordinator_data():
     """Create basic CoordinatorData for battery controller tests."""
-    from custom_components.localshift.coordinator_data import CoordinatorData
+    from custom_components.localshift.coordinator import CoordinatorData
 
     data = CoordinatorData()
     data.soc = 50.0

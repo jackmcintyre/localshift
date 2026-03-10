@@ -8,7 +8,7 @@ from custom_components.localshift.const import (
     SWITCH_NOTIFICATIONS_ENABLED,
     BatteryMode,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.services.notification_service import (
     NotificationService,
 )
