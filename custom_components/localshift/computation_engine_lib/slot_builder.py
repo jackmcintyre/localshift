@@ -20,10 +20,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..coordinator.data import AdaptiveParameters
+from ..forecast.solar import get_solar_for_slot_by_interval
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import TOTAL_SLOTS, compute_hybrid_slot_schedule
-from .solar_utils import get_solar_for_slot_by_interval
 
 _LOGGER = logging.getLogger(__name__)
 

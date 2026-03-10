@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.forecast_accuracy import (
+from custom_components.localshift.forecast.accuracy import (
     ExtendedAccuracyMetrics,
     ExtendedForecastAccuracyEngine,
     ForecastAccuracyEngine,

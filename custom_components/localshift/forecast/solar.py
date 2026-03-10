@@ -12,11 +12,19 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-_LOGGER = logging.getLogger(__name__)
-
 from homeassistant.util import dt as dt_util
 
-from .utils import parse_forecast_dt
+_LOGGER = logging.getLogger(__name__)
+
+
+def _parse_forecast_dt(dt_str: str | None) -> datetime | None:
+    """Parse an ISO format datetime string from forecast data."""
+    if dt_str is None:
+        return None
+    try:
+        return dt_util.parse_datetime(str(dt_str))
+    except (ValueError, TypeError):
+        return None
 
 
 def get_solar_for_15min_slot(
@@ -332,7 +340,7 @@ def sum_solar_before_target(
     period_duration = timedelta(minutes=30)
     total = 0.0
     for period in solcast:
-        period_start = parse_forecast_dt(period.get("period_start"))
+        period_start = _parse_forecast_dt(period.get("period_start"))
         if period_start is None:
             continue
         ps_local = dt_util.as_local(period_start)

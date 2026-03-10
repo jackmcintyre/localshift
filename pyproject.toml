@@ -36,12 +36,12 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "custom_components/localshift/computation_engine_lib/decision_outcome_tracker.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/history_fetcher.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/optimization_controller.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/parameter_optimizer.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/price_calculator.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/slot_builder.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/solar_utils.py" = ["C901"]
+"custom_components/localshift/forecast/history.py" = ["C901"]
+"custom_components/localshift/forecast/solar.py" = ["C901"]
 
 [tool.vulture]
 min_confidence = 80

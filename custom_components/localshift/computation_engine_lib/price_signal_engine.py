@@ -8,8 +8,8 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 
 from ..coordinator.data import CoordinatorData
+from ..forecast.solar import sum_solar_before_target
 from .price_calculator import PriceCalculator
-from .solar_utils import sum_solar_before_target
 from .spike_analyzer import SpikeAnalyzer
 from .utils import (
     analyze_spike_window,

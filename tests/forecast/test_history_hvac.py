@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.history_fetcher import (
+from custom_components.localshift.forecast.history import (
     HistoryFetcher,
 )
 

@@ -30,7 +30,7 @@ from ..const import (
     SWITCH_DEFAULTS,
     BatteryMode,
 )
-from ..forecast_bootstrapper import ForecastBootstrapper
+from ..forecast.bootstrapper import ForecastBootstrapper
 from ..learning.orchestrator import LearningOrchestrator
 from ..services.evaluation_dispatcher import EvaluationDispatcher
 from ..services.subscription_manager import SubscriptionManager
@@ -227,7 +227,7 @@ class LocalShiftCoordinator:
         )
 
         # Initialize solar forecast accuracy tracker (Issue #378)
-        from ..computation_engine_lib.solar_accuracy import SolarAccuracyTracker
+        from ..forecast.solar_accuracy import SolarAccuracyTracker
 
         self.solar_accuracy_tracker = SolarAccuracyTracker(
             self.hass, self.entry.entry_id

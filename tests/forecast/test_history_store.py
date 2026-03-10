@@ -6,7 +6,7 @@ import pytest
 
 from homeassistant.util import dt as dt_util
 
-from custom_components.localshift.computation_engine_lib.forecast_history_store import (
+from custom_components.localshift.forecast.history_store import (
     ForecastHistoryStore,
 )
 from custom_components.localshift.coordinator import CoordinatorData

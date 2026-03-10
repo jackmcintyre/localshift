@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-from custom_components.localshift.computation_engine_lib.forecast_pipeline import (
+from custom_components.localshift.forecast.pipeline import (
     ForecastPipeline,
 )
 from custom_components.localshift.coordinator import CoordinatorData

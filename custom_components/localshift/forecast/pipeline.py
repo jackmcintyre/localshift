@@ -14,7 +14,7 @@ from ..const import (
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 )
 from ..coordinator.data import CoordinatorData
-from .solar_utils import sum_solar_before_target
+from .solar import sum_solar_before_target
 
 _LOGGER = logging.getLogger(__name__)
 

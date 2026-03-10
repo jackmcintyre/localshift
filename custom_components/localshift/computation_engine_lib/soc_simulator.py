@@ -9,8 +9,8 @@ from ..const import (
     BATTERY_CAPACITY_KWH,
     CHARGE_RATE_SOLAR_KW,
 )
+from ..forecast.solar import get_solar_for_15min_slot, get_solar_for_slot_by_interval
 from .price_calculator import get_price_for_slot
-from .solar_utils import get_solar_for_15min_slot, get_solar_for_slot_by_interval
 
 
 class SocSimulator:

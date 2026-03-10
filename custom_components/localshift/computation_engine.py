@@ -13,19 +13,13 @@ from homeassistant.util import dt as dt_util
 
 from .computation_engine_lib import (
     ExcessSolarSignalsEngine,
-    ForecastAccuracyEngine,
-    HistoryFetcher,
     WeatherDiagnosticsEngine,
     max_forecast_price,
     parse_forecast_dt,
     percentile,
     scan_forecast_for_spike,
-    sum_solar_before_target,
 )
 from .computation_engine_lib.excess_solar import ExcessSolarEngine
-from .computation_engine_lib.forecast_history_store import ForecastHistoryStore
-from .computation_engine_lib.forecast_pipeline import ForecastPipeline
-from .computation_engine_lib.load_forecaster import LoadForecaster
 from .computation_engine_lib.optimizer_dp import DPPlanner
 from .computation_engine_lib.optimizer_facade import OptimizerFacade
 from .computation_engine_lib.optimizer_runner import _find_current_slot_index
@@ -58,6 +52,14 @@ from .const import (
     BatteryMode as _BatteryMode,
 )
 from .coordinator import CoordinatorData
+from .forecast import (
+    ForecastAccuracyEngine,
+    ForecastHistoryStore,
+    ForecastPipeline,
+    HistoryFetcher,
+    LoadForecaster,
+    sum_solar_before_target,
+)
 from .learning.correlation import WeatherCorrelation
 
 # Backward-compatible re-export for tests/importers that import BatteryMode
