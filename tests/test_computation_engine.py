@@ -279,7 +279,7 @@ class TestLoadForecastSlots:
         self, computation_engine, coordinator_data
     ):
         """Test that load_forecast_slots has 96 entries after compute_derived_values()."""
-        from custom_components.localshift.computation_engine_lib.slot_schedule import (
+        from custom_components.localshift.engine.slot_schedule import (
             TOTAL_SLOTS,
         )
 

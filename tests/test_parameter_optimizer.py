@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.decision_outcome_tracker import (
+from custom_components.localshift.engine.decision_outcome_tracker import (
     DecisionRecord,
 )
-from custom_components.localshift.computation_engine_lib.parameter_optimizer import (
+from custom_components.localshift.engine.parameter_optimizer import (
     ParameterOptimizer,
 )
 from custom_components.localshift.const import (
@@ -16,7 +16,7 @@ from custom_components.localshift.const import (
     OPTIMIZABLE_PARAMS,
     BatteryMode,
 )
-from custom_components.localshift.coordinator_data import AdaptiveParameters
+from custom_components.localshift.coordinator import AdaptiveParameters
 
 
 class TestParameterOptimizer:

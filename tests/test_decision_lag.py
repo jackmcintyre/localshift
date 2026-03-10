@@ -1,6 +1,6 @@
 """Tests for decision-to-implementation lag tracking (Issue #501)."""
 
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 class TestDecisionLagTracking:

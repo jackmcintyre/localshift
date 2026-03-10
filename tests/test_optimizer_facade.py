@@ -2,10 +2,10 @@
 
 from datetime import UTC, datetime
 
-from custom_components.localshift.computation_engine_lib.optimizer_facade import (
+from custom_components.localshift.engine.optimizer_facade import (
     OptimizerFacade,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 class _StubSlotBuilder:

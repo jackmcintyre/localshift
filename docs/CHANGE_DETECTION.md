@@ -50,7 +50,7 @@ The system should:
 
 ### Class Structure
 
-**Location**: `custom_components/localshift/computation_engine_lib/change_tracker.py`
+**Location**: Change detection is integrated into `computation_engine.py`. The `ForecastChangeTracker` logic runs inline within the computation engine.
 
 ```python
 from datetime import datetime, timedelta
@@ -405,12 +405,11 @@ class ForecastChangeTracker:
 ### 2026-02-23: Modular extraction of change detection (Issue #146)
 
 **What changed:**
-- `ForecastChangeTracker` was extracted from `computation_engine.py` into `computation_engine_lib/change_tracker.py`.
-- `ComputationEngine` now composes this helper via dependency wiring in `__init__`.
-- Runtime imports are surfaced through `computation_engine_lib/__init__.py` for stable package-level access.
+- Change detection logic integrated into `computation_engine.py`.
+- Delegates focused responsibilities to `engine/` helpers for price, spike, and solar calculations.
 
 **Why:**
-- Keeps `ComputationEngine` focused on orchestration instead of low-level comparison logic.
+- Keeps `ComputationEngine` focused on orchestration.
 - Improves maintainability and targeted testability of forecast recompute rules.
 
 **Behavior impact:**
