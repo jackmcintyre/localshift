@@ -302,7 +302,7 @@ class ParameterOptimizer:
 
         return values, confidence
 
-    def _optimize_single_param(
+    def _optimize_single_param(  # noqa: C901
         self,
         param_name: str,
         param_def: Any,  # OptimizableParam

@@ -131,7 +131,7 @@ class SlotBuilder:
         self._config_options = config_options
         self._ha_timezone = ha_timezone
 
-    def build_slots(
+    def build_slots(  # noqa: C901
         self,
         data: Any,  # CoordinatorData — avoid circular import
         adaptive_params: AdaptiveParameters | None,

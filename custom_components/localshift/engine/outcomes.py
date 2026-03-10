@@ -437,7 +437,7 @@ class DecisionOutcomeTracker:
             pending.outcome_score,
         )
 
-    def compute_outcome_score(self, record: DecisionRecord) -> float:
+    def compute_outcome_score(self, record: DecisionRecord) -> float:  # noqa: C901
         """Score a decision outcome from 0.0 (worst) to 1.0 (best).
 
         Components:
