@@ -75,25 +75,26 @@ Bypass attempts are logged to `.git-bypass.log` for audit.
 
 ## PR Target Branches
 
-**Default: target `main`** for production-ready changes.
+**⚠️ DEFAULT for feature worktrees: target `test`**
 
-**Target `test` when:**
-- Changes need live testing in Home Assistant
-- You want to use watch mode for rapid iteration
-- Behavior depends on real HA entity states
-- Need to validate with actual Powerwall/solar data
+When working in a feature worktree (issue/*, feature/*, docs/*, etc.), always create PRs targeting the `test` branch:
 
-**How to target test:**
 ```bash
-# Create worktree from test
-git worktree add worktrees/deploy-test -b test
-cd worktrees/deploy-test
-
-# After changes, create PR targeting test
 gh pr create --base test --title "..."
 ```
 
-**Workflow:** PR to test → merge → watch mode deploys → validate → PR test→main for production
+**Why target test by default:**
+- All changes should be validated in live Home Assistant before production
+- Enables rapid iteration with watch mode auto-deploy
+- Catches integration issues early with real Powerwall/solar data
+- Production releases are deliberate, not accidental
+
+**Only target `main` when:**
+- Hotfixes that need immediate production deployment
+- Documentation-only changes with no code impact
+- User explicitly requests direct-to-main release
+
+**Workflow:** Feature worktree → PR to `test` → merge → validate → PR `test`→`main` for production
 
 ## If You See Changes on Main
 
