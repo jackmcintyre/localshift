@@ -1,6 +1,7 @@
 """Unit tests for StateReader."""
 
-from unittest.mock import MagicMock
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -600,3 +601,291 @@ class TestPriceAvailability:
         assert coordinator_data.prices_available is True
         assert coordinator_data.general_price == 0.0
         assert coordinator_data.feed_in_price == 0.0
+
+
+# =============================================================================
+# FORECAST EXTENSION TESTS (Issue #632)
+# =============================================================================
+
+
+class TestCalculateCurrentDayAveragePrice:
+    """Tests for _calculate_current_day_average_price method."""
+
+    def test_calculate_average_with_valid_forecast(self, state_reader):
+        """Test calculating average price from valid forecast."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": (now - timedelta(hours=2)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.10,
+            },
+            {
+                "start_time": (now - timedelta(hours=1)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.20,
+            },
+        ]
+
+        result = state_reader._calculate_current_day_average_price(forecast, now)
+
+        assert abs(result - 0.15) < 0.001
+
+    def test_calculate_average_with_empty_forecast(self, state_reader):
+        """Test calculating average from empty forecast returns default."""
+        from datetime import datetime
+
+        now = datetime(2026, 3, 10, 14, 0)
+        result = state_reader._calculate_current_day_average_price([], now)
+
+        assert result == 0.20
+
+    def test_calculate_average_filters_future_slots(self, state_reader):
+        """Test that future slots are excluded from average calculation."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": (now - timedelta(hours=1)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.10,
+            },
+            {
+                "start_time": (now + timedelta(hours=1)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.50,
+            },
+        ]
+
+        result = state_reader._calculate_current_day_average_price(forecast, now)
+
+        assert result == 0.10
+
+    def test_calculate_average_with_missing_price_field(self, state_reader):
+        """Test handling entries with missing per_kwh field."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": (now - timedelta(hours=1)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.20,
+            },
+            {
+                "start_time": (now - timedelta(hours=2)).isoformat(),
+                "duration": 30,
+            },
+        ]
+
+        result = state_reader._calculate_current_day_average_price(forecast, now)
+
+        assert result == 0.20
+
+
+class TestExtendForecastWithAssumedPrices:
+    """Tests for _extend_forecast_with_assumed_prices method."""
+
+    def test_extend_forecast_to_24_hours(self, state_reader):
+        """Test extending a short forecast to 24 hours."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": now.isoformat(),
+                "duration": 30,
+                "per_kwh": 0.15,
+            }
+        ]
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.20
+        )
+
+        assert len(result) > len(forecast)
+        last_entry = result[-1]
+        last_time = datetime.fromisoformat(last_entry["start_time"])
+        assert (last_time - now) >= timedelta(hours=23)
+
+    def test_no_extension_when_already_24_hours(self, state_reader):
+        """Test no extension when forecast already covers 24 hours."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = []
+        for i in range(48):
+            forecast.append({
+                "start_time": (now + timedelta(minutes=30 * i)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.10,
+            })
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.20
+        )
+
+        assert len(result) == len(forecast)
+
+    def test_extend_with_correct_price(self, state_reader):
+        """Test that extended entries use the assumed price."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": now.isoformat(),
+                "duration": 30,
+                "per_kwh": 0.15,
+            }
+        ]
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.25
+        )
+
+        for entry in result[1:]:
+            assert entry["per_kwh"] == 0.25
+
+    def test_extend_with_30_minute_slots(self, state_reader):
+        """Test that extended entries use 30-minute duration."""
+        from datetime import datetime, timedelta
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": now.isoformat(),
+                "duration": 30,
+                "per_kwh": 0.15,
+            }
+        ]
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.20
+        )
+
+        for entry in result[1:]:
+            assert entry["duration"] == 30
+
+    def test_extend_empty_forecast_returns_empty(self, state_reader):
+        """Test that extending empty forecast returns empty."""
+        from datetime import datetime
+
+        now = datetime(2026, 3, 10, 14, 0)
+        result = state_reader._extend_forecast_with_assumed_prices(
+            [], now, assumed_price=0.20
+        )
+
+        assert result == []
+
+    def test_extended_entries_have_required_fields(self, state_reader):
+        """Test that extended entries have all required fields."""
+        from datetime import datetime
+
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast = [
+            {
+                "start_time": now.isoformat(),
+                "duration": 30,
+                "per_kwh": 0.15,
+            }
+        ]
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.20
+        )
+
+        for entry in result[1:]:
+            assert "start_time" in entry
+            assert "duration" in entry
+            assert "per_kwh" in entry
+
+
+class TestForecastExtensionIntegration:
+    """Tests for forecast extension in read_all_external_state (Issue #632)."""
+
+    def test_forecast_extended_to_24_hours(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test that short forecast is extended to 24 hours."""
+        now = datetime(2026, 3, 10, 14, 0)
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "0.25"
+            elif "feed_in_price" in entity_id:
+                state.state = "0.08"
+            if "general_forecast" in entity_id:
+                state.attributes = {
+                    "forecasts": [
+                        {
+                            "start_time": now.isoformat(),
+                            "duration": 30,
+                            "per_kwh": 0.15,
+                        }
+                    ]
+                }
+            elif "feed_in_forecast" in entity_id:
+                state.attributes = {
+                    "forecasts": [
+                        {
+                            "start_time": now.isoformat(),
+                            "duration": 30,
+                            "per_kwh": 0.05,
+                        }
+                    ]
+                }
+            else:
+                state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+        with patch("custom_components.localshift.state_reader.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+            state_reader.read_all_external_state(coordinator_data)
+
+        last_general = coordinator_data.general_forecast[-1]
+        last_time = datetime.fromisoformat(last_general["start_time"])
+        assert (last_time - now) >= timedelta(hours=23)
+
+    def test_forecast_not_extended_when_already_24_hours(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Test that forecast is not extended when already 24+ hours."""
+        now = datetime(2026, 3, 10, 14, 0)
+        forecast_24h = []
+        for i in range(48):
+            forecast_24h.append({
+                "start_time": (now + timedelta(minutes=30 * i)).isoformat(),
+                "duration": 30,
+                "per_kwh": 0.10,
+            })
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0"
+            if "general_price" in entity_id:
+                state.state = "0.25"
+            elif "feed_in_price" in entity_id:
+                state.state = "0.08"
+            if "general_forecast" in entity_id:
+                state.attributes = {"forecasts": forecast_24h}
+            elif "feed_in_forecast" in entity_id:
+                state.attributes = {"forecasts": forecast_24h}
+            else:
+                state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+        with patch("custom_components.localshift.state_reader.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+            state_reader.read_all_external_state(coordinator_data)
+
+        assert len(coordinator_data.general_forecast) == 48
