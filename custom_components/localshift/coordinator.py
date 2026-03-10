@@ -120,10 +120,6 @@ class LocalShiftCoordinator:
         self._last_solar_power_kw: float = 0.0
         self._last_solar_power_timestamp: datetime | None = None
 
-        # Price change tracking (Issue #588) - only evaluate when price changes
-        self._last_general_price: float | None = None
-        self._last_feed_in_price: float | None = None
-
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
@@ -442,42 +438,6 @@ class LocalShiftCoordinator:
             return
         self._state_reader.read_all_external_state(self.data)
 
-    def _has_price_changed(self) -> bool:
-        """Check if amber price has changed since last evaluation.
-
-        Issue #588: Only trigger mode evaluation when price actually changes.
-        This prevents unnecessary mode oscillations that occur when the optimizer
-        re-runs on every periodic tick with stable prices.
-
-        Returns:
-            True if price has changed, False otherwise.
-        """
-        current_general = self.data.general_price
-        current_feed_in = self.data.feed_in_price
-
-        general_changed = (
-            self._last_general_price is None
-            or current_general != self._last_general_price
-        )
-        feed_in_changed = (
-            self._last_feed_in_price is None
-            or current_feed_in != self._last_feed_in_price
-        )
-
-        if general_changed or feed_in_changed:
-            _LOGGER.debug(
-                "Price changed: general %s->%s, feed_in %s->%s",
-                self._last_general_price,
-                current_general,
-                self._last_feed_in_price,
-                current_feed_in,
-            )
-            self._last_general_price = current_general
-            self._last_feed_in_price = current_feed_in
-            return True
-
-        return False
-
     def _check_entity_health(self) -> None:
         """Check health of all tracked entities and update data.
 
@@ -566,12 +526,9 @@ class LocalShiftCoordinator:
             )
             return
 
-        # Issue #588: Only evaluate mode when price has changed
-        # This prevents rapid cycling when optimizer re-runs with stable prices
-        if not self._has_price_changed():
-            _LOGGER.debug("Skipping state machine evaluation - price unchanged")
-            return
-
+        # Issue #622: Always dispatch to StateMachine
+        # StateMachine gates mode transitions based on price fingerprint
+        # This ensures optimizer runs every minute for plan updates
         if self._evaluation_dispatcher is not None:
             self._evaluation_dispatcher.on_fast_tick(now)
 

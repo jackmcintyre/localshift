@@ -109,6 +109,8 @@ class StateMachine:
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
+        # Issue #622: Fingerprint for gating mode transitions on price changes
+        self._last_decision_fingerprint: str | None = None
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -161,6 +163,28 @@ class StateMachine:
 
         """
         return self._tesla_override_detected
+
+    def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
+        """Generate fingerprint from price data for gating mode transitions.
+
+        Issue #622: Mode transitions are gated on price changes. This fingerprint
+        captures the price state that affects mode decisions.
+
+        Args:
+            data: Coordinator data with current prices.
+
+        Returns:
+            Fingerprint string "{buy}|{sell}|{spike}" or None if prices unavailable.
+
+        """
+        buy = data.general_price
+        sell = data.feed_in_price
+        spike = data.price_spike
+
+        if buy is None or sell is None:
+            return None
+
+        return f"{buy:.4f}|{sell:.4f}|{spike}"
 
     def _get_mode_config(
         self, target: BatteryMode, data: CoordinatorData
@@ -553,13 +577,72 @@ class StateMachine:
                     return
 
                 # --- Debounce tracking ---
-                # Skip debounce if flag is set (first transition after startup grace)
+                # Clear timers for modes no longer desired.
+                # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
+                # desired at t=0, flipped away at t=2min, then desired again at t=3min,
+                # the old t=0 timer would make the debounce appear nearly satisfied.
+                # Clearing stale timers ensures the full debounce is always served from
+                # a continuous period of desire.
+                for mode in list(self._mode_desired_since.keys()):
+                    if mode != desired:
+                        self._mode_desired_since.pop(mode, None)
+
+                # Get debounce duration (skip if flag is set)
                 debounce = self._get_debounce_duration(desired)
-                if self._handle_debounce_timing(desired, now, debounce):
+
+                # --- Issue #622: Price fingerprint gate ---
+                # Only gate NEW mode transitions on price changes. This prevents
+                # mode oscillation when optimizer re-runs with stable prices.
+                # However, if a debounce timer is already running, we must continue
+                # to allow the transition to complete even if price is unchanged.
+                debounce_in_progress = desired in self._mode_desired_since
+
+                if not debounce_in_progress:
+                    # New desired mode - gate on fingerprint
+                    fingerprint = self._get_decision_fingerprint(data)
+                    price_changed = (
+                        fingerprint != self._last_decision_fingerprint
+                        or self._last_decision_fingerprint is None  # First evaluation
+                    )
+
+                    if not price_changed:
+                        _LOGGER.debug(
+                            "Price unchanged (fingerprint=%s), skipping new mode transition %s → %s",
+                            fingerprint,
+                            self._commanded_mode.value,
+                            desired.value,
+                        )
+                        # Still run health check before returning
+                        if not self._get_switch_state("dry_run"):
+                            await self._perform_health_check(data)
+
+                        return
+
+                    # Price changed - update fingerprint and start debounce
+                    self._last_decision_fingerprint = fingerprint
+                    self._mode_desired_since[desired] = now
+                    if debounce > timedelta(0):
+                        _LOGGER.info(
+                            "Mode %s desired, debounce %s starts now",
+                            desired.value,
+                            debounce,
+                        )
+                        return
+
+                # Debounce timer exists - check if satisfied
+                desired_since = self._mode_desired_since[desired]
+                elapsed = now - desired_since
+
+                if elapsed < debounce:
+                    _LOGGER.info(
+                        "Mode %s desired for %s, need %s — waiting",
+                        desired.value,
+                        elapsed,
+                        debounce,
+                    )
                     return
 
                 # --- Debounce satisfied — execute transition ---
-                desired_since = self._mode_desired_since[desired]
                 elapsed = now - desired_since
                 old_mode = self._commanded_mode
                 _LOGGER.info(

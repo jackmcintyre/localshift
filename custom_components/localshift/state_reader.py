@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_PRICING_FEED_IN_FORECAST,
@@ -101,6 +103,107 @@ class StateReader:
         if state is None:
             return default
         return state.attributes.get(attr, default)
+
+    def _calculate_current_day_average_price(
+        self, forecast: list[dict[str, Any]], now: datetime
+    ) -> float:
+        """Calculate average price from today's forecast slots.
+
+        Issue #632: Used to compute assumed price for forecast extension.
+
+        Args:
+            forecast: List of forecast entries with per_kwh field
+            now: Current datetime
+
+        Returns:
+            Average price in $/kWh, or default of $0.20 if no valid entries
+
+        """
+        if not forecast:
+            return 0.20
+
+        prices = []
+        for entry in forecast:
+            if not isinstance(entry, dict):
+                continue
+
+            price = entry.get("per_kwh")
+            if price is None:
+                continue
+
+            start_time_str = entry.get("start_time")
+            if not start_time_str:
+                continue
+
+            try:
+                start_time = datetime.fromisoformat(start_time_str)
+                if start_time <= now:
+                    prices.append(float(price))
+            except (ValueError, TypeError):
+                continue
+
+        if not prices:
+            return 0.20
+
+        return sum(prices) / len(prices)
+
+    def _extend_forecast_with_assumed_prices(
+        self, forecast: list[dict[str, Any]], now: datetime, assumed_price: float
+    ) -> list[dict[str, Any]]:
+        """Extend forecast to guarantee 24-hour planning horizon.
+
+        Issue #632: Ensures optimizer can see tomorrow's solar opportunities
+        even when price forecast (e.g., Amber free tier) provides only ~16 hours.
+
+        Args:
+            forecast: List of forecast entries
+            now: Current datetime
+            assumed_price: Price to use for extended entries ($/kWh)
+
+        Returns:
+            Extended forecast list with synthetic entries added if needed
+
+        """
+        if not forecast:
+            return []
+
+        last_entry = forecast[-1]
+        if not isinstance(last_entry, dict):
+            return forecast
+
+        last_time_str = last_entry.get("start_time")
+        if not last_time_str:
+            return forecast
+
+        try:
+            last_time = datetime.fromisoformat(last_time_str)
+        except (ValueError, TypeError):
+            return forecast
+
+        # Normalize timezone for comparison (Issue #632)
+        # datetime.fromisoformat() may return timezone-aware datetime
+        # while the 'now' parameter may be timezone-aware from dt_util.now()
+        if last_time.tzinfo is None and now.tzinfo is not None:
+            last_time = last_time.replace(tzinfo=now.tzinfo)
+
+        target_time = now + timedelta(hours=24)
+        last_duration = last_entry.get("duration", 30)
+        last_entry_end = last_time + timedelta(minutes=last_duration)
+        if last_entry_end >= target_time:
+            return forecast
+
+        extended = list(forecast)
+        current_time = last_time + timedelta(minutes=30)
+
+        while current_time < target_time:
+            extended.append({
+                "start_time": current_time.isoformat(),
+                "duration": 30,
+                "per_kwh": assumed_price,
+            })
+            current_time += timedelta(minutes=30)
+
+        return extended
 
     def _read_solcast_forecast_list(self, entity_id: str) -> list[dict[str, Any]]:
         """Read Solcast forecast list using resilient attribute fallbacks."""
@@ -270,6 +373,36 @@ class StateReader:
             )
             or []
         )
+
+        # Issue #632: Extend forecasts to 24 hours if needed
+        # This ensures the optimizer can see tomorrow's solar opportunities
+        # even when price forecast (e.g., Amber free tier) provides only ~16 hours
+        now_dt = dt_util.now()
+        if data.general_forecast:
+            avg_buy_price = self._calculate_current_day_average_price(
+                data.general_forecast, now_dt
+            )
+            data.general_forecast = self._extend_forecast_with_assumed_prices(
+                data.general_forecast, now_dt, avg_buy_price
+            )
+            _LOGGER.debug(
+                "Extended general_forecast to %d entries using avg price $%.3f/kWh",
+                len(data.general_forecast),
+                avg_buy_price,
+            )
+
+        if data.feed_in_forecast:
+            avg_sell_price = self._calculate_current_day_average_price(
+                data.feed_in_forecast, now_dt
+            )
+            data.feed_in_forecast = self._extend_forecast_with_assumed_prices(
+                data.feed_in_forecast, now_dt, avg_sell_price
+            )
+            _LOGGER.debug(
+                "Extended feed_in_forecast to %d entries using avg price $%.3f/kWh",
+                len(data.feed_in_forecast),
+                avg_sell_price,
+            )
 
         # Solcast
         today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)
