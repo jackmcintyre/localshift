@@ -212,7 +212,7 @@ class OptimizerFacade:
         data.solar_can_reach_target = result.can_solar_reach_target
         allow_dw_under_target = config_options.get("allow_dw_entry_under_target", False)
         data.solar_can_reach_target_in_dw = (
-            result.can_solar_reach_target if allow_dw_under_target else False
+            result.can_solar_reach_target_in_dw if allow_dw_under_target else False
         )
 
     def _assign_active_mode(

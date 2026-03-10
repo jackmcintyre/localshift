@@ -657,7 +657,7 @@ class DPPlanner:
         )
 
         terminal_shortfall = self._compute_terminal_shortfall(
-            inputs, decisions, config, terminal_penalty_idx
+            inputs, decisions, config, terminal_penalty_idx, demand_bounds
         )
         can_solar = self._can_solar_reach_target(
             inputs, slots, config, terminal_penalty_idx
@@ -692,7 +692,10 @@ class DPPlanner:
     def _find_demand_window_bounds(
         self, slots: list[SlotContext]
     ) -> dict[str, int | None]:
-        """Find demand window entry and end indices.
+        """Find demand window entry and end indices for the FIRST DW block.
+
+        When cross-day scenarios have multiple DW blocks, only the first block
+        is considered (Issue #633).
 
         Args:
             slots: List of slot contexts
@@ -707,7 +710,11 @@ class DPPlanner:
 
         for i, slot in enumerate(slots):
             if slot.is_demand_window_entry:
-                entry_idx = i
+                if entry_idx is None:
+                    entry_idx = i
+                elif in_demand_window:
+                    end_idx = i - 1
+                    break
             if slot.is_demand_window_slot:
                 in_demand_window = True
             if in_demand_window and not slot.is_demand_window_slot:
@@ -739,7 +746,7 @@ class DPPlanner:
             return False
 
         max_soc_in_dw = _simulate_max_soc_in_demand_window(
-            inputs.initial_soc_pct, inputs.slots, config
+            inputs.initial_soc_pct, inputs.slots, config, demand_bounds
         )
         return max_soc_in_dw >= config.demand_window_target_soc_pct
 
@@ -1126,6 +1133,7 @@ class DPPlanner:
         decisions: list[PlannedSlotDecision],
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
+        demand_bounds: dict[str, int | None] | None = None,
     ) -> float:
         """Compute terminal shortfall.
 
@@ -1134,6 +1142,8 @@ class DPPlanner:
             decisions: Planned decisions
             config: Optimizer config
             terminal_penalty_idx: Terminal penalty index
+            demand_bounds: Demand window bounds (entry_idx, end_idx) for first DW block.
+                Used to scope the solar simulation to the first DW block only (Issue #633).
 
         Returns:
             Terminal shortfall percentage
@@ -1146,7 +1156,7 @@ class DPPlanner:
 
         if config.allow_dw_entry_under_target:
             max_soc_in_dw = _simulate_max_soc_in_demand_window(
-                inputs.initial_soc_pct, inputs.slots, config
+                inputs.initial_soc_pct, inputs.slots, config, demand_bounds
             )
             return max(0.0, target - max_soc_in_dw)
 
@@ -2151,26 +2161,41 @@ def _simulate_max_soc_in_demand_window(
     initial_soc_pct: float,
     slots: list[SlotContext],
     config: OptimizerConfig,
+    demand_bounds: dict[str, int | None] | None = None,
 ) -> float:
     """Simulate solar-only SOC and return max SOC within demand window slots.
 
     Used when allow_dw_entry_under_target=True to determine if solar
     will reach target at any point during DW (Issue #505).
 
+    When demand_bounds is provided, restricts max SOC tracking to the first
+    DW block only (entry_idx..end_idx inclusive). This prevents cross-midnight
+    scenarios from inflating the result with tomorrow's DW solar (Issue #633).
+
     Args:
         initial_soc_pct: Starting SOC percentage.
         slots: List of slot contexts to simulate.
         config: Optimizer configuration.
+        demand_bounds: Optional dict with 'entry_idx' and 'end_idx' keys
+            identifying the first DW block. When provided, only slots within
+            this range contribute to max_soc_in_dw. When None, falls back to
+            tracking all DW slots (legacy behaviour).
 
     Returns:
-        Maximum SOC percentage reached within any demand window slot.
-        Returns initial_soc_pct if no DW slots exist.
+        Maximum SOC percentage reached within the first demand window block.
+        Returns initial_soc_pct if no DW slots exist within bounds.
 
     """
     soc = initial_soc_pct
     max_soc_in_dw = soc
 
-    for slot in slots:
+    entry_idx: int | None = None
+    end_idx: int | None = None
+    if demand_bounds is not None:
+        entry_idx = demand_bounds.get("entry_idx")
+        end_idx = demand_bounds.get("end_idx")
+
+    for i, slot in enumerate(slots):
         net_kwh = slot.solar_kwh - slot.consumption_kwh
         slot_hours = slot.slot_interval_minutes / 60.0
         max_transfer_kwh = config.charge_rate_kw * slot_hours
@@ -2183,7 +2208,12 @@ def _simulate_max_soc_in_demand_window(
         soc += delta / config.battery_capacity_kwh * 100
         soc = max(config.min_soc_pct, min(100.0, soc))
 
-        if slot.is_demand_window_slot:
-            max_soc_in_dw = max(max_soc_in_dw, soc)
+        if demand_bounds is not None:
+            if entry_idx is not None and end_idx is not None:
+                if entry_idx <= i <= end_idx:
+                    max_soc_in_dw = max(max_soc_in_dw, soc)
+        else:
+            if slot.is_demand_window_slot:
+                max_soc_in_dw = max(max_soc_in_dw, soc)
 
     return max_soc_in_dw
