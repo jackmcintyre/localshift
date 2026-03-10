@@ -476,11 +476,13 @@ class DecisionOutcomeTracker:
                 ):
                     cost_score = 0.9  # Made money
                 else:
-                    cost_score = 0.4  # Didn't make expected profit
+                    cost_score = 0.4
             else:
-                # HOLD / self-consumption: neutral on cost
                 cost_score = 0.6
             score = score * 0.6 + cost_score * 0.4
+        else:
+            if record.mode_chosen == PlannerAction.HOLD:
+                score = score * 0.6 + 0.5 * 0.4
 
         # 2. Export Penalty (weight: 20%)
         # Penalize exporting grid-purchased energy (Issue #280)
@@ -522,8 +524,10 @@ class DecisionOutcomeTracker:
                 score -= 0.10  # Far from target (weather-adjusted)
 
         # 4. Cycling Penalty (weight: 15%)
-        # Penalize rapid mode changes (< 5 min in previous mode)
-        if record.duration_minutes is not None and record.duration_minutes < 5:
+        # Penalize rapid mode changes (< 3 min = actual cycling)
+        # Note: Control loop runs every 5 min (PERIODIC_INTERVAL_MEDIUM), so
+        # durations 3-5 min are normal re-planning, not cycling
+        if record.duration_minutes is not None and record.duration_minutes < 3:
             score -= 0.10
 
         # Clamp to valid range

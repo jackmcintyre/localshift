@@ -406,13 +406,103 @@ class TestDecisionOutcomeScoring:
         # Proactive export during high price should score well
         assert 0.5 <= score <= 1.0
 
+    def test_compute_outcome_score_hold_null_cost_data(
+        self, mock_hass, coordinator_data
+    ):
+        """Test HOLD decision with null cost data gets neutral cost score.
+
+        Bug #1: When actual_cost_during_period is None (common for HOLD/self-consumption),
+        the cost scoring section was skipped entirely, leaving score at 0.5 base.
+        Expected: HOLD with null data should get neutral cost score (0.5), resulting in
+        score = 0.5 * 0.6 + 0.5 * 0.4 = 0.5 (proper weighted average).
+        """
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+        record = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.HOLD,
+            previous_mode=PlannerAction.CHARGE_GRID_NORMAL,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.10,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=10.0,
+            cheap_price_threshold=0.15,
+            battery_target_soc=55.0,
+            weather_condition="sunny",
+            day_of_week=0,
+            hour_of_day=14,
+            is_demand_window=False,
+            actual_soc_change=5.0,
+            duration_minutes=30.0,
+        )
+
+        score = tracker.compute_outcome_score(record)
+
+        assert score > 0.5, "HOLD with null cost data should get neutral cost boost"
+
+    def test_compute_outcome_score_duration_threshold_3min(
+        self, mock_hass, coordinator_data
+    ):
+        """Test cycling penalty threshold is 3 minutes, not 5 minutes.
+
+        Bug #2: Control loop runs every 5 minutes (PERIODIC_INTERVAL_MEDIUM).
+        Old threshold of 5 minutes penalized normal re-planning.
+        Expected: Durations 3-5 min should NOT be penalized (normal re-planning).
+        Durations < 3 min should be penalized (actual cycling).
+        """
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+        record_2min = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.10,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=10.0,
+            cheap_price_threshold=0.15,
+            battery_target_soc=80.0,
+            weather_condition="cloudy",
+            day_of_week=0,
+            hour_of_day=14,
+            is_demand_window=False,
+            duration_minutes=2.0,
+        )
+
+        record_4min = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.10,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=10.0,
+            cheap_price_threshold=0.15,
+            battery_target_soc=80.0,
+            weather_condition="cloudy",
+            day_of_week=0,
+            hour_of_day=14,
+            is_demand_window=False,
+            duration_minutes=4.0,
+        )
+
+        score_2min = tracker.compute_outcome_score(record_2min)
+        score_4min = tracker.compute_outcome_score(record_4min)
+
+        assert score_2min < 0.5, "2-min duration should be penalized (actual cycling)"
+        assert score_4min >= 0.5, (
+            "4-min duration should NOT be penalized (normal re-planning)"
+        )
+
     def test_compute_outcome_score_short_duration_penalty(
         self, mock_hass, coordinator_data
     ):
         """Test that short duration decisions get penalized."""
         tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
 
-        # Short duration decision
         record_short = DecisionRecord(
             timestamp=datetime.now(),
             mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
@@ -428,10 +518,9 @@ class TestDecisionOutcomeScoring:
             day_of_week=0,
             hour_of_day=14,
             is_demand_window=False,
-            duration_minutes=2.0,  # Very short - rapid cycling
+            duration_minutes=2.0,
         )
 
-        # Long duration decision
         record_long = DecisionRecord(
             timestamp=datetime.now(),
             mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
@@ -453,5 +542,4 @@ class TestDecisionOutcomeScoring:
         score_short = tracker.compute_outcome_score(record_short)
         score_long = tracker.compute_outcome_score(record_long)
 
-        # Short duration should be penalized
         assert score_short < score_long
