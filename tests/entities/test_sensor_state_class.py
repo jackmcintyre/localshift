@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 from homeassistant.components.sensor import SensorStateClass
 
-from custom_components.localshift.sensor import (
+from custom_components.localshift.entities.sensor import (
     ForecastAccuracySensor,
     ForecastPricesSensor,
     OptimizerPlanGridSensor,

@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
+from ..const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
@@ -25,7 +25,7 @@ from .const import (
     DOMAIN,
     THRESHOLD_RANGES,
 )
-from .coordinator import LocalShiftCoordinator
+from ..coordinator import LocalShiftCoordinator
 
 # Map of (config_key, name, default) for each number entity
 # Simplified per Issue #214 - removed rarely-tuned parameters with sensible defaults

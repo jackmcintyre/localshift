@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
+from ..const import (
     DOMAIN,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
     SWITCH_AUTOMATION_ENABLED,
@@ -31,7 +31,7 @@ from .const import (
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
 )
-from .coordinator import LocalShiftCoordinator
+from ..coordinator import LocalShiftCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 

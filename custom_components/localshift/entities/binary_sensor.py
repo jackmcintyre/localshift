@@ -10,8 +10,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import LocalShiftCoordinator
+from ..const import DOMAIN
+from ..coordinator import LocalShiftCoordinator
 
 
 async def async_setup_entry(
