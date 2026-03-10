@@ -772,6 +772,9 @@ class DPPlanner:
 
         In self-consumption mode, credits future solar gain (Issue #619) to
         prevent grid charging when solar will cover the shortfall.
+
+        Issue #624: In self_consumption mode, treat target as hard constraint by
+        using infinite cost for states below target at terminal penalty index.
         """
         dp: list[dict[int, tuple[float, PlannerAction, int, float, float, float]]] = [
             {} for _ in range(n_slots + 1)
@@ -801,12 +804,40 @@ class DPPlanner:
                     battery_capacity_kwh=config.battery_capacity_kwh,
                 )
 
+            # Issue #624: Hard constraint in self_consumption mode
+            # Use a very high penalty (effectively infinite) for states below target
+            # to force the optimizer to find a path that reaches the target.
+            # We use a finite value instead of float('inf') to handle infeasible cases gracefully.
+            use_hard_constraint = config.optimization_mode == "self_consumption"
+            # Calculate max possible grid cost to set penalty above it
+            # Max SOC gain needed = 100%, battery capacity in kWh
+            # Max cost = capacity_kwh * max_price * 2 (safety factor)
+            max_grid_cost = config.battery_capacity_kwh * 0.30 * 2  # ~$8 for 13.5kWh
+            hard_constraint_penalty = max_grid_cost * 10  # 10x the max cost
+
+            # Check if solar within the horizon can cover the deficit
+            # This prevents unnecessary grid charging when solar is sufficient
+            projected_solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
+                slot_idx=0,
+                slots=inputs.slots,
+                terminal_penalty_idx=terminal_penalty_idx,
+                battery_capacity_kwh=config.battery_capacity_kwh,
+            )
+
             for bin_idx, soc in enumerate(soc_grid):
-                # Subtract future solar gain from shortfall
-                effective_soc = soc + future_solar_gain_pct
-                shortfall_penalty = DPPlanner.terminal_cost(
-                    effective_soc, target, config
-                )
+                # Subtract future solar gain from shortfall (Issue #619)
+                effective_soc = soc + future_solar_gain_pct + projected_solar_gain_pct
+
+                if use_hard_constraint and effective_soc < target:
+                    # Hard constraint: very high penalty for states below target
+                    # This strongly incentivizes the optimizer to reach target
+                    shortfall = target - effective_soc
+                    shortfall_penalty = shortfall * hard_constraint_penalty
+                else:
+                    # Soft penalty for states at or above target, or in arbitrage mode
+                    shortfall_penalty = DPPlanner.terminal_cost(
+                        effective_soc, target, config
+                    )
                 dp[n_slots][bin_idx] = (
                     shortfall_penalty,
                     PlannerAction.HOLD,
