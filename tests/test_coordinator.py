@@ -803,5 +803,33 @@ class TestMediumTickOptimizationController:
 
         orchestrator.update_medium_tick(data)
 
-        # Unchanged – no controller was present
+        # Unchanged - no controller was present
         assert data.adaptive_params is original_params
+
+
+class TestFastTickPriceGate:
+    """Test Issue #622: Fast tick always dispatches to StateMachine.
+
+    The legacy price gate in Coordinator._handle_fast_tick() was removed.
+    The StateMachine now gates mode transitions based on fingerprint.
+    """
+
+    def test_legacy_price_tracking_removed(self, coordinator):
+        """Legacy price tracking fields should be removed from Coordinator."""
+        # Issue #622: These were superseded by StateMachine fingerprint tracking
+        assert not hasattr(coordinator, "_last_general_price")
+        assert not hasattr(coordinator, "_last_feed_in_price")
+
+    def test_legacy_price_gate_removed_from_fast_tick(self, coordinator):
+        """Legacy price gate should not exist in _handle_fast_tick."""
+        import inspect
+
+        # Get the source of _handle_fast_tick
+        source = inspect.getsource(coordinator._handle_fast_tick)
+
+        # Should NOT contain _has_price_changed call
+        assert "_has_price_changed" not in source
+        # Should contain Issue #622 comment explaining new behavior
+        assert "Issue #622" in source
+        # Should contain Issue #622 comment
+        assert "Issue #622" in source
