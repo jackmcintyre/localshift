@@ -31,15 +31,15 @@ from .const import (
     BatteryMode,
 )
 from .coordinator_data import CoordinatorData
-from .evaluation_dispatcher import EvaluationDispatcher
 from .forecast_bootstrapper import ForecastBootstrapper
 from .learning_orchestrator import LearningOrchestrator
-from .subscription_manager import SubscriptionManager
+from .services.evaluation_dispatcher import EvaluationDispatcher
+from .services.subscription_manager import SubscriptionManager
 
 if TYPE_CHECKING:
     from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
-    from .notification_service import NotificationService
+    from .services.notification_service import NotificationService
     from .state_machine import StateMachine
     from .state_reader import StateReader
     from .utils.costs import CostTracker
@@ -182,7 +182,7 @@ class LocalShiftCoordinator:
         # Initialize helper modules
         from .battery_controller import BatteryController
         from .computation_engine import ComputationEngine
-        from .notification_service import NotificationService
+        from .services.notification_service import NotificationService
         from .state_machine import StateMachine
         from .state_reader import StateReader
         from .utils.costs import CostTracker

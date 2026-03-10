@@ -117,13 +117,13 @@ class TestAsyncStart:
         """Test that async_start initializes all helper modules."""
         with (
             patch(
-                "custom_components.localshift.subscription_manager.async_track_state_change_event"
+                "custom_components.localshift.services.subscription_manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.localshift.subscription_manager.async_track_time_interval"
+                "custom_components.localshift.services.subscription_manager.async_track_time_interval"
             ) as mock_track_time,
             patch(
-                "custom_components.localshift.subscription_manager.async_track_time_change"
+                "custom_components.localshift.services.subscription_manager.async_track_time_change"
             ) as mock_track_time_change,
         ):
             mock_track_state.return_value = MagicMock()
@@ -144,13 +144,13 @@ class TestAsyncStart:
         """Test that async_start subscribes to state changes and timers."""
         with (
             patch(
-                "custom_components.localshift.subscription_manager.async_track_state_change_event"
+                "custom_components.localshift.services.subscription_manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.localshift.subscription_manager.async_track_time_interval"
+                "custom_components.localshift.services.subscription_manager.async_track_time_interval"
             ) as mock_track_time,
             patch(
-                "custom_components.localshift.subscription_manager.async_track_time_change"
+                "custom_components.localshift.services.subscription_manager.async_track_time_change"
             ) as mock_track_time_change,
         ):
             mock_track_state.return_value = MagicMock()
@@ -172,13 +172,13 @@ class TestAsyncStart:
         """Test that async_start sets startup grace period."""
         with (
             patch(
-                "custom_components.localshift.subscription_manager.async_track_state_change_event"
+                "custom_components.localshift.services.subscription_manager.async_track_state_change_event"
             ) as mock_track_state,
             patch(
-                "custom_components.localshift.subscription_manager.async_track_time_interval"
+                "custom_components.localshift.services.subscription_manager.async_track_time_interval"
             ) as mock_track_time,
             patch(
-                "custom_components.localshift.subscription_manager.async_track_time_change"
+                "custom_components.localshift.services.subscription_manager.async_track_time_change"
             ) as mock_track_time_change,
         ):
             mock_track_state.return_value = MagicMock()

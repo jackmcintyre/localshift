@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from .const import (
+from ..const import (
     CONF_BATTERY_TARGET,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
-    from .coordinator_data import CoordinatorData
+    from ..coordinator_data import CoordinatorData
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -497,59 +497,77 @@ class NotificationService:
         self, old_mode: BatteryMode, new_mode: BatteryMode, data: CoordinatorData
     ) -> str:
         """Generate a human-readable reason for a mode transition."""
-        if new_mode == BatteryMode.SPIKE_DISCHARGE:
-            return f"Price spike detected (feed-in ${data.feed_in_price:.2f}/kWh)"
-        if new_mode == BatteryMode.PROACTIVE_EXPORT:
-            return f"Forecast predicts low/negative FIT (feed-in ${data.feed_in_price:.2f}/kWh)"
-        if new_mode == BatteryMode.DEMAND_BLOCK:
-            return "Demand window active -- protecting from grid imports"
-        if new_mode == BatteryMode.GRID_CHARGING:
-            return (
-                f"Price ${data.general_price:.2f}/kWh below threshold "
-                f"${data.effective_cheap_price:.2f}/kWh, "
-                f"SOC {data.soc:.0f}%"
-            )
-        if new_mode == BatteryMode.BOOST_CHARGING:
-            return (
-                f"Solar gap -- boost charging needed, "
-                f"price ${data.general_price:.2f}/kWh, "
-                f"SOC {data.soc:.0f}%"
-            )
-        if new_mode == BatteryMode.SELF_CONSUMPTION:
-            if old_mode in (
-                BatteryMode.GRID_CHARGING,
-                BatteryMode.BOOST_CHARGING,
-            ):
-                # Issue #352: Check actual price vs threshold for accurate reason
-                price_above_stop = data.general_price > data.cheap_charge_stop_price
-                price_above_effective = data.general_price > data.effective_cheap_price
-
-                if price_above_stop:
-                    return (
-                        f"Charging ended -- price ${data.general_price:.2f}/kWh "
-                        f"(above stop threshold ${data.cheap_charge_stop_price:.2f}/kWh)"
-                    )
-                elif price_above_effective:
-                    return (
-                        f"Charging ended -- price ${data.general_price:.2f}/kWh "
-                        f"(above effective threshold ${data.effective_cheap_price:.2f}/kWh)"
-                    )
-                else:
-                    # Price still cheap - stopped for other reasons
-                    return (
-                        f"Charging complete -- price ${data.general_price:.2f}/kWh "
-                        f"(still below threshold). SOC at {data.soc:.0f}%"
-                    )
-            if old_mode == BatteryMode.SPIKE_DISCHARGE:
-                return "Price spike cleared"
-            if old_mode == BatteryMode.PROACTIVE_EXPORT:
-                return "Proactive export ended - FIT improved"
-            if old_mode == BatteryMode.DEMAND_BLOCK:
-                return "Demand window ended"
-            return "Normal operation -- no special conditions active"
-        if new_mode == BatteryMode.MANUAL:
-            return "Automation disabled or manual override"
+        mode_reasons = {
+            BatteryMode.SPIKE_DISCHARGE: self._reason_spike_discharge,
+            BatteryMode.PROACTIVE_EXPORT: self._reason_proactive_export,
+            BatteryMode.DEMAND_BLOCK: self._reason_demand_block,
+            BatteryMode.GRID_CHARGING: self._reason_grid_charging,
+            BatteryMode.BOOST_CHARGING: self._reason_boost_charging,
+            BatteryMode.SELF_CONSUMPTION: lambda data: self._reason_self_consumption(
+                old_mode, data
+            ),
+            BatteryMode.MANUAL: self._reason_manual,
+        }
+        if handler := mode_reasons.get(new_mode):
+            return handler(data)
         return f"Mode changed: {old_mode.value} -> {new_mode.value}"
+
+    def _reason_spike_discharge(self, data: CoordinatorData) -> str:
+        return f"Price spike detected (feed-in ${data.feed_in_price:.2f}/kWh)"
+
+    def _reason_proactive_export(self, data: CoordinatorData) -> str:
+        return f"Forecast predicts low/negative FIT (feed-in ${data.feed_in_price:.2f}/kWh)"
+
+    def _reason_demand_block(self, _data: CoordinatorData) -> str:
+        return "Demand window active -- protecting from grid imports"
+
+    def _reason_grid_charging(self, data: CoordinatorData) -> str:
+        return (
+            f"Price ${data.general_price:.2f}/kWh below threshold "
+            f"${data.effective_cheap_price:.2f}/kWh, "
+            f"SOC {data.soc:.0f}%"
+        )
+
+    def _reason_boost_charging(self, data: CoordinatorData) -> str:
+        return (
+            f"Solar gap -- boost charging needed, "
+            f"price ${data.general_price:.2f}/kWh, "
+            f"SOC {data.soc:.0f}%"
+        )
+
+    def _reason_self_consumption(
+        self, old_mode: BatteryMode, data: CoordinatorData
+    ) -> str:
+        if old_mode in (BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING):
+            return self._reason_charging_ended(data)
+        if old_mode == BatteryMode.SPIKE_DISCHARGE:
+            return "Price spike cleared"
+        if old_mode == BatteryMode.PROACTIVE_EXPORT:
+            return "Proactive export ended - FIT improved"
+        if old_mode == BatteryMode.DEMAND_BLOCK:
+            return "Demand window ended"
+        return "Normal operation -- no special conditions active"
+
+    def _reason_charging_ended(self, data: CoordinatorData) -> str:
+        price_above_stop = data.general_price > data.cheap_charge_stop_price
+        price_above_effective = data.general_price > data.effective_cheap_price
+        if price_above_stop:
+            return (
+                f"Charging ended -- price ${data.general_price:.2f}/kWh "
+                f"(above stop threshold ${data.cheap_charge_stop_price:.2f}/kWh)"
+            )
+        if price_above_effective:
+            return (
+                f"Charging ended -- price ${data.general_price:.2f}/kWh "
+                f"(above effective threshold ${data.effective_cheap_price:.2f}/kWh)"
+            )
+        return (
+            f"Charging complete -- price ${data.general_price:.2f}/kWh "
+            f"(still below threshold). SOC at {data.soc:.0f}%"
+        )
+
+    def _reason_manual(self, _data: CoordinatorData) -> str:
+        return "Automation disabled or manual override"
 
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
         """Read a float value from an entity's state."""

@@ -8,7 +8,7 @@ from datetime import datetime
 
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import CONF_PRICING_GENERAL_PRICE
+from ..const import CONF_PRICING_GENERAL_PRICE
 
 _LOGGER = logging.getLogger(__name__)
 

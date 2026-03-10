@@ -3,7 +3,9 @@
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from custom_components.localshift.evaluation_dispatcher import EvaluationDispatcher
+from custom_components.localshift.services.evaluation_dispatcher import (
+    EvaluationDispatcher,
+)
 from homeassistant.util import dt as dt_util
 from tests.fixtures.ha_entities import MockState, MockStates
 

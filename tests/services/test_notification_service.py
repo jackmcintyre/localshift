@@ -9,7 +9,7 @@ from custom_components.localshift.const import (
     BatteryMode,
 )
 from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.notification_service import (
+from custom_components.localshift.services.notification_service import (
     NotificationService,
 )
 
