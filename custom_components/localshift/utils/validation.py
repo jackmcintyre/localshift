@@ -526,15 +526,7 @@ class EntityValidator:
             )
 
     def check_entity(self, config_key: str) -> EntityHealth:
-        """Check health of a single entity.
-
-        Args:
-            config_key: Configuration key for the entity
-
-        Returns:
-            EntityHealth with current status
-
-        """
+        """Check health of a single entity."""
         entity_id = self._get_entity_id(config_key)
         config = ENTITY_CONFIG.get(config_key, {})
         health = self._entity_health.get(config_key)
@@ -552,8 +544,6 @@ class EntityValidator:
         health.entity_id = entity_id
         health.last_check = dt_util.now()
 
-        # Skip checking optional entities that are not configured (empty entity_id)
-        # This prevents false "MISSING" errors for optional features
         if not entity_id and health.category == EntityCategory.OPTIONAL:
             health.status = EntityStatus.OK
             health.error_message = ""
@@ -561,71 +551,33 @@ class EntityValidator:
             health.is_broken = False
             return health
 
-        # Check if entity exists
         state = self.hass.states.get(entity_id)
         if state is None:
-            health.status = EntityStatus.MISSING
-            health.error_message = f"Entity '{entity_id}' does not exist"
-            health.consecutive_failures += 1
-            self._check_failure_thresholds(health, config_key)
-            return health
+            return self._record_entity_failure(
+                health,
+                config_key,
+                EntityStatus.MISSING,
+                f"Entity '{entity_id}' does not exist",
+            )
 
-        # Check if entity is unavailable or unknown
-        if state.state == "unavailable":
-            health.status = EntityStatus.UNAVAILABLE
-            health.error_message = f"Entity '{entity_id}' is unavailable"
-            health.consecutive_failures += 1
-            self._check_failure_thresholds(health, config_key)
-            return health
+        failure_result = self._check_entity_state(entity_id, state)
+        if failure_result:
+            return self._record_entity_failure(health, config_key, *failure_result)
 
-        if state.state == "unknown":
-            health.status = EntityStatus.UNKNOWN
-            health.error_message = f"Entity '{entity_id}' has unknown state"
-            health.consecutive_failures += 1
-            self._check_failure_thresholds(health, config_key)
-            return health
-
-        # Validate the value if we have validation rules
         validation = self._validate_entity_value(
             config_key, state.state, state.attributes
         )
         if not validation.is_valid:
-            health.status = EntityStatus.INVALID_VALUE
-            health.error_message = validation.error_message
-            health.consecutive_failures += 1
-            self._check_failure_thresholds(health, config_key)
+            return self._record_entity_failure(
+                health, config_key, EntityStatus.INVALID_VALUE, validation.error_message
+            )
+
+        staleness_result = self._check_entity_staleness(entity_id, config_key, state)
+        if staleness_result:
+            health.status = EntityStatus.STALE
+            health.error_message = staleness_result
             return health
 
-        # Check for staleness using entity's actual last_updated time
-        # (not our internal last_valid_time which tracks when we last validated it)
-        #
-        # IMPORTANT: Skip staleness check for select entities (Issue #342)
-        # Select entities only update last_updated when the VALUE changes, not periodically.
-        # If a battery stays in "autonomous" mode for hours, the entity is still valid -
-        # the data is NOT stale, it's just unchanged.
-        staleness_threshold = STALENESS_THRESHOLDS.get(config_key)
-        if staleness_threshold and not entity_id.startswith("select."):
-            freshness_timestamp = self._get_freshness_timestamp(state)
-            if freshness_timestamp is not None:
-                try:
-                    time_since_update = dt_util.now() - freshness_timestamp
-                except TypeError:
-                    # Defensive guard for malformed timestamps (e.g., naive vs aware)
-                    _LOGGER.debug(
-                        "Skipping staleness check for '%s' due to incompatible timestamp",
-                        entity_id,
-                    )
-                else:
-                    if time_since_update > staleness_threshold:
-                        health.status = EntityStatus.STALE
-                        health.error_message = (
-                            f"Entity '{entity_id}' data is stale "
-                            f"({time_since_update.total_seconds():.0f}s old)"
-                        )
-                        # Don't increment failures for stale - it still has a value
-                        return health
-
-        # Entity is healthy - clear broken status if it was previously set
         if health.is_broken:
             _LOGGER.info(
                 "Entity '%s' (%s) recovered from BROKEN status - now healthy",
@@ -640,6 +592,69 @@ class EntityValidator:
         health.last_valid_time = dt_util.now()
         health.consecutive_failures = 0
 
+        return health
+
+    def _check_entity_state(
+        self, entity_id: str, state: Any
+    ) -> tuple[EntityStatus, str] | None:
+        """Check if entity state indicates a failure condition.
+
+        Returns:
+            Tuple of (status, error_message) if failure, None if OK.
+        """
+        if state.state == "unavailable":
+            return (EntityStatus.UNAVAILABLE, f"Entity '{entity_id}' is unavailable")
+        if state.state == "unknown":
+            return (EntityStatus.UNKNOWN, f"Entity '{entity_id}' has unknown state")
+        return None
+
+    def _check_entity_staleness(
+        self, entity_id: str, config_key: str, state: Any
+    ) -> str | None:
+        """Check if entity data is stale.
+
+        Returns:
+            Error message string if stale, None if OK.
+        """
+        if entity_id.startswith("select."):
+            return None
+
+        staleness_threshold = STALENESS_THRESHOLDS.get(config_key)
+        if not staleness_threshold:
+            return None
+
+        freshness_timestamp = self._get_freshness_timestamp(state)
+        if freshness_timestamp is None:
+            return None
+
+        try:
+            time_since_update = dt_util.now() - freshness_timestamp
+        except TypeError:
+            _LOGGER.debug(
+                "Skipping staleness check for '%s' due to incompatible timestamp",
+                entity_id,
+            )
+            return None
+
+        if time_since_update > staleness_threshold:
+            return (
+                f"Entity '{entity_id}' data is stale "
+                f"({time_since_update.total_seconds():.0f}s old)"
+            )
+        return None
+
+    def _record_entity_failure(
+        self,
+        health: EntityHealth,
+        config_key: str,
+        status: EntityStatus,
+        error_message: str,
+    ) -> EntityHealth:
+        """Record an entity failure and check thresholds."""
+        health.status = status
+        health.error_message = error_message
+        health.consecutive_failures += 1
+        self._check_failure_thresholds(health, config_key)
         return health
 
     def _get_freshness_timestamp(self, state: Any) -> datetime | None:
@@ -698,105 +713,102 @@ class EntityValidator:
     def _validate_entity_value(
         self, config_key: str, state_value: str, attributes: dict
     ) -> ValidationResult:
-        """Validate an entity's value against expected constraints.
-
-        Args:
-            config_key: Configuration key for the entity
-            state_value: The entity's state value as string
-            attributes: Entity attributes
-
-        Returns:
-            ValidationResult with validation outcome
-
-        """
+        """Validate an entity's value against expected constraints."""
         config = ENTITY_CONFIG.get(config_key, {})
+        expected_type = config.get("expected_type")
 
-        # Handle entities that store data in attributes (forecasts)
-        if config.get("expected_type") == list:
-            # For forecast entities, check attributes
-            if config_key in (
-                CONF_PRICING_GENERAL_FORECAST,
-                CONF_PRICING_FEED_IN_FORECAST,
-            ):
-                forecast = attributes.get("forecasts", [])
+        if expected_type is None:
+            return ValidationResult(is_valid=True, value=state_value)
+
+        if expected_type == list:
+            return self._validate_forecast_entity(config_key, attributes)
+
+        if expected_type == bool:
+            return self._validate_boolean_entity(state_value)
+
+        if expected_type in ((int, float), int, float):
+            return self._validate_numeric_entity(config_key, state_value, config)
+
+        if expected_type == str:
+            return self._validate_string_entity(config_key, state_value, config)
+
+        return ValidationResult(is_valid=True, value=state_value)
+
+    def _validate_forecast_entity(
+        self, config_key: str, attributes: dict
+    ) -> ValidationResult:
+        """Validate forecast-type entities that store data in attributes."""
+        if config_key in (CONF_PRICING_GENERAL_FORECAST, CONF_PRICING_FEED_IN_FORECAST):
+            forecast = attributes.get("forecasts", [])
+            if isinstance(forecast, list):
+                return ValidationResult(is_valid=True, value=forecast)
+            return ValidationResult(
+                is_valid=False,
+                value=[],
+                error_message=f"'{config_key}' forecast attribute is not a list",
+            )
+
+        if config_key in (CONF_SOLCAST_FORECAST_TODAY, CONF_SOLCAST_FORECAST_TOMORROW):
+            for attr_name in ("detailedForecast", "detailedHourly", "forecast"):
+                forecast = attributes.get(attr_name)
                 if isinstance(forecast, list):
                     return ValidationResult(is_valid=True, value=forecast)
-                return ValidationResult(
-                    is_valid=False,
-                    value=[],
-                    error_message=f"'{config_key}' forecast attribute is not a list",
-                )
+            return ValidationResult(is_valid=True, value=[])
 
-            # Solcast forecasts use different attribute names
-            if config_key in (
-                CONF_SOLCAST_FORECAST_TODAY,
-                CONF_SOLCAST_FORECAST_TOMORROW,
-            ):
-                for attr_name in ("detailedForecast", "detailedHourly", "forecast"):
-                    forecast = attributes.get(attr_name)
-                    if isinstance(forecast, list):
-                        return ValidationResult(is_valid=True, value=forecast)
-                # Empty list is valid (no forecast data yet)
-                return ValidationResult(is_valid=True, value=[])
+        return ValidationResult(is_valid=True, value=[])
 
-        # Try to parse the state value
-        expected_type = config.get("expected_type")
-        if expected_type is None:
-            # No type validation required
-            return ValidationResult(is_valid=True, value=state_value)
+    def _validate_boolean_entity(self, state_value: str) -> ValidationResult:
+        """Validate boolean entity value."""
+        bool_value = state_value.lower() in ("on", "true", "yes", "1")
+        return ValidationResult(is_valid=True, value=bool_value)
 
-        # Handle boolean entities
-        if expected_type == bool:
-            bool_value = state_value.lower() in ("on", "true", "yes", "1")
-            return ValidationResult(is_valid=True, value=bool_value)
+    def _validate_numeric_entity(
+        self, config_key: str, state_value: str, config: dict
+    ) -> ValidationResult:
+        """Validate numeric entity value with optional range checking."""
+        try:
+            num_value = float(state_value)
+        except (ValueError, TypeError):
+            return ValidationResult(
+                is_valid=False,
+                value=0.0,
+                error_message=f"'{config_key}' value '{state_value}' is not a number",
+            )
 
-        # Handle numeric entities
-        if expected_type in ((int, float), int, float):
-            try:
-                num_value = float(state_value)
-            except (ValueError, TypeError):
-                return ValidationResult(
-                    is_valid=False,
-                    value=0.0,
-                    error_message=f"'{config_key}' value '{state_value}' is not a number",
-                )
+        min_val = config.get("min_value")
+        max_val = config.get("max_value")
 
-            # Range validation
-            min_val = config.get("min_value")
-            max_val = config.get("max_value")
+        if min_val is not None and num_value < min_val:
+            return ValidationResult(
+                is_valid=False,
+                value=num_value,
+                error_message=f"'{config_key}' value {num_value} is below minimum {min_val}",
+                warning_message=f"'{config_key}' has unusual value: {num_value}",
+            )
 
-            if min_val is not None and num_value < min_val:
-                return ValidationResult(
-                    is_valid=False,
-                    value=num_value,
-                    error_message=f"'{config_key}' value {num_value} is below minimum {min_val}",
-                    warning_message=f"'{config_key}' has unusual value: {num_value}",
-                )
+        if max_val is not None and num_value > max_val:
+            return ValidationResult(
+                is_valid=False,
+                value=num_value,
+                error_message=f"'{config_key}' value {num_value} is above maximum {max_val}",
+                warning_message=f"'{config_key}' has unusual value: {num_value}",
+            )
 
-            if max_val is not None and num_value > max_val:
-                return ValidationResult(
-                    is_valid=False,
-                    value=num_value,
-                    error_message=f"'{config_key}' value {num_value} is above maximum {max_val}",
-                    warning_message=f"'{config_key}' has unusual value: {num_value}",
-                )
+        return ValidationResult(is_valid=True, value=num_value)
 
-            return ValidationResult(is_valid=True, value=num_value)
-
-        # Handle string entities with valid values
-        if expected_type == str:
-            valid_values = config.get("valid_values")
-            if valid_values and state_value not in valid_values:
-                return ValidationResult(
-                    is_valid=False,
-                    value=state_value,
-                    error_message=(
-                        f"'{config_key}' value '{state_value}' not in valid values: {valid_values}"
-                    ),
-                )
-            return ValidationResult(is_valid=True, value=state_value)
-
-        # Default: accept the value
+    def _validate_string_entity(
+        self, config_key: str, state_value: str, config: dict
+    ) -> ValidationResult:
+        """Validate string entity value with optional valid_values checking."""
+        valid_values = config.get("valid_values")
+        if valid_values and state_value not in valid_values:
+            return ValidationResult(
+                is_valid=False,
+                value=state_value,
+                error_message=(
+                    f"'{config_key}' value '{state_value}' not in valid values: {valid_values}"
+                ),
+            )
         return ValidationResult(is_valid=True, value=state_value)
 
     def check_all_entities(self) -> dict[str, EntityHealth]:
@@ -852,111 +864,129 @@ class EntityValidator:
         return True, value_str, ""
 
     def check_all_localshift_entities(self) -> dict[str, dict[str, Any]]:
-        """Check health of all LocalShift internal entities.
-
-        Returns:
-            Dictionary mapping entity_id to serialized health info dict
-
-        """
+        """Check health of all LocalShift internal entities."""
         now = dt_util.now()
         results: dict[str, EntityHealth] = {}
 
         for entity_id, config in LOCALSHIFT_ENTITY_CONFIG.items():
-            # Get or create health object
-            health = self._localshift_entity_health.get(entity_id)
-            if health is None:
-                health = EntityHealth(
-                    entity_id=entity_id,
-                    config_key=entity_id,
-                    category=config["category"],
-                    status=EntityStatus.OK,
-                    last_check=now,
-                )
-                self._localshift_entity_health[entity_id] = health
-            else:
-                health.entity_id = entity_id
-                health.last_check = now
-
-            # Check existence
-            state = self.hass.states.get(entity_id)
-            if state is None:
-                health.status = EntityStatus.MISSING
-                health.error_message = f"Entity '{entity_id}' does not exist"
-                health.consecutive_failures += 1
-                self._check_failure_thresholds(health, entity_id)
-                results[entity_id] = health
-                continue
-
-            # Check unavailable/unknown
-            if state.state == "unavailable":
-                health.status = EntityStatus.UNAVAILABLE
-                health.error_message = f"Entity '{entity_id}' is unavailable"
-                health.consecutive_failures += 1
-                self._check_failure_thresholds(health, entity_id)
-                results[entity_id] = health
-                continue
-            if state.state == "unknown":
-                health.status = EntityStatus.UNKNOWN
-                health.error_message = f"Entity '{entity_id}' has unknown state"
-                health.consecutive_failures += 1
-                self._check_failure_thresholds(health, entity_id)
-                results[entity_id] = health
-                continue
-
-            # Type validation
-            expected_type = config.get("expected_type")
-            if expected_type is not None:
-                is_valid, parsed_value, error_msg = self._validate_type_value(
-                    state.state, expected_type, entity_id
-                )
-                if not is_valid:
-                    health.status = EntityStatus.INVALID_VALUE
-                    health.error_message = error_msg
-                    health.consecutive_failures += 1
-                    self._check_failure_thresholds(health, entity_id)
-                    results[entity_id] = health
-                    continue
-            else:
-                parsed_value = state.state
-
-            # Staleness check
-            staleness_minutes = config.get("staleness_minutes")
-            if staleness_minutes is not None:
-                threshold = timedelta(minutes=staleness_minutes)
-                freshness_ts = self._get_freshness_timestamp(state)
-                if freshness_ts is not None:
-                    try:
-                        age = now - freshness_ts
-                    except TypeError:
-                        _LOGGER.debug(
-                            "Skipping staleness for %s due to timestamp mismatch",
-                            entity_id,
-                        )
-                    else:
-                        if age > threshold:
-                            health.status = EntityStatus.STALE
-                            health.error_message = (
-                                f"Entity '{entity_id}' data is stale "
-                                f"({age.total_seconds():.0f}s old)"
-                            )
-                            results[entity_id] = health
-                            continue
-
-            # Entity is healthy
-            if health.is_broken:
-                _LOGGER.info(
-                    "Entity '%s' recovered from BROKEN status - now healthy",
-                    entity_id,
-                )
-                health.is_broken = False
-            health.status = EntityStatus.OK
-            health.error_message = ""
-            health.last_valid_value = parsed_value
-            health.last_valid_time = now
-            health.consecutive_failures = 0
+            health = self._check_single_localshift_entity(entity_id, config, now)
             results[entity_id] = health
 
-        # Serialize to plain dicts for coordinator data
+        summary = self._serialize_localshift_health(results)
+        self._localshift_entity_health = results
+        return summary
+
+    def _check_single_localshift_entity(
+        self, entity_id: str, config: dict, now: datetime
+    ) -> EntityHealth:
+        """Check health of a single LocalShift internal entity."""
+        health = self._localshift_entity_health.get(entity_id)
+        if health is None:
+            health = EntityHealth(
+                entity_id=entity_id,
+                config_key=entity_id,
+                category=config["category"],
+                status=EntityStatus.OK,
+                last_check=now,
+            )
+            self._localshift_entity_health[entity_id] = health
+        else:
+            health.entity_id = entity_id
+            health.last_check = now
+
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return self._record_entity_failure(
+                health,
+                entity_id,
+                EntityStatus.MISSING,
+                f"Entity '{entity_id}' does not exist",
+            )
+
+        failure_result = self._check_entity_state(entity_id, state)
+        if failure_result:
+            health.status = failure_result[0]
+            health.error_message = failure_result[1]
+            health.consecutive_failures += 1
+            self._check_failure_thresholds(health, entity_id)
+            return health
+
+        parsed_value = self._validate_and_parse_entity(entity_id, config, state, health)
+        if parsed_value is None:
+            return health
+
+        staleness_error = self._check_localshift_staleness(
+            entity_id, config, state, now
+        )
+        if staleness_error:
+            health.status = EntityStatus.STALE
+            health.error_message = staleness_error
+            return health
+
+        if health.is_broken:
+            _LOGGER.info(
+                "Entity '%s' recovered from BROKEN status - now healthy",
+                entity_id,
+            )
+            health.is_broken = False
+        health.status = EntityStatus.OK
+        health.error_message = ""
+        health.last_valid_value = parsed_value
+        health.last_valid_time = now
+        health.consecutive_failures = 0
+        return health
+
+    def _validate_and_parse_entity(
+        self, entity_id: str, config: dict, state: Any, health: EntityHealth
+    ) -> Any | None:
+        """Validate entity type and parse value. Returns None on failure."""
+        expected_type = config.get("expected_type")
+        if expected_type is None:
+            return state.state
+
+        is_valid, parsed_value, error_msg = self._validate_type_value(
+            state.state, expected_type, entity_id
+        )
+        if not is_valid:
+            health.status = EntityStatus.INVALID_VALUE
+            health.error_message = error_msg
+            health.consecutive_failures += 1
+            self._check_failure_thresholds(health, entity_id)
+            return None
+        return parsed_value
+
+    def _check_localshift_staleness(
+        self, entity_id: str, config: dict, state: Any, now: datetime
+    ) -> str | None:
+        """Check if LocalShift entity is stale. Returns error message if stale."""
+        staleness_minutes = config.get("staleness_minutes")
+        if staleness_minutes is None:
+            return None
+
+        threshold = timedelta(minutes=staleness_minutes)
+        freshness_ts = self._get_freshness_timestamp(state)
+        if freshness_ts is None:
+            return None
+
+        try:
+            age = now - freshness_ts
+        except TypeError:
+            _LOGGER.debug(
+                "Skipping staleness for %s due to timestamp mismatch",
+                entity_id,
+            )
+            return None
+
+        if age > threshold:
+            return (
+                f"Entity '{entity_id}' data is stale ({age.total_seconds():.0f}s old)"
+            )
+        return None
+
+    def _serialize_localshift_health(
+        self, results: dict[str, EntityHealth]
+    ) -> dict[str, dict[str, Any]]:
+        """Serialize entity health results to plain dicts."""
         summary: dict[str, dict[str, Any]] = {}
         for entity_id, health in results.items():
             summary[entity_id] = {
@@ -972,8 +1002,6 @@ class EntityValidator:
                 "is_broken": health.is_broken,
                 "error_message": health.error_message if health.error_message else None,
             }
-
-        self._localshift_entity_health = results
         return summary
 
     def _update_cached_status(self) -> None:
@@ -989,40 +1017,16 @@ class EntityValidator:
 
             config = ENTITY_CONFIG.get(config_key, {})
             description = config.get("description", config_key)
-            category = health.category
+            msg = self._format_health_error_message(health, description)
 
-            # Format error message
-            if health.status == EntityStatus.MISSING:
-                msg = f"{description}: entity not found"
-            elif health.status == EntityStatus.UNAVAILABLE:
-                msg = f"{description}: unavailable"
-            elif health.status == EntityStatus.UNKNOWN:
-                msg = f"{description}: unknown state"
-            elif health.status == EntityStatus.INVALID_VALUE:
-                msg = f"{description}: {health.error_message}"
-            elif health.status == EntityStatus.STALE:
-                msg = f"{description}: data stale"
-            else:
-                msg = f"{description}: {health.error_message}"
-
-            # Categorize by severity
-            if category == EntityCategory.REQUIRED:
-                if health.status in (
-                    EntityStatus.MISSING,
-                    EntityStatus.UNAVAILABLE,
-                    EntityStatus.INVALID_VALUE,
-                ):
-                    has_required_error = True
-                    errors.append(msg)
-                elif health.status == EntityStatus.STALE:
-                    warnings.append(msg)
-                    has_degraded = True
-            elif category == EntityCategory.RECOMMENDED:
+            is_error, is_warning = self._categorize_health_severity(health)
+            if is_error:
+                has_required_error = True
+                errors.append(msg)
+            elif is_warning:
                 warnings.append(msg)
                 has_degraded = True
-            # Optional entities only generate info-level messages
 
-        # Determine overall status
         if has_required_error:
             self._cached_status = IntegrationStatus.ERROR
         elif has_degraded:
@@ -1032,6 +1036,42 @@ class EntityValidator:
 
         self._cached_errors = errors
         self._cached_warnings = warnings
+
+    def _format_health_error_message(
+        self, health: EntityHealth, description: str
+    ) -> str:
+        """Format an error message for an entity health status."""
+        status_messages = {
+            EntityStatus.MISSING: f"{description}: entity not found",
+            EntityStatus.UNAVAILABLE: f"{description}: unavailable",
+            EntityStatus.UNKNOWN: f"{description}: unknown state",
+            EntityStatus.INVALID_VALUE: f"{description}: {health.error_message}",
+            EntityStatus.STALE: f"{description}: data stale",
+        }
+        return status_messages.get(
+            health.status, f"{description}: {health.error_message}"
+        )
+
+    def _categorize_health_severity(self, health: EntityHealth) -> tuple[bool, bool]:
+        """Categorize health issue severity.
+
+        Returns:
+            Tuple of (is_error, is_warning).
+        """
+        if health.category != EntityCategory.REQUIRED:
+            return (False, health.category == EntityCategory.RECOMMENDED)
+
+        if health.status in (
+            EntityStatus.MISSING,
+            EntityStatus.UNAVAILABLE,
+            EntityStatus.INVALID_VALUE,
+        ):
+            return (True, False)
+
+        if health.status == EntityStatus.STALE:
+            return (False, True)
+
+        return (False, False)
 
     @property
     def status(self) -> IntegrationStatus:

@@ -42,7 +42,6 @@ select = [
 "custom_components/localshift/computation_engine_lib/price_calculator.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/slot_builder.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/solar_utils.py" = ["C901"]
-"custom_components/localshift/utils/validation.py" = ["C901"]
 "custom_components/localshift/notification_service.py" = ["C901"]
 "custom_components/localshift/state_machine.py" = ["C901"]
 "custom_components/localshift/weather_correlation.py" = ["C901"]
