@@ -665,66 +665,24 @@ class WeatherCorrelation:
             _LOGGER.warning("Invalid hour %d, must be 0-23", hour)
             return
 
-        # Get or create coefficients for this hour
         if hour not in self._data.hourly_coefficients:
             self._data.hourly_coefficients[hour] = HourlyTemperatureCoefficients()
 
         coef = self._data.hourly_coefficients[hour]
-
-        # Calculate the temperature delta based on thresholds
         cooling_threshold = self._data.cooling_threshold
         heating_threshold = self._data.heating_threshold
 
-        # Determine which coefficient to update
         if temperature > cooling_threshold:
-            # Cooling mode: temperature above cooling threshold
-            temp_delta = temperature - cooling_threshold
-            if temp_delta > 0:
-                # Calculate implied cooling coefficient
-                # actual_load = base_load + cooling_coef * temp_delta
-                # We estimate base_load from previous samples
-                if coef.base_load_kw > 0:
-                    implied_cooling_coef = (
-                        actual_load_kw - coef.base_load_kw
-                    ) / temp_delta
-                    # Update using moving average
-                    if coef.cooling_coefficient == 0:
-                        coef.cooling_coefficient = implied_cooling_coef
-                    else:
-                        # Weighted update: new = 0.1 * new + 0.9 * old
-                        coef.cooling_coefficient = (
-                            0.1 * implied_cooling_coef + 0.9 * coef.cooling_coefficient
-                        )
-                else:
-                    # First sample - estimate base load
-                    coef.base_load_kw = actual_load_kw * 0.8  # Rough estimate
-
+            self._update_cooling_coefficient(
+                coef, temperature, actual_load_kw, cooling_threshold
+            )
         elif temperature < heating_threshold:
-            # Heating mode: temperature below heating threshold
-            temp_delta = heating_threshold - temperature
-            if temp_delta > 0:
-                if coef.base_load_kw > 0:
-                    implied_heating_coef = (
-                        actual_load_kw - coef.base_load_kw
-                    ) / temp_delta
-                    if coef.heating_coefficient == 0:
-                        coef.heating_coefficient = implied_heating_coef
-                    else:
-                        coef.heating_coefficient = (
-                            0.1 * implied_heating_coef + 0.9 * coef.heating_coefficient
-                        )
-                else:
-                    coef.base_load_kw = actual_load_kw * 0.8
-
+            self._update_heating_coefficient(
+                coef, temperature, actual_load_kw, heating_threshold
+            )
         else:
-            # Mild temperature - update base load estimate
-            if coef.base_load_kw == 0:
-                coef.base_load_kw = actual_load_kw
-            else:
-                # Moving average for base load
-                coef.base_load_kw = 0.1 * actual_load_kw + 0.9 * coef.base_load_kw
+            self._update_mild_temperature_base_load(coef, actual_load_kw)
 
-        # Update sample count and confidence
         coef.sample_count += 1
         coef.last_updated = dt_util.now().isoformat()
         coef.confidence = self._calculate_confidence(coef.sample_count)
@@ -741,6 +699,61 @@ class WeatherCorrelation:
             coef.sample_count,
             coef.confidence,
         )
+
+    def _update_cooling_coefficient(
+        self,
+        coef: HourlyTemperatureCoefficients,
+        temperature: float,
+        actual_load_kw: float,
+        cooling_threshold: float,
+    ) -> None:
+        """Update cooling coefficient for above-threshold temperatures."""
+        temp_delta = temperature - cooling_threshold
+        if temp_delta <= 0:
+            return
+        if coef.base_load_kw > 0:
+            implied = (actual_load_kw - coef.base_load_kw) / temp_delta
+            if coef.cooling_coefficient == 0:
+                coef.cooling_coefficient = implied
+            else:
+                coef.cooling_coefficient = (
+                    0.1 * implied + 0.9 * coef.cooling_coefficient
+                )
+        else:
+            coef.base_load_kw = actual_load_kw * 0.8
+
+    def _update_heating_coefficient(
+        self,
+        coef: HourlyTemperatureCoefficients,
+        temperature: float,
+        actual_load_kw: float,
+        heating_threshold: float,
+    ) -> None:
+        """Update heating coefficient for below-threshold temperatures."""
+        temp_delta = heating_threshold - temperature
+        if temp_delta <= 0:
+            return
+        if coef.base_load_kw > 0:
+            implied = (actual_load_kw - coef.base_load_kw) / temp_delta
+            if coef.heating_coefficient == 0:
+                coef.heating_coefficient = implied
+            else:
+                coef.heating_coefficient = (
+                    0.1 * implied + 0.9 * coef.heating_coefficient
+                )
+        else:
+            coef.base_load_kw = actual_load_kw * 0.8
+
+    def _update_mild_temperature_base_load(
+        self,
+        coef: HourlyTemperatureCoefficients,
+        actual_load_kw: float,
+    ) -> None:
+        """Update base load estimate for mild temperatures."""
+        if coef.base_load_kw == 0:
+            coef.base_load_kw = actual_load_kw
+        else:
+            coef.base_load_kw = 0.1 * actual_load_kw + 0.9 * coef.base_load_kw
 
     def predict_load(
         self, hour: int, temperature: float, base_load_kw: float

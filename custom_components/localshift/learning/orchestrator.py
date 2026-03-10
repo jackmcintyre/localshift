@@ -52,31 +52,30 @@ class LearningOrchestrator:
         from ..computation_engine_lib.parameter_optimizer import ParameterOptimizer
         from ..computation_engine_lib.pattern_analyzer import PatternAnalyzer
 
-        self.decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
-        await self.decision_tracker.async_load()
+        decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
+        await decision_tracker.async_load()
+        self.decision_tracker = decision_tracker
 
-        self.param_optimizer = ParameterOptimizer(self.hass, self.entry.entry_id)
-        await self.param_optimizer.async_load()
+        param_optimizer = ParameterOptimizer(self.hass, self.entry.entry_id)
+        await param_optimizer.async_load()
+        self.param_optimizer = param_optimizer
 
-        self.pattern_analyzer = PatternAnalyzer(self.hass, self.entry.entry_id)
-        await self.pattern_analyzer.async_load()
+        pattern_analyzer = PatternAnalyzer(self.hass, self.entry.entry_id)
+        await pattern_analyzer.async_load()
+        self.pattern_analyzer = pattern_analyzer
 
-        if (
-            self.decision_tracker is not None
-            and self.param_optimizer is not None
-            and self.pattern_analyzer is not None
-        ):
-            self.optimization_controller = OptimizationController(
-                self.hass,
-                self.entry.entry_id,
-                self.decision_tracker,
-                self.param_optimizer,
-                self.pattern_analyzer,
-            )
-            await self.optimization_controller.async_load()
+        optimization_controller = OptimizationController(
+            self.hass,
+            self.entry.entry_id,
+            decision_tracker,
+            param_optimizer,
+            pattern_analyzer,
+        )
+        await optimization_controller.async_load()
+        self.optimization_controller = optimization_controller
 
-            learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
-            self.optimization_controller.set_learning_enabled(learning_enabled)
+        learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
+        optimization_controller.set_learning_enabled(learning_enabled)
 
     def attach_state_machine(self, state_machine) -> None:
         """Wire decision tracker into state machine."""

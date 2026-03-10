@@ -673,7 +673,7 @@ class TestMediumTickOptimizationController:
         self, mock_hass_with_services, mock_entry, coordinator_data
     ):
         """Learning orchestrator with data for medium tick tests."""
-        from custom_components.localshift.learning_orchestrator import (
+        from custom_components.localshift.learning.orchestrator import (
             LearningOrchestrator,
         )
 
