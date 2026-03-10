@@ -39,11 +39,11 @@ from .subscription_manager import SubscriptionManager
 if TYPE_CHECKING:
     from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
-    from .cost_tracker import CostTracker
-    from .entity_validator import EntityValidator
     from .notification_service import NotificationService
     from .state_machine import StateMachine
     from .state_reader import StateReader
+    from .utils.costs import CostTracker
+    from .utils.validation import EntityValidator
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -182,11 +182,11 @@ class LocalShiftCoordinator:
         # Initialize helper modules
         from .battery_controller import BatteryController
         from .computation_engine import ComputationEngine
-        from .cost_tracker import CostTracker
-        from .entity_validator import EntityValidator
         from .notification_service import NotificationService
         from .state_machine import StateMachine
         from .state_reader import StateReader
+        from .utils.costs import CostTracker
+        from .utils.validation import EntityValidator
 
         self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
         self._state_reader = StateReader(self.hass, self.entry, self._entity_validator)

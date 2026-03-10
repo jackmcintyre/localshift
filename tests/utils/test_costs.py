@@ -1,12 +1,11 @@
 """Unit tests for CostTracker."""
 
-from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
 from custom_components.localshift.coordinator_data import CoordinatorData
-from custom_components.localshift.cost_tracker import CostTracker
+from custom_components.localshift.utils.costs import CostTracker
 
 
 @pytest.fixture

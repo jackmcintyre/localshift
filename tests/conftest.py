@@ -574,7 +574,7 @@ def mock_entity_validator():
     By default, reports all entities as healthy and allows automation.
     Tests can override the return values as needed.
     """
-    from custom_components.localshift.entity_validator import IntegrationStatus
+    from custom_components.localshift.utils.validation import IntegrationStatus
 
     validator = MagicMock()
     validator.should_allow_automation = MagicMock(return_value=True)

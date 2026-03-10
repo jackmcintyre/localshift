@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.const import CONF_TESLEMETRY_SOC
-from custom_components.localshift.entity_validator import (
+from custom_components.localshift.utils.validation import (
     STALENESS_THRESHOLDS,
     EntityStatus,
     EntityValidator,

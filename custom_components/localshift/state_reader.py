@@ -30,7 +30,7 @@ from .const import (
     DEFAULT_ENTITY_IDS,
 )
 from .coordinator_data import CoordinatorData
-from .entity_validator import EntityValidator
+from .utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
 
