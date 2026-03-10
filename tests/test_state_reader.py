@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1142,7 +1143,8 @@ class TestForecastExtensionIntegration:
         self, state_reader, mock_hass, coordinator_data
     ):
         """Test that short forecast is extended to 24 hours."""
-        now = datetime(2026, 3, 10, 14, 0)
+        tz = ZoneInfo("Australia/Sydney")
+        now = datetime(2026, 3, 10, 14, 0, tzinfo=tz)
 
         def mock_get_state(entity_id):
             state = MagicMock()
@@ -1176,9 +1178,8 @@ class TestForecastExtensionIntegration:
             return state
 
         mock_hass.states.get = mock_get_state
-        with patch("custom_components.localshift.state_reader.datetime") as mock_dt:
-            mock_dt.now.return_value = now
-            mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        with patch("custom_components.localshift.state_reader.dt_util") as mock_dt_util:
+            mock_dt_util.now.return_value = now
             state_reader.read_all_external_state(coordinator_data)
 
         last_general = coordinator_data.general_forecast[-1]
@@ -1189,7 +1190,8 @@ class TestForecastExtensionIntegration:
         self, state_reader, mock_hass, coordinator_data
     ):
         """Test that forecast is not extended when already 24+ hours."""
-        now = datetime(2026, 3, 10, 14, 0)
+        tz = ZoneInfo("Australia/Sydney")
+        now = datetime(2026, 3, 10, 14, 0, tzinfo=tz)
         forecast_24h = []
         for i in range(48):
             forecast_24h.append({
@@ -1214,9 +1216,8 @@ class TestForecastExtensionIntegration:
             return state
 
         mock_hass.states.get = mock_get_state
-        with patch("custom_components.localshift.state_reader.datetime") as mock_dt:
-            mock_dt.now.return_value = now
-            mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        with patch("custom_components.localshift.state_reader.dt_util") as mock_dt_util:
+            mock_dt_util.now.return_value = now
             state_reader.read_all_external_state(coordinator_data)
 
         assert len(coordinator_data.general_forecast) == 48
