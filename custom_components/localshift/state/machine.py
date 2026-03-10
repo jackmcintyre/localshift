@@ -30,9 +30,9 @@ from ..const import (
 from ..coordinator_data import CoordinatorData
 
 if TYPE_CHECKING:
-    from ..battery_controller import BatteryController
     from ..computation_engine import ComputationEngine
     from ..computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
+    from ..integration.controller import BatteryController
     from ..services.notification_service import NotificationService
     from ..utils.validation import EntityValidator
 

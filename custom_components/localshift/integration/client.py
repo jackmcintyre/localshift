@@ -7,7 +7,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from .const import TESLEMETRY_EXPORT_BATTERY_OK, TESLEMETRY_EXPORT_PV_ONLY
+from ..const import TESLEMETRY_EXPORT_BATTERY_OK, TESLEMETRY_EXPORT_PV_ONLY
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

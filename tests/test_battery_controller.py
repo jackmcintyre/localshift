@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.battery_controller import BatteryController
+from custom_components.localshift.integration.controller import BatteryController
 from custom_components.localshift.const import (
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,

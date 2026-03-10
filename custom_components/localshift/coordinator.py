@@ -37,8 +37,8 @@ from .services.evaluation_dispatcher import EvaluationDispatcher
 from .services.subscription_manager import SubscriptionManager
 
 if TYPE_CHECKING:
-    from .battery_controller import BatteryController
     from .computation_engine import ComputationEngine
+    from .integration.controller import BatteryController
     from .services.notification_service import NotificationService
     from .state.machine import StateMachine
     from .state.reader import StateReader
@@ -180,8 +180,8 @@ class LocalShiftCoordinator:
     async def async_start(self) -> None:
         """Start listening to entity changes and periodic timer."""
         # Initialize helper modules
-        from .battery_controller import BatteryController
         from .computation_engine import ComputationEngine
+        from .integration.controller import BatteryController
         from .services.notification_service import NotificationService
         from .state.machine import StateMachine
         from .state.reader import StateReader

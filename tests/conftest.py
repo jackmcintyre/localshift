@@ -89,7 +89,7 @@ def mock_battery_sleep():
         )
         service_sleep = stack.enter_context(
             patch(
-                "custom_components.localshift.powerwall_service_client.asyncio.sleep",
+                "custom_components.localshift.integration.client.asyncio.sleep",
                 new_callable=AsyncMock,
             )
         )
