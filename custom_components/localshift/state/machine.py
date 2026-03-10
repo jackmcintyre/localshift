@@ -596,24 +596,47 @@ class StateMachine:
         self, data: CoordinatorData, desired: BatteryMode, now: datetime
     ) -> None:
         """Handle mode transition with debounce logic."""
-        for mode in list(self._mode_desired_since.keys()):
-            if mode != desired:
-                self._mode_desired_since.pop(mode, None)
+        self._clear_stale_debounce_timers(desired)
 
         debounce = self._get_debounce_duration(desired)
         debounce_in_progress = desired in self._mode_desired_since
 
         if not debounce_in_progress:
-            if self._should_skip_price_unchanged(data, desired):
-                if not self._get_switch_state("dry_run"):
-                    await self._perform_health_check(data)
-                return
-            if self._start_debounce(data, desired, now, debounce):
+            if await self._handle_new_desired_mode(data, desired, now, debounce):
                 return
 
         if not await self._check_debounce_and_transition(data, desired, now, debounce):
             return
 
+        await self._execute_transition_with_validation(data, desired, now)
+
+    def _clear_stale_debounce_timers(self, desired: BatteryMode) -> None:
+        """Clear debounce timers for modes no longer desired."""
+        for mode in list(self._mode_desired_since.keys()):
+            if mode != desired:
+                self._mode_desired_since.pop(mode, None)
+
+    async def _handle_new_desired_mode(
+        self,
+        data: CoordinatorData,
+        desired: BatteryMode,
+        now: datetime,
+        debounce: timedelta,
+    ) -> bool:
+        """Handle new desired mode (debounce not in progress).
+
+        Returns True if caller should return, False to continue.
+        """
+        if self._should_skip_price_unchanged(data, desired):
+            if not self._get_switch_state("dry_run"):
+                await self._perform_health_check(data)
+            return True
+        return self._start_debounce(data, desired, now, debounce)
+
+    async def _execute_transition_with_validation(
+        self, data: CoordinatorData, desired: BatteryMode, now: datetime
+    ) -> None:
+        """Execute mode transition with entity validation and notifications."""
         old_mode = self._commanded_mode
         _LOGGER.info(
             "State machine transition: %s → %s (desired for %s)",
@@ -632,17 +655,29 @@ class StateMachine:
         transition_success = await self._execute_mode_transition(data, desired)
 
         if not transition_success:
-            _LOGGER.warning(
-                "Mode transition from %s to %s failed - keeping previous commanded mode",
-                old_mode.value,
-                desired.value,
-            )
-            await self._notification_service.send_transition_failed_notification(
-                desired, data
-            )
-            self._mode_desired_since.pop(desired, None)
+            await self._handle_failed_transition(data, desired, old_mode)
             return
 
+        await self._finalize_successful_transition(data, desired, old_mode)
+
+    async def _handle_failed_transition(
+        self, data: CoordinatorData, desired: BatteryMode, old_mode: BatteryMode
+    ) -> None:
+        """Handle failed mode transition."""
+        _LOGGER.warning(
+            "Mode transition from %s to %s failed - keeping previous commanded mode",
+            old_mode.value,
+            desired.value,
+        )
+        await self._notification_service.send_transition_failed_notification(
+            desired, data
+        )
+        self._mode_desired_since.pop(desired, None)
+
+    async def _finalize_successful_transition(
+        self, data: CoordinatorData, desired: BatteryMode, old_mode: BatteryMode
+    ) -> None:
+        """Finalize successful mode transition."""
         self._commanded_mode = desired
         self._mode_desired_since.clear()
 
