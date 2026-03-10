@@ -24,7 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import (
+from ..const import (
     CONF_COOLING_THRESHOLD,
     CONF_HEATING_THRESHOLD,
     CONF_WEATHER_ENTITY,

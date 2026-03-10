@@ -11,7 +11,7 @@ from ..const import (
     DEFAULT_WEATHER_LEARNING_ENABLED,
 )
 from ..coordinator_data import CoordinatorData
-from ..weather_correlation import WeatherCorrelation
+from ..learning.correlation import WeatherCorrelation
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import SWITCH_ENABLE_LEARNING
+from ..const import SWITCH_ENABLE_LEARNING
 
 if TYPE_CHECKING:
     from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker

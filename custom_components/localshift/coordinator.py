@@ -32,7 +32,7 @@ from .const import (
 )
 from .coordinator_data import CoordinatorData
 from .forecast_bootstrapper import ForecastBootstrapper
-from .learning_orchestrator import LearningOrchestrator
+from .learning.orchestrator import LearningOrchestrator
 from .services.evaluation_dispatcher import EvaluationDispatcher
 from .services.subscription_manager import SubscriptionManager
 
