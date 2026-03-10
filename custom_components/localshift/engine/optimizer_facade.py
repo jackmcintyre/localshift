@@ -22,7 +22,7 @@ from .optimizer_runner import (
     _serialize_decision,
     _serialize_result,
 )
-from .slot_builder import SlotBuilder
+from .slots import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
 

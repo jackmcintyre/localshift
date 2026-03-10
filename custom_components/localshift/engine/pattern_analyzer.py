@@ -23,7 +23,7 @@ from .optimizer_dp import PlannerAction
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .decision_outcome_tracker import DecisionRecord
+    from .outcomes import DecisionRecord
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.engine.decision_outcome_tracker import (
+from custom_components.localshift.engine.outcomes import (
     DecisionRecord,
 )
 from custom_components.localshift.engine.pattern_analyzer import (

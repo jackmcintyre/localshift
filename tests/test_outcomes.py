@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.engine.decision_outcome_tracker import (
+from custom_components.localshift.engine.outcomes import (
     DecisionOutcomeTracker,
     DecisionRecord,
 )
@@ -321,7 +321,7 @@ class TestDecisionOutcomeTracker:
         mock_store.async_save = mock_async_save
 
         with patch(
-            "custom_components.localshift.engine.decision_outcome_tracker.Store",
+            "custom_components.localshift.engine.outcomes.Store",
             return_value=mock_store,
         ):
             tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")

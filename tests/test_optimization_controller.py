@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.engine.decision_outcome_tracker import (
+from custom_components.localshift.engine.outcomes import (
     DecisionOutcomeTracker,
     DecisionRecord,
 )
@@ -13,7 +13,7 @@ from custom_components.localshift.engine.optimization_controller import (
     ObjectiveWeights,
     OptimizationController,
 )
-from custom_components.localshift.engine.parameter_optimizer import (
+from custom_components.localshift.engine.parameters import (
     ParameterOptimizer,
 )
 from custom_components.localshift.engine.pattern_analyzer import (

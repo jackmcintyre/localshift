@@ -27,7 +27,7 @@ from ..coordinator.data import AdaptiveParameters
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .decision_outcome_tracker import DecisionRecord
+    from .outcomes import DecisionRecord
     from .pattern_analyzer import BiasCorrection
 
 _LOGGER = logging.getLogger(__name__)

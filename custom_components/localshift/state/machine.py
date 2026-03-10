@@ -31,7 +31,7 @@ from ..coordinator.data import CoordinatorData
 
 if TYPE_CHECKING:
     from ..computation_engine import ComputationEngine
-    from ..engine.decision_outcome_tracker import DecisionOutcomeTracker
+    from ..engine.outcomes import DecisionOutcomeTracker
     from ..integration.controller import BatteryController
     from ..services.notification_service import NotificationService
     from ..utils.validation import EntityValidator

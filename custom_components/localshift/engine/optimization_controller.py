@@ -24,8 +24,8 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from ..coordinator.data import CoordinatorData
-    from .decision_outcome_tracker import DecisionOutcomeTracker
-    from .parameter_optimizer import ParameterOptimizer
+    from .outcomes import DecisionOutcomeTracker
+    from .parameters import ParameterOptimizer
     from .pattern_analyzer import PatternAnalyzer
 
 _LOGGER = logging.getLogger(__name__)

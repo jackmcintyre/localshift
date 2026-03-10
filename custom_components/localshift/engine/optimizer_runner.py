@@ -30,7 +30,7 @@ from .optimizer_dp import (
     PlannerAction,
     SlotContext,
 )
-from .slot_builder import SlotBuilder
+from .slots import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
 
