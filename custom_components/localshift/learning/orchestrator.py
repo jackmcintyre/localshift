@@ -43,14 +43,14 @@ class LearningOrchestrator:
 
     async def async_initialize(self) -> None:
         """Initialize learning components and load persisted state."""
-        from .computation_engine_lib.decision_outcome_tracker import (
+        from ..computation_engine_lib.decision_outcome_tracker import (
             DecisionOutcomeTracker,
         )
-        from .computation_engine_lib.optimization_controller import (
+        from ..computation_engine_lib.optimization_controller import (
             OptimizationController,
         )
-        from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
-        from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
+        from ..computation_engine_lib.parameter_optimizer import ParameterOptimizer
+        from ..computation_engine_lib.pattern_analyzer import PatternAnalyzer
 
         self.decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
         await self.decision_tracker.async_load()
