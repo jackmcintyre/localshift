@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_PRICING_FEED_IN_FORECAST,
@@ -178,6 +179,12 @@ class StateReader:
             last_time = datetime.fromisoformat(last_time_str)
         except (ValueError, TypeError):
             return forecast
+
+        # Normalize timezone for comparison (Issue #632)
+        # datetime.fromisoformat() may return timezone-aware datetime
+        # while the 'now' parameter may be timezone-aware from dt_util.now()
+        if last_time.tzinfo is None and now.tzinfo is not None:
+            last_time = last_time.replace(tzinfo=now.tzinfo)
 
         target_time = now + timedelta(hours=24)
         last_duration = last_entry.get("duration", 30)
@@ -370,7 +377,7 @@ class StateReader:
         # Issue #632: Extend forecasts to 24 hours if needed
         # This ensures the optimizer can see tomorrow's solar opportunities
         # even when price forecast (e.g., Amber free tier) provides only ~16 hours
-        now_dt = datetime.now()
+        now_dt = dt_util.now()
         if data.general_forecast:
             avg_buy_price = self._calculate_current_day_average_price(
                 data.general_forecast, now_dt
