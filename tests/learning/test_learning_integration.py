@@ -9,17 +9,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.decision_outcome_tracker import (
+from custom_components.localshift.engine.decision_outcome_tracker import (
     DecisionOutcomeTracker,
     DecisionRecord,
 )
-from custom_components.localshift.computation_engine_lib.optimization_controller import (
+from custom_components.localshift.engine.optimization_controller import (
     OptimizationController,
 )
-from custom_components.localshift.computation_engine_lib.parameter_optimizer import (
+from custom_components.localshift.engine.parameter_optimizer import (
     ParameterOptimizer,
 )
-from custom_components.localshift.computation_engine_lib.pattern_analyzer import (
+from custom_components.localshift.engine.pattern_analyzer import (
     PatternAnalyzer,
 )
 from custom_components.localshift.const import BatteryMode

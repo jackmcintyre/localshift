@@ -12,10 +12,10 @@ from homeassistant.core import HomeAssistant
 from ..const import SWITCH_ENABLE_LEARNING
 
 if TYPE_CHECKING:
-    from .computation_engine_lib.decision_outcome_tracker import DecisionOutcomeTracker
-    from .computation_engine_lib.optimization_controller import OptimizationController
-    from .computation_engine_lib.parameter_optimizer import ParameterOptimizer
-    from .computation_engine_lib.pattern_analyzer import PatternAnalyzer
+    from ..engine.decision_outcome_tracker import DecisionOutcomeTracker
+    from ..engine.optimization_controller import OptimizationController
+    from ..engine.parameter_optimizer import ParameterOptimizer
+    from ..engine.pattern_analyzer import PatternAnalyzer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,14 +43,14 @@ class LearningOrchestrator:
 
     async def async_initialize(self) -> None:
         """Initialize learning components and load persisted state."""
-        from ..computation_engine_lib.decision_outcome_tracker import (
+        from ..engine.decision_outcome_tracker import (
             DecisionOutcomeTracker,
         )
-        from ..computation_engine_lib.optimization_controller import (
+        from ..engine.optimization_controller import (
             OptimizationController,
         )
-        from ..computation_engine_lib.parameter_optimizer import ParameterOptimizer
-        from ..computation_engine_lib.pattern_analyzer import PatternAnalyzer
+        from ..engine.parameter_optimizer import ParameterOptimizer
+        from ..engine.pattern_analyzer import PatternAnalyzer
 
         decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
         await decision_tracker.async_load()

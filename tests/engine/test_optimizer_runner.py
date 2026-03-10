@@ -1,7 +1,7 @@
-from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+from custom_components.localshift.engine.optimizer_dp import (
     OptimizerConfig,
 )
-from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+from custom_components.localshift.engine.optimizer_runner import (
     _derive_runtime_apply_plan,
 )
 from custom_components.localshift.const import BatteryMode

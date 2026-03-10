@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     OptimizerConfig,
     OptimizerInputs,
@@ -130,7 +130,7 @@ def test_dp_planner_applies_switching_penalty():
 
 def test_objective_terms_includes_switching_penalty():
     """Test that ObjectiveTerms serializes switching_penalty correctly."""
-    from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+    from custom_components.localshift.engine.optimizer_dp import (
         ObjectiveTerms,
     )
 

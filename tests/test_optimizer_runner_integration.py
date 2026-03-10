@@ -11,7 +11,7 @@ into OptimizerInputs with proper field mapping:
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+from custom_components.localshift.engine.optimizer_runner import (
     _build_optimizer_config,
     _build_summary,
     _normalize_initial_soc,
@@ -382,7 +382,7 @@ class TestBuildSummary:
 
     def test_includes_parity_completeness(self, mock_coordinator_data):
         """Verify parity_completeness_pct included in summary."""
-        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+        from custom_components.localshift.engine.optimizer_dp import (
             OptimizerResult,
         )
 
@@ -397,7 +397,7 @@ class TestBuildSummary:
 
     def test_includes_alignment_results(self, mock_coordinator_data):
         """Verify alignment results included in summary."""
-        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+        from custom_components.localshift.engine.optimizer_dp import (
             OptimizerResult,
         )
 
@@ -413,7 +413,7 @@ class TestBuildSummary:
 
     def test_includes_alignment_issues(self, mock_coordinator_data):
         """Verify alignment issues included when present."""
-        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+        from custom_components.localshift.engine.optimizer_dp import (
             OptimizerResult,
         )
 
@@ -430,7 +430,7 @@ class TestBuildSummary:
         self, mock_coordinator_data
     ):
         """Verify summary exposes cycle timestamp under computed_at for sensors."""
-        from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+        from custom_components.localshift.engine.optimizer_dp import (
             OptimizerResult,
         )
 

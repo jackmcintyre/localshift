@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     ObjectiveTerms,
     OptimizerConfig,
@@ -342,7 +342,7 @@ def test_optimizer_no_actuation():
     from dataclasses import dataclass, field
     from typing import Any
 
-    from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+    from custom_components.localshift.engine.optimizer_runner import (
         run_optimizer,
     )
 
@@ -386,7 +386,7 @@ def test_optimizer_failure_fallback(default_config):
     from dataclasses import dataclass, field
     from typing import Any
 
-    from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+    from custom_components.localshift.engine.optimizer_runner import (
         run_optimizer,
     )
 
@@ -423,7 +423,7 @@ def test_optimizer_result_serialization_safe(default_config, multi_slots):
     from dataclasses import dataclass, field
     from typing import Any
 
-    from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+    from custom_components.localshift.engine.optimizer_runner import (
         run_optimizer,
     )
 

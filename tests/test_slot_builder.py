@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.slot_builder import (
+from custom_components.localshift.engine.slot_builder import (
     SlotBuilder,
     SlotBuildMetadata,
 )

@@ -11,21 +11,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .computation_engine_lib import (
-    ExcessSolarSignalsEngine,
-    WeatherDiagnosticsEngine,
-    max_forecast_price,
-    parse_forecast_dt,
-    percentile,
-    scan_forecast_for_spike,
-)
-from .computation_engine_lib.excess_solar import ExcessSolarEngine
-from .computation_engine_lib.optimizer_dp import DPPlanner
-from .computation_engine_lib.optimizer_facade import OptimizerFacade
-from .computation_engine_lib.optimizer_runner import _find_current_slot_index
-from .computation_engine_lib.price_signal_engine import PriceSignalEngine
-from .computation_engine_lib.slot_schedule import TOTAL_SLOTS
-from .computation_engine_lib.soc_simulator import SocSimulator
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
@@ -52,6 +37,21 @@ from .const import (
     BatteryMode as _BatteryMode,
 )
 from .coordinator import CoordinatorData
+from .engine import (
+    ExcessSolarSignalsEngine,
+    WeatherDiagnosticsEngine,
+    max_forecast_price,
+    parse_forecast_dt,
+    percentile,
+    scan_forecast_for_spike,
+)
+from .engine.excess_solar import ExcessSolarEngine
+from .engine.optimizer_dp import DPPlanner
+from .engine.optimizer_facade import OptimizerFacade
+from .engine.optimizer_runner import _find_current_slot_index
+from .engine.price_signal_engine import PriceSignalEngine
+from .engine.slot_schedule import TOTAL_SLOTS
+from .engine.soc_simulator import SocSimulator
 from .forecast import (
     ForecastAccuracyEngine,
     ForecastHistoryStore,

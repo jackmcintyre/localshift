@@ -700,19 +700,19 @@ def mock_storage():
     # Patch Store at all locations where it's imported
     with (
         patch(
-            "custom_components.localshift.computation_engine_lib.decision_outcome_tracker.Store",
+            "custom_components.localshift.engine.decision_outcome_tracker.Store",
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.computation_engine_lib.parameter_optimizer.Store",
+            "custom_components.localshift.engine.parameter_optimizer.Store",
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.computation_engine_lib.pattern_analyzer.Store",
+            "custom_components.localshift.engine.pattern_analyzer.Store",
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.computation_engine_lib.optimization_controller.Store",
+            "custom_components.localshift.engine.optimization_controller.Store",
             return_value=mock_store,
         ),
     ):

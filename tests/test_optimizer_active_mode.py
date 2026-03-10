@@ -11,7 +11,7 @@ from datetime import datetime
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+from custom_components.localshift.engine.optimizer_dp import (
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerResult,
@@ -19,7 +19,7 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     PlannerAction,
     PlannerReasonCode,
 )
-from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+from custom_components.localshift.engine.optimizer_runner import (
     OptimizerSafetyGate,
     _derive_runtime_apply_plan,
 )
@@ -284,7 +284,7 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
 
     def test_optimizer_runner_class_exists(self):
         """OptimizerRunner (renamed) should be importable from optimizer_runner."""
-        from custom_components.localshift.computation_engine_lib.optimizer_runner import (
+        from custom_components.localshift.engine.optimizer_runner import (
             OptimizerSafetyGate,
             _derive_runtime_apply_plan,
             run_optimizer,
@@ -300,7 +300,7 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
 
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(
-                "custom_components.localshift.computation_engine_lib.optimizer_shadow_runner"
+                "custom_components.localshift.engine.optimizer_shadow_runner"
             )
 
     def test_planner_comparator_module_does_not_exist(self):
@@ -309,5 +309,5 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
 
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(
-                "custom_components.localshift.computation_engine_lib.planner_comparator"
+                "custom_components.localshift.engine.planner_comparator"
             )

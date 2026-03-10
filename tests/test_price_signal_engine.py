@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.price_signal_engine import (
+from custom_components.localshift.engine.price_signal_engine import (
     PriceSignalEngine,
 )
 

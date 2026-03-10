@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.decision_outcome_tracker import (
+from custom_components.localshift.engine.decision_outcome_tracker import (
     DecisionRecord,
 )
-from custom_components.localshift.computation_engine_lib.pattern_analyzer import (
+from custom_components.localshift.engine.pattern_analyzer import (
     BiasCorrection,
     DimensionStats,
     PatternAnalyzer,
