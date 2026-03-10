@@ -90,13 +90,93 @@ The architecture was designed to solve several problems from the original YAML-b
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Module Structure
+
+The integration is organized into logical modules:
+
+```
+custom_components/localshift/
+├── coordinator/              # Data coordination
+│   ├── coordinator.py        # Main coordinator, ties all modules together
+│   └── data.py               # CoordinatorData, ChargingDecision dataclasses
+│
+├── engine/                   # Optimization engine
+│   ├── optimizer_dp.py       # DP solver (core algorithm)
+│   ├── optimizer_runner.py   # Coordinator integration
+│   ├── optimizer_facade.py   # Facade for optimizer access
+│   ├── slot_builder.py       # SlotContext construction
+│   ├── slot_schedule.py      # Hybrid slot schedule
+│   ├── price_calculator.py   # Price calculations
+│   ├── price_signal_engine.py # Price signal orchestration
+│   ├── parameter_optimizer.py # Thompson sampling parameter tuning
+│   ├── pattern_analyzer.py   # Bias detection
+│   ├── decision_outcome_tracker.py # Decision tracking
+│   ├── optimization_controller.py # Real-time evaluation
+│   ├── excess_solar.py       # Excess solar engine
+│   ├── excess_solar_signals.py # Load shift signals
+│   ├── soc_simulator.py      # SOC simulation
+│   ├── spike_analyzer.py     # Price spike detection
+│   ├── utils.py              # General utilities
+│   └── weather_diagnostics.py # Weather diagnostics
+│
+├── forecast/                 # Forecasting modules
+│   ├── pipeline.py           # Forecast orchestration
+│   ├── history.py            # Historical data fetching
+│   ├── load.py               # Load forecasting
+│   ├── solar.py              # Solar calculations
+│   ├── solar_accuracy.py     # Solar accuracy tracking
+│   ├── accuracy.py           # Forecast accuracy engine
+│   ├── history_store.py      # Forecast history storage
+│   └── bootstrapper.py       # Forecast initialization
+│
+├── integration/              # External integrations
+│   ├── controller.py         # Battery controller (Teslemetry)
+│   └── client.py             # Powerwall service client
+│
+├── learning/                 # ML/Adaptive learning
+│   ├── orchestrator.py       # Learning system coordinator
+│   └── correlation.py        # Weather correlation engine
+│
+├── services/                 # Services
+│   ├── notification.py       # Notification service
+│   └── subscription.py       # Subscription manager
+│
+├── state/                    # State machine
+│   ├── machine.py            # State machine evaluator
+│   ├── reader.py             # External entity reader
+│   └── validator.py          # Transition validator
+│
+├── utils/                    # Shared utilities
+│   ├── validation.py         # Entity validation
+│   └── costs.py              # Cost tracking
+│
+├── config_flow/              # Configuration flow (HA requires this name)
+│   ├── __init__.py           # Config flow entry point
+│   ├── schemas.py            # Config schemas
+│   └── validators.py         # Config validators
+│
+├── *.py (entities)           # Entity platforms at root (HA requires this)
+│   ├── sensor.py             # 27 sensor entities
+│   ├── binary_sensor.py      # 10 binary sensor entities
+│   ├── switch.py             # 8 switch entities
+│   ├── number.py             # 4 number entities
+│   ├── select.py             # 2 select entities
+│   └── button.py             # 2 button entities
+│
+├── __init__.py               # Integration entry point
+├── const.py                  # Constants, enums, defaults
+├── computation_engine.py     # Computation engine (orchestrates engine/)
+├── manifest.json             # HA manifest
+└── strings.json              # Localization strings
+```
+
 ## Current Architecture
 
 ### Component Responsibilities
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    coordinator.py                            │
+│                    coordinator/                              │
 │  - Subscribes to entity state changes                      │
 │  - Coordinates all modules                                  │
 │  - 1-minute periodic tick                                   │
@@ -106,19 +186,19 @@ The architecture was designed to solve several problems from the original YAML-b
     │              │              │              │
     ▼              ▼              ▼              ▼
 ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
-│  state  │  │ compute │  │ battery │  │  state  │
-│  reader │  │  engine │  │controller│  │ machine │
+│  state/ │  │ engine/ │  │integration│ │  state/ │
+│  reader │  │         │  │controller │ │ machine │
 └─────────┘  └─────────┘  └─────────┘  └─────────┘
                                     │
                             ┌───────┴───────┐
-                            │  forecast    │
-                            │  computer    │
+                            │  forecast/    │
+                            │  pipeline     │
                             └───────────────┘
 ```
 
 ### Data Flow
 
-1. **State Reader** (`state_reader.py`)
+1. **State Reader** (`state/reader.py`)
    - Reads Teslemetry entities (SOC, operation mode, grid/battery/solar/load power)
    - Reads Amber entities (prices, forecasts, spike status)
    - Reads Solcast entities (solar forecasts)
@@ -126,33 +206,37 @@ The architecture was designed to solve several problems from the original YAML-b
 
 2. **Computation Engine** (`computation_engine.py`)
    - Computes derived values (directional power, mode detection, forecasts)
-   - Delegates to DP optimizer (`optimizer_dp.py`) for 24-hour SOC simulation and control decisions
-   - Delegates focused responsibilities to `computation_engine_lib/` helpers:
-     - `change_tracker.py` → `ForecastChangeTracker`
+   - Delegates to DP optimizer (`engine/optimizer_dp.py`) for 24-hour SOC simulation and control decisions
+   - Delegates focused responsibilities to `engine/` helpers:
      - `price_calculator.py` → effective cheap price + solar-weighted FIT
      - `spike_analyzer.py` → conservative spike analysis + reserve SOC
      - `excess_solar_signals.py` → excess-solar/load-shift signal orchestration
-     - `forecast_accuracy.py` → planned-vs-actual forecast accuracy comparisons
      - `weather_diagnostics.py` → weather-learning diagnostic population
+   - Delegates to `forecast/` helpers:
+     - `accuracy.py` → planned-vs-actual forecast accuracy comparisons
    - Determines `active_mode` based on all conditions
 
-3. **State Machine** (`state_machine.py`)
+3. **State Machine** (`state/machine.py`)
    - Compares `active_mode` with `commanded_mode`
    - Applies debounce timers (2-5 minutes depending on transition)
    - Executes mode transitions via `BatteryController`
 
-4. **Battery Controller** (`battery_controller.py`)
+4. **Battery Controller** (`integration/controller.py`)
    - Issues commands to Teslemetry (operation mode, backup reserve, export mode)
    - Validates transitions completed successfully
 
-5. **DP Optimizer** (`computation_engine_lib/optimizer_dp.py`)
+5. **DP Optimizer** (`engine/optimizer_dp.py`)
    - Core DP solver with SOC discretization (50 bins by default)
    - Computes optimal 24-hour battery control decisions
    - Handles demand window target preparation
    - Provides `optimizer_result` with per-slot decisions
 
-6. **Slot Builder** (`computation_engine_lib/slot_builder.py`)
+6. **Slot Builder** (`engine/slot_builder.py`)
    - Builds `SlotContext` objects from raw coordinator data
+   - Applies adaptive parameters (consumption bias, solar factor, etc.)
+   - Shared between DP optimizer and load forecaster
+   - Applies adaptive parameters (consumption bias, solar factor, etc.)
+   - Shared between DP optimizer and load forecaster
    - Applies adaptive parameters (consumption bias, solar factor, etc.)
    - Shared between DP optimizer and load forecaster
 
@@ -445,7 +529,7 @@ After issuing transition commands, the system polls for hardware confirmation fo
 
 ## Computation Engine Modularization (Issue #146)
 
-To reduce `computation_engine.py` complexity and improve maintainability, forecast-adjacent logic has been extracted into dedicated helper modules under `custom_components/localshift/computation_engine_lib/`.
+To reduce `computation_engine.py` complexity and improve maintainability, forecast-adjacent logic has been extracted into dedicated helper modules under `custom_components/localshift/engine/` and `custom_components/localshift/forecast/`.
 
 ### Why this extraction was done
 
@@ -463,7 +547,7 @@ To reduce `computation_engine.py` complexity and improve maintainability, foreca
 
 The integration includes a weather-aware consumption prediction system using a degree-day model that learns the correlation between temperature and household load.
 
-### Component: WeatherCorrelation (`weather_correlation.py`)
+### Component: WeatherCorrelation (`learning/correlation.py`)
 
 The `WeatherCorrelation` class manages:
 - Loading/saving learned coefficients to HA storage
@@ -540,10 +624,10 @@ The integration includes an adaptive learning system that continuously optimizes
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| **DecisionOutcomeTracker** | `decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
-| **ParameterOptimizer** | `parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
-| **PatternAnalyzer** | `pattern_analyzer.py` | Detects systematic biases across contextual dimensions |
-| **OptimizationController** | `optimization_controller.py` | Real-time parameter evaluation with contextual adjustments |
+| **DecisionOutcomeTracker** | `engine/decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
+| **ParameterOptimizer** | `engine/parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
+| **PatternAnalyzer** | `engine/pattern_analyzer.py` | Detects systematic biases across contextual dimensions |
+| **OptimizationController** | `engine/optimization_controller.py` | Real-time parameter evaluation with contextual adjustments |
 
 ### Data Flow
 
@@ -796,9 +880,9 @@ The integration includes a DP (Dynamic Programming) optimizer subsystem that com
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| **DPPlanner** | `optimizer_dp.py` | Core DP solver with SOC discretization |
-| **SlotBuilder** | `slot_builder.py` | Builds SlotContext from coordinator data |
-| **run_optimizer()** | `optimizer_runner.py` | Coordinator integration entry point |
+| **DPPlanner** | `engine/optimizer_dp.py` | Core DP solver with SOC discretization |
+| **SlotBuilder** | `engine/slot_builder.py` | Builds SlotContext from coordinator data |
+| **run_optimizer()** | `engine/optimizer_runner.py` | Coordinator integration entry point |
 
 ### Data Flow
 

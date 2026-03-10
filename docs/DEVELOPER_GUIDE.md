@@ -6,34 +6,81 @@ This guide covers the technical architecture of the LocalShift integration for d
 
 ```
 custom_components/localshift/
-├── __init__.py              # Integration entry point
-├── coordinator.py            # Main coordinator, ties all modules together
-├── coordinator_data.py      # Data structures (CoordinatorData, ChargingDecision)
-├── const.py                 # Constants, enums, configuration defaults
-├── config_flow.py           # Configuration flow (entity selection, options)
-├── state_reader.py          # Reads external entities
-├── computation_engine.py   # Computes derived values, determines active mode
-├── state_machine.py         # Evaluates state machine, executes transitions
-├── battery_controller.py    # Controls Powerwall via Teslemetry
-├── cost_tracker.py          # Tracks energy costs
-├── notification_service.py   # Sends notifications
-├── weather_correlation.py   # Weather-based consumption prediction
-├── sensor.py                # Sensor entities (11)
-├── binary_sensor.py         # Binary sensor entities (11)
-├── switch.py                # Switch entities (4)
-├── number.py                # Number entities (7)
-├── button.py                # Button entities (5)
-├── manifest.json            # Home Assistant manifest
-├── strings.json            # Localization strings
+├── coordinator/              # Data coordination
+│   ├── coordinator.py        # Main coordinator, ties all modules together
+│   └── data.py               # Data structures (CoordinatorData, ChargingDecision)
 │
-├── computation_engine_lib/ # Computation engine submodules
-│   ├── forecast_computer.py  # 15-minute SOC forecasting
-│   ├── history_fetcher.py    # Historical consumption data
-│   ├── solar_utils.py       # Solar calculation utilities
-│   └── utils.py             # General utilities
+├── engine/                   # Optimization engine
+│   ├── optimizer_dp.py       # DP solver (core algorithm)
+│   ├── optimizer_runner.py   # Coordinator integration
+│   ├── optimizer_facade.py   # Facade for optimizer access
+│   ├── slot_builder.py       # SlotContext construction
+│   ├── slot_schedule.py      # Hybrid slot schedule
+│   ├── price_calculator.py   # Price calculations
+│   ├── price_signal_engine.py # Price signal orchestration
+│   ├── parameter_optimizer.py # Thompson sampling parameter tuning
+│   ├── pattern_analyzer.py   # Bias detection
+│   ├── decision_outcome_tracker.py # Decision tracking
+│   ├── optimization_controller.py # Real-time evaluation
+│   ├── excess_solar.py       # Excess solar engine
+│   ├── excess_solar_signals.py # Load shift signals
+│   ├── soc_simulator.py      # SOC simulation
+│   ├── spike_analyzer.py     # Price spike detection
+│   ├── utils.py              # General utilities
+│   └── weather_diagnostics.py # Weather diagnostics
+│
+├── forecast/                 # Forecasting modules
+│   ├── pipeline.py           # Forecast orchestration
+│   ├── history.py            # Historical data fetching
+│   ├── load.py               # Load forecasting
+│   ├── solar.py              # Solar calculations
+│   ├── solar_accuracy.py     # Solar accuracy tracking
+│   ├── accuracy.py           # Forecast accuracy engine
+│   ├── history_store.py      # Forecast history storage
+│   └── bootstrapper.py       # Forecast initialization
+│
+├── integration/              # External integrations
+│   ├── controller.py         # Battery controller (Teslemetry)
+│   └── client.py             # Powerwall service client
+│
+├── learning/                 # ML/Adaptive learning
+│   ├── orchestrator.py       # Learning system coordinator
+│   └── correlation.py        # Weather correlation engine
+│
+├── services/                 # Services
+│   ├── notification.py       # Notification service
+│   └── subscription.py       # Subscription manager
+│
+├── state/                    # State machine
+│   ├── machine.py            # State machine evaluator
+│   ├── reader.py             # External entity reader
+│   └── validator.py          # Transition validator
+│
+├── utils/                    # Shared utilities
+│   ├── validation.py         # Entity validation
+│   └── costs.py              # Cost tracking
+│
+├── config_flow/              # Configuration flow
+│   ├── __init__.py           # Config flow entry point
+│   ├── schemas.py            # Config schemas
+│   └── validators.py         # Config validators
+│
+├── *.py (entities)           # Entity platforms at root
+│   ├── sensor.py             # 27 sensor entities
+│   ├── binary_sensor.py      # 10 binary sensor entities
+│   ├── switch.py             # 8 switch entities
+│   ├── number.py             # 4 number entities
+│   ├── select.py             # 2 select entities
+│   └── button.py             # 2 button entities
+│
+├── __init__.py               # Integration entry point
+├── const.py                  # Constants, enums, configuration defaults
+├── computation_engine.py     # Computes derived values, determines active mode
+├── manifest.json             # Home Assistant manifest
+├── strings.json              # Localization strings
 │
 └── translations/
-    └── en.json              # English translations
+    └── en.json               # English translations
 ```
 
 ## Key Concepts
@@ -97,7 +144,7 @@ but result in net losses after accounting for wear and inefficiency.
 
 ## Core Classes
 
-### Coordinator (`coordinator.py`)
+### Coordinator (`coordinator/coordinator.py`)
 
 The `LocalShiftCoordinator` is the central hub:
 
@@ -137,7 +184,7 @@ class LocalShiftCoordinator:
 - Coordinates data flow between modules
 - Manages configuration updates
 
-### CoordinatorData (`coordinator_data.py`)
+### CoordinatorData (`coordinator/data.py`)
 
 A dataclass holding all computed state:
 
@@ -172,7 +219,7 @@ class CoordinatorData:
     battery_savings: float
 ```
 
-### StateReader (`state_reader.py`)
+### StateReader (`state/reader.py`)
 
 Reads values from Home Assistant entities:
 
@@ -226,7 +273,7 @@ class ComputationEngine:
 - `_compute_solar_forecast()`: SOC projection using Solcast data
 - `_compute_active_mode()`: State machine priority evaluation
 
-### DP Optimizer (`computation_engine_lib/optimizer_dp.py`)
+### DP Optimizer (`engine/optimizer_dp.py`)
 
 Computes optimal battery decisions over 24 hours:
 
@@ -243,12 +290,12 @@ def plan(self, inputs: OptimizerInputs, config: OptimizerConfig) -> OptimizerRes
     return OptimizerResult(...)
 ```
 
-The optimizer is invoked via `run_optimizer()` in `optimizer_runner.py`:
+The optimizer is invoked via `run_optimizer()` in `engine/optimizer_runner.py`:
 1. `SlotBuilder` constructs `SlotContext` objects from coordinator data
 2. `DPPlanner.plan()` computes optimal decisions
 3. `_derive_runtime_apply_plan()` maps actions to battery modes
 
-### StateMachine (`state_machine.py`)
+### StateMachine (`state/machine.py`)
 
 Evaluates and executes mode transitions:
 
@@ -284,7 +331,7 @@ class BatteryStateMachine:
 - Manual override timeout (configurable)
 - Transition success validation
 
-### WeatherCorrelation (`weather_correlation.py`)
+### WeatherCorrelation (`learning/correlation.py`)
 
 Learns and applies temperature-based consumption adjustments:
 
@@ -314,7 +361,7 @@ class WeatherCorrelation:
 - Confidence levels based on sample count (low/medium/high)
 - Configurable cooling and heating thresholds
 
-### HistoryFetcher (`history_fetcher.py`)
+### HistoryFetcher (`forecast/history.py`)
 
 Fetches historical consumption data with day-of-week awareness:
 
@@ -341,7 +388,7 @@ class HistoryFetcher:
 - Falls back to combined profile if insufficient samples
 - Requires minimum 12 hours with 3+ samples each for day-specific profiles
 
-### BatteryController (`battery_controller.py`)
+### BatteryController (`integration/controller.py`)
 
 Issues commands to Powerwall via Teslemetry:
 
@@ -460,10 +507,10 @@ The learning system consists of four main components:
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `DecisionOutcomeTracker` | `decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
-| `ParameterOptimizer` | `parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
-| `PatternAnalyzer` | `pattern_analyzer.py` | Detects systematic biases across dimensions |
-| `OptimizationController` | `optimization_controller.py` | Real-time parameter evaluation |
+| `DecisionOutcomeTracker` | `engine/decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
+| `ParameterOptimizer` | `engine/parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
+| `PatternAnalyzer` | `engine/pattern_analyzer.py` | Detects systematic biases across dimensions |
+| `OptimizationController` | `engine/optimization_controller.py` | Real-time parameter evaluation |
 
 ### Adding New Optimizable Parameters
 
@@ -515,13 +562,13 @@ def _should_grid_charge_at_slot(self, ...):
 Ensure the new parameter is applied during slot building:
 
 ```python
-# In slot_builder.py
+# In engine/slot_builder.py
 def _apply_adaptive_params(self, slot: SlotContext) -> SlotContext:
     if self._adaptive_params:
         slot.consumption_kwh *= (1 + self._adaptive_params.consumption_forecast_bias)
     return slot
 
-# In optimizer_dp.py or optimizer_runner.py
+# In engine/optimizer_dp.py or engine/optimizer_runner.py
 config = OptimizerConfig(
     battery_capacity_kwh=...,
     demand_window_target_soc_pct=self._adaptive_params.demand_window_buffer_pct,
@@ -616,14 +663,14 @@ def _compute_active_mode(self, data):
     return BatteryMode.SELF_CONSUMPTION
 ```
 
-### 3. Add transition logic (`state_machine.py`)
+### 3. Add transition logic (`state/machine.py`)
 
 ```python
 elif target == BatteryMode.NEW_MODE:
     transition_success = await self._battery_controller.set_new_mode(...)
 ```
 
-### 4. Add controller method (`battery_controller.py`)
+### 4. Add controller method (`integration/controller.py`)
 
 ```python
 async def set_new_mode(self, data, dry_run=False):
@@ -631,7 +678,7 @@ async def set_new_mode(self, data, dry_run=False):
     ...
 ```
 
-### 5. Add expected state (`state_machine.py`)
+### 5. Add expected state (`state/machine.py`)
 
 ```python
 def _get_expected_state_for_mode(self, mode):
