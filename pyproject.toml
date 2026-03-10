@@ -36,7 +36,6 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "custom_components/localshift/computation_engine_lib/decision_outcome_tracker.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/forecast_history_store.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/history_fetcher.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/optimization_controller.py" = ["C901"]
 "custom_components/localshift/computation_engine_lib/parameter_optimizer.py" = ["C901"]

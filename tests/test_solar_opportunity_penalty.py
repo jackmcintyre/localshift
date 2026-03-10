@@ -13,6 +13,7 @@ from custom_components.localshift.computation_engine_lib.optimizer_dp import (
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
+    PlannerReasonCode,
     SlotContext,
 )
 
@@ -742,3 +743,91 @@ class TestSolarOpportunityPenaltyStrengthened:
             f"Solar opportunity penalty ({terms.solar_opportunity_penalty:.4f}) should exceed "
             f"import_cost ({import_cost:.4f}) alone — penalty base must include downstream credit"
         )
+
+def test_short_horizon_aware_of_future_solar_holds():
+    """
+    Test that when the demand window is beyond the horizon, the DP
+    accounts for solar between now and then. (Issue #619)
+    """
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        min_soc_pct=10.0,
+        max_soc_pct=100.0,
+        demand_window_target_soc_pct=80.0,
+        target_shortfall_penalty_per_pct=1.0,
+        soc_bins=50,
+        optimization_mode="self_consumption",
+        effective_cheap_price=0.17,
+        charge_efficiency=0.92,
+        discharge_efficiency=0.95,
+    )
+
+    now = datetime(2026, 1, 3, 23, 0, 0)
+    slots = [make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14) for i in range(10)]
+    # Target 80% at 17:00 tomorrow (well beyond horizon ending at 04:00 AM)
+    # Force terminal_penalty_idx to 9
+    slots[-1].is_demand_window_slot = True
+
+    # Solar tomorrow morning: 16 kWh available (starts at 08:00, beyond 04:00 AM)
+    all_solcast = [
+        make_solcast_entry(8 + i, 4.0) for i in range(8)
+    ]
+
+    inputs = OptimizerInputs(
+        cycle_id="test-horizon-aware",
+        initial_soc_pct=20.0,
+        slots=slots,
+        config=config,
+        all_solcast=all_solcast,
+    )
+
+    planner = DPPlanner()
+    result = planner.plan(inputs)
+    assert result.success
+
+    # Should HOLD because future solar covers shortfall
+    charge_slots = [d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL]
+    assert len(charge_slots) == 0
+
+    # Reason should be SOLAR_OPPORTUNITY_WAIT (since price is cheap and solar is coming)
+    assert result.decisions[0].reason_code == PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
+
+
+def test_short_horizon_still_charges_if_future_solar_insufficient():
+    """
+    Test that it still charges if even the future solar isn't enough. (Issue #619)
+    """
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        min_soc_pct=10.0,
+        max_soc_pct=100.0,
+        demand_window_target_soc_pct=80.0,
+        target_shortfall_penalty_per_pct=1.0,
+        soc_bins=50,
+        optimization_mode="self_consumption",
+        effective_cheap_price=0.17,
+        charge_efficiency=0.92,
+        discharge_efficiency=0.95,
+    )
+
+    now = datetime(2026, 1, 3, 23, 0, 0)
+    slots = [make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14) for i in range(10)]
+    slots[-1].is_demand_window_slot = True
+
+    # Tiny solar tomorrow morning: 1 kWh available
+    all_solcast = [make_solcast_entry(9, 2.0)]
+
+    inputs = OptimizerInputs(
+        cycle_id="test-insufficient-future-solar",
+        initial_soc_pct=10.0,
+        slots=slots,
+        config=config,
+        all_solcast=all_solcast,
+    )
+
+    planner = DPPlanner()
+    result = planner.plan(inputs)
+    assert result.success
+
+    charge_slots = [d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL]
+    assert len(charge_slots) > 0
