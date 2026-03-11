@@ -415,10 +415,31 @@ class DecisionOutcomeTracker:
         # Compute SOC change
         soc_change = data.soc - pending.soc_at_decision
 
+        # Estimate import/export during period (same logic as _backfill_pending_decision)
+        import_kwh = max(0.0, -soc_change / 100.0 * 13.5)
+        export_kwh = max(0.0, soc_change / 100.0 * 13.5)
+
+        # Compute cost (simplified - same logic as _backfill_pending_decision)
+        if soc_change < 0:
+            cost = 0.0
+        else:
+            if pending.mode_chosen in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            ):
+                cost = (
+                    -soc_change / 100.0 * 13.5 * pending.general_price_at_decision / 100
+                )
+            else:
+                cost = 0.0
+
         # Set outcome fields
         pending.actual_soc_change = soc_change
+        pending.actual_import_kwh = import_kwh
+        pending.actual_export_kwh = export_kwh
+        pending.actual_cost_during_period = cost
         pending.duration_minutes = duration_minutes
-        pending.next_mode = None  # No transition occurred
+        pending.next_mode = None
 
         # Compute outcome score
         pending.outcome_score = self.compute_outcome_score(pending)
@@ -507,6 +528,7 @@ class DecisionOutcomeTracker:
         # 3. Target Score (weight: 25%)
         # Did the decision help reach/maintain SOC target?
         # Issue #281: Use weather-aware target gap thresholds
+        # Issue #651: Only penalize when mode could plausibly affect target progress
         if record.battery_target_soc > 0:
             soc_at_end = record.soc_at_decision + (record.actual_soc_change or 0.0)
             target_diff = abs(soc_at_end - record.battery_target_soc)
@@ -516,12 +538,27 @@ class DecisionOutcomeTracker:
             is_low_solar_weather = record.weather_condition in ("rainy", "cloudy")
             far_threshold = 40 if is_low_solar_weather else 20
 
+            # Issue #651: Only apply target penalty when mode could affect progress
+            can_increase_soc = record.mode_chosen in (
+                PlannerAction.CHARGE_GRID_NORMAL,
+                PlannerAction.CHARGE_GRID_BOOST,
+            )
+            can_decrease_soc = record.mode_chosen == PlannerAction.EXPORT_PROACTIVE
+
             if target_diff <= 5:
                 score += 0.15  # Close to target
             elif target_diff <= 10:
                 score += 0.05  # Acceptable
             elif target_diff > far_threshold:
-                score -= 0.10  # Far from target (weather-adjusted)
+                # Only penalize if mode could plausibly help reach target
+                below_target = soc_at_end < record.battery_target_soc
+                above_target = soc_at_end > record.battery_target_soc
+
+                if below_target and can_increase_soc:
+                    score -= 0.10  # Far below target, but could have charged
+                elif above_target and can_decrease_soc:
+                    score -= 0.10  # Far above target, but could have exported
+                # HOLD mode: no penalty, can't control SOC
 
         # 4. Cycling Penalty (weight: 15%)
         # Penalize rapid mode changes (< 3 min = actual cycling)
