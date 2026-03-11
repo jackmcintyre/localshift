@@ -30,6 +30,16 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_DAY_NAMES = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
+
 
 @dataclass
 class ObjectiveWeights:
@@ -339,97 +349,85 @@ class OptimizationController:
     def _apply_active_bias_corrections(
         self, params: AdaptiveParameters, data: CoordinatorData
     ) -> AdaptiveParameters:
-        """Apply relevant bias corrections for current context.
-
-        Matches current conditions (day_of_week, weather, etc.) against
-        active BiasCorrection entries and applies matching adjustments.
-
-        Args:
-            params: Current parameters to adjust
-            data: Current coordinator data
-
-        Returns:
-            Adjusted parameters
-
-        """
+        """Apply relevant bias corrections for current context."""
         if not data.active_bias_corrections:
             return params
 
         now = dt_util.now()
-        current_day = now.weekday()  # 0=Monday, 6=Sunday
+        current_day = now.weekday()
         current_weather = data.weather_condition.lower()
 
         for correction in data.active_bias_corrections:
-            # Check if correction applies to current context
-            applies = False
-
-            dimension = correction.get("dimension", "")
-            group_key = correction.get("group_key", "")
-
-            if dimension == "day_of_week":
-                # Check if current day matches
-                day_names = [
-                    "monday",
-                    "tuesday",
-                    "wednesday",
-                    "thursday",
-                    "friday",
-                    "saturday",
-                    "sunday",
-                ]
-                if group_key.lower() == day_names[current_day]:
-                    applies = True
-
-            elif dimension == "weather":
-                # Check if current weather matches (partial match)
-                if (
-                    group_key.lower() in current_weather
-                    or current_weather in group_key.lower()
-                ):
-                    applies = True
-
-            elif dimension == "hour_of_day":
-                # Check if current hour matches
-                try:
-                    hour = int(group_key)
-                    if hour == now.hour:
-                        applies = True
-                except (ValueError, TypeError):
-                    pass
-
-            elif dimension == "season":
-                # Season matching (approximate by month)
-                month = now.month
-                season = self._get_season(month)
-                if group_key.lower() == season:
-                    applies = True
-
-            if applies:
-                param_name = correction.get("param_name", "")
-                adjustment = correction.get("adjustment", 0.0)
-                confidence = correction.get("confidence", 0.0)
-
-                # Only apply high-confidence corrections directly
-                if confidence >= 0.5 and param_name:
-                    current = params.get(param_name, 0.0)
-                    params.values[param_name] = current + adjustment
-                    self._active_contextual_adjustments.append(
-                        ContextualAdjustment(
-                            param_name=param_name,
-                            adjustment=adjustment,
-                            reason=f"Bias correction ({dimension}={group_key})",
-                        )
-                    )
-                    _LOGGER.debug(
-                        "Applied bias correction: %s +%.2f (%s=%s, confidence=%.2f)",
-                        param_name,
-                        adjustment,
-                        dimension,
-                        group_key,
-                        confidence,
-                    )
+            if self._correction_applies_to_context(
+                correction, current_day, current_weather, now
+            ):
+                self._apply_single_correction(params, correction)
 
         return params
+
+    def _correction_applies_to_context(
+        self,
+        correction: dict[str, Any],
+        current_day: int,
+        current_weather: str,
+        now: datetime,
+    ) -> bool:
+        """Check if a correction matches the current context."""
+        dimension = correction.get("dimension", "")
+        group_key = correction.get("group_key", "").lower()
+
+        if dimension == "day_of_week":
+            return group_key == _DAY_NAMES[current_day]
+
+        if dimension == "weather":
+            return group_key in current_weather or current_weather in group_key
+
+        if dimension == "hour_of_day":
+            return self._hour_matches(group_key, now)
+
+        if dimension == "season":
+            return group_key == self._get_season(now.month)
+
+        return False
+
+    def _hour_matches(self, group_key: str, now: datetime) -> bool:
+        """Check if hour matches group_key."""
+        try:
+            hour = int(group_key)
+            return hour == now.hour
+        except (ValueError, TypeError):
+            return False
+
+    def _apply_single_correction(
+        self, params: AdaptiveParameters, correction: dict[str, Any]
+    ) -> None:
+        """Apply a single bias correction if high confidence."""
+        param_name = correction.get("param_name", "")
+        adjustment = correction.get("adjustment", 0.0)
+        confidence = correction.get("confidence", 0.0)
+        dimension = correction.get("dimension", "")
+        group_key = correction.get("group_key", "")
+
+        if confidence < 0.5 or not param_name:
+            return
+
+        current = params.get(param_name, 0.0)
+        params.values[param_name] = current + adjustment
+        self._active_contextual_adjustments.append(
+            ContextualAdjustment(
+                param_name=param_name,
+                adjustment=adjustment,
+                reason=f"Bias correction ({dimension}={group_key})",
+            )
+        )
+        _LOGGER.debug(
+            "Applied bias correction: %s +%.2f (%s=%s, confidence=%.2f)",
+            param_name,
+            adjustment,
+            dimension,
+            group_key,
+            confidence,
+        )
 
     def _clamp_parameters(self, params: AdaptiveParameters) -> AdaptiveParameters:
         """Clamp all parameters to their defined bounds.

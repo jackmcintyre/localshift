@@ -21,6 +21,39 @@ from ..coordinator.data import CoordinatorData
 from .utils import parse_forecast_dt
 
 
+def _parse_price_entry(
+    entry: Any, slot_start: datetime, slot_end: datetime
+) -> dict[str, Any] | None:
+    """Parse a price forecast entry, returning None if invalid.
+
+    Returns dict with: start_local, end_local, price, duration_minutes, is_overlap.
+    """
+    if not isinstance(entry, dict):
+        return None
+
+    start_raw = entry.get("start_time")
+    if start_raw is None:
+        return None
+
+    start_dt = parse_forecast_dt(start_raw)
+    if start_dt is None:
+        return None
+
+    start_local = dt_util.as_local(start_dt)
+    duration_minutes = int(entry.get("duration", 5))
+    end_local = start_local + timedelta(minutes=duration_minutes)
+    price = float(entry.get("per_kwh", 0.0))
+
+    return {
+        "start_local": start_local,
+        "end_local": end_local,
+        "price": price,
+        "duration_minutes": duration_minutes,
+        "is_overlap": start_local < slot_end and end_local > slot_start,
+        "is_fallback_candidate": start_local <= slot_start,
+    }
+
+
 def _compute_price_slot_data(
     price_forecasts: list[dict[str, Any]],
     slot_start: datetime,
@@ -32,19 +65,7 @@ def _compute_price_slot_data(
 
     Amber mixes 5-min dispatch intervals (near-term) with 30-min extended
     forecast periods. The overlap scan handles both correctly.
-
-    Args:
-        price_forecasts: List of price forecast entries from Amber.
-        slot_start: Start time of the slot to check.
-
-    Returns:
-        Tuple of (prices_in_slot, fallback_price, fallback_start):
-        - prices_in_slot: List of prices that overlap with the slot.
-        - fallback_price: Price from the most recent entry at or before slot_start.
-        - fallback_start: Start time of the fallback entry (None if no fallback).
-
     """
-    # Ensure slot boundaries are timezone-aware local datetimes
     if slot_start.tzinfo is None:
         slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
     else:
@@ -57,33 +78,17 @@ def _compute_price_slot_data(
     fallback_start: datetime | None = None
 
     for entry in price_forecasts:
-        if not isinstance(entry, dict):
+        parsed = _parse_price_entry(entry, slot_start, slot_end)
+        if parsed is None:
             continue
 
-        start_raw = entry.get("start_time")
-        if start_raw is None:
-            continue
+        if parsed["is_overlap"]:
+            prices_in_slot.append(parsed["price"])
 
-        start_dt = parse_forecast_dt(start_raw)
-        if start_dt is None:
-            continue
-
-        start_local = dt_util.as_local(start_dt)
-
-        # Overlap check: use per-entry duration from the data when available,
-        # otherwise assume 5 minutes (standard Amber dispatch interval).
-        duration_minutes: int = int(entry.get("duration", 5))
-        end_local = start_local + timedelta(minutes=duration_minutes)
-
-        if start_local < slot_end and end_local > slot_start:
-            price = float(entry.get("per_kwh", 0.0))
-            prices_in_slot.append(price)
-
-        # Track most-recent entry at or before slot_start for fallback
-        if start_local <= slot_start:
-            if fallback_start is None or start_local > fallback_start:
-                fallback_start = start_local
-                fallback_price = float(entry.get("per_kwh", 0.0))
+        if parsed["is_fallback_candidate"]:
+            if fallback_start is None or parsed["start_local"] > fallback_start:
+                fallback_start = parsed["start_local"]
+                fallback_price = parsed["price"]
 
     return prices_in_slot, fallback_price, fallback_start
 
@@ -118,34 +123,12 @@ def get_price_for_slot(
     return fallback_price
 
 
-def get_price_for_slot_with_source(
+def _collect_prices_by_source(
     price_forecasts: list[dict[str, Any]],
     slot_start: datetime,
-    interval_minutes: int = 15,
-) -> tuple[float, str]:
-    """Get price for a slot along with price source metadata.
-
-    Issue #327: Returns the price source ("5min" or "30min") to support
-    hybrid timescale forecasting.
-
-    Issue #329: Supports variable slot durations (5, 15, or 30 minutes).
-
-    Args:
-        price_forecasts: List of price forecast entries from Amber.
-        slot_start: Start time of the slot to check.
-        interval_minutes: Slot duration in minutes (default 15).
-
-    Returns:
-        Tuple of (price, price_source):
-        - price: Price in $/kWh for the slot.
-        - price_source: "5min" if from 5-min data, "30min" if from 30-min data,
-                       "unknown" if no data found.
-
-    """
-    if not price_forecasts:
-        return 0.0, "unknown"
-
-    # Ensure slot boundaries are timezone-aware local datetimes
+    interval_minutes: int,
+) -> dict[str, Any]:
+    """Collect prices grouped by source (5min/30min) with fallback info."""
     if slot_start.tzinfo is None:
         slot_start = dt_util.as_local(dt_util.as_utc(slot_start))
     else:
@@ -153,7 +136,6 @@ def get_price_for_slot_with_source(
 
     slot_end = slot_start + timedelta(minutes=interval_minutes)
 
-    # Track prices and their sources
     prices_5min: list[float] = []
     prices_30min: list[float] = []
     fallback_price: float = 0.0
@@ -161,49 +143,50 @@ def get_price_for_slot_with_source(
     fallback_start: datetime | None = None
 
     for entry in price_forecasts:
-        if not isinstance(entry, dict):
+        parsed = _parse_price_entry(entry, slot_start, slot_end)
+        if parsed is None:
             continue
 
-        start_raw = entry.get("start_time")
-        if start_raw is None:
-            continue
+        source = "5min" if parsed["duration_minutes"] <= 5 else "30min"
 
-        start_dt = parse_forecast_dt(start_raw)
-        if start_dt is None:
-            continue
-
-        start_local = dt_util.as_local(start_dt)
-        duration_minutes: int = int(entry.get("duration", 5))
-        end_local = start_local + timedelta(minutes=duration_minutes)
-        price = float(entry.get("per_kwh", 0.0))
-
-        # Determine source based on duration
-        source = "5min" if duration_minutes <= 5 else "30min"
-
-        if start_local < slot_end and end_local > slot_start:
-            # Price overlaps with slot
+        if parsed["is_overlap"]:
             if source == "5min":
-                prices_5min.append(price)
+                prices_5min.append(parsed["price"])
             else:
-                prices_30min.append(price)
+                prices_30min.append(parsed["price"])
 
-        # Track most-recent entry for fallback
-        if start_local <= slot_start:
-            if fallback_start is None or start_local > fallback_start:
-                fallback_start = start_local
-                fallback_price = price
+        if parsed["is_fallback_candidate"]:
+            if fallback_start is None or parsed["start_local"] > fallback_start:
+                fallback_start = parsed["start_local"]
+                fallback_price = parsed["price"]
                 fallback_source = source
 
-    # Prefer 5-min data if available (more precise for near-term)
-    if prices_5min:
-        return sum(prices_5min) / len(prices_5min), "5min"
+    return {
+        "prices_5min": prices_5min,
+        "prices_30min": prices_30min,
+        "fallback_price": fallback_price,
+        "fallback_source": fallback_source,
+    }
 
-    # Fall back to 30-min data
-    if prices_30min:
-        return sum(prices_30min) / len(prices_30min), "30min"
 
-    # No overlapping data - use fallback
-    return fallback_price, fallback_source
+def get_price_for_slot_with_source(
+    price_forecasts: list[dict[str, Any]],
+    slot_start: datetime,
+    interval_minutes: int = 15,
+) -> tuple[float, str]:
+    """Get price for a slot along with price source metadata."""
+    if not price_forecasts:
+        return 0.0, "unknown"
+
+    data = _collect_prices_by_source(price_forecasts, slot_start, interval_minutes)
+
+    if data["prices_5min"]:
+        return sum(data["prices_5min"]) / len(data["prices_5min"]), "5min"
+
+    if data["prices_30min"]:
+        return sum(data["prices_30min"]) / len(data["prices_30min"]), "30min"
+
+    return data["fallback_price"], data["fallback_source"]
 
 
 def get_price_for_slot_or_none(
@@ -494,6 +477,52 @@ class PriceCalculator:
         # Apply hysteresis and smoothing (Issue #282)
         data.effective_cheap_price = self._apply_threshold_hysteresis(raw_threshold)
 
+    def _get_fit_price_for_period(
+        self, feed_in_forecast: list[dict[str, Any]], mid_local: datetime
+    ) -> float:
+        """Get FIT price for a specific time from forecast."""
+        for forecast in feed_in_forecast:
+            forecast_start = self._parse_forecast_dt(forecast.get("start_time"))
+            forecast_end = self._parse_forecast_dt(forecast.get("end_time"))
+            if forecast_start is None or forecast_end is None:
+                continue
+            forecast_start_local = dt_util.as_local(forecast_start)
+            forecast_end_local = dt_util.as_local(forecast_end)
+            if forecast_start_local <= mid_local < forecast_end_local:
+                return float(forecast.get("per_kwh", 0))
+        return 0.0
+
+    def _compute_weighted_fit(
+        self,
+        all_solcast: list[dict[str, Any]],
+        feed_in_forecast: list[dict[str, Any]],
+        now_dt: datetime,
+        target_dt: datetime,
+    ) -> tuple[float, float]:
+        """Compute solar-weighted average FIT. Returns (weighted_avg, total_solar)."""
+        weighted_sum = 0.0
+        total_solar = 0.0
+
+        for period in all_solcast:
+            period_start = self._parse_forecast_dt(period.get("period_start"))
+            if period_start is None:
+                continue
+            period_start_local = dt_util.as_local(period_start)
+            if not (period_start_local >= now_dt and period_start_local < target_dt):
+                continue
+
+            solar_kwh_val = float(period.get("pv_estimate", 0))
+            if solar_kwh_val <= 0:
+                continue
+
+            mid_local = period_start_local + timedelta(minutes=15)
+            fit_price = self._get_fit_price_for_period(feed_in_forecast, mid_local)
+
+            weighted_sum += solar_kwh_val * fit_price
+            total_solar += solar_kwh_val
+
+        return weighted_sum, total_solar
+
     def compute_solar_weighted_avg_fit(
         self,
         data: CoordinatorData,
@@ -507,40 +536,12 @@ class PriceCalculator:
             data.solar_remaining_kwh = 0.0
             return
 
-        weighted_sum = 0.0
-        total_solar = 0.0
-
-        # Include tomorrow's forecast when target is tomorrow morning
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-
-        # Compute target datetime (demand window start)
         target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
 
-        for period in all_solcast:
-            period_start = self._parse_forecast_dt(period.get("period_start"))
-            if period_start is None:
-                continue
-            period_start_local = dt_util.as_local(period_start)
-            if period_start_local >= now_dt and period_start_local < target_dt:
-                solar_kwh_val = float(period.get("pv_estimate", 0))
-                if solar_kwh_val <= 0:
-                    continue
-
-                mid_local = period_start_local + timedelta(minutes=15)
-                fit_price = 0.0
-                for forecast in data.feed_in_forecast:
-                    forecast_start = self._parse_forecast_dt(forecast.get("start_time"))
-                    forecast_end = self._parse_forecast_dt(forecast.get("end_time"))
-                    if forecast_start is None or forecast_end is None:
-                        continue
-                    forecast_start_local = dt_util.as_local(forecast_start)
-                    forecast_end_local = dt_util.as_local(forecast_end)
-                    if forecast_start_local <= mid_local < forecast_end_local:
-                        fit_price = float(forecast.get("per_kwh", 0))
-                        break
-
-                weighted_sum += solar_kwh_val * fit_price
-                total_solar += solar_kwh_val
+        weighted_sum, total_solar = self._compute_weighted_fit(
+            all_solcast, data.feed_in_forecast, now_dt, target_dt
+        )
 
         if total_solar > 0:
             data.solar_weighted_avg_fit = round(weighted_sum / total_solar, 4)

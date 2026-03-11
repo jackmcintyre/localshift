@@ -35,9 +35,6 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"custom_components/localshift/engine/optimization_controller.py" = ["C901"]
-"custom_components/localshift/engine/price_calculator.py" = ["C901"]
-"custom_components/localshift/engine/slots.py" = ["C901"]
 "custom_components/localshift/forecast/history.py" = ["C901"]
 "custom_components/localshift/forecast/solar.py" = ["C901"]
 
