@@ -458,7 +458,93 @@ class DecisionOutcomeTracker:
             pending.outcome_score,
         )
 
-    def compute_outcome_score(self, record: DecisionRecord) -> float:  # noqa: C901
+    def _compute_cost_score(self, record: DecisionRecord) -> float | None:
+        """Compute cost score component (0.0-1.0).
+
+        Returns None if cost data is unavailable.
+        """
+        if record.actual_cost_during_period is None:
+            return None
+
+        if record.mode_chosen in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            if record.actual_export_kwh and record.actual_export_kwh > 0.5:
+                return 0.2
+            return 0.7
+
+        if record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
+            if (
+                record.actual_cost_during_period
+                and record.actual_cost_during_period < 0
+            ):
+                return 0.9
+            return 0.4
+
+        return 0.6
+
+    def _compute_export_penalty(self, record: DecisionRecord) -> float:
+        """Compute export penalty (negative) or bonus (positive).
+
+        Returns a value to add to score (-0.15 to +0.05).
+        """
+        if not record.actual_export_kwh or record.actual_export_kwh <= 0.1:
+            return 0.0
+
+        grid_imported = (
+            record.actual_import_kwh is not None and record.actual_import_kwh > 0.1
+        )
+
+        if record.mode_chosen in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            if grid_imported:
+                return -0.15
+            return 0.0
+
+        if record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
+            return 0.05
+
+        return 0.0
+
+    def _compute_target_score(self, record: DecisionRecord) -> float:
+        """Compute target score component.
+
+        Returns a value to add to score (-0.10 to +0.15).
+        """
+        if record.battery_target_soc <= 0:
+            return 0.0
+
+        soc_at_end = record.soc_at_decision + (record.actual_soc_change or 0.0)
+        target_diff = abs(soc_at_end - record.battery_target_soc)
+
+        is_low_solar_weather = record.weather_condition in ("rainy", "cloudy")
+        far_threshold = 40 if is_low_solar_weather else 20
+
+        can_increase_soc = record.mode_chosen in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        )
+        can_decrease_soc = record.mode_chosen == PlannerAction.EXPORT_PROACTIVE
+
+        if target_diff <= 5:
+            return 0.15
+        if target_diff <= 10:
+            return 0.05
+        if target_diff > far_threshold:
+            below_target = soc_at_end < record.battery_target_soc
+            above_target = soc_at_end > record.battery_target_soc
+
+            if below_target and can_increase_soc:
+                return -0.10
+            if above_target and can_decrease_soc:
+                return -0.10
+
+        return 0.0
+
+    def compute_outcome_score(self, record: DecisionRecord) -> float:
         """Score a decision outcome from 0.0 (worst) to 1.0 (best).
 
         Components:
@@ -474,100 +560,20 @@ class DecisionOutcomeTracker:
             Score from 0.0 to 1.0
 
         """
-        score = 0.5  # Start at neutral
+        score = 0.5
 
-        # 1. Cost Score (weight: 40%)
-        # Lower cost = better score
-        if record.actual_cost_during_period is not None:
-            if record.mode_chosen in (
-                PlannerAction.CHARGE_GRID_NORMAL,
-                PlannerAction.CHARGE_GRID_BOOST,
-            ):
-                # Grid charging: positive cost is expected
-                # Penalize if we charged and then exported (waste)
-                if record.actual_export_kwh and record.actual_export_kwh > 0.5:
-                    cost_score = 0.2  # Penalize grid-charge-then-export
-                else:
-                    cost_score = 0.7  # Normal grid charge
-            elif record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
-                # Proactive export: should make money
-                if (
-                    record.actual_cost_during_period
-                    and record.actual_cost_during_period < 0
-                ):
-                    cost_score = 0.9  # Made money
-                else:
-                    cost_score = 0.4
-            else:
-                cost_score = 0.6
+        cost_score = self._compute_cost_score(record)
+        if cost_score is not None:
             score = score * 0.6 + cost_score * 0.4
-        else:
-            if record.mode_chosen == PlannerAction.HOLD:
-                score = score * 0.6 + 0.5 * 0.4
+        elif record.mode_chosen == PlannerAction.HOLD:
+            score = score * 0.6 + 0.5 * 0.4
 
-        # 2. Export Penalty (weight: 20%)
-        # Penalize exporting grid-purchased energy (Issue #280)
-        # Only penalize if we actually imported grid energy AND exported
-        # Solar-driven export during charging modes is acceptable
-        if record.actual_export_kwh and record.actual_export_kwh > 0.1:
-            grid_imported = (
-                record.actual_import_kwh is not None and record.actual_import_kwh > 0.1
-            )
-            if record.mode_chosen in (
-                PlannerAction.CHARGE_GRID_NORMAL,
-                PlannerAction.CHARGE_GRID_BOOST,
-            ):
-                if grid_imported:
-                    # Bad: imported from grid then exported
-                    score -= 0.15
-                # else: solar-driven export is acceptable, no penalty
-            elif record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
-                # Good: this mode is supposed to export
-                score += 0.05
+        score += self._compute_export_penalty(record)
+        score += self._compute_target_score(record)
 
-        # 3. Target Score (weight: 25%)
-        # Did the decision help reach/maintain SOC target?
-        # Issue #281: Use weather-aware target gap thresholds
-        # Issue #651: Only penalize when mode could plausibly affect target progress
-        if record.battery_target_soc > 0:
-            soc_at_end = record.soc_at_decision + (record.actual_soc_change or 0.0)
-            target_diff = abs(soc_at_end - record.battery_target_soc)
-
-            # Adjust thresholds based on weather (Issue #281)
-            # On rainy/cloudy days, being far from target is more acceptable
-            is_low_solar_weather = record.weather_condition in ("rainy", "cloudy")
-            far_threshold = 40 if is_low_solar_weather else 20
-
-            # Issue #651: Only apply target penalty when mode could affect progress
-            can_increase_soc = record.mode_chosen in (
-                PlannerAction.CHARGE_GRID_NORMAL,
-                PlannerAction.CHARGE_GRID_BOOST,
-            )
-            can_decrease_soc = record.mode_chosen == PlannerAction.EXPORT_PROACTIVE
-
-            if target_diff <= 5:
-                score += 0.15  # Close to target
-            elif target_diff <= 10:
-                score += 0.05  # Acceptable
-            elif target_diff > far_threshold:
-                # Only penalize if mode could plausibly help reach target
-                below_target = soc_at_end < record.battery_target_soc
-                above_target = soc_at_end > record.battery_target_soc
-
-                if below_target and can_increase_soc:
-                    score -= 0.10  # Far below target, but could have charged
-                elif above_target and can_decrease_soc:
-                    score -= 0.10  # Far above target, but could have exported
-                # HOLD mode: no penalty, can't control SOC
-
-        # 4. Cycling Penalty (weight: 15%)
-        # Penalize rapid mode changes (< 3 min = actual cycling)
-        # Note: Control loop runs every 5 min (PERIODIC_INTERVAL_MEDIUM), so
-        # durations 3-5 min are normal re-planning, not cycling
         if record.duration_minutes is not None and record.duration_minutes < 3:
             score -= 0.10
 
-        # Clamp to valid range
         return max(0.0, min(1.0, score))
 
     def get_recent_decisions(self, hours: int = 24) -> list[DecisionRecord]:
@@ -586,6 +592,39 @@ class DecisionOutcomeTracker:
         return [
             record for record in self._completed_decisions if record.timestamp >= cutoff
         ]
+
+    def _compute_cost_trend(self, week_scores: list[float]) -> str:
+        """Determine cost trend from 7-day score data."""
+        if len(week_scores) < 7:
+            return "stable"
+
+        recent_avg = sum(week_scores[-3:]) / 3
+        older_avg = sum(week_scores[:4]) / 4
+
+        if recent_avg > older_avg + 0.05:
+            return "improving"
+        if recent_avg < older_avg - 0.05:
+            return "degrading"
+        return "stable"
+
+    def _aggregate_mode_metrics(
+        self, decisions: list[DecisionRecord]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Aggregate per-mode durations and costs from decisions."""
+        mode_durations: dict[str, float] = {}
+        mode_costs: dict[str, float] = {}
+
+        for record in decisions:
+            mode_key = record.mode_chosen.value
+            mode_durations[mode_key] = mode_durations.get(mode_key, 0.0) + (
+                record.duration_minutes or 0.0
+            )
+            if record.actual_cost_during_period:
+                mode_costs[mode_key] = (
+                    mode_costs.get(mode_key, 0.0) + record.actual_cost_during_period
+                )
+
+        return mode_durations, mode_costs
 
     def get_daily_summary(self) -> PerformanceMetrics:
         """Aggregate today's decision outcomes into summary metrics.
@@ -610,21 +649,8 @@ class DecisionOutcomeTracker:
             r.outcome_score for r in week_decisions if r.outcome_score is not None
         ]
         avg_score_7d = sum(week_scores) / len(week_scores) if week_scores else 0.0
+        cost_trend = self._compute_cost_trend(week_scores)
 
-        # Determine cost trend from 7-day data
-        if len(week_scores) >= 7:
-            recent_avg = sum(week_scores[-3:]) / 3
-            older_avg = sum(week_scores[:4]) / 4
-            if recent_avg > older_avg + 0.05:
-                cost_trend = "improving"
-            elif recent_avg < older_avg - 0.05:
-                cost_trend = "degrading"
-            else:
-                cost_trend = "stable"
-        else:
-            cost_trend = "stable"
-
-        # If no decisions today, return with 7-day metrics populated
         if not today_decisions:
             return PerformanceMetrics(
                 total_decisions_today=0,
@@ -640,20 +666,7 @@ class DecisionOutcomeTracker:
             r.outcome_score for r in today_decisions if r.outcome_score is not None
         ]
         avg_score = sum(scores) / len(scores) if scores else 0.0
-
-        # Compute per-mode durations and costs
-        mode_durations: dict[str, float] = {}
-        mode_costs: dict[str, float] = {}
-
-        for record in today_decisions:
-            mode_key = record.mode_chosen.value
-            mode_durations[mode_key] = mode_durations.get(mode_key, 0.0) + (
-                record.duration_minutes or 0.0
-            )
-            if record.actual_cost_during_period:
-                mode_costs[mode_key] = (
-                    mode_costs.get(mode_key, 0.0) + record.actual_cost_during_period
-                )
+        mode_durations, mode_costs = self._aggregate_mode_metrics(today_decisions)
 
         return PerformanceMetrics(
             total_decisions_today=len(today_decisions),
