@@ -768,6 +768,7 @@ class TestPriceCalculatorSolarWeightedAvgFit:
     def test_computes_weighted_average(self, calculator):
         """Test weighted average is computed correctly."""
         now = _make_utc_datetime()
+        target_hour = (now + timedelta(hours=6)).hour
         data = MagicMock()
         data.solcast_today = [
             {
@@ -784,19 +785,20 @@ class TestPriceCalculatorSolarWeightedAvgFit:
             }
         ]
 
-        calculator.compute_solar_weighted_avg_fit(data, now, 18, after_dw=False)
+        calculator.compute_solar_weighted_avg_fit(data, now, target_hour, after_dw=False)
         assert data.solar_weighted_avg_fit == 0.10
         assert data.solar_remaining_kwh == 2.0
 
     def test_no_solar_defaults_to_zero(self, calculator):
         """Test zero values when no solar forecast."""
         now = _make_utc_datetime()
+        target_hour = (now + timedelta(hours=6)).hour
         data = MagicMock()
         data.solcast_today = []
         data.solcast_tomorrow = []
         data.feed_in_forecast = []
 
-        calculator.compute_solar_weighted_avg_fit(data, now, 18, after_dw=False)
+        calculator.compute_solar_weighted_avg_fit(data, now, target_hour, after_dw=False)
         assert data.solar_weighted_avg_fit == 0.0
         assert data.solar_remaining_kwh == 0.0
 

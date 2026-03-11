@@ -333,6 +333,8 @@ class PriceCalculator:
 
         """
         target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if target_dt <= now_dt:
+            target_dt += timedelta(days=1)
         hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
         # Issue #559 Root Cause 2: shortened from 8h to 4h to reduce urgency creep.
         # A wider window caused prices to be raised well before any real urgency,
@@ -342,12 +344,14 @@ class PriceCalculator:
         urgency_price = base + (max_price - base) * urgency
 
         min_forecast = max_price
+        now_dt_local = dt_util.as_local(now_dt) if now_dt.tzinfo else now_dt
+        target_dt_local = dt_util.as_local(target_dt) if target_dt.tzinfo else target_dt
         for forecast in data.general_forecast:
             start = self._parse_forecast_dt(forecast.get("start_time"))
             if start is None:
                 continue
             start_local = dt_util.as_local(start)
-            if start_local >= now_dt and start_local.hour < target_hour:
+            if start_local >= now_dt_local and start_local < target_dt_local:
                 price = float(forecast.get("per_kwh", max_price))
                 if price < min_forecast:
                     min_forecast = price
@@ -503,12 +507,18 @@ class PriceCalculator:
         weighted_sum = 0.0
         total_solar = 0.0
 
+        now_dt_local = dt_util.as_local(now_dt) if now_dt.tzinfo else now_dt
+        target_dt_local = dt_util.as_local(target_dt) if target_dt.tzinfo else target_dt
+
         for period in all_solcast:
             period_start = self._parse_forecast_dt(period.get("period_start"))
             if period_start is None:
                 continue
             period_start_local = dt_util.as_local(period_start)
-            if not (period_start_local >= now_dt and period_start_local < target_dt):
+            if not (
+                period_start_local >= now_dt_local
+                and period_start_local < target_dt_local
+            ):
                 continue
 
             solar_kwh_val = float(period.get("pv_estimate", 0))
@@ -538,6 +548,8 @@ class PriceCalculator:
 
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
         target_dt = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if target_dt <= now_dt:
+            target_dt += timedelta(days=1)
 
         weighted_sum, total_solar = self._compute_weighted_fit(
             all_solcast, data.feed_in_forecast, now_dt, target_dt
