@@ -252,7 +252,12 @@ Before adding any optimizer feature:
 
 ### Coverage Requirement
 
-**Minimum 95% test coverage enforced:**
+**Minimum 95% coverage required PER MODIFIED FILE.**
+
+The pre-commit hook checks each staged file individually:
+- Each modified `.py` file must have ≥ 95% coverage
+- Uncovered lines are shown in the error message
+- Run the suggested command to see detailed coverage
 
 ```bash
 # Check coverage before commit
@@ -263,7 +268,7 @@ uv run pytest --cov=custom_components/localshift --cov-report=term-missing
 
 **Automatically checks before commit:**
 - Test file exists for modified code
-- Coverage >= 95%
+- **Per-file coverage >= 95%** (not project-wide average)
 - Tests pass
 
 ### Integration with Workflow
