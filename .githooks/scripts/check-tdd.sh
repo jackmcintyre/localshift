@@ -36,6 +36,12 @@ find_test_file() {
     return 1
 }
 
+# Check if pytest-xdist is available for parallel execution
+check_xdist_available() {
+    uv run python -c "import xdist" 2>/dev/null
+    return $?
+}
+
 # Get list of staged Python files in custom_components/localshift/
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '^custom_components/localshift/.*\.py$' || true)
 
@@ -94,57 +100,56 @@ if [ "$CHANGES_REQUIRE_TESTS" = false ]; then
     exit 0
 fi
 
-# Run tests for modified files
-echo ""
-echo "🔍 Running tests for modified files..."
-
-# Convert array to space-separated string
-TEST_FILES="${TEST_FILE_PATHS[*]}"
-
-# Run the tests
-if ! uv run pytest $TEST_FILES -v --tb=short 2>&1; then
-    echo ""
-    echo "❌ ERROR: Tests failed"
-    echo ""
-    echo "All tests must pass before commit (TDD GREEN phase)"
-    echo "See: .agents/rules/tdd-workflow.md"
-    exit 1
-fi
-
-echo "✅ All tests pass"
-
-# Check coverage threshold (95%) for modified files only
-echo ""
-echo "🔍 Checking test coverage for modified files..."
-
 # Build --cov flags only for staged files (not entire codebase)
 COV_FLAGS=""
 for FILE in $STAGED_FILES; do
-    # Skip __init__.py (no testable code)
     if [[ "$FILE" == *"__init__.py" ]]; then
         continue
     fi
-    # Convert path to module: custom_components/localshift/foo.py -> custom_components.localshift.foo
     MODULE=$(echo "$FILE" | sed 's|\.py$||' | tr '/' '.')
     COV_FLAGS="$COV_FLAGS --cov=$MODULE"
 done
 
-if [ -n "$COV_FLAGS" ]; then
-    COVERAGE_OUTPUT=$(uv run pytest $TEST_FILES $COV_FLAGS --cov-report=term-missing --cov-fail-under=95 2>&1)
-    COVERAGE_EXIT_CODE=$?
+# Check for xdist availability and set parallel flag
+PARALLEL_FLAG=""
+if check_xdist_available; then
+    PARALLEL_FLAG="-n logical"
+    echo "🚀 Using parallel execution (pytest-xdist)"
+fi
 
-    if [ $COVERAGE_EXIT_CODE -ne 0 ]; then
-        echo "$COVERAGE_OUTPUT"
+# Convert array to space-separated string
+TEST_FILES="${TEST_FILE_PATHS[*]}"
+
+# Run tests with coverage in single invocation
+echo ""
+echo "🔍 Running tests with coverage for modified files..."
+
+if [ -n "$COV_FLAGS" ]; then
+    if ! uv run pytest $TEST_FILES $COV_FLAGS \
+        $PARALLEL_FLAG \
+        --cov-report=term-missing \
+        --cov-fail-under=95 \
+        -v --tb=short 2>&1; then
         echo ""
-        echo "❌ ERROR: Coverage below 95% for modified files"
+        echo "❌ ERROR: Tests failed or coverage below 95%"
         echo ""
-        echo "Write more tests to reach 95% coverage for your changes"
+        echo "All tests must pass and modified files must have 95% coverage"
         echo "See: .agents/rules/tdd-workflow.md"
         exit 1
     fi
-    echo "✅ Coverage meets 95% threshold for modified files"
+    echo ""
+    echo "✅ All tests pass with 95%+ coverage"
 else
-    echo "✅ No files require coverage check (only init/config files modified)"
+    if ! uv run pytest $TEST_FILES $PARALLEL_FLAG -v --tb=short 2>&1; then
+        echo ""
+        echo "❌ ERROR: Tests failed"
+        echo ""
+        echo "All tests must pass before commit (TDD GREEN phase)"
+        echo "See: .agents/rules/tdd-workflow.md"
+        exit 1
+    fi
+    echo ""
+    echo "✅ All tests pass"
 fi
 
 echo ""
