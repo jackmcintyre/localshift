@@ -18,6 +18,7 @@ import pytest
 from custom_components.localshift.engine.slots import (
     SlotBuilder,
     SlotBuildMetadata,
+    SlotContext,
 )
 from custom_components.localshift.coordinator import AdaptiveParameters
 
@@ -450,3 +451,540 @@ class TestIntegration:
         # Verify builder has required methods
         assert hasattr(builder, "build_slots")
         assert callable(builder.build_slots)
+
+
+class TestGetSolarConfidenceFactor:
+    """Tests for _get_solar_confidence_factor method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_none_params_returns_default(self, builder):
+        """Test None adaptive params returns 1.0."""
+        result = builder._get_solar_confidence_factor(None)
+        assert result == 1.0
+
+    def test_params_with_value(self, builder):
+        """Test adaptive params with solar_confidence_factor."""
+        params = AdaptiveParameters(values={"solar_confidence_factor": 0.8})
+        result = builder._get_solar_confidence_factor(params)
+        assert result == 0.8
+
+    def test_params_without_value_uses_default(self, builder):
+        """Test adaptive params without solar_confidence_factor uses default."""
+        params = AdaptiveParameters(values={})
+        result = builder._get_solar_confidence_factor(params)
+        assert result == 1.0
+
+    def test_clamp_at_zero(self, builder):
+        """Test negative values clamped to 0.0."""
+        params = AdaptiveParameters(values={"solar_confidence_factor": -0.5})
+        result = builder._get_solar_confidence_factor(params)
+        assert result == 0.0
+
+    def test_clamp_at_two(self, builder):
+        """Test values > 2.0 clamped to 2.0."""
+        params = AdaptiveParameters(values={"solar_confidence_factor": 3.0})
+        result = builder._get_solar_confidence_factor(params)
+        assert result == 2.0
+
+    def test_exact_boundary_values(self, builder):
+        """Test exact boundary values 0.0 and 2.0."""
+        params = AdaptiveParameters(values={"solar_confidence_factor": 0.0})
+        assert builder._get_solar_confidence_factor(params) == 0.0
+
+        params = AdaptiveParameters(values={"solar_confidence_factor": 2.0})
+        assert builder._get_solar_confidence_factor(params) == 2.0
+
+
+class TestComputeBaseSlot:
+    """Tests for _compute_base_slot method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_rounds_to_5min_interval(self, builder):
+        """Test that time is rounded to 5-minute interval."""
+        now = datetime(2024, 1, 15, 14, 23, 37)
+        result = builder._compute_base_slot(now)
+        assert result.minute % 5 == 0
+        assert result.second == 0
+        assert result.microsecond == 0
+
+    def test_preserves_hour(self, builder):
+        """Test that hour is preserved."""
+        now = datetime(2024, 1, 15, 14, 23, 37)
+        result = builder._compute_base_slot(now)
+        assert result.hour == 14
+
+
+class TestGetLocalTimezone:
+    """Tests for _get_local_timezone method."""
+
+    def test_valid_timezone(self):
+        """Test valid timezone returns ZoneInfo."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        builder = SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+        result = builder._get_local_timezone()
+        assert result is not None
+
+    def test_invalid_timezone_returns_none(self):
+        """Test invalid timezone returns None."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        builder = SlotBuilder(config_options=config, ha_timezone="Invalid/Timezone")
+        result = builder._get_local_timezone()
+        assert result is None
+
+
+class TestGetSlotTimeForDW:
+    """Tests for _get_slot_time_for_dw method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_no_timezone_returns_original_time(self, builder):
+        """Test None timezone returns original slot time."""
+        from datetime import timezone
+
+        now = datetime(2024, 1, 15, 14, 30, tzinfo=timezone.utc)
+        result = builder._get_slot_time_for_dw(now, None)
+        assert result == now.time()
+
+    def test_with_timezone_converts(self, builder):
+        """Test with timezone converts to local time."""
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        local_tz = ZoneInfo("Australia/Sydney")
+        slot_start = datetime(2024, 1, 15, 4, 30, tzinfo=timezone.utc)
+        result = builder._get_slot_time_for_dw(slot_start, local_tz)
+        assert result is not None
+
+
+class TestGetSellPrice:
+    """Tests for _get_sell_price method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_empty_forecast_returns_zero(self, builder):
+        """Test empty feed_in_forecast returns 0.0."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        result = builder._get_sell_price([], now)
+        assert result == 0.0
+
+    def test_matching_forecast_returns_price(self, builder):
+        """Test matching forecast entry returns price."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        forecast = [
+            {
+                "start_time": now.isoformat(),
+                "per_kwh": 0.08,
+                "duration": 30,
+            }
+        ]
+        result = builder._get_sell_price(forecast, now)
+        assert result == 0.08
+
+
+class TestGetSolarKwh:
+    """Tests for _get_solar_kwh method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_empty_solcast_returns_zero(self, builder):
+        """Test empty solcast returns 0.0."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        result = builder._get_solar_kwh([], now, 30, 1.0)
+        assert result == 0.0
+
+    def test_applies_confidence_factor(self, builder):
+        """Test confidence factor is applied."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        solcast = [
+            {
+                "period_start": now.isoformat(),
+                "pv_estimate": 2.0,
+            }
+        ]
+        result = builder._get_solar_kwh(solcast, now, 30, 0.5)
+        assert result == 0.5
+
+    def test_clamp_negative_to_zero(self, builder):
+        """Test negative solar values are clamped to 0.0."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        result = builder._get_solar_kwh([], now, 30, -1.0)
+        assert result >= 0.0
+
+
+class TestGetConsumptionKwh:
+    """Tests for _get_consumption_kwh method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_empty_forecast_returns_zero(self, builder):
+        """Test empty load_forecast_slots returns 0.0."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        result = builder._get_consumption_kwh([], now, now, 30, 0)
+        assert result == 0.0
+
+    def test_computes_from_kw(self, builder):
+        """Test consumption computed from kW values."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        base_slot = now.replace(minute=0, second=0, microsecond=0)
+        load_slots = [1.0] * 96
+
+        result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30, 0)
+        assert result == 0.5
+
+    def test_out_of_range_index_returns_zero(self, builder):
+        """Test out of range index returns 0.0."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        base_slot = now - timedelta(hours=48)
+        load_slots = [1.0] * 96
+
+        result = builder._get_consumption_kwh(load_slots, now, base_slot, 30, 0)
+        assert result >= 0.0
+
+
+class TestParseTimeOption:
+    """Tests for _parse_time_option method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        config = {"demand_window_start": "18:30:00", "demand_window_end": "22:00:00"}
+        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+
+    def test_parse_with_seconds(self, builder):
+        """Test parsing time with seconds."""
+        result = builder._parse_time_option("demand_window_start")
+        assert result.hour == 18
+        assert result.minute == 30
+
+    def test_parse_without_seconds(self, builder):
+        """Test parsing time without seconds."""
+        result = builder._parse_time_option("demand_window_end")
+        assert result.hour == 22
+        assert result.minute == 0
+
+    def test_missing_key_uses_default(self, builder):
+        """Test missing key uses default."""
+        result = builder._parse_time_option("unknown_key")
+        assert result.hour == 18
+        assert result.minute == 0
+
+    def test_time_object_passed_through(self):
+        """Test time object is passed through."""
+        config = {"test_time": time(15, 45)}
+        builder = SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+        result = builder._parse_time_option("test_time")
+        assert result.hour == 15
+
+
+class TestBuildSlotsIntegration:
+    """Integration tests for build_slots method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        return SlotBuilder(
+            config_options={
+                "demand_window_start": "18:00:00",
+                "demand_window_end": "22:00:00",
+            },
+            ha_timezone="UTC",
+        )
+
+    @pytest.fixture
+    def mock_coordinator_data(self):
+        """Create mock CoordinatorData with timezone-aware data."""
+        from datetime import timezone
+
+        data = MagicMock()
+        now = datetime.now(timezone.utc)
+
+        data.general_forecast = [
+            {
+                "start_time": (now + timedelta(minutes=30 * i)).isoformat(),
+                "per_kwh": 0.10 + i * 0.01,
+                "duration": 30,
+            }
+            for i in range(48)
+        ]
+        data.feed_in_forecast = [
+            {
+                "start_time": (now + timedelta(minutes=30 * i)).isoformat(),
+                "per_kwh": 0.05,
+                "duration": 30,
+            }
+            for i in range(48)
+        ]
+        data.solcast_today = [
+            {
+                "period_end": (now + timedelta(minutes=30 * i)).isoformat(),
+                "pv_estimate": 2.0
+                if 6 <= (now + timedelta(minutes=30 * i)).hour <= 18
+                else 0.0,
+            }
+            for i in range(48)
+        ]
+        data.solcast_tomorrow = []
+        data.load_forecast_slots = [0.5 + (i % 24) * 0.1 for i in range(96)]
+        data.adaptive_params = AdaptiveParameters(
+            values={"solar_confidence_factor": 1.0}
+        )
+
+        return data
+
+    def test_build_slots_returns_slots_and_metadata(
+        self, builder, mock_coordinator_data
+    ):
+        """Test build_slots returns list of SlotContext and metadata."""
+        slots, metadata = builder.build_slots(
+            mock_coordinator_data, mock_coordinator_data.adaptive_params
+        )
+
+        assert isinstance(slots, list)
+        assert len(slots) > 0
+        assert all(isinstance(s, SlotContext) for s in slots)
+        assert isinstance(metadata, SlotBuildMetadata)
+
+    def test_build_slots_metadata_counts(self, builder, mock_coordinator_data):
+        """Test build_slots metadata has correct counts."""
+        slots, metadata = builder.build_slots(
+            mock_coordinator_data, mock_coordinator_data.adaptive_params
+        )
+
+        assert metadata.total_slots == len(slots)
+        assert (
+            metadata.five_min_slots + metadata.thirty_min_slots == metadata.total_slots
+        )
+        assert metadata.solar_confidence_factor == 1.0
+
+    def test_build_slots_with_none_adaptive_params(
+        self, builder, mock_coordinator_data
+    ):
+        """Test build_slots handles None adaptive params."""
+        slots, metadata = builder.build_slots(mock_coordinator_data, None)
+
+        assert metadata.solar_confidence_factor == 1.0
+        assert len(slots) > 0
+
+    def test_build_slots_with_custom_now_dt(self, builder, mock_coordinator_data):
+        """Test build_slots respects custom now_dt parameter."""
+        from datetime import timezone
+
+        custom_now = datetime.now(timezone.utc)
+        slots, metadata = builder.build_slots(
+            mock_coordinator_data, None, now_dt=custom_now
+        )
+
+        assert len(slots) >= 0
+
+
+class TestProcessAllSlots:
+    """Tests for _process_all_slots method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        return SlotBuilder(
+            config_options={
+                "demand_window_start": "18:00:00",
+                "demand_window_end": "22:00:00",
+            },
+            ha_timezone="UTC",
+        )
+
+    def test_process_all_slots_returns_contexts_and_counts(self, builder):
+        """Test _process_all_slots returns correct structure."""
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc)
+        hybrid_slots = [
+            {
+                "start": now,
+                "interval_minutes": 30,
+                "price": 0.10,
+                "price_source": "30min",
+            }
+        ]
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+
+        contexts, counts = builder._process_all_slots(
+            hybrid_slots=hybrid_slots,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+        )
+
+        assert len(contexts) == 1
+        assert "five_min" in counts
+        assert "thirty_min" in counts
+
+    def test_process_all_slots_counts_slots_correctly(self, builder):
+        """Test _process_all_slots counts 5min and 30min slots."""
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc)
+        hybrid_slots = [
+            {
+                "start": now,
+                "interval_minutes": 5,
+                "price": 0.10,
+                "price_source": "5min",
+            },
+            {
+                "start": now + timedelta(minutes=5),
+                "interval_minutes": 30,
+                "price": 0.12,
+                "price_source": "30min",
+            },
+        ]
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+
+        contexts, counts = builder._process_all_slots(
+            hybrid_slots=hybrid_slots,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+        )
+
+        assert counts["five_min"] == 1
+        assert counts["thirty_min"] == 1
+
+
+class TestProcessSingleSlot:
+    """Tests for _process_single_slot method."""
+
+    @pytest.fixture
+    def builder(self):
+        """Create a SlotBuilder instance."""
+        return SlotBuilder(
+            config_options={
+                "demand_window_start": "18:00:00",
+                "demand_window_end": "22:00:00",
+            },
+            ha_timezone="UTC",
+        )
+
+    def test_process_single_slot_returns_context(self, builder):
+        """Test _process_single_slot returns SlotContext."""
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc)
+        slot = {
+            "start": now,
+            "interval_minutes": 30,
+            "price": 0.10,
+            "price_source": "30min",
+        }
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+
+        ctx, counts, in_dw = builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert isinstance(ctx, SlotContext)
+        assert ctx.slot_index == 0
+        assert ctx.buy_price == 0.10
+        assert counts["thirty_min"] == 1
+
+    def test_process_single_slot_demand_window_entry(self, builder):
+        """Test _process_single_slot detects demand window entry."""
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc).replace(hour=18, minute=0)
+        slot = {
+            "start": now,
+            "interval_minutes": 30,
+            "price": 0.10,
+            "price_source": "30min",
+        }
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+
+        ctx, counts, in_dw = builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert ctx.is_demand_window_entry is True
+        assert ctx.is_demand_window_slot is True

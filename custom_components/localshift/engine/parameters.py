@@ -189,6 +189,111 @@ class ParameterOptimizer:
 
         return self._current_params
 
+    def _apply_high_confidence_correction(
+        self,
+        param_name: str,
+        param_def: Any,
+        current_value: float,
+        corrections: list[Any],
+        values: dict[str, float],
+        confidence: dict[str, float],
+    ) -> bool:
+        """Apply high-confidence corrections directly as offsets.
+
+        Returns True if a correction was applied.
+        """
+        total_weight = sum(c.confidence for c in corrections)
+        weighted_adjustment = (
+            sum(c.adjustment * c.confidence for c in corrections) / total_weight
+        )
+
+        new_value = current_value + weighted_adjustment
+        new_value = max(param_def.min_val, min(param_def.max_val, new_value))
+
+        if new_value == current_value:
+            return False
+
+        values[param_name] = new_value
+        avg_confidence = total_weight / len(corrections)
+        confidence[param_name] = min(1.0, avg_confidence + 0.1)
+
+        _LOGGER.info(
+            "Applied bias correction to %s: %.3f -> %.3f (from %d high-confidence patterns)",
+            param_name,
+            current_value,
+            new_value,
+            len(corrections),
+        )
+        return True
+
+    def _apply_medium_confidence_correction(
+        self,
+        param_name: str,
+        param_def: Any,
+        current_value: float,
+        corrections: list[Any],
+        values: dict[str, float],
+    ) -> bool:
+        """Apply medium-confidence corrections as smaller adjustments.
+
+        Returns True if a correction was applied.
+        """
+        avg_adjustment = sum(c.adjustment for c in corrections) / len(corrections)
+        avg_conf = sum(c.confidence for c in corrections) / len(corrections)
+        scaled_adjustment = avg_adjustment * avg_conf
+
+        new_value = current_value + scaled_adjustment * 0.5
+        new_value = max(param_def.min_val, min(param_def.max_val, new_value))
+
+        if abs(new_value - current_value) <= 0.01:
+            return False
+
+        values[param_name] = new_value
+
+        _LOGGER.info(
+            "Applied medium-confidence bias correction to %s: %.3f -> %.3f (from %d patterns)",
+            param_name,
+            current_value,
+            new_value,
+            len(corrections),
+        )
+        return True
+
+    def _process_param_corrections(
+        self,
+        param_name: str,
+        corrections: list[Any],
+        values: dict[str, float],
+        confidence: dict[str, float],
+    ) -> int:
+        """Process corrections for a single parameter.
+
+        Returns the number of corrections applied (0 or 1).
+        """
+        if param_name not in OPTIMIZABLE_PARAMS:
+            _LOGGER.debug(
+                "Ignoring bias correction for unknown parameter: %s",
+                param_name,
+            )
+            return 0
+
+        param_def = OPTIMIZABLE_PARAMS[param_name]
+        current_value = values.get(param_name, param_def.default)
+
+        high_confidence = [c for c in corrections if c.confidence > 0.8]
+        if high_confidence and self._apply_high_confidence_correction(
+            param_name, param_def, current_value, high_confidence, values, confidence
+        ):
+            return 1
+
+        medium_confidence = [c for c in corrections if 0.5 <= c.confidence <= 0.8]
+        if medium_confidence and self._apply_medium_confidence_correction(
+            param_name, param_def, current_value, medium_confidence, values
+        ):
+            return 1
+
+        return 0
+
     def _apply_bias_corrections(
         self,
         values: dict[str, float],
@@ -210,89 +315,16 @@ class ParameterOptimizer:
             Tuple of (updated_values, updated_confidence)
 
         """
-        # Group corrections by parameter
         param_corrections: dict[str, list[BiasCorrection]] = {}
         for correction in bias_corrections:
             if correction.param_name not in param_corrections:
                 param_corrections[correction.param_name] = []
             param_corrections[correction.param_name].append(correction)
 
-        applied_count = 0
-
-        for param_name, corrections in param_corrections.items():
-            if param_name not in OPTIMIZABLE_PARAMS:
-                _LOGGER.debug(
-                    "Ignoring bias correction for unknown parameter: %s",
-                    param_name,
-                )
-                continue
-
-            param_def = OPTIMIZABLE_PARAMS[param_name]
-            current_value = values.get(param_name, param_def.default)
-
-            # Separate by confidence level
-            high_confidence = [c for c in corrections if c.confidence > 0.8]
-            medium_confidence = [c for c in corrections if 0.5 <= c.confidence <= 0.8]
-
-            # Apply high-confidence corrections directly
-            if high_confidence:
-                # Use weighted average based on confidence
-                total_weight = sum(c.confidence for c in high_confidence)
-                weighted_adjustment = (
-                    sum(c.adjustment * c.confidence for c in high_confidence)
-                    / total_weight
-                )
-
-                new_value = current_value + weighted_adjustment
-
-                # Clamp to bounds
-                new_value = max(param_def.min_val, min(param_def.max_val, new_value))
-
-                if new_value != current_value:
-                    values[param_name] = new_value
-                    # Boost confidence when multiple high-confidence corrections agree
-                    avg_confidence = total_weight / len(high_confidence)
-                    confidence[param_name] = min(1.0, avg_confidence + 0.1)
-
-                    _LOGGER.info(
-                        "Applied bias correction to %s: %.3f -> %.3f (from %d high-confidence patterns)",
-                        param_name,
-                        current_value,
-                        new_value,
-                        len(high_confidence),
-                    )
-                    applied_count += 1
-
-            # Apply medium-confidence corrections as smaller adjustments
-            elif medium_confidence:
-                # Use smaller weight for medium confidence
-                avg_adjustment = sum(c.adjustment for c in medium_confidence) / len(
-                    medium_confidence
-                )
-                # Scale down the adjustment based on confidence
-                avg_conf = sum(c.confidence for c in medium_confidence) / len(
-                    medium_confidence
-                )
-                scaled_adjustment = avg_adjustment * avg_conf
-
-                new_value = (
-                    current_value + scaled_adjustment * 0.5
-                )  # Scale down further
-
-                # Clamp to bounds
-                new_value = max(param_def.min_val, min(param_def.max_val, new_value))
-
-                if abs(new_value - current_value) > 0.01:  # Only log meaningful changes
-                    values[param_name] = new_value
-
-                    _LOGGER.info(
-                        "Applied medium-confidence bias correction to %s: %.3f -> %.3f (from %d patterns)",
-                        param_name,
-                        current_value,
-                        new_value,
-                        len(medium_confidence),
-                    )
-                    applied_count += 1
+        applied_count = sum(
+            self._process_param_corrections(param_name, corrections, values, confidence)
+            for param_name, corrections in param_corrections.items()
+        )
 
         if applied_count > 0:
             _LOGGER.info(
@@ -302,10 +334,58 @@ class ParameterOptimizer:
 
         return values, confidence
 
-    def _optimize_single_param(  # noqa: C901
+    def _select_best_bin(
+        self, bins: dict[int, list[float]], num_bins: int
+    ) -> int | None:
+        """Select best bin using Thompson sampling.
+
+        Returns the best bin index, or None if no valid bins.
+        """
+        best_bin = None
+        best_sample = -float("inf")
+
+        for bin_idx in range(num_bins):
+            scores = bins[bin_idx]
+            if not scores:
+                continue
+
+            mean_score = sum(scores) / len(scores)
+            n = len(scores)
+            alpha = mean_score * n + 1
+            beta = (1 - mean_score) * n + 1
+
+            sample = self._sample_beta(alpha, beta)
+
+            if sample > best_sample:
+                best_sample = sample
+                best_bin = bin_idx
+
+        return best_bin
+
+    def _compute_bin_confidence(self, bin_scores: list[float]) -> float:
+        """Calculate confidence based on sample count and variance."""
+        if not bin_scores:
+            return 0.0
+
+        mean_score = sum(bin_scores) / len(bin_scores)
+        variance = sum((s - mean_score) ** 2 for s in bin_scores) / len(bin_scores)
+        return min(1.0, len(bin_scores) / 50.0) * (1 - min(variance, 0.25) * 4)
+
+    def _apply_step_limit(
+        self, bin_center: float, current_val: float, step_size: float
+    ) -> float:
+        """Apply step limit to bin center value."""
+        if abs(bin_center - current_val) <= step_size:
+            return bin_center
+
+        if bin_center > current_val:
+            return current_val + step_size
+        return current_val - step_size
+
+    def _optimize_single_param(
         self,
         param_name: str,
-        param_def: Any,  # OptimizableParam
+        param_def: Any,
         decisions: list[DecisionRecord],
     ) -> tuple[float | None, float]:
         """Optimize a single parameter using Thompson sampling.
@@ -319,83 +399,36 @@ class ParameterOptimizer:
             Tuple of (optimal_value, confidence) or (None, 0.0) if no data
 
         """
-        # Group decisions by parameter value ranges
         num_bins = 5
         bin_width = (param_def.max_val - param_def.min_val) / num_bins
         bins: dict[int, list[float]] = defaultdict(list)
 
         current_value = self._current_params.values.get(param_name, param_def.default)
 
-        # Assign decisions to bins based on what parameter value would have been optimal
         for decision in decisions:
             if decision.outcome_score is None:
                 continue
 
-            # Calculate which bin the current value falls into
             bin_idx = int((current_value - param_def.min_val) / bin_width)
             bin_idx = max(0, min(num_bins - 1, bin_idx))
             bins[bin_idx].append(decision.outcome_score)
 
-        # If we don't have enough data, don't adjust
         total_samples = sum(len(scores) for scores in bins.values())
         if total_samples < 10:
             return None, 0.0
 
-        # Thompson sampling: sample from Beta distribution for each bin
-        best_bin = None
-        best_sample = -float("inf")
-
-        for bin_idx in range(num_bins):
-            scores = bins[bin_idx]
-            if not scores:
-                continue
-
-            # Convert scores to success/failure counts
-            # Score is 0-1, so we can use it directly as success rate
-            mean_score = sum(scores) / len(scores)
-            n = len(scores)
-
-            # Beta distribution parameters (add 1 for prior)
-            alpha = mean_score * n + 1
-            beta = (1 - mean_score) * n + 1
-
-            # Sample from Beta distribution
-            sample = self._sample_beta(alpha, beta)
-
-            if sample > best_sample:
-                best_sample = sample
-                best_bin = bin_idx
-
+        best_bin = self._select_best_bin(bins, num_bins)
         if best_bin is None:
             return None, 0.0
 
-        # Calculate the center value of the winning bin
         bin_center = param_def.min_val + (best_bin + 0.5) * bin_width
 
-        # Apply step limit: can only move one step from current value
-        current_val = self._current_params.values.get(param_name, param_def.default)
-        step_size = param_def.step
-        if abs(bin_center - current_val) > step_size:
-            # Move one step in the direction of the bin center
-            if bin_center > current_val:
-                bin_center = current_val + step_size
-            else:
-                bin_center = current_val - step_size
+        current_val = self._current_params.values.get(param_name) or param_def.default
+        bin_center = self._apply_step_limit(bin_center, current_val, param_def.step)
 
-        # Clamp to bounds
         bin_center = max(param_def.min_val, min(param_def.max_val, bin_center))
 
-        # Calculate confidence based on sample count and variance
-        bin_scores = bins.get(best_bin, [])
-        if bin_scores:
-            mean_score = sum(bin_scores) / len(bin_scores)
-            variance = sum((s - mean_score) ** 2 for s in bin_scores) / len(bin_scores)
-            # Higher sample count and lower variance = higher confidence
-            confidence = min(1.0, len(bin_scores) / 50.0) * (
-                1 - min(variance, 0.25) * 4
-            )
-        else:
-            confidence = 0.0
+        confidence = self._compute_bin_confidence(bins.get(best_bin, []))
 
         return bin_center, confidence
 
