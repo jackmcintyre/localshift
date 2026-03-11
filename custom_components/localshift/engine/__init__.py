@@ -23,9 +23,10 @@ from .outcomes import (
     PerformanceMetrics,
 )
 from .parameters import ParameterOptimizer
-from .pattern_analyzer import (
+from .pattern_analyzer import PatternAnalyzer
+from .pattern_types import (
     BiasCorrection,
-    PatternAnalyzer,
+    DimensionStats,
     PatternBucket,
     PatternReport,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "ContextualAdjustment",
     "DecisionOutcomeTracker",
     "DecisionRecord",
+    "DimensionStats",
     "ObjectiveWeights",
     "OptimizationController",
     "ParameterOptimizer",
