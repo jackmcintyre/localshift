@@ -22,41 +22,41 @@ try:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.util import dt as dt_util
-except Exception:
+except Exception:  # pragma: no cover
 
-    class ConfigEntry:
+    class ConfigEntry:  # pragma: no cover
         pass
 
-    class _ConfigStub:
+    class _ConfigStub:  # pragma: no cover
         """Stub for HA config when homeassistant is not available."""
 
         time_zone: str = "UTC"
 
-    class _StatesStub:
+    class _StatesStub:  # pragma: no cover
         """Stub for HA states when homeassistant is not available."""
 
-        def get(self, entity_id: str):  # noqa: ARG002
+        def get(self, entity_id: str):  # noqa: ARG002  # pragma: no cover
             return None
 
-    class HomeAssistant:
+    class HomeAssistant:  # pragma: no cover
         """Stub for HomeAssistant when homeassistant is not available."""
 
         config = _ConfigStub()
         states = _StatesStub()
 
-    class _DTUtilStub:
+    class _DTUtilStub:  # pragma: no cover
         @staticmethod
-        def now():
+        def now():  # pragma: no cover
             from datetime import datetime
 
             return datetime.now()
 
         @staticmethod
-        def get_time_zone(tz):
+        def get_time_zone(tz):  # pragma: no cover
             return tz
 
         @staticmethod
-        def utc_from_timestamp(ts):
+        def utc_from_timestamp(ts):  # pragma: no cover
             from datetime import datetime
 
             if isinstance(ts, (int, float)):
@@ -64,7 +64,7 @@ except Exception:
             return None
 
         @staticmethod
-        def parse_datetime(dt_str):
+        def parse_datetime(dt_str):  # pragma: no cover
             from datetime import datetime
 
             try:
@@ -73,10 +73,10 @@ except Exception:
                 return None
 
         @staticmethod
-        def as_local(dt):
+        def as_local(dt):  # pragma: no cover
             return dt
 
-    dt_util = _DTUtilStub()
+    dt_util = _DTUtilStub()  # pragma: no cover
 
 from ..const import HISTORY_WINDOW_DAYS, MIN_SAMPLES_PER_HOUR
 
@@ -239,124 +239,61 @@ class HistoryFetcher:
         """
         start_time = now - timedelta(days=HISTORY_WINDOW_DAYS)
 
-        try:
-            from homeassistant.components.recorder import (
-                statistics as recorder_statistics,
-            )
-        except Exception as e:
-            _LOGGER.info("Failed to import recorder statistics: %s", e)
+        recorder_stats = self._import_recorder_statistics()
+        if recorder_stats is None:
             return self._empty_result()
 
-        # Get statistics metadata to find the correct statistic_id
-        stat_ids: list[dict[str, Any]] = []
-        try:
-            stat_meta_fn = getattr(recorder_statistics, "list_statistic_ids", None)
-            if callable(stat_meta_fn):
-                stat_ids_raw = stat_meta_fn(self.hass, None) or []
-                if isinstance(stat_ids_raw, list):
-                    stat_ids = [
-                        cast(dict[str, Any], s)
-                        for s in stat_ids_raw
-                        if isinstance(s, dict)
-                    ]
-        except Exception as e:
-            _LOGGER.info("Failed to list statistic ids: %s", e)
-            pass
-
-        # Find matching statistic_id
+        stat_ids = self._list_statistic_ids(recorder_stats)
         resolved_entity_id = self._resolve_statistic_id(entity_id, stat_ids)
 
-        # Get statistics
-        fn = getattr(recorder_statistics, "statistics_during_period", None)
-        if not callable(fn):
+        fn = self._get_statistics_fn(recorder_stats)
+        if fn is None:
             return self._empty_result()
 
-        try:
-            statistics_data_raw = fn(
-                self.hass,
-                start_time,
-                now,
-                [resolved_entity_id],
-                period="hour",
-                types={"mean"},
-                units=None,
-            )
-        except Exception as e:
-            _LOGGER.info("statistics_during_period exception: %s", e)
+        statistics_data = self._fetch_statistics_data(
+            fn, resolved_entity_id, start_time, now, period="hour"
+        )
+        if "error" in statistics_data:
             return self._empty_result()
 
-        if not isinstance(statistics_data_raw, dict):
-            return self._empty_result()
+        rows = statistics_data.get("rows", [])
+        local_tz = dt_util.get_time_zone(self.hass.config.time_zone)
+        return self._compute_historical_profiles(rows, local_tz)
 
-        statistics_data = cast(dict[str, Any], statistics_data_raw)
+    def _compute_historical_profiles(
+        self, rows: list[dict[str, Any]], local_tz: Any
+    ) -> dict[str, Any]:
+        """Compute consumption profiles from statistics rows.
 
-        if not statistics_data or resolved_entity_id not in statistics_data:
-            return self._empty_result()
+        Args:
+            rows: List of statistics rows with 'start' and 'mean' fields
+            local_tz: Local timezone for day-of-week determination
 
-        rows_raw = statistics_data.get(resolved_entity_id)
-        if not isinstance(rows_raw, list) or not rows_raw:
-            return self._empty_result()
+        Returns:
+            Dict with weekday/weekend/combined/baseline/hvac profiles
 
-        rows: list[dict[str, Any]] = [
-            cast(dict[str, Any], r) for r in rows_raw if isinstance(r, dict)
-        ]
-        if not rows:
-            return self._empty_result()
-
-        # Separate samples by day type (weekday vs weekend)
+        """
         weekday_by_hour, weekend_by_hour = self._separate_samples_by_day_type(
-            rows, dt_util.get_time_zone(self.hass.config.time_zone)
+            rows, local_tz
         )
 
-        # NEW HVAC separation (best-effort with available data)
         non_hvac_by_hour, hvac_by_hour = self._separate_hvac_load(
             weekday_by_hour, weekend_by_hour, climate_states=None
         )
 
-        # Calculate profiles for non-HVAC baseline
         baseline_by_hour = self.calculate_baseline_profile(non_hvac_by_hour)
 
-        # Calculate hvac profile averages
-        hvac_avg: dict[int, float] = {}
-        hvac_counts: dict[int, int] = {}
-        for hour, values in hvac_by_hour.items():
-            if values:
-                hvac_avg[hour] = sum(values) / len(values)
-                hvac_counts[hour] = len(values)
+        hvac_avg, hvac_counts = self._compute_hourly_averages(hvac_by_hour)
+        weekday_avg, weekday_counts = self._compute_hourly_averages(weekday_by_hour)
+        weekend_avg, weekend_counts = self._compute_hourly_averages(weekend_by_hour)
 
-        # Prepare combined (backward-compatible) profile
-        weekday_avg = {
-            hour: sum(vals) / len(vals)
-            for hour, vals in weekday_by_hour.items()
-            if vals
-        }
-        weekend_avg = {
-            hour: sum(vals) / len(vals)
-            for hour, vals in weekend_by_hour.items()
-            if vals
-        }
-        weekday_counts = {
-            hour: len(vals) for hour, vals in weekday_by_hour.items() if vals
-        }
-        weekend_counts = {
-            hour: len(vals) for hour, vals in weekend_by_hour.items() if vals
-        }
+        combined_avg, combined_counts = self._compute_combined_profile(
+            weekday_by_hour, weekend_by_hour
+        )
 
-        combined_avg: dict[int, float] = {}
-        combined_counts: dict[int, int] = {}
-        for hour in range(24):
-            weekday_vals = weekday_by_hour.get(hour, [])
-            weekend_vals = weekend_by_hour.get(hour, [])
-            all_vals = weekday_vals + weekend_vals
-            if all_vals:
-                combined_avg[hour] = sum(all_vals) / len(all_vals)
-                combined_counts[hour] = len(all_vals)
-
-        # Determine profile source
         profile_source = self._determine_profile_source(weekday_counts, weekend_counts)
 
-        # Build result payload
-        result: dict[str, Any] = {
+        return {
             "combined_avg": combined_avg,
             "combined_counts": combined_counts,
             "weekday_avg": weekday_avg,
@@ -364,7 +301,6 @@ class HistoryFetcher:
             "weekday_counts": weekday_counts,
             "weekend_counts": weekend_counts,
             "profile_source": profile_source,
-            # New HVAC-separated metadata (optional in old callers)
             "baseline_avg": baseline_by_hour,
             "baseline_counts": {
                 hour: len(non_hvac_by_hour.get(hour, [])) for hour in non_hvac_by_hour
@@ -373,7 +309,49 @@ class HistoryFetcher:
             "hvac_counts": hvac_counts,
         }
 
-        return result
+    def _compute_hourly_averages(
+        self, samples_by_hour: dict[int, list[float]]
+    ) -> tuple[dict[int, float], dict[int, int]]:
+        """Compute average and count for each hour.
+
+        Args:
+            samples_by_hour: Dict mapping hour to list of power values
+
+        Returns:
+            Tuple of (averages, counts) dicts
+
+        """
+        averages: dict[int, float] = {}
+        counts: dict[int, int] = {}
+        for hour, vals in samples_by_hour.items():
+            if vals:
+                averages[hour] = sum(vals) / len(vals)
+                counts[hour] = len(vals)
+        return averages, counts
+
+    def _compute_combined_profile(
+        self,
+        weekday_by_hour: dict[int, list[float]],
+        weekend_by_hour: dict[int, list[float]],
+    ) -> tuple[dict[int, float], dict[int, int]]:
+        """Compute combined profile from weekday and weekend samples.
+
+        Args:
+            weekday_by_hour: Weekday samples by hour
+            weekend_by_hour: Weekend samples by hour
+
+        Returns:
+            Tuple of (combined_avg, combined_counts)
+
+        """
+        combined_avg: dict[int, float] = {}
+        combined_counts: dict[int, int] = {}
+        for hour in range(24):
+            all_vals = weekday_by_hour.get(hour, []) + weekend_by_hour.get(hour, [])
+            if all_vals:
+                combined_avg[hour] = sum(all_vals) / len(all_vals)
+                combined_counts[hour] = len(all_vals)
+        return combined_avg, combined_counts
 
     def _separate_samples_by_day_type(
         self, rows: list[dict[str, Any]], _local_tz: Any
@@ -792,6 +770,7 @@ class HistoryFetcher:
         resolved_entity_id: str,
         start_time: datetime,
         end_time: datetime,
+        period: str = "5minute",
     ) -> dict[str, Any]:
         """Fetch statistics data for entity.
 
@@ -800,6 +779,7 @@ class HistoryFetcher:
             resolved_entity_id: Resolved statistic ID
             start_time: Query start time
             end_time: Query end time
+            period: Aggregation period ("5minute" or "hour")
 
         Returns:
             Statistics data dict or error result
@@ -811,7 +791,7 @@ class HistoryFetcher:
                 start_time,
                 end_time,
                 [resolved_entity_id],
-                period="5minute",
+                period=period,
                 types={"mean"},
                 units=None,
             )
