@@ -1791,18 +1791,18 @@ class DPPlanner:
         # handles solar sufficiency. We don't want to suppress charging just
         # because tomorrow looks sunny - that's too aggressive for daytime.
         #
-        # DISABLED: This gate is causing issues with test scenarios. The gate
-        # logic works but scenarios aren't properly setting up demand windows.
-        # For now, disable until we can properly test.
+        # Re-enabled for Issue #638: The gate logic is correct - it checks if
+        # solar from slot to END of horizon covers the SOC deficit. Combined
+        # with the futile cycling penalty, this provides robust protection.
         _global_solar_covers = False
-        # if (
-        #     config.optimization_mode == "self_consumption"
-        #     and slots is not None
-        #     and terminal_penalty_idx is None  # Only apply at night (no DW)
-        # ):
-        #     _global_solar_covers = DPPlanner._check_global_solar_sufficiency(
-        #         soc_pct, slot_idx, slots, config
-        #     )
+        if (
+            config.optimization_mode == "self_consumption"
+            and slots is not None
+            and terminal_penalty_idx is None  # Only apply at night (no DW)
+        ):
+            _global_solar_covers = DPPlanner._check_global_solar_sufficiency(
+                soc_pct, slot_idx, slots, config
+            )
 
         # Grid charging constraints (Issue #406)
         if (
