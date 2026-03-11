@@ -1713,8 +1713,8 @@ class DPPlanner:
             config: Optimizer configuration.
 
         Returns:
-            True if projected net solar (solar - consumption) from slot_idx to end
-            of horizon is sufficient to raise SOC from soc_pct to demand_window_target_soc_pct.
+            True if projected solar SURPLUS (max(0, solar - consumption)) from slot_idx
+            to end of horizon is sufficient to raise SOC from soc_pct to demand_window_target_soc_pct.
 
         """
         if not slots:
@@ -1726,10 +1726,12 @@ class DPPlanner:
         if soc_deficit_pct <= 0:
             return False
 
-        projected_net_kwh = sum(
-            s.solar_kwh - s.consumption_kwh for s in slots[slot_idx:]
+        projected_surplus_kwh = sum(
+            max(0.0, s.solar_kwh - s.consumption_kwh) for s in slots[slot_idx:]
         )
-        potential_gain_pct = (projected_net_kwh / config.battery_capacity_kwh) * 100.0
+        potential_gain_pct = (
+            projected_surplus_kwh / config.battery_capacity_kwh
+        ) * 100.0
         return potential_gain_pct >= soc_deficit_pct
 
     @staticmethod
@@ -1786,20 +1788,11 @@ class DPPlanner:
         # remaining horizon so overnight solar-sufficient days suppress grid
         # charging even without a demand window.
         #
-        # CRITICAL: Only apply this gate at NIGHT when there's no immediate solar.
-        # During daytime (when terminal_penalty_idx exists), the original gate
-        # handles solar sufficiency. We don't want to suppress charging just
-        # because tomorrow looks sunny - that's too aggressive for daytime.
-        #
-        # Re-enabled for Issue #638: The gate logic is correct - it checks if
-        # solar from slot to END of horizon covers the SOC deficit. Combined
-        # with the futile cycling penalty, this provides robust protection.
+        # Issue #638: Removed terminal_penalty_idx is None guard so the gate
+        # also applies when a DW exists. If solar surplus can fill the battery
+        # before DW entry, suppress grid charging overnight.
         _global_solar_covers = False
-        if (
-            config.optimization_mode == "self_consumption"
-            and slots is not None
-            and terminal_penalty_idx is None  # Only apply at night (no DW)
-        ):
+        if config.optimization_mode == "self_consumption" and slots is not None:
             _global_solar_covers = DPPlanner._check_global_solar_sufficiency(
                 soc_pct, slot_idx, slots, config
             )
