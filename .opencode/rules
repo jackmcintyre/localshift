@@ -2,6 +2,17 @@
 
 **NEVER commit directly to the `main` branch.**
 
+## SymDex Code Navigation
+
+**Prefer SymDex tools for code exploration (~200 tokens vs ~7,500 per file read):**
+
+| Task | Tool |
+|------|------|
+| Find function/class | `symdex_search_symbols("optimizer")` |
+| See file structure | `symdex_get_file_outline("sensor.py")` |
+| Search text | `symdex_search_text("battery_soc")` |
+| Get repo structure | `symdex_get_repo_outline()` |
+
 ## Enforcement
 
 Git hooks in `.githooks/` automatically block:

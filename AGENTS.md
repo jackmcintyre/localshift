@@ -35,6 +35,21 @@ LocalShift is a Home Assistant integration for automated Tesla Powerwall battery
 
 ---
 
+## ⚠️ PREFER: SymDex for Code Navigation
+
+**Use SymDex MCP tools instead of grep/read for code exploration (~200 tokens vs ~7,500 per lookup).**
+
+| Task | Tool |
+|------|------|
+| Find function/class | `symdex_search_symbols("optimizer")` |
+| See file structure | `symdex_get_file_outline("sensor.py")` |
+| Search text | `symdex_search_text("battery_soc")` |
+| Get repo structure | `symdex_get_repo_outline()` |
+
+**Note:** `symdex watch` should be running in background (auto-reindexes on file changes).
+
+---
+
 ## ⚠️ ENFORCED: Worktree-Only Workflow
 
 **Git hooks in `.githooks/` block all main branch commits and pushes.**

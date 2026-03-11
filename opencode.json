@@ -11,5 +11,12 @@
       ".opencode/skills/ha-integration-testing"
     ]
   },
-  "plugin": ["@tarquinen/opencode-dcp@latest"]
+  "plugin": ["@tarquinen/opencode-dcp@latest"],
+  "mcp": {
+    "symdex": {
+      "type": "local",
+      "command": ["symdex", "serve"],
+      "enabled": true
+    }
+  }
 }
