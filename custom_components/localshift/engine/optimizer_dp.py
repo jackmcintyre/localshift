@@ -293,6 +293,10 @@ class ObjectiveTerms:
     solar_opportunity_penalty: float = 0.0
     """Penalty for grid charging when future solar can charge battery for free (Issue #607)."""
 
+    futile_cycling_penalty: float = 0.0
+    """Penalty for grid charging when energy will drain through house load before reaching
+    a useful period (solar surplus or demand window). Issue #638."""
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue - self_consumption_value + penalties."""
@@ -305,6 +309,7 @@ class ObjectiveTerms:
             + self.uncertainty_penalty
             + self.switching_penalty
             + self.solar_opportunity_penalty
+            + self.futile_cycling_penalty
         )
 
     def to_dict(self) -> dict:
@@ -318,6 +323,7 @@ class ObjectiveTerms:
             "uncertainty_penalty": self.uncertainty_penalty,
             "switching_penalty": self.switching_penalty,
             "solar_opportunity_penalty": self.solar_opportunity_penalty,
+            "futile_cycling_penalty": self.futile_cycling_penalty,
             "net_cost": self.net_cost,
         }
 
@@ -980,6 +986,16 @@ class DPPlanner:
                 terminal_penalty_idx=terminal_penalty_idx,
                 all_solcast=inputs.all_solcast,
             )
+            # Issue #638: futile cycling penalty
+            charge_kwh = max(0.0, next_soc - soc) / 100.0 * config.battery_capacity_kwh
+            futile_factor = self._get_futile_cycling_penalty_factor(
+                action=action,
+                slot_idx=slot_idx,
+                slots=slots,
+                config=config,
+                soc_after_charge_pct=next_soc,
+                charge_kwh=charge_kwh,
+            )
             stage = DPPlanner.stage_cost(
                 action,
                 grid_import,
@@ -989,6 +1005,7 @@ class DPPlanner:
                 soc_pct=soc,
                 is_switch=is_switch,
                 solar_opportunity_penalty_factor=solar_opp_factor,
+                futile_cycling_penalty_factor=futile_factor,
             )
             total_cost = stage.net_cost + future_cost
 
@@ -1074,6 +1091,18 @@ class DPPlanner:
                 terminal_penalty_idx=terminal_penalty_idx,
                 all_solcast=inputs.all_solcast,
             )
+            # Issue #638: futile cycling penalty
+            recon_charge_kwh = (
+                max(0.0, next_soc - current_soc) / 100.0 * config.battery_capacity_kwh
+            )
+            recon_futile_factor = self._get_futile_cycling_penalty_factor(
+                action=action,
+                slot_idx=slot_idx,
+                slots=slots,
+                config=config,
+                soc_after_charge_pct=next_soc,
+                charge_kwh=recon_charge_kwh,
+            )
             stage = DPPlanner.stage_cost(
                 action,
                 grid_import,
@@ -1083,6 +1112,7 @@ class DPPlanner:
                 soc_pct=current_soc,
                 is_switch=is_switch,
                 solar_opportunity_penalty_factor=solar_opp_factor,
+                futile_cycling_penalty_factor=recon_futile_factor,
             )
 
             reason = self._classify_reason(
@@ -1230,6 +1260,87 @@ class DPPlanner:
 
         # Coverage ratio: how much of battery capacity solar can fill
         return min(1.0, total_surplus / config.battery_capacity_kwh)
+
+    def _get_futile_cycling_penalty_factor(
+        self,
+        action: PlannerAction,
+        slot_idx: int,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        soc_after_charge_pct: float,
+        charge_kwh: float,
+    ) -> float:
+        """Compute penalty factor for grid charging that will be drained before a useful period.
+
+        Issue #638: Overnight grid charging at $0.14/kWh is wasteful if the charged energy
+        drains through house load before reaching a solar-surplus period or demand window.
+        This factor estimates the fraction of charged energy that will be consumed by house
+        load before reaching a useful period.
+
+        Args:
+            action: The action being considered (only applies to CHARGE_GRID_*)
+            slot_idx: Index of the current slot
+            slots: All slot contexts
+            config: Optimizer config
+            soc_after_charge_pct: SOC immediately after charging (post-transition)
+            charge_kwh: kWh added to battery in this charge action
+
+        Returns:
+            0.0 = all charged energy is retained for a useful period (no penalty)
+            1.0 = all charged energy will drain through house load before useful period
+            0.3-0.7 = partial drain (proportional penalty)
+
+        """
+        # Only apply to grid charging actions
+        if action not in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            return 0.0
+
+        # No charge means no futile cycling
+        if charge_kwh <= 0.0:
+            return 0.0
+
+        # Forward-simulate HOLD drain from post-charge SOC through future slots.
+        # Stop when we reach a useful period: solar surplus or demand window entry.
+        soc = soc_after_charge_pct
+        total_drained = 0.0
+
+        capacity_kwh = config.battery_capacity_kwh
+        min_soc = config.min_soc_pct
+        discharge_eff = config.discharge_efficiency
+
+        for future_slot in slots[slot_idx + 1 :]:
+            # A "useful period" is where solar surplus or demand window makes the
+            # charged energy valuable — stop draining here.
+            if future_slot.solar_kwh > future_slot.consumption_kwh:
+                break
+            if future_slot.is_demand_window_slot:
+                break
+
+            # Simulate HOLD deficit: battery covers house load up to available capacity
+            net_load = future_slot.consumption_kwh - future_slot.solar_kwh
+            if net_load <= 0.0:
+                # Solar covers load — no drain this slot
+                continue
+
+            available_kwh = max(0.0, (soc - min_soc) / 100.0 * capacity_kwh)
+            max_deliverable = available_kwh * discharge_eff
+            battery_used = min(net_load, max_deliverable)
+
+            if battery_used <= 0.0:
+                # SOC is at floor, no further drain possible
+                break
+
+            # Update simulated SOC
+            soc -= (battery_used / discharge_eff / capacity_kwh) * 100.0
+            total_drained += battery_used
+
+            if soc <= min_soc:
+                break
+
+        return min(1.0, total_drained / charge_kwh)
 
     def _can_solar_reach_target(
         self,
@@ -1680,18 +1791,18 @@ class DPPlanner:
         # handles solar sufficiency. We don't want to suppress charging just
         # because tomorrow looks sunny - that's too aggressive for daytime.
         #
-        # DISABLED: This gate is causing issues with test scenarios. The gate
-        # logic works but scenarios aren't properly setting up demand windows.
-        # For now, disable until we can properly test.
+        # Re-enabled for Issue #638: The gate logic is correct - it checks if
+        # solar from slot to END of horizon covers the SOC deficit. Combined
+        # with the futile cycling penalty, this provides robust protection.
         _global_solar_covers = False
-        # if (
-        #     config.optimization_mode == "self_consumption"
-        #     and slots is not None
-        #     and terminal_penalty_idx is None  # Only apply at night (no DW)
-        # ):
-        #     _global_solar_covers = DPPlanner._check_global_solar_sufficiency(
-        #         soc_pct, slot_idx, slots, config
-        #     )
+        if (
+            config.optimization_mode == "self_consumption"
+            and slots is not None
+            and terminal_penalty_idx is None  # Only apply at night (no DW)
+        ):
+            _global_solar_covers = DPPlanner._check_global_solar_sufficiency(
+                soc_pct, slot_idx, slots, config
+            )
 
         # Grid charging constraints (Issue #406)
         if (
@@ -2012,6 +2123,7 @@ class DPPlanner:
         soc_pct: float | None = None,
         is_switch: bool = False,
         solar_opportunity_penalty_factor: float = 0.0,
+        futile_cycling_penalty_factor: float = 0.0,
     ) -> ObjectiveTerms:
         """
         Compute per-slot stage cost terms for an action.
@@ -2102,6 +2214,22 @@ class DPPlanner:
 
                 self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
 
+        # Issue #638: futile cycling penalty.
+        # Penalise grid charging when the charged energy will drain through house load
+        # before reaching a useful period (solar surplus or demand window).
+        futile_cycling_penalty = 0.0
+        if action in (
+            PlannerAction.CHARGE_GRID_NORMAL,
+            PlannerAction.CHARGE_GRID_BOOST,
+        ):
+            # Penalty = efficiency loss cost of the futile round-trip
+            futile_cycling_penalty = (
+                grid_import_kwh
+                * (1.0 - config.charge_efficiency * config.discharge_efficiency)
+                * slot.buy_price
+                * futile_cycling_penalty_factor
+            )
+
         return ObjectiveTerms(
             import_cost=import_cost,
             export_revenue=export_revenue,
@@ -2110,6 +2238,7 @@ class DPPlanner:
             uncertainty_penalty=uncertainty_penalty,
             switching_penalty=switching_penalty,
             solar_opportunity_penalty=solar_opportunity_penalty,
+            futile_cycling_penalty=futile_cycling_penalty,
         )
 
     @staticmethod

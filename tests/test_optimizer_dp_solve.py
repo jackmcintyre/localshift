@@ -1422,18 +1422,15 @@ def test_allow_dw_entry_under_target_false_uses_original_behavior():
 
 
 def test_global_solar_gate_fires_when_no_demand_window():
-    """Issue #559 Phase 1: global solar gate disabled temporarily.
+    """Issue #559 Phase 1: global solar gate prevents charging when terminal_penalty_idx is None.
 
-    The global solar gate logic was disabled due to test scenario issues
-    (demand window detection failing). This test verifies the _check_global_solar_sufficiency
-    method directly rather than through feasible_actions.
-
-    NOTE: This test is temporarily modified to verify the method directly.
+    When solar from slot to END of horizon can cover the SOC deficit, the gate
+    should suppress grid charging entirely (hard constraint, not soft penalty).
     """
     # SOC=60, target=80 → deficit=20% (2.7 kWh needed)
     # Slots: 12 overnight/morning slots, each solar=0.6 kWh, consumption=0.3 kWh → net=0.3 kWh/slot
     # 12 * 0.3 = 3.6 kWh total net solar → 3.6 / 13.5 * 100 = 26.7% gain >= 20% deficit
-    # → method returns True (solar sufficient)
+    # → global gate fires → no grid charging even though terminal_penalty_idx=None
     slots = [
         _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.6, consumption_kwh=0.3)
         for i in range(12)
@@ -1446,32 +1443,33 @@ def test_global_solar_gate_fires_when_no_demand_window():
         soc_bins=20,
     )
 
-    # Test the method directly (not through feasible_actions since gate is disabled)
+    # Test the helper method directly
     result = DPPlanner._check_global_solar_sufficiency(60.0, 0, slots, config)
     assert result is True, (
         "Global solar sufficiency should return True when solar >= deficit"
     )
 
-    # With gate disabled, feasible_actions should return charge options
+    # With gate ENABLED, feasible_actions should suppress grid charging
     actions = DPPlanner.feasible_actions(
         soc_pct=60.0,
         slot=slots[0],
         config=config,
         slot_idx=0,
         slots=slots,
-        terminal_penalty_idx=None,
+        terminal_penalty_idx=None,  # No demand window → gate runs
     )
 
-    # Gate disabled → charging IS allowed (not suppressed)
     assert PlannerAction.HOLD in actions
-    assert PlannerAction.CHARGE_GRID_NORMAL in actions
-    assert PlannerAction.CHARGE_GRID_BOOST in actions
+    # Global gate should suppress grid charging when solar sufficient
+    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
+    assert PlannerAction.CHARGE_GRID_BOOST not in actions
 
 
 def test_global_solar_gate_allows_charge_when_solar_insufficient():
     """Issue #559 Phase 1: global gate returns False when solar < deficit.
 
-    This test verifies the _check_global_solar_sufficiency method works correctly.
+    When solar is insufficient to cover the SOC deficit, the gate should NOT
+    suppress grid charging (price gate still applies).
     """
     # SOC=60, target=80 → deficit=20% (2.7 kWh needed)
     # Slots: 12 slots, each solar=0.1 kWh, consumption=0.3 kWh → net=-0.2 kWh/slot
@@ -1489,13 +1487,13 @@ def test_global_solar_gate_allows_charge_when_solar_insufficient():
         soc_bins=20,
     )
 
-    # Test the method directly
+    # Test the helper method directly
     result = DPPlanner._check_global_solar_sufficiency(60.0, 0, slots, config)
     assert result is False, (
         "Global solar sufficiency should return False when solar < deficit"
     )
 
-    # With gate disabled (and solar insufficient), charge is allowed via price gate
+    # With gate enabled but solar insufficient, charge is allowed via price gate
     actions = DPPlanner.feasible_actions(
         soc_pct=60.0,
         slot=slots[0],
