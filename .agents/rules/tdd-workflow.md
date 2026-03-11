@@ -287,19 +287,58 @@ If test passes before implementation:
 
 ### Coverage Below 95%
 
-If coverage is below threshold:
-1. Run: `uv run pytest --cov-report=html`
-2. Open: `htmlcov/index.html`
-3. Find uncovered lines
-4. Write tests for uncovered code
-5. Re-run coverage check
+**Coverage is checked PER MODIFIED FILE, not project-wide.**
+
+When coverage fails, the pre-commit hook shows:
+- **Specific file** with low coverage
+- **Exact coverage percentage** vs 95% requirement  
+- **Uncovered line ranges** (e.g., L45-52, L78-85)
+- **Test file location** for that source file
+- **One-liner command** to re-run with details
+
+Example failure output:
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ❌ COVERAGE FAILURES - 1 file(s) below 95% threshold                 │
+├──────────────────────────────────────────────────────────────────────┤
+│ File: custom_components/localshift/optimizer.py                      │
+│ Coverage: 78.3% (need 95%)                                           │
+│ Uncovered: L45-52, L78-85                                            │
+│ Test file: tests/test_optimizer.py                                   │
+├──────────────────────────────────────────────────────────────────────┤
+│ Run this to see detailed coverage:                                   │
+│   uv run pytest tests/test_optimizer.py                              │
+│     --cov=custom_components.localshift.optimizer \                   │
+│     --cov-report=term-missing -v                                     │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Remediation steps:**
+1. Open the test file shown
+2. Write tests targeting the uncovered line ranges
+3. Re-run the command shown at the bottom
+4. Re-attempt commit when coverage ≥ 95%
+
+**For detailed HTML coverage report:**
+```bash
+uv run pytest --cov-report=html
+open htmlcov/index.html
+```
 
 ### Pre-Commit Hook Blocks Commit
 
-If commit is blocked:
-1. Read the error message
-2. Identify missing test file
-3. Create test file
-4. Write failing test (RED)
-5. Run test to confirm failure
+If commit is blocked by coverage:
+1. Read the structured error message
+2. Note the specific file and uncovered lines
+3. Open the test file shown
+4. Write tests for the uncovered lines
+5. Re-run the suggested command
+6. Re-attempt commit when coverage passes
+
+If commit is blocked by missing test file:
+1. Read the error message for expected test file location
+2. Create test file: `touch tests/test_module.py`
+3. Write failing test (RED phase)
+4. Run test to confirm failure
+5. Implement (GREEN phase)
 6. Re-attempt commit

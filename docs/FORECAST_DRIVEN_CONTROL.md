@@ -436,7 +436,7 @@ if forecast_entry.get("proactive_export"):
 
 ### Step 2.6: Extend Battery Controller
 
-**Location**: `battery_controller.py`
+**Location**: `integration/controller.py`
 
 **Modify method signature**:
 ```python

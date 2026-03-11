@@ -1,42 +1,20 @@
 #!/bin/bash
 # TDD enforcement pre-commit hook
-# Verifies test files exist for modified code and coverage meets threshold
+# Verifies test files exist for modified code and coverage meets 95% threshold per file
 
 set -e
 
 echo "🔍 Checking TDD compliance..."
 
-# Function to find test file for a given source file
-# Returns the path to the test file if found, or empty string if not found
-find_test_file() {
-    local SOURCE_FILE="$1"
-    local MODULE_NAME=$(basename "$SOURCE_FILE" .py)
-    
-    # Pattern 1: Flat test structure (most common)
-    # custom_components/localshift/module.py -> tests/test_module.py
-    local TEST_FLAT="tests/test_${MODULE_NAME}.py"
-    if [ -f "$TEST_FLAT" ]; then
-        echo "$TEST_FLAT"
-        return 0
-    fi
-    
-    # Pattern 2: Subdirectory-preserving test structure
-    # custom_components/localshift/subdir/module.py -> tests/subdir/test_module.py
-    local REL_PATH=$(echo "$SOURCE_FILE" | sed 's|custom_components/localshift/||')
-    if [[ "$REL_PATH" == *"/"* ]]; then
-        local SUBDIR=$(dirname "$REL_PATH")
-        local TEST_SUBDIR="tests/${SUBDIR}/test_${MODULE_NAME}.py"
-        if [ -f "$TEST_SUBDIR" ]; then
-            echo "$TEST_SUBDIR"
-            return 0
-        fi
-    fi
-    
-    # No test file found
-    return 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+COVERAGE_CHECKER="$PROJECT_ROOT/scripts/coverage_checker.py"
+
+check_xdist_available() {
+    uv run python -c "import xdist" 2>/dev/null
+    return $?
 }
 
-# Get list of staged Python files in custom_components/localshift/
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '^custom_components/localshift/.*\.py$' || true)
 
 if [ -z "$STAGED_FILES" ]; then
@@ -44,49 +22,55 @@ if [ -z "$STAGED_FILES" ]; then
     exit 0
 fi
 
-# Check if any are exception files (docs, config, etc.)
 CHANGES_REQUIRE_TESTS=false
-
-# Array to collect test file paths
 declare -a TEST_FILE_PATHS
+declare -a SOURCE_FILE_PATHS
 
 for FILE in $STAGED_FILES; do
-    # Skip __init__.py, manifest.json, etc.
     if [[ "$FILE" == *"__init__.py" ]] || [[ "$FILE" == *"manifest.json" ]]; then
         continue
     fi
     
-    # This file requires tests
     CHANGES_REQUIRE_TESTS=true
+    SOURCE_FILE_PATHS+=("$FILE")
     
-    # Find the test file using our function
-    TEST_FILE=$(find_test_file "$FILE")
+    MODULE_NAME=$(basename "$FILE" .py)
+    TEST_FLAT="tests/test_${MODULE_NAME}.py"
     
-    if [ -z "$TEST_FILE" ]; then
-        echo "❌ ERROR: No test file found for $FILE"
-        echo ""
-        echo "Searched locations:"
-        echo "  - tests/test_$(basename "$FILE" .py).py"
-        
-        # Check if file is in subdirectory
-        REL_PATH=$(echo "$FILE" | sed 's|custom_components/localshift/||')
-        if [[ "$REL_PATH" == *"/"* ]]; then
-            SUBDIR=$(dirname "$REL_PATH")
-            echo "  - tests/${SUBDIR}/test_$(basename "$FILE" .py).py"
-        fi
-        
-        echo ""
-        echo "TDD Workflow:"
-        echo "  1. Create a test file at one of the above locations"
-        echo "  2. Write failing test (RED phase)"
-        echo "  3. Then commit"
-        echo ""
-        echo "See: .agents/rules/tdd-workflow.md"
-        exit 1
+    if [ -f "$TEST_FLAT" ]; then
+        TEST_FILE_PATHS+=("$TEST_FLAT")
+        echo "✅ Test file exists: $TEST_FLAT"
+        continue
     fi
     
-    echo "✅ Test file exists: $TEST_FILE"
-    TEST_FILE_PATHS+=("$TEST_FILE")
+    REL_PATH=$(echo "$FILE" | sed 's|custom_components/localshift/||')
+    if [[ "$REL_PATH" == *"/"* ]]; then
+        SUBDIR=$(dirname "$REL_PATH")
+        TEST_SUBDIR="tests/${SUBDIR}/test_${MODULE_NAME}.py"
+        if [ -f "$TEST_SUBDIR" ]; then
+            TEST_FILE_PATHS+=("$TEST_SUBDIR")
+            echo "✅ Test file exists: $TEST_SUBDIR"
+            continue
+        fi
+    fi
+    
+    echo "❌ ERROR: No test file found for $FILE"
+    echo ""
+    echo "Searched locations:"
+    echo "  - tests/test_${MODULE_NAME}.py"
+    REL_PATH=$(echo "$FILE" | sed 's|custom_components/localshift/||')
+    if [[ "$REL_PATH" == *"/"* ]]; then
+        SUBDIR=$(dirname "$REL_PATH")
+        echo "  - tests/${SUBDIR}/test_${MODULE_NAME}.py"
+    fi
+    echo ""
+    echo "TDD Workflow:"
+    echo "  1. Create a test file at one of the above locations"
+    echo "  2. Write failing test (RED phase)"
+    echo "  3. Then commit"
+    echo ""
+    echo "See: .agents/rules/tdd-workflow.md"
+    exit 1
 done
 
 if [ "$CHANGES_REQUIRE_TESTS" = false ]; then
@@ -94,57 +78,73 @@ if [ "$CHANGES_REQUIRE_TESTS" = false ]; then
     exit 0
 fi
 
-# Run tests for modified files
-echo ""
-echo "🔍 Running tests for modified files..."
-
-# Convert array to space-separated string
-TEST_FILES="${TEST_FILE_PATHS[*]}"
-
-# Run the tests
-if ! uv run pytest $TEST_FILES -v --tb=short 2>&1; then
-    echo ""
-    echo "❌ ERROR: Tests failed"
-    echo ""
-    echo "All tests must pass before commit (TDD GREEN phase)"
-    echo "See: .agents/rules/tdd-workflow.md"
-    exit 1
-fi
-
-echo "✅ All tests pass"
-
-# Check coverage threshold (95%) for modified files only
-echo ""
-echo "🔍 Checking test coverage for modified files..."
-
-# Build --cov flags only for staged files (not entire codebase)
 COV_FLAGS=""
-for FILE in $STAGED_FILES; do
-    # Skip __init__.py (no testable code)
-    if [[ "$FILE" == *"__init__.py" ]]; then
-        continue
-    fi
-    # Convert path to module: custom_components/localshift/foo.py -> custom_components.localshift.foo
+for FILE in "${SOURCE_FILE_PATHS[@]}"; do
     MODULE=$(echo "$FILE" | sed 's|\.py$||' | tr '/' '.')
     COV_FLAGS="$COV_FLAGS --cov=$MODULE"
 done
 
-if [ -n "$COV_FLAGS" ]; then
-    COVERAGE_OUTPUT=$(uv run pytest $TEST_FILES $COV_FLAGS --cov-report=term-missing --cov-fail-under=95 2>&1)
-    COVERAGE_EXIT_CODE=$?
+PARALLEL_FLAG=""
+if check_xdist_available; then
+    PARALLEL_FLAG="-n logical"
+    echo "🚀 Using parallel execution (pytest-xdist)"
+fi
 
-    if [ $COVERAGE_EXIT_CODE -ne 0 ]; then
-        echo "$COVERAGE_OUTPUT"
+TEST_FILES="${TEST_FILE_PATHS[*]}"
+COVERAGE_JSON="$PROJECT_ROOT/.coverage-tdd.json"
+
+echo ""
+echo "🔍 Running tests with coverage for modified files..."
+
+if [ -n "$COV_FLAGS" ]; then
+    if ! uv run pytest $TEST_FILES $COV_FLAGS \
+        $PARALLEL_FLAG \
+        --cov-report=json:"$COVERAGE_JSON" \
+        --cov-report=term-missing \
+        -v --tb=short 2>&1; then
         echo ""
-        echo "❌ ERROR: Coverage below 95% for modified files"
+        echo "❌ ERROR: Tests failed"
         echo ""
-        echo "Write more tests to reach 95% coverage for your changes"
+        echo "All tests must pass before commit (TDD GREEN phase)"
+        echo "See: .agents/rules/tdd-workflow.md"
+        rm -f "$COVERAGE_JSON"
+        exit 1
+    fi
+    
+    echo ""
+    echo "📊 Checking per-file coverage (95% threshold)..."
+    
+    if [ -f "$COVERAGE_CHECKER" ]; then
+        if ! uv run python "$COVERAGE_CHECKER" "$COVERAGE_JSON" "${SOURCE_FILE_PATHS[@]}"; then
+            rm -f "$COVERAGE_JSON"
+            exit 1
+        fi
+    else
+        echo "⚠️  coverage_checker.py not found, falling back to --cov-fail-under"
+        if ! uv run pytest $TEST_FILES $COV_FLAGS \
+            --cov-fail-under=95 \
+            -q 2>&1; then
+            echo ""
+            echo "❌ ERROR: Coverage below 95%"
+            rm -f "$COVERAGE_JSON"
+            exit 1
+        fi
+    fi
+    
+    rm -f "$COVERAGE_JSON"
+    echo ""
+    echo "✅ All tests pass with 95%+ coverage per file"
+else
+    if ! uv run pytest $TEST_FILES $PARALLEL_FLAG -v --tb=short 2>&1; then
+        echo ""
+        echo "❌ ERROR: Tests failed"
+        echo ""
+        echo "All tests must pass before commit (TDD GREEN phase)"
         echo "See: .agents/rules/tdd-workflow.md"
         exit 1
     fi
-    echo "✅ Coverage meets 95% threshold for modified files"
-else
-    echo "✅ No files require coverage check (only init/config files modified)"
+    echo ""
+    echo "✅ All tests pass"
 fi
 
 echo ""

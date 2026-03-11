@@ -33,6 +33,29 @@ git worktree list
 
 ---
 
+## ⚠️ PR Creation from Worktrees
+
+**All feature PRs from worktrees MUST target `test`, not `main`.**
+
+When your work is complete and you're asked to create a PR:
+
+```bash
+# From your worktree, create PR targeting test branch
+gh pr create --base test --title "..."
+```
+
+**Why test by default:**
+- Changes are validated in live Home Assistant before production
+- Enables watch mode for rapid iteration
+- Catches integration issues early
+
+**Only target `main` if:**
+- User explicitly requests direct-to-main
+- Hotfix requiring immediate production deployment
+- Documentation-only with no code changes
+
+---
+
 ## ⚠️ HARD STOP SIGNALS
 
 **When user issues any of these commands, IMMEDIATELY stop all work and respond:**

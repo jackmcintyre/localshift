@@ -34,18 +34,7 @@ select = [
   "C901",
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"custom_components/localshift/computation_engine_lib/decision_outcome_tracker.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/history_fetcher.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/optimization_controller.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/parameter_optimizer.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/price_calculator.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/slot_builder.py" = ["C901"]
-"custom_components/localshift/computation_engine_lib/solar_utils.py" = ["C901"]
-"custom_components/localshift/entity_validator.py" = ["C901"]
-"custom_components/localshift/notification_service.py" = ["C901"]
-"custom_components/localshift/state_machine.py" = ["C901"]
-"custom_components/localshift/weather_correlation.py" = ["C901"]
+
 
 [tool.vulture]
 min_confidence = 80
@@ -82,6 +71,16 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "raise NotImplementedError",
+  "except Exception:",
+  "class .*Stub.*:",
+  "Stub for .* when homeassistant",
+]
 
 [dependency-groups]
 dev = [

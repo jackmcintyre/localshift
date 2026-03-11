@@ -8,7 +8,7 @@ from datetime import datetime
 
 import pytest
 
-from custom_components.localshift.computation_engine_lib.optimizer_dp import (
+from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     OptimizerConfig,
     OptimizerInputs,
@@ -744,6 +744,7 @@ class TestSolarOpportunityPenaltyStrengthened:
             f"import_cost ({import_cost:.4f}) alone — penalty base must include downstream credit"
         )
 
+
 def test_short_horizon_aware_of_future_solar_holds():
     """
     Test that when the demand window is beyond the horizon, the DP
@@ -763,15 +764,16 @@ def test_short_horizon_aware_of_future_solar_holds():
     )
 
     now = datetime(2026, 1, 3, 23, 0, 0)
-    slots = [make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14) for i in range(10)]
+    slots = [
+        make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14)
+        for i in range(10)
+    ]
     # Target 80% at 17:00 tomorrow (well beyond horizon ending at 04:00 AM)
     # Force terminal_penalty_idx to 9
     slots[-1].is_demand_window_slot = True
 
     # Solar tomorrow morning: 16 kWh available (starts at 08:00, beyond 04:00 AM)
-    all_solcast = [
-        make_solcast_entry(8 + i, 4.0) for i in range(8)
-    ]
+    all_solcast = [make_solcast_entry(8 + i, 4.0) for i in range(8)]
 
     inputs = OptimizerInputs(
         cycle_id="test-horizon-aware",
@@ -786,7 +788,9 @@ def test_short_horizon_aware_of_future_solar_holds():
     assert result.success
 
     # Should HOLD because future solar covers shortfall
-    charge_slots = [d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL]
+    charge_slots = [
+        d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL
+    ]
     assert len(charge_slots) == 0
 
     # Reason should be SOLAR_OPPORTUNITY_WAIT (since price is cheap and solar is coming)
@@ -811,7 +815,10 @@ def test_short_horizon_still_charges_if_future_solar_insufficient():
     )
 
     now = datetime(2026, 1, 3, 23, 0, 0)
-    slots = [make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14) for i in range(10)]
+    slots = [
+        make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14)
+        for i in range(10)
+    ]
     slots[-1].is_demand_window_slot = True
 
     # Tiny solar tomorrow morning: 1 kWh available
@@ -829,5 +836,7 @@ def test_short_horizon_still_charges_if_future_solar_insufficient():
     result = planner.plan(inputs)
     assert result.success
 
-    charge_slots = [d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL]
+    charge_slots = [
+        d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL
+    ]
     assert len(charge_slots) > 0

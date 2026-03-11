@@ -1,0 +1,421 @@
+"""SlotBuilder — construct SlotContext list from raw CoordinatorData.
+
+This module builds SlotContext objects directly from raw coordinator data fields,
+serving as the input preparation layer for the DP optimizer.
+
+Design principles:
+- Read raw data: general_forecast, feed_in_forecast, solcast_today/tomorrow, load_forecast_slots
+- Apply adaptive param transforms: solar_confidence_factor to solar_kwh
+- DO NOT apply consumption_forecast_bias (already applied by LoadForecaster)
+- Compute demand window flags independently
+- Return typed SlotBuildMetadata for diagnostics
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, time
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from ..coordinator.data import AdaptiveParameters
+from ..forecast.solar import get_solar_for_slot_by_interval
+from .optimizer_dp import SlotContext
+from .price_calculator import get_price_for_slot_or_none
+from .slot_schedule import TOTAL_SLOTS, compute_hybrid_slot_schedule
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class SlotBuildMetadata:
+    """Diagnostics from a SlotBuilder.build_slots() call.
+
+    Replaces the legacy parity_info dict with a typed dataclass.
+    Provides backward-compatible to_parity_dict() for existing callers.
+    """
+
+    total_slots: int
+    """Total number of slots built."""
+
+    five_min_slots: int
+    """Count of 5-minute duration slots."""
+
+    thirty_min_slots: int
+    """Count of 30-minute duration slots."""
+
+    horizon_hours: float
+    """Forecast horizon in hours."""
+
+    solar_confidence_factor: float
+    """Adaptive parameter value actually applied to solar forecasts."""
+
+    slots_with_defaulted_solar: int
+    """Slots where solcast returned 0.0 kWh."""
+
+    slots_with_defaulted_price: int
+    """Slots where buy or sell price was 0.0 $/kWh."""
+
+    slots_with_defaulted_consumption: int = 0
+    """Slots where load_forecast_slots was unavailable (fallback to 0.0)."""
+
+    all_solcast: list[dict[str, Any]] = field(default_factory=list)
+    """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
+
+    def to_parity_dict(self) -> dict[str, Any]:
+        """Convert to legacy parity_info dict format for backward compatibility.
+
+        Returns dict matching the old _build_slot_contexts() return schema.
+        """
+        total_fields = (
+            self.total_slots * 4
+        )  # buy_price, sell_price, solar_kwh, consumption_kwh
+        defaulted_count = (
+            self.slots_with_defaulted_solar
+            + self.slots_with_defaulted_price
+            + self.slots_with_defaulted_consumption
+        )
+        populated_fields = total_fields - defaulted_count
+        completeness_pct = (
+            (populated_fields / total_fields * 100) if total_fields > 0 else 0.0
+        )
+
+        return {
+            "total_slots": self.total_slots,
+            "total_fields_checked": total_fields,
+            "populated_fields": populated_fields,
+            "defaulted_fields": {
+                "solar_kwh": self.slots_with_defaulted_solar,
+                "price": self.slots_with_defaulted_price,
+                "consumption_kwh": self.slots_with_defaulted_consumption,
+            },
+            "completeness_pct": round(completeness_pct, 1),
+            "five_min_slots": self.five_min_slots,
+            "thirty_min_slots": self.thirty_min_slots,
+            "horizon_hours": self.horizon_hours,
+            "solar_confidence_factor": self.solar_confidence_factor,
+        }
+
+
+class SlotBuilder:
+    """Builds SlotContext list from raw CoordinatorData without touching daily_forecast.
+
+    Reads:
+    - data.general_forecast / data.feed_in_forecast — Amber buy/sell price series
+    - data.solcast_today / data.solcast_tomorrow — solar forecast
+    - data.load_forecast_slots — per-slot load kW (from Phase 1 LoadForecaster)
+    - DW config options — demand window entry/slot flags per slot
+
+    Applies:
+    - solar_confidence_factor: solar_kwh *= factor (clamped >= 0)
+    - consumption_forecast_bias: already applied by LoadForecaster; not re-applied here
+
+    Usage:
+        slot_builder = SlotBuilder(config_options, ha_timezone)
+        slots, metadata = slot_builder.build_slots(data, adaptive_params)
+    """
+
+    def __init__(
+        self,
+        config_options: dict[str, Any],
+        ha_timezone: str,
+    ) -> None:
+        """Store DW time config and timezone for slot generation.
+
+        Args:
+            config_options: Integration config options (for DW start/end parsing).
+            ha_timezone: Home Assistant timezone string (e.g., "Australia/Sydney").
+
+        """
+        self._config_options = config_options
+        self._ha_timezone = ha_timezone
+
+    def build_slots(
+        self,
+        data: Any,
+        adaptive_params: AdaptiveParameters | None,
+        now_dt: datetime | None = None,
+    ) -> tuple[list[SlotContext], SlotBuildMetadata]:
+        """Build SlotContext list from raw coordinator data."""
+        now_local = (
+            now_dt.astimezone() if now_dt is not None else datetime.now().astimezone()
+        )
+        hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
+            now_local=now_local,
+            general_forecast=data.general_forecast,
+            ha_timezone=self._ha_timezone,
+        )
+
+        dw_start_time = self._parse_time_option("demand_window_start")
+        dw_end_time = self._parse_time_option("demand_window_end")
+
+        solar_confidence_factor = self._get_solar_confidence_factor(adaptive_params)
+        all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
+        base_slot = self._compute_base_slot(now_local)
+        local_tz = self._get_local_timezone()
+
+        contexts, counts = self._process_all_slots(
+            hybrid_slots=hybrid_slots,
+            data=data,
+            all_solcast=all_solcast,
+            solar_confidence_factor=solar_confidence_factor,
+            base_slot=base_slot,
+            local_tz=local_tz,
+            dw_start_time=dw_start_time,
+            dw_end_time=dw_end_time,
+        )
+
+        metadata = SlotBuildMetadata(
+            total_slots=len(contexts),
+            five_min_slots=counts["five_min"],
+            thirty_min_slots=counts["thirty_min"],
+            horizon_hours=hybrid_metadata.get("horizon_hours", 24.0),
+            solar_confidence_factor=solar_confidence_factor,
+            slots_with_defaulted_solar=counts["defaulted_solar"],
+            slots_with_defaulted_price=counts["defaulted_price"],
+            slots_with_defaulted_consumption=counts["defaulted_consumption"],
+            all_solcast=all_solcast,
+        )
+
+        _LOGGER.debug(
+            "SlotBuilder: built %d slots (%d x 5min, %d x 30min), "
+            "solar_confidence=%.2f, defaulted: solar=%d price=%d consumption=%d",
+            len(contexts),
+            counts["five_min"],
+            counts["thirty_min"],
+            solar_confidence_factor,
+            counts["defaulted_solar"],
+            counts["defaulted_price"],
+            counts["defaulted_consumption"],
+        )
+
+        return contexts, metadata
+
+    def _get_solar_confidence_factor(
+        self, adaptive_params: AdaptiveParameters | None
+    ) -> float:
+        """Extract and clamp solar_confidence_factor from adaptive params."""
+        factor = 1.0
+        if adaptive_params is not None:
+            factor = adaptive_params.get("solar_confidence_factor", 1.0)
+        return max(0.0, min(2.0, factor))
+
+    def _compute_base_slot(self, now_local: datetime) -> datetime:
+        """Compute base slot time for load_forecast_slots indexing."""
+        current_5min = (now_local.minute // 5) * 5
+        return now_local.replace(minute=current_5min, second=0, microsecond=0)
+
+    def _get_local_timezone(self) -> ZoneInfo | None:
+        """Resolve local timezone object for DW time comparisons."""
+        try:
+            return ZoneInfo(self._ha_timezone)
+        except Exception:
+            return None
+
+    def _process_all_slots(
+        self,
+        hybrid_slots: list[dict[str, Any]],
+        data: Any,
+        all_solcast: list[dict[str, Any]],
+        solar_confidence_factor: float,
+        base_slot: datetime,
+        local_tz: ZoneInfo | None,
+        dw_start_time: time,
+        dw_end_time: time,
+    ) -> tuple[list[SlotContext], dict[str, int]]:
+        """Process all hybrid slots and return contexts with counts."""
+        contexts: list[SlotContext] = []
+        counts = {
+            "five_min": 0,
+            "thirty_min": 0,
+            "defaulted_solar": 0,
+            "defaulted_price": 0,
+            "defaulted_consumption": 0,
+        }
+        prev_in_demand_window = False
+
+        for i, slot in enumerate(hybrid_slots):
+            ctx, slot_counts, in_demand_window = self._process_single_slot(
+                i=i,
+                slot=slot,
+                data=data,
+                all_solcast=all_solcast,
+                solar_confidence_factor=solar_confidence_factor,
+                base_slot=base_slot,
+                local_tz=local_tz,
+                dw_start_time=dw_start_time,
+                dw_end_time=dw_end_time,
+                prev_in_demand_window=prev_in_demand_window,
+            )
+            contexts.append(ctx)
+            for key in counts:
+                counts[key] += slot_counts.get(key, 0)
+            prev_in_demand_window = in_demand_window
+
+        return contexts, counts
+
+    def _process_single_slot(
+        self,
+        i: int,
+        slot: dict[str, Any],
+        data: Any,
+        all_solcast: list[dict[str, Any]],
+        solar_confidence_factor: float,
+        base_slot: datetime,
+        local_tz: ZoneInfo | None,
+        dw_start_time: time,
+        dw_end_time: time,
+        prev_in_demand_window: bool,
+    ) -> tuple[SlotContext, dict[str, int], bool]:
+        """Process a single slot, returning (context, counts, in_demand_window)."""
+        slot_start: datetime = slot["start"]
+        interval_minutes: int = slot["interval_minutes"]
+
+        slot_time = self._get_slot_time_for_dw(slot_start, local_tz)
+
+        counts: dict[str, int] = {
+            "five_min": 1 if interval_minutes == 5 else 0,
+            "thirty_min": 1 if interval_minutes == 30 else 0,
+            "defaulted_solar": 0,
+            "defaulted_price": 0,
+            "defaulted_consumption": 0,
+        }
+
+        buy_price = float(slot.get("price", 0.0))
+        sell_price = self._get_sell_price(data.feed_in_forecast, slot_start)
+
+        solar_kwh = self._get_solar_kwh(
+            all_solcast, slot_start, interval_minutes, solar_confidence_factor
+        )
+        if solar_kwh < 0.001:
+            counts["defaulted_solar"] = 1
+
+        consumption_kwh = self._get_consumption_kwh(
+            data.load_forecast_slots, slot_start, base_slot, interval_minutes, i
+        )
+        if consumption_kwh < 0.001:
+            counts["defaulted_consumption"] = 1
+
+        if buy_price < 0.001 or sell_price < 0.001:
+            counts["defaulted_price"] = 1
+
+        in_demand_window = dw_start_time <= slot_time < dw_end_time
+        is_demand_window_entry = in_demand_window and not prev_in_demand_window
+
+        ctx = SlotContext(
+            slot_index=i,
+            timestamp_iso=slot_start.isoformat(),
+            slot_interval_minutes=interval_minutes,
+            buy_price=buy_price,
+            sell_price=sell_price,
+            solar_kwh=solar_kwh,
+            consumption_kwh=consumption_kwh,
+            is_demand_window_entry=is_demand_window_entry,
+            is_demand_window_slot=in_demand_window,
+            price_source=slot.get("price_source", "unknown"),
+        )
+
+        return ctx, counts, in_demand_window
+
+    def _get_slot_time_for_dw(
+        self, slot_start: datetime, local_tz: ZoneInfo | None
+    ) -> time:
+        """Get slot time in local timezone for demand window comparison."""
+        if local_tz is not None and slot_start.tzinfo is not None:
+            return slot_start.astimezone(local_tz).time()
+        return slot_start.time()
+
+    def _get_sell_price(
+        self, feed_in_forecast: list[dict[str, Any]], slot_start: datetime
+    ) -> float:
+        """Get sell price for a slot from feed_in_forecast."""
+        result = get_price_for_slot_or_none(feed_in_forecast, slot_start)
+        return result if result is not None else 0.0
+
+    def _get_solar_kwh(
+        self,
+        all_solcast: list[dict[str, Any]],
+        slot_start: datetime,
+        interval_minutes: int,
+        solar_confidence_factor: float,
+    ) -> float:
+        """Get solar kWh for a slot with confidence factor applied."""
+        solar_kwh = get_solar_for_slot_by_interval(
+            all_solcast, slot_start, interval_minutes
+        )
+        return max(0.0, solar_kwh * solar_confidence_factor)
+
+    def _get_consumption_kwh(
+        self,
+        load_forecast_slots: list[float],
+        slot_start: datetime,
+        base_slot: datetime,
+        interval_minutes: int,
+        slot_index: int,
+    ) -> float:
+        """Get consumption kWh for a slot from load_forecast_slots."""
+        if not load_forecast_slots:
+            return 0.0
+
+        elapsed_min = (slot_start - base_slot).total_seconds() / 60.0
+        fixed_idx = min(int(elapsed_min // 15), TOTAL_SLOTS - 1)
+
+        if not (0 <= fixed_idx < len(load_forecast_slots)):
+            return 0.0
+
+        consumption_kw = load_forecast_slots[fixed_idx]
+        consumption_kwh = consumption_kw * interval_minutes / 60.0
+
+        if interval_minutes == 30 and 11 <= slot_start.hour <= 14:
+            _LOGGER.info(
+                "ISSUE_500 slot_builder: slot=%d time=%s interval=%d fixed_idx=%d "
+                "slots_len=%d kw_idx_%d=%.3f kwh=%.3f",
+                slot_index,
+                slot_start.strftime("%H:%M"),
+                interval_minutes,
+                fixed_idx,
+                len(load_forecast_slots),
+                fixed_idx,
+                consumption_kw,
+                consumption_kwh,
+            )
+
+        return consumption_kwh
+
+    def _parse_time_option(self, key: str) -> time:
+        """Parse time option from config_options.
+
+        Args:
+            key: Option key (e.g., "demand_window_start").
+
+        Returns:
+            time object parsed from "HH:MM:SS" or "HH:MM" format.
+
+        """
+        from ..const import (  # noqa: PLC0415
+            DEFAULT_DEMAND_WINDOW_END,
+            DEFAULT_DEMAND_WINDOW_START,
+        )
+
+        defaults = {
+            "demand_window_start": DEFAULT_DEMAND_WINDOW_START,
+            "demand_window_end": DEFAULT_DEMAND_WINDOW_END,
+        }
+
+        value = self._config_options.get(key, defaults.get(key, "18:00:00"))
+
+        # Handle various formats
+        if isinstance(value, time):
+            return value
+
+        if isinstance(value, str):
+            # Try parsing with seconds first, then without
+            for fmt in ["%H:%M:%S", "%H:%M"]:
+                try:
+                    return datetime.strptime(value, fmt).time()
+                except ValueError:
+                    continue
+
+        # Fallback to default
+        return time(18, 0)

@@ -35,6 +35,21 @@ LocalShift is a Home Assistant integration for automated Tesla Powerwall battery
 
 ---
 
+## ⚠️ PREFER: SymDex for Code Navigation
+
+**Use SymDex MCP tools instead of grep/read for code exploration (~200 tokens vs ~7,500 per lookup).**
+
+| Task | Tool |
+|------|------|
+| Find function/class | `symdex_search_symbols("optimizer")` |
+| See file structure | `symdex_get_file_outline("sensor.py")` |
+| Search text | `symdex_search_text("battery_soc")` |
+| Get repo structure | `symdex_get_repo_outline()` |
+
+**Note:** `symdex watch` should be running in background (auto-reindexes on file changes).
+
+---
+
 ## ⚠️ ENFORCED: Worktree-Only Workflow
 
 **Git hooks in `.githooks/` block all main branch commits and pushes.**
@@ -111,31 +126,26 @@ The `test` branch is a persistent branch for continuous testing/deployment. Chan
 
 ### PR Target Branches
 
-**When to target `main`:**
-- Production-ready changes that should be released
-- Bug fixes, features, refactoring that don't need live testing
-- Default target for most PRs
+**⚠️ DEFAULT for feature worktrees: target `test`**
 
-**When to target `test`:**
-- Changes that need live testing in Home Assistant before production release
-- Changes where you want to use watch mode for rapid iteration
-- Changes where behavior depends on real HA entity states
-- Changes that need to be validated with actual Powerwall/solar data
+When working in a feature worktree (issue/*, feature/*, docs/*, etc.), always create PRs targeting the `test` branch:
 
-**How to target test:**
 ```bash
-# Create worktree from test branch
-git worktree add worktrees/deploy-test -b test
-cd worktrees/deploy-test
-
-# Make changes, commit, then create PR with base = test
 gh pr create --base test --title "..."
 ```
 
-**After PR to test is merged:**
-- Run watch mode to see changes deploy automatically
-- Validate in live HA
-- If successful, create follow-up PR from test to main for production release
+**Why target test by default:**
+- All changes should be validated in live Home Assistant before production
+- Enables rapid iteration with watch mode auto-deploy
+- Catches integration issues early with real Powerwall/solar data
+- Production releases are deliberate, not accidental
+
+**Only target `main` when:**
+- Hotfixes that need immediate production deployment
+- Documentation-only changes with no code impact
+- User explicitly requests direct-to-main release
+
+**Workflow:** Feature worktree → PR to `test` → merge → validate → PR `test`→`main` for production
 
 ### PR Creation & CI Monitoring
 
@@ -242,7 +252,12 @@ Before adding any optimizer feature:
 
 ### Coverage Requirement
 
-**Minimum 95% test coverage enforced:**
+**Minimum 95% coverage required PER MODIFIED FILE.**
+
+The pre-commit hook checks each staged file individually:
+- Each modified `.py` file must have ≥ 95% coverage
+- Uncovered lines are shown in the error message
+- Run the suggested command to see detailed coverage
 
 ```bash
 # Check coverage before commit
@@ -253,7 +268,7 @@ uv run pytest --cov=custom_components/localshift --cov-report=term-missing
 
 **Automatically checks before commit:**
 - Test file exists for modified code
-- Coverage >= 95%
+- **Per-file coverage >= 95%** (not project-wide average)
 - Tests pass
 
 ### Integration with Workflow

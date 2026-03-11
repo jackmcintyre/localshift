@@ -47,7 +47,7 @@ import pytest
 from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 # Import realistic HA state simulation
 from tests.fixtures.ha_entities import (
@@ -83,13 +83,13 @@ def mock_battery_sleep():
     with ExitStack() as stack:
         transition_sleep = stack.enter_context(
             patch(
-                "custom_components.localshift.transition_validator.asyncio.sleep",
+                "custom_components.localshift.state.validator.asyncio.sleep",
                 new_callable=AsyncMock,
             )
         )
         service_sleep = stack.enter_context(
             patch(
-                "custom_components.localshift.powerwall_service_client.asyncio.sleep",
+                "custom_components.localshift.integration.client.asyncio.sleep",
                 new_callable=AsyncMock,
             )
         )
@@ -574,7 +574,7 @@ def mock_entity_validator():
     By default, reports all entities as healthy and allows automation.
     Tests can override the return values as needed.
     """
-    from custom_components.localshift.entity_validator import IntegrationStatus
+    from custom_components.localshift.utils.validation import IntegrationStatus
 
     validator = MagicMock()
     validator.should_allow_automation = MagicMock(return_value=True)
@@ -595,7 +595,7 @@ def state_reader(mock_hass_with_states, mock_entry, mock_entity_validator):
 
     Use this for testing state reading functionality with realistic entity states.
     """
-    from custom_components.localshift.state_reader import StateReader
+    from custom_components.localshift.state.reader import StateReader
 
     return StateReader(mock_hass_with_states, mock_entry, mock_entity_validator)
 
@@ -605,7 +605,7 @@ def state_reader_unavailable(
     mock_hass_unavailable_entities, mock_entry, mock_entity_validator
 ):
     """Create a StateReader with all entities unavailable."""
-    from custom_components.localshift.state_reader import StateReader
+    from custom_components.localshift.state.reader import StateReader
 
     return StateReader(
         mock_hass_unavailable_entities, mock_entry, mock_entity_validator
@@ -615,7 +615,7 @@ def state_reader_unavailable(
 @pytest.fixture
 def state_reader_missing(mock_hass_missing_entities, mock_entry, mock_entity_validator):
     """Create a StateReader with missing entities."""
-    from custom_components.localshift.state_reader import StateReader
+    from custom_components.localshift.state.reader import StateReader
 
     return StateReader(mock_hass_missing_entities, mock_entry, mock_entity_validator)
 
@@ -700,19 +700,19 @@ def mock_storage():
     # Patch Store at all locations where it's imported
     with (
         patch(
-            "custom_components.localshift.computation_engine_lib.decision_outcome_tracker.Store",
+            "custom_components.localshift.engine.outcomes.Store",
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.computation_engine_lib.parameter_optimizer.Store",
+            "custom_components.localshift.engine.parameters.Store",
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.computation_engine_lib.pattern_analyzer.Store",
+            "custom_components.localshift.engine.pattern_analyzer.Store",
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.computation_engine_lib.optimization_controller.Store",
+            "custom_components.localshift.engine.optimization_controller.Store",
             return_value=mock_store,
         ),
     ):

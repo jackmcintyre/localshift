@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.localshift.const import BatteryMode
-from custom_components.localshift.coordinator_data import CoordinatorData
+from custom_components.localshift.coordinator import CoordinatorData
 
 
 # Helper to create timezone-aware datetimes
@@ -366,7 +366,9 @@ class TestErrorHandlingAndRecovery:
         self, mock_hass, mock_get_entity_id, integration_data
     ):
         """Test recovery from battery controller failure."""
-        from custom_components.localshift.battery_controller import BatteryController
+        from custom_components.localshift.integration.controller import (
+            BatteryController,
+        )
 
         controller = BatteryController(mock_hass, mock_get_entity_id)
 
@@ -390,7 +392,9 @@ class TestErrorHandlingAndRecovery:
         Note: With mock_battery_sleep, this test runs instantly but still
         verifies the timeout logic by checking that mismatched state returns False.
         """
-        from custom_components.localshift.battery_controller import BatteryController
+        from custom_components.localshift.integration.controller import (
+            BatteryController,
+        )
 
         # Create a proper mock for states BEFORE creating the controller
         # Use MagicMock with spec to allow attribute assignment
