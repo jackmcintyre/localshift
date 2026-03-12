@@ -7,6 +7,7 @@ import pytest
 from custom_components.localshift.forecast.load import (
     LoadForecaster,
 )
+from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
 from custom_components.localshift.const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
@@ -258,7 +259,7 @@ class TestLoadForecasterExponentialDecay:
         forecaster.set_adaptive_params(mock_adaptive_params)
         hourly_avg = {10: 0.5, 11: 0.6, 12: 0.7}
 
-        kw, source = forecaster.estimate_hourly_consumption_kw(
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
             hourly_avg_kw=hourly_avg,
             slot_hour=10,
             current_hour=11,
@@ -310,7 +311,7 @@ class TestLoadForecasterExponentialDecay:
             (3.0, "decay_load_d3"),
             (4.0, "profile_hour"),
         ]:
-            kw, source = forecaster.estimate_hourly_consumption_kw(
+            _, source = forecaster.estimate_hourly_consumption_kw(
                 hourly_avg_kw=hourly_avg,
                 slot_hour=10,
                 current_hour=11,
@@ -354,6 +355,112 @@ class TestLoadForecasterExponentialDecay:
         assert source == "live_load_fallback"
         assert kw == 0.0
         assert "NO_LOAD_DATA" in caplog.text
+
+    def test_context_correction_applies_when_context_provided(self):
+        forecaster = _create_load_forecaster()
+        corrections = ForecastCorrectionProvider(min_samples=1)
+        corrections.record_error(2.0, 1.0, 1, 11, "summer")
+        forecaster.set_forecast_corrections(corrections)
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 0.6},
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=1.0,
+            recent_load_kw=1.0,
+            day_of_week=1,
+            season="summer",
+        )
+
+        assert source == "live_load"
+        assert kw == 1.5
+
+    def test_context_correction_runs_after_global_bias(self):
+        forecaster = _create_load_forecaster()
+        adaptive = MagicMock()
+        adaptive.get.return_value = 0.2
+        forecaster.set_adaptive_params(adaptive)
+
+        corrections = ForecastCorrectionProvider(min_samples=1)
+        corrections.record_error(2.0, 1.0, 2, 11, "winter")
+        forecaster.set_forecast_corrections(corrections)
+
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 0.6},
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=1.0,
+            recent_load_kw=1.0,
+            day_of_week=2,
+            season="winter",
+        )
+
+        assert kw == 1.8
+
+    def test_context_correction_ignored_without_context_parameters(self):
+        forecaster = _create_load_forecaster()
+        corrections = ForecastCorrectionProvider(min_samples=1)
+        corrections.record_error(2.0, 1.0, 4, 11, "spring")
+        forecaster.set_forecast_corrections(corrections)
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 0.6},
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=1.0,
+            recent_load_kw=1.0,
+        )
+
+        assert source == "live_load"
+        assert kw == 1.0
+
+    def test_context_correction_neutral_factor_returns_original_load(self):
+        forecaster = _create_load_forecaster()
+        corrections = ForecastCorrectionProvider(min_samples=1)
+        corrections.record_error(1.0, 1.0, 6, 11, "autumn")
+        forecaster.set_forecast_corrections(corrections)
+
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 0.6},
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=1.0,
+            recent_load_kw=1.0,
+            day_of_week=6,
+            season="autumn",
+        )
+
+        assert kw == 1.0
+
+    def test_parse_time_option_valid_and_invalid(self):
+        entry = _create_mock_entry()
+        entry.options = {"valid": "06:30:15", "invalid": "oops"}
+        forecaster = LoadForecaster(entry)
+
+        valid = forecaster.parse_time_option("valid", "01:02:03")
+        fallback = forecaster.parse_time_option("invalid", "01:02:03")
+
+        assert (valid.hour, valid.minute, valid.second) == (6, 30, 15)
+        assert (fallback.hour, fallback.minute, fallback.second) == (1, 2, 3)
+
+    def test_weather_correlation_invalid_adjustment_source_keeps_base_load(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="high")
+        weather.predict_load.return_value = (0.99, "low_confidence")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 0.5},
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=0.45,
+            recent_load_kw=0.5,
+            temperature=22.0,
+        )
+
+        assert kw == 0.45
+        assert source == "live_load"
 
 
 @pytest.fixture

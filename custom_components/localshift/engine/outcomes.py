@@ -462,27 +462,39 @@ class DecisionOutcomeTracker:
         """Compute cost score component (0.0-1.0).
 
         Returns None if cost data is unavailable.
+
+        Task 3 (Issue #626): Uses cost-relative scoring instead of fixed
+        mode-based scores. Scores higher when actual cost is well below
+        the cheap price threshold for grid charges, and higher revenue
+        for exports.
         """
         if record.actual_cost_during_period is None:
             return None
 
-        if record.mode_chosen in (
-            PlannerAction.CHARGE_GRID_NORMAL,
-            PlannerAction.CHARGE_GRID_BOOST,
-        ):
+        cost = record.actual_cost_during_period
+        threshold = record.cheap_price_threshold or 0.10  # fallback
+
+        mode = record.mode_chosen
+
+        # Grid charge: score based on how cheap relative to threshold
+        if mode in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST):
             if record.actual_export_kwh and record.actual_export_kwh > 0.5:
-                return 0.2
-            return 0.7
+                return 0.2  # charged then exported — still bad
+            # Excellent if cost < 50% of threshold, poor if cost > 150%
+            ratio = cost / max(threshold, 0.01)
+            return max(0.2, min(0.9, 1.0 - ratio * 0.4))
 
-        if record.mode_chosen == PlannerAction.EXPORT_PROACTIVE:
-            if (
-                record.actual_cost_during_period
-                and record.actual_cost_during_period < 0
-            ):
-                return 0.9
-            return 0.4
+        # Export: score based on revenue (negative cost = good)
+        if mode == PlannerAction.EXPORT_PROACTIVE:
+            if cost < 0:
+                # Earned money — scale by how much relative to threshold
+                revenue_ratio = abs(cost) / max(threshold, 0.01)
+                return min(0.95, 0.6 + revenue_ratio * 0.2)
+            return 0.3  # exported but didn't earn — poor
 
-        return 0.6
+        # Hold/Solar charge: mild score, slightly better if low cost
+        ratio = cost / max(threshold, 0.01)
+        return max(0.4, min(0.7, 0.65 - ratio * 0.1))
 
     def _compute_export_penalty(self, record: DecisionRecord) -> float:
         """Compute export penalty (negative) or bonus (positive).
@@ -513,6 +525,9 @@ class DecisionOutcomeTracker:
         """Compute target score component.
 
         Returns a value to add to score (-0.10 to +0.15).
+
+        Uses a smooth gradient for near-target scoring (Task 1, Issue #626)
+        and achievability-scaled far penalty (Task 2, Issue #626).
         """
         if record.battery_target_soc <= 0:
             return 0.0
@@ -520,8 +535,24 @@ class DecisionOutcomeTracker:
         soc_at_end = record.soc_at_decision + (record.actual_soc_change or 0.0)
         target_diff = abs(soc_at_end - record.battery_target_soc)
 
-        is_low_solar_weather = record.weather_condition in ("rainy", "cloudy")
+        is_low_solar_weather = record.weather_condition in (
+            "rainy",
+            "cloudy",
+            "overcast",
+        )
         far_threshold = 40 if is_low_solar_weather else 20
+
+        # Task 1: Smooth gradient from +0.15 at diff=0 to 0.0 at diff=15
+        if target_diff <= 15:
+            return 0.15 - target_diff * 0.01
+
+        # Neutral zone: no penalty unless very far
+        if target_diff <= far_threshold:
+            return 0.0
+
+        # Task 2: Far penalty with achievability scaling
+        below_target = soc_at_end < record.battery_target_soc
+        above_target = soc_at_end > record.battery_target_soc
 
         can_increase_soc = record.mode_chosen in (
             PlannerAction.CHARGE_GRID_NORMAL,
@@ -529,18 +560,14 @@ class DecisionOutcomeTracker:
         )
         can_decrease_soc = record.mode_chosen == PlannerAction.EXPORT_PROACTIVE
 
-        if target_diff <= 5:
-            return 0.15
-        if target_diff <= 10:
-            return 0.05
-        if target_diff > far_threshold:
-            below_target = soc_at_end < record.battery_target_soc
-            above_target = soc_at_end > record.battery_target_soc
-
-            if below_target and can_increase_soc:
-                return -0.10
-            if above_target and can_decrease_soc:
-                return -0.10
+        if (below_target and can_increase_soc) or (above_target and can_decrease_soc):
+            # Scale penalty by how achievable the target was
+            # Powerwall 2 capacity is 13.5 kWh
+            BATTERY_CAPACITY_KWH = 13.5  # TODO: make configurable
+            required_kwh = target_diff * BATTERY_CAPACITY_KWH / 100
+            available_kwh = record.forecast_solar_remaining_kwh or 0.0
+            achievability = min(available_kwh / max(required_kwh, 0.1), 1.0)
+            return -0.10 * achievability
 
         return 0.0
 

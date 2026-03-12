@@ -452,6 +452,8 @@ class CoordinatorData:
     Contains: action, battery_mode, target_soc, reason.
     """
 
+    load_deviation_diagnostics: dict[str, Any] = field(default_factory=dict)
+
     # ---------------------------------------------------------------------------
     # --- Decision-to-Implementation Lag Tracking (Issue #501) ---
     # ---------------------------------------------------------------------------

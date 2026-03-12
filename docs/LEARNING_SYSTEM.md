@@ -55,12 +55,25 @@ The Decision Quality Score (0-100%) measures how well each decision performed:
 
 ### Score Components
 
-| Component | Weight | Description |
-|-----------|--------|-------------|
-| Cost Score | 50% | How much money was saved/lost vs baseline |
-| Export Avoidance | 20% | Did we avoid exporting grid-purchased energy? |
-| Target Achievement | 20% | Did we reach SOC target by demand window? |
-| Cycle Reduction | 10% | Did we avoid rapid mode changes? |
+The score uses a **blended base+cost** model with **additive adjustments**:
+
+```python
+score = 0.5 * 0.6 + cost_score * 0.4   # base/cost blend
+score += export_penalty                  # -0.15 to +0.05
+score += target_score                    # -0.10 to +0.15
+score -= cycling_penalty                 # 0.0 or 0.10
+score = max(0.0, min(1.0, score))        # clamp to [0, 1]
+```
+
+| Component | Type | Range | Description |
+|-----------|------|-------|-------------|
+| Base | Fixed | 0.5 | Starting point |
+| Cost Score | Blend 40% | 0.2–0.9 | Cost efficiency by mode |
+| Export Penalty | Additive | -0.15 to +0.05 | Penalize grid-bought exports |
+| Target Score | Additive | -0.10 to +0.15 | Bonus/penalty for SOC target |
+| Cycling Penalty | Additive | 0.0 or 0.10 | Rapid mode change penalty |
+
+**Note:** This is NOT a weighted average. The base+cost blend creates the foundation, then additive components adjust the score up or down.
 
 ### Interpreting the Score
 

@@ -3,11 +3,22 @@
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+from homeassistant.util import dt as dt_util
+
+from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.services.evaluation_dispatcher import (
     EvaluationDispatcher,
 )
-from homeassistant.util import dt as dt_util
 from tests.fixtures.ha_entities import MockState, MockStates
+
+
+class StubCoordinator:
+    def __init__(self) -> None:
+        self.data = CoordinatorData()
+        self.async_recompute_and_evaluate = AsyncMock()
+
+    def read_state(self) -> None:
+        return None
 
 
 def test_state_change_dispatches_evaluation():
@@ -57,6 +68,25 @@ def test_state_change_skips_during_transition():
         MagicMock(),
         AsyncMock(),
         state_machine,
+        timedelta(minutes=10),
+    )
+
+    dispatcher.on_state_change(MagicMock())
+
+    hass.async_create_task.assert_not_called()
+
+
+def test_state_change_skips_when_state_machine_missing():
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        MagicMock(),
+        MagicMock(),
+        AsyncMock(),
+        None,
         timedelta(minutes=10),
     )
 
@@ -124,4 +154,127 @@ def test_fast_tick_triggers_periodic_evaluation_when_fresh():
 
     dispatcher.on_fast_tick(now)
 
+    assert hass.async_create_task.call_args.args[1] == "localshift_evaluate_periodic"
+
+
+def test_fast_tick_ignores_missing_price_entity():
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+
+    now = dt_util.now()
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        MagicMock(),
+        MagicMock(),
+        AsyncMock(),
+        MagicMock(in_mode_transition=False),
+        timedelta(minutes=10),
+    )
+    dispatcher._load_deviation_detector = MagicMock()
+    dispatcher._load_deviation_detector.evaluate.return_value = False
+
+    stale_price = dispatcher.on_fast_tick(now)
+
+    assert stale_price is False
+    assert hass.async_create_task.call_args.args[1] == "localshift_evaluate_periodic"
+
+
+def test_fast_tick_ignores_invalid_price_state():
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    now = dt_util.now()
+    states = MockStates({
+        "sensor.price": MockState(
+            entity_id="sensor.price",
+            state="unknown",
+            attributes={},
+            last_updated=now - timedelta(minutes=2),
+        )
+    })
+    hass.states.get = states.get
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        MagicMock(),
+        MagicMock(),
+        AsyncMock(),
+        MagicMock(in_mode_transition=False),
+        timedelta(minutes=10),
+    )
+    dispatcher._load_deviation_detector = MagicMock()
+    dispatcher._load_deviation_detector.evaluate.return_value = False
+
+    stale_price = dispatcher.on_fast_tick(now)
+
+    assert stale_price is False
+    assert hass.async_create_task.call_args.args[1] == "localshift_evaluate_periodic"
+
+
+def test_fast_tick_triggers_load_deviation_reoptimization():
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    coordinator = StubCoordinator()
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        coordinator.read_state,
+        MagicMock(),
+        AsyncMock(),
+        MagicMock(in_mode_transition=False),
+        timedelta(minutes=10),
+    )
+    dispatcher._load_deviation_detector = MagicMock()
+    dispatcher._load_deviation_detector.evaluate.return_value = True
+
+    now = dt_util.now()
+    dispatcher.on_fast_tick(now)
+
+    dispatcher._load_deviation_detector.evaluate.assert_called_once_with(
+        coordinator.data, now
+    )
+    assert (
+        hass.async_create_task.call_args.args[1]
+        == "localshift_reoptimize_load_deviation"
+    )
+
+
+def test_fast_tick_uses_periodic_evaluation_when_no_load_deviation_trigger():
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    now = dt_util.now()
+    states = MockStates({
+        "sensor.price": MockState(
+            entity_id="sensor.price",
+            state="0.25",
+            attributes={},
+            last_updated=now - timedelta(minutes=2),
+        )
+    })
+    hass.states.get = states.get
+
+    coordinator = StubCoordinator()
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        coordinator.read_state,
+        MagicMock(),
+        AsyncMock(),
+        MagicMock(in_mode_transition=False),
+        timedelta(minutes=10),
+    )
+    dispatcher._load_deviation_detector = MagicMock()
+    dispatcher._load_deviation_detector.evaluate.return_value = False
+
+    dispatcher.on_fast_tick(now)
+
+    dispatcher._load_deviation_detector.evaluate.assert_called_once_with(
+        coordinator.data, now
+    )
     assert hass.async_create_task.call_args.args[1] == "localshift_evaluate_periodic"
