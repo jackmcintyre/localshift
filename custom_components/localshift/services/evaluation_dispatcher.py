@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import datetime
+from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, callback
 
 from ..const import CONF_PRICING_GENERAL_PRICE
+from ..forecast.load_deviation import LoadDeviationDetector
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ class EvaluationDispatcher:
         get_entity_id: Callable[[str], str],
         read_state_func: Callable[[], None],
         notify_listeners_func: Callable[[], None],
-        evaluate_state_machine_func: Callable[[], object],
+        evaluate_state_machine_func: Callable[[], Coroutine[Any, Any, Any]],
         state_machine,
         stale_price_threshold,
     ) -> None:
@@ -33,6 +35,7 @@ class EvaluationDispatcher:
         self._evaluate_state_machine = evaluate_state_machine_func
         self._state_machine = state_machine
         self._stale_price_threshold = stale_price_threshold
+        self._load_deviation_detector = LoadDeviationDetector()
 
     @callback
     def on_state_change(self, _event: Event) -> None:
@@ -58,6 +61,9 @@ class EvaluationDispatcher:
 
         Returns True if stale price was detected.
         """
+        if self._trigger_load_deviation_reoptimization(_now):
+            return False
+
         stale_price = self._check_stale_price()
 
         if stale_price:
@@ -136,6 +142,20 @@ class EvaluationDispatcher:
                 self._evaluate_state_machine(),
                 "localshift_evaluate_startup_ready",
             )
+
+    def _trigger_load_deviation_reoptimization(self, now: datetime) -> bool:
+        coordinator = getattr(self._read_state, "__self__", None)
+        if coordinator is None:
+            return False
+
+        if not self._load_deviation_detector.evaluate(coordinator.data, now):
+            return False
+
+        self.hass.async_create_task(
+            coordinator.async_recompute_and_evaluate(),
+            "localshift_reoptimize_load_deviation",
+        )
+        return True
 
     def _check_stale_price(self) -> bool:
         """Check if price sensor hasn't updated in the stale threshold."""
