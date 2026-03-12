@@ -16,6 +16,7 @@ from .learning import (
     DecisionQualitySensor,
     LearningDecisionHistorySensor,
     LearningStatusSensor,
+    OptimizerAdvantageSensor,
 )
 from .load_deviation import LoadDeviationSensor
 from .misc import (
@@ -68,6 +69,7 @@ __all__ = [
     "LearningStatusSensor",
     "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
+    "OptimizerAdvantageSensor",
     # Status
     "IntegrationStatusSensor",
     "EntityHealthSensor",

@@ -22,6 +22,7 @@ from .sensors import (
     LoadShiftSignalSensor,
     MinimumTargetSOCSensor,
     NetElectricityCostSensor,
+    OptimizerAdvantageSensor,
     OptimizerPlanDetailedSensor,
     OptimizerPlanGridSensor,
     OptimizerPlanSensor,
@@ -56,6 +57,7 @@ __all__ = [
     "LearningStatusSensor",
     "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
+    "OptimizerAdvantageSensor",
     "DecisionLagSensor",
     "ExtendedForecastAccuracySensor",
     "ForecastStatusSensor",
@@ -89,6 +91,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         LearningStatusSensor,
         LoadDeviationSensor,
         LoadShiftSignalSensor,
+        OptimizerAdvantageSensor,
         MinimumTargetSOCSensor,
         NetElectricityCostSensor,
         OptimizerPlanDetailedSensor,
@@ -131,6 +134,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         LearningStatusSensor(coordinator, entry),
         DecisionQualitySensor(coordinator, entry),
         LearningDecisionHistorySensor(coordinator, entry),
+        # Counterfactual optimizer advantage sensor (Issue #683)
+        OptimizerAdvantageSensor(coordinator, entry),
         # Decision-to-implementation lag sensor (Issue #501)
         DecisionLagSensor(coordinator, entry),
         # Extended forecast accuracy sensor (Issue #270)
