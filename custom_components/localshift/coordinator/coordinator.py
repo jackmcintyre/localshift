@@ -313,6 +313,13 @@ class LocalShiftCoordinator:
         if self._state_reader is not None:
             self._state_reader.check_automation_ready(self.data, suppress_warning=True)
 
+        # Issue #478: Trigger immediate evaluation if automation just became ready
+        # This prevents waiting up to 1 minute for the next periodic tick
+        if self._evaluation_dispatcher is not None:
+            self._evaluation_dispatcher.maybe_trigger_on_startup_ready(
+                lambda: self.data.automation_ready if self.data else False
+            )
+
         # Fetch historical load data in background (runs in thread pool, won't block)
         load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
         await self._computation_engine.async_get_historical_hourly_averages(
@@ -525,6 +532,13 @@ class LocalShiftCoordinator:
                 "Skipping state machine evaluation during startup grace period"
             )
             return
+
+        # Issue #478: Check if automation just became ready during startup
+        # Triggers immediate evaluation when transitioning from not-ready to ready
+        if self._evaluation_dispatcher is not None:
+            self._evaluation_dispatcher.maybe_trigger_on_startup_ready(
+                lambda: self.data.automation_ready if self.data else False
+            )
 
         # Issue #622: Always dispatch to StateMachine
         # StateMachine gates mode transitions based on price fingerprint
