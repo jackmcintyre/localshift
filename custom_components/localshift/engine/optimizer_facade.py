@@ -65,14 +65,16 @@ class OptimizerFacade:
 
         recorded = 0
         for slot in slots:
-            if slot.solar_kwh > 0.01:
-                period_start = datetime.fromisoformat(slot.timestamp_iso)
-                self._solar_accuracy_tracker.record_forecast(
-                    period_start=period_start,
-                    forecast_kwh=slot.solar_kwh,
-                    weather_condition=weather_condition,
-                )
-                recorded += 1
+            period_start = datetime.fromisoformat(slot.timestamp_iso)
+            if not self._is_backfillable_period_start(period_start):
+                continue
+
+            self._solar_accuracy_tracker.record_forecast(
+                period_start=period_start,
+                forecast_kwh=slot.solar_kwh,
+                weather_condition=weather_condition,
+            )
+            recorded += 1
 
         if recorded > 0:
             _LOGGER.debug("Recorded %d solar forecasts for accuracy tracking", recorded)
@@ -90,39 +92,51 @@ class OptimizerFacade:
         if self._solar_accuracy_tracker is None:
             return
 
-        time_of_day = "day" if 6 <= dt_util.now().hour < 18 else "night"
-        now = dt_util.now()
-        month = now.month
-        if month in (12, 1, 2):
-            season = "summer"
-        elif month in (3, 4, 5):
-            season = "autumn"
-        elif month in (6, 7, 8):
-            season = "winter"
-        else:
-            season = "spring"
+        corrected = 0
+        for slot in slots:
+            slot_dt = datetime.fromisoformat(slot.timestamp_iso)
+            time_of_day = self._get_time_of_day(slot_dt)
+            season = self._get_season(slot_dt)
+            original = slot.solar_kwh
+            slot.solar_kwh = self._solar_accuracy_tracker.apply_bias_correction(
+                slot.solar_kwh,
+                time_of_day,
+                weather_condition,
+                season,
+            )
+            if abs(slot.solar_kwh - original) > 0.001:
+                corrected += 1
 
-        bias_multiplier = self._solar_accuracy_tracker.get_bias_correction(
-            time_of_day, weather_condition, season
-        )
+        if corrected > 0:
+            _LOGGER.info(
+                "Applied solar bias correction for weather=%s to %d slots",
+                weather_condition,
+                corrected,
+            )
 
-        if bias_multiplier != 1.0:
-            corrected = 0
-            for slot in slots:
-                if slot.solar_kwh > 0.01:
-                    original = slot.solar_kwh
-                    slot.solar_kwh = max(0.0, slot.solar_kwh * bias_multiplier)
-                    if abs(slot.solar_kwh - original) > 0.001:
-                        corrected += 1
-            if corrected > 0:
-                _LOGGER.info(
-                    "Applied bias correction: multiplier=%.2f (%s/%s/%s), corrected %d slots",
-                    bias_multiplier,
-                    time_of_day,
-                    weather_condition,
-                    season,
-                    corrected,
-                )
+    @staticmethod
+    def _is_backfillable_period_start(period_start: datetime) -> bool:
+        return period_start.minute in (0, 30)
+
+    @staticmethod
+    def _get_time_of_day(dt: datetime) -> str:
+        if 6 <= dt.hour < 12:
+            return "morning"
+        if 12 <= dt.hour < 18:
+            return "afternoon"
+        if 18 <= dt.hour < 21:
+            return "evening"
+        return "night"
+
+    @staticmethod
+    def _get_season(dt: datetime) -> str:
+        if dt.month in (12, 1, 2):
+            return "summer"
+        if dt.month in (3, 4, 5):
+            return "autumn"
+        if dt.month in (6, 7, 8):
+            return "winter"
+        return "spring"
 
     def run_inline(
         self, data: CoordinatorData, now_dt: Any, config_options: dict[str, Any]
