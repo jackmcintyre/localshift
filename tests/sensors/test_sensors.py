@@ -4,34 +4,36 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.localshift import sensor as sensor_platform
 from custom_components.localshift.sensors import (
-    EffectiveCheapPriceSensor,
-    CheapChargeStopPriceSensor,
-    SolarWeightedAvgFITSensor,
-    SolarBatteryForecastSensor,
-    NetElectricityCostSensor,
-    DecisionLogSensor,
-    ForecastHistorySensor,
-    OptimizerPlanSensor,
-    ForecastPricesSensor,
-    OptimizerPlanGridSensor,
-    ForecastDiagnosticsSensor,
-    MinimumTargetSOCSensor,
-    ExcessSolarSensor,
-    LoadShiftSignalSensor,
-    ForecastAccuracySensor,
-    IntegrationStatusSensor,
-    EntityHealthSensor,
-    LearningStatusSensor,
-    DecisionQualitySensor,
-    LearningDecisionHistorySensor,
-    DecisionLagSensor,
-    ExtendedForecastAccuracySensor,
-    ForecastStatusSensor,
     AutomationReadySensor,
+    CheapChargeStopPriceSensor,
+    DecisionLagSensor,
+    DecisionLogSensor,
+    DecisionQualitySensor,
+    EffectiveCheapPriceSensor,
+    EntityHealthSensor,
+    ExcessSolarSensor,
+    ExtendedForecastAccuracySensor,
+    ForecastAccuracySensor,
+    ForecastDiagnosticsSensor,
+    ForecastHistorySensor,
+    ForecastPricesSensor,
+    ForecastStatusSensor,
+    IntegrationStatusSensor,
+    LearningDecisionHistorySensor,
+    LearningStatusSensor,
+    LoadDeviationSensor,
+    LoadShiftSignalSensor,
+    MinimumTargetSOCSensor,
+    NetElectricityCostSensor,
     OptimizerPlanDetailedSensor,
+    OptimizerPlanGridSensor,
+    OptimizerPlanSensor,
     OptimizerSummarySensor,
+    SolarBatteryForecastSensor,
     SolarForecastAccuracySensor,
+    SolarWeightedAvgFITSensor,
 )
 
 
@@ -131,6 +133,16 @@ class Fixtures:
         data.weather_heating_coefficient = 0.05
         data.weather_sample_count = 100
         data.load_forecast_slots = [1.0, 1.2, 1.5, 1.3, 1.1, 1.0, 0.9, 0.8, 0.7]
+        data.load_deviation_diagnostics = {
+            "status": "triggered",
+            "deviation_kw": 1.25,
+            "actual_kw": 2.25,
+            "forecast_kw": 1.0,
+            "breach_type": "sustained",
+            "current_slot_index": 0,
+            "last_triggered_at": "2026-03-12T12:11:00+00:00",
+            "triggered": True,
+        }
         data.adaptive_params = MagicMock()
         data.adaptive_params.values = {"param1": 1.0, "param2": 2.0}
         data.excess_until_battery_full_kwh = 3.5
@@ -288,6 +300,14 @@ class TestForecastSensors(Fixtures):
         sensor._update_from_coordinator()
         assert sensor.native_value == "history"
 
+    def test_load_deviation(self, mock_coordinator, mock_entry):
+        sensor = LoadDeviationSensor(mock_coordinator, mock_entry)
+        sensor._update_from_coordinator()
+        assert sensor.native_value == 1.25
+        attrs = sensor.extra_state_attributes
+        assert attrs["status"] == "triggered"
+        assert attrs["breach_type"] == "sustained"
+
     def test_minimum_target_soc(self, mock_coordinator, mock_entry):
         sensor = MinimumTargetSOCSensor(mock_coordinator, mock_entry)
         sensor._update_from_coordinator()
@@ -391,3 +411,18 @@ class TestOptimizerSensors(Fixtures):
         assert sensor.native_value == 85.0
         attrs = sensor.extra_state_attributes
         assert attrs == {"bias": 0.5}
+
+
+@pytest.mark.asyncio
+async def test_async_setup_entry_registers_load_deviation_sensor():
+    coordinator = MagicMock()
+    coordinator.data = Fixtures()._make_mock_data()
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+
+    async_add_entities = MagicMock()
+
+    await sensor_platform.async_setup_entry(MagicMock(), entry, async_add_entities)
+
+    entities = async_add_entities.call_args.args[0]
+    assert any(isinstance(entity, LoadDeviationSensor) for entity in entities)
