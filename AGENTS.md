@@ -4,22 +4,22 @@
 
 # ⚠️ STOP: MANDATORY FIRST ACTION
 
-**You MUST verify you're NOT on the `main` branch before ANY file edit.**
+**You MUST verify you're NOT on a protected branch (`main` or `test`) before ANY file edit.**
 
 ## Verification Steps
 
 1. Run: `git branch --show-current`
-2. If output is `"main"`: **STOP HERE**
+2. If output is `"main"` or `"test"`: **STOP HERE**
    - Create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
    - Change directory: `cd worktrees/issue-{NNN}`
    - Then proceed with edits
-3. If output is NOT `"main"`: Proceed with the task
+3. If output is NOT `"main"` or `"test"`: Proceed with the task
 
 ## Why This Matters
 
-- **Git hooks block all commits on main** - No exceptions
-- **Editing on main wastes time** - You'll be forced to move changes anyway
-- **Main is read-only** - All changes go through PR
+- **Git hooks block all commits on `main` and `test`** - No exceptions
+- **Editing on protected branches wastes time** - You'll be forced to move changes anyway
+- **`main` and `test` are read-only** - All changes go through PR
 
 **The enforcement is real. Start in a worktree.**
 
@@ -52,13 +52,13 @@ LocalShift is a Home Assistant integration for automated Tesla Powerwall battery
 
 ## ⚠️ ENFORCED: Worktree-Only Workflow
 
-**Git hooks in `.githooks/` block all main branch commits and pushes.**
+**Git hooks in `.githooks/` block all commits and pushes on `main` and `test` branches.**
 
 ### Before Starting ANY Task
 
 1. Run `git worktree list` - verify you're in a worktree
-2. Run `git branch --show-current` - must NOT be `main`
-3. If on main, create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
+2. Run `git branch --show-current` - must NOT be `main` or `test`
+3. If on `main` or `test`, create worktree: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
 
 ### Emergency Bypass
 

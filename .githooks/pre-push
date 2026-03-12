@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-push hook: Block all pushes from main branch
+# Pre-push hook: Block all pushes from protected branches
 # Emergency override: GIT_EMERGENCY_PUSH=1 (logged)
 
 RED='\033[0;31m'
@@ -10,21 +10,22 @@ REMOTE="$1"
 URL="$2"
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+PROTECTED_BRANCHES="main test"
 
-if [ "$BRANCH" = "main" ]; then
+if [[ "$PROTECTED_BRANCHES" =~ "$BRANCH" ]]; then
     # Check for emergency override
     if [ "$GIT_EMERGENCY_PUSH" = "1" ]; then
-        echo "$(date -Iseconds) - pre-push EMERGENCY OVERRIDE: push from main to $REMOTE" >> .git-bypass.log
-        echo -e "${YELLOW}WARNING: Emergency push from main branch logged for audit${NC}"
+        echo "$(date -Iseconds) - pre-push EMERGENCY OVERRIDE: push from $BRANCH to $REMOTE" >> .git-bypass.log
+        echo -e "${YELLOW}WARNING: Emergency push from $BRANCH branch logged for audit${NC}"
         exit 0
     fi
-    
+
     echo ""
     echo -e "${RED}==========================================${NC}"
-    echo -e "${RED}ERROR: Pushes from 'main' branch are blocked!${NC}"
+    echo -e "${RED}ERROR: Pushes from '$BRANCH' branch are blocked!${NC}"
     echo -e "${RED}==========================================${NC}"
     echo ""
-    echo "The main branch is protected. Push from feature branches only."
+    echo "The '$BRANCH' branch is protected. Push from feature branches only."
     echo ""
     echo "Correct workflow:"
     echo "  1. Push your issue branch: git push origin issue/{NNN}"
@@ -32,13 +33,13 @@ if [ "$BRANCH" = "main" ]; then
     echo "  3. Merge via GitHub UI after review"
     echo ""
     echo "Emergency override (logged, audit required):"
-    echo "  GIT_EMERGENCY_PUSH=1 git push origin main"
+    echo "  GIT_EMERGENCY_PUSH=1 git push origin $BRANCH"
     echo ""
     echo -e "${RED}==========================================${NC}"
-    
+
     # Log the attempt
-    echo "$(date -Iseconds) - pre-push blocked push from main to $REMOTE" >> .git-bypass.log
-    
+    echo "$(date -Iseconds) - pre-push blocked push from $BRANCH to $REMOTE" >> .git-bypass.log
+
     exit 1
 fi
 

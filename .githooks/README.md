@@ -1,52 +1,60 @@
 # Git Hooks - Branch Protection System
 
-This directory contains version-controlled git hooks that enforce the worktree-only workflow and protect the main branch.
+This directory contains version-controlled git hooks that enforce the worktree-only workflow and protect the `main` and `test` branches.
+
+## Protected Branches
+
+- **`main`** - Production branch
+- **`test`** - Continuous deployment branch for testing
+
+Both branches require changes to go through pull requests from feature worktrees.
 
 ## Hooks Overview
 
 ### `pre-commit` (HARD BLOCK)
-**Purpose:** Prevents ALL commits directly on the main branch.
+**Purpose:** Prevents ALL commits directly on protected branches (`main`, `test`).
 
 **Behavior:**
-- Exits with code 1 if current branch is `main`
+- Exits with code 1 if current branch is `main` or `test`
 - Logs blocked attempts to `.git-bypass.log`
 - No bypass method documented in error message
 
-**Recovery:** If you accidentally commit on main, run `.githooks/scripts/recover-main.sh`
+**Recovery:** If you accidentally commit on a protected branch, run `.githooks/scripts/recover-main.sh`
 
 ---
 
 ### `pre-push` (HARD BLOCK)
-**Purpose:** Prevents pushing from main branch (defense-in-depth if pre-commit is bypassed).
+**Purpose:** Prevents pushing from protected branches (defense-in-depth if pre-commit is bypassed).
 
 **Behavior:**
-- Exits with code 1 if pushing from `main` branch
+- Exits with code 1 if pushing from `main` or `test` branch
 - Logs blocked attempts to `.git-bypass.log`
 - Emergency override available (see below)
 
 **Emergency Override:**
 ```bash
 GIT_EMERGENCY_PUSH=1 git push origin main
+GIT_EMERGENCY_PUSH=1 git push origin test
 ```
 This bypass is logged to `.git-bypass.log` and should only be used in true emergencies.
 
 ---
 
 ### `post-checkout` (WARNING)
-**Purpose:** Inform users when they land on the main branch.
+**Purpose:** Inform users when they land on a protected branch.
 
 **Behavior:**
-- Displays warning message with recent main activity
+- Displays warning message with recent branch activity
 - Shows recommended worktree command
 - Does NOT block - informational only
 
 ---
 
 ### `prepare-commit-msg` (WARNING)
-**Purpose:** Add reviewer awareness for commits that mention main branch.
+**Purpose:** Add reviewer awareness for commits that mention protected branches.
 
 **Behavior:**
-- Prepends warning comment to commit messages mentioning "main"
+- Prepends warning comment to commit messages mentioning "main" or "test"
 - Does NOT block - comment for reviewer awareness only
 
 ---
@@ -95,9 +103,9 @@ Audit script to verify git protection is configured correctly.
 **Checks:**
 - `core.hooksPath` is set to `.githooks`
 - All hooks exist and are executable
-- No worktrees are on main branch
-- Current branch is not main
-- Main branch sync status with origin
+- No worktrees are on protected branches (`main`, `test`)
+- Current branch is not protected (`main`, `test`)
+- Protected branches sync status with origin
 
 **Usage:**
 ```bash
@@ -115,6 +123,7 @@ All bypass attempts and recovery actions are logged to `.git-bypass.log` in the 
 **Log format:**
 ```
 2026-03-03T09:15:23+11:00 - pre-commit blocked commit on main
+2026-03-03T09:16:45+11:00 - pre-commit blocked commit on test
 2026-03-03T09:20:45+11:00 - pre-push blocked push from main to origin
 2026-03-03T09:25:12+11:00 - RECOVERY: Created backup branch backup-main-20260303-092512
 2026-03-03T09:26:30+11:00 - RECOVERY: Reset main to origin/main (was ahead by 3 commits)
@@ -128,30 +137,31 @@ All bypass attempts and recovery actions are logged to `.git-bypass.log` in the 
 1. Create worktree for each task: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
 2. Work in the worktree directory
 3. Commit and push from the issue branch
-4. Create pull request for review
+4. Create pull request targeting `test` (for testing) or `main` (for production)
 5. Merge via GitHub UI after approval
 
 ### ❌ DON'T:
-1. Commit directly on main branch (blocked)
-2. Push from main branch (blocked)
-3. Create worktrees on main branch
+1. Commit directly on `main` or `test` branches (blocked)
+2. Push from `main` or `test` branches (blocked)
+3. Create worktrees on protected branches
 4. Use `git commit --no-verify` to bypass hooks
 
 ---
 
 ## Emergency Procedures
 
-### If you accidentally commit on main:
+### If you accidentally commit on a protected branch:
 
 1. **Don't panic** - the commit didn't push
 2. Run: `.githooks/scripts/recover-main.sh`
-3. Choose option A to reset main to origin/main
+3. Choose option A to reset the branch to origin
 4. Your work is preserved in the backup branch
 
-### If you need to emergency-push from main:
+### If you need to emergency-push from a protected branch:
 
 ```bash
 GIT_EMERGENCY_PUSH=1 git push origin main
+GIT_EMERGENCY_PUSH=1 git push origin test
 ```
 
 This is logged and should only be used when:
