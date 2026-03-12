@@ -62,6 +62,9 @@ class ParameterOptimizer:
         self._last_7d_score: float = 0.0
         self._adjustment_log: list[dict[str, Any]] = []
         self._pending_bias_corrections: list[BiasCorrection] = []
+        self._scoring_model_warned: bool = (
+            False  # Issue #626: Track scoring model warning
+        )
 
     def should_update(self, decision_count: int) -> bool:
         """Check if enough data has accumulated for an update.
@@ -124,6 +127,14 @@ class ParameterOptimizer:
         if not decisions:
             _LOGGER.warning("No decisions provided for optimization")
             return self._current_params
+
+        # Issue #626: Log warning on first run after scoring model update
+        if not self._scoring_model_warned and len(decisions) > 0:
+            _LOGGER.warning(
+                "Scoring model updated (Issue #626) — parameter optimization "
+                "will re-warm. Expect ~50 decisions before adjustments resume."
+            )
+            self._scoring_model_warned = True
 
         # Check for rollback condition
         if self._should_rollback(current_7d_score):
