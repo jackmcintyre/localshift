@@ -6,9 +6,8 @@
   ],
   "skills": {
     "paths": [
-      ".opencode/skills/ha-mcp-debug",
-      ".opencode/skills/python-refactoring",
-      ".opencode/skills/ha-integration-testing"
+      ".opencode/skills/homeassistant",
+      ".opencode/skills/python-refactoring"
     ]
   },
   "plugin": ["@tarquinen/opencode-dcp@latest"],
@@ -31,9 +30,19 @@
     "homeassistant_*": false
   },
   "agent": {
-    "ha-debug": {
+    "homeassistant": {
       "description": "Agent with HomeAssistant MCP enabled for debugging",
-      "mode": "primary",
+      "mode": "subagent",
+      "mcp": {
+        "homeassistant": {
+          "type": "remote",
+          "url": "https://homeassistant.nectaron.jackmcintyre.net/api/mcp",
+          "enabled": true,
+          "headers": {
+            "Authorization": "Bearer {env:HA_LONG_LIVED_TOKEN}"
+          }
+        }
+      },
       "tools": {
         "homeassistant_*": true
       }
