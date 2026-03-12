@@ -230,15 +230,16 @@ class SolarEventDetector:
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-            period_end_str = entry.get("period_end")
-            if not period_end_str:
+            # Solcast integration provides period_start, not period_end
+            period_start_str = entry.get("period_start")
+            if not period_start_str:
                 continue
             try:
-                period_end = datetime.fromisoformat(str(period_end_str))
+                period_start = datetime.fromisoformat(str(period_start_str))
             except (ValueError, TypeError):
                 continue
 
-            period_start = period_end - period_delta
+            period_end = period_start + period_delta
             if period_start <= now < period_end:
                 pv = (
                     entry.get("pv_estimate")

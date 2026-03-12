@@ -27,9 +27,11 @@ def _make_data(
         data.optimizer_last_apply_status = "none"
         data.optimizer_apply_plan = None
 
-    period_end = now + timedelta(minutes=30)
+    # Solcast integration provides period_start (not period_end)
+    period_start = now.replace(second=0, microsecond=0)
+    period_start = period_start - timedelta(minutes=period_start.minute % 30)
     data.solcast_today = [
-        {"period_end": period_end.isoformat(), "pv_estimate": forecast_kw}
+        {"period_start": period_start.isoformat(), "pv_estimate": forecast_kw}
     ]
     data.cloud_event_diagnostics = {}
     data.cloud_event_solar_scale_factor = None
@@ -316,8 +318,11 @@ def test_falls_back_to_solcast_tomorrow_when_today_empty() -> None:
     now = BASE_NOW
     data = _make_data(now=now, actual_solar_kw=1.0, forecast_kw=5.0)
     data.solcast_today = []
-    period_end = now + timedelta(minutes=30)
-    data.solcast_tomorrow = [{"period_end": period_end.isoformat(), "pv_estimate": 5.0}]
+    period_start = now.replace(second=0, microsecond=0)
+    period_start = period_start - timedelta(minutes=period_start.minute % 30)
+    data.solcast_tomorrow = [
+        {"period_start": period_start.isoformat(), "pv_estimate": 5.0}
+    ]
     detector = SolarEventDetector()
 
     assert detector.evaluate(data, now) is True
@@ -326,9 +331,13 @@ def test_falls_back_to_solcast_tomorrow_when_today_empty() -> None:
 def test_slot_not_found_when_now_outside_all_periods() -> None:
     now = BASE_NOW
     data = _make_data(now=now, actual_solar_kw=1.0, forecast_kw=5.0)
+    # Set period_start to 5 hours from now, so current time is outside the slot
+    period_start = now + timedelta(hours=5)
+    period_start = period_start.replace(second=0, microsecond=0)
+    period_start = period_start - timedelta(minutes=period_start.minute % 30)
     data.solcast_today = [
         {
-            "period_end": (now + timedelta(hours=5)).isoformat(),
+            "period_start": period_start.isoformat(),
             "pv_estimate": 5.0,
         }
     ]
