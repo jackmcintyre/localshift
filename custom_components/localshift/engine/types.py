@@ -6,10 +6,8 @@ Extracted from optimizer_dp.py (issue #641 refactor).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from typing import Any
-
 
 # -----------------------------------------------------------------------------
 # Action vocabulary

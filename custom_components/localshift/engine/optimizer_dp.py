@@ -9,19 +9,14 @@ New code should import directly from:
 """
 
 # Re-export all types
-from custom_components.localshift.engine.types import (
-    ObjectiveTerms,
-    OptimizerConfig,
-    OptimizerInputs,
-    OptimizerResult,
-    PlannerAction,
-    PlannerReasonCode,
-    PlannedSlotDecision,
-    SlotContext,
-)
+# Re-export constraint functions
+from custom_components.localshift.engine.constraints import feasible_actions
 
 # Re-export DPPlanner from core
 from custom_components.localshift.engine.core import DPPlanner
+
+# Re-export cost functions
+from custom_components.localshift.engine.cost import stage_cost, terminal_cost
 
 # Re-export math functions from dp_math
 from custom_components.localshift.engine.dp_math import (
@@ -31,12 +26,16 @@ from custom_components.localshift.engine.dp_math import (
     _simulate_max_soc_in_demand_window,
     _simulate_solar_only_terminal_soc,
 )
-
-# Re-export constraint functions
-from custom_components.localshift.engine.constraints import feasible_actions
-
-# Re-export cost functions
-from custom_components.localshift.engine.cost import stage_cost, terminal_cost
+from custom_components.localshift.engine.types import (
+    ObjectiveTerms,
+    OptimizerConfig,
+    OptimizerInputs,
+    OptimizerResult,
+    PlannedSlotDecision,
+    PlannerAction,
+    PlannerReasonCode,
+    SlotContext,
+)
 
 __all__ = [
     "DPPlanner",

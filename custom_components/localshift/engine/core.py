@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import StrEnum
 from typing import Any
 
-from custom_components.localshift.engine.constraints import feasible_actions
-from custom_components.localshift.engine.cost import stage_cost, terminal_cost
 from custom_components.localshift.engine.dp_math import (
     _build_soc_grid,
     _interpolate_cost_to_soc,
@@ -23,9 +19,9 @@ from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
     OptimizerResult,
+    PlannedSlotDecision,
     PlannerAction,
     PlannerReasonCode,
-    PlannedSlotDecision,
     SlotContext,
 )
 
