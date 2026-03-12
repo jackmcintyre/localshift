@@ -5,17 +5,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.engine.outcomes import (
-    DecisionOutcomeTracker,
-    DecisionRecord,
-)
-from custom_components.localshift.engine.optimizer_dp import (
-    PlannerAction,
-)
 from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.coordinator import (
     CoordinatorData,
     PerformanceMetrics,
+)
+from custom_components.localshift.engine.optimizer_dp import (
+    PlannerAction,
+)
+from custom_components.localshift.engine.outcomes import (
+    DecisionOutcomeTracker,
+    DecisionRecord,
 )
 
 
@@ -543,3 +543,306 @@ class TestDecisionOutcomeScoring:
         score_long = tracker.compute_outcome_score(record_long)
 
         assert score_short < score_long
+
+
+class TestTargetScoreGradient:
+    """Tests for smooth gradient target scoring (Issue #626 Task 1)."""
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        """Create a tracker for testing."""
+        return DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+    def _make_record(
+        self,
+        soc_at_decision: float,
+        actual_soc_change: float,
+        target_soc: float,
+        weather: str = "sunny",
+        mode: PlannerAction = PlannerAction.HOLD,
+        forecast_solar: float = 10.0,
+    ) -> DecisionRecord:
+        """Helper to create a DecisionRecord with minimal boilerplate."""
+        return DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=mode,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=soc_at_decision,
+            general_price_at_decision=0.10,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=forecast_solar,
+            forecast_consumption_remaining_kwh=5.0,
+            cheap_price_threshold=0.15,
+            battery_target_soc=target_soc,
+            weather_condition=weather,
+            day_of_week=0,
+            hour_of_day=14,
+            is_demand_window=False,
+            actual_soc_change=actual_soc_change,
+            duration_minutes=30.0,
+        )
+
+    def test_target_diff_zero_returns_max_bonus(self, tracker):
+        """Exact target hit: diff=0 should return +0.15."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=30.0,
+            target_soc=80.0,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.15)
+
+    def test_target_diff_15_returns_zero(self, tracker):
+        """End of gradient: diff=15 should return 0.0."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=15.0,
+            target_soc=80.0,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.0)
+
+    def test_target_diff_10_returns_mid_gradient(self, tracker):
+        """Mid gradient: diff=10 should return +0.05 (same as before, smoother path)."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=20.0,
+            target_soc=80.0,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.05)
+
+    def test_target_diff_5_in_gradient(self, tracker):
+        """Within gradient: diff=5 should return +0.10."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=25.0,
+            target_soc=80.0,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.10)
+
+    def test_neutral_zone_sunny(self, tracker):
+        """Neutral zone: diff=18 (sunny, far_threshold=20) should return 0.0."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=12.0,
+            target_soc=80.0,
+            weather="sunny",
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.0)
+
+    def test_far_penalty_below_target_can_increase(self, tracker):
+        """Far penalty: diff=25 (sunny), CHARGE_GRID, below target -> -0.10."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=5.0,
+            target_soc=80.0,
+            weather="sunny",
+            mode=PlannerAction.CHARGE_GRID_NORMAL,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(-0.10)
+
+    def test_far_penalty_above_target_can_decrease(self, tracker):
+        """Far penalty: diff=25 (sunny), EXPORT, above target -> -0.10."""
+        record = self._make_record(
+            soc_at_decision=90.0,
+            actual_soc_change=0.0,
+            target_soc=65.0,
+            weather="sunny",
+            mode=PlannerAction.EXPORT_PROACTIVE,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(-0.10)
+
+    def test_far_no_penalty_wrong_mode(self, tracker):
+        """Far no-penalty: diff=25 (sunny), EXPORT, below target -> 0.0 (can't increase)."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=5.0,
+            target_soc=80.0,
+            weather="sunny",
+            mode=PlannerAction.EXPORT_PROACTIVE,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.0)
+
+    def test_neutral_zone_low_solar_weather(self, tracker):
+        """Low-solar neutral zone: diff=35 (rainy, far_threshold=40) -> 0.0."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=-5.0,
+            target_soc=80.0,
+            weather="rainy",
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(0.0)
+
+    def test_far_penalty_low_solar_weather(self, tracker):
+        """Low-solar far penalty: diff=50 (rainy), CHARGE_GRID, below -> -0.10."""
+        record = self._make_record(
+            soc_at_decision=20.0,
+            actual_soc_change=10.0,
+            target_soc=80.0,
+            weather="rainy",
+            mode=PlannerAction.CHARGE_GRID_NORMAL,
+        )
+        assert tracker._compute_target_score(record) == pytest.approx(-0.10)
+
+    def test_gradient_is_smooth(self, tracker):
+        """Gradient should be smooth: each step changes score by ~0.01."""
+        scores = []
+        for diff in range(0, 16):
+            record = self._make_record(
+                soc_at_decision=50.0,
+                actual_soc_change=30.0 - diff,
+                target_soc=80.0,
+            )
+            scores.append(tracker._compute_target_score(record))
+
+        for i in range(1, len(scores)):
+            delta = abs(scores[i] - scores[i - 1])
+            assert delta == pytest.approx(0.01, abs=0.001), (
+                f"Score change from diff={i - 1} to diff={i} is {delta}, expected ~0.01"
+            )
+
+    def test_achievability_full_solar_coverage(self, tracker):
+        """Full achievability (solar=20kWh, required=10kWh) -> -0.10."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=5.0,  # Only got to 55%, target is 80%
+            target_soc=80.0,
+            weather="sunny",
+            mode=PlannerAction.CHARGE_GRID_NORMAL,
+            forecast_solar=20.0,  # 20kWh available
+        )
+        # Required: 25% * 13.5kWh / 100 = 3.375kWh
+        # Available: 20kWh
+        # Achievability = min(20/3.375, 1.0) = 1.0
+        assert tracker._compute_target_score(record) == pytest.approx(-0.10)
+
+    def test_achievability_partial_solar_coverage(self, tracker):
+        """Partial achievability (solar=5kWh, required=10kWh) -> -0.05."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=5.0,  # Only got to 55%, target is 80%
+            target_soc=80.0,
+            weather="sunny",
+            mode=PlannerAction.CHARGE_GRID_NORMAL,
+            forecast_solar=1.6875,  # Half of required
+        )
+        # Required: 25% * 13.5kWh / 100 = 3.375kWh
+        # Available: 1.6875kWh
+        # Achievability = min(1.6875/3.375, 1.0) = 0.5
+        assert tracker._compute_target_score(record) == pytest.approx(-0.05)
+
+    def test_achievability_zero_solar(self, tracker):
+        """Zero solar (solar=0, required=10kWh) -> ~0.0."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=5.0,
+            target_soc=80.0,
+            weather="sunny",
+            mode=PlannerAction.CHARGE_GRID_NORMAL,
+            forecast_solar=0.0,
+        )
+        # With no solar, achievability approaches 0
+        assert tracker._compute_target_score(record) == pytest.approx(0.0, abs=0.01)
+
+    def test_achievability_no_forecast_data(self, tracker):
+        """No forecast data (solar=0) -> ~0.0."""
+        record = self._make_record(
+            soc_at_decision=50.0,
+            actual_soc_change=5.0,
+            target_soc=80.0,
+            weather="sunny",
+            mode=PlannerAction.CHARGE_GRID_NORMAL,
+            forecast_solar=0.0,
+        )
+        # With no forecast data, treated as 0 available
+        assert tracker._compute_target_score(record) == pytest.approx(0.0, abs=0.01)
+
+
+class TestCostValueScoring:
+    """Tests for Task 3: Cost-value scoring (Issue #626)."""
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        """Create a tracker for testing."""
+        return DecisionOutcomeTracker(mock_hass, "test_entry")
+
+    @pytest.fixture
+    def base_record(self):
+        """Create a base DecisionRecord for testing."""
+        return DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=10.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.10,
+            battery_target_soc=80.0,
+            weather_condition="sunny",
+            day_of_week=0,
+            hour_of_day=14,
+            is_demand_window=False,
+        )
+
+    def test_grid_charge_50_percent_threshold(self, tracker, base_record):
+        """Grid charge at 50% of threshold -> high score (~0.8)."""
+        record = base_record
+        record.actual_cost_during_period = 0.05  # 50% of 0.10 threshold
+        # ratio = 0.05 / 0.10 = 0.5
+        # score = 1.0 - 0.5 * 0.4 = 1.0 - 0.2 = 0.8
+        assert tracker._compute_cost_score(record) == pytest.approx(0.8)
+
+    def test_grid_charge_150_percent_threshold(self, tracker, base_record):
+        """Grid charge at 150% of threshold -> low score (~0.4)."""
+        record = base_record
+        record.actual_cost_during_period = 0.15  # 150% of 0.10 threshold
+        # ratio = 0.15 / 0.10 = 1.5
+        # score = 1.0 - 1.5 * 0.4 = 1.0 - 0.6 = 0.4
+        assert tracker._compute_cost_score(record) == pytest.approx(0.4)
+
+    def test_grid_charge_with_export_penalty(self, tracker, base_record):
+        """Grid charge with export > 0.5kWh -> 0.2 (unchanged)."""
+        record = base_record
+        record.actual_cost_during_period = 0.05
+        record.actual_export_kwh = 1.0  # > 0.5
+        assert tracker._compute_cost_score(record) == pytest.approx(0.2)
+
+    def test_export_with_negative_cost(self, tracker, base_record):
+        """Export with negative cost (revenue) -> high score (0.7+)."""
+        record = base_record
+        record.mode_chosen = PlannerAction.EXPORT_PROACTIVE
+        record.actual_cost_during_period = -0.10  # Revenue
+        # revenue_ratio = 0.10 / 0.10 = 1.0
+        # score = min(0.95, 0.6 + 1.0 * 0.2) = 0.8
+        assert tracker._compute_cost_score(record) == pytest.approx(0.8)
+
+    def test_export_with_positive_cost(self, tracker, base_record):
+        """Export with positive cost -> 0.3."""
+        record = base_record
+        record.mode_chosen = PlannerAction.EXPORT_PROACTIVE
+        record.actual_cost_during_period = 0.05  # Cost money
+        assert tracker._compute_cost_score(record) == pytest.approx(0.3)
+
+    def test_hold_with_low_cost(self, tracker, base_record):
+        """Hold with low cost -> ~0.6."""
+        record = base_record
+        record.mode_chosen = PlannerAction.HOLD
+        record.actual_cost_during_period = 0.05  # Low cost
+        # ratio = 0.05 / 0.10 = 0.5
+        # score = 0.65 - 0.5 * 0.1 = 0.65 - 0.05 = 0.6
+        assert tracker._compute_cost_score(record) == pytest.approx(0.6)
+
+    def test_hold_with_high_cost(self, tracker, base_record):
+        """Hold with high cost -> ~0.4."""
+        record = base_record
+        record.mode_chosen = PlannerAction.HOLD
+        record.actual_cost_during_period = 0.25  # High cost
+        # ratio = 0.25 / 0.10 = 2.5
+        # score = 0.65 - 2.5 * 0.1 = 0.65 - 0.25 = 0.4
+        assert tracker._compute_cost_score(record) == pytest.approx(0.4)
+
+    def test_none_cost_returns_none(self, tracker, base_record):
+        """None cost -> None (null handling preserved)."""
+        record = base_record
+        record.actual_cost_during_period = None
+        assert tracker._compute_cost_score(record) is None
