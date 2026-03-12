@@ -287,15 +287,8 @@ class CounterfactualEvaluator:
         self._daily_results: list[CounterfactualResult] = []
         self._last_evaluation: datetime | None = None
 
-    def evaluate_daily(
-        self,
-        decisions: list[Any],
-        data: CoordinatorData,
-    ) -> CounterfactualResult | None:
-        """Run counterfactual evaluation for daily decisions."""
-        if not decisions:
-            return None
-
+    def _extract_price_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
+        """Extract price data from coordinator data."""
         price_data = []
         if hasattr(data, "general_forecast") and data.general_forecast:
             for entry in data.general_forecast:
@@ -306,10 +299,13 @@ class CounterfactualEvaluator:
                     })
 
         if not price_data and hasattr(data, "general_price"):
-            current_hour = dt_util.now().hour
             for h in range(24):
                 price_data.append({"hour": h, "price": data.general_price})
 
+        return price_data
+
+    def _extract_solar_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
+        """Extract solar data from coordinator data."""
         solar_data = []
         if hasattr(data, "solcast_today") and data.solcast_today:
             for entry in data.solcast_today:
@@ -318,14 +314,50 @@ class CounterfactualEvaluator:
                         "hour": entry.get("hour", 0),
                         "kwh": entry.get("kwh", 0.0),
                     })
+        return solar_data
 
+    def _extract_consumption_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
+        """Extract consumption data from coordinator data."""
         consumption_data = []
-        if (
-            hasattr(data, "consumption_hourly_profile_kw")
-            and data.consumption_hourly_profile_kw
-        ):
-            for hour, kw in data.consumption_hourly_profile_kw.items():
+        profile = getattr(data, "consumption_hourly_profile_kw", None)
+        if profile:
+            for hour, kw in profile.items():
                 consumption_data.append({"hour": hour, "kwh": kw})
+        return consumption_data
+
+    def _store_result(self, result: CounterfactualResult) -> None:
+        """Store result and clean up old data."""
+        self._daily_results.append(result)
+        self._last_evaluation = dt_util.now()
+
+        cutoff = dt_util.now() - timedelta(days=7)
+        self._daily_results = [
+            r
+            for r in self._daily_results
+            if r.period_start.replace(tzinfo=None) >= cutoff.replace(tzinfo=None)
+        ]
+
+        _LOGGER.info(
+            "Counterfactual evaluation complete: TOU=$%.2f, Actual=$%.2f, "
+            "Advantage=$%.2f (%.1f%%)",
+            result.total_cost_tou,
+            result.total_cost_actual,
+            result.optimizer_advantage,
+            result.advantage_percent,
+        )
+
+    def evaluate_daily(
+        self,
+        decisions: list[Any],
+        data: CoordinatorData,
+    ) -> CounterfactualResult | None:
+        """Run counterfactual evaluation for daily decisions."""
+        if not decisions:
+            return None
+
+        price_data = self._extract_price_data(data)
+        solar_data = self._extract_solar_data(data)
+        consumption_data = self._extract_consumption_data(data)
 
         result = self._simulator.simulate_period(
             decisions,
@@ -335,22 +367,7 @@ class CounterfactualEvaluator:
         )
 
         if result:
-            self._daily_results.append(result)
-            self._last_evaluation = dt_util.now()
-
-            cutoff = dt_util.now() - timedelta(days=7)
-            self._daily_results = [
-                r for r in self._daily_results if r.period_start >= cutoff
-            ]
-
-            _LOGGER.info(
-                "Counterfactual evaluation complete: TOU=$%.2f, Actual=$%.2f, "
-                "Advantage=$%.2f (%.1f%%)",
-                result.total_cost_tou,
-                result.total_cost_actual,
-                result.optimizer_advantage,
-                result.advantage_percent,
-            )
+            self._store_result(result)
 
         return result
 
