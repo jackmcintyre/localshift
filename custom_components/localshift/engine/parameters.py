@@ -3,6 +3,7 @@
 Issue #170 Phase 2: Bayesian-inspired parameter optimization using Thompson sampling.
 Adjusts tunable parameters based on decision outcome data from Phase 1.
 Issue #170 Phase 3: Enhanced to accept bias corrections from pattern analysis.
+Issue #677: Multi-parameter updates per daily cycle with prioritization.
 """
 
 from __future__ import annotations
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
     from .pattern_analyzer import BiasCorrection
 
 _LOGGER = logging.getLogger(__name__)
+
+# Issue #677: Maximum parameters to update per daily cycle
+MAX_PARAMS_PER_UPDATE = 3
 
 
 class ParameterOptimizer:
@@ -65,6 +69,10 @@ class ParameterOptimizer:
         self._scoring_model_warned: bool = (
             False  # Issue #626: Track scoring model warning
         )
+        # Issue #677: Track recently rolled-back params to skip in next cycle
+        self._recently_rolled_back_params: set[str] = set()
+        # Issue #677: Stable checkpoint for rollback
+        self._stable_checkpoint: dict[str, float] = {}
 
     def should_update(self, decision_count: int) -> bool:
         """Check if enough data has accumulated for an update.
@@ -149,39 +157,15 @@ class ParameterOptimizer:
         if current_7d_score < self._last_7d_score - 0.05:  # 5% degradation threshold
             self._consecutive_degrading_days += 1
         else:
+            # Issue #677: Save stable checkpoint when not degrading
             self._consecutive_degrading_days = 0
+            self._stable_checkpoint = dict(self._current_params.values)
         self._last_7d_score = current_7d_score
 
-        # Optimize each parameter
-        new_values = dict(self._current_params.values)
-        new_confidence = dict(self._current_params.confidence)
-
-        for param_name, param_def in OPTIMIZABLE_PARAMS.items():
-            # Compute optimal value for this parameter
-            optimal_value, confidence = self._optimize_single_param(
-                param_name, param_def, decisions
-            )
-
-            if optimal_value is not None:
-                old_value = new_values.get(param_name, param_def.default)
-                new_values[param_name] = optimal_value
-                new_confidence[param_name] = confidence
-
-                if old_value != optimal_value:
-                    _LOGGER.info(
-                        "Parameter %s adjusted: %.3f -> %.3f (confidence: %.2f)",
-                        param_name,
-                        old_value,
-                        optimal_value,
-                        confidence,
-                    )
-                    self._adjustment_log.append({
-                        "timestamp": datetime.now().isoformat(),
-                        "param": param_name,
-                        "old_value": old_value,
-                        "new_value": optimal_value,
-                        "confidence": confidence,
-                    })
+        # Issue #677: Multi-parameter optimization with prioritization
+        new_values, new_confidence = self._select_and_update_params(
+            decisions, bias_corrections
+        )
 
         # Apply bias corrections from pattern analysis (Issue #170 Phase 3)
         if bias_corrections:
@@ -199,6 +183,99 @@ class ParameterOptimizer:
         self._last_update = datetime.now()
 
         return self._current_params
+
+    def _select_and_update_params(
+        self,
+        decisions: list[DecisionRecord],
+        bias_corrections: list[BiasCorrection] | None,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Select parameters to update and apply changes.
+
+        Issue #677: Selects up to MAX_PARAMS_PER_UPDATE parameters
+        prioritizing by uncertainty (lowest confidence first).
+
+        Args:
+            decisions: List of decision records with outcomes
+            bias_corrections: Optional bias corrections from pattern analyzer
+
+        Returns:
+            Tuple of (new_values, new_confidence)
+
+        """
+        # Initialize with all parameter defaults if not already set
+        new_values = {name: param.default for name, param in OPTIMIZABLE_PARAMS.items()}
+        new_values.update(self._current_params.values)
+        new_confidence = dict(self._current_params.confidence)
+
+        # Collect all optimization candidates with their confidence
+        param_candidates = []
+        for param_name, param_def in OPTIMIZABLE_PARAMS.items():
+            optimal_value, confidence = self._optimize_single_param(
+                param_name, param_def, decisions
+            )
+
+            if optimal_value is not None:
+                old_value = new_values.get(param_name, param_def.default)
+                if old_value != optimal_value:
+                    param_candidates.append({
+                        "name": param_name,
+                        "param_def": param_def,
+                        "old_value": old_value,
+                        "new_value": optimal_value,
+                        "confidence": confidence,
+                    })
+
+        # Issue #677: Sort by confidence (ascending) - lowest confidence = highest uncertainty
+        param_candidates.sort(key=lambda x: x["confidence"])
+
+        # Issue #677: Filter out recently rolled-back parameters
+        candidates_to_skip = self._recently_rolled_back_params.copy()
+        self._recently_rolled_back_params.clear()
+
+        filtered_candidates = [
+            c for c in param_candidates if c["name"] not in candidates_to_skip
+        ]
+
+        skipped_count = len(param_candidates) - len(filtered_candidates)
+        if skipped_count > 0:
+            _LOGGER.debug(
+                "Skipped %d recently rolled-back parameters this cycle", skipped_count
+            )
+
+        # Issue #677: Update at most MAX_PARAMS_PER_UPDATE parameters
+        params_to_update = filtered_candidates[:MAX_PARAMS_PER_UPDATE]
+
+        for candidate in params_to_update:
+            param_name = candidate["name"]
+            old_value = candidate["old_value"]
+            optimal_value = candidate["new_value"]
+            confidence = candidate["confidence"]
+
+            new_values[param_name] = optimal_value
+            new_confidence[param_name] = confidence
+
+            _LOGGER.info(
+                "Parameter %s adjusted: %.3f -> %.3f (confidence: %.2f)",
+                param_name,
+                old_value,
+                optimal_value,
+                confidence,
+            )
+            self._adjustment_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "param": param_name,
+                "old_value": old_value,
+                "new_value": optimal_value,
+                "confidence": confidence,
+            })
+
+        # Apply bias corrections from pattern analysis
+        if bias_corrections:
+            new_values, new_confidence = self._apply_bias_corrections(
+                new_values, new_confidence, bias_corrections
+            )
+
+        return new_values, new_confidence
 
     def _apply_high_confidence_correction(
         self,
@@ -508,21 +585,33 @@ class ParameterOptimizer:
         return self._consecutive_degrading_days >= 3
 
     def _rollback_parameters(self) -> None:
-        """Rollback to previous parameter values."""
-        # Find the most recent adjustment and revert it
-        if self._adjustment_log:
-            last_adjustment = self._adjustment_log.pop()
-            param_name = last_adjustment["param"]
-            old_value = last_adjustment["old_value"]
+        """Rollback to previous parameter values.
 
-            self._current_params.values[param_name] = old_value
-            self._current_params.update_count += 1
-            self._current_params.last_updated = datetime.now()
+        Issue #677: Reverts ALL parameters changed since last stable checkpoint.
+        """
+        rolled_back_count = 0
 
+        # Issue #677: Revert all parameters to stable checkpoint
+        if self._stable_checkpoint:
+            for param_name, stable_value in self._stable_checkpoint.items():
+                current_value = self._current_params.values.get(param_name)
+                if current_value != stable_value:
+                    self._current_params.values[param_name] = stable_value
+                    rolled_back_count += 1
+                    _LOGGER.warning(
+                        "Rolled back parameter %s: %.3f -> %.3f",
+                        param_name,
+                        current_value,
+                        stable_value,
+                    )
+
+        # Issue #677: Track which parameters were rolled back to skip next cycle
+        self._recently_rolled_back_params = set(self._current_params.values.keys())
+
+        if rolled_back_count > 0:
             _LOGGER.warning(
-                "Rolled back parameter %s to %.3f",
-                param_name,
-                old_value,
+                "Rolled back %d parameters to stable checkpoint",
+                rolled_back_count,
             )
 
         self._consecutive_degrading_days = 0
@@ -536,6 +625,10 @@ class ParameterOptimizer:
             "consecutive_degrading_days": self._consecutive_degrading_days,
             "last_7d_score": self._last_7d_score,
             "last_update": self._last_update.isoformat() if self._last_update else None,
+            "stable_checkpoint": self._stable_checkpoint,  # Issue #677
+            "recently_rolled_back_params": list(
+                self._recently_rolled_back_params
+            ),  # Issue #677
         }
         await self._store.async_save(data)
         _LOGGER.debug("Parameter optimizer state saved")
@@ -554,6 +647,11 @@ class ParameterOptimizer:
         self._adjustment_log = data.get("adjustment_log", [])
         self._consecutive_degrading_days = data.get("consecutive_degrading_days", 0)
         self._last_7d_score = data.get("last_7d_score", 0.0)
+        # Issue #677: Load stable checkpoint and rolled-back params
+        self._stable_checkpoint = data.get("stable_checkpoint", {})
+        self._recently_rolled_back_params = set(
+            data.get("recently_rolled_back_params", [])
+        )
 
         if data.get("last_update"):
             try:
