@@ -17,6 +17,26 @@
       "type": "local",
       "command": ["symdex", "serve"],
       "enabled": true
+    },
+    "homeassistant": {
+      "type": "remote",
+      "url": "https://homeassistant.nectaron.jackmcintyre.net/api/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:HA_LONG_LIVED_TOKEN}"
+      }
+    }
+  },
+  "tools": {
+    "homeassistant_*": false
+  },
+  "agent": {
+    "ha-debug": {
+      "description": "Agent with HomeAssistant MCP enabled for debugging",
+      "mode": "primary",
+      "tools": {
+        "homeassistant_*": true
+      }
     }
   }
 }
