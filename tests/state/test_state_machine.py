@@ -28,6 +28,93 @@ def dt_aware(year, month, day, hour, minute=0, second=0):
     )
 
 
+class TestTeslaOverrideDetection:
+    """Test Tesla override detection."""
+
+    @pytest.fixture
+    def state_machine(
+        self, mock_battery_controller, mock_notification_service, mock_entity_validator
+    ):
+        return StateMachine(
+            mock_battery_controller,
+            mock_notification_service,
+            lambda key: True,
+            lambda key, default=None: default,
+            mock_entity_validator,
+        )
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_not_detected(
+        self, state_machine, coordinator_data
+    ):
+        """Test Tesla override not detected when not in override state."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 10
+        result = state_machine._detect_tesla_override(coordinator_data)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_detected(
+        self, state_machine, coordinator_data
+    ):
+        """Test Tesla override detected with 80% reserve."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80
+        result = state_machine._detect_tesla_override(coordinator_data)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_tolerance(
+        self, state_machine, coordinator_data
+    ):
+        """Test Tesla override detection within tolerance."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.5
+        result = state_machine._detect_tesla_override(coordinator_data)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_is_tesla_override_active(self, state_machine):
+        """Test checking if Tesla override is active."""
+        assert state_machine.is_tesla_override_active() is False
+
+
+class TestDecisionFingerprint:
+    """Test decision fingerprint for price change detection."""
+
+    @pytest.fixture
+    def state_machine(
+        self, mock_battery_controller, mock_notification_service, mock_entity_validator
+    ):
+        return StateMachine(
+            mock_battery_controller,
+            mock_notification_service,
+            lambda key: True,
+            lambda key, default=None: default,
+            mock_entity_validator,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fingerprint_none_general_price(
+        self, state_machine, coordinator_data
+    ):
+        """Test fingerprint returns None when general price missing."""
+        coordinator_data.general_price = None
+        coordinator_data.feed_in_price = 0.15
+        result = state_machine._get_decision_fingerprint(coordinator_data)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fingerprint_none_feed_in_price(
+        self, state_machine, coordinator_data
+    ):
+        """Test fingerprint returns None when feed-in price missing."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = None
+        result = state_machine._get_decision_fingerprint(coordinator_data)
+        assert result is None
+
+
 @pytest.fixture
 def mock_battery_controller():
     """Create a mock BatteryController."""
