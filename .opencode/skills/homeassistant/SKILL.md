@@ -1,5 +1,5 @@
 ---
-name: ha-mcp
+name: homeassistant
 description: Debug Home Assistant issues using native tools and direct log access
 license: MIT
 compatibility: opencode
@@ -7,6 +7,21 @@ metadata:
   audience: developers
   workflow: debugging
 ---
+
+## How to Access
+
+⚠️ **ALWAYS DELEGATE to the `homeassistant` subagent.** The main agent does NOT have HA tools enabled (by design, to avoid MCP token overhead).
+
+```python
+# ALWAYS use task() with subagent_type="homeassistant"
+task(
+    subagent_type="homeassistant",
+    prompt="Check the current state of switch.localshift_automation_enabled",
+    run_in_background=False
+)
+```
+
+The `homeassistant` subagent has exclusive access to all HA MCP tools. Never attempt to call `homeassistant_*` tools or `skill_mcp` directly from the main agent.
 
 ## What I Do
 
@@ -19,7 +34,9 @@ Help debug Home Assistant issues by using native Home Assistant tools and direct
 - "What's the current state of my battery?"
 - "Debug why my sensor shows unavailable"
 
-## Native Home Assistant Tools
+## Native Home Assistant Tools (Subagent Only)
+
+These tools are available ONLY within the `homeassistant` subagent. The main agent must delegate to use them.
 
 ### State & Entity Inspection
 
