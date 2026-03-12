@@ -19,6 +19,12 @@ _LOGGER = logging.getLogger(__name__)
 class LearningOrchestrator:
     """Manage learning initialization, persistence, and periodic updates."""
 
+    _PATTERN_ANALYSIS_INTERVALS = {
+        "observing": 7,
+        "tuning": 5,
+        "optimizing": 3,
+    }
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -186,10 +192,13 @@ class LearningOrchestrator:
             )
 
         self._days_since_pattern_analysis += 1
+        analysis_interval = self._get_pattern_analysis_interval(
+            getattr(data, "learning_status", "observing")
+        )
         if (
             self.pattern_analyzer is not None
             and self.decision_tracker is not None
-            and self._days_since_pattern_analysis >= 7
+            and self._days_since_pattern_analysis >= analysis_interval
         ):
             self._days_since_pattern_analysis = 0
             self.hass.async_create_task(
@@ -202,6 +211,9 @@ class LearningOrchestrator:
                 self.pattern_analyzer.async_save(),
                 "localshift_save_pattern_analyzer",
             )
+
+    def _get_pattern_analysis_interval(self, learning_status: str) -> int:
+        return self._PATTERN_ANALYSIS_INTERVALS.get(learning_status, 7)
 
     def update_medium_tick(self, data) -> None:
         """Run learning and monitoring tasks on medium tick."""

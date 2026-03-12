@@ -9,24 +9,24 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.engine.outcomes import (
-    DecisionOutcomeTracker,
-    DecisionRecord,
+from custom_components.localshift.coordinator import (
+    AdaptiveParameters,
+    CoordinatorData,
+    PerformanceMetrics,
 )
 from custom_components.localshift.engine.optimization_controller import (
     OptimizationController,
+)
+from custom_components.localshift.engine.optimizer_dp import PlannerAction
+from custom_components.localshift.engine.outcomes import (
+    DecisionOutcomeTracker,
+    DecisionRecord,
 )
 from custom_components.localshift.engine.parameters import (
     ParameterOptimizer,
 )
 from custom_components.localshift.engine.pattern_analyzer import (
     PatternAnalyzer,
-)
-from custom_components.localshift.engine.optimizer_dp import PlannerAction
-from custom_components.localshift.coordinator import (
-    AdaptiveParameters,
-    CoordinatorData,
-    PerformanceMetrics,
 )
 from custom_components.localshift.learning.orchestrator import LearningOrchestrator
 
@@ -347,7 +347,26 @@ class TestLearningOrchestratorForecastCorrections:
         if hasattr(coro, "close"):
             coro.close()
 
-    def test_handle_midnight_reset_schedules_tasks(self, mock_hass, mock_entry):
+    @pytest.mark.parametrize(
+        ("learning_status", "starting_days", "expects_analysis", "expected_days"),
+        [
+            ("observing", 5, False, 6),
+            ("observing", 6, True, 0),
+            ("tuning", 3, False, 4),
+            ("tuning", 4, True, 0),
+            ("optimizing", 1, False, 2),
+            ("optimizing", 2, True, 0),
+        ],
+    )
+    def test_handle_midnight_reset_uses_phase_specific_interval(
+        self,
+        mock_hass,
+        mock_entry,
+        learning_status,
+        starting_days,
+        expects_analysis,
+        expected_days,
+    ):
         orchestrator = LearningOrchestrator(mock_hass, mock_entry, lambda _key: False)
         orchestrator.decision_tracker = MagicMock(
             async_save=MagicMock(return_value=None)
@@ -358,9 +377,10 @@ class TestLearningOrchestratorForecastCorrections:
         orchestrator.pattern_analyzer = MagicMock(
             async_save=MagicMock(return_value=None)
         )
-        orchestrator._days_since_pattern_analysis = 6
+        orchestrator._days_since_pattern_analysis = starting_days
 
         data = CoordinatorData()
+        data.learning_status = learning_status
         orchestrator.handle_midnight_reset(data)
 
         task_names = [
@@ -368,9 +388,50 @@ class TestLearningOrchestratorForecastCorrections:
         ]
         assert "localshift_save_decision_outcomes" in task_names
         assert "localshift_save_param_optimizer" in task_names
-        assert "localshift_pattern_analysis" in task_names
         assert "localshift_save_pattern_analyzer" in task_names
-        assert orchestrator._days_since_pattern_analysis == 0
+        assert ("localshift_pattern_analysis" in task_names) is expects_analysis
+        assert orchestrator._days_since_pattern_analysis == expected_days
+
+        for call in mock_hass.async_create_task.call_args_list:
+            coro = call.args[0]
+            if hasattr(coro, "close"):
+                coro.close()
+        mock_hass.async_create_task.reset_mock()
+
+    def test_handle_midnight_reset_keeps_counter_across_phase_changes(
+        self, mock_hass, mock_entry
+    ):
+        orchestrator = LearningOrchestrator(mock_hass, mock_entry, lambda _key: False)
+        orchestrator.decision_tracker = MagicMock(
+            async_save=MagicMock(return_value=None)
+        )
+        orchestrator.param_optimizer = MagicMock(
+            async_save=MagicMock(return_value=None)
+        )
+        orchestrator.pattern_analyzer = MagicMock(
+            async_save=MagicMock(return_value=None)
+        )
+        orchestrator._days_since_pattern_analysis = 1
+
+        data = CoordinatorData()
+        data.learning_status = "observing"
+        orchestrator.handle_midnight_reset(data)
+        assert orchestrator._days_since_pattern_analysis == 2
+
+        for call in mock_hass.async_create_task.call_args_list:
+            coro = call.args[0]
+            if hasattr(coro, "close"):
+                coro.close()
+        mock_hass.async_create_task.reset_mock()
+
+        data.learning_status = "tuning"
+        orchestrator.handle_midnight_reset(data)
+
+        task_names = [
+            call.args[1] for call in mock_hass.async_create_task.call_args_list
+        ]
+        assert "localshift_pattern_analysis" not in task_names
+        assert orchestrator._days_since_pattern_analysis == 3
 
         for call in mock_hass.async_create_task.call_args_list:
             coro = call.args[0]
@@ -454,11 +515,14 @@ class TestLearningOrchestratorForecastCorrections:
 
         await orchestrator._run_pattern_analysis(data)
 
-        orchestrator.pattern_analyzer = MagicMock()
+        orchestrator.pattern_analyzer = MagicMock(analyze=MagicMock())
         orchestrator.decision_tracker = MagicMock(
-            get_recent_decisions=MagicMock(return_value=[1] * 10)
+            get_recent_decisions=MagicMock(return_value=[1] * 49)
         )
         await orchestrator._run_pattern_analysis(data)
+
+        orchestrator.pattern_analyzer.analyze.assert_not_called()
+        assert orchestrator._last_pattern_analysis is None
 
     @pytest.mark.asyncio
     async def test_run_pattern_analysis_updates_status_and_biases(

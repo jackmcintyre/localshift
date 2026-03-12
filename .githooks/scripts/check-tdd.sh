@@ -85,9 +85,11 @@ for FILE in "${SOURCE_FILE_PATHS[@]}"; do
 done
 
 PARALLEL_FLAG=""
-if check_xdist_available; then
+if [ "${LOCALSHIFT_PRECOMMIT_USE_XDIST:-0}" = "1" ] && check_xdist_available; then
     PARALLEL_FLAG="-n logical"
     echo "🚀 Using parallel execution (pytest-xdist)"
+else
+    echo "🚶 Using serial execution"
 fi
 
 TEST_FILES="${TEST_FILE_PATHS[*]}"
@@ -97,13 +99,18 @@ echo ""
 echo "🔍 Running tests with coverage for modified files..."
 
 if [ -n "$COV_FLAGS" ]; then
-    if ! uv run pytest $TEST_FILES $COV_FLAGS \
+    set +e
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
+        uv run python -m pytest $TEST_FILES $COV_FLAGS \
         $PARALLEL_FLAG \
         --cov-report=json:"$COVERAGE_JSON" \
         --cov-report=term-missing \
-        -v --tb=short 2>&1; then
+        -v --tb=short 2>&1
+    PYTEST_EXIT=$?
+    set -e
+    if [ "$PYTEST_EXIT" -ne 0 ]; then
         echo ""
-        echo "❌ ERROR: Tests failed"
+        echo "❌ ERROR: Tests failed (exit $PYTEST_EXIT)"
         echo ""
         echo "All tests must pass before commit (TDD GREEN phase)"
         echo "See: .agents/rules/tdd-workflow.md"
@@ -121,11 +128,16 @@ if [ -n "$COV_FLAGS" ]; then
         fi
     else
         echo "⚠️  coverage_checker.py not found, falling back to --cov-fail-under"
-        if ! uv run pytest $TEST_FILES $COV_FLAGS \
+        set +e
+        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
+            uv run python -m pytest $TEST_FILES $COV_FLAGS \
             --cov-fail-under=95 \
-            -q 2>&1; then
+            -q 2>&1
+        PYTEST_EXIT=$?
+        set -e
+        if [ "$PYTEST_EXIT" -ne 0 ]; then
             echo ""
-            echo "❌ ERROR: Coverage below 95%"
+            echo "❌ ERROR: Coverage below 95% (exit $PYTEST_EXIT)"
             rm -f "$COVERAGE_JSON"
             exit 1
         fi
