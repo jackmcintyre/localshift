@@ -1,5 +1,22 @@
 # AGENTS.md - Agent Coding Guidelines for LocalShift
 
+**Generated:** 2026-03-12
+**Hierarchy:** Root → [custom_components/localshift/AGENTS.md](custom_components/localshift/AGENTS.md) → [engine/AGENTS.md](custom_components/localshift/engine/AGENTS.md), [tests/AGENTS.md](tests/AGENTS.md), [docs/AGENTS.md](docs/AGENTS.md)
+
+---
+
+## Hierarchical Documentation
+
+This project uses hierarchical AGENTS.md files. Navigate to the appropriate level:
+
+| Level | File | Content |
+|-------|------|---------|
+| **Root** | `./AGENTS.md` (this file) | Global rules, workflows, TDD |
+| **Integration** | `custom_components/localshift/AGENTS.md` | Entities, platforms, coordinator |
+| **Optimizer** | `custom_components/localshift/engine/AGENTS.md` | DP solver, critical for optimizer changes |
+| **Tests** | `tests/AGENTS.md` | Fixtures, test patterns, TDD workflow |
+| **Docs** | `docs/AGENTS.md` | Documentation index |
+
 ---
 
 # ⚠️ STOP: MANDATORY FIRST ACTION
