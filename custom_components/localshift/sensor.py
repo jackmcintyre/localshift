@@ -3,6 +3,7 @@
 from .sensors import (
     AutomationReadySensor,
     CheapChargeStopPriceSensor,
+    CloudEventSensor,
     DecisionLagSensor,
     DecisionLogSensor,
     DecisionQualitySensor,
@@ -36,6 +37,7 @@ from .sensors.base import LocalShiftSensorBase
 # For backward compatibility - these were previously defined inline
 __all__ = [
     "LocalShiftSensorBase",
+    "CloudEventSensor",
     "EffectiveCheapPriceSensor",
     "CheapChargeStopPriceSensor",
     "SolarWeightedAvgFITSensor",
@@ -74,6 +76,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     from .sensors import (
         AutomationReadySensor,
         CheapChargeStopPriceSensor,
+        CloudEventSensor,
         DecisionLagSensor,
         DecisionLogSensor,
         DecisionQualitySensor,
@@ -150,6 +153,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         ),  # Was OptimizerShadowPlanSensor
         OptimizerSummarySensor(coordinator, entry),  # Was OptimizerShadowSummarySensor
         SolarForecastAccuracySensor(coordinator, entry),
+        CloudEventSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)

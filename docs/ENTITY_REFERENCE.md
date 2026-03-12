@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **55 entities** grouped under a single "LocalShift" device:
+The integration creates **56 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 29 | `sensor` |
+| Sensors | 30 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 4 | `number` |
@@ -695,7 +695,59 @@ Attributes:
 
 ---
 
-### 25. sensor.localshift_optimizer_shadow_plan
+### 25. sensor.localshift_cloud_event
+
+**Purpose:** Real-time diagnostic for solar cloud event detection and re-optimization status.
+
+Added in Issue #685. Monitors actual solar production vs forecast for sudden cloud events. Triggers re-optimization when production drops significantly below Solcast forecast (onset: <50% for >10min; severe: <25% immediate) and detects clearing (production >120% of depressed average for >10min).
+
+**State:** Current actual-to-forecast ratio (dimensionless, 0.0-1.0+); 0.0 when inactive or no forecast
+
+**Example Data:**
+```
+State: 0.2000
+Attributes:
+  status: triggered
+  triggered: true
+  event_type: onset_severe
+  actual_kw: 1.0
+  forecast_kw: 5.0
+  ratio: 0.2
+  cloud_scale_factor: 0.2
+  depressed_avg_kw: null
+  onset_started_at: null
+  clearing_started_at: null
+  last_triggered_at: 2026-03-12T12:00:00+00:00
+  cooldown_until: 2026-03-12T12:15:00+00:00
+  cooldown_remaining_seconds: 900
+```
+
+**Status values:**
+
+| Status | Meaning |
+|--------|---------|
+| `inactive` | Optimizer runtime plan is not currently active |
+| `no_forecast` | Solcast forecast unavailable or below minimum threshold (0.3 kW) |
+| `normal` | Solar production within normal range of forecast |
+| `cooldown` | Onset re-trigger is temporarily blocked after a recent event |
+| `onset_pending` | Moderate onset (<50%) detected but 10-min window accumulating |
+| `cloud_event` | Currently in cloud event, tracking samples for clearing detection |
+| `clearing_pending` | Clearing detected but 10-min window accumulating |
+| `triggered` | Event threshold exceeded and re-optimization was requested |
+
+**Event types:**
+
+| Event Type | Trigger |
+|------------|---------|
+| `onset_severe` | Ratio < 25% — triggers immediately |
+| `onset_moderate` | Ratio < 50% — triggers after 10-min confirmation |
+| `clearing` | Production > 120% of depressed average — triggers after 10-min confirmation |
+
+**Icon:** `mdi:weather-partly-cloudy`
+
+---
+
+### 26. sensor.localshift_optimizer_shadow_plan
 
 **Purpose:** DP optimizer shadow plan for comparison.
 

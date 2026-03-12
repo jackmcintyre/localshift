@@ -474,6 +474,10 @@ class CoordinatorData:
 
     load_deviation_diagnostics: dict[str, Any] = field(default_factory=dict)
 
+    cloud_event_diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    cloud_event_solar_scale_factor: float | None = None
+
     # ---------------------------------------------------------------------------
     # --- Decision-to-Implementation Lag Tracking (Issue #501) ---
     # ---------------------------------------------------------------------------
