@@ -106,6 +106,44 @@ gh pr create --base test --title "..."
 
 ---
 
+## PR Body Formatting Guidelines
+
+**ALWAYS use heredoc for PR bodies to preserve markdown formatting:**
+
+```bash
+# CORRECT - preserves backticks, pipes, newlines
+gh pr create --base test --title "Fix thing" --body "$(cat <<'EOF'
+This PR does `thing` with | table | support |
+- Item 1
+- Item 2
+EOF
+)"
+
+# WRONG - causes escaped characters like \` and broken tables
+gh pr create --base test --title "Fix thing" --body "This has \`backticks\` and broken|tables"
+```
+
+**Why this matters:** Shell escaping converts `\`` to `\\`` and breaks table formatting.
+
+**Template for standard PRs:**
+```bash
+gh pr create --base test --title "TITLE" --body "$(cat <<'EOF'
+## Summary
+Brief description
+
+## Changes
+- Change 1
+- Change 2
+
+## Testing
+- [ ] Tested in worktree
+- [ ] CI passes
+EOF
+)"
+```
+
+---
+
 ## Why This Matters
 
 - **Git hooks block main commits** - No exceptions (unless emergency bypass)
