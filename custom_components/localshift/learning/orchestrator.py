@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from ..const import SWITCH_ENABLE_LEARNING
+from ..engine.counterfactual import CounterfactualEvaluator
 from ..forecast.corrections import ForecastCorrectionProvider
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class LearningOrchestrator:
             version=1,
             key=f"localshift.forecast_corrections.{self._entry_id}",
         )
+        self._counterfactual_evaluator: CounterfactualEvaluator | None = None
 
     async def async_initialize(self) -> None:
         """Initialize learning components and load persisted state."""
@@ -92,6 +94,8 @@ class LearningOrchestrator:
             self._forecast_corrections = ForecastCorrectionProvider.from_dict(
                 stored_corrections
             )
+
+        self._counterfactual_evaluator = CounterfactualEvaluator()
 
     def attach_state_machine(self, state_machine) -> None:
         """Wire decision tracker into state machine."""
@@ -239,6 +243,17 @@ class LearningOrchestrator:
                         decisions,
                         current_7d_score,
                     )
+
+            if self._counterfactual_evaluator is not None:
+                decisions = self.decision_tracker.get_recent_decisions(hours=24)
+                daily_result = self._counterfactual_evaluator.evaluate_daily(
+                    decisions, data
+                )
+                data.performance_metrics = (
+                    self._counterfactual_evaluator.update_performance_metrics(
+                        data.performance_metrics, daily_result
+                    )
+                )
 
         if self.optimization_controller is not None:
             data.adaptive_params = self.optimization_controller.evaluate(data)

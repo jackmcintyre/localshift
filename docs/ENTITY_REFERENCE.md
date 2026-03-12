@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **54 entities** grouped under a single "LocalShift" device:
+The integration creates **55 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 28 | `sensor` |
+| Sensors | 29 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 4 | `number` |
@@ -574,7 +574,46 @@ Attributes:
 
 ---
 
-### 22. sensor.localshift_backfill_status
+### 22. sensor.localshift_optimizer_advantage
+
+**Purpose:** Counterfactual TOU baseline comparison showing optimizer value.
+
+Added in Issue #683 to measure whether the optimizer performs better than a simple time-of-use baseline strategy (charge during cheapest 4 hours, discharge during peak).
+
+**State Class:** `measurement`
+
+**State:** Daily optimizer advantage in $ (negative = TOU cheaper, positive = optimizer cheaper)
+
+**Example Data:**
+```
+State: 1.25
+Attributes:
+  advantage_7d: 8.75
+  advantage_daily_avg: 1.25
+  advantage_percent: 15.2
+  tou_cost: 8.25
+  actual_cost: 7.00
+  degrading: false
+```
+
+**Key Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `advantage_7d` | float | 7-day rolling total advantage ($) |
+| `advantage_daily_avg` | float | Daily average over 7 days ($) |
+| `advantage_percent` | float | Advantage as percentage of TOU cost |
+| `tou_cost` | float | Estimated cost with TOU baseline strategy ($) |
+| `actual_cost` | float | Actual cost with optimizer decisions ($) |
+| `degrading` | bool | Whether advantage trend is negative |
+
+**Use Case:** This sensor answers "Is the optimizer actually saving money compared to simple TOU rules?" The TOU baseline strategy charges during the cheapest 4 hours and discharges/self-consumes during peak hours. A positive value means the optimizer is outperforming this simple baseline.
+
+**Icon:** `mdi:scale-balance`
+
+---
+
+### 24. sensor.localshift_backfill_status
 
 **Purpose:** Statistics backfill validation status.
 

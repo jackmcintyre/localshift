@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.sensor import SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 from .base import LocalShiftSensorBase
 
@@ -90,4 +90,29 @@ class LearningDecisionHistorySensor(LocalShiftSensorBase):
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "decisions": self.coordinator.data.recent_decision_log[-20:],
+        }
+
+
+class OptimizerAdvantageSensor(LocalShiftSensorBase):
+    _attr_unique_id = "localshift_optimizer_advantage"
+    _attr_name = "Optimizer Advantage"
+    _attr_icon = "mdi:scale-balance"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "$"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        metrics = self.coordinator.data.performance_metrics
+        self._attr_native_value = round(metrics.optimizer_advantage_daily, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        metrics = self.coordinator.data.performance_metrics
+        return {
+            "advantage_7d": round(metrics.optimizer_advantage_7d, 2),
+            "advantage_daily_avg": round(metrics.optimizer_advantage_daily_avg, 2),
+            "advantage_percent": round(metrics.optimizer_advantage_percent, 1),
+            "tou_cost": round(metrics.counterfactual_tou_cost, 2),
+            "actual_cost": round(metrics.counterfactual_actual_cost, 2),
+            "degrading": metrics.counterfactual_degrading,
         }
