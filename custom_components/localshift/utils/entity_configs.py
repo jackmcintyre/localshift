@@ -181,6 +181,11 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": float,
         "staleness_minutes": 15,
     },
+    "sensor.localshift_load_deviation": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": 15,
+    },
     "sensor.localshift_forecast_diagnostics": {
         "category": EntityCategory.REQUIRED,
         "expected_type": str,

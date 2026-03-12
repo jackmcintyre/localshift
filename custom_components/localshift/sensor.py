@@ -18,6 +18,7 @@ from .sensors import (
     IntegrationStatusSensor,
     LearningDecisionHistorySensor,
     LearningStatusSensor,
+    LoadDeviationSensor,
     LoadShiftSignalSensor,
     MinimumTargetSOCSensor,
     NetElectricityCostSensor,
@@ -44,6 +45,7 @@ __all__ = [
     "OptimizerPlanSensor",
     "ForecastPricesSensor",
     "OptimizerPlanGridSensor",
+    "LoadDeviationSensor",
     "ForecastDiagnosticsSensor",
     "MinimumTargetSOCSensor",
     "ExcessSolarSensor",
@@ -85,6 +87,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         IntegrationStatusSensor,
         LearningDecisionHistorySensor,
         LearningStatusSensor,
+        LoadDeviationSensor,
         LoadShiftSignalSensor,
         MinimumTargetSOCSensor,
         NetElectricityCostSensor,
@@ -113,6 +116,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         # Price and grid sensors
         ForecastPricesSensor(coordinator, entry),
         OptimizerPlanGridSensor(coordinator, entry),  # Was ForecastGridSensor
+        LoadDeviationSensor(coordinator, entry),
         ForecastDiagnosticsSensor(coordinator, entry),
         MinimumTargetSOCSensor(coordinator, entry),
         # Excess solar load shifting sensors (backlog-high-017)

@@ -17,6 +17,7 @@ from .learning import (
     LearningDecisionHistorySensor,
     LearningStatusSensor,
 )
+from .load_deviation import LoadDeviationSensor
 from .misc import (
     ExcessSolarSensor,
     LoadShiftSignalSensor,
@@ -56,6 +57,7 @@ __all__ = [
     "OptimizerPlanSensor",
     "ForecastPricesSensor",
     "OptimizerPlanGridSensor",
+    "LoadDeviationSensor",
     "ForecastDiagnosticsSensor",
     "MinimumTargetSOCSensor",
     # Optimizer
