@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +27,7 @@ from ..const import (
     BatteryMode,
 )
 from ..coordinator.data import CoordinatorData
+from .mode_configs import MODE_CONFIG_BUILDERS, MODE_EXECUTORS, ModeConfig
 
 if TYPE_CHECKING:
     from ..computation_engine import ComputationEngine
@@ -39,53 +39,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Tesla Override Detection Constants
-# Extended cooldown during Tesla override events
 TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)
-
-
-@dataclass
-class ModeConfig:
-    """Complete configuration for a mode transition.
-
-    Contains all parameters needed for a mode, ensuring atomic updates
-    to both Tesla hardware state and internal tracking state.
-    """
-
-    # Tesla hardware state (set via battery_controller)
-    operation_mode: str
-    backup_reserve: int | float
-    export_mode: str
-    grid_charging_allowed: bool
-
-    # Internal tracking state (for health checks and sensors)
-    self_consumption_reserve: float | None = None
-    grid_charging_reserve: int | None = None
-    proactive_export_reserve: float | None = None
 
 
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
-
-    _MODE_CONFIG_BUILDERS: dict[BatteryMode, str] = {
-        BatteryMode.SELF_CONSUMPTION: "_build_self_consumption_config",
-        BatteryMode.DEMAND_BLOCK: "_build_self_consumption_config",
-        BatteryMode.GRID_CHARGING: "_build_grid_charging_config",
-        BatteryMode.BOOST_CHARGING: "_build_boost_charging_config",
-        BatteryMode.SPIKE_DISCHARGE: "_build_spike_discharge_config",
-        BatteryMode.PROACTIVE_EXPORT: "_build_proactive_export_config",
-        BatteryMode.HOLD: "_build_hold_config",
-    }
-
-    _MODE_EXECUTORS: dict[BatteryMode, str] = {
-        BatteryMode.SELF_CONSUMPTION: "_execute_self_consumption_transition",
-        BatteryMode.DEMAND_BLOCK: "_execute_self_consumption_transition",
-        BatteryMode.GRID_CHARGING: "_execute_grid_charging_transition",
-        BatteryMode.BOOST_CHARGING: "_execute_boost_charging_transition",
-        BatteryMode.SPIKE_DISCHARGE: "_execute_spike_discharge_transition",
-        BatteryMode.PROACTIVE_EXPORT: "_execute_proactive_export_transition",
-        BatteryMode.HOLD: "_execute_hold_transition",
-    }
 
     def __init__(
         self,
@@ -215,7 +173,7 @@ class StateMachine:
         """
         if target == BatteryMode.MANUAL:
             return None
-        builder_name = self._MODE_CONFIG_BUILDERS.get(target)
+        builder_name = MODE_CONFIG_BUILDERS.get(target)
         return getattr(self, builder_name)(data) if builder_name else None
 
     def _build_self_consumption_config(self, data: CoordinatorData) -> ModeConfig:
@@ -812,7 +770,7 @@ class StateMachine:
         dry_run: bool,
     ) -> bool:
         """Dispatch to the appropriate transition executor."""
-        executor_name = self._MODE_EXECUTORS.get(target)
+        executor_name = MODE_EXECUTORS.get(target)
         if executor_name:
             return await getattr(self, executor_name)(data, config, dry_run)
         return False
