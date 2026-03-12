@@ -27,7 +27,7 @@
     }
   },
   "tools": {
-    "homeassistant_*": false
+    "homeassistant_*": true
   },
   "agent": {
     "homeassistant": {
