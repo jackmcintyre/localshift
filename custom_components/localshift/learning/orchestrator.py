@@ -4,18 +4,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from ..const import SWITCH_ENABLE_LEARNING
-
-if TYPE_CHECKING:
-    from ..engine.optimization_controller import OptimizationController
-    from ..engine.outcomes import DecisionOutcomeTracker
-    from ..engine.parameters import ParameterOptimizer
-    from ..engine.pattern_analyzer import PatternAnalyzer
+from ..forecast.corrections import ForecastCorrectionProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,14 +28,21 @@ class LearningOrchestrator:
         self.hass = hass
         self.entry = entry
         self._get_switch_state = get_switch_state
+        self._entry_id = entry.entry_id
 
-        self.decision_tracker: DecisionOutcomeTracker | None = None
-        self.param_optimizer: ParameterOptimizer | None = None
-        self.pattern_analyzer: PatternAnalyzer | None = None
-        self.optimization_controller: OptimizationController | None = None
+        self.decision_tracker: Any | None = None
+        self.param_optimizer: Any | None = None
+        self.pattern_analyzer: Any | None = None
+        self.optimization_controller: Any | None = None
 
         self._last_pattern_analysis: datetime | None = None
         self._days_since_pattern_analysis = 0
+        self._forecast_corrections: ForecastCorrectionProvider | None = None
+        self._forecast_corrections_store = Store(
+            hass,
+            version=1,
+            key=f"localshift.forecast_corrections.{self._entry_id}",
+        )
 
     async def async_initialize(self) -> None:
         """Initialize learning components and load persisted state."""
@@ -77,6 +80,13 @@ class LearningOrchestrator:
         learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
         optimization_controller.set_learning_enabled(learning_enabled)
 
+        self._forecast_corrections = ForecastCorrectionProvider()
+        stored_corrections = await self._forecast_corrections_store.async_load()
+        if stored_corrections:
+            self._forecast_corrections = ForecastCorrectionProvider.from_dict(
+                stored_corrections
+            )
+
     def attach_state_machine(self, state_machine) -> None:
         """Wire decision tracker into state machine."""
         if state_machine is None or self.decision_tracker is None:
@@ -87,38 +97,72 @@ class LearningOrchestrator:
         """Save all learning system data to storage."""
         saved_components = []
 
+        operations: list[tuple] = []
         if self.decision_tracker is not None:
-            try:
-                await self.decision_tracker.async_save()
-                saved_components.append(
-                    f"decisions:{self.decision_tracker.completed_count}"
-                )
-            except Exception as e:
-                _LOGGER.error("Failed to save decision tracker: %s", e)
-
+            operations.append((
+                self.decision_tracker.async_save,
+                f"decisions:{self.decision_tracker.completed_count}",
+                "Failed to save decision tracker",
+                False,
+            ))
         if self.param_optimizer is not None:
-            try:
-                await self.param_optimizer.async_save()
-                saved_components.append("param_optimizer")
-            except Exception as e:
-                _LOGGER.error("Failed to save parameter optimizer: %s", e)
-
+            operations.append((
+                self.param_optimizer.async_save,
+                "param_optimizer",
+                "Failed to save parameter optimizer",
+                False,
+            ))
         if self.pattern_analyzer is not None:
-            try:
-                await self.pattern_analyzer.async_save()
-                saved_components.append("pattern_analyzer")
-            except Exception as e:
-                _LOGGER.error("Failed to save pattern analyzer: %s", e)
-
+            operations.append((
+                self.pattern_analyzer.async_save,
+                "pattern_analyzer",
+                "Failed to save pattern analyzer",
+                False,
+            ))
         if self.optimization_controller is not None:
-            try:
-                await self.optimization_controller.async_save()
-                saved_components.append("optimization_controller")
-            except Exception as e:
-                _LOGGER.error("Failed to save optimization controller: %s", e)
+            operations.append((
+                self.optimization_controller.async_save,
+                "optimization_controller",
+                "Failed to save optimization controller",
+                False,
+            ))
+        if self._forecast_corrections is not None:
+            operations.append((
+                self._async_save_forecast_corrections,
+                "forecast_corrections",
+                "Failed to save forecast corrections",
+                True,
+            ))
+
+        for saver, label, error_message, use_exception in operations:
+            if await self._save_component(saver, error_message, use_exception):
+                saved_components.append(label)
 
         if saved_components:
             _LOGGER.info("Learning data saved: %s", ", ".join(saved_components))
+
+    async def _save_component(
+        self,
+        saver,
+        error_message: str,
+        use_exception: bool,
+    ) -> bool:
+        try:
+            await saver()
+            return True
+        except Exception as err:
+            if use_exception:
+                _LOGGER.exception(error_message)
+            else:
+                _LOGGER.error("%s: %s", error_message, err)
+            return False
+
+    async def _async_save_forecast_corrections(self) -> None:
+        if self._forecast_corrections is None:
+            return
+        await self._forecast_corrections_store.async_save(
+            self._forecast_corrections.to_dict()
+        )
 
     def handle_periodic_save(self) -> None:
         """Schedule a periodic save of learning data."""
@@ -236,3 +280,7 @@ class LearningOrchestrator:
             report.data_points_analyzed,
             len(report.biases_detected),
         )
+
+    @property
+    def forecast_corrections(self) -> ForecastCorrectionProvider | None:
+        return self._forecast_corrections
