@@ -1,15 +1,16 @@
 #!/bin/bash
-# Pre-commit hook: Block all commits on main branch
+# Pre-commit hook: Block all commits on protected branches
 # No bypass documented - use worktree workflow instead
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+PROTECTED_BRANCHES="main test"
 
-if [ "$BRANCH" = "main" ]; then
+if [[ "$PROTECTED_BRANCHES" =~ "$BRANCH" ]]; then
     echo "=========================================="
-    echo "ERROR: Direct commits to 'main' are blocked!"
+    echo "ERROR: Direct commits to '$BRANCH' are blocked!"
     echo "=========================================="
     echo ""
-    echo "The main branch is protected. All changes must go through pull requests."
+    echo "The '$BRANCH' branch is protected. All changes must go through pull requests."
     echo ""
     echo "Correct workflow:"
     echo "  1. Create worktree: git worktree add worktrees/issue-{NNN} -b issue/{NNN}"
@@ -17,14 +18,14 @@ if [ "$BRANCH" = "main" ]; then
     echo "  3. Commit and push from issue branch"
     echo "  4. Create pull request for review"
     echo ""
-    echo "If you accidentally committed on main:"
+    echo "If you accidentally committed on $BRANCH:"
     echo "  Run: .githooks/scripts/recover-main.sh"
     echo ""
     echo "=========================================="
-    
+
     # Log the attempt
-    echo "$(date -Iseconds) - pre-commit blocked commit on main" >> .git-bypass.log
-    
+    echo "$(date -Iseconds) - pre-commit blocked commit on $BRANCH" >> .git-bypass.log
+
     exit 1
 fi
 
