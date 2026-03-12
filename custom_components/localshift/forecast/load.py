@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 
@@ -14,6 +14,9 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .corrections import ForecastCorrectionProvider
 
 
 class LoadForecaster:
@@ -34,6 +37,7 @@ class LoadForecaster:
         self.entry = entry
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
+        self._forecast_corrections: ForecastCorrectionProvider | None = None
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -48,6 +52,11 @@ class LoadForecaster:
 
         """
         self._adaptive_params = adaptive_params
+
+    def set_forecast_corrections(
+        self, provider: ForecastCorrectionProvider | None
+    ) -> None:
+        self._forecast_corrections = provider
 
     def parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -72,6 +81,8 @@ class LoadForecaster:
         recent_load_kw: float = 0.0,
         temperature: float | None = None,
         hours_ahead: float | None = None,
+        day_of_week: int | None = None,
+        season: str | None = None,
     ) -> tuple[float, str]:
         """Estimate hourly household consumption with exponential decay weighting.
 
@@ -114,6 +125,13 @@ class LoadForecaster:
             base_load_kw, base_source, slot_hour, temperature
         )
         final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
+        if day_of_week is not None and season is not None:
+            final_load_kw = self._apply_context_correction(
+                final_load_kw,
+                day_of_week,
+                slot_hour,
+                season,
+            )
         return round(final_load_kw, 3), adjusted_source
 
     def _get_historical(self, hourly_avg_kw: dict[int, float], slot_hour: int) -> float:
@@ -356,3 +374,33 @@ class LoadForecaster:
             adjusted,
         )
         return adjusted
+
+    def _apply_context_correction(
+        self,
+        load_kw: float,
+        day_of_week: int,
+        hour_of_day: int,
+        season: str,
+    ) -> float:
+        if self._forecast_corrections is None:
+            return load_kw
+
+        factor = self._forecast_corrections.get_correction_factor(
+            day_of_week,
+            hour_of_day,
+            season,
+        )
+        if factor == 1.0:
+            return load_kw
+
+        corrected = load_kw * factor
+        _LOGGER.debug(
+            "Context correction: day=%d hour=%d season=%s factor=%.3f (%.2f -> %.2f kW)",
+            day_of_week,
+            hour_of_day,
+            season,
+            factor,
+            load_kw,
+            corrected,
+        )
+        return max(0.0, corrected)

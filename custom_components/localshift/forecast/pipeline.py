@@ -15,6 +15,7 @@ from ..const import (
 )
 from ..coordinator.data import CoordinatorData
 from .solar import sum_solar_before_target
+from .solar_accuracy import SolarAccuracyTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +54,8 @@ class ForecastPipeline:
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
+            day_of_week = slot_start.weekday()
+            season = SolarAccuracyTracker._get_season(slot_start)
             hours_ahead = i / 4.0
             temperature = data.weather_temperature_forecast.get(slot_hour)
             load_kw, _ = self._load_forecaster.estimate_hourly_consumption_kw(
@@ -63,6 +66,8 @@ class ForecastPipeline:
                 recent_load_kw=recent_load_kw,
                 temperature=temperature,
                 hours_ahead=hours_ahead,
+                day_of_week=day_of_week,
+                season=season,
             )
             slots.append(load_kw)
 
@@ -85,6 +90,7 @@ class ForecastPipeline:
         target_pct: float,
     ) -> None:
         """Compute solar battery SOC forecast."""
+        _ = before_dw
         if after_dw:
             dw_entry = self._get_dp_decision_at_demand_window(data, target_hour)
             if dw_entry:
