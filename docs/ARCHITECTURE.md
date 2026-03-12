@@ -123,6 +123,7 @@ custom_components/localshift/
 │   ├── pipeline.py           # Forecast orchestration
 │   ├── history.py            # Historical data fetching
 │   ├── load.py               # Load forecasting
+│   ├── load_deviation.py     # Real-time load deviation detection
 │   ├── solar.py              # Solar calculations
 │   ├── solar_accuracy.py     # Solar accuracy tracking
 │   ├── accuracy.py           # Forecast accuracy engine
@@ -156,7 +157,7 @@ custom_components/localshift/
 │   └── validators.py         # Config validators
 │
 ├── *.py (entities)           # Entity platforms at root (HA requires this)
-│   ├── sensor.py             # 27 sensor entities
+│   ├── sensor.py             # 28 sensor entities
 │   ├── binary_sensor.py      # 10 binary sensor entities
 │   ├── switch.py             # 8 switch entities
 │   ├── number.py             # 4 number entities
@@ -287,6 +288,7 @@ Control follows optimizer plan
 4. **Change Detection**: Only recompute forecast when inputs change significantly
 5. **Extensibility**: New features follow the same pattern
 6. **Spot Price Priority**: Current spot prices preferred over forecasts for decisions
+7. **Near-Term Load Correction**: Fast-tick deviation detection can request a fresh optimizer recompute when live load diverges materially from the current forecast slot
 
 ### Price Decision Logic
 
@@ -362,6 +364,8 @@ The `ForecastChangeTracker` determines when to re-run the optimizer:
 - SOC changes (≥1% threshold)
 - Forecast age (>5 minutes)
 - Solar forecast updates
+
+Separately, `forecast/load_deviation.py` performs a 1-minute fast-tick check against the current forecast slot while an optimizer runtime apply plan is active. A sustained deviation of more than 1.0 kW for more than 10 minutes, or a spike of more than 3.0 kW for more than 5 minutes, triggers `LocalShiftCoordinator.async_recompute_and_evaluate()`. The detector enforces a 15-minute cooldown and only corrects the near-term plan; longer-horizon slots still rely on the normal forecast pipeline.
 
 This ensures efficient computation without missing critical changes.
 

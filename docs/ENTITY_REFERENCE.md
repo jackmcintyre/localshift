@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **52 entities** grouped under a single "LocalShift" device:
+The integration creates **54 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 26 | `sensor` |
+| Sensors | 28 | `sensor` |
 | Binary Sensors | 10 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 4 | `number` |
@@ -613,6 +613,46 @@ Attributes:
   sample_count: 0
   last_updated: null
 ```
+
+---
+
+### 24. sensor.localshift_load_deviation
+
+**Purpose:** Real-time diagnostic for current load-vs-forecast deviation while an optimizer runtime plan is active.
+
+Added in Issue #678. This sensor tracks the absolute deviation between live household load and the current forecast slot, along with the sustained/spike breach window and re-optimization cooldown state.
+
+**State Class:** `measurement`
+
+**State:** Absolute load deviation in kW for the current optimizer slot
+
+**Example Data:**
+```
+State: 1.25
+Attributes:
+  status: triggered
+  triggered: true
+  breach_type: sustained
+  actual_kw: 2.25
+  forecast_kw: 1.0
+  current_slot_index: 0
+  sustained_started_at: 2026-03-12T12:00:00+00:00
+  spike_started_at: null
+  last_triggered_at: 2026-03-12T12:11:00+00:00
+  cooldown_until: 2026-03-12T12:26:00+00:00
+  cooldown_remaining_seconds: 900
+```
+
+**Status values:**
+
+| Status | Meaning |
+|--------|---------|
+| `inactive` | Optimizer runtime plan is not currently active |
+| `no_current_slot` | No forecast slot matches the current time |
+| `normal` | Deviation is below all trigger thresholds |
+| `pending` | A sustained or spike breach window is accumulating |
+| `cooldown` | Re-optimization is temporarily blocked after a recent trigger |
+| `triggered` | A sustained/spike breach exceeded its duration and re-optimization was requested |
 
 ---
 
