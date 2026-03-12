@@ -26,7 +26,7 @@ class LocalShiftSensorBase(SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        from .const import DOMAIN
+        from ..const import DOMAIN
 
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
