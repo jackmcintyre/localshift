@@ -114,6 +114,25 @@ class OptimizerFacade:
                 corrected,
             )
 
+    def _apply_cloud_scale_factor_to_slots(
+        self, slots: list[Any], data: CoordinatorData
+    ) -> None:
+        scale_factor = getattr(data, "cloud_event_solar_scale_factor", None)
+        if scale_factor is None:
+            return
+
+        applied = 0
+        for slot in slots:
+            slot.solar_kwh *= scale_factor
+            applied += 1
+
+        if applied > 0:
+            _LOGGER.info(
+                "Applied cloud event scale factor %.3f to %d slots",
+                scale_factor,
+                applied,
+            )
+
     @staticmethod
     def _is_backfillable_period_start(period_start: datetime) -> bool:
         return period_start.minute in (0, 30)
@@ -158,6 +177,7 @@ class OptimizerFacade:
             weather_condition = getattr(data, "weather_condition", None) or "unknown"
             self._record_forecasts_for_slots(slots, weather_condition)
             self._apply_bias_correction_to_slots(slots, weather_condition)
+            self._apply_cloud_scale_factor_to_slots(slots, data)
 
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
