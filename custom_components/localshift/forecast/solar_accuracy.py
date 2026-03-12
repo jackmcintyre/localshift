@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 
 MAX_PERIOD_RECORDS = 1440
 BIAS_HALF_LIFE_DAYS = 7.0
+MAX_ADDITIVE_OFFSET_KWH = 2.0
 
 
 @dataclass
@@ -48,9 +50,11 @@ class SolarPeriodRecord:
     time_of_day: str
     season: str
     bias: float = 0.0
+    additive_bias: float = 0.0
 
     def __post_init__(self) -> None:
         """Calculate bias after initialization."""
+        self.additive_bias = self.forecast_kwh - self.actual_kwh
         if self.forecast_kwh > 0.01:
             self.bias = (self.forecast_kwh - self.actual_kwh) / self.forecast_kwh
         else:
@@ -71,6 +75,7 @@ class SolarPeriodRecord:
             "time_of_day": self.time_of_day,
             "season": self.season,
             "bias": self.bias,
+            "additive_bias": self.additive_bias,
         }
 
     @classmethod
@@ -93,6 +98,7 @@ class SolarPeriodRecord:
             time_of_day=data.get("time_of_day", "unknown"),
             season=data.get("season", "unknown"),
             bias=data.get("bias", 0.0),
+            additive_bias=data.get("additive_bias", 0.0),
         )
 
 
@@ -112,9 +118,13 @@ class SolarBiasMetrics:
     """
 
     overall_bias: float = 0.0
+    overall_additive_bias: float = 0.0
     bias_by_time: dict[str, float] = field(default_factory=dict)
     bias_by_weather: dict[str, float] = field(default_factory=dict)
     bias_by_season: dict[str, float] = field(default_factory=dict)
+    additive_bias_by_time: dict[str, float] = field(default_factory=dict)
+    additive_bias_by_weather: dict[str, float] = field(default_factory=dict)
+    additive_bias_by_season: dict[str, float] = field(default_factory=dict)
     sample_count: int = 0
     mape: float = 0.0
     accuracy: float = 100.0
@@ -128,9 +138,13 @@ class SolarBiasMetrics:
         """
         return {
             "overall_bias": self.overall_bias,
+            "overall_additive_bias": self.overall_additive_bias,
             "bias_by_time": self.bias_by_time,
             "bias_by_weather": self.bias_by_weather,
             "bias_by_season": self.bias_by_season,
+            "additive_bias_by_time": self.additive_bias_by_time,
+            "additive_bias_by_weather": self.additive_bias_by_weather,
+            "additive_bias_by_season": self.additive_bias_by_season,
             "sample_count": self.sample_count,
             "mape": self.mape,
             "accuracy": self.accuracy,
@@ -149,9 +163,13 @@ class SolarBiasMetrics:
         """
         return cls(
             overall_bias=data.get("overall_bias", 0.0),
+            overall_additive_bias=data.get("overall_additive_bias", 0.0),
             bias_by_time=data.get("bias_by_time", {}),
             bias_by_weather=data.get("bias_by_weather", {}),
             bias_by_season=data.get("bias_by_season", {}),
+            additive_bias_by_time=data.get("additive_bias_by_time", {}),
+            additive_bias_by_weather=data.get("additive_bias_by_weather", {}),
+            additive_bias_by_season=data.get("additive_bias_by_season", {}),
             sample_count=data.get("sample_count", 0),
             mape=data.get("mape", 0.0),
             accuracy=data.get("accuracy", 100.0),
@@ -207,7 +225,9 @@ class SolarAccuracyTracker:
                 except Exception as err:
                     _LOGGER.warning("Failed to load solar period record: %s", err)
 
-            if "metrics" in data:
+            if self._period_records:
+                self._recompute_metrics()
+            elif "metrics" in data:
                 self._metrics = SolarBiasMetrics.from_dict(data["metrics"])
 
             _LOGGER.info(
@@ -313,6 +333,9 @@ class SolarAccuracyTracker:
 
         self._metrics.sample_count = len(records)
         self._metrics.overall_bias = sum(r.bias for r in records) / len(records)
+        self._metrics.overall_additive_bias = sum(
+            r.additive_bias for r in records
+        ) / len(records)
 
         mape_sum = 0.0
         mape_count = 0
@@ -326,12 +349,18 @@ class SolarAccuracyTracker:
         by_time: dict[str, list[float]] = defaultdict(list)
         by_weather: dict[str, list[float]] = defaultdict(list)
         by_season: dict[str, list[float]] = defaultdict(list)
+        additive_by_time: dict[str, list[float]] = defaultdict(list)
+        additive_by_weather: dict[str, list[float]] = defaultdict(list)
+        additive_by_season: dict[str, list[float]] = defaultdict(list)
         self._count_by_time: dict[str, int] = defaultdict(int)
 
         for r in records:
             by_time[r.time_of_day].append(r.bias)
             by_weather[r.weather_condition].append(r.bias)
             by_season[r.season].append(r.bias)
+            additive_by_time[r.time_of_day].append(r.additive_bias)
+            additive_by_weather[r.weather_condition].append(r.additive_bias)
+            additive_by_season[r.season].append(r.additive_bias)
             self._count_by_time[r.time_of_day] += 1
 
         self._metrics.bias_by_time = {k: sum(v) / len(v) for k, v in by_time.items()}
@@ -341,16 +370,25 @@ class SolarAccuracyTracker:
         self._metrics.bias_by_season = {
             k: sum(v) / len(v) for k, v in by_season.items()
         }
+        self._metrics.additive_bias_by_time = {
+            k: sum(v) / len(v) for k, v in additive_by_time.items()
+        }
+        self._metrics.additive_bias_by_weather = {
+            k: sum(v) / len(v) for k, v in additive_by_weather.items()
+        }
+        self._metrics.additive_bias_by_season = {
+            k: sum(v) / len(v) for k, v in additive_by_season.items()
+        }
 
-    def _compute_context_bias(
+    def _compute_context_metric(
         self,
         time_of_day: str,
         weather: str,
         season: str | None,
+        metric_getter: Callable[[SolarPeriodRecord], float],
     ) -> tuple[float, int] | None:
-        """Compute weighted average bias for specific context."""
         now = dt_util.now()
-        biases: list[tuple[float, float]] = []
+        values: list[tuple[float, float]] = []
 
         for record in self._period_records:
             if record.time_of_day != time_of_day:
@@ -361,15 +399,44 @@ class SolarAccuracyTracker:
                 continue
 
             age_days = (now - record.period_start).total_seconds() / 86400.0
-            weight = math.exp(-age_days / BIAS_HALF_LIFE_DAYS)
-            biases.append((record.bias, weight))
+            weight = math.exp(-(math.log(2) * age_days) / BIAS_HALF_LIFE_DAYS)
+            values.append((metric_getter(record), weight))
 
-        if not biases:
+        if not values:
             return None
 
-        total_weight = sum(w for _, w in biases)
-        weighted_bias = sum(b * w for b, w in biases) / total_weight
-        return (weighted_bias, len(biases))
+        total_weight = sum(weight for _, weight in values)
+        weighted_value = sum(value * weight for value, weight in values) / total_weight
+        return (weighted_value, len(values))
+
+    def _compute_context_bias(
+        self,
+        time_of_day: str,
+        weather: str,
+        season: str | None,
+    ) -> tuple[float, int] | None:
+        """Compute weighted average bias for specific context."""
+        normalized_weather = self._normalize_weather(weather)
+        return self._compute_context_metric(
+            time_of_day,
+            normalized_weather,
+            season,
+            lambda record: record.bias,
+        )
+
+    def _compute_context_additive_bias(
+        self,
+        time_of_day: str,
+        weather: str,
+        season: str | None,
+    ) -> tuple[float, int] | None:
+        normalized_weather = self._normalize_weather(weather)
+        return self._compute_context_metric(
+            time_of_day,
+            normalized_weather,
+            season,
+            lambda record: record.additive_bias,
+        )
 
     @staticmethod
     def _get_time_of_day(dt: datetime) -> str:
@@ -440,7 +507,8 @@ class SolarAccuracyTracker:
             Values < 1.0 reduce forecast (overestimate), > 1.0 increase (underestimate).
 
         """
-        result = self._compute_context_bias(time_of_day, weather, season)
+        normalized_weather = self._normalize_weather(weather)
+        result = self._compute_context_bias(time_of_day, normalized_weather, season)
         if result is None:
             return 1.0
 
@@ -448,9 +516,36 @@ class SolarAccuracyTracker:
         _LOGGER.debug(
             "Bias correction for %s/%s/%s: bias=%.2f%%, samples=%d",
             time_of_day,
-            weather,
+            normalized_weather,
             season or "any",
             weighted_bias * 100,
             sample_count,
         )
         return 1.0 - weighted_bias
+
+    def get_additive_correction(
+        self,
+        time_of_day: str,
+        weather: str,
+        season: str | None = None,
+    ) -> float:
+        result = self._compute_context_additive_bias(time_of_day, weather, season)
+        if result is None:
+            return 0.0
+
+        weighted_bias, _sample_count = result
+        return max(
+            -MAX_ADDITIVE_OFFSET_KWH,
+            min(MAX_ADDITIVE_OFFSET_KWH, weighted_bias),
+        )
+
+    def apply_bias_correction(
+        self,
+        forecast_kwh: float,
+        time_of_day: str,
+        weather: str,
+        season: str | None = None,
+    ) -> float:
+        multiplier = self.get_bias_correction(time_of_day, weather, season)
+        additive_offset = self.get_additive_correction(time_of_day, weather, season)
+        return max(0.0, forecast_kwh * multiplier - additive_offset)

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.localshift.forecast.solar_accuracy import (
+    BIAS_HALF_LIFE_DAYS,
     MAX_PERIOD_RECORDS,
     SolarAccuracyTracker,
     SolarBiasMetrics,
@@ -30,6 +31,7 @@ class TestSolarPeriodRecord:
         assert record.actual_kwh == 2.0
         # Bias = (forecast - actual) / forecast = (2.5 - 2.0) / 2.5 = 0.2
         assert record.bias == pytest.approx(0.2)
+        assert record.additive_bias == pytest.approx(0.5)
 
     def test_initialization_with_zero_forecast(self):
         """Test record initialization with zero forecast - bias should be 0."""
@@ -42,6 +44,7 @@ class TestSolarPeriodRecord:
             season="summer",
         )
         assert record.bias == 0.0
+        assert record.additive_bias == 0.0
 
     def test_initialization_with_small_forecast(self):
         """Test record initialization with very small forecast - bias should be 0."""
@@ -54,6 +57,7 @@ class TestSolarPeriodRecord:
             season="summer",
         )
         assert record.bias == 0.0
+        assert record.additive_bias == pytest.approx(0.001)
 
     def test_to_dict(self):
         """Test serialization to dictionary."""
@@ -71,6 +75,7 @@ class TestSolarPeriodRecord:
         assert data["weather_condition"] == "sunny"
         assert data["time_of_day"] == "morning"
         assert data["season"] == "summer"
+        assert data["additive_bias"] == pytest.approx(0.5)
         assert "period_start" in data
 
     def test_from_dict(self):
@@ -83,6 +88,7 @@ class TestSolarPeriodRecord:
             "time_of_day": "morning",
             "season": "summer",
             "bias": 0.2,
+            "additive_bias": 0.5,
         }
         record = SolarPeriodRecord.from_dict(data)
         assert record.forecast_kwh == 2.5
@@ -90,6 +96,7 @@ class TestSolarPeriodRecord:
         assert record.weather_condition == "sunny"
         assert record.time_of_day == "morning"
         assert record.season == "summer"
+        assert record.additive_bias == pytest.approx(0.5)
 
     def test_from_dict_with_defaults(self):
         """Test deserialization with missing fields uses defaults."""
@@ -100,6 +107,7 @@ class TestSolarPeriodRecord:
         assert record.weather_condition == "unknown"
         assert record.time_of_day == "unknown"
         assert record.season == "unknown"
+        assert record.additive_bias == 0.0
 
 
 class TestSolarBiasMetrics:
@@ -109,9 +117,13 @@ class TestSolarBiasMetrics:
         """Test default values."""
         metrics = SolarBiasMetrics()
         assert metrics.overall_bias == 0.0
+        assert metrics.overall_additive_bias == 0.0
         assert metrics.bias_by_time == {}
         assert metrics.bias_by_weather == {}
         assert metrics.bias_by_season == {}
+        assert metrics.additive_bias_by_time == {}
+        assert metrics.additive_bias_by_weather == {}
+        assert metrics.additive_bias_by_season == {}
         assert metrics.sample_count == 0
         assert metrics.mape == 0.0
         assert metrics.accuracy == 100.0
@@ -120,31 +132,42 @@ class TestSolarBiasMetrics:
         """Test serialization to dictionary."""
         metrics = SolarBiasMetrics(
             overall_bias=0.1,
+            overall_additive_bias=0.2,
             bias_by_time={"morning": 0.05},
             bias_by_weather={"sunny": 0.1},
+            additive_bias_by_time={"morning": 0.1},
+            additive_bias_by_weather={"sunny": 0.2},
             sample_count=10,
             mape=15.0,
             accuracy=85.0,
         )
         data = metrics.to_dict()
         assert data["overall_bias"] == 0.1
+        assert data["overall_additive_bias"] == 0.2
         assert data["bias_by_time"] == {"morning": 0.05}
+        assert data["additive_bias_by_time"] == {"morning": 0.1}
         assert data["sample_count"] == 10
 
     def test_from_dict(self):
         """Test deserialization from dictionary."""
         data = {
             "overall_bias": 0.1,
+            "overall_additive_bias": 0.2,
             "bias_by_time": {"morning": 0.05},
             "bias_by_weather": {"sunny": 0.1},
             "bias_by_season": {"summer": 0.15},
+            "additive_bias_by_time": {"morning": 0.1},
+            "additive_bias_by_weather": {"sunny": 0.2},
+            "additive_bias_by_season": {"summer": 0.25},
             "sample_count": 10,
             "mape": 15.0,
             "accuracy": 85.0,
         }
         metrics = SolarBiasMetrics.from_dict(data)
         assert metrics.overall_bias == 0.1
+        assert metrics.overall_additive_bias == 0.2
         assert metrics.bias_by_time == {"morning": 0.05}
+        assert metrics.additive_bias_by_weather == {"sunny": 0.2}
         assert metrics.sample_count == 10
 
     def test_from_dict_with_defaults(self):
@@ -346,6 +369,72 @@ class TestSolarAccuracyTracker:
         # Correction = 1.0 - (-1.0) = 2.0
         assert correction == pytest.approx(2.0, rel=0.1)
 
+    def test_get_additive_correction_no_data(self, tracker):
+        correction = tracker.get_additive_correction("morning", "sunny", "summer")
+        assert correction == 0.0
+
+    def test_get_additive_correction_with_data(self, tracker):
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny")
+        tracker.backfill_actual(period_start, 1.5)
+
+        correction = tracker.get_additive_correction("morning", "sunny", "summer")
+        assert correction == pytest.approx(0.5, rel=0.1)
+
+    def test_get_additive_correction_clamps_to_bounds(self, tracker):
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 3.0, "sunny")
+        tracker.backfill_actual(period_start, 0.0)
+
+        correction = tracker.get_additive_correction("morning", "sunny", "summer")
+        assert correction == pytest.approx(2.0)
+
+    def test_apply_bias_correction_combines_multiplicative_and_additive(self, tracker):
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 4.0, "sunny")
+        tracker.backfill_actual(period_start, 3.0)
+
+        corrected = tracker.apply_bias_correction(2.0, "morning", "sunny", "summer")
+        assert corrected == pytest.approx(0.5, rel=0.1)
+
+    def test_apply_bias_correction_floors_at_zero(self, tracker):
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 1.0, "sunny")
+        tracker.backfill_actual(period_start, 0.4)
+
+        corrected = tracker.apply_bias_correction(0.2, "morning", "sunny", "summer")
+        assert corrected == 0.0
+
+    def test_apply_bias_correction_can_raise_zero_forecast_from_additive_history(
+        self, tracker
+    ):
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 0.0, "sunny")
+        tracker.backfill_actual(period_start, 0.5)
+
+        assert tracker.get_additive_correction("morning", "sunny", "summer") == (
+            pytest.approx(-0.5, rel=0.1)
+        )
+        corrected = tracker.apply_bias_correction(0.0, "morning", "sunny", "summer")
+        assert corrected == pytest.approx(0.5, rel=0.1)
+
+    def test_get_additive_correction_is_context_specific(self, tracker):
+        morning = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        afternoon = datetime(2026, 1, 15, 14, 0, tzinfo=UTC)
+
+        tracker.record_forecast(morning, 2.0, "sunny")
+        tracker.backfill_actual(morning, 1.5)
+        tracker.record_forecast(afternoon, 2.0, "cloudy")
+        tracker.backfill_actual(afternoon, 1.9)
+
+        sunny_correction = tracker.get_additive_correction("morning", "sunny", "summer")
+        cloudy_correction = tracker.get_additive_correction(
+            "afternoon", "cloudy", "summer"
+        )
+
+        assert sunny_correction == pytest.approx(0.5, rel=0.1)
+        assert cloudy_correction == pytest.approx(0.1, rel=0.1)
+
     @pytest.mark.asyncio
     async def test_async_load_no_data(self, tracker, mock_hass):
         """Test async_load with no stored data."""
@@ -392,6 +481,8 @@ class TestSolarAccuracyTracker:
         assert len(tracker._period_records) == 1
         assert tracker._metrics.sample_count == 1
         assert tracker._metrics.overall_bias == 0.25
+        assert tracker._metrics.overall_additive_bias == pytest.approx(0.5)
+        assert tracker._metrics.additive_bias_by_time == {"morning": pytest.approx(0.5)}
 
     @pytest.mark.asyncio
     async def test_async_load_with_bad_record(self, tracker, mock_hass, caplog):
@@ -589,3 +680,52 @@ class TestComputeContextBias:
         assert result is not None
         _, count = result
         assert count == 3
+
+    def test_compute_context_additive_bias(self, tracker_with_data):
+        result = tracker_with_data._compute_context_additive_bias(
+            "morning", "sunny", "summer"
+        )
+        assert result is not None
+        weighted_bias, count = result
+        assert count == 3
+        assert weighted_bias == pytest.approx(0.5, rel=0.1)
+
+    def test_compute_context_bias_uses_true_half_life_weighting(
+        self, tracker_with_data
+    ):
+        tracker_with_data._period_records.clear()
+        now = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker_with_data._period_records.extend([
+            SolarPeriodRecord(
+                period_start=now,
+                forecast_kwh=1.0,
+                actual_kwh=1.0,
+                weather_condition="sunny",
+                time_of_day="morning",
+                season="summer",
+            ),
+            SolarPeriodRecord(
+                period_start=now.replace(day=8),
+                forecast_kwh=1.0,
+                actual_kwh=0.0,
+                weather_condition="sunny",
+                time_of_day="morning",
+                season="summer",
+            ),
+        ])
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: now,
+            )
+            result = tracker_with_data._compute_context_bias(
+                "morning", "sunny", "summer"
+            )
+
+        assert result is not None
+        weighted_bias, count = result
+        expected = 0.5 / (1.0 + 0.5)
+        assert count == 2
+        assert BIAS_HALF_LIFE_DAYS == 7.0
+        assert weighted_bias == pytest.approx(expected, rel=0.01)
