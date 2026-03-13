@@ -107,14 +107,11 @@ def check_global_solar_sufficiency(
 ) -> bool:
     """Check if remaining solar in the full horizon covers the SOC deficit to target.
 
-    Unlike the demand-window-based solar gate, this check works across the
-    entire remaining horizon regardless of whether a demand window (and its
-    terminal_penalty_idx) exists. It prevents nighttime grid charging when
-    tomorrow's solar will naturally fill the battery to the demand window target.
+    Uses realistic simulation that accounts for charge rate limits and efficiency,
+    ensuring consistency with solar_can_reach_target sensor.
 
-    Fixes Issue #559 Root Cause 1: the original _solar_covers_deficit gate is
-    skipped entirely when terminal_penalty_idx is None (no demand window), so
-    the optimizer was free to panic-buy grid power overnight.
+    Fixes Issue #701: Previous implementation used raw surplus without rate limits,
+    incorrectly blocking cheap grid charging when solar was insufficient in reality.
 
     Args:
         soc_pct: Current battery SOC percentage.
@@ -123,23 +120,25 @@ def check_global_solar_sufficiency(
         config: Optimizer configuration.
 
     Returns:
-        True if projected solar SURPLUS (max(0, solar - consumption)) from slot_idx
-        to end of horizon is sufficient to raise SOC from soc_pct to demand_window_target_soc_pct.
+        True if realistic solar simulation can raise SOC from soc_pct to demand_window_target_soc_pct.
 
     """
     if not slots:
         return False
 
-    # Only suppress charging if we have a meaningful deficit to the target.
     soc_deficit_pct = config.demand_window_target_soc_pct - soc_pct
     if soc_deficit_pct <= 0:
         return False
 
-    projected_surplus_kwh = sum(
-        max(0.0, s.solar_kwh - s.consumption_kwh) for s in slots[slot_idx:]
+    from custom_components.localshift.engine.dp_math import (
+        _simulate_solar_only_terminal_soc,
     )
-    potential_gain_pct = (projected_surplus_kwh / config.battery_capacity_kwh) * 100.0
-    return potential_gain_pct >= soc_deficit_pct
+
+    remaining_slots = slots[slot_idx:]
+    simulated_terminal_soc = _simulate_solar_only_terminal_soc(
+        soc_pct, remaining_slots, None, config
+    )
+    return simulated_terminal_soc >= config.demand_window_target_soc_pct
 
 
 def is_cheap_import_window(
