@@ -326,28 +326,3 @@ class TestObjectiveTerms:
         # -(-20.0) = +20.0
         expected = 50.0 - (-20.0)
         assert terms.net_cost == expected
-
-    def test_net_cost_with_zero_values(self):
-        """net_cost handles zero values."""
-        terms = ObjectiveTerms(
-            import_cost=0.0,
-            export_revenue=0.0,
-            cycle_penalty=0.0,
-            shortfall_penalty=0.0,
-            switching_penalty=0.0,
-        )
-        assert terms.net_cost == 0.0
-
-    def test_net_cost_negative_export_no_self_consumption(self):
-        """Negative export revenue increases cost."""
-        terms = ObjectiveTerms(
-            import_cost=50.0,
-            export_revenue=-20.0,  # Export cost money (e.g., grid charges)
-            cycle_penalty=0.0,
-            shortfall_penalty=0.0,
-            switching_penalty=0.0,
-        )
-
-        # -(-20.0) = +20.0
-        expected = 50.0 - (-20.0)
-        assert terms.net_cost == expected
