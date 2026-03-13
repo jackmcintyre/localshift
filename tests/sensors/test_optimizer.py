@@ -141,6 +141,26 @@ class TestOptimizerPlanDetailedSensor:
 
         assert sensor.icon == "mdi:minus-circle-outline"
 
+    def test_unrecorded_attributes_includes_decisions(self):
+        """Test that 'decisions' is excluded from recorder to avoid 16KB limit.
+
+        Issue #467: The decisions array can exceed 26KB, which exceeds the
+        Home Assistant recorder's 16KB attribute limit. By excluding 'decisions'
+        from recording, we ensure:
+        1. The sensor state and other attributes are recorded for history
+        2. The dashboard can still access decisions in real-time
+        3. No "State attributes exceed maximum size" warnings
+        """
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True}
+        )
+        mock_entry = MagicMock()
+
+        sensor = OptimizerPlanDetailedSensor(mock_coordinator, mock_entry)
+
+        assert hasattr(sensor, "_unrecorded_attributes")
+        assert "decisions" in sensor._unrecorded_attributes
+
 
 class TestOptimizerSummarySensor:
     """Tests for OptimizerSummarySensor."""

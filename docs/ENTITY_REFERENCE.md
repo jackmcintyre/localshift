@@ -811,11 +811,13 @@ Attributes:
 
 ---
 
-### 26. sensor.localshift_optimizer_shadow_plan
+### 26. sensor.localshift_optimizer_plan_detailed
 
 **Purpose:** Detailed DP optimizer plan with full decision breakdown.
 
 **Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_plan`. Removed "shadow" naming since DP optimizer is now the active planner.
+
+**Recorder Note (#467):** The `decisions` attribute is excluded from database recording because it can exceed 26KB (larger than the 16KB recorder limit). The attribute remains available in real-time for dashboard charts, but historical queries will not include it. Other attributes (`enabled`, `success`, `total_slots`, `computed_at`) are recorded normally.
 
 **State:** One of: `computed`, `error`, `disabled`
 
