@@ -46,6 +46,13 @@ class EntityHealthSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_entity_health"
     _attr_name = "Entity Health"
     _attr_icon = "mdi:heart-pulse"
+    _unrecorded_attributes = frozenset({
+        "entities",
+        "dependencies",
+        "localshift_entities",
+        "errors",
+        "warnings",
+    })
 
     def _update_from_coordinator(self) -> None:
         dep_health = self.coordinator.data.entity_health

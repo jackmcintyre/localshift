@@ -92,6 +92,22 @@ class TestEntityHealthSensor:
         assert attrs["summary"]["dependencies"]["total"] == 1
         assert attrs["summary"]["localshift"]["healthy"] == 1
 
+    def test_unrecorded_attributes_excludes_large_dicts(self):
+        """Test that large entity dicts are excluded from recorder.
+
+        Issue #467: Entity health dicts can exceed 16KB limit.
+        """
+        sensor = _sensor(
+            EntityHealthSensor, entity_health={}, localshift_entity_health={}
+        )
+
+        assert hasattr(sensor, "_unrecorded_attributes")
+        assert "entities" in sensor._unrecorded_attributes
+        assert "dependencies" in sensor._unrecorded_attributes
+        assert "localshift_entities" in sensor._unrecorded_attributes
+        assert "errors" in sensor._unrecorded_attributes
+        assert "warnings" in sensor._unrecorded_attributes
+
 
 class TestForecastAccuracySensor:
     def test_update_with_value(self):

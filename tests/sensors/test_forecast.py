@@ -316,6 +316,21 @@ class TestOptimizerPlanSensor:
         assert attrs["forecast_horizon_hours"] == 24
         assert attrs["planner"] == "DP_OPTIMIZER"
 
+    def test_unrecorded_attributes_includes_slots(self):
+        """Test that 'slots' is excluded from recorder to avoid 16KB limit.
+
+        Issue #467: The slots array can exceed 16KB with many slots.
+        """
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_decisions=[{"action": "CHARGE"}]
+        )
+        mock_entry = MagicMock()
+
+        sensor = OptimizerPlanSensor(mock_coordinator, mock_entry)
+
+        assert hasattr(sensor, "_unrecorded_attributes")
+        assert "slots" in sensor._unrecorded_attributes
+
 
 class TestForecastPricesSensor:
     """Tests for ForecastPricesSensor."""
