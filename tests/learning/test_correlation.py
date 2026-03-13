@@ -12,7 +12,7 @@ related dataclasses, covering:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +29,10 @@ from custom_components.localshift.learning.correlation import (
     CONFIDENCE_MEDIUM_THRESHOLD,
     HourlyTemperatureCoefficients,
     TemperatureForecast,
+    WEATHER_ANOMALY_ANOMALOUS_WEIGHT,
+    WEATHER_ANOMALY_NORMAL_WEIGHT,
+    WEATHER_TEMPERATURE_HISTORY_DAYS,
+    WeatherAnomalyResult,
     WeatherCorrelation,
     WeatherCorrelationData,
 )
@@ -870,9 +874,7 @@ class TestParseForecastDatetime:
             with patch(
                 "custom_components.localshift.learning.correlation.dt_util.as_local"
             ) as mock_local:
-                mock_local.return_value = datetime(
-                    2024, 6, 15, 14, 30, 0, tzinfo=UTC
-                )
+                mock_local.return_value = datetime(2024, 6, 15, 14, 30, 0, tzinfo=UTC)
                 result = correlation._parse_forecast_datetime(naive_str, 0, 0)
 
         assert result is not None
@@ -1470,3 +1472,151 @@ class TestLearnAndPredict:
 
         assert 12 in restored.hourly_coefficients
         assert restored.hourly_coefficients[12].sample_count == 10
+
+
+# =============================================================================
+# WEATHER ANOMALY DETECTION TESTS
+# =============================================================================
+
+
+def _populate_anomaly_history(
+    correlation: WeatherCorrelation,
+    temps: list[float],
+    base_date: date | None = None,
+) -> None:
+    """Populate temperature history for anomaly detection tests."""
+    if base_date is None:
+        base_date = date(2024, 1, 1)
+    for i, temp in enumerate(temps):
+        d = base_date + timedelta(days=i)
+        correlation.record_daily_temperature(temp, date_key=d.isoformat())
+
+
+class TestWeatherAnomalyDetection:
+    """Tests for weather anomaly detection features."""
+
+    @pytest.fixture
+    def correlation(self, mock_hass, mock_entry):
+        """Create a WeatherCorrelation instance for anomaly tests."""
+        with patch("custom_components.localshift.learning.correlation.Store"):
+            return WeatherCorrelation(mock_hass, mock_entry)
+
+    def test_record_daily_temperature_stores_value(self, correlation):
+        """Test that record_daily_temperature stores temperature values."""
+        correlation.record_daily_temperature(22.5, date_key="2024-01-01")
+        assert correlation._data.temperature_history["2024-01-01"] == 22.5
+
+    def test_record_daily_temperature_is_idempotent_per_day(self, correlation):
+        """Test that recording same day overwrites previous value."""
+        correlation.record_daily_temperature(20.0, date_key="2024-01-01")
+        correlation.record_daily_temperature(25.0, date_key="2024-01-01")
+        assert correlation._data.temperature_history["2024-01-01"] == 25.0
+
+    def test_record_daily_temperature_prunes_to_14_days(self, correlation):
+        """Test that history is pruned to WEATHER_TEMPERATURE_HISTORY_DAYS."""
+        for i in range(20):
+            d = date(2024, 1, 1) + timedelta(days=i)
+            correlation.record_daily_temperature(20.0, date_key=d.isoformat())
+        assert (
+            len(correlation._data.temperature_history)
+            == WEATHER_TEMPERATURE_HISTORY_DAYS
+        )
+
+    def test_record_daily_temperature_keeps_newest_dates(self, correlation):
+        """Test that pruning keeps the most recent dates."""
+        for i in range(20):
+            d = date(2024, 1, 1) + timedelta(days=i)
+            correlation.record_daily_temperature(float(i), date_key=d.isoformat())
+        oldest_retained = min(correlation._data.temperature_history.keys())
+        assert oldest_retained == "2024-01-07"
+
+    def test_record_daily_temperature_uses_today_by_default(self, correlation):
+        """Test that record_daily_temperature uses today's date when not specified."""
+        with patch(
+            "custom_components.localshift.learning.correlation.dt_util"
+        ) as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2024-06-15"
+            correlation.record_daily_temperature(22.0)
+        assert "2024-06-15" in correlation._data.temperature_history
+
+    def test_insufficient_history_returns_normal_weight(self, correlation):
+        """Test that insufficient history (<7 days) returns normal weight."""
+        _populate_anomaly_history(correlation, [20.0, 21.0, 22.0, 20.0, 21.0])
+        result = correlation.detect_weather_anomaly(35.0)
+        assert result.is_anomalous is False
+        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
+        assert result.deviation_sigma == 0.0
+        assert result.mean_temperature == 0.0
+        assert result.std_temperature == 0.0
+
+    def test_exactly_7_days_history_is_enough(self, correlation):
+        """Test that exactly 7 days of history is sufficient."""
+        _populate_anomaly_history(correlation, [20.0] * 7)
+        result = correlation.detect_weather_anomaly(20.0)
+        assert result.mean_temperature is not None
+
+    def test_normal_temperature_not_flagged(self, correlation):
+        """Test that normal temperature is not flagged as anomalous."""
+        temps = [20.0, 21.0, 19.0, 20.5, 21.5, 20.0, 21.0, 20.0, 19.5, 21.0]
+        _populate_anomaly_history(correlation, temps)
+        result = correlation.detect_weather_anomaly(21.0)
+        assert result.is_anomalous is False
+        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
+
+    def test_extreme_high_temperature_is_anomalous(self, correlation):
+        """Test that extreme high temperature is flagged as anomalous."""
+        temps = [20.0] * 8 + [21.0, 19.0]
+        _populate_anomaly_history(correlation, temps)
+        result = correlation.detect_weather_anomaly(40.0)
+        assert result.is_anomalous is True
+        assert result.weight == WEATHER_ANOMALY_ANOMALOUS_WEIGHT
+        assert result.deviation_sigma is not None
+        assert result.deviation_sigma > 2.0
+
+    def test_extreme_low_temperature_is_anomalous(self, correlation):
+        """Test that extreme low temperature is flagged as anomalous."""
+        temps = [20.0] * 8 + [21.0, 19.0]
+        _populate_anomaly_history(correlation, temps)
+        result = correlation.detect_weather_anomaly(0.0)
+        assert result.is_anomalous is True
+        assert result.weight == WEATHER_ANOMALY_ANOMALOUS_WEIGHT
+
+    def test_anomaly_result_temperature_field(self, correlation):
+        """Test that WeatherAnomalyResult includes the input temperature."""
+        _populate_anomaly_history(correlation, [20.0] * 10)
+        result = correlation.detect_weather_anomaly(35.0)
+        assert result.temperature == 35.0
+
+    def test_anomaly_result_mean_and_std_fields(self, correlation):
+        """Test that WeatherAnomalyResult includes mean and std."""
+        temps = [20.0] * 10
+        _populate_anomaly_history(correlation, temps)
+        result = correlation.detect_weather_anomaly(20.0)
+        assert result.mean_temperature == pytest.approx(20.0)
+        assert result.std_temperature == pytest.approx(0.0)
+
+    def test_zero_std_does_not_raise(self, correlation):
+        """Test that zero standard deviation is handled gracefully."""
+        temps = [20.0] * 10
+        _populate_anomaly_history(correlation, temps)
+        result = correlation.detect_weather_anomaly(20.0)
+        assert result.is_anomalous is False
+        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
+
+    def test_temperature_history_included_in_to_dict(self, correlation):
+        """Test that temperature_history is included in to_dict output."""
+        correlation.record_daily_temperature(22.0, date_key="2024-01-01")
+        d = correlation._data.to_dict()
+        assert "temperature_history" in d
+        assert d["temperature_history"]["2024-01-01"] == 22.0
+
+    def test_temperature_history_loaded_from_dict(self):
+        """Test that temperature_history is loaded from dict."""
+        data_dict = {"temperature_history": {"2024-01-01": 22.0, "2024-01-02": 25.0}}
+        data = WeatherCorrelationData.from_dict(data_dict)
+        assert data.temperature_history == {"2024-01-01": 22.0, "2024-01-02": 25.0}
+
+    def test_from_dict_without_history_defaults_to_empty(self):
+        """Test that missing temperature_history defaults to empty dict."""
+        data = WeatherCorrelationData.from_dict({})
+        assert data.temperature_history == {}

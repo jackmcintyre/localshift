@@ -64,6 +64,8 @@ class ParameterOptimizer:
         self._last_update: datetime | None = None
         self._consecutive_degrading_days: int = 0
         self._last_7d_score: float = 0.0
+        self._last_weighted_7d_score: float = 0.0  # Issue #681
+        self._last_weather_anomaly_weight: float = 1.0  # Issue #681
         self._adjustment_log: list[dict[str, Any]] = []
         self._pending_bias_corrections: list[BiasCorrection] = []
         self._scoring_model_warned: bool = (
@@ -111,6 +113,7 @@ class ParameterOptimizer:
         decisions: list[DecisionRecord],
         current_7d_score: float,
         bias_corrections: list[BiasCorrection] | None = None,
+        weather_weight: float = 1.0,
     ) -> AdaptiveParameters:
         """Run optimization using recent decision outcomes.
 
@@ -127,6 +130,7 @@ class ParameterOptimizer:
             decisions: List of decision records with outcomes
             current_7d_score: Current 7-day rolling score for rollback detection
             bias_corrections: Optional list of bias corrections from pattern analyzer
+            weather_weight: Weight for score interpolation (Issue #681), 0.3 for anomalous days
 
         Returns:
             Updated AdaptiveParameters
@@ -153,14 +157,18 @@ class ParameterOptimizer:
             self._rollback_parameters()
             return self._current_params
 
-        # Track if we're improving or degrading
-        if current_7d_score < self._last_7d_score - 0.05:  # 5% degradation threshold
+        # Track if we're improving or degrading (Issue #681: weighted interpolation)
+        weighted_score = self._last_weighted_7d_score + weather_weight * (
+            current_7d_score - self._last_weighted_7d_score
+        )
+        if weighted_score < self._last_weighted_7d_score - 0.05:
             self._consecutive_degrading_days += 1
         else:
-            # Issue #677: Save stable checkpoint when not degrading
             self._consecutive_degrading_days = 0
             self._stable_checkpoint = dict(self._current_params.values)
         self._last_7d_score = current_7d_score
+        self._last_weighted_7d_score = weighted_score
+        self._last_weather_anomaly_weight = weather_weight
 
         # Issue #677: Multi-parameter optimization with prioritization
         new_values, new_confidence = self._select_and_update_params(
@@ -624,6 +632,7 @@ class ParameterOptimizer:
             "adjustment_log": self._adjustment_log[-100:],  # Keep last 100
             "consecutive_degrading_days": self._consecutive_degrading_days,
             "last_7d_score": self._last_7d_score,
+            "last_weighted_7d_score": self._last_weighted_7d_score,  # Issue #681
             "last_update": self._last_update.isoformat() if self._last_update else None,
             "stable_checkpoint": self._stable_checkpoint,  # Issue #677
             "recently_rolled_back_params": list(
@@ -647,7 +656,9 @@ class ParameterOptimizer:
         self._adjustment_log = data.get("adjustment_log", [])
         self._consecutive_degrading_days = data.get("consecutive_degrading_days", 0)
         self._last_7d_score = data.get("last_7d_score", 0.0)
-        # Issue #677: Load stable checkpoint and rolled-back params
+        self._last_weighted_7d_score = data.get(
+            "last_weighted_7d_score", data.get("last_7d_score", 0.0)
+        )
         self._stable_checkpoint = data.get("stable_checkpoint", {})
         self._recently_rolled_back_params = set(
             data.get("recently_rolled_back_params", [])
@@ -693,6 +704,7 @@ class ParameterOptimizer:
             "adjustment_count": len(self._adjustment_log),
             "consecutive_degrading_days": self._consecutive_degrading_days,
             "last_7d_score": self._last_7d_score,
+            "last_weather_anomaly_weight": self._last_weather_anomaly_weight,
             "last_update": self._last_update.isoformat() if self._last_update else None,
             "min_observations": LEARNING_MIN_OBSERVATIONS,
             "update_interval_hours": LEARNING_UPDATE_INTERVAL_HOURS,

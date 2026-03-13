@@ -26,3 +26,14 @@ def test_coordinator_data_has_independent_load_deviation_diagnostics():
 
     assert first.load_deviation_diagnostics == {"status": "triggered"}
     assert second.load_deviation_diagnostics == {}
+
+
+def test_coordinator_data_weather_anomaly_weight_defaults_to_1():
+    data = CoordinatorData()
+    assert data.weather_anomaly_weight == 1.0
+
+
+def test_coordinator_data_weather_anomaly_weight_can_be_set():
+    data = CoordinatorData()
+    data.weather_anomaly_weight = 0.3
+    assert data.weather_anomaly_weight == 0.3

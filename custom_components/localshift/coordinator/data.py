@@ -337,6 +337,7 @@ class CoordinatorData:
         0.0  # Learned kW per °C below heating threshold
     )
     weather_sample_count: int = 0  # Number of samples used for learning
+    weather_anomaly_weight: float = 1.0  # Issue #681: Weight for rollback evaluation
 
     # Forecast accuracy tracking fields (Issue #37 Phase 2)
     # SOC prediction errors (predicted - actual, in percentage points)
