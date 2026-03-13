@@ -91,6 +91,7 @@ class OptimizerPlanSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan"
     _attr_name = "Optimizer Plan"
     _attr_icon = "mdi:chart-bar"
+    _unrecorded_attributes = frozenset({"slots"})
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = len(self.coordinator.data.optimizer_decisions or [])
