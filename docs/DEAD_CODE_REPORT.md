@@ -37,9 +37,8 @@ Coverage: 56%
 | `number.py` | 40 | **DEAD** - Entire file |
 | `select.py` | 116 | **DEAD** - Entire file |
 | `switch.py` | 61 | **DEAD** - Entire file |
-| `config_flow/defaults.py` | 28 | **DEAD** - Entire file |
 
-**Total**: 410 lines in completely dead files
+**Total**: 382 lines in completely dead files
 
 ### Files with <30% Coverage (Mostly Dead)
 
@@ -133,15 +132,6 @@ Total:      221 items, 12,457 lines
 
 | Constant | File | Purpose |
 |----------|------|---------|
-| `DEFAULT_THERMAL_MANAGEMENT_ENABLED` | config_flow/defaults.py | Thermal mgmt (unused) |
-| `DEFAULT_COOLING_TRIGGER_TEMP` | config_flow/defaults.py | Cooling threshold |
-| `DEFAULT_HEATING_TRIGGER_TEMP` | config_flow/defaults.py | Heating threshold |
-| `DEFAULT_DEHUMIDIFY_TRIGGER_HUMIDITY` | config_flow/defaults.py | Dehumidify threshold |
-| `DEFAULT_SOLAR_TAPER_ENABLED` | config_flow/defaults.py | Solar taper feature |
-| `DEFAULT_PRECONDITION_HOURS_BEFORE_DW` | config_flow/defaults.py | Preconditioning |
-| `DEFAULT_PRECONDITION_TEMP_OFFSET` | config_flow/defaults.py | Preconditioning |
-| `DEFAULT_TAPER_MAX_SETPOINT_OFFSET` | config_flow/defaults.py | Taper offset |
-| `DEFAULT_THERMAL_MODE_DECISION_TIME` | config_flow/defaults.py | Thermal timing |
 | `CONF_SOLAR_BIAS_LEARNING_ENABLED` | const.py | Solar learning |
 | `DEFAULT_SOLAR_BIAS_LEARNING_ENABLED` | const.py | Solar learning default |
 | `CONF_NOTIFY_SERVICE` | const.py | Notifications |
@@ -269,9 +259,8 @@ Files needing test coverage:
 
 1. `custom_components/localshift/computation_engine_lib/change_tracker.py` - Never used
 2. `custom_components/localshift/computation_engine_lib/statistics_backfiller.py` - Never used
-3. `custom_components/localshift/config_flow/defaults.py` - All defaults unused
-4. Remove 33 constants from `const.py`
-5. Remove 14 functions from `config_flow/schemas.py` and `config_flow/validators.py`
+3. Remove 33 constants from `const.py`
+4. Remove 14 functions from `config_flow/schemas.py` and `config_flow/validators.py`
 
 **Estimated savings**: ~1,000 lines
 
