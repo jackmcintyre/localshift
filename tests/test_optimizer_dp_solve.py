@@ -1553,35 +1553,40 @@ def test_global_solar_gate_allows_charge_when_solar_insufficient():
 
 
 # ---------------------------------------------------------------------------
-# Issue #638: Global Solar Gate Uses Net Instead of Surplus
+# Issue #701: Global Solar Gate Uses Realistic Simulation
 # ---------------------------------------------------------------------------
 
 
-def test_global_solar_sufficiency_uses_surplus_not_net():
-    """Issue #638: Gate should use SURPLUS (max(0, solar-consumption)), not NET.
+def test_global_solar_sufficiency_uses_realistic_simulation():
+    """Issue #701: Gate should use realistic simulation with rate limits and efficiency.
 
-    The bug: overnight slots with consumption>0 have negative net, which drags
-    down the total even when daytime solar is abundant. The gate returns False
-    when it should return True.
+    The bug (Issue #638 regression): the gate used raw surplus without accounting
+    for charge rate limits and efficiency losses. This incorrectly blocked cheap
+    grid charging when solar couldn't actually reach the target.
 
-    Example:
-    - 8 overnight slots: solar=0, consumption=0.3 kWh → net=-0.3, surplus=0
-    - 8 daytime slots: solar=1.0, consumption=0.2 kWh → net=0.8, surplus=0.8
-    - Total net: 8*(-0.3) + 8*0.8 = -2.4 + 6.4 = 4.0 kWh
-    - Total surplus: 8*0 + 8*0.8 = 6.4 kWh
+    This test verifies the realistic simulation:
+    - Overnight consumption depletes the battery
+    - Daytime solar has enough surplus to recover AND reach target
+    - Realistic simulation accounts for efficiency losses
 
-    With NET formula: 4.0 kWh / 13.5 * 100 = 29.6% gain
-    With SURPLUS formula: 6.4 kWh / 13.5 * 100 = 47.4% gain
+    Scenario:
+    - Start at 60% SOC, target 80% (need 20% = 2.7 kWh)
+    - 8 overnight slots: 0.2 kWh consumption each = 1.6 kWh total discharge
+    - 8 daytime slots: 1.8 kWh surplus each = 14.4 kWh total surplus
+    - With 90% efficiency: 14.4 * 0.9 = 12.96 kWh effective charge
 
-    For 30% deficit: NET formula says 29.6% < 30% → gate FALSE (wrong!)
-                      SURPLUS formula says 47.4% > 30% → gate TRUE (correct!)
+    Realistic simulation:
+    - Overnight: SOC drops by 1.6 / 13.5 * 100 = 11.9% → 48.1%
+    - Daytime: SOC rises by 12.96 / 13.5 * 100 = 96% → capped at 100%
+
+    Since 100% >= 80% target, result should be TRUE.
     """
     overnight = [
-        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.0, consumption_kwh=0.3)
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.0, consumption_kwh=0.2)
         for i in range(8)
     ]
     daytime = [
-        _make_slot(slot_index=i + 8, buy_price=0.08, solar_kwh=1.0, consumption_kwh=0.2)
+        _make_slot(slot_index=i + 8, buy_price=0.08, solar_kwh=2.0, consumption_kwh=0.2)
         for i in range(8)
     ]
     slots = overnight + daytime
@@ -1592,12 +1597,56 @@ def test_global_solar_sufficiency_uses_surplus_not_net():
         effective_cheap_price=0.10,
         optimization_mode="self_consumption",
         soc_bins=20,
+        charge_efficiency=0.9,
+        discharge_efficiency=0.95,
     )
 
-    result = DPPlanner._check_global_solar_sufficiency(50.0, 0, slots, config)
+    result = DPPlanner._check_global_solar_sufficiency(60.0, 0, slots, config)
     assert result is True, (
-        "Gate should return True when solar SURPLUS covers deficit, "
-        "even if NET is reduced by overnight consumption"
+        "Gate should return True when realistic simulation reaches target"
+    )
+
+
+def test_global_solar_sufficiency_realistic_returns_false_when_insufficient():
+    """Issue #701: Gate should return False when rate limits prevent reaching target.
+
+    This test verifies that realistic simulation correctly handles rate limits.
+    Even with abundant surplus, if charge rate limits prevent capturing enough,
+    the gate should return False.
+
+    Scenario:
+    - Start at 30% SOC, target 80% (need 50% = 6.75 kWh)
+    - 4 daytime slots: 10 kWh surplus each = 40 kWh raw surplus
+    - But charge rate of 5 kW = 2.5 kWh max per 30-min slot
+    - Per slot: min(10, 2.5) * 0.9 = 2.25 kWh captured
+    - Total captured: 4 * 2.25 = 9 kWh
+
+    Realistic: 9 kWh > 6.75 kWh needed → TRUE (enough despite rate limit)
+
+    But if we need more (e.g., start at 20% → need 60% = 8.1 kWh):
+    - 9 kWh > 8.1 kWh → still TRUE
+
+    Let's make it fail: start at 10%, target 80% (need 70% = 9.45 kWh)
+    - 9 kWh < 9.45 kWh → FALSE
+    """
+    daytime = [
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=10.0, consumption_kwh=0.0)
+        for i in range(4)
+    ]
+
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+        charge_efficiency=0.9,
+        solar_charge_rate_kw=5.0,
+    )
+
+    result = DPPlanner._check_global_solar_sufficiency(10.0, 0, daytime, config)
+    assert result is False, (
+        "Gate should return False when rate limits prevent reaching target"
     )
 
 
