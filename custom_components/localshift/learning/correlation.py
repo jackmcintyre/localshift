@@ -481,7 +481,9 @@ class WeatherCorrelation:
         _LOGGER.info(
             "Processing %d forecast entries, first entry keys: %s",
             len(forecast_data),
-            list(forecast_data[0].keys()) if forecast_data else "empty",
+            list(forecast_data[0].keys())
+            if forecast_data and isinstance(forecast_data[0], dict)
+            else "empty",
         )
 
         for i, forecast_entry in enumerate(forecast_data):
