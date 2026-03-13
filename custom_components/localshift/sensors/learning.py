@@ -99,7 +99,7 @@ class OptimizerAdvantageSensor(LocalShiftSensorBase):
     _attr_icon = "mdi:scale-balance"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = "$"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
 
     def _update_from_coordinator(self) -> None:
         metrics = self.coordinator.data.performance_metrics
