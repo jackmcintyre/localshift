@@ -125,11 +125,21 @@ gh pr create --base test --title "Fix thing" --body "This has \`backticks\` and 
 
 **Why this matters:** Shell escaping converts `\`` to `\\`` and breaks table formatting.
 
-**Template for standard PRs:**
+**Auto-link PRs to issues:**
+
+Branches named `issue/{NNN}` automatically extract the issue number. Use this pattern:
+
 ```bash
+# Extract issue number from branch name (e.g., issue/42 → 42)
+ISSUE_NUM=$(git branch --show-current | grep -oP 'issue/\K\d+')
+
+# Create PR with auto-linking
 gh pr create --base test --title "TITLE" --body "$(cat <<'EOF'
 ## Summary
 Brief description
+
+## Related Issue
+Closes #${ISSUE_NUM}
 
 ## Changes
 - Change 1
@@ -141,6 +151,30 @@ Brief description
 EOF
 )"
 ```
+
+**One-liner version:**
+```bash
+gh pr create --base test --title "TITLE" --body "$(cat <<'EOF
+## Summary
+Brief description
+
+## Related Issue
+Closes #$(git branch --show-current | grep -oP 'issue/\K\d+')
+
+## Changes
+- Change 1
+
+## Testing
+- [ ] Tested in worktree
+- [ ] CI passes
+EOF
+)"
+```
+
+**Why this works:**
+- GitHub recognizes `Closes #NNN` and auto-links the PR to the issue
+- When the PR merges, the issue automatically closes
+- Branch naming convention (`issue/{NNN}`) makes extraction reliable
 
 ---
 
