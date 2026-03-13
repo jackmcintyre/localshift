@@ -242,6 +242,7 @@ class LearningOrchestrator:
                     data.adaptive_params = self.param_optimizer.optimize(
                         decisions,
                         current_7d_score,
+                        weather_weight=data.weather_anomaly_weight,
                     )
 
             if self._counterfactual_evaluator is not None:
