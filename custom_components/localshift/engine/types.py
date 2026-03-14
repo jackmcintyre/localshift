@@ -422,7 +422,6 @@ class OptimizerResult:
     """Count of each reason code across all slots (for diagnostics)."""
 
 
-
 # -----------------------------------------------------------------------------
 # Negative FIT avoidance context
 # -----------------------------------------------------------------------------
@@ -443,6 +442,7 @@ class NegativeFitAvoidanceContext:
 
     temporary_floor_pct: float
     """Minimum SOC percent allowed during pre-discharge (demand_window_target - allowed_headroom_pct)."""
+
 
 # -----------------------------------------------------------------------------
 # Optimizer inputs

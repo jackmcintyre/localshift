@@ -40,7 +40,7 @@ def _determine_export_actions(
         and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
     )
 
-    if use_avoidance:
+    if use_avoidance and negative_fit_avoidance_context is not None:
         if slot.sell_price > 0:
             if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)

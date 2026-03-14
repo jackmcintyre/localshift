@@ -83,7 +83,6 @@ class DPPlanner:
         result.solve_time_seconds = time.monotonic() - start
         return result
 
-
     # ------------------------------------------------------------------
     # Negative FIT Avoidance Context Derivation (Issue #719)
     # ------------------------------------------------------------------
@@ -117,7 +116,9 @@ class DPPlanner:
             return None
 
         # 2. Check there is at least one earlier positive-FIT slot
-        has_positive_before = any(s.sell_price > 0 for s in slots[:first_negative_fit_idx])
+        has_positive_before = any(
+            s.sell_price > 0 for s in slots[:first_negative_fit_idx]
+        )
         if not has_positive_before:
             return None
 
@@ -141,7 +142,9 @@ class DPPlanner:
         if accumulated_excess_kwh <= 0:
             return None
 
-        conservative_overflow_kwh = accumulated_excess_kwh * NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR
+        conservative_overflow_kwh = (
+            accumulated_excess_kwh * NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR
+        )
 
         # 4. Derive allowed headroom (percentage points)
         allowed_headroom_pct = min(
@@ -190,15 +193,29 @@ class DPPlanner:
         dp = self._initialize_dp_tables(
             n_slots, soc_grid, config, terminal_penalty_idx, solar_capable, inputs
         )
-        
+
         # Issue #719: Derive negative-FIT avoidance context before backward induction
-        negative_fit_avoidance_context = self._derive_negative_fit_avoidance_context(inputs)
-        
+        negative_fit_avoidance_context = self._derive_negative_fit_avoidance_context(
+            inputs
+        )
+
         states_explored = self._backward_induction(
-            dp, slots, soc_grid, config, terminal_penalty_idx, inputs, negative_fit_avoidance_context
+            dp,
+            slots,
+            soc_grid,
+            config,
+            terminal_penalty_idx,
+            inputs,
+            negative_fit_avoidance_context,
         )
         decisions, totals, reason_histogram = self._forward_reconstruct(
-            dp, inputs, slots, soc_grid, config, terminal_penalty_idx, negative_fit_avoidance_context
+            dp,
+            inputs,
+            slots,
+            soc_grid,
+            config,
+            terminal_penalty_idx,
+            negative_fit_avoidance_context,
         )
 
         terminal_shortfall = self._compute_terminal_shortfall(
@@ -1273,7 +1290,6 @@ class DPPlanner:
         )
         return simulated_terminal_soc >= config.demand_window_target_soc_pct
 
-
     @staticmethod
     def _determine_export_actions(
         soc_pct: float,
@@ -1283,21 +1299,21 @@ class DPPlanner:
         negative_fit_avoidance_context: NegativeFitAvoidanceContext | None,
     ) -> list[PlannerAction]:
         """Determine export actions based on mode and negative-FIT avoidance context.
-        
+
         Issue #719: Bounded first-window negative-FIT avoidance.
         """
         actions = []
         can_discharge = soc_pct > config.min_soc_pct
-        
+
         if not can_discharge:
             return actions
-        
+
         use_avoidance = (
             negative_fit_avoidance_context is not None
             and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
         )
-        
-        if use_avoidance:
+
+        if use_avoidance and negative_fit_avoidance_context is not None:
             if slot.sell_price > 0:
                 if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
                     actions.append(PlannerAction.EXPORT_PROACTIVE)
@@ -1311,7 +1327,7 @@ class DPPlanner:
             else:
                 if slot.sell_price > 0:
                     actions.append(PlannerAction.EXPORT_PROACTIVE)
-        
+
         return actions
 
     @staticmethod
