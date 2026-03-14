@@ -67,29 +67,19 @@ class TestBatteryModeSelect:
         assert device_info["name"] == "LocalShift"
 
     def test_current_option_self_consumption(self, mock_coordinator, mock_entry):
-        """Test current option returns self_consumption."""
-        mock_coordinator.data.active_mode = BatteryMode.SELF_CONSUMPTION
+        """Test current option returns manual_mode when automation off."""
+        mock_coordinator.get_switch_state.return_value = False
+        mock_entry.options = {"manual_battery_mode": "self_consumption"}
         select = BatteryModeSelect(mock_coordinator, mock_entry)
 
         assert select.current_option == "self_consumption"
 
     def test_current_option_grid_charging(self, mock_coordinator, mock_entry):
-        """Test current option returns grid_charging when automation is on."""
+        """Test current option returns automatic when automation is on."""
         mock_coordinator.get_switch_state.return_value = True
-        mock_coordinator.data.active_mode = BatteryMode.GRID_CHARGING
         select = BatteryModeSelect(mock_coordinator, mock_entry)
 
-        assert select.current_option == "grid_charging"
-
-    def test_current_option_demand_block_returns_self_consumption(
-        self, mock_coordinator, mock_entry
-    ):
-        """Test current option returns self_consumption when in DEMAND_BLOCK mode."""
-        mock_coordinator.get_switch_state.return_value = True
-        mock_coordinator.data.active_mode = BatteryMode.DEMAND_BLOCK
-        select = BatteryModeSelect(mock_coordinator, mock_entry)
-
-        assert select.current_option == "self_consumption"
+        assert select.current_option == "automatic"
 
     def test_current_option_returns_manual_mode_when_automation_off(
         self, mock_coordinator, mock_entry
@@ -100,6 +90,15 @@ class TestBatteryModeSelect:
         select = BatteryModeSelect(mock_coordinator, mock_entry)
 
         assert select.current_option == "grid_charging"
+
+    def test_current_option_returns_automatic_when_automation_on(
+        self, mock_coordinator, mock_entry
+    ):
+        """Test current option returns automatic when automation is enabled."""
+        mock_coordinator.get_switch_state.return_value = True
+        select = BatteryModeSelect(mock_coordinator, mock_entry)
+
+        assert select.current_option == "automatic"
 
     @pytest.mark.asyncio
     async def test_select_automatic_enables_automation_and_clears_manual_override(
@@ -204,37 +203,6 @@ class TestBatteryModeSelect:
                 ):
                     await select.async_select_option("grid_charging")
         mock_logger.error.assert_called()
-
-    def test_current_option_boost_charging(self, mock_coordinator, mock_entry):
-        """Test current option returns boost_charging when automation on."""
-        mock_coordinator.get_switch_state.return_value = True
-        mock_coordinator.data.active_mode = BatteryMode.BOOST_CHARGING
-        select = BatteryModeSelect(mock_coordinator, mock_entry)
-        assert select.current_option == "boost_charging"
-
-    def test_current_option_spike_discharge(self, mock_coordinator, mock_entry):
-        """Test current option returns spike_discharge when automation on."""
-        mock_coordinator.get_switch_state.return_value = True
-        mock_coordinator.data.active_mode = BatteryMode.SPIKE_DISCHARGE
-        select = BatteryModeSelect(mock_coordinator, mock_entry)
-        assert select.current_option == "spike_discharge"
-
-    def test_current_option_proactive_export(self, mock_coordinator, mock_entry):
-        """Test current option returns proactive_export when automation on."""
-        mock_coordinator.get_switch_state.return_value = True
-        mock_coordinator.data.active_mode = BatteryMode.PROACTIVE_EXPORT
-        select = BatteryModeSelect(mock_coordinator, mock_entry)
-        assert select.current_option == "proactive_export"
-
-    def test_current_option_hold_returns_manual_mode(
-        self, mock_coordinator, mock_entry
-    ):
-        """Test current option returns _manual_mode for HOLD mode when automation on."""
-        mock_coordinator.get_switch_state.return_value = True
-        mock_coordinator.data.active_mode = BatteryMode.HOLD
-        mock_entry.options = {"manual_battery_mode": "grid_charging"}
-        select = BatteryModeSelect(mock_coordinator, mock_entry)
-        assert select.current_option == "grid_charging"
 
     def test_handle_coordinator_update_early_exit(self, mock_coordinator, mock_entry):
         """Test _handle_coordinator_update returns early when _internal_update is True."""

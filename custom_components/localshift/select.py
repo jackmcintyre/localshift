@@ -94,19 +94,8 @@ class BatteryModeSelect(SelectEntity):
     @property
     def current_option(self) -> str | None:
         """Return the current selected option."""
-        if not self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            return self._manual_mode
-        mode = self.coordinator.data.active_mode
-        if mode == BatteryMode.DEMAND_BLOCK:
-            return "self_consumption"
-        if mode in (
-            BatteryMode.SELF_CONSUMPTION,
-            BatteryMode.GRID_CHARGING,
-            BatteryMode.BOOST_CHARGING,
-            BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.PROACTIVE_EXPORT,
-        ):
-            return mode.value
+        if self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
+            return "automatic"
         return self._manual_mode
 
     async def async_select_option(self, option: str) -> None:
