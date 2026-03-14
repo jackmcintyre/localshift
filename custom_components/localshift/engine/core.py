@@ -190,11 +190,15 @@ class DPPlanner:
         dp = self._initialize_dp_tables(
             n_slots, soc_grid, config, terminal_penalty_idx, solar_capable, inputs
         )
+        
+        # Issue #719: Derive negative-FIT avoidance context before backward induction
+        negative_fit_avoidance_context = self._derive_negative_fit_avoidance_context(inputs)
+        
         states_explored = self._backward_induction(
-            dp, slots, soc_grid, config, terminal_penalty_idx, inputs
+            dp, slots, soc_grid, config, terminal_penalty_idx, inputs, negative_fit_avoidance_context
         )
         decisions, totals, reason_histogram = self._forward_reconstruct(
-            dp, inputs, slots, soc_grid, config, terminal_penalty_idx
+            dp, inputs, slots, soc_grid, config, terminal_penalty_idx, negative_fit_avoidance_context
         )
 
         terminal_shortfall = self._compute_terminal_shortfall(
@@ -409,6 +413,7 @@ class DPPlanner:
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
         inputs: OptimizerInputs,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> int:
         """Perform backward induction to fill DP tables.
 
@@ -457,6 +462,7 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         slots: list[SlotContext],
         inputs: OptimizerInputs,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> tuple[tuple[float, PlannerAction, int, float, float, float], int]:
         """Compute best action for a state.
 
@@ -482,6 +488,7 @@ class DPPlanner:
             slot_idx=slot_idx,
             slots=slots,
             terminal_penalty_idx=terminal_penalty_idx,
+            negative_fit_avoidance_context=negative_fit_avoidance_context,
         )
 
         best_cost = float("inf")
@@ -578,6 +585,7 @@ class DPPlanner:
         soc_grid: list[float],
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> tuple[list[PlannedSlotDecision], dict[str, float], dict[str, int]]:
         """Reconstruct optimal path forward.
 
@@ -1273,6 +1281,7 @@ class DPPlanner:
         slot_idx: int = 0,
         slots: list[SlotContext] | None = None,
         terminal_penalty_idx: int | None = None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> list[PlannerAction]:
         """
         Return list of actions feasible from given SOC and slot context.
@@ -1350,19 +1359,32 @@ class DPPlanner:
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
                 actions.append(PlannerAction.CHARGE_GRID_BOOST)
 
-        # Export constraints (Issue #406)
+        # Export constraints (Issue #406, #719)
         if can_discharge:
-            # In self-consumption mode, only export if profitable vs keeping energy for load
-            if config.optimization_mode == "self_consumption":
-                min_profitable_sell = (
-                    max(0.0, slot.buy_price) + config.export_price_margin
-                )
-                if slot.sell_price >= min_profitable_sell:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
-            else:
-                # Arbitrage mode: export if positive price
+            # Determine if we are in the pre-negative-FIT window with context active
+            use_avoidance = (
+                negative_fit_avoidance_context is not None
+                and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
+            )
+
+            if use_avoidance:
+                # Relaxed: allow any positive FIT, but enforce temporary SOC floor
                 if slot.sell_price > 0:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+                    # Rough guard: require SOC high enough to discharge without immediately breaching floor
+                    if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
+                        actions.append(PlannerAction.EXPORT_PROACTIVE)
+            else:
+                # Existing rules
+                if config.optimization_mode == "self_consumption":
+                    min_profitable_sell = (
+                        max(0.0, slot.buy_price) + config.export_price_margin
+                    )
+                    if slot.sell_price >= min_profitable_sell:
+                        actions.append(PlannerAction.EXPORT_PROACTIVE)
+                else:
+                    # Arbitrage mode: export if positive price
+                    if slot.sell_price > 0:
+                        actions.append(PlannerAction.EXPORT_PROACTIVE)
 
         return actions
 
