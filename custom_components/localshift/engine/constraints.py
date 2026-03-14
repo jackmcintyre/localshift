@@ -25,7 +25,15 @@ def _determine_export_actions(
 ) -> list[PlannerAction]:
     """Determine export actions based on mode and negative-FIT avoidance context.
 
-    Issue #719: Bounded first-window negative-FIT avoidance.
+    Issue #719: Recoverability-based negative-FIT avoidance.
+
+    Allows proactive export at positive FIT before the risk window when:
+    - SOC is above the recoverability floor + buffer
+    - The slot is before the risk window starts
+    - The slot has positive sell price
+
+    The recoverability floor ensures we only discharge energy that can be
+    recovered via future solar before the deadline, avoiding later grid import.
     """
     from custom_components.localshift.engine.types import PlannerAction
 
@@ -37,12 +45,15 @@ def _determine_export_actions(
 
     use_avoidance = (
         negative_fit_avoidance_context is not None
-        and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
+        and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
     )
 
     if use_avoidance and negative_fit_avoidance_context is not None:
         if slot.sell_price > 0:
-            if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
+            floor_pct = negative_fit_avoidance_context.recoverability_floor_pct_by_slot[
+                slot_idx
+            ]
+            if soc_pct > floor_pct + 2.0:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)
     else:
         if config.optimization_mode == "self_consumption":

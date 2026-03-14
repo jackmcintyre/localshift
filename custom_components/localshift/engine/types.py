@@ -429,19 +429,30 @@ class OptimizerResult:
 
 @dataclass(frozen=True)
 class NegativeFitAvoidanceContext:
-    """Immutable context for bounded first-window negative-FIT avoidance."""
+    """Immutable context for recoverability-based negative-FIT avoidance.
 
-    first_negative_fit_slot_idx: int
-    """Index of the first slot where sell_price <= 0 within the horizon."""
+    The planner may proactively discharge at positive FIT before a bad-price
+    spill window when conservative future solar can still recover the battery
+    to target by the relevant deadline.
+    """
 
-    conservative_overflow_kwh: float
-    """Conservative estimate of excess solar (kWh) available before first negative-FIT window."""
+    risk_window_start_idx: int
+    """Index of the first slot in the spill-risk window (first sell_price <= 0)."""
 
-    allowed_headroom_pct: float
-    """Maximum temporary headroom below demand_window_target_soc_pct (percentage points)."""
+    risk_window_end_idx: int
+    """Index of the last slot in the spill-risk window (inclusive)."""
 
-    temporary_floor_pct: float
-    """Minimum SOC percent allowed during pre-discharge (demand_window_target - allowed_headroom_pct)."""
+    required_headroom_kwh: float
+    """Estimated storage space (kWh) needed to absorb spill during risk window."""
+
+    recovery_deadline_idx: int | None
+    """Slot index by which target must be recoverable (demand window or horizon end)."""
+
+    conservative_recovery_kwh_by_slot: tuple[float, ...]
+    """Conservative recoverable solar (kWh) from each slot to recovery deadline."""
+
+    recoverability_floor_pct_by_slot: tuple[float, ...]
+    """Precomputed recoverability floor (%) for each slot based on future recovery potential."""
 
 
 # -----------------------------------------------------------------------------
