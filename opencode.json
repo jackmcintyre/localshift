@@ -26,9 +26,6 @@
       }
     }
   },
-  "tools": {
-    "homeassistant_*": true
-  },
   "agent": {
     "homeassistant": {
       "description": "Agent with HomeAssistant MCP enabled for debugging",
