@@ -1273,6 +1273,47 @@ class DPPlanner:
         )
         return simulated_terminal_soc >= config.demand_window_target_soc_pct
 
+
+    @staticmethod
+    def _determine_export_actions(
+        soc_pct: float,
+        slot: SlotContext,
+        config: OptimizerConfig,
+        slot_idx: int,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None,
+    ) -> list[PlannerAction]:
+        """Determine export actions based on mode and negative-FIT avoidance context.
+        
+        Issue #719: Bounded first-window negative-FIT avoidance.
+        """
+        actions = []
+        can_discharge = soc_pct > config.min_soc_pct
+        
+        if not can_discharge:
+            return actions
+        
+        use_avoidance = (
+            negative_fit_avoidance_context is not None
+            and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
+        )
+        
+        if use_avoidance:
+            if slot.sell_price > 0:
+                if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+        else:
+            if config.optimization_mode == "self_consumption":
+                min_profitable_sell = (
+                    max(0.0, slot.buy_price) + config.export_price_margin
+                )
+                if slot.sell_price >= min_profitable_sell:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+            else:
+                if slot.sell_price > 0:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+        
+        return actions
+
     @staticmethod
     def feasible_actions(
         soc_pct: float,
@@ -1308,7 +1349,6 @@ class DPPlanner:
         actions = []
 
         can_charge = soc_pct < config.max_soc_pct
-        can_discharge = soc_pct > config.min_soc_pct
 
         actions.append(PlannerAction.HOLD)
 
@@ -1360,31 +1400,11 @@ class DPPlanner:
                 actions.append(PlannerAction.CHARGE_GRID_BOOST)
 
         # Export constraints (Issue #406, #719)
-        if can_discharge:
-            # Determine if we are in the pre-negative-FIT window with context active
-            use_avoidance = (
-                negative_fit_avoidance_context is not None
-                and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
+        actions.extend(
+            DPPlanner._determine_export_actions(
+                soc_pct, slot, config, slot_idx, negative_fit_avoidance_context
             )
-
-            if use_avoidance:
-                # Relaxed: allow any positive FIT, but enforce temporary SOC floor
-                if slot.sell_price > 0:
-                    # Rough guard: require SOC high enough to discharge without immediately breaching floor
-                    if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
-                        actions.append(PlannerAction.EXPORT_PROACTIVE)
-            else:
-                # Existing rules
-                if config.optimization_mode == "self_consumption":
-                    min_profitable_sell = (
-                        max(0.0, slot.buy_price) + config.export_price_margin
-                    )
-                    if slot.sell_price >= min_profitable_sell:
-                        actions.append(PlannerAction.EXPORT_PROACTIVE)
-                else:
-                    # Arbitrage mode: export if positive price
-                    if slot.sell_price > 0:
-                        actions.append(PlannerAction.EXPORT_PROACTIVE)
+        )
 
         return actions
 
