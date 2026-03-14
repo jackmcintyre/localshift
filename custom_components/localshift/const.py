@@ -350,6 +350,7 @@ SELECT_OPTIMIZATION_MODE = "optimization_mode"
 
 SELECT_OPTIONS = {
     SELECT_BATTERY_MODE: [
+        "automatic",
         "self_consumption",
         "grid_charging",
         "boost_charging",
