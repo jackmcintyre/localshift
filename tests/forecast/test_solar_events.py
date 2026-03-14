@@ -296,22 +296,130 @@ def test_cloud_scale_factor_reset_to_none_on_clearing() -> None:
     assert data_sunny.cloud_event_solar_scale_factor is None
 
 
+def test_cloud_scale_factor_reset_when_runtime_becomes_inactive() -> None:
+    now = BASE_NOW
+    detector = SolarEventDetector()
+    data_cloud = _make_data(now=now, actual_solar_kw=1.0, forecast_kw=5.0)
+    detector.evaluate(data_cloud, now)
+    assert data_cloud.cloud_event_solar_scale_factor == pytest.approx(0.2, rel=0.01)
+
+    data_inactive = _make_data(
+        now=now + timedelta(minutes=1),
+        actual_solar_kw=1.0,
+        forecast_kw=5.0,
+        optimizer_active=False,
+    )
+    data_inactive.cloud_event_solar_scale_factor = (
+        data_cloud.cloud_event_solar_scale_factor
+    )
+
+    assert detector.evaluate(data_inactive, now + timedelta(minutes=1)) is False
+    assert data_inactive.cloud_event_diagnostics["status"] == "inactive"
+    assert data_inactive.cloud_event_solar_scale_factor is None
+
+
+def test_cloud_scale_factor_reset_when_no_current_solcast_slot() -> None:
+    now = BASE_NOW
+    detector = SolarEventDetector()
+    data_cloud = _make_data(now=now, actual_solar_kw=1.0, forecast_kw=5.0)
+    detector.evaluate(data_cloud, now)
+    assert data_cloud.cloud_event_solar_scale_factor == pytest.approx(0.2, rel=0.01)
+
+    data_no_slot = _make_data(
+        now=now + timedelta(minutes=5), actual_solar_kw=1.0, forecast_kw=5.0
+    )
+    future_period_start = now + timedelta(hours=5)
+    future_period_start = future_period_start.replace(second=0, microsecond=0)
+    future_period_start = future_period_start - timedelta(
+        minutes=future_period_start.minute % 30
+    )
+    data_no_slot.solcast_today = [
+        {
+            "period_start": future_period_start.isoformat(),
+            "pv_estimate": 5.0,
+        }
+    ]
+    data_no_slot.cloud_event_solar_scale_factor = (
+        data_cloud.cloud_event_solar_scale_factor
+    )
+
+    assert detector.evaluate(data_no_slot, now + timedelta(minutes=5)) is False
+    assert data_no_slot.cloud_event_diagnostics["status"] == "no_forecast"
+    assert data_no_slot.cloud_event_solar_scale_factor is None
+
+
+def test_cloud_scale_factor_reset_when_forecast_drops_below_minimum() -> None:
+    now = BASE_NOW
+    detector = SolarEventDetector()
+    data_cloud = _make_data(now=now, actual_solar_kw=1.0, forecast_kw=5.0)
+    detector.evaluate(data_cloud, now)
+    assert data_cloud.cloud_event_solar_scale_factor == pytest.approx(0.2, rel=0.01)
+
+    data_low_forecast = _make_data(
+        now=now + timedelta(minutes=5), actual_solar_kw=0.05, forecast_kw=0.2
+    )
+    data_low_forecast.cloud_event_solar_scale_factor = (
+        data_cloud.cloud_event_solar_scale_factor
+    )
+
+    assert detector.evaluate(data_low_forecast, now + timedelta(minutes=5)) is False
+    assert data_low_forecast.cloud_event_diagnostics["status"] == "no_forecast"
+    assert data_low_forecast.cloud_event_solar_scale_factor is None
+
+
 def test_clearing_window_resets_if_production_drops_again() -> None:
     now = BASE_NOW
     data_cloud = _make_data(now=now, actual_solar_kw=1.0, forecast_kw=5.0)
     detector = SolarEventDetector()
     detector.evaluate(data_cloud, now)
 
-    data_sunny = _make_data(now=now, actual_solar_kw=4.5, forecast_kw=5.0)
-    data_cloudy2 = _make_data(now=now, actual_solar_kw=0.8, forecast_kw=5.0)
+    detector.evaluate(
+        _make_data(
+            now=now + timedelta(minutes=16), actual_solar_kw=4.5, forecast_kw=5.0
+        ),
+        now + timedelta(minutes=16),
+    )
+    detector.evaluate(
+        _make_data(
+            now=now + timedelta(minutes=20), actual_solar_kw=4.5, forecast_kw=5.0
+        ),
+        now + timedelta(minutes=20),
+    )
+    detector.evaluate(
+        _make_data(
+            now=now + timedelta(minutes=22), actual_solar_kw=0.8, forecast_kw=5.0
+        ),
+        now + timedelta(minutes=22),
+    )
 
-    detector.evaluate(data_sunny, now + timedelta(minutes=16))
-    detector.evaluate(data_sunny, now + timedelta(minutes=20))
-    detector.evaluate(data_cloudy2, now + timedelta(minutes=22))
-
-    detector.evaluate(data_sunny, now + timedelta(minutes=23))
-    assert detector.evaluate(data_sunny, now + timedelta(minutes=33)) is False
-    assert detector.evaluate(data_sunny, now + timedelta(minutes=34)) is True
+    detector.evaluate(
+        _make_data(
+            now=now + timedelta(minutes=23), actual_solar_kw=4.5, forecast_kw=5.0
+        ),
+        now + timedelta(minutes=23),
+    )
+    assert (
+        detector.evaluate(
+            _make_data(
+                now=now + timedelta(minutes=33),
+                actual_solar_kw=4.5,
+                forecast_kw=5.0,
+            ),
+            now + timedelta(minutes=33),
+        )
+        is False
+    )
+    assert (
+        detector.evaluate(
+            _make_data(
+                now=now + timedelta(minutes=34),
+                actual_solar_kw=4.5,
+                forecast_kw=5.0,
+            ),
+            now + timedelta(minutes=34),
+        )
+        is True
+    )
 
 
 def test_falls_back_to_solcast_tomorrow_when_today_empty() -> None:

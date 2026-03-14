@@ -25,7 +25,7 @@ class SolarEventDetector:
 
     def evaluate(self, data: Any, now: datetime) -> bool:
         if not self._runtime_is_active(data):
-            self._reset_all()
+            self._clear_state_and_scale_factor(data)
             self._write_diagnostics(
                 data,
                 status="inactive",
@@ -38,20 +38,10 @@ class SolarEventDetector:
             return False
 
         actual_kw = float(getattr(data, "solar_power_kw", 0.0) or 0.0)
-
-        if self._in_cloud_event:
-            forecast_kw = self._current_solcast_kw(data, now)
-            ratio = (
-                actual_kw / forecast_kw
-                if forecast_kw is not None and forecast_kw >= MIN_FORECAST_KW
-                else None
-            )
-            return self._handle_cloud_event(data, now, actual_kw, forecast_kw, ratio)
-
         forecast_kw = self._current_solcast_kw(data, now)
 
         if forecast_kw is None or forecast_kw < MIN_FORECAST_KW:
-            self._reset_onset_window()
+            self._clear_state_and_scale_factor(data)
             self._write_diagnostics(
                 data,
                 status="no_forecast",
@@ -62,6 +52,10 @@ class SolarEventDetector:
                 ratio=None,
             )
             return False
+
+        if self._in_cloud_event:
+            ratio = actual_kw / forecast_kw
+            return self._handle_cloud_event(data, now, actual_kw, forecast_kw, ratio)
 
         ratio = actual_kw / forecast_kw
         return self._handle_onset_detection(data, now, actual_kw, forecast_kw, ratio)
@@ -276,6 +270,10 @@ class SolarEventDetector:
         self._clearing_started_at = None
         self._in_cloud_event = False
         self._cloud_samples = []
+
+    def _clear_state_and_scale_factor(self, data: Any) -> None:
+        self._reset_all()
+        data.cloud_event_solar_scale_factor = None
 
     def _write_diagnostics(
         self,
