@@ -18,12 +18,13 @@
       "enabled": true
     },
     "homeassistant": {
-      "type": "remote",
-      "url": "https://homeassistant.nectaron.jackmcintyre.net/api/mcp",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:HA_LONG_LIVED_TOKEN}"
-      }
+      "type": "local",
+      "command": ["uvx", "ha-mcp"],
+      "environment": {
+        "HOMEASSISTANT_URL": "https://homeassistant.nectaron.jackmcintyre.net",
+        "HOMEASSISTANT_TOKEN": "{env:HA_LONG_LIVED_TOKEN}"
+      },
+      "enabled": true
     }
   },
   "agent": {
@@ -32,12 +33,13 @@
       "mode": "subagent",
       "mcp": {
         "homeassistant": {
-          "type": "remote",
-          "url": "https://homeassistant.nectaron.jackmcintyre.net/api/mcp",
-          "enabled": true,
-          "headers": {
-            "Authorization": "Bearer {env:HA_LONG_LIVED_TOKEN}"
-          }
+          "type": "local",
+          "command": ["uvx", "ha-mcp"],
+          "environment": {
+            "HOMEASSISTANT_URL": "https://homeassistant.nectaron.jackmcintyre.net",
+            "HOMEASSISTANT_TOKEN": "{env:HA_LONG_LIVED_TOKEN}"
+          },
+          "enabled": true
         }
       },
       "tools": {
