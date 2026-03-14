@@ -2546,3 +2546,18 @@ def test_plan_with_empty_slots():
     result = planner.plan(inputs)
     assert result.success
     assert result.total_slots == 0
+
+
+def test_negative_fit_context_type():
+    """Smoke test: NegativeFitAvoidanceContext can be constructed."""
+    from custom_components.localshift.engine.types import NegativeFitAvoidanceContext
+    ctx = NegativeFitAvoidanceContext(
+        first_negative_fit_slot_idx=10,
+        conservative_overflow_kwh=5.0,
+        allowed_headroom_pct=3.7,
+        temporary_floor_pct=76.3,
+    )
+    assert ctx.first_negative_fit_slot_idx == 10
+    assert ctx.conservative_overflow_kwh == 5.0
+    assert ctx.allowed_headroom_pct == 3.7
+    assert ctx.temporary_floor_pct == 76.3

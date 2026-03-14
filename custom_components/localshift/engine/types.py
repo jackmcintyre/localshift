@@ -422,6 +422,28 @@ class OptimizerResult:
     """Count of each reason code across all slots (for diagnostics)."""
 
 
+
+# -----------------------------------------------------------------------------
+# Negative FIT avoidance context
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NegativeFitAvoidanceContext:
+    """Immutable context for bounded first-window negative-FIT avoidance."""
+
+    first_negative_fit_slot_idx: int
+    """Index of the first slot where sell_price <= 0 within the horizon."""
+
+    conservative_overflow_kwh: float
+    """Conservative estimate of excess solar (kWh) available before first negative-FIT window."""
+
+    allowed_headroom_pct: float
+    """Maximum temporary headroom below demand_window_target_soc_pct (percentage points)."""
+
+    temporary_floor_pct: float
+    """Minimum SOC percent allowed during pre-discharge (demand_window_target - allowed_headroom_pct)."""
+
 # -----------------------------------------------------------------------------
 # Optimizer inputs
 # -----------------------------------------------------------------------------
