@@ -7,12 +7,53 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from custom_components.localshift.engine.types import (
+        NegativeFitAvoidanceContext,
         OptimizerConfig,
         PlannerAction,
         SlotContext,
     )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _determine_export_actions(
+    soc_pct: float,
+    slot: SlotContext,
+    config: OptimizerConfig,
+    slot_idx: int,
+    negative_fit_avoidance_context: NegativeFitAvoidanceContext | None,
+) -> list[PlannerAction]:
+    """Determine export actions based on mode and negative-FIT avoidance context.
+
+    Issue #719: Bounded first-window negative-FIT avoidance.
+    """
+    from custom_components.localshift.engine.types import PlannerAction
+
+    actions = []
+    can_discharge = soc_pct > config.min_soc_pct
+
+    if not can_discharge:
+        return actions
+
+    use_avoidance = (
+        negative_fit_avoidance_context is not None
+        and slot_idx < negative_fit_avoidance_context.first_negative_fit_slot_idx
+    )
+
+    if use_avoidance:
+        if slot.sell_price > 0:
+            if soc_pct > negative_fit_avoidance_context.temporary_floor_pct + 2.0:
+                actions.append(PlannerAction.EXPORT_PROACTIVE)
+    else:
+        if config.optimization_mode == "self_consumption":
+            min_profitable_sell = max(0.0, slot.buy_price) + config.export_price_margin
+            if slot.sell_price >= min_profitable_sell:
+                actions.append(PlannerAction.EXPORT_PROACTIVE)
+        else:
+            if slot.sell_price > 0:
+                actions.append(PlannerAction.EXPORT_PROACTIVE)
+
+    return actions
 
 
 def feasible_actions(
@@ -22,6 +63,7 @@ def feasible_actions(
     slot_idx: int = 0,
     slots: list[SlotContext] | None = None,
     terminal_penalty_idx: int | None = None,
+    negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
 ) -> list[PlannerAction]:
     """Return list of actions feasible from given SOC and slot context.
 
@@ -33,6 +75,7 @@ def feasible_actions(
     - Solar surplus gate: suppresses grid charging when solar will cover
       the full SOC deficit before the demand window (self_consumption mode only)
     - Slot duration vs transfer limits
+    - Negative FIT avoidance (Issue #719)
 
     Args:
         soc_pct: Current battery SOC percentage.
@@ -42,6 +85,7 @@ def feasible_actions(
         slots: Full list of planning slots (None disables solar gate).
         terminal_penalty_idx: Index at which the shortfall penalty is applied
             (None disables solar gate).
+        negative_fit_avoidance_context: Context for bounded pre-discharge (Issue #719).
 
     """
     from custom_components.localshift.engine.types import PlannerAction
@@ -49,28 +93,21 @@ def feasible_actions(
     actions = []
 
     can_charge = soc_pct < config.max_soc_pct
-    can_discharge = soc_pct > config.min_soc_pct
 
     actions.append(PlannerAction.HOLD)
 
-    # Solar surplus gate: if projected solar can cover the full SOC deficit
-    # before the demand window, suppress grid charging entirely.
     _solar_covers_deficit = False
-
-    # Issue #559 Root Cause 1: global solar gate for no-DW scenarios.
     _global_solar_covers = False
     if config.optimization_mode == "self_consumption" and slots is not None:
         _global_solar_covers = check_global_solar_sufficiency(
             soc_pct, slot_idx, slots, config
         )
 
-    # Grid charging constraints (Issue #406)
     if (
         can_charge
         and not slot.is_demand_window_slot
         and not (_solar_covers_deficit or _global_solar_covers)
     ):
-        # In self-consumption mode, only charge if price is cheap
         if config.optimization_mode == "self_consumption":
             price_is_cheap = slot.buy_price <= config.effective_cheap_price
             price_is_very_cheap = slot.buy_price <= config.effective_cheap_price * 0.8
@@ -80,21 +117,14 @@ def feasible_actions(
                 if price_is_very_cheap:
                     actions.append(PlannerAction.CHARGE_GRID_BOOST)
         else:
-            # Arbitrage mode: charge whenever below max (no solar gate)
             actions.append(PlannerAction.CHARGE_GRID_NORMAL)
             actions.append(PlannerAction.CHARGE_GRID_BOOST)
 
-    # Export constraints (Issue #406)
-    if can_discharge:
-        # In self-consumption mode, only export if profitable vs keeping energy for load
-        if config.optimization_mode == "self_consumption":
-            min_profitable_sell = max(0.0, slot.buy_price) + config.export_price_margin
-            if slot.sell_price >= min_profitable_sell:
-                actions.append(PlannerAction.EXPORT_PROACTIVE)
-        else:
-            # Arbitrage mode: export if positive price
-            if slot.sell_price > 0:
-                actions.append(PlannerAction.EXPORT_PROACTIVE)
+    actions.extend(
+        _determine_export_actions(
+            soc_pct, slot, config, slot_idx, negative_fit_avoidance_context
+        )
+    )
 
     return actions
 
