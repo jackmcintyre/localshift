@@ -10,7 +10,7 @@ metadata:
 
 ## What I Do
 
-I am the **sole gateway** to Home Assistant. I have exclusive access to Home Assistant MCP tools. The main agent must delegate any HA operation to me using `@homeassistant`.
+I am the **sole gateway** to Home Assistant. I have exclusive access to Home Assistant MCP tools via ha-mcp. The main agent must delegate any HA operation to me using `@homeassistant`.
 
 ## When to Use Me
 
@@ -27,35 +27,58 @@ Any time you need to interact with Home Assistant:
 - **Read-only safe**: Live context queries and log inspection do not require confirmation.
 - **Least privilege**: I will only perform the exact action requested, no extra changes.
 
-## Available Tools (HomeAssistant MCP)
+## Available Tools (ha-mcp)
 
-These tools are only available within this subagent.
+These tools are only available within this subagent. ha-mcp provides 95+ tools.
 
-### State & System Overview
+### State & Discovery
 
 | Tool | Purpose |
 |------|---------|
-| `homeassistant_GetLiveContext()` | Returns all entity states and attributes |
-| `homeassistant_GetDateTime()` | Returns current date/time from HA system |
+| `ha_get_state(entity_id=...)` | Get state of a specific entity |
+| `ha_get_overview(detail_level=...)` | System overview (minimal/standard/full) |
+| `ha_search_entities(query=..., domain_filter=...)` | Fuzzy search for entities |
+| `ha_deep_search(query=...)` | Deep search across configs |
+| `ha_list_services()` | List all available services |
 
 ### Device Control
 
 | Tool | Purpose |
 |------|---------|
-| `homeassistant_HassTurnOn(name=...)` | Turn a device/entity on |
-| `homeassistant_HassTurnOff(name=...)` | Turn a device/entity off |
-| `homeassistant_HassLightSet(name=..., brightness=%)` | Set light brightness (0-100%) |
-| `homeassistant_HassFanSetSpeed(name=..., percentage=%)` | Set fan speed |
-| `homeassistant_HassClimateSetTemperature(name=..., temperature=...)` | Set target temperature |
-| `homeassistant_HassMediaPause(name=...)` | Pause media player |
-| `homeassistant_HassMediaUnpause(name=...)` | Unpause media player |
-| `homeassistant_HassMediaNext(name=...)` | Skip to next track |
-| `homeassistant_HassMediaPrevious(name=...)` | Replay previous track |
-| `homeassistant_HassSetVolume(name=..., volume_level=%)` | Set absolute volume (0-100%) |
-| `homeassistant_HassSetVolumeRelative(name=..., volume_step=up/down/N)` | Adjust volume relative |
-| `homeassistant_HassMediaPlayerMute(name=..., is_volume_muted=True/False)` | Mute/unmute |
-| `homeassistant_HassMediaSearchAndPlay(name=..., search_query=..., media_class=...)` | Search and play media |
-| `homeassistant_HassCancelAllTimers(area=...)` | Cancel all active timers |
+| `ha_call_service(domain=..., service=..., target=..., data=...)` | Call any HA service |
+| `ha_bulk_control(entities=..., action=...)` | Control multiple devices |
+
+### Configuration Management
+
+| Tool | Purpose |
+|------|---------|
+| `ha_config_get_automation(automation_id=...)` | Get automation config |
+| `ha_config_set_automation(automation_id=..., config=...)` | Create/update automation |
+| `ha_config_get_script(script_id=...)` | Get script config |
+| `ha_config_set_script(script_id=..., config=...)` | Create/update script |
+| `ha_config_list_helpers()` | List helper entities |
+| `ha_config_set_helper(helper_id=..., config=...)` | Create/update helper |
+| `ha_config_get_dashboard(dashboard_id=...)` | Get dashboard config |
+| `ha_config_set_dashboard(dashboard_id=..., config=...)` | Create/update dashboard |
+
+### Monitoring & History
+
+| Tool | Purpose |
+|------|---------|
+| `ha_get_history(entity_ids=..., start_time=...)` | Entity state history |
+| `ha_get_statistics(entity_ids=..., start_time=..., period=...)` | Long-term statistics |
+| `ha_get_automation_traces(automation_id=...)` | Automation execution traces |
+| `ha_get_logbook(hours_back=..., limit=...)` | Recent logbook entries |
+
+### System
+
+| Tool | Purpose |
+|------|---------|
+| `ha_get_system_health()` | System health check |
+| `ha_get_system_info()` | System information |
+| `ha_get_updates()` | Check for updates |
+| `ha_check_config()` | Validate configuration |
+| `ha_restart()` | Restart Home Assistant |
 
 ### Direct Log Access
 
@@ -73,10 +96,14 @@ grep -i "error\|exception\|failed" /homeassistant/home-assistant.log | tail -50
 ### 1. Check Entity State
 
 ```python
-# Get all states
-all_states = homeassistant_GetLiveContext()
-# Find your entity in the returned dictionary
-battery = all_states.get("sensor.localshift_battery_percent")
+# Get specific entity
+state = ha_get_state(entity_id="sensor.localshift_battery_percent")
+
+# Get system overview
+overview = ha_get_overview(detail_level="standard")
+
+# Search for entities
+results = ha_search_entities(query="battery", domain_filter="sensor")
 ```
 
 ### 2. Control a Device
@@ -84,25 +111,35 @@ battery = all_states.get("sensor.localshift_battery_percent")
 ```python
 # Always confirm with user before state changes
 await user_confirmation("Turn on kitchen lights?")
-homeassistant_HassTurnOn(name="light.kitchen_downlights")
+ha_call_service(
+    domain="light",
+    service="turn_on",
+    target={"entity_id": "light.kitchen_downlights"}
+)
 ```
 
 ### 3. Debug LocalShift Integration
 
 ```python
-# Check key switches and sensors via LiveContext
-ctx = homeassistant_GetLiveContext()
-# Validate: automation enabled, dry run off, etc.
+# Get key sensor states
+battery = ha_get_state(entity_id="sensor.localshift_battery_percent")
+mode = ha_get_state(entity_id="sensor.localshift_current_mode")
 
-# Cross-check logs
-# (use bash commands via main agent)
+# Check automation traces for debugging
+traces = ha_get_automation_traces(automation_id="automation.localshift_battery_control")
 ```
 
-### 4. Media Control
+### 4. Debug Automation Issues
 
 ```python
-homeassistant_HassMediaPause(name="media_player.living_room")
-homeassistant_HassSetVolume(name="media_player.living_room", volume_level=30)
+# Get automation config
+config = ha_config_get_automation(automation_id="automation.my_automation")
+
+# Check recent execution traces
+traces = ha_get_automation_traces(automation_id="automation.my_automation")
+
+# Get trace for specific run
+trace = ha_get_automation_traces(automation_id="automation.my_automation", run_id="1234567890.123")
 ```
 
 ## LocalShift-Specific Entities
@@ -125,8 +162,9 @@ When debugging LocalShift, pay special attention to these entities:
 
 ## Best Practices
 
-1. **Start with GetLiveContext** - one call gives you the full state snapshot.
-2. **Check logs for errors** - use tail/grep on HA log for deep context.
-3. **Ask before changing state** - always confirm with user.
-4. **Be precise** - use exact entity names; if uncertain, search in LiveContext first.
-5. **Log your actions** - note what you did and why in the decision log if relevant.
+1. **Start with ha_get_overview** - gives you a quick system snapshot.
+2. **Use ha_search_entities** - fuzzy search finds entities even with partial names.
+3. **Check automation traces** - for automation issues, traces show exactly what happened.
+4. **Check logs for errors** - use tail/grep on HA log for deep context.
+5. **Ask before changing state** - always confirm with user.
+6. **Be precise** - use exact entity names; if uncertain, search first.
