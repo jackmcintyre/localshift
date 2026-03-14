@@ -128,7 +128,7 @@ class TestStageCost:
         )
 
         terms = stage_cost(PlannerAction.EXPORT_PROACTIVE, 0.0, 1.0, slot, config)
-        assert terms.export_revenue == 0.0  # Clamped to 0
+        assert terms.export_revenue == -10.0  # Issue #719: no longer clamped
 
     def test_stage_cost_returns_objective_terms(self):
         """stage_cost returns ObjectiveTerms with all expected fields."""
