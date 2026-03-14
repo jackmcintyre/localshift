@@ -73,10 +73,38 @@ Add `_derive_negative_fit_avoidance_context()` that:
 - Otherwise returns `NegativeFitAvoidanceContext` with:
   - `first_negative_fit_slot_idx`: index of first `sell_price <= 0` slot
   - `conservative_overflow_kwh`: conservative estimate of forecast overflow before that slot
-  - `allowed_headroom_pct`: `min(conservative_overflow_kwh / battery_capacity_kwh * 100, max_headroom_pct)`
+  - `allowed_headroom_pct`: `min(conservative_overflow_kwh / battery_capacity_kwh * 100, MAX_NEGATIVE_FIT_HEADROOM_PCT)`
   - `temporary_floor_pct`: `demand_window_target_soc_pct - allowed_headroom_pct`
 
 Call this function in `_solve()` before `_initialize_dp_tables()` and pass the context to `_backward_induction()`.
+
+**Context lifecycle:** The context is recomputed on every `_solve()` call. No caching is used because forecast prices and solar data may change between planning cycles, and the bounded headroom must reflect current projections.
+
+#### Constants
+
+Add to `custom_components/localshift/const.py`:
+
+```python
+# Maximum headroom below battery target for negative-FIT avoidance (percentage points)
+MAX_NEGATIVE_FIT_HEADROOM_PCT: Final[float] = 20.0
+
+# Conservative buffer factor for overflow estimates (0.8 = use 80% of forecast)
+NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
+```
+
+#### Conservative Overflow Calculation
+
+The `conservative_overflow_kwh` is computed using logic similar to `_calculate_excess_until_negative_fit()` in `excess_solar.py`:
+
+1. Find the first negative-FIT slot index
+2. Iterate through all slots before that index
+3. For each slot: `net_kwh = solar_forecast_kwh - estimated_consumption_kwh`
+4. If `net_kwh > 0`, apply charging efficiency (0.92) to get `excess_kwh`
+5. Track space remaining to reach `demand_window_target_soc_pct`
+6. After target space is filled, accumulate remaining excess
+7. Apply conservative buffer: `conservative_overflow_kwh = accumulated_excess * NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR`
+
+This reuses the existing forecast-based excess calculation pattern but applies a buffer factor to reduce the risk of over-estimating available headroom.
 
 ### `custom_components/localshift/engine/constraints.py`
 
@@ -178,8 +206,28 @@ class NegativeFitAvoidanceContext:
 
 ### Test Updates Required
 
+**Updates to existing tests:**
 - `tests/test_optimizer_dp_solve.py::test_dp_planner_negative_fit_no_export`: Update to clarify this tests the hard `0c` floor, not the bounded pre-discharge behavior
 - `tests/test_scenarios.py::test_high_solar_no_export_at_negative_prices`: Ensure this tests that export at `sell_price <= 0` is still forbidden, not that no proactive export ever occurs before negative-FIT windows
+
+**New tests to add:**
+- `tests/test_optimizer_dp_solve.py`:
+  - `test_negative_fit_context_no_window` — returns `None` when no negative-FIT window in horizon
+  - `test_negative_fit_context_no_overflow` — returns `None` when no forecast overflow
+  - `test_negative_fit_context_no_positive_slots` — returns `None` when no earlier positive-FIT slots
+  - `test_negative_fit_context_computes_floor` — computes correct `temporary_floor_pct` when all conditions met
+  - `test_negative_fit_context_conservative_buffer` — respects conservative buffer in overflow estimate
+- `tests/test_constraints.py`:
+  - `test_feasible_actions_positive_fit_before_negative` — allows `EXPORT_PROACTIVE` at positive FIT before first negative-FIT window
+  - `test_feasible_actions_negative_fit_floor_blocked` — blocks `EXPORT_PROACTIVE` at `sell_price <= 0` (hard floor preserved)
+  - `test_feasible_actions_temporary_floor_enforced` — blocks `EXPORT_PROACTIVE` when SOC would fall below `temporary_floor_pct`
+  - `test_feasible_actions_normal_rules_after_negative_window` — uses normal rules for slots at/after first negative-FIT window
+- `tests/test_cost.py`:
+  - `test_stage_cost_negative_fit_real_cost` — negative `sell_price` produces negative export revenue (real cost)
+- `tests/test_scenarios.py`:
+  - `test_negative_fit_bounded_predischarge` — high solar, future negative-FIT, earlier positive-FIT slots available
+  - `test_negative_fit_no_earlier_positive_slots` — no earlier positive-FIT slots, accepts later negative export
+  - `test_negative_fit_partial_avoidance` — partial avoidance only, creates partial headroom
 
 ## Alignment with PLANNING_MODEL.md
 
