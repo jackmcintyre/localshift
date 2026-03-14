@@ -12,6 +12,8 @@ from custom_components.localshift.const import (
     SELECT_OPTIONS,
     SELECT_NAMES,
     SELECT_ICONS,
+    MAX_NEGATIVE_FIT_HEADROOM_PCT,
+    NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR,
 )
 
 
@@ -53,3 +55,9 @@ def test_optimization_mode_constant():
 def test_default_optimization_mode_constant():
     """Test DEFAULT_OPTIMIZATION_MODE constant."""
     assert DEFAULT_OPTIMIZATION_MODE == "self_consumption"
+
+
+def test_negative_fit_constants_defined():
+    """Verify negative-FIT avoidance constants are defined."""
+    assert MAX_NEGATIVE_FIT_HEADROOM_PCT == 20.0
+    assert NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR == 0.8

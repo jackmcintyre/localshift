@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Final
 
 # -----------------------------------------------------------------------------
 # Domain
@@ -507,6 +508,16 @@ PROACTIVE_EXPORT_MIN_RESERVE_PERCENT = 4.0
 # Buffer above current SOC for proactive export reserve setting.
 # 5% prevents immediate discharge below reserve threshold.
 PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
+
+# -----------------------------------------------------------------------------
+# Negative FIT Avoidance Constants (Issue #719)
+# -----------------------------------------------------------------------------
+
+# Maximum headroom below battery target for negative-FIT avoidance (percentage points)
+MAX_NEGATIVE_FIT_HEADROOM_PCT: Final[float] = 20.0
+
+# Conservative buffer factor for overflow estimates (0.8 = use 80% of forecast)
+NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
 
 # -----------------------------------------------------------------------------
 # Tesla Override Detection Constants
