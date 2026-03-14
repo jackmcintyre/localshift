@@ -147,6 +147,72 @@ def test_apply_bias_correction_to_slots_includes_zero_forecasts():
     )
 
 
+def test_apply_cloud_scale_factor_only_scales_rolling_30_minute_window():
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = CoordinatorData()
+    data.cloud_event_solar_scale_factor = 0.25
+    now_dt = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    slots = [
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T09:45:00+00:00",
+            slot_interval_minutes=15,
+        ),
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:00:00+00:00",
+            slot_interval_minutes=15,
+        ),
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:15:00+00:00",
+            slot_interval_minutes=15,
+        ),
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:30:00+00:00",
+            slot_interval_minutes=15,
+        ),
+    ]
+
+    facade._apply_cloud_scale_factor_to_slots(slots, data, now_dt)
+
+    assert [slot.solar_kwh for slot in slots] == [4.0, 1.0, 1.0, 4.0]
+
+
+def test_apply_cloud_scale_factor_scales_current_partially_elapsed_slot():
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = CoordinatorData()
+    data.cloud_event_solar_scale_factor = 0.25
+    now_dt = datetime(2026, 1, 15, 10, 7, tzinfo=UTC)
+    slots = [
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:00:00+00:00",
+            slot_interval_minutes=15,
+        ),
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:15:00+00:00",
+            slot_interval_minutes=15,
+        ),
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:30:00+00:00",
+            slot_interval_minutes=15,
+        ),
+        SimpleNamespace(
+            solar_kwh=4.0,
+            timestamp_iso="2026-01-15T10:45:00+00:00",
+            slot_interval_minutes=15,
+        ),
+    ]
+
+    facade._apply_cloud_scale_factor_to_slots(slots, data, now_dt)
+
+    assert [slot.solar_kwh for slot in slots] == [1.0, 1.0, 1.0, 4.0]
+
+
 def test_record_forecasts_for_slots_records_only_backfillable_timestamps():
     tracker = MagicMock()
     slots = [
