@@ -47,7 +47,7 @@ def stage_cost(
         ObjectiveTerms with all cost components broken down.
     """
     import_cost = grid_import_kwh * slot.buy_price
-    export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
+    export_revenue = grid_export_kwh * slot.sell_price
     cycle_kwh = grid_import_kwh + grid_export_kwh
     cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
 
