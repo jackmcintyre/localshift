@@ -2561,3 +2561,87 @@ def test_negative_fit_context_type():
     assert ctx.conservative_overflow_kwh == 5.0
     assert ctx.allowed_headroom_pct == 3.7
     assert ctx.temporary_floor_pct == 76.3
+
+
+# =============================================================================
+# Chunk 2: Negative FIT Avoidance Context Tests
+# =============================================================================
+
+
+def _make_slot_for_neg_fit(
+    idx: int, sell_price: float, solar_kwh: float = 0.0, consumption_kwh: float = 0.0
+) -> SlotContext:
+    """Helper to create a 30-min slot for negative-FIT tests."""
+    return SlotContext(
+        slot_index=idx,
+        timestamp_iso=f"2026-01-03T{(idx // 2):02d}:{(idx % 2) * 30:02d}:00",
+        slot_interval_minutes=30,
+        buy_price=0.10,
+        sell_price=sell_price,
+        solar_kwh=solar_kwh,
+        consumption_kwh=consumption_kwh,
+    )
+
+
+def test_negative_fit_context_no_window(default_config):
+    """Returns None when no negative-FIT window in horizon."""
+    planner = DPPlanner(default_config)
+    slots = [_make_slot_for_neg_fit(i, sell_price=0.08) for i in range(10)]
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    assert ctx is None
+
+
+def test_negative_fit_context_no_overflow(default_config):
+    """Returns None when no forecast overflow projected."""
+    planner = DPPlanner(default_config)
+    slots = [_make_slot_for_neg_fit(i, sell_price=0.08 if i < 5 else -0.05) for i in range(10)]
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    assert ctx is None
+
+
+def test_negative_fit_context_no_positive_slots(default_config):
+    """Returns None when no earlier positive-FIT slots."""
+    planner = DPPlanner(default_config)
+    slots = [_make_slot_for_neg_fit(i, sell_price=0.08 if i >= 5 else 0.0) for i in range(10)]
+    slots[5] = _make_slot_for_neg_fit(5, sell_price=-0.05)
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    assert ctx is None
+
+
+def test_negative_fit_context_computes_floor(default_config):
+    """Computes correct temporary_floor_pct when all conditions met."""
+    planner = DPPlanner(default_config)
+    default_config.demand_window_target_soc_pct = 80.0
+    slots = []
+    for i in range(6):
+        sell = 0.08 if i < 4 else -0.05
+        solar = 2.0 if i == 0 else 0.0
+        slots.append(_make_slot_for_neg_fit(i, sell_price=sell, solar_kwh=solar))
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=90.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    assert ctx is not None
+    assert 0 < ctx.allowed_headroom_pct <= 20.0
+    assert abs(ctx.temporary_floor_pct - (80.0 - ctx.allowed_headroom_pct)) < 0.01

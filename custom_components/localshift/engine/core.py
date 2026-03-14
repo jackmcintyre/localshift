@@ -15,6 +15,7 @@ from custom_components.localshift.engine.dp_math import (
     _simulate_solar_only_terminal_soc,
 )
 from custom_components.localshift.engine.types import (
+    NegativeFitAvoidanceContext,
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
@@ -81,6 +82,82 @@ class DPPlanner:
 
         result.solve_time_seconds = time.monotonic() - start
         return result
+
+
+    # ------------------------------------------------------------------
+    # Negative FIT Avoidance Context Derivation (Issue #719)
+    # ------------------------------------------------------------------
+
+    def _derive_negative_fit_avoidance_context(
+        self, inputs: OptimizerInputs
+    ) -> NegativeFitAvoidanceContext | None:
+        """Derive context for bounded first-window negative-FIT avoidance.
+
+        Returns None if any of:
+        - No negative-FIT window within horizon
+        - No conservative overflow projected
+        - No earlier positive-FIT slots
+        """
+        from custom_components.localshift.const import (
+            MAX_NEGATIVE_FIT_HEADROOM_PCT,
+            NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR,
+        )
+
+        slots = inputs.slots
+        config = inputs.config
+        battery_capacity_kwh = config.battery_capacity_kwh
+
+        # 1. Find first negative-FIT slot (sell_price <= 0)
+        first_negative_fit_idx = None
+        for idx, slot in enumerate(slots):
+            if slot.sell_price <= 0:
+                first_negative_fit_idx = idx
+                break
+        if first_negative_fit_idx is None:
+            return None
+
+        # 2. Check there is at least one earlier positive-FIT slot
+        has_positive_before = any(s.sell_price > 0 for s in slots[:first_negative_fit_idx])
+        if not has_positive_before:
+            return None
+
+        # 3. Compute conservative overflow before that window
+        target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
+        current_kwh = inputs.initial_soc_pct / 100.0 * battery_capacity_kwh
+        space_to_target_kwh = max(target_kwh - current_kwh, 0)
+
+        accumulated_excess_kwh = 0.0
+        for idx in range(first_negative_fit_idx):
+            slot = slots[idx]
+            net_kwh = slot.solar_kwh - slot.consumption_kwh
+            if net_kwh > 0:
+                excess_kwh = net_kwh * config.charge_efficiency
+                if space_to_target_kwh > 0:
+                    used = min(excess_kwh, space_to_target_kwh)
+                    space_to_target_kwh -= used
+                else:
+                    accumulated_excess_kwh += excess_kwh
+
+        if accumulated_excess_kwh <= 0:
+            return None
+
+        conservative_overflow_kwh = accumulated_excess_kwh * NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR
+
+        # 4. Derive allowed headroom (percentage points)
+        allowed_headroom_pct = min(
+            conservative_overflow_kwh / battery_capacity_kwh * 100.0,
+            MAX_NEGATIVE_FIT_HEADROOM_PCT,
+        )
+
+        # 5. Compute temporary floor
+        temporary_floor_pct = config.demand_window_target_soc_pct - allowed_headroom_pct
+
+        return NegativeFitAvoidanceContext(
+            first_negative_fit_slot_idx=first_negative_fit_idx,
+            conservative_overflow_kwh=conservative_overflow_kwh,
+            allowed_headroom_pct=allowed_headroom_pct,
+            temporary_floor_pct=temporary_floor_pct,
+        )
 
     # ------------------------------------------------------------------
     # Internal solve — Full DP Implementation (Phase C)
