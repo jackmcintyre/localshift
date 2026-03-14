@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -115,14 +115,21 @@ class OptimizerFacade:
             )
 
     def _apply_cloud_scale_factor_to_slots(
-        self, slots: list[Any], data: CoordinatorData
+        self, slots: list[Any], data: CoordinatorData, now_dt: datetime
     ) -> None:
         scale_factor = getattr(data, "cloud_event_solar_scale_factor", None)
         if scale_factor is None:
             return
 
+        window_end = now_dt + timedelta(minutes=30)
         applied = 0
         for slot in slots:
+            slot_dt = datetime.fromisoformat(slot.timestamp_iso)
+            slot_end = slot_dt + timedelta(
+                minutes=getattr(slot, "slot_interval_minutes", 30)
+            )
+            if slot_dt >= window_end or slot_end <= now_dt:
+                continue
             slot.solar_kwh *= scale_factor
             applied += 1
 
@@ -177,7 +184,7 @@ class OptimizerFacade:
             weather_condition = getattr(data, "weather_condition", None) or "unknown"
             self._record_forecasts_for_slots(slots, weather_condition)
             self._apply_bias_correction_to_slots(slots, weather_condition)
-            self._apply_cloud_scale_factor_to_slots(slots, data)
+            self._apply_cloud_scale_factor_to_slots(slots, data, now_dt)
 
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
