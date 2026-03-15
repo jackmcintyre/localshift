@@ -1,5 +1,15 @@
 # Documentation Index for Agents
 
+## Current vs Historical Docs
+
+**Current (Authoritative):** PLANNING_MODEL.md, ARCHITECTURE.md, ENTITY_REFERENCE.md, DEVELOPER_GUIDE.md, LOAD_SHIFTING_GUIDE.md, INDEX.md
+
+**Historical / Design Context:** FORECAST_DRIVEN_CONTROL.md, OPTIMIZER_DP_ROLLOUT.md, CHANGE_DETECTION.md, LEARNING_SYSTEM.md, LOAD_FORECASTING.md, NOTIFICATIONS.md, TROUBLESHOOTING.md
+
+> **Note:** Historical docs contain valuable context but may contain stale terminology or outdated examples. Always verify against current code.
+
+---
+
 ## Quick Reference
 
 Use this index to quickly determine which documentation files to consult before working on different parts of the codebase.
@@ -154,14 +164,14 @@ class LocalShiftSensor(SensorEntity):
 
 ## Learning System Changes
 
-**Modifying the adaptive learning system (`learning/`, `engine/parameter_optimizer.py`, etc.).**
+**Modifying the adaptive learning system (`learning/`, `engine/parameters.py`, etc.).**
 
 ### Must Read
 - **[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md)** — Complete architecture and data flow
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Learning system section (lines 593-723)
 
 ### Should Read
-- **[OPTIMIZER_DP_ROLLOUT.md](OPTIMIZER_DP_ROLLOUT.md)** — Shadow mode patterns
+- **[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md)** — Learning system architecture (verify against current code)
 
 ### Key Constraints
 
@@ -209,7 +219,7 @@ score = 0.50 × cost_score
 
 ### Must Read
 - **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** — Development patterns
-- **[docs/AGENTS.md](AGENTS.md)** — Reference index
+- **[AGENTS.md](AGENTS.md)** — Reference index (legacy, see note above)
 
 ### Should Read
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Config flow placement

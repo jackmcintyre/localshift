@@ -1,5 +1,11 @@
 # DP Optimizer Rollout Guide
 
+> **⚠️ Historical Document** — The DP optimizer migration is complete. Shadow and assist modes were removed. This doc is retained for historical context only; the optimizer is now the sole control path.
+> 
+> **Current authoritative doc:** [PLANNING_MODEL.md](PLANNING_MODEL.md)
+
+---
+
 > **Rollout Complete (March 2026)** — The DP optimizer migration is finished. The optimizer is now the sole control path. Shadow and assist modes were removed in #448. This document remains as a historical reference for the rollout process and comparison methodology.
 
 This document describes the DP (Dynamic Programming) optimizer rollout phases and how to interpret the optimizer comparison data.

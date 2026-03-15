@@ -1,6 +1,6 @@
-# Documentation Index
+# Documentation Index (Legacy)
 
-**Note:** This file is legacy. The primary index is now **[INDEX.md](../INDEX.md)** which provides comprehensive, domain-specific guidance.
+**Note:** This file is legacy. The primary index is now **[INDEX.md](INDEX.md)** which provides comprehensive, domain-specific guidance.
 
 ## Quick Reference
 
@@ -30,6 +30,6 @@ When adding/removing entities:
 
 ## See Also
 
-- `../INDEX.md` — **Primary documentation index (use this first!)**
+- `INDEX.md` — **Primary documentation index (use this first!)**
 - `../AGENTS.md` - Root rules (includes doc-first skill)
 - `../custom_components/localshift/AGENTS.md` - Integration
