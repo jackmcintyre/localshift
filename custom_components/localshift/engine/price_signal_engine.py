@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 
+from ..const import PRICING_SOURCE_AMBER
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import sum_solar_before_target
 from .price_calculator import PriceCalculator
@@ -89,9 +90,10 @@ class PriceSignalEngine:
         forecasts: list[dict[str, Any]],
         now_dt: datetime,
         cutoff: datetime,
+        pricing_source: str = PRICING_SOURCE_AMBER,
     ) -> bool:
-        """Return True if any forecast has spike_status == 'spike' in window."""
-        return scan_forecast_for_spike(forecasts, now_dt, cutoff)
+        """Return True if any forecast indicates spike in window."""
+        return scan_forecast_for_spike(forecasts, now_dt, cutoff, pricing_source)
 
     @staticmethod
     def max_forecast_price(

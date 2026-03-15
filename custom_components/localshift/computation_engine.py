@@ -348,8 +348,14 @@ class ComputationEngine:
         # Hardcoded lookahead (Issue #214)
         lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
         cutoff = now_dt + timedelta(hours=lookahead)
+
+        # Get pricing_source for provider-aware spike detection (Issue #300)
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+
         data.forecast_spike_within_window = self._price_signals.scan_forecast_for_spike(
-            data.feed_in_forecast, now_dt, cutoff
+            data.feed_in_forecast, now_dt, cutoff, pricing_source
         )
         # max_forecast_price tracks the max SELL price (feed-in) for spike detection.
         data.max_forecast_price = self._price_signals.max_forecast_price(
@@ -363,7 +369,7 @@ class ComputationEngine:
         # ---- Step 10: forecast_expensive_period_coming ----
         data.forecast_expensive_period_coming = (
             self._price_signals.scan_forecast_for_spike(
-                data.general_forecast, now_dt, cutoff
+                data.general_forecast, now_dt, cutoff, pricing_source
             )
         )
 

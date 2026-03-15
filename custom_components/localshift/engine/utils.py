@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.util import dt as dt_util
 
+from ..const import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -135,19 +137,49 @@ def percentile(prices: list[float], percentile_value: float) -> float:
     return sorted_prices[lower] * (1 - fraction) + sorted_prices[upper] * fraction
 
 
+def _is_spike_slot(forecast_entry: dict[str, Any], pricing_source: str) -> bool:
+    """Check if a forecast entry represents a spike, provider-aware.
+
+    Args:
+        forecast_entry: Single forecast slot with price data
+        pricing_source: Either PRICING_SOURCE_AMBER or PRICING_SOURCE_AMBER_EXPRESS
+
+    Returns:
+        True if this slot represents a price spike
+
+    """
+    if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+        # Amber Express uses demand_window field (more reliable)
+        return forecast_entry.get("demand_window") is True
+    # Amber uses spike_status field
+    return forecast_entry.get("spike_status") == "spike"
+
+
 def scan_forecast_for_spike(
     forecasts: list[dict[str, Any]],
     now_dt: datetime,
     cutoff: datetime,
+    pricing_source: str = PRICING_SOURCE_AMBER,
 ) -> bool:
-    """Return True if any forecast has spike_status == 'spike' in window."""
+    """Return True if any forecast indicates spike in window.
+
+    Args:
+        forecasts: List of forecast entries
+        now_dt: Current datetime
+        cutoff: End of time window to check
+        pricing_source: Either PRICING_SOURCE_AMBER or PRICING_SOURCE_AMBER_EXPRESS
+
+    Returns:
+        True if any spike detected in the window
+
+    """
     for f in forecasts:
         start = parse_forecast_dt(f.get("start_time"))
         if start is None:
             continue
         start_local = dt_util.as_local(start)
         if start_local >= now_dt and start_local <= cutoff:
-            if f.get("spike_status") == "spike":
+            if _is_spike_slot(f, pricing_source):
                 return True
     return False
 
@@ -175,6 +207,7 @@ def analyze_spike_window(
     forecasts: list[dict[str, Any]],
     now_dt: datetime,
     max_lookahead_hours: float = 8.0,
+    pricing_source: str = PRICING_SOURCE_AMBER,
 ) -> tuple[datetime | None, float, list[float]]:
     """Analyze feed-in forecast for spike window details.
 
@@ -185,6 +218,7 @@ def analyze_spike_window(
         forecasts: Feed-in price forecast list
         now_dt: Current datetime
         max_lookahead_hours: Maximum hours to look ahead for spike analysis
+        pricing_source: Either PRICING_SOURCE_AMBER or PRICING_SOURCE_AMBER_EXPRESS
 
     Returns:
         Tuple of (spike_end_time, max_price, all_spike_prices)
@@ -211,8 +245,8 @@ def analyze_spike_window(
         if start_local < now_dt or start_local > cutoff:
             continue
 
-        # Check if this is a spike slot
-        if f.get("spike_status") == "spike":
+        # Check if this is a spike slot (provider-aware)
+        if _is_spike_slot(f, pricing_source):
             price = float(f.get("per_kwh", 0))
 
             if spike_start is None:

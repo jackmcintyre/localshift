@@ -12,9 +12,11 @@ from ..const import (
     BATTERY_CAPACITY_KWH,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
+    CONF_PRICING_DATA_SOURCE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_SPIKE_PRICE_PERCENTILE,
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
 )
@@ -31,7 +33,7 @@ class SpikeAnalyzer:
         entry: ConfigEntry,
         get_switch_state: Callable[[str], bool],
         parse_time_option: Callable[[str, str], time],
-        analyze_spike_window: Callable[[list[dict], datetime, float], tuple],
+        analyze_spike_window: Callable[[list[dict], datetime, float, str], tuple],
         calculate_spike_price_threshold: Callable[[list[float], float], float],
     ) -> None:
         """Initialize analyzer dependencies."""
@@ -63,11 +65,16 @@ class SpikeAnalyzer:
         if not conservative_enabled:
             return
 
+        # Get pricing source for provider-aware spike detection
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+
         # Hardcoded default (Issue #214)
         lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
 
         spike_end, max_price, spike_prices = self._analyze_spike_window(
-            data.feed_in_forecast, now_dt, lookahead
+            data.feed_in_forecast, now_dt, lookahead, pricing_source
         )
 
         if spike_end is None or not spike_prices:
