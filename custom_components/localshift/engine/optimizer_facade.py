@@ -397,9 +397,15 @@ class OptimizerFacade:
             )
             result = self._planner.plan(inputs)
 
-            # Extract shadow decision
-            if result.decisions:
-                shadow_mode = result.decisions[0].battery_mode
+            # Extract shadow decision using same flow as primary
+            shadow_decisions = [_serialize_decision(d) for d in result.decisions]
+            if shadow_decisions:
+                # Find current slot index for shadow run
+                current_slot_idx = _find_current_slot_index(data)
+                shadow_apply_plan = _derive_runtime_apply_plan(
+                    shadow_decisions, current_slot_idx, optimizer_config
+                )
+                shadow_mode = shadow_apply_plan.get("battery_mode", "unknown")
             else:
                 shadow_mode = "unknown"
 
