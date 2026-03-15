@@ -28,6 +28,8 @@ terminal_cost()    → What MUST I achieve? (deadline)
 
 **MUST consult** `docs/PLANNING_MODEL.md` before changes.
 
+**See also:** `docs/INDEX.md` for complete documentation map.
+
 ## Key Concepts
 
 - **Slots**: 15-minute intervals

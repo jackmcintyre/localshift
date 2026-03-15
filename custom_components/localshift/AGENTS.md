@@ -48,7 +48,10 @@ class LocalShiftSensor(SensorEntity):
 
 ## See Also
 
-- `../AGENTS.md` - Root rules
+- `../AGENTS.md` - Root rules (includes doc-first skill)
 - `engine/AGENTS.md` - Optimizer rules
 - `../../tests/AGENTS.md` - Testing
-- `../../docs/PLANNING_MODEL.md` - Planner guide
+- `../../docs/INDEX.md` - **Primary documentation index (use this first!)**
+- `../../docs/PLANNING_MODEL.md` - Optimizer constraints (legacy, see INDEX.md)
+- `../../docs/ENTITY_REFERENCE.md` - Entity catalog
+- `../../docs/ARCHITECTURE.md` - System architecture

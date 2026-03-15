@@ -51,10 +51,24 @@ Use SymDex instead of grep/read:
 | `custom_components/localshift/AGENTS.md` | Entity/platform changes |
 | `custom_components/localshift/engine/AGENTS.md` | Optimizer changes |
 | `tests/AGENTS.md` | Test patterns |
-| `docs/AGENTS.md` | Documentation index |
+| `docs/INDEX.md` | **Primary documentation index (use this first!)** |
+| `docs/AGENTS.md` | Documentation index (legacy, see INDEX.md) |
 | `.agents/rules/tdd-workflow.md` | Detailed TDD guide |
 | `.agents/rules/pr-ci-checks.md` | CI/PR workflow |
 | `.agents/rules/worktrees.md` | Git worktree details |
+
+## Documentation-First Workflow
+
+**NEW:** The `doc-first` skill automatically checks relevant documentation before any code analysis. It activates on tasks like "analyze", "review", "refactor", "explain", and related queries. The skill:
+
+1. Determines domain (optimizer, entities, state machine, etc.)
+2. Identifies required docs from `docs/INDEX.md`
+3. Extracts key constraints and patterns
+4. Presents summary before analysis begins
+
+**Manual override:** If you need to skip this, say "skip documentation check" explicitly.
+
+**When manual review needed:** Always consult `docs/INDEX.md` to understand which docs apply to your task.
 
 ## Verification Commands
 
