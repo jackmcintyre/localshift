@@ -176,17 +176,18 @@ def build_pricing_schema(
         prefix = "sensor.100h_"
 
     merged_defaults = dict(defaults)
-    merged_defaults.setdefault(CONF_PRICING_GENERAL_PRICE, f"{prefix}general_price")
-    merged_defaults.setdefault(CONF_PRICING_FEED_IN_PRICE, f"{prefix}feed_in_price")
-    merged_defaults.setdefault(
-        CONF_PRICING_PRICE_SPIKE,
+    # Always override pricing entity defaults based on pricing_source
+    # (DEFAULT_ENTITY_IDS contains Amber IDs which we need to replace for Express)
+    merged_defaults[CONF_PRICING_GENERAL_PRICE] = f"{prefix}general_price"
+    merged_defaults[CONF_PRICING_FEED_IN_PRICE] = f"{prefix}feed_in_price"
+    merged_defaults[CONF_PRICING_PRICE_SPIKE] = (
         "binary_sensor.amber_express_100h_price_spike"
         if pricing_source == PRICING_SOURCE_AMBER_EXPRESS
-        else "binary_sensor.100h_price_spike",
+        else "binary_sensor.100h_price_spike"
     )
     if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
-        merged_defaults.setdefault(CONF_PRICING_GENERAL_FORECAST, "")
-        merged_defaults.setdefault(CONF_PRICING_FEED_IN_FORECAST, "")
+        merged_defaults[CONF_PRICING_GENERAL_FORECAST] = ""
+        merged_defaults[CONF_PRICING_FEED_IN_FORECAST] = ""
 
     schema_fields: dict[Any, Any] = {
         vol.Required(
