@@ -525,6 +525,10 @@ MAX_NEGATIVE_FIT_HEADROOM_PCT: Final[float] = 20.0
 # Conservative buffer factor for overflow estimates (0.8 = use 80% of forecast)
 NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
 
+# Minimum net benefit ($/kWh) required to allow proactive export inside
+# demand window while running negative-FIT avoidance.
+NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
+
 # -----------------------------------------------------------------------------
 # Tesla Override Detection Constants
 # -----------------------------------------------------------------------------

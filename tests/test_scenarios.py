@@ -646,6 +646,23 @@ def test_negative_fit_bounded_predischarge_exports_before_negative_window():
     )
 
 
+def test_recoverable_negative_fit_exports_use_avoidance_reason_code():
+    """Pre-risk exports for bad-FIT avoidance should be labeled explicitly."""
+    data = run_scenario("recoverable-negative-fit-preexport")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    export_slots = get_slots_by_action(decisions, "export_proactive")
+    assert export_slots, "expected at least one proactive export slot"
+
+    for slot in export_slots:
+        assert slot.get("reason_code") == "NEGATIVE_FIT_AVOIDANCE", (
+            "recoverable-negative-fit-preexport: expected reason_code "
+            f"NEGATIVE_FIT_AVOIDANCE for export slot {slot['slot_index']}, "
+            f"got {slot.get('reason_code')}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # DP-native scenario assertion tests — hot day / price spike
 # ---------------------------------------------------------------------------

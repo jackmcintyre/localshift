@@ -50,6 +50,15 @@ def _determine_export_actions(
 
     if use_avoidance and negative_fit_avoidance_context is not None:
         if slot.sell_price > 0:
+            if slot.is_demand_window_slot:
+                from custom_components.localshift.const import (
+                    NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH,
+                )
+
+                net_benefit = slot.sell_price - max(0.0, slot.buy_price)
+                if net_benefit < NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH:
+                    return actions
+
             floor_pct = negative_fit_avoidance_context.recoverability_floor_pct_by_slot[
                 slot_idx
             ]

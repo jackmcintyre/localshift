@@ -827,6 +827,7 @@ class DPPlanner:
                 terminal_penalty_idx,
                 stage,
                 inputs=inputs,
+                negative_fit_avoidance_context=negative_fit_avoidance_context,
             )
 
             decision = PlannedSlotDecision(
@@ -1084,6 +1085,7 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         objective_terms: ObjectiveTerms | None = None,
         inputs: OptimizerInputs | None = None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> PlannerReasonCode:
         """
         Classify the reason for a decision based on action and context.
@@ -1103,7 +1105,11 @@ class DPPlanner:
                 inputs=inputs,
             )
         if action == PlannerAction.EXPORT_PROACTIVE:
-            return self._classify_export_reason(slot)
+            return self._classify_export_reason(
+                slot,
+                slot_idx=slot_idx,
+                negative_fit_avoidance_context=negative_fit_avoidance_context,
+            )
         if action in (
             PlannerAction.CHARGE_GRID_NORMAL,
             PlannerAction.CHARGE_GRID_BOOST,
@@ -1170,7 +1176,13 @@ class DPPlanner:
 
         return PlannerReasonCode.IDLE
 
-    def _classify_export_reason(self, slot: SlotContext) -> PlannerReasonCode:
+    def _classify_export_reason(
+        self,
+        slot: SlotContext,
+        *,
+        slot_idx: int | None = None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
+    ) -> PlannerReasonCode:
         """Classify EXPORT action reason.
 
         Args:
@@ -1180,6 +1192,13 @@ class DPPlanner:
             Reason code for EXPORT action
 
         """
+        if (
+            negative_fit_avoidance_context is not None
+            and slot_idx is not None
+            and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
+        ):
+            return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
+
         if slot.sell_price > 0:
             return PlannerReasonCode.HIGH_SELL_PRICE_EXPORT
         return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
@@ -1464,6 +1483,15 @@ class DPPlanner:
 
         if use_avoidance and negative_fit_avoidance_context is not None:
             if slot.sell_price > 0:
+                if slot.is_demand_window_slot:
+                    from custom_components.localshift.const import (  # noqa: PLC0415
+                        NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH,
+                    )
+
+                    net_benefit = slot.sell_price - max(0.0, slot.buy_price)
+                    if net_benefit < NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH:
+                        return actions
+
                 floor_pct = (
                     negative_fit_avoidance_context.recoverability_floor_pct_by_slot[
                         slot_idx
