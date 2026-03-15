@@ -617,6 +617,35 @@ def test_recoverable_negative_fit_exports_before_bad_window():
     )
 
 
+def test_negative_fit_bounded_predischarge_exports_before_negative_window():
+    """Negative FIT bounded pre-discharge: exports at positive FIT before negative window.
+
+    When solar overflow is high and tomorrow has strong solar, the optimizer can
+    create SOC headroom by exporting proactively at earlier positive FIT slots,
+    thereby avoiding later negative-FIT export. This scenario validates that
+    bounded pre-discharge behavior exists.
+    """
+    data = run_scenario("negative-fit-bounded-predischarge")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    proactive_exports = get_slots_by_action(decisions, "export_proactive")
+    assert proactive_exports, "expected proactive export before negative FIT window"
+
+    first_negative_slot = min(
+        d["slot_index"] for d in decisions if d["sell_price"] <= 0
+    )
+
+    assert any(
+        slot["slot_index"] < first_negative_slot and slot["sell_price"] > 0
+        for slot in proactive_exports
+    ), "expected at least one positive-FIT proactive export before negative FIT"
+
+    assert all(slot["sell_price"] > 0 for slot in proactive_exports), (
+        "proactive export must never occur at non-positive FIT"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DP-native scenario assertion tests — hot day / price spike
 # ---------------------------------------------------------------------------
