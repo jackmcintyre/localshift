@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntry
 
 from ..const import (
+    DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT,
+    DEFAULT_CURRENT_HOUR_RECENT_WEIGHT,
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
 )
@@ -242,8 +244,17 @@ class LoadForecaster:
             Tuple of (load_kw, source_tag)
 
         """
-        if hour_distance == 0 and current_load_kw > 0:
-            return current_load_kw, "live_load"
+        if hour_distance == 0:
+            if current_load_kw > 0 and recent_load_kw > 0:
+                blended = (
+                    DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT * current_load_kw
+                    + DEFAULT_CURRENT_HOUR_RECENT_WEIGHT * recent_load_kw
+                )
+                return blended, "blended_live"
+            elif current_load_kw > 0:
+                return current_load_kw, "live_load"
+            elif recent_load_kw > 0:
+                return recent_load_kw, "recent_load"
 
         if hour_distance <= 3 and recent_load_kw > 0 and has_historical:
             live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (

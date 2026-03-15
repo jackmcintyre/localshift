@@ -193,6 +193,12 @@ DEFAULT_LOAD_DECAY_FACTOR = 0.8  # 20% reduction per hour for exponential decay
 DEFAULT_LOAD_INITIAL_WEIGHT = (
     0.8  # Initial weight for current hour (80% recent, 20% historical)
 )
+DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT = (
+    0.3  # 30% instantaneous for current hour blend (Issue #728)
+)
+DEFAULT_CURRENT_HOUR_RECENT_WEIGHT = (
+    0.7  # 70% recent 1-hour average for current hour blend (Issue #728)
+)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
