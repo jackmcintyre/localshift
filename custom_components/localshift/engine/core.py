@@ -1484,7 +1484,7 @@ class DPPlanner:
         if use_avoidance and negative_fit_avoidance_context is not None:
             if slot.sell_price > 0:
                 if slot.is_demand_window_slot:
-                    from custom_components.localshift.const import (  # noqa: PLC0415
+                    from custom_components.localshift.const import (
                         NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH,
                     )
 

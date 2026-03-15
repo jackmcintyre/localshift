@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover
     class _StatesStub:  # pragma: no cover
         """Stub for HA states when homeassistant is not available."""
 
-        def get(self, entity_id: str):  # noqa: ARG002  # pragma: no cover
+        def get(self, entity_id: str):  # pragma: no cover
             return None
 
     class HomeAssistant:  # pragma: no cover
