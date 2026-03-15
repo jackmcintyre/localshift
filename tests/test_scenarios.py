@@ -663,6 +663,29 @@ def test_recoverable_negative_fit_exports_use_avoidance_reason_code():
         )
 
 
+def test_recoverable_negative_fit_prefers_higher_value_pre_risk_slots():
+    """Pre-risk exports should avoid low-value slots when better slots exist."""
+    data = run_scenario("recoverable-negative-fit-value-priority")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    first_bad_idx = next(
+        (i for i, slot in enumerate(decisions) if slot["sell_price"] <= 0), None
+    )
+    assert first_bad_idx is not None, "scenario must include non-positive FIT window"
+
+    pre_risk = [d for d in decisions if d["slot_index"] < first_bad_idx]
+    export_slots = [d for d in pre_risk if d.get("action") == "export_proactive"]
+    assert export_slots, "expected proactive export before negative-FIT window"
+
+    best_pre_risk_price = max(d["sell_price"] for d in pre_risk)
+    exported_prices = [d["sell_price"] for d in export_slots]
+    assert max(exported_prices) == pytest.approx(best_pre_risk_price, rel=1e-6), (
+        "value-priority scenario: expected at least one export at the highest "
+        f"pre-risk FIT price {best_pre_risk_price}, got {sorted(exported_prices)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DP-native scenario assertion tests — hot day / price spike
 # ---------------------------------------------------------------------------
