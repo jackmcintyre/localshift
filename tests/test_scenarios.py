@@ -617,6 +617,35 @@ def test_recoverable_negative_fit_exports_before_bad_window():
     )
 
 
+def test_negative_fit_bounded_predischarge_exports_before_negative_window():
+    """Negative FIT bounded pre-discharge: exports at positive FIT before negative window.
+
+    When solar overflow is high and tomorrow has strong solar, the optimizer can
+    create SOC headroom by exporting proactively at earlier positive FIT slots,
+    thereby avoiding later negative-FIT export. This scenario validates that
+    bounded pre-discharge behavior exists.
+    """
+    data = run_scenario("negative-fit-bounded-predischarge")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    proactive_exports = get_slots_by_action(decisions, "export_proactive")
+    assert proactive_exports, "expected proactive export before negative FIT window"
+
+    first_negative_slot = min(
+        d["slot_index"] for d in decisions if d["sell_price"] <= 0
+    )
+
+    assert any(
+        slot["slot_index"] < first_negative_slot and slot["sell_price"] > 0
+        for slot in proactive_exports
+    ), "expected at least one positive-FIT proactive export before negative FIT"
+
+    assert all(slot["sell_price"] > 0 for slot in proactive_exports), (
+        "proactive export must never occur at non-positive FIT"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DP-native scenario assertion tests — hot day / price spike
 # ---------------------------------------------------------------------------
@@ -738,3 +767,66 @@ def test_solar_can_reach_target_matches_optimizer_result_cloudy():
         f"but optimizer_result['can_solar_reach_target']="
         f"{data.optimizer_result['can_solar_reach_target']}"
     )
+
+
+def test_allow_dw_entry_under_target_avoids_pre_dw_charging():
+    """Allow DW entry under target: no grid charging pre-DW when solar can reach target in DW.
+
+    With allow_dw_entry_under_target=True, the optimizer should not grid-charge
+    before the demand window if solar forecast shows target can be reached during
+    the window (not just at entry). This avoids unnecessary charging costs.
+    """
+    data = run_scenario("allow-dw-entry-under-target")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+    assert data.optimizer_result is not None, "optimizer did not run"
+    assert data.optimizer_result.get("success") is True
+
+    pre_dw_slots = decisions[:8]
+    for slot in pre_dw_slots:
+        assert slot["action"] not in ("charge_grid_normal", "charge_grid_boost"), (
+            f"should not grid-charge before DW when solar can reach target during DW: "
+            f"slot {slot['slot_index']} has action {slot['action']}"
+        )
+
+
+def test_cross_day_first_dw_only_ignores_second_window_pressure():
+    """Cross-day first DW only: planner should not charge overnight for second-day DW.
+
+    When tomorrow's DW has abundant solar but today's does not, the optimizer
+    should base its shortfall calculation on today's DW only, not tomorrow's.
+    Overnight charging purely for tomorrow's DW should not occur.
+    """
+    data = run_scenario("cross-day-first-dw-only")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+    assert data.optimizer_result is not None, "optimizer did not run"
+
+    overnight_slots = decisions[20:36]
+    overnight_charges = [
+        d
+        for d in overnight_slots
+        if d["action"] in ("charge_grid_normal", "charge_grid_boost")
+    ]
+    assert not overnight_charges, (
+        f"should not charge overnight for second-day DW, found {len(overnight_charges)} charge slots"
+    )
+
+    assert data.optimizer_result["terminal_shortfall_pct"] == pytest.approx(
+        0.0, abs=0.1
+    )
+
+
+def test_manual_override_bypasses_optimizer():
+    """Manual override bypass: optimizer should be skipped when manual_override=True.
+
+    When manual_override is set, the computation engine returns early and does not
+    run the optimizer. The active_mode should be MANUAL and no optimizer decisions
+    should be present.
+    """
+    data = run_scenario("manual-override-bypass")
+
+    assert data.active_mode == BatteryMode.MANUAL, (
+        f"active_mode should be MANUAL when manual_override=True, got {data.active_mode}"
+    )
+    assert data.manual_override is True
