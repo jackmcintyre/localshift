@@ -333,11 +333,11 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 
 ---
 
-### 13. sensor.localshift_excess_solar_kwh
+### 13. sensor.localshift_excess_solar
 
 **Purpose:** Forecasted excess solar energy available for discretionary loads.
 
-**Note:** Entity ID changed from `sensor.localshift_excess_solar` to `sensor.localshift_excess_solar_kwh`.
+**Note:** Entity ID is `sensor.localshift_excess_solar`.
 
 **State:** Total excess solar until battery reaches 100% (kWh)
 

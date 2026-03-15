@@ -196,7 +196,7 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": float,
         "staleness_minutes": None,
     },
-    "sensor.localshift_excess_solar_kwh": {
+    "sensor.localshift_excess_solar": {
         "category": EntityCategory.REQUIRED,
         "expected_type": float,
         "staleness_minutes": 15,
