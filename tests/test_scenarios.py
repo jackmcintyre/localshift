@@ -566,6 +566,57 @@ def test_high_solar_no_export_at_negative_prices():
         )
 
 
+def test_recoverable_negative_fit_exports_before_bad_window():
+    """Recoverability-based negative-FIT avoidance (Issue #719).
+
+    Scenario: Evening start at 58% SOC, positive FIT overnight, strong solar
+    tomorrow with non-positive FIT during the solar spill window.
+
+    The optimizer should proactively export at positive FIT prices BEFORE
+    the first non-positive FIT slot to create headroom and reduce later
+    forced export at bad prices.
+
+    This test proves the feature works: proactive export occurs at positive
+    FIT slots before the bad-price window starts.
+    """
+    data = run_scenario("recoverable-negative-fit-preexport")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    export_slots = get_slots_by_action(decisions, "export_proactive")
+
+    first_bad_idx = next(
+        (i for i, slot in enumerate(decisions) if slot["sell_price"] <= 0), None
+    )
+
+    assert first_bad_idx is not None, (
+        "recoverable-negative-fit-preexport: no non-positive FIT slot found"
+    )
+
+    assert export_slots, (
+        f"recoverable-negative-fit-preexport: expected proactive export "
+        f"before bad-FIT window at slot {first_bad_idx}, but got none"
+    )
+
+    for slot in export_slots:
+        assert slot["sell_price"] > 0, (
+            f"recoverable-negative-fit-preexport: export at slot {slot['slot_index']} "
+            f"has non-positive sell_price={slot['sell_price']:.4f}"
+        )
+
+    for slot in export_slots:
+        assert slot["slot_index"] < first_bad_idx, (
+            f"recoverable-negative-fit-preexport: export at slot {slot['slot_index']} "
+            f"is at or after first bad-FIT slot {first_bad_idx}"
+        )
+
+    total_export_kwh = sum(slot.get("grid_export_kwh", 0) for slot in export_slots)
+    assert total_export_kwh > 0, (
+        "recoverable-negative-fit-preexport: export slots exist but "
+        "total grid_export_kwh is zero"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DP-native scenario assertion tests — hot day / price spike
 # ---------------------------------------------------------------------------

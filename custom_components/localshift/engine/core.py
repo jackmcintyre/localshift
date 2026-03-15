@@ -112,9 +112,16 @@ class DPPlanner:
 
     @staticmethod
     def _compute_required_headroom(
-        slots: list, risk_start_idx: int, risk_end_idx: int, charge_efficiency: float
+        slots: list,
+        risk_start_idx: int,
+        risk_end_idx: int,
+        charge_efficiency: float,
+        max_headroom_kwh: float,
     ) -> float:
-        """Compute storage needed to absorb spill during risk window."""
+        """Compute storage needed to absorb spill during risk window.
+
+        Capped at max_headroom_kwh (battery capacity minus minimum floor).
+        """
         from custom_components.localshift.const import (
             NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR,
         )
@@ -126,7 +133,8 @@ class DPPlanner:
             if net_kwh > 0:
                 required_headroom_kwh += net_kwh * charge_efficiency
 
-        return required_headroom_kwh * NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR
+        required_headroom_kwh *= NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR
+        return min(required_headroom_kwh, max_headroom_kwh)
 
     @staticmethod
     def _compute_recovery_by_slot(
@@ -202,8 +210,15 @@ class DPPlanner:
         if not has_positive_before:
             return None
 
+        min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
+        max_headroom_kwh = battery_capacity_kwh - min_floor_kwh
+
         required_headroom_kwh = self._compute_required_headroom(
-            slots, risk_start_idx, risk_end_idx, config.charge_efficiency
+            slots,
+            risk_start_idx,
+            risk_end_idx,
+            config.charge_efficiency,
+            max_headroom_kwh,
         )
         if required_headroom_kwh <= 0:
             return None
@@ -227,7 +242,6 @@ class DPPlanner:
             slots, recovery_deadline_idx, config.charge_efficiency
         )
 
-        min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
         floor_by_slot = self._compute_floor_by_slot(
             n_slots,
             current_kwh,
@@ -588,6 +602,7 @@ class DPPlanner:
                     terminal_penalty_idx,
                     slots,
                     inputs,
+                    negative_fit_avoidance_context,
                 )
                 dp[slot_idx][bin_idx] = best
                 states_explored += action_count
