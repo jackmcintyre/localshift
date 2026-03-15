@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugin": ["context-mode"],
   "instructions": [
     ".opencode/rules",
     ".agents/rules/worktrees.md"
@@ -10,7 +11,6 @@
       ".opencode/skills/python-refactoring"
     ]
   },
-  "plugin": ["@tarquinen/opencode-dcp@latest"],
   "mcp": {
     "symdex": {
       "type": "local",
