@@ -815,7 +815,7 @@ Attributes:
 
 **Purpose:** Detailed DP optimizer plan with full decision breakdown.
 
-**Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_plan`. Removed "shadow" naming since DP optimizer is now the active planner.
+**Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_plan`. DP optimizer is now the active planner.
 
 **Recorder Note (#467):** The `decisions` attribute is excluded from database recording because it can exceed 26KB (larger than the 16KB recorder limit). The attribute remains available in real-time for dashboard charts, but historical queries will not include it. Other attributes (`enabled`, `success`, `total_slots`, `computed_at`) are recorded normally.
 
@@ -841,7 +841,7 @@ Attributes:
   computed_at: "2026-03-01T10:00:00+11:00"
 ```
 
-**Icon:** Dynamic (mdi:shadow for computed, mdi:shadow-off for error/disabled)
+**Icon:** Dynamic (mdi:check-circle for success, mdi:alert-circle for error/disabled)
 
 ---
 
@@ -849,7 +849,7 @@ Attributes:
 
 **Purpose:** DP optimizer run summary.
 
-**Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_summary`. Shows aggregate metrics from the optimizer run including timing, success status, and projected costs.
+**Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_summary`. Shows aggregate metrics from the optimizer run.
 
 **State:** One of: `success`, `failed`, `disabled`
 
@@ -1291,7 +1291,7 @@ Added in Issue #406 to allow runtime switching between self-consumption and arbi
 **Behavior:**
 - Updates integration option `optimization_mode`
 - Triggers immediate recompute/evaluate cycle
-- Changes planner objective and action feasibility in both shadow and active modes
+- Changes planner objective and action feasibility
 
 **Example Data:**
 ```
@@ -1319,22 +1319,19 @@ State: 2026-02-24T02:32:04+00:00 (last pressed)
 
 ---
 
-### 2. button.localshift_reset_learning_data
+### 2. button.localshift_reset_learning
 
-**Action:** Reset all learning system data and start fresh.
-
-Added in Issue #170 Phase 5 for user control over learning system state.
+**Action:** Reset learning system decision tracking and start fresh.
 
 **Effect:**
-- Clears all decision records
-- Resets learned parameters to defaults
+- Clears decision tracker state
+- Clears recent decision log
+- Resets performance metrics
 - Returns learning status to "observing" phase
-- Clears pattern analysis data
-- Resets optimization weights
 
 **Use Case:** Start fresh after significant household changes, or if the system has learned sub-optimal parameters.
 
-**Warning:** This erases all learned data. The system will need another 2-3 days of observation before parameter optimization resumes.
+**Note:** This clears decision history and metrics, not all learned parameters.
 
 ---
 
