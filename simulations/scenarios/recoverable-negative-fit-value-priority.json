@@ -1,0 +1,95 @@
+{
+  "name": "Recoverable Negative FIT Value Priority",
+  "description": "When negative FIT is forecast later and recoverability allows pre-discharge, proactive export should prioritize higher-value pre-risk slots.",
+  "input": {
+    "test_time": "2026-03-14T22:30:00+11:00",
+    "soc": 62.0,
+    "operation_mode": "autonomous",
+    "backup_reserve": 10,
+    "grid_power_kw": 0.0,
+    "load_power_kw": 0.4,
+    "solar_power_kw": 0.0,
+    "battery_power_kw": 0.4,
+    "general_price": 0.14,
+    "feed_in_price": 0.03,
+    "price_spike": false,
+    "manual_override": false,
+    "target_reached_today": false,
+    "solcast_today": [
+      {"period_start": "2026-03-14T22:30:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-14T23:00:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-14T23:30:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0}
+    ],
+    "solcast_tomorrow": [
+      {"period_start": "2026-03-15T00:00:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T00:30:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T01:00:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T01:30:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T02:00:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T02:30:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T03:00:00+11:00", "pv_estimate10": 0.0, "pv_estimate": 0.0},
+      {"period_start": "2026-03-15T03:30:00+11:00", "pv_estimate10": 0.1, "pv_estimate": 0.2},
+      {"period_start": "2026-03-15T04:00:00+11:00", "pv_estimate10": 0.3, "pv_estimate": 0.5},
+      {"period_start": "2026-03-15T04:30:00+11:00", "pv_estimate10": 0.8, "pv_estimate": 1.2},
+      {"period_start": "2026-03-15T05:00:00+11:00", "pv_estimate10": 1.6, "pv_estimate": 2.2},
+      {"period_start": "2026-03-15T05:30:00+11:00", "pv_estimate10": 2.8, "pv_estimate": 3.8},
+      {"period_start": "2026-03-15T06:00:00+11:00", "pv_estimate10": 4.2, "pv_estimate": 5.2},
+      {"period_start": "2026-03-15T06:30:00+11:00", "pv_estimate10": 5.6, "pv_estimate": 6.6},
+      {"period_start": "2026-03-15T07:00:00+11:00", "pv_estimate10": 6.4, "pv_estimate": 7.4},
+      {"period_start": "2026-03-15T07:30:00+11:00", "pv_estimate10": 6.8, "pv_estimate": 7.8},
+      {"period_start": "2026-03-15T08:00:00+11:00", "pv_estimate10": 6.5, "pv_estimate": 7.5},
+      {"period_start": "2026-03-15T08:30:00+11:00", "pv_estimate10": 5.8, "pv_estimate": 6.8},
+      {"period_start": "2026-03-15T09:00:00+11:00", "pv_estimate10": 4.8, "pv_estimate": 5.8},
+      {"period_start": "2026-03-15T09:30:00+11:00", "pv_estimate10": 3.6, "pv_estimate": 4.6},
+      {"period_start": "2026-03-15T10:00:00+11:00", "pv_estimate10": 2.4, "pv_estimate": 3.0},
+      {"period_start": "2026-03-15T10:30:00+11:00", "pv_estimate10": 1.2, "pv_estimate": 1.6},
+      {"period_start": "2026-03-15T11:00:00+11:00", "pv_estimate10": 0.5, "pv_estimate": 0.7},
+      {"period_start": "2026-03-15T11:30:00+11:00", "pv_estimate10": 0.1, "pv_estimate": 0.2}
+    ],
+    "general_forecast": [
+      {"start_time": "2026-03-14T22:30:00+11:00", "end_time": "2026-03-14T23:30:00+11:00", "per_kwh": 0.14},
+      {"start_time": "2026-03-14T23:30:00+11:00", "end_time": "2026-03-15T00:30:00+11:00", "per_kwh": 0.13},
+      {"start_time": "2026-03-15T00:30:00+11:00", "end_time": "2026-03-15T01:30:00+11:00", "per_kwh": 0.12},
+      {"start_time": "2026-03-15T01:30:00+11:00", "end_time": "2026-03-15T02:30:00+11:00", "per_kwh": 0.11},
+      {"start_time": "2026-03-15T02:30:00+11:00", "end_time": "2026-03-15T03:30:00+11:00", "per_kwh": 0.10},
+      {"start_time": "2026-03-15T03:30:00+11:00", "end_time": "2026-03-15T04:30:00+11:00", "per_kwh": 0.11},
+      {"start_time": "2026-03-15T04:30:00+11:00", "end_time": "2026-03-15T05:30:00+11:00", "per_kwh": 0.12},
+      {"start_time": "2026-03-15T05:30:00+11:00", "end_time": "2026-03-15T06:30:00+11:00", "per_kwh": 0.13},
+      {"start_time": "2026-03-15T06:30:00+11:00", "end_time": "2026-03-15T07:30:00+11:00", "per_kwh": 0.15},
+      {"start_time": "2026-03-15T07:30:00+11:00", "end_time": "2026-03-15T08:30:00+11:00", "per_kwh": 0.17},
+      {"start_time": "2026-03-15T08:30:00+11:00", "end_time": "2026-03-15T09:30:00+11:00", "per_kwh": 0.20},
+      {"start_time": "2026-03-15T09:30:00+11:00", "end_time": "2026-03-15T10:30:00+11:00", "per_kwh": 0.22}
+    ],
+    "feed_in_forecast": [
+      {"start_time": "2026-03-14T22:30:00+11:00", "end_time": "2026-03-14T23:30:00+11:00", "per_kwh": 0.03},
+      {"start_time": "2026-03-14T23:30:00+11:00", "end_time": "2026-03-15T00:30:00+11:00", "per_kwh": 0.10},
+      {"start_time": "2026-03-15T00:30:00+11:00", "end_time": "2026-03-15T01:30:00+11:00", "per_kwh": 0.05},
+      {"start_time": "2026-03-15T01:30:00+11:00", "end_time": "2026-03-15T02:30:00+11:00", "per_kwh": 0.04},
+      {"start_time": "2026-03-15T02:30:00+11:00", "end_time": "2026-03-15T03:30:00+11:00", "per_kwh": 0.02},
+      {"start_time": "2026-03-15T03:30:00+11:00", "end_time": "2026-03-15T04:30:00+11:00", "per_kwh": 0.00},
+      {"start_time": "2026-03-15T04:30:00+11:00", "end_time": "2026-03-15T05:30:00+11:00", "per_kwh": -0.02},
+      {"start_time": "2026-03-15T05:30:00+11:00", "end_time": "2026-03-15T06:30:00+11:00", "per_kwh": -0.03},
+      {"start_time": "2026-03-15T06:30:00+11:00", "end_time": "2026-03-15T07:30:00+11:00", "per_kwh": -0.04},
+      {"start_time": "2026-03-15T07:30:00+11:00", "end_time": "2026-03-15T08:30:00+11:00", "per_kwh": -0.05},
+      {"start_time": "2026-03-15T08:30:00+11:00", "end_time": "2026-03-15T09:30:00+11:00", "per_kwh": -0.03},
+      {"start_time": "2026-03-15T09:30:00+11:00", "end_time": "2026-03-15T10:30:00+11:00", "per_kwh": -0.01}
+    ]
+  },
+  "config_overrides": {
+    "battery_target": 100,
+    "demand_window_start": "18:00:00",
+    "demand_window_end": "22:00:00",
+    "export_price_margin": 0.10,
+    "optimizer_enabled": true,
+    "optimizer_control_mode": "active",
+    "ha_timezone": "Australia/Sydney"
+  },
+  "switch_states": {
+    "automation_enabled": true,
+    "spike_discharge_enabled": true,
+    "demand_window_block": true
+  },
+  "expected": {
+    "optimizer_result_success": true
+  }
+}

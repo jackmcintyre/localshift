@@ -51,6 +51,7 @@ Determines which actions are physically/legal possible for a given state.
 | Price thresholds | Only charge if price is cheap (self-consumption mode) | L1419-1428 |
 | Solar sufficiency | Suppress grid charging when solar covers deficit | L1378-1416 |
 | Export profitability | Only export if sell price exceeds threshold | L1437-1446 |
+| Negative-FIT DW guardrail | In avoidance mode, DW export allowed only if net benefit >= $0.02/kWh | `engine/constraints.py` / `engine/core.py` |
 
 ### When to Add Hard Constraints
 

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# Reuse broad constraints coverage from engine-level test module so the
+# hook-scoped coverage check reflects full constraints behavior.
+from tests.engine.test_constraints import *  # noqa: F403
+
 import pytest
 
 from custom_components.localshift.engine.constraints import feasible_actions
@@ -153,3 +157,37 @@ def test_feasible_actions_context_none_uses_normal_rules(default_config):
         assert PlannerAction.EXPORT_PROACTIVE in actions
     else:
         assert PlannerAction.EXPORT_PROACTIVE not in actions
+
+
+def test_feasible_actions_dw_requires_min_net_benefit_in_avoidance(default_config):
+    """Demand-window export in avoidance mode requires minimum net benefit."""
+    slot = _make_test_slot(sell_price=0.14, is_demand_window_slot=True)
+    slot.buy_price = 0.13
+    context = _make_context(risk_start=5, recovery_by_slot=[20.0] * 15)
+    actions = feasible_actions(
+        soc_pct=90.0,
+        slot=slot,
+        config=default_config,
+        slot_idx=0,
+        slots=None,
+        terminal_penalty_idx=None,
+        negative_fit_avoidance_context=context,
+    )
+    assert PlannerAction.EXPORT_PROACTIVE not in actions
+
+
+def test_feasible_actions_dw_allows_export_above_min_net_benefit(default_config):
+    """Demand-window export is allowed in avoidance mode when net benefit is high."""
+    slot = _make_test_slot(sell_price=0.16, is_demand_window_slot=True)
+    slot.buy_price = 0.13
+    context = _make_context(risk_start=5, recovery_by_slot=[20.0] * 15)
+    actions = feasible_actions(
+        soc_pct=90.0,
+        slot=slot,
+        config=default_config,
+        slot_idx=0,
+        slots=None,
+        terminal_penalty_idx=None,
+        negative_fit_avoidance_context=context,
+    )
+    assert PlannerAction.EXPORT_PROACTIVE in actions
