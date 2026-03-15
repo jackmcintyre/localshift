@@ -448,13 +448,37 @@ class StateReader:
         )
 
         if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
-            # Read embedded forecasts from price sensor attributes
-            data.general_forecast = (
-                self._read_attribute(general_price_entity, "forecast", []) or []
-            )
-            data.feed_in_forecast = (
-                self._read_attribute(feed_in_price_entity, "forecast", []) or []
-            )
+            # Amber Express has _detailed entities with full forecast data (including spike_status)
+            # Derive _detailed entity IDs from the configured price entities
+            general_detailed = general_price_entity.replace("_price", "_price_detailed")
+            feed_in_detailed = feed_in_price_entity.replace("_price", "_price_detailed")
+
+            # Read from _detailed entities which have 'forecasts' attribute with full data
+            general_forecast = self._read_attribute(general_detailed, "forecasts", [])
+            feed_in_forecast = self._read_attribute(feed_in_detailed, "forecasts", [])
+
+            # Fallback to simple entities if _detailed not available
+            if not general_forecast:
+                _LOGGER.warning(
+                    "Amber Express detailed entity '%s' has no forecasts, "
+                    "falling back to simple entity. Spike detection may be limited.",
+                    general_detailed,
+                )
+                general_forecast = self._read_attribute(
+                    general_price_entity, "forecast", []
+                )
+            if not feed_in_forecast:
+                _LOGGER.warning(
+                    "Amber Express detailed entity '%s' has no forecasts, "
+                    "falling back to simple entity. Spike detection may be limited.",
+                    feed_in_detailed,
+                )
+                feed_in_forecast = self._read_attribute(
+                    feed_in_price_entity, "forecast", []
+                )
+
+            data.general_forecast = general_forecast or []
+            data.feed_in_forecast = feed_in_forecast or []
         else:
             # Use separate forecast sensors (existing behavior)
             data.general_forecast = (
