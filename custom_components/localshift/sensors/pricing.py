@@ -51,3 +51,34 @@ class SolarWeightedAvgFITSensor(LocalShiftSensorBase):
                 self.coordinator.data.solar_remaining_kwh, 2
             ),
         }
+
+
+# ---------------------------------------------------------------------------
+# Comparison Sensors (Issue #300)
+# ---------------------------------------------------------------------------
+
+
+class ComparisonResultSensor(LocalShiftSensorBase):
+    """Sensor showing primary vs shadow decision match status."""
+
+    _attr_unique_id = "localshift_comparison_result"
+    _attr_name = "Comparison Result"
+    _attr_icon = "mdi:compare"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = (
+            "match" if self.coordinator.data.comparison_match else "mismatch"
+        )
+
+
+class PriceDeltaSensor(LocalShiftSensorBase):
+    """Sensor showing price difference between primary and shadow sources."""
+
+    _attr_unique_id = "localshift_price_delta"
+    _attr_name = "Price Delta"
+    _attr_icon = "mdi:currency-usd"
+    _attr_native_unit_of_measurement = "$/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = round(self.coordinator.data.price_delta, 4)

@@ -30,7 +30,7 @@ class TestSensorAsyncSetup:
 
         mock_async_add_entities.assert_called_once()
         entities = mock_async_add_entities.call_args[0][0]
-        assert len(entities) == 30
+        assert len(entities) == 32
         assert any(
             type(entity).__name__ == "LoadDeviationSensor" for entity in entities
         )

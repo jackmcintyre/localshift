@@ -7,13 +7,16 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.localshift.const import (
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_TESLEMETRY_GRID_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     DEFAULT_ENTITY_IDS,
+    PRICING_SOURCE_AMBER_EXPRESS,
 )
 from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.state.reader import StateReader
@@ -482,6 +485,26 @@ class TestReadAllExternalState:
         assert coordinator_data.general_price == 0.0
         assert coordinator_data.feed_in_price == 0.0
         assert coordinator_data.price_spike is False
+
+    def test_read_all_external_state_resets_amber_demand_window_when_entity_missing(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Amber demand window should reset when configured source has no entity."""
+        state_reader.entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+        state_reader.entry.data[CONF_PRICING_PRICE_SPIKE] = ""
+        coordinator_data.demand_window_amber = True
+
+        def mock_get_state(_entity_id):
+            state = MagicMock()
+            state.state = "0"
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.demand_window_amber is False
 
 
 class TestPriceAvailability:
@@ -1014,7 +1037,7 @@ class TestExtendForecastWithAssumedPrices:
 
     def test_extend_with_correct_price(self, state_reader):
         """Test that extended entries use the assumed price."""
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
@@ -1034,7 +1057,7 @@ class TestExtendForecastWithAssumedPrices:
 
     def test_extend_with_30_minute_slots(self, state_reader):
         """Test that extended entries use 30-minute duration."""
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [

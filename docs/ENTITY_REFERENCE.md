@@ -4,12 +4,12 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **56 entities** grouped under a single "LocalShift" device:
+The integration creates **58 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 30 | `sensor` |
-| Binary Sensors | 10 | `binary_sensor` |
+| Sensors | 32 | `sensor` |
+| Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 4 | `number` |
 | Selects | 2 | `select` |
@@ -870,6 +870,42 @@ Attributes:
 
 ---
 
+### 30. sensor.localshift_comparison_result (Issue #300)
+
+**Purpose:** Comparison result between primary and shadow pricing sources.
+
+Added in Issue #300 for A/B comparison between Amber and Amber Express pricing data.
+
+**State:** `match` if primary and shadow decisions align, `mismatch` otherwise
+
+**Example Data:**
+```
+State: match
+```
+
+**Icon:** `mdi:compare`
+
+---
+
+### 31. sensor.localshift_price_delta (Issue #300)
+
+**Purpose:** Price difference between primary and shadow pricing sources.
+
+Added in Issue #300 to show the delta between Amber and Amber Express prices.
+
+**State:** Price difference in $/kWh
+
+**Example Data:**
+```
+State: 0.0200
+Attributes:
+  unit_of_measurement: $/kWh
+```
+
+**Icon:** `mdi:currency-usd`
+
+---
+
 ## Binary Sensors
 
 ### 1. binary_sensor.localshift_demand_window
@@ -1022,6 +1058,23 @@ Attributes:
 **Icon:** Dynamic (shield-alert when active, shield-check when inactive)
 
 **Use Case:** When this sensor is `on`, LocalShift automation will pause and wait for Tesla to release control. No need to manually intervene.
+
+---
+
+### 11. binary_sensor.localshift_amber_demand_window (Issue #300)
+
+**Purpose:** Demand window status from Amber Express integration.
+
+Added in Issue #300 to provide real-time demand window detection from Amber Express.
+
+**State:** `on` when Amber Express demand window is active, `off` otherwise
+
+**Example Data:**
+```
+State: on
+```
+
+**Icon:** Dynamic (clock-alert when on, clock-check when off)
 
 ---
 

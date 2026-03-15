@@ -18,6 +18,7 @@ from ..const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
+    CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
@@ -26,6 +27,7 @@ from ..const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -53,12 +55,15 @@ from ..const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
+    PRICING_SOURCE_AMBER_EXPRESS,
 )
 from .schemas import (
     build_pricing_schema,
+    build_pricing_source_schema,
     build_solcast_schema,
     build_user_schema,
 )
@@ -137,17 +142,40 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
 
             # Store teslemetry config, move to pricing step
             self._teslemetry_data = user_input
-            return await self.async_step_pricing()
+            return await self.async_step_pricing_source()
 
         return self.async_show_form(
             step_id="user",
             data_schema=build_user_schema(),
         )
 
+    async def async_step_pricing_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle the pricing source selection step."""
+        if user_input is not None:
+            # Store pricing source config
+            self._pricing_source_data = user_input
+            return await self.async_step_pricing()
+
+        return self.async_show_form(
+            step_id="pricing_source",
+            data_schema=build_pricing_source_schema(),
+        )
+
     async def async_step_pricing(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the pricing entity selection step."""
+        # Get pricing source from previous step
+        pricing_source = (
+            self._pricing_source_data.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            )
+            if hasattr(self, "_pricing_source_data")
+            else DEFAULT_PRICING_DATA_SOURCE
+        )
+
         if user_input is not None:
             # Validate entities
             entities_to_validate = {
@@ -159,35 +187,42 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_PRICING_FEED_IN_PRICE],
                     "sensor",
                 ),
-                CONF_PRICING_GENERAL_FORECAST: (
-                    user_input[CONF_PRICING_GENERAL_FORECAST],
-                    "sensor",
-                ),
-                CONF_PRICING_FEED_IN_FORECAST: (
-                    user_input[CONF_PRICING_FEED_IN_FORECAST],
-                    "sensor",
-                ),
                 CONF_PRICING_PRICE_SPIKE: (
                     user_input[CONF_PRICING_PRICE_SPIKE],
                     "binary_sensor",
                 ),
             }
 
+            if pricing_source != PRICING_SOURCE_AMBER_EXPRESS:
+                entities_to_validate[CONF_PRICING_GENERAL_FORECAST] = (
+                    user_input[CONF_PRICING_GENERAL_FORECAST],
+                    "sensor",
+                )
+                entities_to_validate[CONF_PRICING_FEED_IN_FORECAST] = (
+                    user_input[CONF_PRICING_FEED_IN_FORECAST],
+                    "sensor",
+                )
+
             errors = await validate_all_entities(self.hass, entities_to_validate)
             if errors:
                 return self.async_show_form(
                     step_id="pricing",
-                    data_schema=build_pricing_schema(user_input=user_input),
+                    data_schema=build_pricing_schema(
+                        user_input=user_input, pricing_source=pricing_source
+                    ),
                     errors=errors,
                 )
 
             # Store pricing config, move to solcast step
-            self._pricing_data = user_input
+            self._pricing_data = dict(user_input)
+            if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+                self._pricing_data.setdefault(CONF_PRICING_GENERAL_FORECAST, "")
+                self._pricing_data.setdefault(CONF_PRICING_FEED_IN_FORECAST, "")
             return await self.async_step_solcast()
 
         return self.async_show_form(
             step_id="pricing",
-            data_schema=build_pricing_schema(),
+            data_schema=build_pricing_schema(pricing_source=pricing_source),
         )
 
     async def async_step_solcast(
@@ -235,6 +270,7 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
             # Note: notify_service goes into options, not data, so it can be changed later
             all_data = {
                 **self._teslemetry_data,
+                **self._pricing_source_data,
                 **self._pricing_data,
                 CONF_SOLCAST_FORECAST_TODAY: user_input[CONF_SOLCAST_FORECAST_TODAY],
                 CONF_SOLCAST_FORECAST_TOMORROW: user_input[
@@ -303,7 +339,12 @@ class LocalShiftOptionsFlow(OptionsFlow):
         errors = {}
         for config_key, entity_id in entities.items():
             # Skip non-entity fields
-            if config_key in (CONF_NOTIFY_SERVICE, CONF_WEATHER_ENTITY):
+            if config_key in (
+                CONF_NOTIFY_SERVICE,
+                CONF_WEATHER_ENTITY,
+                CONF_PRICING_DATA_SOURCE,
+                CONF_COMPARISON_MODE,
+            ):
                 continue
             if not entity_id:
                 errors[config_key] = "Entity is required"
@@ -438,7 +479,11 @@ class LocalShiftOptionsFlow(OptionsFlow):
 
         # Build schemas and extract their dict contents
         user_schema = build_user_schema(values)
-        pricing_schema = build_pricing_schema()
+        pricing_source = values.get(
+            CONF_PRICING_DATA_SOURCE,
+            DEFAULT_PRICING_DATA_SOURCE,
+        )
+        pricing_schema = build_pricing_schema(values, pricing_source=pricing_source)
         solcast_schema = build_solcast_schema(
             notify_services, weather_entities, values, include_notify=False
         )

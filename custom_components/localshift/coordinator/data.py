@@ -177,6 +177,22 @@ class CoordinatorData:
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False
+
+    # Shadow prices for A/B comparison (Issue #300)
+    general_price_shadow: float = 0.0
+    feed_in_price_shadow: float = 0.0
+    general_forecast_shadow: list[dict[str, Any]] = field(default_factory=list)
+    feed_in_forecast_shadow: list[dict[str, Any]] = field(default_factory=list)
+
+    # Decision comparison results
+    primary_decision: str = ""
+    shadow_decision: str = ""
+    comparison_match: bool = True
+    price_delta: float = 0.0  # Difference between sources
+
+    # Demand window from Amber Express (Issue #300)
+    demand_window_amber: bool = False
+
     prices_available: bool = (
         True  # False when price entities are unavailable (Issue #330)
     )

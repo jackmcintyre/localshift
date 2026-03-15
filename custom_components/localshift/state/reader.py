@@ -11,6 +11,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPARISON_MODE_ENABLED,
+    CONF_COMPARISON_MODE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -27,7 +30,11 @@ from ..const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_WEATHER_ENTITY,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_ENTITY_IDS,
+    DEFAULT_PRICING_DATA_SOURCE,
+    PRICING_SOURCE_AMBER,
+    PRICING_SOURCE_AMBER_EXPRESS,
 )
 from ..coordinator.data import CoordinatorData
 from ..utils.validation import EntityValidator
@@ -103,6 +110,79 @@ class StateReader:
         if state is None:
             return default
         return state.attributes.get(attr, default)
+
+    def _read_shadow_prices(self) -> dict[str, Any]:
+        """Read alternate price source for comparison mode.
+
+        Issue #300: Read shadow prices when comparison mode is enabled.
+        Derives shadow entity IDs by manipulating user's configured entity IDs.
+
+        Returns:
+            Dict with shadow prices and forecasts
+        """
+        current_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+
+        # Get user's configured general price entity ID
+        general_price_entity = self.entry.data.get(CONF_PRICING_GENERAL_PRICE, "")
+        feed_in_price_entity = self.entry.data.get(CONF_PRICING_FEED_IN_PRICE, "")
+
+        # Derive shadow entity IDs by toggling "amber_express_" prefix
+        # Example: "sensor.100h_general_price" <-> "sensor.amber_express_100h_general_price"
+        AMBER_EXPRESS_PREFIX = "amber_express_"
+
+        def get_shadow_entity(entity_id: str, target_source: str) -> str:
+            """Derive shadow entity ID based on target source."""
+            if target_source == PRICING_SOURCE_AMBER_EXPRESS:
+                # Add amber_express_ prefix if not present
+                if AMBER_EXPRESS_PREFIX not in entity_id:
+                    # Insert "amber_express_" after "sensor."
+                    return entity_id.replace("sensor.", "sensor.amber_express_", 1)
+                return entity_id
+            else:
+                # Remove amber_express_ prefix if present
+                if AMBER_EXPRESS_PREFIX in entity_id:
+                    return entity_id.replace(AMBER_EXPRESS_PREFIX, "", 1)
+                return entity_id
+
+        # Determine target source (the opposite of current)
+        if current_source == PRICING_SOURCE_AMBER:
+            shadow_source = PRICING_SOURCE_AMBER_EXPRESS
+        else:
+            shadow_source = PRICING_SOURCE_AMBER
+
+        # Build shadow entity IDs
+        shadow_general_entity = get_shadow_entity(general_price_entity, shadow_source)
+        shadow_feed_in_entity = get_shadow_entity(feed_in_price_entity, shadow_source)
+
+        shadow_general_price = self._read_float_optional(shadow_general_entity)
+        shadow_feed_in_price = self._read_float_optional(shadow_feed_in_entity)
+
+        # Read shadow forecasts based on source type
+        if shadow_source == PRICING_SOURCE_AMBER_EXPRESS:
+            # Amber Express embeds forecasts in price sensor attributes
+            shadow_general_forecast = self._read_attribute(
+                shadow_general_entity, "forecast", []
+            )
+            shadow_feed_in_forecast = self._read_attribute(
+                shadow_feed_in_entity, "forecast", []
+            )
+        else:
+            # For amber, need separate forecast entities - try to derive them
+            shadow_general_forecast = self._read_attribute(
+                shadow_general_entity.replace("_price", "_forecast"), "forecasts", []
+            )
+            shadow_feed_in_forecast = self._read_attribute(
+                shadow_feed_in_entity.replace("_price", "_forecast"), "forecasts", []
+            )
+
+        return {
+            "general_price_shadow": shadow_general_price or 0.0,
+            "feed_in_price_shadow": shadow_feed_in_price or 0.0,
+            "general_forecast_shadow": shadow_general_forecast or [],
+            "feed_in_forecast_shadow": shadow_feed_in_forecast or [],
+        }
 
     def _calculate_current_day_average_price(
         self, forecast: list[dict[str, Any]], now: datetime
@@ -361,18 +441,34 @@ class StateReader:
         data.price_spike = self._read_bool(
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
         )
-        data.general_forecast = (
-            self._read_attribute(
-                self._get_entity_id(CONF_PRICING_GENERAL_FORECAST), "forecasts", []
-            )
-            or []
+
+        # Issue #300: Read forecasts based on pricing source
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
         )
-        data.feed_in_forecast = (
-            self._read_attribute(
-                self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST), "forecasts", []
+
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+            # Read embedded forecasts from price sensor attributes
+            data.general_forecast = (
+                self._read_attribute(general_price_entity, "forecast", []) or []
             )
-            or []
-        )
+            data.feed_in_forecast = (
+                self._read_attribute(feed_in_price_entity, "forecast", []) or []
+            )
+        else:
+            # Use separate forecast sensors (existing behavior)
+            data.general_forecast = (
+                self._read_attribute(
+                    self._get_entity_id(CONF_PRICING_GENERAL_FORECAST), "forecasts", []
+                )
+                or []
+            )
+            data.feed_in_forecast = (
+                self._read_attribute(
+                    self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST), "forecasts", []
+                )
+                or []
+            )
 
         # Issue #632: Extend forecasts to 24 hours if needed
         # This ensures the optimizer can see tomorrow's solar opportunities
@@ -403,6 +499,54 @@ class StateReader:
                 len(data.feed_in_forecast),
                 avg_sell_price,
             )
+
+        # Issue #300: Read shadow prices for comparison mode
+        comparison_mode = self.entry.data.get(
+            CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
+        )
+        if comparison_mode == COMPARISON_MODE_ENABLED:
+            shadow = self._read_shadow_prices()
+            data.general_price_shadow = shadow["general_price_shadow"]
+            data.feed_in_price_shadow = shadow["feed_in_price_shadow"]
+            data.general_forecast_shadow = shadow["general_forecast_shadow"]
+            data.feed_in_forecast_shadow = shadow["feed_in_forecast_shadow"]
+
+            # Calculate price delta
+            data.price_delta = abs(data.general_price - data.general_price_shadow)
+            _LOGGER.debug(
+                "Shadow prices: general=$%.3f/kWh, feed_in=$%.3f/kWh, delta=$%.3f/kWh",
+                data.general_price_shadow,
+                data.feed_in_price_shadow,
+                data.price_delta,
+            )
+        else:
+            data.general_price_shadow = 0.0
+            data.feed_in_price_shadow = 0.0
+            data.general_forecast_shadow = []
+            data.feed_in_forecast_shadow = []
+            data.primary_decision = ""
+            data.shadow_decision = ""
+            data.comparison_match = True
+            data.price_delta = 0.0
+
+        # Issue #300: Read demand window from Amber Express
+        # Derive from user's configured price spike entity (replace _price_spike with _demand_window)
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+            price_spike_entity = self.entry.data.get(CONF_PRICING_PRICE_SPIKE, "")
+            if price_spike_entity:
+                # Replace "price_spike" with "demand_window" to get the entity
+                demand_window_entity = price_spike_entity.replace(
+                    "price_spike", "demand_window"
+                )
+                data.demand_window_amber = self._read_bool(demand_window_entity)
+                _LOGGER.debug(
+                    "Reading Amber Express demand window from: %s",
+                    demand_window_entity,
+                )
+            else:
+                data.demand_window_amber = False
+        else:
+            data.demand_window_amber = False
 
         # Solcast
         today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)

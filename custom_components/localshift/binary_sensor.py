@@ -35,6 +35,8 @@ async def async_setup_entry(
         ExcessSolarAvailableSensor(coordinator, entry),
         # Tesla Override Detection sensor
         TeslaOverrideActiveSensor(coordinator, entry),
+        # Amber Express demand window (Issue #300)
+        AmberExpressDemandWindowSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -262,12 +264,35 @@ class TeslaOverrideActiveSensor(LocalShiftBinarySensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return Tesla override details."""
-        d = self.coordinator.data
+        """Return override context from coordinator data."""
+        if self._attr_is_on:
+            description = "Tesla has taken control (Storm Watch, Grid Event, or VPP)"
+        else:
+            description = "Tesla is not overriding control"
+
         return {
-            "operation_mode": d.operation_mode,
-            "backup_reserve": d.backup_reserve,
-            "description": "Tesla has taken control (Storm Watch, Grid Event, or VPP active)"
-            if self._attr_is_on
-            else "Tesla is not overriding control",
+            "operation_mode": self.coordinator.data.operation_mode,
+            "backup_reserve": self.coordinator.data.backup_reserve,
+            "description": description,
         }
+
+
+# ---------------------------------------------------------------------------
+# Amber Express Demand Window Binary Sensor (Issue #300)
+# ---------------------------------------------------------------------------
+
+
+class AmberExpressDemandWindowSensor(LocalShiftBinarySensorBase):
+    """Demand window status from Amber Express."""
+
+    _attr_unique_id = "localshift_amber_demand_window"
+    _attr_name = "Amber Demand Window"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on state."""
+        return "mdi:clock-alert" if self._attr_is_on else "mdi:clock-check"
+
+    def _update_from_coordinator(self) -> None:
+        """Update state from coordinator data."""
+        self._attr_is_on = self.coordinator.data.demand_window_amber

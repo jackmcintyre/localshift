@@ -4,6 +4,7 @@ from .sensors import (
     AutomationReadySensor,
     CheapChargeStopPriceSensor,
     CloudEventSensor,
+    ComparisonResultSensor,
     DecisionLagSensor,
     DecisionLogSensor,
     DecisionQualitySensor,
@@ -28,6 +29,7 @@ from .sensors import (
     OptimizerPlanGridSensor,
     OptimizerPlanSensor,
     OptimizerSummarySensor,
+    PriceDeltaSensor,
     SolarBatteryForecastSensor,
     SolarForecastAccuracySensor,
     SolarWeightedAvgFITSensor,
@@ -67,6 +69,9 @@ __all__ = [
     "OptimizerPlanDetailedSensor",
     "OptimizerSummarySensor",
     "SolarForecastAccuracySensor",
+    # Comparison sensors (Issue #300)
+    "ComparisonResultSensor",
+    "PriceDeltaSensor",
 ]
 
 
@@ -77,6 +82,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         AutomationReadySensor,
         CheapChargeStopPriceSensor,
         CloudEventSensor,
+        ComparisonResultSensor,
         DecisionLagSensor,
         DecisionLogSensor,
         DecisionQualitySensor,
@@ -101,6 +107,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         OptimizerPlanGridSensor,
         OptimizerPlanSensor,
         OptimizerSummarySensor,
+        PriceDeltaSensor,
         SolarBatteryForecastSensor,
         SolarForecastAccuracySensor,
         SolarWeightedAvgFITSensor,
@@ -154,6 +161,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
         OptimizerSummarySensor(coordinator, entry),  # Was OptimizerShadowSummarySensor
         SolarForecastAccuracySensor(coordinator, entry),
         CloudEventSensor(coordinator, entry),
+        # Comparison sensors (Issue #300)
+        ComparisonResultSensor(coordinator, entry),
+        PriceDeltaSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
