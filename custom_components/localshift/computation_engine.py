@@ -14,21 +14,25 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
+    CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_SWITCHING_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_SWITCHING_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -533,6 +537,12 @@ class ComputationEngine:
             ),
             CONF_SWITCHING_PENALTY: self.entry.options.get(
                 CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY
+            ),
+            "pricing_source": self.entry.options.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            ),
+            "comparison_mode": self.entry.options.get(
+                CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
             ),
             # ha_timezone override: if present in entry.options (e.g. injected by tests
             # via config_overrides), use it to avoid relying on dt_util.DEFAULT_TIME_ZONE.
