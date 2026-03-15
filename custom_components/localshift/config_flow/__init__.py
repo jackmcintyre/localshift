@@ -48,6 +48,7 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -359,8 +360,37 @@ class LocalShiftOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the first step: entity mappings."""
-        return await self.async_step_entity_mappings(user_input)
+        """Handle the first step: pricing source selection."""
+        return await self.async_step_options_pricing_source(user_input)
+
+    async def async_step_options_pricing_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle pricing source selection for options flow."""
+        if user_input is not None:
+            new_data = {**self.config_entry.data, **user_input}
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, data=new_data
+            )
+            return await self.async_step_entity_mappings()
+
+        current = self.config_entry.data
+        defaults = {
+            CONF_PRICING_DATA_SOURCE: current.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            ),
+            CONF_COMPARISON_MODE: current.get(
+                CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
+            ),
+        }
+
+        return self.async_show_form(
+            step_id="options_pricing_source",
+            data_schema=build_pricing_source_schema(defaults),
+            description_placeholders={
+                "integration_name": "LocalShift",
+            },
+        )
 
     async def async_step_entity_mappings(
         self, user_input: dict[str, Any] | None = None

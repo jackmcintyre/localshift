@@ -532,6 +532,64 @@ class TestOptionsFlow:
         for key, value in user_input.items():
             assert result["data"][key] == value
 
+    @pytest.mark.asyncio
+    async def test_options_flow_shows_pricing_source_first(
+        self, mock_hass, mock_config_entry
+    ):
+        """Test options flow starts with pricing source selection step."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+        mock_config_entries = MagicMock()
+        mock_config_entries.async_get_known_entry = MagicMock(
+            return_value=mock_config_entry
+        )
+        mock_config_entries.async_update_entry = MagicMock()
+        mock_hass.config_entries = mock_config_entries
+        flow.hass = mock_hass
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+
+        result = await flow.async_step_init()
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "options_pricing_source"
+
+    @pytest.mark.asyncio
+    async def test_options_flow_pricing_source_updates_and_proceeds(
+        self, mock_hass, mock_config_entry
+    ):
+        """Test pricing source selection updates config and proceeds to entity mappings."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+        mock_config_entries = MagicMock()
+        mock_config_entries.async_get_known_entry = MagicMock(
+            return_value=mock_config_entry
+        )
+        mock_config_entries.async_update_entry = MagicMock()
+        mock_hass.config_entries = mock_config_entries
+        flow.hass = mock_hass
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: "amber",
+            CONF_COMPARISON_MODE: "enabled",
+        }
+
+        user_input = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+
+        result = await flow.async_step_options_pricing_source(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "entity_mappings"
+        mock_config_entries.async_update_entry.assert_called_once()
+
 
 # =============================================================================
 # STATIC METHOD TESTS
