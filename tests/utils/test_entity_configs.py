@@ -82,6 +82,11 @@ class TestLocalshiftEntityConfig:
         """LOCALSHIFT_ENTITY_CONFIG should contain switches."""
         assert "switch.localshift_automation_enabled" in LOCALSHIFT_ENTITY_CONFIG
 
+    def test_uses_current_excess_solar_entity_id(self):
+        """Health config should track the current excess solar entity id."""
+        assert "sensor.localshift_excess_solar" in LOCALSHIFT_ENTITY_CONFIG
+        assert "sensor.localshift_excess_solar_kwh" not in LOCALSHIFT_ENTITY_CONFIG
+
     def test_all_entries_have_category(self):
         """All entries should have a category."""
         for entity_id, config in LOCALSHIFT_ENTITY_CONFIG.items():
