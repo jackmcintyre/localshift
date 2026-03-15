@@ -122,9 +122,28 @@ class LoadDeviationDetector:
         self, data: Any, current_slot_index: int
     ) -> float | None:
         load_forecast_slots = getattr(data, "load_forecast_slots", []) or []
-        if current_slot_index < 0 or current_slot_index >= len(load_forecast_slots):
+        if not load_forecast_slots:
             return None
-        return float(load_forecast_slots[current_slot_index])
+
+        decisions = getattr(data, "optimizer_decisions", []) or []
+        if not decisions or current_slot_index < 0:
+            return None
+
+        try:
+            base_slot = datetime.fromisoformat(decisions[0]["timestamp_iso"])
+            active_slot = datetime.fromisoformat(
+                decisions[current_slot_index]["timestamp_iso"]
+            )
+        except (KeyError, ValueError, TypeError):
+            return None
+
+        elapsed_min = (active_slot - base_slot).total_seconds() / 60.0
+        max_forecast_index = len(load_forecast_slots) - 1
+        mapped_idx = max(0, min(int(elapsed_min // 15), max_forecast_index))
+
+        if mapped_idx < 0 or mapped_idx >= len(load_forecast_slots):
+            return None
+        return float(load_forecast_slots[mapped_idx])
 
     def _update_window(
         self, breach_name: str, breach_active: bool, now: datetime
