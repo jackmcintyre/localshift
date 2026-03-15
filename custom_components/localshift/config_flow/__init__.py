@@ -507,13 +507,26 @@ class LocalShiftOptionsFlow(OptionsFlow):
         """Build schema for entity mappings step."""
         import voluptuous as vol
 
-        # Build schemas and extract their dict contents
         user_schema = build_user_schema(values)
         pricing_source = values.get(
             CONF_PRICING_DATA_SOURCE,
             DEFAULT_PRICING_DATA_SOURCE,
         )
-        pricing_schema = build_pricing_schema(values, pricing_source=pricing_source)
+        pricing_values = {
+            k: v
+            for k, v in values.items()
+            if k
+            not in (
+                CONF_PRICING_GENERAL_PRICE,
+                CONF_PRICING_FEED_IN_PRICE,
+                CONF_PRICING_PRICE_SPIKE,
+                CONF_PRICING_GENERAL_FORECAST,
+                CONF_PRICING_FEED_IN_FORECAST,
+            )
+        }
+        pricing_schema = build_pricing_schema(
+            pricing_values, pricing_source=pricing_source
+        )
         solcast_schema = build_solcast_schema(
             notify_services, weather_entities, values, include_notify=False
         )
