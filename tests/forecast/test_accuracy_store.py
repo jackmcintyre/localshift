@@ -169,9 +169,13 @@ class TestAsyncLoad:
             }
         )
 
+        # Capture the default instance BEFORE the load call
+        original_extended = data.extended_accuracy_metrics
+
         await store.async_load(data)
 
-        # Should have fallen back to default ExtendedAccuracyMetrics
+        # Should have left extended_accuracy_metrics untouched (no assignment on malformed input)
+        assert data.extended_accuracy_metrics is original_extended
         assert isinstance(data.extended_accuracy_metrics, ExtendedAccuracyMetrics)
 
     @pytest.mark.asyncio
