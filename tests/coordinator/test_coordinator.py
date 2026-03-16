@@ -190,6 +190,40 @@ class TestAsyncStart:
             # State machine should have startup grace set
             assert coordinator._state_machine is not None
 
+    @pytest.mark.asyncio
+    async def test_async_setup_initializes_accuracy_metrics_storage(
+        self, coordinator, mock_recorder
+    ):
+        """Verify accuracy metrics storage is initialized during startup."""
+        with (
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_state_change_event"
+            ) as mock_track_state,
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_time_interval"
+            ) as mock_track_time,
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_time_change"
+            ) as mock_track_time_change,
+        ):
+            mock_track_state.return_value = MagicMock()
+            mock_track_time.return_value = MagicMock()
+            mock_track_time_change.return_value = MagicMock()
+
+            await coordinator.async_start()
+
+            assert hasattr(
+                coordinator._computation_engine,
+                "async_initialize_accuracy_metrics_storage",
+            )
+            assert hasattr(
+                coordinator._computation_engine, "async_load_accuracy_metrics"
+            )
+            assert callable(
+                coordinator._computation_engine.async_initialize_accuracy_metrics_storage
+            )
+            assert callable(coordinator._computation_engine.async_load_accuracy_metrics)
+
 
 # =============================================================================
 # STATE CHANGE HANDLER TESTS
@@ -592,6 +626,25 @@ class TestOptions:
 # =============================================================================
 # ASYNC_STOP TESTS
 # =============================================================================
+
+
+class TestHandleSlowTick:
+    """Tests for _handle_slow_tick method."""
+
+    def test_slow_tick_saves_accuracy_metrics(self, coordinator, coordinator_data):
+        """Verify accuracy metrics are saved during slow-tick."""
+        coordinator.data = coordinator_data
+        coordinator._computation_engine = MagicMock()
+        coordinator.hass.async_create_task = MagicMock()
+
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        coordinator._handle_slow_tick(now)
+
+        coordinator.hass.async_create_task.assert_called()
+        call_args = coordinator.hass.async_create_task.call_args
+        assert call_args[0][1] == "localshift_save_accuracy_metrics"
 
 
 class TestAsyncStop:
