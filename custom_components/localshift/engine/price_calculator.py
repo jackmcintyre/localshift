@@ -271,7 +271,7 @@ class PriceCalculator:
 
         forecast_prices = []
         for forecast in general_forecast:
-            if not isinstance(forecast, dict):
+            if not hasattr(forecast, "get"):
                 continue
             start = self._parse_forecast_dt(forecast.get("start_time"))
             if start is None:
