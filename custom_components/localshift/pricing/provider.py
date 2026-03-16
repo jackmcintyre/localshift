@@ -76,7 +76,50 @@ class AmberProvider:
     def read_forecasts(
         self, hass: HomeAssistant, price_entity_id: str
     ) -> list[ForecastSlot]:
-        raise NotImplementedError
+        """Read forecasts from separate forecast entity."""
+        forecast_entity = price_entity_id.replace("_price", "_forecast")
+        raw_forecasts = self._read_attribute(hass, forecast_entity, "forecasts", [])
+
+        if not raw_forecasts:
+            _LOGGER.warning("No forecasts found on %s", forecast_entity)
+            return []
+
+        slots = []
+        for raw in raw_forecasts:
+            try:
+                slots.append(self._normalize_slot(raw))
+            except (KeyError, ValueError, TypeError) as e:
+                _LOGGER.warning("Skipping malformed forecast slot: %s", e)
+                continue
+        return slots
 
     def is_spike(self, entry: dict[str, Any]) -> bool:
-        raise NotImplementedError
+        """Check if entry represents a spike (Amber uses spike_status)."""
+        return entry.get("spike_status") == "spike"
+
+    def _normalize_slot(self, raw: dict[str, Any]) -> ForecastSlot:
+        """Convert raw forecast dict to ForecastSlot."""
+        return ForecastSlot(
+            start_time=self._parse_timestamp(raw["start_time"]),
+            duration=raw.get("duration", 30),
+            per_kwh=raw["per_kwh"],
+            is_spike=self.is_spike(raw),
+            source_type="amber",
+        )
+
+    def _read_attribute(
+        self, hass: HomeAssistant, entity_id: str, attr: str, default: Any
+    ) -> Any:
+        """Read an attribute from a Home Assistant entity."""
+        state = hass.states.get(entity_id)
+        if state is None:
+            _LOGGER.debug("Entity not found: %s", entity_id)
+            return default
+        return state.attributes.get(attr, default)
+
+    def _parse_timestamp(self, ts: str) -> datetime:
+        """Parse ISO timestamp to timezone-aware datetime."""
+        parsed = dt_util.parse_datetime(ts)
+        if parsed is None:
+            raise ValueError(f"Invalid timestamp: {ts}")
+        return parsed
