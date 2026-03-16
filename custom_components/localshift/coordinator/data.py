@@ -10,6 +10,7 @@ from ..const import BatteryMode
 
 if TYPE_CHECKING:
     from ..forecast.accuracy import ExtendedAccuracyMetrics
+    from ..pricing.types import ForecastSlot
 
 
 def _default_extended_accuracy_metrics() -> Any:
@@ -181,8 +182,8 @@ class CoordinatorData:
     # Shadow prices for A/B comparison (Issue #300)
     general_price_shadow: float = 0.0
     feed_in_price_shadow: float = 0.0
-    general_forecast_shadow: list[dict[str, Any]] = field(default_factory=list)
-    feed_in_forecast_shadow: list[dict[str, Any]] = field(default_factory=list)
+    general_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
+    feed_in_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
 
     # Decision comparison results
     primary_decision: str = ""
@@ -196,8 +197,8 @@ class CoordinatorData:
     prices_available: bool = (
         True  # False when price entities are unavailable (Issue #330)
     )
-    general_forecast: list[dict[str, Any]] = field(default_factory=list)
-    feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
+    general_forecast: list[ForecastSlot] = field(default_factory=list)
+    feed_in_forecast: list[ForecastSlot] = field(default_factory=list)
     solcast_today: list[dict[str, Any]] = field(default_factory=list)
     solcast_tomorrow: list[dict[str, Any]] = field(default_factory=list)
     allow_export: str = "unknown"
