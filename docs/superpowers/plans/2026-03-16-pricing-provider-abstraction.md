@@ -619,28 +619,73 @@ git commit -m "feat(#300): add create_provider factory function"
 
 **Files:**
 - Modify: `custom_components/localshift/coordinator/data.py`
-- Test: Update affected tests
+- Test: `tests/coordinator/test_data.py`
 
-- [ ] **Step 1: Check current CoordinatorData structure**
+- [ ] **Step 1: Write failing test for ForecastSlot type**
 
-Run: `cd /config/home/localshift/worktrees/issue-300 && rg "general_forecast|feed_in_forecast" custom_components/localshift/coordinator/data.py`
+```python
+# Add to tests/coordinator/test_data.py
 
-- [ ] **Step 2: Update type annotations in CoordinatorData**
+def test_coordinator_data_forecast_types():
+    """Test CoordinatorData forecast fields accept ForecastSlot."""
+    from datetime import datetime, timezone
+    
+    from custom_components.localshift.coordinator.data import CoordinatorData
+    from custom_components.localshift.pricing.types import ForecastSlot
+    
+    data = CoordinatorData()
+    
+    slot = ForecastSlot(
+        start_time=datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
+        duration=30,
+        per_kwh=0.15,
+        is_spike=False,
+        source_type="amber",
+    )
+    
+    data.general_forecast = [slot]
+    data.feed_in_forecast = [slot]
+    
+    assert len(data.general_forecast) == 1
+    assert data.general_forecast[0].per_kwh == 0.15
+```
 
-The `general_forecast` and `feed_in_forecast` fields should change from `list[dict[str, Any]]` to `list[ForecastSlot]`.
+- [ ] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Run tests to identify breakage**
+Run: `cd /config/home/localshift/worktrees/issue-300 && uv run pytest tests/coordinator/test_data.py::test_coordinator_data_forecast_types -v`
+Expected: FAIL (type mismatch)
 
-Run: `cd /config/home/localshift/worktrees/issue-300 && uv run pytest --tb=short 2>&1 | head -100`
+- [ ] **Step 3: Update CoordinatorData type annotations**
 
-- [ ] **Step 4: Fix type errors**
+```python
+# In custom_components/localshift/coordinator/data.py
 
-Update any code that accesses forecast dicts to use ForecastSlot attributes.
+# Add import at top
+from ..pricing.types import ForecastSlot
+
+# Find these lines (~199-200) and change type:
+# Before:
+general_forecast: list[dict[str, Any]] = field(default_factory=list)
+feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
+
+# After:
+general_forecast: list[ForecastSlot] = field(default_factory=list)
+feed_in_forecast: list[ForecastSlot] = field(default_factory=list)
+
+# Also update shadow forecasts (~184-185):
+general_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
+feed_in_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd /config/home/localshift/worktrees/issue-300 && uv run pytest tests/coordinator/test_data.py::test_coordinator_data_forecast_types -v`
+Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add custom_components/localshift/coordinator/data.py
+git add custom_components/localshift/coordinator/data.py tests/coordinator/test_data.py
 git commit -m "refactor(#300): update CoordinatorData to use ForecastSlot type"
 ```
 
@@ -656,30 +701,50 @@ git commit -m "refactor(#300): update CoordinatorData to use ForecastSlot type"
 ```python
 # Add to tests/state/test_reader.py
 
-def test_state_reader_uses_provider_for_forecasts():
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def test_state_reader_uses_provider_for_forecasts(mock_hass_with_states):
     """Test StateReader delegates forecast reading to provider."""
-    from unittest.mock import MagicMock, patch
-    
     from custom_components.localshift.pricing.types import ForecastSlot
     from custom_components.localshift.state.reader import StateReader
     
+    # Create mock provider that returns forecast slots
     mock_provider = MagicMock()
-    mock_provider.read_forecasts.return_value = [
+    mock_slots = [
         ForecastSlot(
             start_time=datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
             duration=30,
             per_kwh=0.15,
             is_spike=False,
             source_type="amber",
-        )
+        ),
+        ForecastSlot(
+            start_time=datetime(2026, 3, 16, 12, 30, tzinfo=timezone.utc),
+            duration=30,
+            per_kwh=0.85,
+            is_spike=True,
+            source_type="amber",
+        ),
     ]
+    mock_provider.read_forecasts.return_value = mock_slots
     
-    hass = MagicMock()
+    # Create StateReader with provider
+    hass = mock_hass_with_states
     entry = MagicMock()
-    entry.data = {"pricing_data_source": "amber"}
+    entry.data = {
+        "pricing_data_source": "amber",
+        "pricing_general_price": "sensor.100h_general_price",
+        "pricing_feed_in_price": "sensor.100h_feed_in_price",
+    }
     
     reader = StateReader(hass, entry, MagicMock(), mock_provider)
-    # ... verify provider is called
+    
+    # Verify provider is stored
+    assert reader.pricing_provider is mock_provider
 ```
 
 - [ ] **Step 2: Update StateReader constructor**
@@ -770,30 +835,115 @@ git commit -m "refactor(#300): use PricingProvider for forecast reading in State
 
 ## Phase 3: Clean Up
 
-### Task 9: Remove pricing_source parameter from utils
+### Task 9: Update engine/utils.py spike detection
 
 **Files:**
 - Modify: `custom_components/localshift/engine/utils.py`
-- Modify: `custom_components/localshift/engine/price_signal_engine.py`
-- Modify: `custom_components/localshift/engine/spike_analyzer.py`
+- Test: `tests/engine/test_utils.py`
 
-- [ ] **Step 1: Find all pricing_source usages in utils**
+- [ ] **Step 1: Write failing test for spike detection without pricing_source**
 
-Run: `cd /config/home/localshift/worktrees/issue-300 && rg "pricing_source" custom_components/localshift/engine/`
+```python
+# Add to tests/engine/test_utils.py
 
-- [ ] **Step 2: Remove _is_spike_slot function**
+def test_spike_detection_uses_forecast_slot_is_spike():
+    """Test spike detection works with ForecastSlot.is_spike attribute."""
+    from datetime import datetime, timezone
+    
+    from custom_components.localshift.pricing.types import ForecastSlot
+    
+    slot_spike = ForecastSlot(
+        start_time=datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
+        duration=30,
+        per_kwh=2.50,
+        is_spike=True,
+        source_type="amber",
+    )
+    slot_normal = ForecastSlot(
+        start_time=datetime(2026, 3, 16, 12, 30, tzinfo=timezone.utc),
+        duration=30,
+        per_kwh=0.15,
+        is_spike=False,
+        source_type="amber",
+    )
+    
+    # Spike detection should just check slot.is_spike
+    assert slot_spike.is_spike is True
+    assert slot_normal.is_spike is False
+```
 
-Since spike detection is now in ForecastSlot.is_spike, remove the `_is_spike_slot()` function from utils.py.
+- [ ] **Step 2: Remove _is_spike_slot function and pricing_source parameter**
 
-- [ ] **Step 3: Update callers to use ForecastSlot.is_spike**
+```python
+# In custom_components/localshift/engine/utils.py
 
-Any code calling `_is_spike_slot(entry, pricing_source)` should now use `slot.is_spike` directly.
+# DELETE this function (lines ~140-155):
+# def _is_spike_slot(forecast_entry: dict[str, Any], pricing_source: str) -> bool:
+#     ...
 
-- [ ] **Step 4: Run tests**
+# UPDATE scan_forecast_for_spike (lines ~160-190):
+# Remove pricing_source parameter, use slot.is_spike directly
+
+# Before:
+def scan_forecast_for_spike(
+    forecasts: list[dict[str, Any]],
+    now: datetime,
+    cutoff: timedelta,
+    pricing_source: str = PRICING_SOURCE_AMBER,
+) -> list[dict[str, Any]]:
+    ...
+    if _is_spike_slot(f, pricing_source):
+
+# After:
+def scan_forecast_for_spike(
+    forecasts: list[ForecastSlot],
+    now: datetime,
+    cutoff: timedelta,
+) -> list[ForecastSlot]:
+    ...
+    if f.is_spike:
+```
+
+- [ ] **Step 3: Update price_signal_engine.py caller**
+
+```python
+# In custom_components/localshift/engine/price_signal_engine.py (~line 93)
+
+# Before:
+def check_for_spike(
+    self, now: datetime, cutoff: timedelta, pricing_source: str = PRICING_SOURCE_AMBER
+) -> list[dict[str, Any]]:
+    return scan_forecast_for_spike(forecasts, now_dt, cutoff, pricing_source)
+
+# After:
+def check_for_spike(
+    self, now: datetime, cutoff: timedelta
+) -> list[ForecastSlot]:
+    return scan_forecast_for_spike(forecasts, now_dt, cutoff)
+```
+
+- [ ] **Step 4: Update spike_analyzer.py caller**
+
+```python
+# In custom_components/localshift/engine/spike_analyzer.py (~lines 69-77)
+
+# Before:
+pricing_source = self.entry.data.get(
+    CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+)
+...
+scan_forecast_for_spike(data.feed_in_forecast, now_dt, lookahead, pricing_source)
+
+# After:
+# Remove pricing_source extraction entirely
+scan_forecast_for_spike(data.feed_in_forecast, now_dt, lookahead)
+```
+
+- [ ] **Step 5: Run tests**
 
 Run: `cd /config/home/localshift/worktrees/issue-300 && uv run pytest tests/engine/ -v`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add custom_components/localshift/engine/
@@ -841,7 +991,11 @@ git commit -m "fix(#300): use ForecastSlot fields in ForecastPricesSensor"
 **Files:**
 - Modify: `custom_components/localshift/const.py`
 - Modify: `custom_components/localshift/pricing/__init__.py`
-- Update all imports
+- Modify: `custom_components/localshift/config_flow/__init__.py`
+- Modify: `custom_components/localshift/config_flow/schemas.py`
+- Modify: `custom_components/localshift/state/reader.py`
+- Modify: `custom_components/localshift/engine/utils.py`
+- Modify: `custom_components/localshift/engine/price_signal_engine.py`
 
 - [ ] **Step 1: Add constants to pricing module**
 
@@ -852,21 +1006,74 @@ PRICING_SOURCE_AMBER = "amber"
 PRICING_SOURCE_AMBER_EXPRESS = "amber_express"
 ```
 
-- [ ] **Step 2: Update imports across codebase**
+- [ ] **Step 2: Update config_flow/__init__.py**
 
-Run: `cd /config/home/localshift/worktrees/issue-300 && rg "from ..const import.*PRICING_SOURCE" -l`
+```python
+# Before:
+from ..const import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
 
-Update each file to import from `..pricing` instead.
+# After:
+from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+```
 
-- [ ] **Step 3: Remove from const.py**
+- [ ] **Step 3: Update config_flow/schemas.py**
 
-Remove `PRICING_SOURCE_AMBER` and `PRICING_SOURCE_AMBER_EXPRESS` from const.py.
+```python
+# Before:
+from ..const import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
 
-- [ ] **Step 4: Run full test suite**
+# After:
+from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+```
+
+- [ ] **Step 4: Update state/reader.py**
+
+```python
+# Before:
+from ..const import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+
+# After:
+from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+```
+
+- [ ] **Step 5: Update engine/utils.py**
+
+```python
+# Before:
+from ..const import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+
+# After:
+from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+```
+
+- [ ] **Step 6: Update engine/price_signal_engine.py**
+
+```python
+# Before:
+from ..const import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+
+# After:
+from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
+```
+
+- [ ] **Step 7: Remove from const.py**
+
+```python
+# In custom_components/localshift/const.py, DELETE these lines:
+PRICING_SOURCE_AMBER = "amber"
+PRICING_SOURCE_AMBER_EXPRESS = "amber_express"
+```
+
+- [ ] **Step 8: Run full test suite**
 
 Run: `cd /config/home/localshift/worktrees/issue-300 && uv run pytest`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 9: Commit**
+
+```bash
+git add custom_components/localshift/
+git commit -m "refactor(#300): move PRICING_SOURCE constants to pricing module"
+```
 
 ```bash
 git add custom_components/localshift/
@@ -876,6 +1083,141 @@ git commit -m "refactor(#300): move PRICING_SOURCE constants to pricing module"
 ---
 
 ## Verification
+
+### Task 12: Integration test - StateReader with providers
+
+**Files:**
+- Test: `tests/integration/test_pricing_provider.py`
+
+- [ ] **Step 1: Create integration test directory**
+
+```bash
+mkdir -p tests/integration
+```
+
+- [ ] **Step 2: Write integration test**
+
+```python
+# tests/integration/test_pricing_provider.py
+"""Integration tests for pricing provider with StateReader."""
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
+
+import pytest
+
+from custom_components.localshift.pricing import create_provider
+from custom_components.localshift.pricing.types import ForecastSlot
+
+
+class TestPricingProviderIntegration:
+    """Test that StateReader works with both providers."""
+
+    def test_amber_provider_reads_forecasts(self):
+        """Amber provider reads from separate forecast entity."""
+        provider = create_provider("amber")
+        
+        hass = MagicMock()
+        forecast_state = MagicMock()
+        forecast_state.attributes = {
+            "forecasts": [
+                {
+                    "start_time": "2026-03-16T12:00:00+00:00",
+                    "duration": 30,
+                    "per_kwh": 0.15,
+                    "spike_status": "none",
+                },
+            ]
+        }
+        hass.states.get.return_value = forecast_state
+        
+        slots = provider.read_forecasts(hass, "sensor.100h_general_price")
+        
+        assert len(slots) == 1
+        assert slots[0].per_kwh == 0.15
+        assert slots[0].is_spike is False
+        assert slots[0].source_type == "amber"
+
+    def test_amber_express_provider_reads_forecasts(self):
+        """Amber Express provider reads from _detailed entity."""
+        provider = create_provider("amber_express")
+        
+        hass = MagicMock()
+        detailed_state = MagicMock()
+        detailed_state.attributes = {
+            "forecasts": [
+                {
+                    "start_time": "2026-03-16T12:00:00+11:00",
+                    "duration": 30,
+                    "per_kwh": 0.20,
+                    "demand_window": False,
+                },
+                {
+                    "start_time": "2026-03-16T12:30:00+11:00",
+                    "duration": 30,
+                    "per_kwh": 2.50,
+                    "demand_window": True,
+                },
+            ]
+        }
+        hass.states.get.return_value = detailed_state
+        
+        slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
+        
+        assert len(slots) == 2
+        assert slots[0].per_kwh == 0.20
+        assert slots[0].is_spike is False
+        assert slots[1].per_kwh == 2.50
+        assert slots[1].is_spike is True
+        assert slots[0].source_type == "amber_express"
+
+    def test_both_producers_normalize_to_same_format(self):
+        """Both providers produce identical ForecastSlot structure."""
+        amber = create_provider("amber")
+        express = create_provider("amber_express")
+        
+        # Amber input
+        amber_hass = MagicMock()
+        amber_state = MagicMock()
+        amber_state.attributes = {
+            "forecasts": [
+                {"start_time": "2026-03-16T12:00:00Z", "duration": 30, "per_kwh": 0.15, "spike_status": "none"},
+            ]
+        }
+        amber_hass.states.get.return_value = amber_state
+        
+        # Express input (same price, different spike field)
+        express_hass = MagicMock()
+        express_state = MagicMock()
+        express_state.attributes = {
+            "forecasts": [
+                {"start_time": "2026-03-16T12:00:00+11:00", "duration": 30, "per_kwh": 0.15, "demand_window": False},
+            ]
+        }
+        express_hass.states.get.return_value = express_state
+        
+        amber_slots = amber.read_forecasts(amber_hass, "sensor.100h_general_price")
+        express_slots = express.read_forecasts(express_hass, "sensor.amber_express_100h_general_price")
+        
+        # Both should produce same structure (ignoring timezone difference)
+        assert amber_slots[0].duration == express_slots[0].duration
+        assert amber_slots[0].per_kwh == express_slots[0].per_kwh
+        assert amber_slots[0].is_spike == express_slots[0].is_spike
+```
+
+- [ ] **Step 3: Run integration test**
+
+Run: `cd /config/home/localshift/worktrees/issue-300 && uv run pytest tests/integration/test_pricing_provider.py -v`
+
+Expected: PASS
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add tests/integration/
+git commit -m "test(#300): add integration tests for pricing providers"
+```
+
+---
 
 ### Final Verification
 
