@@ -62,7 +62,38 @@ class PricingProvider(Protocol):
         ...
 
 
-class AmberProvider:
+class _ProviderMixin:
+    """Shared helper methods for pricing providers."""
+
+    def _normalize_slot(self, raw: dict[str, Any]) -> ForecastSlot:
+        """Convert raw forecast dict to ForecastSlot."""
+        return ForecastSlot(
+            start_time=self._parse_timestamp(raw["start_time"]),
+            duration=raw.get("duration", 30),
+            per_kwh=raw["per_kwh"],
+            is_spike=self.is_spike(raw),  # type: ignore[attr-defined]
+            source_type=self.name,  # type: ignore[attr-defined]
+        )
+
+    def _read_attribute(
+        self, hass: HomeAssistant, entity_id: str, attr: str, default: Any
+    ) -> Any:
+        """Read an attribute from a Home Assistant entity."""
+        state = hass.states.get(entity_id)
+        if state is None:
+            _LOGGER.debug("Entity not found: %s", entity_id)
+            return default
+        return state.attributes.get(attr, default)
+
+    def _parse_timestamp(self, ts: str) -> datetime:
+        """Parse ISO timestamp to timezone-aware datetime."""
+        parsed = dt_util.parse_datetime(ts)
+        if parsed is None:
+            raise ValueError(f"Invalid timestamp: {ts}")
+        return parsed
+
+
+class AmberProvider(_ProviderMixin):
     """Amber pricing provider (original 100H integration)."""
 
     @property
@@ -97,29 +128,42 @@ class AmberProvider:
         """Check if entry represents a spike (Amber uses spike_status)."""
         return entry.get("spike_status") == "spike"
 
-    def _normalize_slot(self, raw: dict[str, Any]) -> ForecastSlot:
-        """Convert raw forecast dict to ForecastSlot."""
-        return ForecastSlot(
-            start_time=self._parse_timestamp(raw["start_time"]),
-            duration=raw.get("duration", 30),
-            per_kwh=raw["per_kwh"],
-            is_spike=self.is_spike(raw),
-            source_type="amber",
-        )
 
-    def _read_attribute(
-        self, hass: HomeAssistant, entity_id: str, attr: str, default: Any
-    ) -> Any:
-        """Read an attribute from a Home Assistant entity."""
-        state = hass.states.get(entity_id)
-        if state is None:
-            _LOGGER.debug("Entity not found: %s", entity_id)
-            return default
-        return state.attributes.get(attr, default)
+class AmberExpressProvider(_ProviderMixin):
+    """Amber Express pricing provider."""
 
-    def _parse_timestamp(self, ts: str) -> datetime:
-        """Parse ISO timestamp to timezone-aware datetime."""
-        parsed = dt_util.parse_datetime(ts)
-        if parsed is None:
-            raise ValueError(f"Invalid timestamp: {ts}")
-        return parsed
+    @property
+    def name(self) -> str:
+        return "amber_express"
+
+    @property
+    def entity_prefix(self) -> str:
+        return "sensor.amber_express_100h_"
+
+    def read_forecasts(
+        self, hass: HomeAssistant, price_entity_id: str
+    ) -> list[ForecastSlot]:
+        """Read forecasts from _price_detailed entity with fallback."""
+        detailed_entity = price_entity_id.replace("_price", "_price_detailed")
+        raw_forecasts = self._read_attribute(hass, detailed_entity, "forecasts", [])
+
+        if not raw_forecasts:
+            _LOGGER.debug("%s has no forecasts, trying simple entity", detailed_entity)
+            raw_forecasts = self._read_attribute(hass, price_entity_id, "forecast", [])
+
+        if not raw_forecasts:
+            _LOGGER.warning("No forecasts found for %s", price_entity_id)
+            return []
+
+        slots = []
+        for raw in raw_forecasts:
+            try:
+                slots.append(self._normalize_slot(raw))
+            except (KeyError, ValueError, TypeError) as e:
+                _LOGGER.warning("Skipping malformed forecast slot: %s", e)
+                continue
+        return slots
+
+    def is_spike(self, entry: dict[str, Any]) -> bool:
+        """Check if entry is a spike (Express uses demand_window)."""
+        return entry.get("demand_window") is True
