@@ -143,14 +143,14 @@ def test_amber_express_provider_read_forecasts():
     detailed_state.attributes = {
         "forecasts": [
             {
-                "start_time": "2026-03-16T12:00:00+11:00",
-                "duration": 30,
+                "start_time": "2026-03-16T12:00:01+11:00",
+                "end_time": "2026-03-16T12:30:00+11:00",
                 "per_kwh": 0.20,
                 "demand_window": False,
             },
             {
-                "start_time": "2026-03-16T12:30:00+11:00",
-                "duration": 30,
+                "start_time": "2026-03-16T12:30:01+11:00",
+                "end_time": "2026-03-16T13:00:00+11:00",
                 "per_kwh": 2.50,
                 "demand_window": True,
             },
@@ -162,8 +162,10 @@ def test_amber_express_provider_read_forecasts():
 
     assert len(slots) == 2
     assert slots[0].per_kwh == 0.20
+    assert slots[0].duration == 30  # inferred from timestamps
     assert slots[0].is_spike is False
     assert slots[1].per_kwh == 2.50
+    assert slots[1].duration == 30  # inferred from timestamps
     assert slots[1].is_spike is True  # demand_window=True
 
 
@@ -190,8 +192,8 @@ def test_amber_express_provider_falls_back_to_simple_entity():
     simple_state.attributes = {
         "forecast": [
             {
-                "start_time": "2026-03-16T12:00:00+11:00",
-                "duration": 30,
+                "start_time": "2026-03-16T12:00:01+11:00",
+                "end_time": "2026-03-16T12:30:00+11:00",
                 "per_kwh": 0.20,
                 "demand_window": False,
             },
@@ -250,8 +252,8 @@ def test_amber_express_provider_skips_malformed():
         "forecasts": [
             {"start_time": "not-a-date", "per_kwh": 0.20},  # invalid timestamp
             {
-                "start_time": "2026-03-16T12:00:00+11:00",
-                "duration": 30,
+                "start_time": "2026-03-16T12:00:01+11:00",
+                "end_time": "2026-03-16T12:30:00+11:00",
                 "per_kwh": 0.30,
                 "demand_window": False,
             },
