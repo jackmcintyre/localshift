@@ -40,6 +40,7 @@ class LoadForecaster:
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
         self._forecast_corrections: ForecastCorrectionProvider | None = None
+        self._weather_adjustment_applied = False  # Track if weather adjustment was used
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -59,6 +60,14 @@ class LoadForecaster:
         self, provider: ForecastCorrectionProvider | None
     ) -> None:
         self._forecast_corrections = provider
+
+    def get_weather_adjustment_applied(self) -> bool:
+        """Return whether weather adjustment was applied in last forecast."""
+        return self._weather_adjustment_applied
+
+    def reset_weather_adjustment_applied(self) -> None:
+        """Reset weather adjustment flag before new forecast computation."""
+        self._weather_adjustment_applied = False
 
     def parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -354,6 +363,7 @@ class LoadForecaster:
             "low_confidence",
             "invalid_hour",
         ):
+            self._weather_adjustment_applied = True
             return weather_adjusted, adjustment_source
 
         return adjusted_load_kw, adjusted_source

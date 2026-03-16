@@ -539,3 +539,96 @@ def mock_adaptive_params():
     mock = MagicMock()
     mock.get.return_value = 0.1  # +0.1 bias
     return mock
+
+
+class TestWeatherAdjustmentTracking:
+    """Tests for weather_adjustment_applied tracking (Issue #739)."""
+
+    def test_get_weather_adjustment_applied_defaults_to_false(self):
+        forecaster = _create_load_forecaster()
+        assert forecaster.get_weather_adjustment_applied() is False
+
+    def test_reset_weather_adjustment_applied_sets_flag_false(self):
+        forecaster = _create_load_forecaster()
+        forecaster._weather_adjustment_applied = True
+        forecaster.reset_weather_adjustment_applied()
+        assert forecaster.get_weather_adjustment_applied() is False
+
+    def test_weather_adjustment_flag_set_when_applied(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
+        weather.predict_load.return_value = (1.5, "weather_adjusted")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        forecaster.reset_weather_adjustment_applied()
+
+        forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 1.0},
+            slot_hour=11,
+            current_hour=10,
+            current_load_kw=0.5,
+            recent_load_kw=0.6,
+            temperature=30.0,
+        )
+
+        assert forecaster.get_weather_adjustment_applied() is True
+
+    def test_weather_adjustment_flag_not_set_for_low_confidence(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="low")
+        weather.predict_load.return_value = (1.5, "weather_adjusted")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        forecaster.reset_weather_adjustment_applied()
+
+        forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 1.0},
+            slot_hour=11,
+            current_hour=10,
+            current_load_kw=0.5,
+            recent_load_kw=0.6,
+            temperature=30.0,
+        )
+
+        assert forecaster.get_weather_adjustment_applied() is False
+
+    def test_weather_adjustment_flag_not_set_when_no_temperature(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        forecaster.reset_weather_adjustment_applied()
+
+        forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 1.0},
+            slot_hour=11,
+            current_hour=10,
+            current_load_kw=0.5,
+            recent_load_kw=0.6,
+            temperature=None,
+        )
+
+        assert forecaster.get_weather_adjustment_applied() is False
+
+    def test_weather_adjustment_flag_not_set_for_invalid_source(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
+        weather.predict_load.return_value = (0.99, "no_coefficients")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        forecaster.reset_weather_adjustment_applied()
+
+        forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 1.0},
+            slot_hour=11,
+            current_hour=10,
+            current_load_kw=0.5,
+            recent_load_kw=0.6,
+            temperature=30.0,
+        )
+
+        assert forecaster.get_weather_adjustment_applied() is False
