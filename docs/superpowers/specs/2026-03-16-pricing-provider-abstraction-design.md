@@ -91,6 +91,8 @@ class PricingProvider(Protocol):
 ### 3. Amber Provider
 
 ```python
+from homeassistant.util import dt as dt_util
+
 class AmberProvider:
     """Amber pricing provider (original 100H integration)."""
     
@@ -104,19 +106,47 @@ class AmberProvider:
         # Read from separate forecast entity
         forecast_entity = price_entity_id.replace("_price", "_forecast")
         raw_forecasts = self._read_attribute(hass, forecast_entity, "forecasts", [])
-        return [self._normalize_slot(f) for f in raw_forecasts]
+        if not raw_forecasts:
+            _LOGGER.warning("No forecasts found on %s", forecast_entity)
+            return []
+        
+        slots = []
+        for raw in raw_forecasts:
+            try:
+                slots.append(self._normalize_slot(raw))
+            except (KeyError, ValueError, TypeError) as e:
+                _LOGGER.warning("Skipping malformed forecast slot: %s", e)
+                continue
+        return slots
     
     def is_spike(self, entry: dict) -> bool:
         return entry.get("spike_status") == "spike"
     
     def _normalize_slot(self, raw: dict) -> ForecastSlot:
         return ForecastSlot(
-            start_time=parse_iso(raw["start_time"]),
+            start_time=self._parse_timestamp(raw["start_time"]),
             duration=raw.get("duration", 30),
             per_kwh=raw["per_kwh"],
             is_spike=self.is_spike(raw),
             source_type="amber",
         )
+    
+    def _read_attribute(
+        self, hass: HomeAssistant, entity_id: str, attr: str, default: Any
+    ) -> Any:
+        """Read an attribute from a Home Assistant entity."""
+        state = hass.states.get(entity_id)
+        if state is None:
+            _LOGGER.debug("Entity not found: %s", entity_id)
+            return default
+        return state.attributes.get(attr, default)
+    
+    def _parse_timestamp(self, ts: str) -> datetime:
+        """Parse ISO timestamp to timezone-aware datetime."""
+        parsed = dt_util.parse_datetime(ts)
+        if parsed is None:
+            raise ValueError(f"Invalid timestamp: {ts}")
+        return parsed
 ```
 
 ### 4. Amber Express Provider
@@ -138,28 +168,61 @@ class AmberExpressProvider:
         
         # Fallback to simple entity if _detailed unavailable
         if not raw_forecasts:
+            _LOGGER.debug("%s has no forecasts, trying simple entity", detailed_entity)
             raw_forecasts = self._read_attribute(hass, price_entity_id, "forecast", [])
         
-        return [self._normalize_slot(f) for f in raw_forecasts]
+        if not raw_forecasts:
+            _LOGGER.warning("No forecasts found for %s", price_entity_id)
+            return []
+        
+        slots = []
+        for raw in raw_forecasts:
+            try:
+                slots.append(self._normalize_slot(raw))
+            except (KeyError, ValueError, TypeError) as e:
+                _LOGGER.warning("Skipping malformed forecast slot: %s", e)
+                continue
+        return slots
     
     def is_spike(self, entry: dict) -> bool:
         return entry.get("demand_window") is True
     
     def _normalize_slot(self, raw: dict) -> ForecastSlot:
         return ForecastSlot(
-            start_time=parse_iso(raw["start_time"]),
+            start_time=self._parse_timestamp(raw["start_time"]),
             duration=raw.get("duration", 30),
             per_kwh=raw["per_kwh"],
             is_spike=self.is_spike(raw),
             source_type="amber_express",
         )
+    
+    # _read_attribute and _parse_timestamp inherited from base or duplicated
+    # (Both providers use identical implementations)
 ```
 
-### 5. Factory Function
+### 5. Error Handling
+
+**Principle:** Fail gracefully, never crash the integration.
+
+| Scenario | Behavior |
+|----------|----------|
+| Entity not found | Log debug, return empty list |
+| Attribute missing | Log debug, use default (`[]`) |
+| Malformed slot | Log warning, skip slot, continue |
+| Invalid timestamp | Log warning, skip slot, continue |
+| Missing required field (`per_kwh`, `start_time`) | Raise in `_normalize_slot`, caught and skipped |
+
+**Logging levels:**
+- DEBUG: Expected conditions (entity temporarily unavailable, fallback used)
+- WARNING: Unexpected but recoverable (malformed data, parse failures)
+- ERROR: Never (all errors are caught and handled)
+
+### 6. Factory Function
 
 ```python
 # pricing/__init__.py
 from .provider import AmberProvider, AmberExpressProvider, PricingProvider
+from .types import ForecastSlot
 
 def create_provider(source: str) -> PricingProvider:
     """Create the appropriate pricing provider based on config."""
