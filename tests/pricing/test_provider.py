@@ -3,8 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from custom_components.localshift.pricing.provider import PricingProvider
-    from custom_components.localshift.pricing.types import ForecastSlot
+    pass
 
 
 def test_protocol_has_required_methods():
@@ -28,7 +27,6 @@ def test_amber_provider_implements_protocol():
 
 def test_amber_provider_read_forecasts():
     """Test AmberProvider reads forecasts from separate entity."""
-    from datetime import datetime, timezone
     from unittest.mock import MagicMock
 
     from custom_components.localshift.pricing.provider import AmberProvider
