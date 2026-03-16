@@ -425,7 +425,7 @@ class SlotBuilder:
             time object parsed from "HH:MM:SS" or "HH:MM" format.
 
         """
-        from ..const import (  # noqa: PLC0415
+        from custom_components.localshift.const import (
             DEFAULT_DEMAND_WINDOW_END,
             DEFAULT_DEMAND_WINDOW_START,
         )

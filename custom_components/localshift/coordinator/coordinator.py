@@ -345,6 +345,10 @@ class LocalShiftCoordinator:
         await self._computation_engine.async_initialize_forecast_history_storage()
         await self._computation_engine.async_load_forecast_history(self.data)
 
+        # Initialize accuracy metrics storage and load persisted metrics (Issue #706)
+        await self._computation_engine.async_initialize_accuracy_metrics_storage()
+        await self._computation_engine.async_load_accuracy_metrics(self.data)
+
         self._forecast_bootstrapper = ForecastBootstrapper(
             self.hass,
             self.data,
@@ -652,6 +656,11 @@ class LocalShiftCoordinator:
             self.hass.async_create_task(
                 self._computation_engine.async_save_forecast_history(self.data),
                 "localshift_save_forecast_history",
+            )
+            # Save accuracy metrics periodically (Issue #706)
+            self.hass.async_create_task(
+                self._computation_engine.async_save_accuracy_metrics(self.data),
+                "localshift_save_accuracy_metrics",
             )
 
         # Backfill actual solar energy for completed periods (Issue #513)

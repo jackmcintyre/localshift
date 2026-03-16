@@ -70,7 +70,7 @@ def _map_mode_to_action(mode: Any) -> PlannerAction | None:
         PlannerAction or None if mode is not actionable by optimizer.
 
     """
-    from ..const import BatteryMode  # noqa: PLC0415
+    from custom_components.localshift.const import BatteryMode
 
     if mode == BatteryMode.SELF_CONSUMPTION:
         return PlannerAction.HOLD
@@ -248,7 +248,7 @@ def _build_optimizer_config(
     Phase B (#403): Complete mapping of all config fields from user settings.
     Uses safe defaults for tunable parameters that will be exposed in Phase C.
     """
-    from ..const import (  # noqa: PLC0415
+    from custom_components.localshift.const import (
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
@@ -631,7 +631,7 @@ class OptimizerSafetyGate:
             config_options: Integration options from config_entry.options
 
         """
-        from ..const import (  # noqa: PLC0415
+        from custom_components.localshift.const import (
             OPTIMIZER_FORECAST_FRESHNESS_MINUTES,
         )
 
@@ -785,7 +785,7 @@ def _derive_runtime_apply_plan(
             - reason: Explanation for the decision
 
     """
-    from ..const import BatteryMode  # noqa: PLC0415
+    from custom_components.localshift.const import BatteryMode
 
     if not decisions or current_slot_idx < 0 or current_slot_idx >= len(decisions):
         return {
