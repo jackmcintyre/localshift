@@ -65,15 +65,39 @@ class PricingProvider(Protocol):
 class _ProviderMixin:
     """Shared helper methods for pricing providers."""
 
+    _VALID_DURATIONS = (5, 15, 30)
+
     def _normalize_slot(self, raw: dict[str, Any]) -> ForecastSlot:
         """Convert raw forecast dict to ForecastSlot."""
+        duration = raw.get("duration")
+        if duration is None:
+            duration = self._infer_duration_minutes(raw)
         return ForecastSlot(
             start_time=self._parse_timestamp(raw["start_time"]),
-            duration=raw.get("duration", 30),
+            duration=int(duration),
             per_kwh=raw["per_kwh"],
             is_spike=self.is_spike(raw),  # type: ignore[attr-defined]
             source_type=self.name,  # type: ignore[attr-defined]
         )
+
+    def _infer_duration_minutes(self, raw: dict[str, Any]) -> int:
+        """Infer slot duration from start_time/end_time timestamps.
+
+        Returns the closest valid duration (5, 15, or 30 minutes),
+        or 30 as fallback when end_time is missing or unparseable.
+        """
+        end_time_str = raw.get("end_time")
+        if end_time_str is None:
+            return 30
+        try:
+            start_dt = self._parse_timestamp(raw["start_time"])
+            end_dt = self._parse_timestamp(end_time_str)
+            delta_minutes = (end_dt - start_dt).total_seconds() / 60
+            if delta_minutes <= 0:
+                return 5
+            return min(self._VALID_DURATIONS, key=lambda d: abs(d - delta_minutes))
+        except (ValueError, TypeError, KeyError):
+            return 30
 
     def _read_attribute(
         self, hass: HomeAssistant, entity_id: str, attr: str, default: Any

@@ -262,3 +262,157 @@ def test_amber_express_provider_skips_malformed():
     slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
     assert len(slots) == 1
     assert slots[0].per_kwh == 0.30
+
+
+# --- Duration inference tests ---
+
+
+def test_normalize_slot_infers_5min_duration_from_timestamps():
+    """Test _normalize_slot infers duration=5 when no duration field present.
+
+    Real Amber Express entries have NO duration field. Duration must be
+    inferred from (end_time - start_time). Express timestamps have a :01
+    second offset (e.g., 09:25:01 -> 09:30:00 = 299 seconds), which must
+    round to 5 minutes.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T09:25:01+00:00",
+        "end_time": "2026-03-16T09:30:00+00:00",
+        "per_kwh": 0.15,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 5
+
+
+def test_normalize_slot_infers_30min_duration_from_timestamps():
+    """Test _normalize_slot infers duration=30 for 30-minute Express entries.
+
+    Express 30-min entries also lack the duration field but have timestamps
+    30 minutes apart (with :01 offset).
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:01+00:00",
+        "end_time": "2026-03-16T10:30:00+00:00",
+        "per_kwh": 0.25,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 30
+
+
+def test_normalize_slot_infers_15min_duration_from_timestamps():
+    """Test _normalize_slot infers duration=15 for 15-minute entries.
+
+    _VALID_DURATIONS includes 15, so ensure the rounding works for entries
+    that are approximately 15 minutes apart.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:01+00:00",
+        "end_time": "2026-03-16T10:15:00+00:00",
+        "per_kwh": 0.20,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 15
+
+
+def test_normalize_slot_uses_explicit_duration_field():
+    """Test _normalize_slot uses explicit duration field when present.
+
+    Regular Amber entries include a duration field. It should be used
+    directly without inference.
+    """
+    from custom_components.localshift.pricing.provider import AmberProvider
+
+    provider = AmberProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:00+00:00",
+        "duration": 5,
+        "per_kwh": 0.15,
+        "spike_status": "none",
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 5
+
+
+def test_normalize_slot_defaults_to_30_without_duration_or_end_time():
+    """Test _normalize_slot defaults to 30 when neither duration nor end_time.
+
+    Fallback behavior: if we can't determine duration, assume 30 minutes.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:00+00:00",
+        "per_kwh": 0.15,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 30
+
+
+def test_normalize_slot_boundary_10min_rounds_to_5():
+    """Test 10-minute gap rounds to nearest valid duration.
+
+    10 minutes is equidistant from 5 and 15. With min() and tuple ordering
+    (5, 15, 30), the first element (5) wins on tie.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:00+00:00",
+        "end_time": "2026-03-16T10:10:00+00:00",
+        "per_kwh": 0.15,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 5  # equidistant: min() picks first (5)
+
+
+def test_normalize_slot_boundary_22min_rounds_to_15():
+    """Test 22-minute gap rounds to 15 (closest valid duration).
+
+    22 min: |22-5|=17, |22-15|=7, |22-30|=8. Closest is 15.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:00+00:00",
+        "end_time": "2026-03-16T10:22:00+00:00",
+        "per_kwh": 0.15,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 15
+
+
+def test_normalize_slot_negative_duration_defaults_to_5():
+    """Test negative duration (end_time < start_time) picks 5.
+
+    If end_time is before start_time, delta is negative. abs() in the
+    rounding means smallest valid duration (5) wins.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:30:00+00:00",
+        "end_time": "2026-03-16T10:00:00+00:00",
+        "per_kwh": 0.15,
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+    assert slot.duration == 5  # -30 min: abs diffs = |35|, |45|, |60|; 5 wins
