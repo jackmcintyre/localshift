@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
@@ -148,19 +149,24 @@ class ForecastPricesSensor(LocalShiftSensorBase):
                     "price": dec.get("sell_price"),
                 })
         else:
+            # Issue #300: Use normalized ForecastSlot fields (start_time, per_kwh)
             for slot in d.general_forecast:
-                ts = slot.get("timestamp", "")
+                ts = slot.get("start_time", "")
+                if isinstance(ts, datetime):
+                    ts = ts.isoformat()
                 time_str = ts[11:16] if len(ts) >= 16 else ""
                 buy_prices.append({
                     "time": time_str,
-                    "price": slot.get("price"),
+                    "price": slot.get("per_kwh"),
                 })
             for slot in d.feed_in_forecast:
-                ts = slot.get("timestamp", "")
+                ts = slot.get("start_time", "")
+                if isinstance(ts, datetime):
+                    ts = ts.isoformat()
                 time_str = ts[11:16] if len(ts) >= 16 else ""
                 sell_prices.append({
                     "time": time_str,
-                    "price": slot.get("price"),
+                    "price": slot.get("per_kwh"),
                 })
 
         return {

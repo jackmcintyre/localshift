@@ -60,8 +60,8 @@ from ..const import (
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
-    PRICING_SOURCE_AMBER_EXPRESS,
 )
+from ..pricing import PRICING_SOURCE_AMBER_EXPRESS
 from .schemas import (
     build_pricing_schema,
     build_pricing_source_schema,

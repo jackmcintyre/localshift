@@ -387,11 +387,11 @@ class TestForecastPricesSensor:
             cheap_charge_stop_price=0.12,
             optimizer_decisions=[],
             general_forecast=[
-                {"timestamp": "2026-03-13T10:00:00", "price": 0.25},
-                {"timestamp": "2026-03-13T10:30:00", "price": 0.30},
+                {"start_time": "2026-03-13T10:00:00", "per_kwh": 0.25},
+                {"start_time": "2026-03-13T10:30:00", "per_kwh": 0.30},
             ],
             feed_in_forecast=[
-                {"timestamp": "2026-03-13T10:00:00", "price": 0.08},
+                {"start_time": "2026-03-13T10:00:00", "per_kwh": 0.08},
             ],
         )
         mock_entry = MagicMock()

@@ -34,11 +34,13 @@ from ..const import (
     DEFAULT_COMPARISON_MODE,
     DEFAULT_ENTITY_IDS,
     DEFAULT_PRICING_DATA_SOURCE,
-    PRICING_SOURCE_AMBER,
-    PRICING_SOURCE_AMBER_EXPRESS,
 )
 from ..coordinator.data import CoordinatorData
-from ..pricing import PricingProvider
+from ..pricing import (
+    PRICING_SOURCE_AMBER,
+    PRICING_SOURCE_AMBER_EXPRESS,
+    PricingProvider,
+)
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
