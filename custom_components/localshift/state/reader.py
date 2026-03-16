@@ -41,6 +41,7 @@ from ..pricing import (
     PRICING_SOURCE_AMBER_EXPRESS,
     PricingProvider,
 )
+from ..pricing.types import ForecastSlot
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
@@ -208,11 +209,12 @@ class StateReader:
         }
 
     def _calculate_current_day_average_price(
-        self, forecast: list[dict[str, Any]], now: datetime
+        self, forecast: list, now: datetime
     ) -> float:
         """Calculate average price from today's forecast slots.
 
         Issue #632: Used to compute assumed price for forecast extension.
+        Issue #300: Updated to handle both dict and ForecastSlot types.
 
         Args:
             forecast: List of forecast entries with per_kwh field
@@ -227,19 +229,33 @@ class StateReader:
 
         prices = []
         for entry in forecast:
-            if not isinstance(entry, dict):
+            # Handle both dict and ForecastSlot-like objects
+            if hasattr(entry, "per_kwh") and hasattr(entry, "start_time"):
+                # It's a ForecastSlot-like object
+                price = entry.per_kwh
+                start_time = entry.start_time
+            elif isinstance(entry, dict):
+                price = entry.get("per_kwh")
+                start_time_str = entry.get("start_time")
+                try:
+                    start_time = (
+                        datetime.fromisoformat(start_time_str)
+                        if start_time_str
+                        else None
+                    )
+                except (ValueError, TypeError):
+                    continue
+            else:
                 continue
 
-            price = entry.get("per_kwh")
             if price is None:
                 continue
-
-            start_time_str = entry.get("start_time")
-            if not start_time_str:
+            if start_time is None:
                 continue
 
             try:
-                start_time = datetime.fromisoformat(start_time_str)
+                if isinstance(start_time, str):
+                    start_time = datetime.fromisoformat(start_time)
                 if start_time <= now:
                     prices.append(float(price))
             except (ValueError, TypeError):
@@ -251,12 +267,13 @@ class StateReader:
         return sum(prices) / len(prices)
 
     def _extend_forecast_with_assumed_prices(
-        self, forecast: list[dict[str, Any]], now: datetime, assumed_price: float
-    ) -> list[dict[str, Any]]:
+        self, forecast: list, now: datetime, assumed_price: float
+    ) -> list:
         """Extend forecast to guarantee 24-hour planning horizon.
 
         Issue #632: Ensures optimizer can see tomorrow's solar opportunities
         even when price forecast (e.g., Amber free tier) provides only ~16 hours.
+        Issue #300: Updated to handle both dict and ForecastSlot types.
 
         Args:
             forecast: List of forecast entries
@@ -271,16 +288,27 @@ class StateReader:
             return []
 
         last_entry = forecast[-1]
-        if not isinstance(last_entry, dict):
-            return forecast
 
-        last_time_str = last_entry.get("start_time")
-        if not last_time_str:
-            return forecast
-
-        try:
-            last_time = datetime.fromisoformat(last_time_str)
-        except (ValueError, TypeError):
+        # Handle both dict and ForecastSlot-like objects
+        # Use isinstance check to avoid MagicMock issues in tests
+        if (
+            hasattr(last_entry, "start_time")
+            and hasattr(last_entry, "duration")
+            and isinstance(last_entry.duration, (int, float))
+        ):
+            # It's a ForecastSlot-like object with valid types
+            last_time = last_entry.start_time
+            last_duration = last_entry.duration
+        elif isinstance(last_entry, dict):
+            last_time_str = last_entry.get("start_time")
+            if not last_time_str:
+                return forecast
+            try:
+                last_time = datetime.fromisoformat(last_time_str)
+            except (ValueError, TypeError):
+                return forecast
+            last_duration = last_entry.get("duration", 30)
+        else:
             return forecast
 
         # Normalize timezone for comparison (Issue #632)
@@ -290,20 +318,81 @@ class StateReader:
             last_time = last_time.replace(tzinfo=now.tzinfo)
 
         target_time = now + timedelta(hours=24)
-        last_duration = last_entry.get("duration", 30)
+        # Determine input type to preserve in output
+        input_was_dict = isinstance(forecast[0], dict) if forecast else False
+
+        # Handle both dict and ForecastSlot-like objects
+        # Use isinstance check to avoid MagicMock issues in tests
+        if (
+            hasattr(last_entry, "start_time")
+            and hasattr(last_entry, "duration")
+            and not isinstance(last_entry, dict)
+            and isinstance(last_entry.duration, (int, float))
+        ):
+            last_duration = last_entry.duration
+        else:
+            # Check if it's a dict or has .get() method
+            if isinstance(last_entry, dict):
+                last_duration = last_entry.get("duration", 30)
+            elif hasattr(last_entry, "duration"):
+                last_duration = last_entry.duration
+            else:
+                last_duration = 30
         last_entry_end = last_time + timedelta(minutes=last_duration)
         if last_entry_end >= target_time:
             return forecast
 
-        extended = list(forecast)
+        # Build extended list - preserve input type (dict or ForecastSlot)
+        extended: list | list[ForecastSlot] = []
+
+        # Convert existing entries to match input type
+        for entry in forecast:
+            if input_was_dict and not isinstance(entry, dict):
+                # Convert ForecastSlot to dict
+                extended.append({
+                    "start_time": entry.start_time.isoformat()
+                    if hasattr(entry.start_time, "isoformat")
+                    else str(entry.start_time),
+                    "duration": entry.duration,
+                    "per_kwh": entry.per_kwh,
+                    "is_spike": entry.is_spike,
+                    "source_type": entry.source_type,
+                })
+            elif not input_was_dict and isinstance(entry, dict):
+                # Convert dict to ForecastSlot
+                extended.append(
+                    ForecastSlot(
+                        start_time=entry.get("start_time"),
+                        duration=entry.get("duration", 30),
+                        per_kwh=entry.get("per_kwh", 0),
+                        is_spike=entry.get("is_spike", False),
+                        source_type=entry.get("source_type", "original"),
+                    )
+                )
+            else:
+                extended.append(entry)
+
         current_time = last_time + timedelta(minutes=30)
 
         while current_time < target_time:
-            extended.append({
-                "start_time": current_time.isoformat(),
-                "duration": 30,
-                "per_kwh": assumed_price,
-            })
+            if input_was_dict:
+                extended.append({
+                    "start_time": current_time.isoformat(),
+                    "duration": 30,
+                    "per_kwh": assumed_price,
+                    "is_spike": False,
+                    "source_type": "extended",
+                })
+            else:
+                extended.append(
+                    ForecastSlot(
+                        start_time=current_time,
+                        duration=30,
+                        per_kwh=assumed_price,
+                        is_spike=False,
+                        source_type="extended",
+                    )
+                )
             current_time += timedelta(minutes=30)
 
         return extended
@@ -467,16 +556,16 @@ class StateReader:
 
         # Issue #300: Read forecasts via pricing provider abstraction
         if self.pricing_provider is not None:
-            # Use pricing provider to read forecasts, convert ForecastSlot to dict
+            # Use pricing provider to read forecasts, assign directly (ForecastSlot type)
             general_slots = self.pricing_provider.read_forecasts(
                 self.hass, general_price_entity
             )
             feed_in_slots = self.pricing_provider.read_forecasts(
                 self.hass, feed_in_price_entity
             )
-            # Convert ForecastSlot dataclasses to dicts for CoordinatorData compatibility
-            data.general_forecast = [asdict(slot) for slot in general_slots]
-            data.feed_in_forecast = [asdict(slot) for slot in feed_in_slots]
+            # Assign ForecastSlot lists directly to CoordinatorData
+            data.general_forecast = general_slots
+            data.feed_in_forecast = feed_in_slots
             # Set pricing_source for later use in demand window reading
             pricing_source = self.entry.data.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
