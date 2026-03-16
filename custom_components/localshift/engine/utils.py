@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.util import dt as dt_util
 
+from custom_components.localshift.pricing.types import ForecastSlot
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -136,7 +138,7 @@ def percentile(prices: list[float], percentile_value: float) -> float:
 
 
 def scan_forecast_for_spike(
-    forecasts: list[dict[str, Any]],
+    forecasts: list[ForecastSlot],
     now_dt: datetime,
     cutoff: datetime,
 ) -> bool:
@@ -147,7 +149,7 @@ def scan_forecast_for_spike(
     provider-specific spike detection logic.
 
     Args:
-        forecasts: List of forecast entries (normalized with is_spike field)
+        forecasts: List of ForecastSlot objects (normalized with is_spike field)
         now_dt: Current datetime
         cutoff: End of time window to check
 
@@ -156,15 +158,9 @@ def scan_forecast_for_spike(
 
     """
     for f in forecasts:
-        # Handle both dict and ForecastSlot-like objects
-        if isinstance(f, dict):
-            start = parse_forecast_dt(f.get("start_time"))  # type: ignore[union-attr]
-            is_spike = f.get("is_spike")  # type: ignore[union-attr]
-        else:
-            start = getattr(f, "start_time", None)  # type: ignore[union-attr]
-            is_spike = getattr(f, "is_spike", None)  # type: ignore[union-attr]
-        if start is None:
-            continue
+        start = f.start_time
+        is_spike = f.is_spike
+
         start_local = dt_util.as_local(start) if isinstance(start, datetime) else start
         if start_local >= now_dt and start_local <= cutoff:
             if is_spike is True:
