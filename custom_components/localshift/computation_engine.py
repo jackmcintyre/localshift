@@ -53,6 +53,7 @@ from .engine.price_signal_engine import PriceSignalEngine
 from .engine.slot_schedule import TOTAL_SLOTS
 from .engine.soc_simulator import SocSimulator
 from .forecast import (
+    AccuracyMetricsStore,
     ForecastAccuracyEngine,
     ForecastHistoryStore,
     ForecastPipeline,
@@ -60,7 +61,6 @@ from .forecast import (
     LoadForecaster,
     sum_solar_before_target,
 )
-from .forecast.accuracy_store import AccuracyMetricsStore
 from .learning.correlation import WeatherCorrelation
 
 # Backward-compatible re-export for tests/importers that import BatteryMode
