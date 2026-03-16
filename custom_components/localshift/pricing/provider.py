@@ -124,9 +124,9 @@ class AmberProvider(_ProviderMixin):
                 continue
         return slots
 
-    def is_spike(self, entry: dict[str, Any]) -> bool:
+    def is_spike(self, forecast_entry: dict[str, Any]) -> bool:
         """Check if entry represents a spike (Amber uses spike_status)."""
-        return entry.get("spike_status") == "spike"
+        return forecast_entry.get("spike_status") == "spike"
 
 
 class AmberExpressProvider(_ProviderMixin):
@@ -164,6 +164,6 @@ class AmberExpressProvider(_ProviderMixin):
                 continue
         return slots
 
-    def is_spike(self, entry: dict[str, Any]) -> bool:
+    def is_spike(self, forecast_entry: dict[str, Any]) -> bool:
         """Check if entry is a spike (Express uses demand_window)."""
-        return entry.get("demand_window") is True
+        return forecast_entry.get("demand_window") is True
