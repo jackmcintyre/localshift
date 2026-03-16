@@ -208,6 +208,42 @@ class StateReader:
             "feed_in_forecast_shadow": shadow_feed_in_forecast or [],
         }
 
+    @staticmethod
+    def _extract_price_and_time(
+        entry: Any,
+    ) -> tuple[float, datetime] | None:
+        """Extract price and start_time from a forecast entry.
+
+        Handles both ForecastSlot objects and legacy dict entries.
+
+        Returns:
+            Tuple of (price, start_time) or None if entry is invalid.
+
+        """
+        if hasattr(entry, "per_kwh") and hasattr(entry, "start_time"):
+            if entry.per_kwh is None or entry.start_time is None:
+                return None
+            return (float(entry.per_kwh), entry.start_time)
+
+        if isinstance(entry, dict):
+            price = entry.get("per_kwh")
+            if price is None:
+                return None
+            start_time_raw = entry.get("start_time")
+            if start_time_raw is None:
+                return None
+            try:
+                start_time = (
+                    datetime.fromisoformat(start_time_raw)
+                    if isinstance(start_time_raw, str)
+                    else start_time_raw
+                )
+            except (ValueError, TypeError):
+                return None
+            return (float(price), start_time)
+
+        return None
+
     def _calculate_current_day_average_price(
         self, forecast: list, now: datetime
     ) -> float:
@@ -229,42 +265,81 @@ class StateReader:
 
         prices = []
         for entry in forecast:
-            # Handle both dict and ForecastSlot-like objects
-            if hasattr(entry, "per_kwh") and hasattr(entry, "start_time"):
-                # It's a ForecastSlot-like object
-                price = entry.per_kwh
-                start_time = entry.start_time
-            elif isinstance(entry, dict):
-                price = entry.get("per_kwh")
-                start_time_str = entry.get("start_time")
-                try:
-                    start_time = (
-                        datetime.fromisoformat(start_time_str)
-                        if start_time_str
-                        else None
-                    )
-                except (ValueError, TypeError):
-                    continue
-            else:
+            result = self._extract_price_and_time(entry)
+            if result is None:
                 continue
-
-            if price is None:
-                continue
-            if start_time is None:
-                continue
-
-            try:
-                if isinstance(start_time, str):
-                    start_time = datetime.fromisoformat(start_time)
-                if start_time <= now:
-                    prices.append(float(price))
-            except (ValueError, TypeError):
-                continue
+            price, start_time = result
+            start_time = self._normalize_tz(start_time, now)
+            if start_time <= now:
+                prices.append(price)
 
         if not prices:
             return 0.20
 
         return sum(prices) / len(prices)
+
+    @staticmethod
+    def _get_last_entry_timing(
+        last_entry: Any,
+    ) -> tuple[datetime, int] | None:
+        """Extract start_time and duration from the last forecast entry.
+
+        Returns:
+            Tuple of (last_time, last_duration) or None if invalid.
+
+        """
+        if hasattr(last_entry, "start_time") and hasattr(last_entry, "duration"):
+            last_duration = last_entry.duration
+            if not isinstance(last_duration, (int, float)):
+                return None
+            return (last_entry.start_time, int(last_duration))
+
+        if isinstance(last_entry, dict):
+            last_time_str = last_entry.get("start_time")
+            if not last_time_str:
+                return None
+            try:
+                last_time = (
+                    datetime.fromisoformat(last_time_str)
+                    if isinstance(last_time_str, str)
+                    else last_time_str
+                )
+            except (ValueError, TypeError):
+                return None
+            return (last_time, last_entry.get("duration", 30))
+
+        return None
+
+    @staticmethod
+    def _dict_to_forecast_slot(entry: dict) -> ForecastSlot | None:
+        """Convert a dict to a ForecastSlot, returning None if invalid."""
+        try:
+            start_time = entry.get("start_time")
+            if isinstance(start_time, str):
+                start_time = datetime.fromisoformat(start_time)
+            if start_time is None:
+                return None
+            return ForecastSlot(
+                start_time=start_time,
+                duration=entry.get("duration", 30),
+                per_kwh=entry.get("per_kwh", 0.0),
+                is_spike=entry.get("is_spike", False),
+                source_type=entry.get("source_type", "unknown"),
+            )
+        except (ValueError, TypeError, KeyError):
+            return None
+
+    @staticmethod
+    def _normalize_tz(
+        dt_value: datetime,
+        reference: datetime,
+    ) -> datetime:
+        """Align timezone awareness of dt_value to match reference."""
+        if reference.tzinfo is not None and dt_value.tzinfo is None:
+            return dt_value.replace(tzinfo=reference.tzinfo)
+        if reference.tzinfo is None and dt_value.tzinfo is not None:
+            return dt_value.replace(tzinfo=None)
+        return dt_value
 
     def _extend_forecast_with_assumed_prices(
         self, forecast: list, now: datetime, assumed_price: float
@@ -287,53 +362,20 @@ class StateReader:
         if not forecast:
             return []
 
-        last_entry = forecast[-1]
-
-        # Get last entry's end time
-        if hasattr(last_entry, "start_time") and hasattr(last_entry, "duration"):
-            # ForecastSlot object
-            last_time = last_entry.start_time
-            last_duration = last_entry.duration
-            # Validate types (handle MagicMock in tests)
-            if not isinstance(last_duration, (int, float)):
-                return forecast
-        else:
-            # Fallback for dict (shouldn't happen after full migration)
-            last_time_str = (
-                last_entry.get("start_time") if isinstance(last_entry, dict) else None
-            )
-            if not last_time_str:
-                return forecast
-            try:
-                last_time = (
-                    datetime.fromisoformat(last_time_str)
-                    if isinstance(last_time_str, str)
-                    else last_time_str
-                )
-            except (ValueError, TypeError):
-                # Invalid ISO format or wrong type
-                return forecast
-            last_duration = (
-                last_entry.get("duration", 30) if isinstance(last_entry, dict) else 30
-            )
+        timing = self._get_last_entry_timing(forecast[-1])
+        if timing is None:
+            return forecast
+        last_time, last_duration = timing
 
         target_time = now + timedelta(hours=24)
-        last_entry_end = last_time + timedelta(minutes=last_duration)
-
-        # Normalize timezone awareness to match `now` for comparison
-        if now.tzinfo is not None and last_time.tzinfo is None:
-            # If `now` is aware but `last_time` is naive, make `last_time` aware
-            last_entry_end = last_entry_end.replace(tzinfo=now.tzinfo)
-        elif now.tzinfo is None and last_time.tzinfo is not None:
-            # If `now` is naive but `last_time` is aware, strip timezone from `last_time`
-            last_entry_end = last_entry_end.replace(tzinfo=None)
+        last_entry_end = self._normalize_tz(
+            last_time + timedelta(minutes=last_duration),
+            now,
+        )
 
         # If forecast already covers 24h, return unchanged
         if last_entry_end >= target_time:
             return forecast
-
-        # Import ForecastSlot for extension
-        from ..pricing.types import ForecastSlot
 
         # Convert input to ForecastSlot objects if needed
         extended: list[ForecastSlot] = []
@@ -341,29 +383,11 @@ class StateReader:
             if isinstance(entry, ForecastSlot):
                 extended.append(entry)
             elif isinstance(entry, dict):
-                # Convert dict to ForecastSlot
-                try:
-                    start_time = entry.get("start_time")
-                    if isinstance(start_time, str):
-                        start_time = datetime.fromisoformat(start_time)
-                    extended.append(
-                        ForecastSlot(
-                            start_time=start_time,
-                            duration=entry.get("duration", 30),
-                            per_kwh=entry.get("per_kwh", 0.0),
-                            is_spike=entry.get("is_spike", False),
-                            source_type=entry.get("source_type", "unknown"),
-                        )
-                    )
-                except (ValueError, TypeError, KeyError):
-                    # Skip invalid entries
-                    continue
-            else:
-                # Skip non-dict, non-ForecastSlot entries
-                continue
+                slot = self._dict_to_forecast_slot(entry)
+                if slot is not None:
+                    extended.append(slot)
 
         # Calculate correct start time for first extension slot
-        # Use last_entry_end instead of hardcoded +30min offset
         current_time = last_entry_end
 
         while current_time < target_time:
@@ -379,6 +403,64 @@ class StateReader:
             current_time += timedelta(minutes=30)
 
         return extended
+
+    def _read_legacy_forecasts(
+        self,
+        data: CoordinatorData,
+        pricing_source: str,
+        general_price_entity: str,
+        feed_in_price_entity: str,
+    ) -> None:
+        """Read forecasts directly from entities without pricing provider.
+
+        Legacy fallback for when no pricing provider is configured.
+        Handles both Amber Express (detailed entities) and standard forecast sensors.
+        """
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+            general_detailed = general_price_entity.replace("_price", "_price_detailed")
+            feed_in_detailed = feed_in_price_entity.replace("_price", "_price_detailed")
+
+            general_forecast = self._read_attribute(general_detailed, "forecasts", [])
+            feed_in_forecast = self._read_attribute(feed_in_detailed, "forecasts", [])
+
+            if not general_forecast:
+                _LOGGER.warning(
+                    "Amber Express detailed entity '%s' has no forecasts, "
+                    "falling back to simple entity. Spike detection may be limited.",
+                    general_detailed,
+                )
+                general_forecast = self._read_attribute(
+                    general_price_entity, "forecast", []
+                )
+            if not feed_in_forecast:
+                _LOGGER.warning(
+                    "Amber Express detailed entity '%s' has no forecasts, "
+                    "falling back to simple entity. Spike detection may be limited.",
+                    feed_in_detailed,
+                )
+                feed_in_forecast = self._read_attribute(
+                    feed_in_price_entity, "forecast", []
+                )
+
+            data.general_forecast = general_forecast or []
+            data.feed_in_forecast = feed_in_forecast or []
+        else:
+            data.general_forecast = (
+                self._read_attribute(
+                    self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
+                    "forecasts",
+                    [],
+                )
+                or []
+            )
+            data.feed_in_forecast = (
+                self._read_attribute(
+                    self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
+                    "forecasts",
+                    [],
+                )
+                or []
+            )
 
     def _read_solcast_forecast_list(self, entity_id: str) -> list[dict[str, Any]]:
         """Read Solcast forecast list using resilient attribute fallbacks."""
@@ -538,6 +620,9 @@ class StateReader:
         )
 
         # Issue #300: Read forecasts via pricing provider abstraction
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
         if self.pricing_provider is not None:
             # Use pricing provider to read forecasts, assign directly (ForecastSlot type)
             general_slots = self.pricing_provider.read_forecasts(
@@ -549,74 +634,11 @@ class StateReader:
             # Assign ForecastSlot lists directly to CoordinatorData
             data.general_forecast = general_slots
             data.feed_in_forecast = feed_in_slots
-            # Set pricing_source for later use in demand window reading
-            pricing_source = self.entry.data.get(
-                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
-            )
         else:
             # Fallback: Read forecasts directly from entities (legacy behavior)
-            pricing_source = self.entry.data.get(
-                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            self._read_legacy_forecasts(
+                data, pricing_source, general_price_entity, feed_in_price_entity
             )
-
-            if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
-                # Amber Express has _detailed entities with full forecast data (including spike_status)
-                # Derive _detailed entity IDs from the configured price entities
-                general_detailed = general_price_entity.replace(
-                    "_price", "_price_detailed"
-                )
-                feed_in_detailed = feed_in_price_entity.replace(
-                    "_price", "_price_detailed"
-                )
-
-                # Read from _detailed entities which have 'forecasts' attribute with full data
-                general_forecast = self._read_attribute(
-                    general_detailed, "forecasts", []
-                )
-                feed_in_forecast = self._read_attribute(
-                    feed_in_detailed, "forecasts", []
-                )
-
-                # Fallback to simple entities if _detailed not available
-                if not general_forecast:
-                    _LOGGER.warning(
-                        "Amber Express detailed entity '%s' has no forecasts, "
-                        "falling back to simple entity. Spike detection may be limited.",
-                        general_detailed,
-                    )
-                    general_forecast = self._read_attribute(
-                        general_price_entity, "forecast", []
-                    )
-                if not feed_in_forecast:
-                    _LOGGER.warning(
-                        "Amber Express detailed entity '%s' has no forecasts, "
-                        "falling back to simple entity. Spike detection may be limited.",
-                        feed_in_detailed,
-                    )
-                    feed_in_forecast = self._read_attribute(
-                        feed_in_price_entity, "forecast", []
-                    )
-
-                data.general_forecast = general_forecast or []
-                data.feed_in_forecast = feed_in_forecast or []
-            else:
-                # Use separate forecast sensors (existing behavior)
-                data.general_forecast = (
-                    self._read_attribute(
-                        self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
-                        "forecasts",
-                        [],
-                    )
-                    or []
-                )
-                data.feed_in_forecast = (
-                    self._read_attribute(
-                        self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
-                        "forecasts",
-                        [],
-                    )
-                    or []
-                )
 
         # Issue #632: Extend forecasts to 24 hours if needed
         # This ensures the optimizer can see tomorrow's solar opportunities

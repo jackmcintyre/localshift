@@ -66,6 +66,7 @@ from .forecast import (
     sum_solar_before_target,
 )
 from .learning.correlation import WeatherCorrelation
+from .pricing.types import ForecastSlot
 
 # Backward-compatible re-export for tests/importers that import BatteryMode
 # from computation_engine.
@@ -691,7 +692,7 @@ class ComputationEngine:
 
     @staticmethod
     def _scan_forecast_for_spike(
-        forecasts: list[dict[str, Any]],
+        forecasts: list[ForecastSlot],
         now_dt: datetime,
         cutoff: datetime,
     ) -> bool:
@@ -700,7 +701,7 @@ class ComputationEngine:
 
     @staticmethod
     def _max_forecast_price(
-        forecasts: list[dict[str, Any]],
+        forecasts: list[ForecastSlot],
         now_dt: datetime,
         cutoff: datetime,
     ) -> float:
