@@ -997,14 +997,17 @@ class TestExtendForecastWithAssumedPrices:
     def test_extend_forecast_to_24_hours(self, state_reader):
         """Test extending a short forecast to 24 hours."""
         from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1013,21 +1016,26 @@ class TestExtendForecastWithAssumedPrices:
 
         assert len(result) > len(forecast)
         last_entry = result[-1]
-        last_time = datetime.fromisoformat(last_entry["start_time"])
-        assert (last_time - now) >= timedelta(hours=23)
+        assert isinstance(last_entry, ForecastSlot)
+        assert (last_entry.start_time - now) >= timedelta(hours=23)
 
     def test_no_extension_when_already_24_hours(self, state_reader):
         """Test no extension when forecast already covers 24 hours."""
         from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = []
         for i in range(48):
-            forecast.append({
-                "start_time": (now + timedelta(minutes=30 * i)).isoformat(),
-                "duration": 30,
-                "per_kwh": 0.10,
-            })
+            forecast.append(
+                ForecastSlot(
+                    start_time=now + timedelta(minutes=30 * i),
+                    duration=30,
+                    per_kwh=0.10,
+                    is_spike=False,
+                    source_type="amber",
+                )
+            )
 
         result = state_reader._extend_forecast_with_assumed_prices(
             forecast, now, assumed_price=0.20
@@ -1038,14 +1046,17 @@ class TestExtendForecastWithAssumedPrices:
     def test_extend_with_correct_price(self, state_reader):
         """Test that extended entries use the assumed price."""
         from datetime import datetime
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1053,19 +1064,23 @@ class TestExtendForecastWithAssumedPrices:
         )
 
         for entry in result[1:]:
-            assert entry["per_kwh"] == 0.25
+            assert isinstance(entry, ForecastSlot)
+            assert entry.per_kwh == 0.25
 
     def test_extend_with_30_minute_slots(self, state_reader):
         """Test that extended entries use 30-minute duration."""
         from datetime import datetime
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1073,7 +1088,8 @@ class TestExtendForecastWithAssumedPrices:
         )
 
         for entry in result[1:]:
-            assert entry["duration"] == 30
+            assert isinstance(entry, ForecastSlot)
+            assert entry.duration == 30
 
     def test_extend_with_invalid_last_time(self, state_reader):
         """Test extension returns original forecast if last_time is invalid."""
@@ -1092,10 +1108,11 @@ class TestExtendForecastWithAssumedPrices:
             forecast, now, assumed_price=0.20
         )
 
+        # Should return original dict-based forecast unchanged
         assert result == forecast
 
     def test_extend_with_non_dict_last_entry(self, state_reader):
-        """Test extension returns original forecast if last entry is not a dict."""
+        """Test extension returns original forecast if last entry is not a dict or ForecastSlot."""
         from datetime import datetime
 
         now = datetime(2026, 3, 10, 14, 0)
@@ -1105,6 +1122,7 @@ class TestExtendForecastWithAssumedPrices:
             forecast, now, assumed_price=0.20
         )
 
+        # Should return original invalid forecast unchanged
         assert result == forecast
 
     def test_extend_with_missing_start_time_in_last_entry(self, state_reader):
@@ -1123,6 +1141,7 @@ class TestExtendForecastWithAssumedPrices:
             forecast, now, assumed_price=0.20
         )
 
+        # Should return original dict-based forecast unchanged
         assert result == forecast
 
     def test_extend_empty_forecast_returns_empty(self, state_reader):
@@ -1139,14 +1158,17 @@ class TestExtendForecastWithAssumedPrices:
     def test_extended_entries_have_required_fields(self, state_reader):
         """Test that extended entries have all required fields."""
         from datetime import datetime
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1154,9 +1176,78 @@ class TestExtendForecastWithAssumedPrices:
         )
 
         for entry in result[1:]:
-            assert "start_time" in entry
-            assert "duration" in entry
-            assert "per_kwh" in entry
+            assert isinstance(entry, ForecastSlot)
+            assert hasattr(entry, "start_time")
+            assert hasattr(entry, "duration")
+            assert hasattr(entry, "per_kwh")
+
+    def test_extend_forecast_preserves_forecast_slot_type(
+        self, state_reader, mock_hass, mock_entry
+    ):
+        """Test that _extend_forecast_with_assumed_prices preserves ForecastSlot objects."""
+        from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
+
+        now = datetime(2026, 3, 16, 10, 0)
+
+        # Create forecast with ForecastSlot objects covering only 12 hours
+        forecast = [
+            ForecastSlot(
+                start_time=now + timedelta(hours=i),
+                duration=30,
+                per_kwh=0.20 + (i * 0.01),
+                is_spike=False,
+                source_type="amber",
+            )
+            for i in range(24)  # 12 hours of 30-min slots
+        ]
+
+        extended = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.22
+        )
+
+        # All entries should be ForecastSlot objects
+        assert len(extended) > 24  # Should have extension slots
+        assert all(isinstance(slot, ForecastSlot) for slot in extended)
+
+        # Original slots preserved
+        for i in range(24):
+            assert extended[i] == forecast[i]
+
+        # Extension slots have correct structure
+        for slot in extended[24:]:
+            assert slot.per_kwh == 0.22
+            assert slot.is_spike is False
+            assert slot.source_type == "extended"
+
+    def test_extend_forecast_no_conversion_when_sufficient(
+        self, state_reader, mock_hass, mock_entry
+    ):
+        """Test that 24h+ forecast returns ForecastSlot objects unchanged."""
+        from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
+
+        now = datetime(2026, 3, 16, 10, 0)
+
+        # Create forecast covering 25 hours (no extension needed)
+        forecast = [
+            ForecastSlot(
+                start_time=now + timedelta(minutes=i * 30),
+                duration=30,
+                per_kwh=0.20,
+                is_spike=False,
+                source_type="amber",
+            )
+            for i in range(50)  # 25 hours
+        ]
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.22
+        )
+
+        # Should return original list unchanged (no extension needed)
+        assert result is forecast
+        assert all(isinstance(slot, ForecastSlot) for slot in result)
 
 
 class TestForecastExtensionIntegration:
@@ -1166,6 +1257,8 @@ class TestForecastExtensionIntegration:
         self, state_reader, mock_hass, coordinator_data
     ):
         """Test that short forecast is extended to 24 hours."""
+        from custom_components.localshift.pricing.types import ForecastSlot
+
         tz = ZoneInfo("Australia/Sydney")
         now = datetime(2026, 3, 10, 14, 0, tzinfo=tz)
 
@@ -1206,8 +1299,8 @@ class TestForecastExtensionIntegration:
             state_reader.read_all_external_state(coordinator_data)
 
         last_general = coordinator_data.general_forecast[-1]
-        last_time = datetime.fromisoformat(last_general["start_time"])
-        assert (last_time - now) >= timedelta(hours=23)
+        assert isinstance(last_general, ForecastSlot)
+        assert (last_general.start_time - now) >= timedelta(hours=23)
 
     def test_forecast_not_extended_when_already_24_hours(
         self, state_reader, mock_hass, coordinator_data
@@ -1716,6 +1809,7 @@ def test_extend_forecast_timezone_normalization(
 ):
     """Test timezone normalization in _extend_forecast_with_assumed_prices."""
     from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.pricing.types import ForecastSlot
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -1739,11 +1833,12 @@ def test_extend_forecast_timezone_normalization(
     reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
     result = reader._extend_forecast_with_assumed_prices(forecast, now, 0.50)
 
-    # Should handle timezone mismatch and extend forecast
+    # Should handle timezone mismatch and extend forecast with ForecastSlot objects
     assert len(result) > len(forecast)
     for entry in result:
-        assert "start_time" in entry
-        assert "per_kwh" in entry
+        assert isinstance(entry, ForecastSlot)
+        assert hasattr(entry, "start_time")
+        assert hasattr(entry, "per_kwh")
 
 
 # =============================================================================
@@ -1882,11 +1977,11 @@ def test_read_all_external_state_calls_provider_for_forecasts(mock_hass, mock_en
     # Verify provider was called for both price entities
     assert provider.read_forecasts.call_count == 2
 
-    # Verify forecasts were returned and extended (returned as dicts)
+    # Verify forecasts were returned and extended (returned as ForecastSlot objects after migration)
     assert len(data.general_forecast) >= 48  # Extended to 24+ hours
     assert len(data.feed_in_forecast) >= 48
     assert all(
-        isinstance(slot, dict) and "start_time" in slot
+        isinstance(slot, ForecastSlot) and hasattr(slot, "start_time")
         for slot in data.general_forecast
     )
 

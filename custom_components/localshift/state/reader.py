@@ -273,15 +273,15 @@ class StateReader:
 
         Issue #632: Ensures optimizer can see tomorrow's solar opportunities
         even when price forecast (e.g., Amber free tier) provides only ~16 hours.
-        Issue #300: Updated to handle both dict and ForecastSlot types.
+        Issue #300: Returns ForecastSlot objects consistently.
 
         Args:
-            forecast: List of forecast entries
+            forecast: List of ForecastSlot objects
             now: Current datetime
             assumed_price: Price to use for extended entries ($/kWh)
 
         Returns:
-            Extended forecast list with synthetic entries added if needed
+            Extended forecast list with synthetic ForecastSlot entries added if needed
 
         """
         if not forecast:
@@ -289,87 +289,93 @@ class StateReader:
 
         last_entry = forecast[-1]
 
-        # Handle both dict and ForecastSlot-like objects
-        # Use isinstance check to avoid MagicMock issues in tests
-        if (
-            hasattr(last_entry, "start_time")
-            and hasattr(last_entry, "duration")
-            and isinstance(last_entry.duration, (int, float))
-        ):
-            # It's a ForecastSlot-like object with valid types
+        # Get last entry's end time
+        if hasattr(last_entry, "start_time") and hasattr(last_entry, "duration"):
+            # ForecastSlot object
             last_time = last_entry.start_time
             last_duration = last_entry.duration
-        elif isinstance(last_entry, dict):
-            last_time_str = last_entry.get("start_time")
+            # Validate types (handle MagicMock in tests)
+            if not isinstance(last_duration, (int, float)):
+                return forecast
+        else:
+            # Fallback for dict (shouldn't happen after full migration)
+            last_time_str = (
+                last_entry.get("start_time") if isinstance(last_entry, dict) else None
+            )
             if not last_time_str:
                 return forecast
             try:
-                last_time = datetime.fromisoformat(last_time_str)
+                last_time = (
+                    datetime.fromisoformat(last_time_str)
+                    if isinstance(last_time_str, str)
+                    else last_time_str
+                )
             except (ValueError, TypeError):
+                # Invalid ISO format or wrong type
                 return forecast
-            last_duration = last_entry.get("duration", 30)
-        else:
-            return forecast
-
-        # Normalize timezone for comparison (Issue #632)
-        # datetime.fromisoformat() may return timezone-aware datetime
-        # while the 'now' parameter may be timezone-aware from dt_util.now()
-        if last_time.tzinfo is None and now.tzinfo is not None:
-            last_time = last_time.replace(tzinfo=now.tzinfo)
+            last_duration = (
+                last_entry.get("duration", 30) if isinstance(last_entry, dict) else 30
+            )
 
         target_time = now + timedelta(hours=24)
-
-        # Handle both dict and ForecastSlot-like objects
-        # Use isinstance check to avoid MagicMock issues in tests
-        if (
-            hasattr(last_entry, "start_time")
-            and hasattr(last_entry, "duration")
-            and not isinstance(last_entry, dict)
-            and isinstance(last_entry.duration, (int, float))
-        ):
-            last_duration = last_entry.duration
-        else:
-            # Check if it's a dict or has .get() method
-            if isinstance(last_entry, dict):
-                last_duration = last_entry.get("duration", 30)
-            elif hasattr(last_entry, "duration"):
-                last_duration = last_entry.duration
-            else:
-                last_duration = 30
         last_entry_end = last_time + timedelta(minutes=last_duration)
+
+        # Normalize timezone awareness to match `now` for comparison
+        if now.tzinfo is not None and last_time.tzinfo is None:
+            # If `now` is aware but `last_time` is naive, make `last_time` aware
+            last_entry_end = last_entry_end.replace(tzinfo=now.tzinfo)
+        elif now.tzinfo is None and last_time.tzinfo is not None:
+            # If `now` is naive but `last_time` is aware, strip timezone from `last_time`
+            last_entry_end = last_entry_end.replace(tzinfo=None)
+
+        # If forecast already covers 24h, return unchanged
         if last_entry_end >= target_time:
             return forecast
 
-        # Always return dicts for backwards compatibility with existing code
-        extended: list[dict] = []
+        # Import ForecastSlot for extension
+        from ..pricing.types import ForecastSlot
 
-        # Convert existing entries to dicts (if they're ForecastSlot)
+        # Convert input to ForecastSlot objects if needed
+        extended: list[ForecastSlot] = []
         for entry in forecast:
-            if isinstance(entry, dict):
+            if isinstance(entry, ForecastSlot):
                 extended.append(entry)
+            elif isinstance(entry, dict):
+                # Convert dict to ForecastSlot
+                try:
+                    start_time = entry.get("start_time")
+                    if isinstance(start_time, str):
+                        start_time = datetime.fromisoformat(start_time)
+                    extended.append(
+                        ForecastSlot(
+                            start_time=start_time,
+                            duration=entry.get("duration", 30),
+                            per_kwh=entry.get("per_kwh", 0.0),
+                            is_spike=entry.get("is_spike", False),
+                            source_type=entry.get("source_type", "unknown"),
+                        )
+                    )
+                except (ValueError, TypeError, KeyError):
+                    # Skip invalid entries
+                    continue
             else:
-                # Convert ForecastSlot-like object to dict
-                start_val = getattr(entry, "start_time", None)
-                extended.append({
-                    "start_time": start_val.isoformat()
-                    if hasattr(start_val, "isoformat")
-                    else str(start_val),
-                    "duration": getattr(entry, "duration", 30),
-                    "per_kwh": getattr(entry, "per_kwh", 0),
-                    "is_spike": getattr(entry, "is_spike", False),
-                    "source_type": getattr(entry, "source_type", "original"),
-                })
+                # Skip non-dict, non-ForecastSlot entries
+                continue
 
-        current_time = last_time + timedelta(minutes=30)
+        # Calculate correct start time for first extension slot
+        # Use last_entry_end instead of hardcoded +30min offset
+        current_time = last_entry_end
 
         while current_time < target_time:
-            extended.append({
-                "start_time": current_time.isoformat(),
-                "duration": 30,
-                "per_kwh": assumed_price,
-                "is_spike": False,
-                "source_type": "extended",
-            })
+            extended.append(
+                ForecastSlot(
+                    start_time=current_time,
+                    duration=30,
+                    per_kwh=assumed_price,
+                    is_spike=False,
+                    source_type="extended",
+                )
+            )
             current_time += timedelta(minutes=30)
 
         return extended
