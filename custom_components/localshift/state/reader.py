@@ -37,6 +37,7 @@ from ..const import (
     PRICING_SOURCE_AMBER_EXPRESS,
 )
 from ..coordinator.data import CoordinatorData
+from ..pricing import PricingProvider
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,12 +47,17 @@ class StateReader:
     """Handles reading state from external Home Assistant entities."""
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, entity_validator: EntityValidator
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        entity_validator: EntityValidator,
+        pricing_provider: PricingProvider | None = None,
     ) -> None:
         """Initialize the state reader."""
         self.hass = hass
         self.entry = entry
         self.entity_validator = entity_validator
+        self.pricing_provider = pricing_provider
 
     def _get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
