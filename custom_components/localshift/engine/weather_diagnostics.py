@@ -62,8 +62,6 @@ class WeatherDiagnosticsEngine:
         if has_medium_confidence:
             data.weather_correlation_confidence = "medium"
 
-        data.weather_adjustment_applied = False
-
         # Issue #681: Weather anomaly detection for rollback protection
         current_temp = weather_correlation.get_current_temperature()
         if current_temp is not None:
