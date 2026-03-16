@@ -53,6 +53,7 @@ from .engine.price_signal_engine import PriceSignalEngine
 from .engine.slot_schedule import TOTAL_SLOTS
 from .engine.soc_simulator import SocSimulator
 from .forecast import (
+    AccuracyMetricsStore,
     ForecastAccuracyEngine,
     ForecastHistoryStore,
     ForecastPipeline,
@@ -95,6 +96,9 @@ class ComputationEngine:
 
         # Forecast history storage (HA Storage) - persists predictions across restarts
         self._forecast_history_store = ForecastHistoryStore(hass)
+
+        # Accuracy metrics storage (HA Storage) - persists accuracy across restarts (Issue #706)
+        self._accuracy_metrics_store = AccuracyMetricsStore(hass)
 
         # History fetcher for historical load data (delegated to separate module)
         self._history_fetcher = HistoryFetcher(hass, entry)
@@ -724,6 +728,28 @@ class ComputationEngine:
         Called after new predictions are stored.
         """
         await self._forecast_history_store.async_save(data)
+
+    # ========================================================================
+    # ACCURACY METRICS PERSISTENCE (Issue #706)
+    # ========================================================================
+
+    async def async_initialize_accuracy_metrics_storage(self) -> None:
+        """Initialize accuracy metrics storage."""
+        await self._accuracy_metrics_store.async_initialize()
+
+    async def async_load_accuracy_metrics(self, data: CoordinatorData) -> None:
+        """Load persisted accuracy metrics from storage.
+
+        Called during coordinator startup to restore metrics across restarts.
+        """
+        await self._accuracy_metrics_store.async_load(data)
+
+    async def async_save_accuracy_metrics(self, data: CoordinatorData) -> None:
+        """Persist accuracy metrics to storage.
+
+        Called after each slow-tick cycle.
+        """
+        await self._accuracy_metrics_store.async_save(data)
 
     # ========================================================================
     # WEATHER CORRELATION (Issue #61)

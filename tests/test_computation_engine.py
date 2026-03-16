@@ -1,7 +1,7 @@
 """Unit tests for ComputationEngine."""
 
 from datetime import datetime, time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -300,6 +300,49 @@ class TestLoadForecastSlots:
             isinstance(v, float) and v >= 0
             for v in coordinator_data.load_forecast_slots
         )
+
+
+# =============================================================================
+# ACCURACY METRICS PERSISTENCE TESTS (Issue #706)
+# =============================================================================
+
+
+class TestAccuracyMetricsPersistence:
+    """Tests for AccuracyMetricsStore delegation methods (Issue #706)."""
+
+    @pytest.mark.asyncio
+    async def test_async_initialize_accuracy_metrics_storage(self, computation_engine):
+        """Test that initialize delegates to the accuracy metrics store."""
+        store_mock = AsyncMock()
+        computation_engine._accuracy_metrics_store = store_mock
+
+        await computation_engine.async_initialize_accuracy_metrics_storage()
+
+        store_mock.async_initialize.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_async_load_accuracy_metrics(
+        self, computation_engine, coordinator_data
+    ):
+        """Test that load delegates to the accuracy metrics store with data."""
+        store_mock = AsyncMock()
+        computation_engine._accuracy_metrics_store = store_mock
+
+        await computation_engine.async_load_accuracy_metrics(coordinator_data)
+
+        store_mock.async_load.assert_awaited_once_with(coordinator_data)
+
+    @pytest.mark.asyncio
+    async def test_async_save_accuracy_metrics(
+        self, computation_engine, coordinator_data
+    ):
+        """Test that save delegates to the accuracy metrics store with data."""
+        store_mock = AsyncMock()
+        computation_engine._accuracy_metrics_store = store_mock
+
+        await computation_engine.async_save_accuracy_metrics(coordinator_data)
+
+        store_mock.async_save.assert_awaited_once_with(coordinator_data)
 
 
 # =============================================================================
