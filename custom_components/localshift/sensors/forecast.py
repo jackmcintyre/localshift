@@ -5,10 +5,24 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
 
+from ..pricing.types import ForecastSlot
 from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
+
+
+def _get_slot_attr(slot: Any, key: str, default: Any = None) -> Any:
+    """Get attribute from dict or ForecastSlot object.
+
+    Issue #300: Handles both dict and ForecastSlot types for backwards compatibility.
+    """
+    if isinstance(slot, dict):
+        return slot.get(key, default)
+    elif isinstance(slot, ForecastSlot):
+        return getattr(slot, key, default)
+    else:
+        return default
 
 
 class SolarBatteryForecastSensor(LocalShiftSensorBase):
@@ -150,23 +164,24 @@ class ForecastPricesSensor(LocalShiftSensorBase):
                 })
         else:
             # Issue #300: Use normalized ForecastSlot fields (start_time, per_kwh)
+            # Handle both dict and ForecastSlot types
             for slot in d.general_forecast:
-                ts = slot.get("start_time", "")
+                ts = _get_slot_attr(slot, "start_time", "")
                 if isinstance(ts, datetime):
                     ts = ts.isoformat()
                 time_str = ts[11:16] if len(ts) >= 16 else ""
                 buy_prices.append({
                     "time": time_str,
-                    "price": slot.get("per_kwh"),
+                    "price": _get_slot_attr(slot, "per_kwh"),
                 })
             for slot in d.feed_in_forecast:
-                ts = slot.get("start_time", "")
+                ts = _get_slot_attr(slot, "start_time", "")
                 if isinstance(ts, datetime):
                     ts = ts.isoformat()
                 time_str = ts[11:16] if len(ts) >= 16 else ""
                 sell_prices.append({
                     "time": time_str,
-                    "price": slot.get("per_kwh"),
+                    "price": _get_slot_attr(slot, "per_kwh"),
                 })
 
         return {

@@ -1882,10 +1882,13 @@ def test_read_all_external_state_calls_provider_for_forecasts(mock_hass, mock_en
     # Verify provider was called for both price entities
     assert provider.read_forecasts.call_count == 2
 
-    # Verify forecasts were returned and extended (preserved as ForecastSlot type)
+    # Verify forecasts were returned and extended (returned as dicts)
     assert len(data.general_forecast) >= 48  # Extended to 24+ hours
     assert len(data.feed_in_forecast) >= 48
-    assert all(hasattr(slot, "start_time") for slot in data.general_forecast)
+    assert all(
+        isinstance(slot, dict) and "start_time" in slot
+        for slot in data.general_forecast
+    )
 
 
 def test_read_all_external_state_fallback_without_provider(mock_hass, mock_entry):

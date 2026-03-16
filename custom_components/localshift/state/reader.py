@@ -318,8 +318,6 @@ class StateReader:
             last_time = last_time.replace(tzinfo=now.tzinfo)
 
         target_time = now + timedelta(hours=24)
-        # Determine input type to preserve in output
-        input_was_dict = isinstance(forecast[0], dict) if forecast else False
 
         # Handle both dict and ForecastSlot-like objects
         # Use isinstance check to avoid MagicMock issues in tests
@@ -342,57 +340,36 @@ class StateReader:
         if last_entry_end >= target_time:
             return forecast
 
-        # Build extended list - preserve input type (dict or ForecastSlot)
-        extended: list | list[ForecastSlot] = []
+        # Always return dicts for backwards compatibility with existing code
+        extended: list[dict] = []
 
-        # Convert existing entries to match input type
+        # Convert existing entries to dicts (if they're ForecastSlot)
         for entry in forecast:
-            if input_was_dict and not isinstance(entry, dict):
-                # Convert ForecastSlot to dict
-                extended.append({
-                    "start_time": entry.start_time.isoformat()
-                    if hasattr(entry.start_time, "isoformat")
-                    else str(entry.start_time),
-                    "duration": entry.duration,
-                    "per_kwh": entry.per_kwh,
-                    "is_spike": entry.is_spike,
-                    "source_type": entry.source_type,
-                })
-            elif not input_was_dict and isinstance(entry, dict):
-                # Convert dict to ForecastSlot
-                extended.append(
-                    ForecastSlot(
-                        start_time=entry.get("start_time"),
-                        duration=entry.get("duration", 30),
-                        per_kwh=entry.get("per_kwh", 0),
-                        is_spike=entry.get("is_spike", False),
-                        source_type=entry.get("source_type", "original"),
-                    )
-                )
-            else:
+            if isinstance(entry, dict):
                 extended.append(entry)
+            else:
+                # Convert ForecastSlot-like object to dict
+                start_val = getattr(entry, "start_time", None)
+                extended.append({
+                    "start_time": start_val.isoformat()
+                    if hasattr(start_val, "isoformat")
+                    else str(start_val),
+                    "duration": getattr(entry, "duration", 30),
+                    "per_kwh": getattr(entry, "per_kwh", 0),
+                    "is_spike": getattr(entry, "is_spike", False),
+                    "source_type": getattr(entry, "source_type", "original"),
+                })
 
         current_time = last_time + timedelta(minutes=30)
 
         while current_time < target_time:
-            if input_was_dict:
-                extended.append({
-                    "start_time": current_time.isoformat(),
-                    "duration": 30,
-                    "per_kwh": assumed_price,
-                    "is_spike": False,
-                    "source_type": "extended",
-                })
-            else:
-                extended.append(
-                    ForecastSlot(
-                        start_time=current_time,
-                        duration=30,
-                        per_kwh=assumed_price,
-                        is_spike=False,
-                        source_type="extended",
-                    )
-                )
+            extended.append({
+                "start_time": current_time.isoformat(),
+                "duration": 30,
+                "per_kwh": assumed_price,
+                "is_spike": False,
+                "source_type": "extended",
+            })
             current_time += timedelta(minutes=30)
 
         return extended
