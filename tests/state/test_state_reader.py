@@ -1837,3 +1837,168 @@ def test_discover_solcast_entity_returns_first_candidate_no_hint_match(
 
     # Should return first candidate (line 375)
     assert result == "sensor.solcast_pv_estimate_today"
+
+
+def test_read_all_external_state_calls_provider_for_forecasts(mock_hass, mock_entry):
+    """Test StateReader calls pricing_provider.read_forecasts() for both price entities."""
+    from dataclasses import asdict
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.pricing.types import ForecastSlot
+    from custom_components.localshift.utils.validation import EntityValidator
+    from homeassistant.util import dt as dt_util
+
+    # Create a mock provider
+    provider = MagicMock()
+    provider.name = "test_provider"
+    expected_forecast = [
+        ForecastSlot(
+            start_time=dt_util.now(),
+            duration=30,
+            per_kwh=0.25,
+            is_spike=False,
+            source_type="test_provider",
+        )
+    ]
+    provider.read_forecasts.return_value = expected_forecast
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=provider,
+    )
+
+    # Mock the price entities
+    mock_hass.states.async_set("sensor.100h_general_price", "0.25", {"forecasts": []})
+    mock_hass.states.async_set("sensor.100h_feed_in_price", "0.12", {"forecasts": []})
+
+    data = CoordinatorData()
+    reader.read_all_external_state(data)
+
+    # Verify provider was called for both price entities
+    assert provider.read_forecasts.call_count == 2
+
+    # Verify forecasts came from provider (converted to dicts)
+    assert data.general_forecast == [asdict(slot) for slot in expected_forecast]
+    assert data.feed_in_forecast == [asdict(slot) for slot in expected_forecast]
+
+
+def test_read_all_external_state_fallback_without_provider(mock_hass, mock_entry):
+    """Test StateReader falls back to direct entity reading when provider is None."""
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.utils.validation import EntityValidator
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=None,
+    )
+
+    # Mock the forecast entities directly (fallback path uses separate forecast entities)
+    mock_hass.states.get.return_value = None
+
+    data = CoordinatorData()
+    reader.read_all_external_state(data)
+
+    # When provider is None, should fall back to reading from separate forecast entities
+    # Since mocked hass returns None, forecasts should be empty lists (the fallback)
+    assert isinstance(data.general_forecast, list)
+    assert isinstance(data.feed_in_forecast, list)
+
+
+def test_read_shadow_prices_calls_provider(mock_hass, mock_entry):
+    """Test _read_shadow_prices() calls pricing_provider for shadow forecasts."""
+    from dataclasses import asdict
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.pricing.types import ForecastSlot
+    from custom_components.localshift.utils.validation import EntityValidator
+    from homeassistant.util import dt as dt_util
+    from custom_components.localshift.const import (
+        CONF_COMPARISON_MODE,
+        COMPARISON_MODE_ENABLED,
+    )
+
+    # Create a mock provider
+    provider = MagicMock()
+    provider.name = "test_provider"
+    expected_shadow = [
+        ForecastSlot(
+            start_time=dt_util.now(),
+            duration=30,
+            per_kwh=0.28,
+            is_spike=False,
+            source_type="test_provider",
+        )
+    ]
+    provider.read_forecasts.return_value = expected_shadow
+
+    # Enable comparison mode
+    mock_entry.data[CONF_COMPARISON_MODE] = COMPARISON_MODE_ENABLED
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=provider,
+    )
+
+    # Mock shadow price entities (amber_express variants)
+    mock_hass.states.async_set("sensor.amber_express_100h_general_price", "0.28")
+    mock_hass.states.async_set("sensor.amber_express_100h_feed_in_price", "0.14")
+
+    shadow = reader._read_shadow_prices()
+
+    # Verify provider was called for shadow price entities
+    assert provider.read_forecasts.call_count >= 2
+
+    # Verify shadow forecasts came from provider (converted to dicts)
+    assert shadow["general_forecast_shadow"] == [
+        asdict(slot) for slot in expected_shadow
+    ]
+    assert shadow["feed_in_forecast_shadow"] == [
+        asdict(slot) for slot in expected_shadow
+    ]
+
+
+def test_read_shadow_prices_fallback_without_provider(mock_hass, mock_entry):
+    """Test _read_shadow_prices() falls back without provider."""
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.utils.validation import EntityValidator
+    from custom_components.localshift.const import (
+        CONF_COMPARISON_MODE,
+        COMPARISON_MODE_ENABLED,
+    )
+
+    # Enable comparison mode
+    mock_entry.data[CONF_COMPARISON_MODE] = COMPARISON_MODE_ENABLED
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=None,
+    )
+
+    # Mock shadow price entities
+    mock_hass.states.get.return_value = None
+
+    shadow = reader._read_shadow_prices()
+
+    # Should have fallback data (empty lists since mocked hass returns None)
+    assert isinstance(shadow["general_forecast_shadow"], list)
+    assert isinstance(shadow["feed_in_forecast_shadow"], list)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -165,8 +166,22 @@ class StateReader:
         shadow_general_price = self._read_float_optional(shadow_general_entity)
         shadow_feed_in_price = self._read_float_optional(shadow_feed_in_entity)
 
-        # Read shadow forecasts based on source type
-        if shadow_source == PRICING_SOURCE_AMBER_EXPRESS:
+        # Read shadow forecasts - use provider if available
+        if self.pricing_provider is not None:
+            # Use pricing provider to read shadow forecasts
+            shadow_general_forecast = [
+                asdict(slot)
+                for slot in self.pricing_provider.read_forecasts(
+                    self.hass, shadow_general_entity
+                )
+            ]
+            shadow_feed_in_forecast = [
+                asdict(slot)
+                for slot in self.pricing_provider.read_forecasts(
+                    self.hass, shadow_feed_in_entity
+                )
+            ]
+        elif shadow_source == PRICING_SOURCE_AMBER_EXPRESS:
             # Amber Express embeds forecasts in price sensor attributes
             shadow_general_forecast = self._read_attribute(
                 shadow_general_entity, "forecast", []
@@ -448,57 +463,86 @@ class StateReader:
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
         )
 
-        # Issue #300: Read forecasts based on pricing source
-        pricing_source = self.entry.data.get(
-            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
-        )
+        # Issue #300: Read forecasts via pricing provider abstraction
+        if self.pricing_provider is not None:
+            # Use pricing provider to read forecasts, convert ForecastSlot to dict
+            general_slots = self.pricing_provider.read_forecasts(
+                self.hass, general_price_entity
+            )
+            feed_in_slots = self.pricing_provider.read_forecasts(
+                self.hass, feed_in_price_entity
+            )
+            # Convert ForecastSlot dataclasses to dicts for CoordinatorData compatibility
+            data.general_forecast = [asdict(slot) for slot in general_slots]
+            data.feed_in_forecast = [asdict(slot) for slot in feed_in_slots]
+            # Set pricing_source for later use in demand window reading
+            pricing_source = self.entry.data.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            )
+        else:
+            # Fallback: Read forecasts directly from entities (legacy behavior)
+            pricing_source = self.entry.data.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            )
 
-        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
-            # Amber Express has _detailed entities with full forecast data (including spike_status)
-            # Derive _detailed entity IDs from the configured price entities
-            general_detailed = general_price_entity.replace("_price", "_price_detailed")
-            feed_in_detailed = feed_in_price_entity.replace("_price", "_price_detailed")
-
-            # Read from _detailed entities which have 'forecasts' attribute with full data
-            general_forecast = self._read_attribute(general_detailed, "forecasts", [])
-            feed_in_forecast = self._read_attribute(feed_in_detailed, "forecasts", [])
-
-            # Fallback to simple entities if _detailed not available
-            if not general_forecast:
-                _LOGGER.warning(
-                    "Amber Express detailed entity '%s' has no forecasts, "
-                    "falling back to simple entity. Spike detection may be limited.",
-                    general_detailed,
+            if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+                # Amber Express has _detailed entities with full forecast data (including spike_status)
+                # Derive _detailed entity IDs from the configured price entities
+                general_detailed = general_price_entity.replace(
+                    "_price", "_price_detailed"
                 )
+                feed_in_detailed = feed_in_price_entity.replace(
+                    "_price", "_price_detailed"
+                )
+
+                # Read from _detailed entities which have 'forecasts' attribute with full data
                 general_forecast = self._read_attribute(
-                    general_price_entity, "forecast", []
-                )
-            if not feed_in_forecast:
-                _LOGGER.warning(
-                    "Amber Express detailed entity '%s' has no forecasts, "
-                    "falling back to simple entity. Spike detection may be limited.",
-                    feed_in_detailed,
+                    general_detailed, "forecasts", []
                 )
                 feed_in_forecast = self._read_attribute(
-                    feed_in_price_entity, "forecast", []
+                    feed_in_detailed, "forecasts", []
                 )
 
-            data.general_forecast = general_forecast or []
-            data.feed_in_forecast = feed_in_forecast or []
-        else:
-            # Use separate forecast sensors (existing behavior)
-            data.general_forecast = (
-                self._read_attribute(
-                    self._get_entity_id(CONF_PRICING_GENERAL_FORECAST), "forecasts", []
+                # Fallback to simple entities if _detailed not available
+                if not general_forecast:
+                    _LOGGER.warning(
+                        "Amber Express detailed entity '%s' has no forecasts, "
+                        "falling back to simple entity. Spike detection may be limited.",
+                        general_detailed,
+                    )
+                    general_forecast = self._read_attribute(
+                        general_price_entity, "forecast", []
+                    )
+                if not feed_in_forecast:
+                    _LOGGER.warning(
+                        "Amber Express detailed entity '%s' has no forecasts, "
+                        "falling back to simple entity. Spike detection may be limited.",
+                        feed_in_detailed,
+                    )
+                    feed_in_forecast = self._read_attribute(
+                        feed_in_price_entity, "forecast", []
+                    )
+
+                data.general_forecast = general_forecast or []
+                data.feed_in_forecast = feed_in_forecast or []
+            else:
+                # Use separate forecast sensors (existing behavior)
+                data.general_forecast = (
+                    self._read_attribute(
+                        self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
+                        "forecasts",
+                        [],
+                    )
+                    or []
                 )
-                or []
-            )
-            data.feed_in_forecast = (
-                self._read_attribute(
-                    self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST), "forecasts", []
+                data.feed_in_forecast = (
+                    self._read_attribute(
+                        self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
+                        "forecasts",
+                        [],
+                    )
+                    or []
                 )
-                or []
-            )
 
         # Issue #632: Extend forecasts to 24 hours if needed
         # This ensures the optimizer can see tomorrow's solar opportunities
