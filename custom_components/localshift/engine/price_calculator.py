@@ -28,7 +28,7 @@ def _parse_price_entry(
 
     Returns dict with: start_local, end_local, price, duration_minutes, is_overlap.
     """
-    if not isinstance(entry, dict):
+    if not hasattr(entry, "get"):
         return None
 
     start_raw = entry.get("start_time")

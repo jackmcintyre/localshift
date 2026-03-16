@@ -19,6 +19,7 @@ from ..const import (
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
 )
 from ..coordinator.data import CoordinatorData
+from ..pricing.types import ForecastSlot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class SpikeAnalyzer:
         entry: ConfigEntry,
         get_switch_state: Callable[[str], bool],
         parse_time_option: Callable[[str, str], time],
-        analyze_spike_window: Callable[[list[dict], datetime, float], tuple],
+        analyze_spike_window: Callable[[list[ForecastSlot], datetime, float], tuple],
         calculate_spike_price_threshold: Callable[[list[float], float], float],
     ) -> None:
         """Initialize analyzer dependencies."""

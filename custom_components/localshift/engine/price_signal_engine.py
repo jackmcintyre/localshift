@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import sum_solar_before_target
+from ..pricing.types import ForecastSlot
 from .price_calculator import PriceCalculator
 from .spike_analyzer import SpikeAnalyzer
 from .utils import (
@@ -19,6 +20,46 @@ from .utils import (
     percentile,
     scan_forecast_for_spike,
 )
+
+
+def _dict_to_forecast_slot(d: dict[str, Any] | ForecastSlot) -> ForecastSlot:
+    """Convert dict forecast to ForecastSlot.
+
+    Helper for backward compatibility during migration from dict to ForecastSlot.
+    """
+    if isinstance(d, ForecastSlot):
+        return d
+
+    start_time = d["start_time"]
+    if isinstance(start_time, str):
+        start_time = datetime.fromisoformat(start_time)
+
+    duration = d.get("duration")
+    if duration is None and "duration_minutes" in d:
+        duration = d["duration_minutes"]
+    if duration is None and "end_time" in d:
+        end_time = d["end_time"]
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time)
+        duration = int((end_time - start_time).total_seconds() / 60)
+
+    per_kwh = d.get("per_kwh")
+    if per_kwh is None and "price_per_kwh" in d:
+        per_kwh = d["price_per_kwh"]
+
+    is_spike = d.get("is_spike", False)
+    if "spike_status" in d:
+        is_spike = d["spike_status"] == "spike"
+
+    source_type = d.get("source_type", "unknown")
+
+    return ForecastSlot(
+        start_time=start_time,
+        duration=duration,
+        per_kwh=per_kwh,
+        is_spike=is_spike,
+        source_type=source_type,
+    )
 
 
 class PriceSignalEngine:
@@ -94,7 +135,9 @@ class PriceSignalEngine:
 
         Issue #300: Removed pricing_source parameter - uses normalized is_spike field.
         """
-        return scan_forecast_for_spike(forecasts, now_dt, cutoff)
+        # Convert dicts to ForecastSlot for utility function
+        forecast_slots = [_dict_to_forecast_slot(f) for f in forecasts]
+        return scan_forecast_for_spike(forecast_slots, now_dt, cutoff)
 
     @staticmethod
     def max_forecast_price(
@@ -103,7 +146,9 @@ class PriceSignalEngine:
         cutoff: datetime,
     ) -> float:
         """Return maximum per_kwh price from forecasts within window."""
-        return max_forecast_price(forecasts, now_dt, cutoff)
+        # Convert dicts to ForecastSlot for utility function
+        forecast_slots = [_dict_to_forecast_slot(f) for f in forecasts]
+        return max_forecast_price(forecast_slots, now_dt, cutoff)
 
     def analyze_spike(self, data: CoordinatorData, now_dt: datetime) -> None:
         """Analyze feed-in forecast for spike window details."""

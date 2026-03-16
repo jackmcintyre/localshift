@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.localshift.pricing.types import ForecastSlot
+
 
 class TestSpikeAnalyzerWithNormalizedData:
     """Tests for SpikeAnalyzer using is_spike field from normalized ForecastSlot data."""
@@ -17,16 +19,18 @@ class TestSpikeAnalyzerWithNormalizedData:
 
         now = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
 
-        # Forecast with is_spike=True (normalized format from provider)
+        # Forecast with is_spike=True (ForecastSlot format)
         forecasts = [
-            {
-                "start_time": now + timedelta(hours=1),
-                "per_kwh": 2.50,
-                "is_spike": True,
-            },
+            ForecastSlot(
+                start_time=now + timedelta(hours=1),
+                duration=60,
+                per_kwh=2.50,
+                is_spike=True,
+                source_type="test",
+            ),
         ]
 
-        # Should work without pricing_source parameter
+        # Should work with ForecastSlot objects
         result = analyze_spike_window(forecasts, now, 4.0)
         spike_end, max_price, spike_prices = result
 
