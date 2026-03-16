@@ -156,13 +156,18 @@ def scan_forecast_for_spike(
 
     """
     for f in forecasts:
-        start = parse_forecast_dt(f.get("start_time"))
+        # Handle both dict and ForecastSlot-like objects
+        if isinstance(f, dict):
+            start = parse_forecast_dt(f.get("start_time"))  # type: ignore[union-attr]
+            is_spike = f.get("is_spike")  # type: ignore[union-attr]
+        else:
+            start = getattr(f, "start_time", None)  # type: ignore[union-attr]
+            is_spike = getattr(f, "is_spike", None)  # type: ignore[union-attr]
         if start is None:
             continue
-        start_local = dt_util.as_local(start)
+        start_local = dt_util.as_local(start) if isinstance(start, datetime) else start
         if start_local >= now_dt and start_local <= cutoff:
-            # Issue #300: Use normalized is_spike field from ForecastSlot
-            if f.get("is_spike") is True:
+            if is_spike is True:
                 return True
     return False
 
@@ -175,14 +180,20 @@ def max_forecast_price(
     """Return maximum per_kwh price from forecasts within window."""
     max_price = 0.0
     for f in forecasts:
-        start = parse_forecast_dt(f.get("start_time"))
+        # Handle both dict and ForecastSlot-like objects
+        if isinstance(f, dict):
+            start = parse_forecast_dt(f.get("start_time"))  # type: ignore[union-attr]
+            price = f.get("per_kwh", 0)  # type: ignore[union-attr]
+        else:
+            start = getattr(f, "start_time", None)  # type: ignore[union-attr]
+            price = getattr(f, "per_kwh", 0)  # type: ignore[union-attr]
         if start is None:
             continue
-        start_local = dt_util.as_local(start)
+        start_local = dt_util.as_local(start) if isinstance(start, datetime) else start
         if start_local >= now_dt and start_local <= cutoff:
-            price = float(f.get("per_kwh", 0))
-            if price > max_price:
-                max_price = price
+            price_val = float(price) if price is not None else 0.0
+            if price_val > max_price:
+                max_price = price_val
     return round(max_price, 2)
 
 
