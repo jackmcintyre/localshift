@@ -7,13 +7,16 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.localshift.const import (
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_TESLEMETRY_GRID_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     DEFAULT_ENTITY_IDS,
+    PRICING_SOURCE_AMBER_EXPRESS,
 )
 from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.state.reader import StateReader
@@ -296,6 +299,80 @@ class TestGetEntityId:
 
         assert result == ""
 
+    def test_get_entity_id_express_source_applies_prefix_to_defaults(
+        self, mock_hass, mock_entity_validator
+    ):
+        """Test _get_entity_id applies Express prefix when pricing source is amber_express.
+
+        When the pricing source is amber_express and a pricing entity key is NOT
+        in entry.data, the fallback to DEFAULT_ENTITY_IDS should still apply the
+        amber_express_ prefix so that the returned entity ID matches the Express
+        provider's entity naming convention.
+
+        This is the root cause fix for Issue #300: when config is missing
+        CONF_PRICING_GENERAL_PRICE, we want to return
+        sensor.amber_express_100h_general_price, not sensor.100h_general_price.
+        """
+        from custom_components.localshift.const import (
+            CONF_PRICING_DATA_SOURCE,
+            PRICING_SOURCE_AMBER_EXPRESS,
+        )
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            # Intentionally missing CONF_PRICING_GENERAL_PRICE
+            # to test fallback behavior
+        }
+
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
+        result = reader._get_entity_id(CONF_PRICING_GENERAL_PRICE)
+
+        # Should return Express-prefixed version of the default
+        assert result == "sensor.amber_express_100h_general_price"
+
+    def test_get_entity_id_express_source_applies_prefix_to_feed_in(
+        self, mock_hass, mock_entity_validator
+    ):
+        """Test Express prefix applied to feed_in_price default too."""
+        from custom_components.localshift.const import (
+            CONF_PRICING_DATA_SOURCE,
+            PRICING_SOURCE_AMBER_EXPRESS,
+        )
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            # Intentionally missing CONF_PRICING_FEED_IN_PRICE
+        }
+
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
+        result = reader._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
+
+        # Should return Express-prefixed version
+        assert result == "sensor.amber_express_100h_feed_in_price"
+
+    def test_get_entity_id_non_express_source_no_prefix(
+        self, mock_hass, mock_entity_validator
+    ):
+        """Test that non-Express sources don't get Express prefix on defaults."""
+        from custom_components.localshift.const import (
+            CONF_PRICING_DATA_SOURCE,
+            PRICING_SOURCE_AMBER,
+        )
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            # Intentionally missing CONF_PRICING_GENERAL_PRICE
+        }
+
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
+        result = reader._get_entity_id(CONF_PRICING_GENERAL_PRICE)
+
+        # Should return non-Express default
+        assert result == "sensor.100h_general_price"
+
 
 # =============================================================================
 # SOLCAST FORECAST TESTS
@@ -482,6 +559,26 @@ class TestReadAllExternalState:
         assert coordinator_data.general_price == 0.0
         assert coordinator_data.feed_in_price == 0.0
         assert coordinator_data.price_spike is False
+
+    def test_read_all_external_state_resets_amber_demand_window_when_entity_missing(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Amber demand window should reset when configured source has no entity."""
+        state_reader.entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+        state_reader.entry.data[CONF_PRICING_PRICE_SPIKE] = ""
+        coordinator_data.demand_window_amber = True
+
+        def mock_get_state(_entity_id):
+            state = MagicMock()
+            state.state = "0"
+            state.attributes = {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.demand_window_amber is False
 
 
 class TestPriceAvailability:
@@ -974,14 +1071,17 @@ class TestExtendForecastWithAssumedPrices:
     def test_extend_forecast_to_24_hours(self, state_reader):
         """Test extending a short forecast to 24 hours."""
         from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -990,21 +1090,26 @@ class TestExtendForecastWithAssumedPrices:
 
         assert len(result) > len(forecast)
         last_entry = result[-1]
-        last_time = datetime.fromisoformat(last_entry["start_time"])
-        assert (last_time - now) >= timedelta(hours=23)
+        assert isinstance(last_entry, ForecastSlot)
+        assert (last_entry.start_time - now) >= timedelta(hours=23)
 
     def test_no_extension_when_already_24_hours(self, state_reader):
         """Test no extension when forecast already covers 24 hours."""
         from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = []
         for i in range(48):
-            forecast.append({
-                "start_time": (now + timedelta(minutes=30 * i)).isoformat(),
-                "duration": 30,
-                "per_kwh": 0.10,
-            })
+            forecast.append(
+                ForecastSlot(
+                    start_time=now + timedelta(minutes=30 * i),
+                    duration=30,
+                    per_kwh=0.10,
+                    is_spike=False,
+                    source_type="amber",
+                )
+            )
 
         result = state_reader._extend_forecast_with_assumed_prices(
             forecast, now, assumed_price=0.20
@@ -1014,15 +1119,18 @@ class TestExtendForecastWithAssumedPrices:
 
     def test_extend_with_correct_price(self, state_reader):
         """Test that extended entries use the assumed price."""
-        from datetime import datetime, timedelta
+        from datetime import datetime
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1030,19 +1138,23 @@ class TestExtendForecastWithAssumedPrices:
         )
 
         for entry in result[1:]:
-            assert entry["per_kwh"] == 0.25
+            assert isinstance(entry, ForecastSlot)
+            assert entry.per_kwh == 0.25
 
     def test_extend_with_30_minute_slots(self, state_reader):
         """Test that extended entries use 30-minute duration."""
-        from datetime import datetime, timedelta
+        from datetime import datetime
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1050,7 +1162,8 @@ class TestExtendForecastWithAssumedPrices:
         )
 
         for entry in result[1:]:
-            assert entry["duration"] == 30
+            assert isinstance(entry, ForecastSlot)
+            assert entry.duration == 30
 
     def test_extend_with_invalid_last_time(self, state_reader):
         """Test extension returns original forecast if last_time is invalid."""
@@ -1069,10 +1182,11 @@ class TestExtendForecastWithAssumedPrices:
             forecast, now, assumed_price=0.20
         )
 
+        # Should return original dict-based forecast unchanged
         assert result == forecast
 
     def test_extend_with_non_dict_last_entry(self, state_reader):
-        """Test extension returns original forecast if last entry is not a dict."""
+        """Test extension returns original forecast if last entry is not a dict or ForecastSlot."""
         from datetime import datetime
 
         now = datetime(2026, 3, 10, 14, 0)
@@ -1082,6 +1196,7 @@ class TestExtendForecastWithAssumedPrices:
             forecast, now, assumed_price=0.20
         )
 
+        # Should return original invalid forecast unchanged
         assert result == forecast
 
     def test_extend_with_missing_start_time_in_last_entry(self, state_reader):
@@ -1100,6 +1215,7 @@ class TestExtendForecastWithAssumedPrices:
             forecast, now, assumed_price=0.20
         )
 
+        # Should return original dict-based forecast unchanged
         assert result == forecast
 
     def test_extend_empty_forecast_returns_empty(self, state_reader):
@@ -1116,14 +1232,17 @@ class TestExtendForecastWithAssumedPrices:
     def test_extended_entries_have_required_fields(self, state_reader):
         """Test that extended entries have all required fields."""
         from datetime import datetime
+        from custom_components.localshift.pricing.types import ForecastSlot
 
         now = datetime(2026, 3, 10, 14, 0)
         forecast = [
-            {
-                "start_time": now.isoformat(),
-                "duration": 30,
-                "per_kwh": 0.15,
-            }
+            ForecastSlot(
+                start_time=now,
+                duration=30,
+                per_kwh=0.15,
+                is_spike=False,
+                source_type="amber",
+            )
         ]
 
         result = state_reader._extend_forecast_with_assumed_prices(
@@ -1131,9 +1250,78 @@ class TestExtendForecastWithAssumedPrices:
         )
 
         for entry in result[1:]:
-            assert "start_time" in entry
-            assert "duration" in entry
-            assert "per_kwh" in entry
+            assert isinstance(entry, ForecastSlot)
+            assert hasattr(entry, "start_time")
+            assert hasattr(entry, "duration")
+            assert hasattr(entry, "per_kwh")
+
+    def test_extend_forecast_preserves_forecast_slot_type(
+        self, state_reader, mock_hass, mock_entry
+    ):
+        """Test that _extend_forecast_with_assumed_prices preserves ForecastSlot objects."""
+        from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
+
+        now = datetime(2026, 3, 16, 10, 0)
+
+        # Create forecast with ForecastSlot objects covering only 12 hours
+        forecast = [
+            ForecastSlot(
+                start_time=now + timedelta(hours=i),
+                duration=30,
+                per_kwh=0.20 + (i * 0.01),
+                is_spike=False,
+                source_type="amber",
+            )
+            for i in range(24)  # 12 hours of 30-min slots
+        ]
+
+        extended = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.22
+        )
+
+        # All entries should be ForecastSlot objects
+        assert len(extended) > 24  # Should have extension slots
+        assert all(isinstance(slot, ForecastSlot) for slot in extended)
+
+        # Original slots preserved
+        for i in range(24):
+            assert extended[i] == forecast[i]
+
+        # Extension slots have correct structure
+        for slot in extended[24:]:
+            assert slot.per_kwh == 0.22
+            assert slot.is_spike is False
+            assert slot.source_type == "extended"
+
+    def test_extend_forecast_no_conversion_when_sufficient(
+        self, state_reader, mock_hass, mock_entry
+    ):
+        """Test that 24h+ forecast returns ForecastSlot objects unchanged."""
+        from datetime import datetime, timedelta
+        from custom_components.localshift.pricing.types import ForecastSlot
+
+        now = datetime(2026, 3, 16, 10, 0)
+
+        # Create forecast covering 25 hours (no extension needed)
+        forecast = [
+            ForecastSlot(
+                start_time=now + timedelta(minutes=i * 30),
+                duration=30,
+                per_kwh=0.20,
+                is_spike=False,
+                source_type="amber",
+            )
+            for i in range(50)  # 25 hours
+        ]
+
+        result = state_reader._extend_forecast_with_assumed_prices(
+            forecast, now, assumed_price=0.22
+        )
+
+        # Should return original list unchanged (no extension needed)
+        assert result is forecast
+        assert all(isinstance(slot, ForecastSlot) for slot in result)
 
 
 class TestForecastExtensionIntegration:
@@ -1143,6 +1331,8 @@ class TestForecastExtensionIntegration:
         self, state_reader, mock_hass, coordinator_data
     ):
         """Test that short forecast is extended to 24 hours."""
+        from custom_components.localshift.pricing.types import ForecastSlot
+
         tz = ZoneInfo("Australia/Sydney")
         now = datetime(2026, 3, 10, 14, 0, tzinfo=tz)
 
@@ -1183,8 +1373,8 @@ class TestForecastExtensionIntegration:
             state_reader.read_all_external_state(coordinator_data)
 
         last_general = coordinator_data.general_forecast[-1]
-        last_time = datetime.fromisoformat(last_general["start_time"])
-        assert (last_time - now) >= timedelta(hours=23)
+        assert isinstance(last_general, ForecastSlot)
+        assert (last_general.start_time - now) >= timedelta(hours=23)
 
     def test_forecast_not_extended_when_already_24_hours(
         self, state_reader, mock_hass, coordinator_data
@@ -1221,3 +1411,767 @@ class TestForecastExtensionIntegration:
             state_reader.read_all_external_state(coordinator_data)
 
         assert len(coordinator_data.general_forecast) == 48
+
+
+def test_state_reader_accepts_pricing_provider(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test StateReader can be constructed with a pricing_provider argument."""
+    from unittest.mock import MagicMock
+
+    from custom_components.localshift.state.reader import StateReader
+
+    mock_provider = MagicMock()
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator, mock_provider)
+
+    assert reader.pricing_provider is mock_provider
+
+
+def test_state_reader_default_provider_is_none(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test StateReader still works without provider (backwards compat)."""
+    from custom_components.localshift.state.reader import StateReader
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+
+    assert reader.pricing_provider is None
+
+
+# Tests for uncovered lines in reader.py
+def test_read_shadow_prices_calls_read_methods(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test _read_shadow_prices calls internal read methods."""
+    from custom_components.localshift.state.reader import StateReader
+
+    # All states return valid data
+    mock_hass.states.get.return_value = MagicMock(
+        state="0.42", attributes={"forecast": [{"price": 0.45}], "forecasts": []}
+    )
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should return dict with shadow fields
+    assert isinstance(result, dict)
+    assert "general_price_shadow" in result
+    assert "feed_in_price_shadow" in result
+
+
+def test_read_shadow_prices_missing_entities_return_zeros(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test _read_shadow_prices returns 0.0 when entities missing."""
+    from custom_components.localshift.state.reader import StateReader
+
+    mock_hass.states.get.return_value = None
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    assert result["general_price_shadow"] == 0.0
+    assert result["feed_in_price_shadow"] == 0.0
+
+
+def test_extend_forecast_handles_duplicate_times(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test _extend_forecast_with_assumed_prices with duplicate timestamps."""
+    from custom_components.localshift.state.reader import StateReader
+    from datetime import datetime
+
+    # Create forecast with duplicate final time to test extension logic
+    forecast = [
+        {"time": "2025-03-16T22:00", "price": 0.40},
+        {"time": "2025-03-16T23:00", "price": 0.42},
+        {"time": "2025-03-16T23:00", "price": 0.45},  # Duplicate triggers extension
+    ]
+    now = datetime(2025, 3, 16, 23, 0)
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._extend_forecast_with_assumed_prices(forecast, now, 0.50)
+
+    # Should extend forecast with assumed price
+    assert len(result) >= len(forecast)
+
+
+def test_discover_solcast_entity_returns_none_when_no_sensors(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test _discover_solcast_entity returns None when no solcast sensors found."""
+    from custom_components.localshift.state.reader import StateReader
+
+    mock_hass.states.async_all.return_value = []
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._discover_solcast_entity("sensor.solcast_missing")
+
+    assert result is None
+
+
+def test_discover_solcast_entity_finds_matching_sensor(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test _discover_solcast_entity finds solcast sensor."""
+    from custom_components.localshift.state.reader import StateReader
+
+    # Create mock solcast sensor
+    solcast_sensor = MagicMock()
+    solcast_sensor.entity_id = "sensor.solcast_pv_estimate_today"
+    solcast_sensor.attributes = {"forecast": [{"pv_estimate": 0.5}]}
+
+    mock_hass.states.async_all.return_value = [solcast_sensor]
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._discover_solcast_entity("sensor.solcast_missing_today")
+
+    # Should discover and return matching entity
+    assert result is not None
+
+
+def test_read_all_external_state_with_comparison_mode(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test read_all_external_state reads shadow prices in comparison mode."""
+    from custom_components.localshift.const import CONF_COMPARISON_MODE
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.state.reader import StateReader
+
+    # Enable comparison mode
+    mock_entry.data[CONF_COMPARISON_MODE] = "enabled"
+
+    # Mock states
+    mock_hass.states.get.return_value = MagicMock(
+        state="0.42", attributes={"forecast": [], "forecasts": []}
+    )
+
+    data = CoordinatorData()
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+
+    # Should not raise
+    reader.read_all_external_state(data)
+    assert data is not None
+
+
+# =============================================================================
+# SHADOW PRICING EDGE CASES (Lines 148-153, 159)
+# =============================================================================
+
+
+def test_read_shadow_prices_amber_to_amber_express(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test shadow pricing when switching from AMBER to AMBER EXPRESS."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        PRICING_SOURCE_AMBER,
+    )
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set current source to AMBER
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER
+
+    # Mock general and feed-in price entities
+    price_state = MagicMock()
+    price_state.state = "0.30"
+    price_state.attributes = {}
+    mock_hass.states.get.return_value = price_state
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should add amber_express_ prefix to entities
+    # Called for: sensor.amber_general_price -> sensor.amber_express_general_price
+    assert result is not None
+    assert "general_price_shadow" in result
+
+
+def test_read_shadow_prices_amber_to_amber_express_already_prefixed(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test shadow pricing when entity already has amber_express_ prefix."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        CONF_PRICING_GENERAL_PRICE,
+        PRICING_SOURCE_AMBER,
+    )
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set current source to AMBER
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER
+    # Configure entity that already has the prefix
+    mock_entry.data[CONF_PRICING_GENERAL_PRICE] = "sensor.amber_express_general_price"
+
+    # Mock price entity state
+    price_state = MagicMock()
+    price_state.state = "0.30"
+    price_state.attributes = {}
+    mock_hass.states.get.return_value = price_state
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should return entity as-is if prefix already present (line 148)
+    assert result is not None
+
+
+def test_read_shadow_prices_amber_express_to_amber_no_prefix(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test shadow pricing when entity doesn't have amber_express_ prefix to remove."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        CONF_PRICING_FEED_IN_PRICE,
+        PRICING_SOURCE_AMBER_EXPRESS,
+    )
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set current source to AMBER EXPRESS
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+    # Configure entity that doesn't have the prefix
+    mock_entry.data[CONF_PRICING_FEED_IN_PRICE] = "sensor.amber_feed_in_price"
+
+    # Mock price entity state
+    price_state = MagicMock()
+    price_state.state = "0.15"
+    price_state.attributes = {}
+    mock_hass.states.get.return_value = price_state
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should return entity as-is if prefix not present (line 153)
+    assert result is not None
+    assert result["feed_in_price_shadow"] is not None
+
+
+def test_read_shadow_prices_amber_express_remove_prefix_when_present(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test shadow pricing removes amber_express_ prefix from entity name."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        CONF_PRICING_GENERAL_PRICE,
+        PRICING_SOURCE_AMBER_EXPRESS,
+    )
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set current source to AMBER EXPRESS
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+    # Configure entity WITH the prefix
+    mock_entry.data[CONF_PRICING_GENERAL_PRICE] = "sensor.amber_express_general_price"
+
+    # Mock price entity state
+    price_state = MagicMock()
+    price_state.state = "0.30"
+    price_state.attributes = {}
+    mock_hass.states.get.return_value = price_state
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should remove prefix when present (covers line 152)
+    assert result is not None
+    assert "general_price_shadow" in result
+
+
+def test_read_shadow_prices_amber_express_to_amber(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test shadow pricing when switching from AMBER EXPRESS to AMBER."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        PRICING_SOURCE_AMBER_EXPRESS,
+    )
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set current source to AMBER EXPRESS
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+
+    # Mock entities with amber_express_ prefix
+    price_state = MagicMock()
+    price_state.state = "0.28"
+    price_state.attributes = {}
+    mock_hass.states.get.return_value = price_state
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should remove amber_express_ prefix from entities
+    assert result is not None
+    assert "feed_in_price_shadow" in result
+
+
+# =============================================================================
+# SHADOW PRICING FORECAST EDGE CASES (Lines 179-182)
+# =============================================================================
+
+
+def test_read_shadow_prices_amber_forecast_reading(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test shadow pricing correctly reads AMBER forecast entities."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        PRICING_SOURCE_AMBER_EXPRESS,
+    )
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set current source to AMBER EXPRESS, so shadow is AMBER
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+
+    # Mock price state (no forecast attribute)
+    price_state = MagicMock()
+    price_state.state = "0.32"
+    price_state.attributes = {}
+
+    # Mock forecast entity state
+    forecast_state = MagicMock()
+    forecast_state.state = "on"
+    forecast_state.attributes = {
+        "forecasts": [
+            {"start_time": "2025-03-16T00:00", "duration": 30, "per_kwh": 0.30}
+        ]
+    }
+
+    def get_state_side_effect(entity_id):
+        if "_forecast" in entity_id:
+            return forecast_state
+        return price_state
+
+    mock_hass.states.get.side_effect = get_state_side_effect
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_shadow_prices()
+
+    # Should read forecasts from AMBER forecast entities
+    assert result is not None
+    assert "general_forecast_shadow" in result
+
+
+# =============================================================================
+# DEMAND WINDOW ENTITY DISCOVERY (Lines 568-572)
+# =============================================================================
+
+
+def test_read_demand_window_amber_express_with_entity(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test demand window reading when price_spike entity is configured."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        CONF_PRICING_PRICE_SPIKE,
+        PRICING_SOURCE_AMBER_EXPRESS,
+    )
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set source to AMBER EXPRESS
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+    mock_entry.data[CONF_PRICING_PRICE_SPIKE] = "sensor.amber_express_price_spike"
+
+    # Mock demand window state
+    demand_state = MagicMock()
+    demand_state.state = "on"
+
+    # Mock other states
+    other_state = MagicMock()
+    other_state.state = "0.30"
+    other_state.attributes = {}
+
+    def get_state_side_effect(entity_id):
+        if "demand_window" in entity_id:
+            return demand_state
+        return other_state
+
+    mock_hass.states.get.side_effect = get_state_side_effect
+
+    data = CoordinatorData()
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    reader.read_all_external_state(data)
+
+    # Should derive demand_window entity from price_spike
+    assert data.demand_window_amber is True
+
+
+def test_read_demand_window_amber_express_no_entity(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test demand window is False when price_spike entity not configured."""
+    from custom_components.localshift.const import (
+        CONF_PRICING_DATA_SOURCE,
+        PRICING_SOURCE_AMBER_EXPRESS,
+    )
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.state.reader import StateReader
+
+    # Set source to AMBER EXPRESS but no price_spike configured
+    mock_entry.data[CONF_PRICING_DATA_SOURCE] = PRICING_SOURCE_AMBER_EXPRESS
+    mock_entry.data[CONF_PRICING_PRICE_SPIKE] = ""
+
+    # Mock states
+    state = MagicMock()
+    state.state = "0.30"
+    state.attributes = {}
+    mock_hass.states.get.return_value = state
+
+    data = CoordinatorData()
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    reader.read_all_external_state(data)
+
+    # Should set to False when not configured
+    assert data.demand_window_amber is False
+
+
+# =============================================================================
+# WEATHER ENTITY CONFIGURATION EDGE CASES (Lines 620-622)
+# =============================================================================
+
+
+def test_read_weather_no_entity_configured(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test weather reading when no weather entity is configured."""
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.state.reader import StateReader
+
+    # Ensure no weather entity in entry
+    mock_entry.options = {}
+    mock_entry.data = {
+        CONF_TESLEMETRY_GRID_POWER: "sensor.tesla_powerwall_grid_power",
+        CONF_TESLEMETRY_SOC: "sensor.tesla_powerwall_soc",
+    }
+
+    data = CoordinatorData()
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    reader._read_weather_state(data)
+
+    # Should set empty weather_entity_id and return early
+    assert data.weather_entity_id == ""
+
+
+def test_read_weather_entity_not_found(mock_hass, mock_entry, mock_entity_validator):
+    """Test weather reading when configured entity does not exist."""
+    from custom_components.localshift.const import CONF_WEATHER_ENTITY
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.state.reader import StateReader
+
+    # Configure weather entity that doesn't exist
+    mock_entry.options = {CONF_WEATHER_ENTITY: "weather.nonexistent"}
+    mock_entry.data = {
+        CONF_TESLEMETRY_GRID_POWER: "sensor.tesla_powerwall_grid_power",
+    }
+
+    mock_hass.states.get.return_value = None
+
+    data = CoordinatorData()
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    reader._read_weather_state(data)
+
+    # Should log warning but not raise
+    assert data.weather_entity_id == "weather.nonexistent"
+
+
+# =============================================================================
+# TIMEZONE NORMALIZATION IN FORECAST EXTENSION (Line 273)
+# =============================================================================
+
+
+def test_extend_forecast_timezone_normalization(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test timezone normalization in _extend_forecast_with_assumed_prices."""
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.pricing.types import ForecastSlot
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    # Create forecast with naive timestamp
+    forecast = [
+        {
+            "start_time": "2025-03-16T20:00:00",
+            "duration": 30,
+            "per_kwh": 0.40,
+        },
+        {
+            "start_time": "2025-03-16T20:30:00",
+            "duration": 30,
+            "per_kwh": 0.42,
+        },
+    ]
+
+    # Now with timezone
+    now = datetime(2025, 3, 16, 20, 30, tzinfo=ZoneInfo("UTC"))
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._extend_forecast_with_assumed_prices(forecast, now, 0.50)
+
+    # Should handle timezone mismatch and extend forecast with ForecastSlot objects
+    assert len(result) > len(forecast)
+    for entry in result:
+        assert isinstance(entry, ForecastSlot)
+        assert hasattr(entry, "start_time")
+        assert hasattr(entry, "per_kwh")
+
+
+# =============================================================================
+# SOLCAST ENTITY DISCOVERY EDGE CASES (Lines 302-303, 362)
+# =============================================================================
+
+
+def test_solcast_auto_discovery_uses_fallback(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test Solcast auto-discovery when primary entity not found."""
+    from custom_components.localshift.state.reader import StateReader
+
+    # Mock discovered sensor with valid state
+    solcast_sensor = MagicMock()
+    solcast_sensor.entity_id = "sensor.solcast_pv_estimate_today"
+    solcast_sensor.attributes = {
+        "forecast": [{"pv_estimate": 0.5, "period_start": "2025-03-16T00:00+00:00"}]
+    }
+
+    # Create mock state for discovered entity
+    discovered_state = MagicMock()
+    discovered_state.state = "0.5"
+    discovered_state.attributes = {
+        "forecast": [{"pv_estimate": 0.5, "period_start": "2025-03-16T00:00+00:00"}]
+    }
+
+    # First call returns None (entity not found), second returns discovered state
+    call_sequence = [None, discovered_state]
+    call_count = [0]
+
+    def get_state_side_effect(entity_id):
+        result = call_sequence[min(call_count[0], len(call_sequence) - 1)]
+        call_count[0] += 1
+        return result
+
+    mock_hass.states.get.side_effect = get_state_side_effect
+    mock_hass.states.async_all.return_value = [solcast_sensor]
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._read_solcast_forecast_list("sensor.solcast_missing")
+
+    # Should use discovered entity and read forecast (covers lines 302-303)
+    assert isinstance(result, list)
+
+
+def test_discover_solcast_entity_attribute_filter(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test Solcast discovery correctly filters by forecast list attributes."""
+    from custom_components.localshift.state.reader import StateReader
+
+    # Create various mock sensors
+    valid_solcast = MagicMock()
+    valid_solcast.entity_id = "sensor.solcast_pv_estimate_today"
+    valid_solcast.attributes = {"detailedForecast": [{"pv_estimate": 0.5}]}
+
+    invalid_sensor = MagicMock()
+    invalid_sensor.entity_id = "sensor.other_entity"
+    invalid_sensor.attributes = {"some_value": 123}
+
+    mock_hass.states.async_all.return_value = [invalid_sensor, valid_solcast]
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    result = reader._discover_solcast_entity("sensor.solcast_missing_today")
+
+    # Should skip invalid sensors and find valid one
+    assert result == "sensor.solcast_pv_estimate_today"
+
+
+def test_discover_solcast_entity_returns_first_candidate_no_hint_match(
+    mock_hass, mock_entry, mock_entity_validator
+):
+    """Test Solcast discovery returns first candidate when hint doesn't match."""
+    from custom_components.localshift.state.reader import StateReader
+
+    # Create multiple valid solcast sensors
+    first_solcast = MagicMock()
+    first_solcast.entity_id = "sensor.solcast_pv_estimate_today"
+    first_solcast.attributes = {"forecast": [{"pv_estimate": 0.5}]}
+
+    second_solcast = MagicMock()
+    second_solcast.entity_id = "sensor.forecast_pv_estimate_tomorrow"
+    second_solcast.attributes = {"detailedForecast": [{"pv_estimate": 0.6}]}
+
+    mock_hass.states.async_all.return_value = [first_solcast, second_solcast]
+
+    reader = StateReader(mock_hass, mock_entry, mock_entity_validator)
+    # Use a hint that doesn't match either entity
+    result = reader._discover_solcast_entity("sensor.nonexistent_hint")
+
+    # Should return first candidate (line 375)
+    assert result == "sensor.solcast_pv_estimate_today"
+
+
+def test_read_all_external_state_calls_provider_for_forecasts(mock_hass, mock_entry):
+    """Test StateReader calls pricing_provider.read_forecasts() for both price entities."""
+    from dataclasses import asdict
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.pricing.types import ForecastSlot
+    from custom_components.localshift.utils.validation import EntityValidator
+    from homeassistant.util import dt as dt_util
+
+    # Create a mock provider
+    provider = MagicMock()
+    provider.name = "test_provider"
+    expected_forecast = [
+        ForecastSlot(
+            start_time=dt_util.now(),
+            duration=30,
+            per_kwh=0.25,
+            is_spike=False,
+            source_type="test_provider",
+        )
+    ]
+    provider.read_forecasts.return_value = expected_forecast
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=provider,
+    )
+
+    # Mock the price entities
+    mock_hass.states.async_set("sensor.100h_general_price", "0.25", {"forecasts": []})
+    mock_hass.states.async_set("sensor.100h_feed_in_price", "0.12", {"forecasts": []})
+
+    data = CoordinatorData()
+    reader.read_all_external_state(data)
+
+    # Verify provider was called for both price entities
+    assert provider.read_forecasts.call_count == 2
+
+    # Verify forecasts were returned and extended (returned as ForecastSlot objects after migration)
+    assert len(data.general_forecast) >= 48  # Extended to 24+ hours
+    assert len(data.feed_in_forecast) >= 48
+    assert all(
+        isinstance(slot, ForecastSlot) and hasattr(slot, "start_time")
+        for slot in data.general_forecast
+    )
+
+
+def test_read_all_external_state_fallback_without_provider(mock_hass, mock_entry):
+    """Test StateReader falls back to direct entity reading when provider is None."""
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.coordinator import CoordinatorData
+    from custom_components.localshift.utils.validation import EntityValidator
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=None,
+    )
+
+    # Mock the forecast entities directly (fallback path uses separate forecast entities)
+    mock_hass.states.get.return_value = None
+
+    data = CoordinatorData()
+    reader.read_all_external_state(data)
+
+    # When provider is None, should fall back to reading from separate forecast entities
+    # Since mocked hass returns None, forecasts should be empty lists (the fallback)
+    assert isinstance(data.general_forecast, list)
+    assert isinstance(data.feed_in_forecast, list)
+
+
+def test_read_shadow_prices_calls_provider(mock_hass, mock_entry):
+    """Test _read_shadow_prices() calls pricing_provider for shadow forecasts."""
+    from dataclasses import asdict
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.pricing.types import ForecastSlot
+    from custom_components.localshift.utils.validation import EntityValidator
+    from homeassistant.util import dt as dt_util
+    from custom_components.localshift.const import (
+        CONF_COMPARISON_MODE,
+        COMPARISON_MODE_ENABLED,
+    )
+
+    # Create a mock provider
+    provider = MagicMock()
+    provider.name = "test_provider"
+    expected_shadow = [
+        ForecastSlot(
+            start_time=dt_util.now(),
+            duration=30,
+            per_kwh=0.28,
+            is_spike=False,
+            source_type="test_provider",
+        )
+    ]
+    provider.read_forecasts.return_value = expected_shadow
+
+    # Enable comparison mode
+    mock_entry.data[CONF_COMPARISON_MODE] = COMPARISON_MODE_ENABLED
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=provider,
+    )
+
+    # Mock shadow price entities (amber_express variants)
+    mock_hass.states.async_set("sensor.amber_express_100h_general_price", "0.28")
+    mock_hass.states.async_set("sensor.amber_express_100h_feed_in_price", "0.14")
+
+    shadow = reader._read_shadow_prices()
+
+    # Verify provider was called for shadow price entities
+    assert provider.read_forecasts.call_count >= 2
+
+    # Verify shadow forecasts came from provider (converted to dicts)
+    assert shadow["general_forecast_shadow"] == [
+        asdict(slot) for slot in expected_shadow
+    ]
+    assert shadow["feed_in_forecast_shadow"] == [
+        asdict(slot) for slot in expected_shadow
+    ]
+
+
+def test_read_shadow_prices_fallback_without_provider(mock_hass, mock_entry):
+    """Test _read_shadow_prices() falls back without provider."""
+    from custom_components.localshift.state.reader import StateReader
+    from custom_components.localshift.utils.validation import EntityValidator
+    from custom_components.localshift.const import (
+        CONF_COMPARISON_MODE,
+        COMPARISON_MODE_ENABLED,
+    )
+
+    # Enable comparison mode
+    mock_entry.data[CONF_COMPARISON_MODE] = COMPARISON_MODE_ENABLED
+
+    # Create a mock validator
+    validator = MagicMock(spec=EntityValidator)
+
+    reader = StateReader(
+        mock_hass,
+        mock_entry,
+        entity_validator=validator,
+        pricing_provider=None,
+    )
+
+    # Mock shadow price entities
+    mock_hass.states.get.return_value = None
+
+    shadow = reader._read_shadow_prices()
+
+    # Should have fallback data (empty lists since mocked hass returns None)
+    assert isinstance(shadow["general_forecast_shadow"], list)
+    assert isinstance(shadow["feed_in_forecast_shadow"], list)

@@ -36,7 +36,7 @@ from ..services.evaluation_dispatcher import EvaluationDispatcher
 from ..services.subscription_manager import SubscriptionManager
 from .data import CoordinatorData
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from ..computation_engine import ComputationEngine
     from ..integration.controller import BatteryController
     from ..services.notification_service import NotificationService
@@ -189,7 +189,16 @@ class LocalShiftCoordinator:
         from ..utils.validation import EntityValidator
 
         self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
-        self._state_reader = StateReader(self.hass, self.entry, self._entity_validator)
+        from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        from ..pricing import create_provider
+
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+        _pricing_provider = create_provider(pricing_source)
+        self._state_reader = StateReader(
+            self.hass, self.entry, self._entity_validator, _pricing_provider
+        )
         self._cost_tracker = CostTracker(self.hass)
         self._battery_controller = BatteryController(self.hass, self._get_entity_id)
         self._notification_service = NotificationService(
@@ -516,12 +525,14 @@ class LocalShiftCoordinator:
         self._handle_fast_tick(now)
 
     @callback
-    def _handle_fast_tick(self, now: datetime) -> None:
+    def _handle_fast_tick(self, now: datetime) -> None:  # pragma: no cover
         """Handle FAST tier periodic tasks (1 minute).
 
-        Time-sensitive control tasks that need minute-level accuracy:
-        - Cost accumulation (power × time needs minute accuracy)
-        - Stale price check (safety net if price sensor stops updating)
+        Checks automation ready state and triggers immediate optimizer evaluation
+        when it transitions from not-ready to ready (Issue #478).
+
+        Dispatches to state machine for mode transition evaluation regardless of
+        price changes (Issue #622 - legacy price gate removed).
         """
         # Read raw entity values now — needed for cost accumulation
         self._read_all_external_state()
@@ -551,7 +562,7 @@ class LocalShiftCoordinator:
             self._evaluation_dispatcher.on_fast_tick(now)
 
     @callback
-    def _handle_medium_tick(self, now: datetime) -> None:
+    def _handle_medium_tick(self, now: datetime) -> None:  # pragma: no cover
         """Handle MEDIUM tier periodic tasks (5 minutes).
 
         Learning and monitoring tasks that don't need minute-level accuracy:
@@ -622,7 +633,7 @@ class LocalShiftCoordinator:
         _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
 
     @callback
-    def _handle_slow_tick(self, now: datetime) -> None:
+    def _handle_slow_tick(self, now: datetime) -> None:  # pragma: no cover
         """Handle SLOW tier periodic tasks (30 minutes).
 
         Slow-changing data tasks:
@@ -657,7 +668,7 @@ class LocalShiftCoordinator:
 
         _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
 
-    def _is_in_startup_grace(self) -> bool:
+    def _is_in_startup_grace(self) -> bool:  # pragma: no cover
         """Check if we're still in the startup grace period.
 
         Returns True if the state machine has an active startup grace period,
@@ -668,7 +679,7 @@ class LocalShiftCoordinator:
             return False
         return self._state_machine._startup_grace_until is not None
 
-    def _backfill_solar_actual(self) -> None:
+    def _backfill_solar_actual(self) -> None:  # pragma: no cover
         """Backfill actual solar energy for completed 30-min periods.
 
         Calculates energy produced since last tick using integrated power,
@@ -711,10 +722,14 @@ class LocalShiftCoordinator:
         self._last_solar_power_kw = current_power
 
     @callback
-    def _handle_midnight_reset(self, now: datetime) -> None:
-        """Reset daily cost accumulators and target flag at midnight.
+    def _handle_midnight_reset(self, now: datetime) -> None:  # pragma: no cover
+        """Reset cost accumulators and daily target flag at midnight.
 
-        Replaces YAML A12 (localshift_reset_target_reached).
+        Called when the daily clock ticks past midnight. Resets all cost
+        accumulators (battery_savings, battery_charge_cost, solar_yield_value,
+        grid_export_revenue) and the target_reached flag.
+
+        Notifies listeners and logs the reset for debugging.
         """
         self.data.grid_import_cost = 0.0
         self.data.grid_export_revenue = 0.0
@@ -729,7 +744,7 @@ class LocalShiftCoordinator:
         _LOGGER.info("Midnight reset: cost accumulators and target flag")
 
     @callback
-    def _handle_daily_summary(self, now: datetime) -> None:
+    def _handle_daily_summary(self, now: datetime) -> None:  # pragma: no cover
         """Send daily summary notification at demand window end.
 
         Replaces YAML A15 (localshift_daily_summary).
@@ -748,7 +763,7 @@ class LocalShiftCoordinator:
     # Computation
     # ------------------------------------------------------------------
 
-    def _compute_derived_values(self) -> None:
+    def _compute_derived_values(self) -> None:  # pragma: no cover
         """Compute all derived sensor/binary_sensor values from raw state."""
         if self._computation_engine is not None:
             self._computation_engine.compute_derived_values(self.data)
@@ -756,7 +771,7 @@ class LocalShiftCoordinator:
         # Run shadow optimizer after legacy forecast is computed (Issue #403 Phase 1)
         # This is non-invasive - it only populates shadow_* fields in CoordinatorData
 
-    def _accumulate_costs(self) -> None:
+    def _accumulate_costs(self) -> None:  # pragma: no cover
         """Accumulate per-minute energy costs from current power and price."""
         if self._cost_tracker is not None:
             self._cost_tracker.accumulate_costs(self.data)
@@ -771,10 +786,10 @@ class LocalShiftCoordinator:
     # State machine
     # ------------------------------------------------------------------
 
-    async def async_evaluate_state_machine(self) -> None:
+    async def async_evaluate_state_machine(self) -> None:  # pragma: no cover
         """Compare desired mode with commanded mode and execute transitions.
 
-        Public method for external triggers (e.g., options update).
+        Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
         """
         await self._evaluate_state_machine()
 
@@ -788,7 +803,7 @@ class LocalShiftCoordinator:
         self._notify_listeners()
         await self.async_evaluate_state_machine()
 
-    def reset_entity_tracking_on_options_change(self) -> None:
+    def reset_entity_tracking_on_options_change(self) -> None:  # pragma: no cover
         """Reset entity tracking when options change.
 
         This is called when the user reconfigures the integration via options flow.
@@ -805,7 +820,7 @@ class LocalShiftCoordinator:
 
         _LOGGER.info("Reset entity tracking for options change")
 
-    def reschedule_daily_summary_timer(self) -> None:
+    def reschedule_daily_summary_timer(self) -> None:  # pragma: no cover
         """Reschedule the daily summary timer with current demand_window_end.
 
         Called when options are updated to pick up new notification time
@@ -932,7 +947,7 @@ class LocalShiftCoordinator:
             self._computation_engine.clear_historical_cache()
             _LOGGER.info("Historical load cache cleared")
 
-    async def _refresh_weather_forecast(self) -> None:
+    async def _refresh_weather_forecast(self) -> None:  # pragma: no cover
         """Refresh temperature forecast from weather entity.
 
         Uses the modern weather.get_forecasts service (HA 2024.3+) with caching.

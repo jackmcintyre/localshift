@@ -136,14 +136,38 @@ class SlotBuilder:
         data: Any,
         adaptive_params: AdaptiveParameters | None,
         now_dt: datetime | None = None,
+        override_general_forecast: list[dict[str, Any]] | None = None,
+        override_feed_in_forecast: list[dict[str, Any]] | None = None,
     ) -> tuple[list[SlotContext], SlotBuildMetadata]:
-        """Build SlotContext list from raw coordinator data."""
+        """Build SlotContext list from raw coordinator data.
+
+        Args:
+            data: CoordinatorData with prices, forecasts, etc.
+            adaptive_params: Adaptive parameters for solar confidence.
+            now_dt: Current datetime (optional, defaults to now).
+            override_general_forecast: Shadow forecast to use instead of data.general_forecast.
+            override_feed_in_forecast: Shadow forecast to use instead of data.feed_in_forecast.
+
+        """
         now_local = (
             now_dt.astimezone() if now_dt is not None else datetime.now().astimezone()
         )
+
+        # Use override forecasts if provided (for shadow optimizer runs)
+        general_forecast = (
+            override_general_forecast
+            if override_general_forecast is not None
+            else data.general_forecast
+        )
+        feed_in_forecast = (
+            override_feed_in_forecast
+            if override_feed_in_forecast is not None
+            else data.feed_in_forecast
+        )
+
         hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
             now_local=now_local,
-            general_forecast=data.general_forecast,
+            general_forecast=general_forecast,
             ha_timezone=self._ha_timezone,
         )
 
@@ -164,6 +188,7 @@ class SlotBuilder:
             local_tz=local_tz,
             dw_start_time=dw_start_time,
             dw_end_time=dw_end_time,
+            feed_in_forecast=feed_in_forecast,
         )
 
         metadata = SlotBuildMetadata(
@@ -223,6 +248,7 @@ class SlotBuilder:
         local_tz: ZoneInfo | None,
         dw_start_time: time,
         dw_end_time: time,
+        feed_in_forecast: list[dict[str, Any]] | None = None,
     ) -> tuple[list[SlotContext], dict[str, int]]:
         """Process all hybrid slots and return contexts with counts."""
         contexts: list[SlotContext] = []
@@ -247,6 +273,7 @@ class SlotBuilder:
                 dw_start_time=dw_start_time,
                 dw_end_time=dw_end_time,
                 prev_in_demand_window=prev_in_demand_window,
+                feed_in_forecast=feed_in_forecast,
             )
             contexts.append(ctx)
             for key in counts:
@@ -267,6 +294,7 @@ class SlotBuilder:
         dw_start_time: time,
         dw_end_time: time,
         prev_in_demand_window: bool,
+        feed_in_forecast: list[dict[str, Any]] | None = None,
     ) -> tuple[SlotContext, dict[str, int], bool]:
         """Process a single slot, returning (context, counts, in_demand_window)."""
         slot_start: datetime = slot["start"]
@@ -283,7 +311,11 @@ class SlotBuilder:
         }
 
         buy_price = float(slot.get("price", 0.0))
-        sell_price = self._get_sell_price(data.feed_in_forecast, slot_start)
+        # Use override feed_in_forecast if provided (for shadow optimizer)
+        sell_price = self._get_sell_price(
+            feed_in_forecast if feed_in_forecast is not None else data.feed_in_forecast,
+            slot_start,
+        )
 
         solar_kwh = self._get_solar_kwh(
             all_solcast, slot_start, interval_minutes, solar_confidence_factor

@@ -105,6 +105,18 @@ CONF_PRICING_GENERAL_FORECAST = "pricing_general_forecast"
 CONF_PRICING_FEED_IN_FORECAST = "pricing_feed_in_forecast"
 CONF_PRICING_PRICE_SPIKE = "pricing_price_spike"
 
+# Pricing data source (Issue #300)
+CONF_PRICING_DATA_SOURCE = "pricing_data_source"
+CONF_COMPARISON_MODE = "comparison_mode"
+
+# Pricing source options
+PRICING_SOURCE_AMBER = "amber"
+PRICING_SOURCE_AMBER_EXPRESS = "amber_express"
+
+# Comparison mode options
+COMPARISON_MODE_DISABLED = "disabled"
+COMPARISON_MODE_ENABLED = "enabled"
+
 # Solcast entities
 CONF_SOLCAST_FORECAST_TODAY = "solcast_forecast_today"
 CONF_SOLCAST_FORECAST_TOMORROW = "solcast_forecast_tomorrow"
@@ -129,6 +141,10 @@ DEFAULT_WEATHER_LEARNING_ENABLED = True
 # Manual override auto-clear timeout
 CONF_MANUAL_OVERRIDE_TIMEOUT = "manual_override_timeout"
 
+# Pricing data source defaults (Issue #300)
+DEFAULT_PRICING_DATA_SOURCE = PRICING_SOURCE_AMBER
+DEFAULT_COMPARISON_MODE = COMPARISON_MODE_DISABLED
+
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Default Entity IDs
 # -----------------------------------------------------------------------------
@@ -152,6 +168,8 @@ DEFAULT_ENTITY_IDS = {
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
     CONF_WEATHER_ENTITY: DEFAULT_WEATHER_ENTITY,
+    CONF_PRICING_DATA_SOURCE: DEFAULT_PRICING_DATA_SOURCE,
+    CONF_COMPARISON_MODE: DEFAULT_COMPARISON_MODE,
 }
 
 # -----------------------------------------------------------------------------

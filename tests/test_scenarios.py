@@ -20,6 +20,7 @@ from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
 from custom_components.localshift.coordinator import CoordinatorData
+from custom_components.localshift.pricing.types import ForecastSlot
 from simulations.schema import Scenario, discover_scenarios
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,36 @@ def dt_aware(year, month, day, hour, minute=0, second=0, tz_offset_hours=11):
 # ---------------------------------------------------------------------------
 # Setup helpers
 # ---------------------------------------------------------------------------
+
+
+def _convert_forecast_to_slot(forecast_dict: dict) -> ForecastSlot:
+    """Convert forecast dict from JSON to ForecastSlot.
+
+    Handles two JSON formats:
+    - Legacy: {"start_time": "...", "end_time": "...", "per_kwh": ..., "is_spike": ...}
+    - New: {"start_time": "...", "duration": ..., "per_kwh": ..., "spike_status": "spike"|"none"}
+    """
+    start_time = datetime.fromisoformat(forecast_dict["start_time"])
+
+    # Calculate duration from either end_time or duration field
+    if "duration" in forecast_dict:
+        duration_minutes = forecast_dict["duration"]
+    else:
+        end_time = datetime.fromisoformat(forecast_dict["end_time"])
+        duration_minutes = int((end_time - start_time).total_seconds() / 60)
+
+    # Handle is_spike from either is_spike or spike_status field
+    is_spike = forecast_dict.get("is_spike", False)
+    if "spike_status" in forecast_dict:
+        is_spike = forecast_dict["spike_status"] == "spike"
+
+    return ForecastSlot(
+        start_time=start_time,
+        duration=duration_minutes,
+        per_kwh=forecast_dict["per_kwh"],
+        is_spike=is_spike,
+        source_type="test",
+    )
 
 
 def setup_coordinator_data(input_data: dict) -> CoordinatorData:
@@ -72,8 +103,17 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
     # Forecast data
     data.solcast_today = input_data.get("solcast_today", [])
     data.solcast_tomorrow = input_data.get("solcast_tomorrow", [])
-    data.general_forecast = input_data.get("general_forecast", [])
-    data.feed_in_forecast = input_data.get("feed_in_forecast", [])
+
+    # Convert dict forecasts to ForecastSlot objects
+    general_forecast_dicts = input_data.get("general_forecast", [])
+    data.general_forecast = [
+        _convert_forecast_to_slot(f) for f in general_forecast_dicts
+    ]
+
+    feed_in_forecast_dicts = input_data.get("feed_in_forecast", [])
+    data.feed_in_forecast = [
+        _convert_forecast_to_slot(f) for f in feed_in_forecast_dicts
+    ]
 
     # Initialize empty containers
     data.decision_log = []

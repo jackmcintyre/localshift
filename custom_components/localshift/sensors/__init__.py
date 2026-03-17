@@ -31,7 +31,9 @@ from .optimizer import (
 )
 from .pricing import (
     CheapChargeStopPriceSensor,
+    ComparisonResultSensor,
     EffectiveCheapPriceSensor,
+    PriceDeltaSensor,
     SolarWeightedAvgFITSensor,
 )
 from .status import (
@@ -52,6 +54,8 @@ __all__ = [
     "EffectiveCheapPriceSensor",
     "CheapChargeStopPriceSensor",
     "SolarWeightedAvgFITSensor",
+    "ComparisonResultSensor",
+    "PriceDeltaSensor",
     # Forecast
     "SolarBatteryForecastSensor",
     "NetElectricityCostSensor",

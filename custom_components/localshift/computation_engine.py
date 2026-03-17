@@ -14,21 +14,25 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
+    CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_SWITCHING_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_SWITCHING_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -62,6 +66,7 @@ from .forecast import (
     sum_solar_before_target,
 )
 from .learning.correlation import WeatherCorrelation
+from .pricing.types import ForecastSlot
 
 # Backward-compatible re-export for tests/importers that import BatteryMode
 # from computation_engine.
@@ -348,6 +353,8 @@ class ComputationEngine:
         # Hardcoded lookahead (Issue #214)
         lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
         cutoff = now_dt + timedelta(hours=lookahead)
+
+        # Issue #300: scan_forecast_for_spike no longer needs pricing_source
         data.forecast_spike_within_window = self._price_signals.scan_forecast_for_spike(
             data.feed_in_forecast, now_dt, cutoff
         )
@@ -538,6 +545,12 @@ class ComputationEngine:
             CONF_SWITCHING_PENALTY: self.entry.options.get(
                 CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY
             ),
+            "pricing_source": self.entry.options.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            ),
+            "comparison_mode": self.entry.options.get(
+                CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
+            ),
             # ha_timezone override: if present in entry.options (e.g. injected by tests
             # via config_overrides), use it to avoid relying on dt_util.DEFAULT_TIME_ZONE.
             "ha_timezone": self.entry.options.get("ha_timezone", None),
@@ -679,7 +692,7 @@ class ComputationEngine:
 
     @staticmethod
     def _scan_forecast_for_spike(
-        forecasts: list[dict[str, Any]],
+        forecasts: list[ForecastSlot],
         now_dt: datetime,
         cutoff: datetime,
     ) -> bool:
@@ -688,7 +701,7 @@ class ComputationEngine:
 
     @staticmethod
     def _max_forecast_price(
-        forecasts: list[dict[str, Any]],
+        forecasts: list[ForecastSlot],
         now_dt: datetime,
         cutoff: datetime,
     ) -> float:
