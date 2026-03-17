@@ -1,0 +1,26 @@
+"""Shared fixtures for coordinator tests."""
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from custom_components.localshift.coordinator import LocalShiftCoordinator
+
+
+@pytest.fixture
+def mock_hass_with_services():
+    """Create a mock Home Assistant instance with services."""
+    hass = MagicMock()
+    hass.services = MagicMock()
+    hass.services.async_call = AsyncMock()
+    hass.states = MagicMock()
+    # async_create_task receives coroutines - use a mock that consumes them
+    # to avoid "coroutine was never awaited" warnings
+    hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
+    return hass
+
+
+@pytest.fixture
+def coordinator(mock_hass_with_services, mock_entry):
+    """Create a LocalShiftCoordinator instance."""
+    return LocalShiftCoordinator(mock_hass_with_services, mock_entry)
