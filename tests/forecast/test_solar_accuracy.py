@@ -432,10 +432,12 @@ class TestSolarAccuracyTracker:
         assert correction == pytest.approx(1.5, rel=0.1)
 
     def test_get_additive_correction_no_data(self, tracker):
+        """Test get_additive_correction returns 0.0 (deprecated, always returns 0)."""
         correction = tracker.get_additive_correction("morning", "sunny", "summer")
         assert correction == 0.0
 
     def test_get_additive_correction_with_data(self, tracker):
+        """Test get_additive_correction still returns 0.0 (deprecated, always returns 0)."""
         # Add historical data (need 20+ samples)
         # Use month 1 (January) = summer in Southern hemisphere
         for i in range(20):
@@ -443,10 +445,12 @@ class TestSolarAccuracyTracker:
             tracker.record_forecast(period_start, 2.0, "sunny")
             tracker.backfill_actual(period_start, 1.5)
 
+        # Deprecated - always returns 0.0 regardless of data
         correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        assert correction == pytest.approx(0.5, rel=0.1)
+        assert correction == 0.0
 
     def test_get_additive_correction_clamps_to_bounds(self, tracker):
+        """Test get_additive_correction returns 0.0 (deprecated, always returns 0)."""
         # Add historical data with extreme bias (need 20+ samples)
         # Use month 1 (January) = summer in Southern hemisphere
         for i in range(20):
@@ -454,10 +458,12 @@ class TestSolarAccuracyTracker:
             tracker.record_forecast(period_start, 3.0, "sunny")
             tracker.backfill_actual(period_start, 0.0)
 
+        # Deprecated - always returns 0.0 regardless of data
         correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        assert correction == pytest.approx(2.0)
+        assert correction == 0.0
 
-    def test_apply_bias_correction_combines_multiplicative_and_additive(self, tracker):
+    def test_apply_bias_correction_uses_multiplicative_only(self, tracker):
+        """Test apply_bias_correction uses multiplicative only (issue #760)."""
         # Add historical data (need 20+ samples)
         # Use month 1 (January) = summer in Southern hemisphere
         for i in range(20):
@@ -465,13 +471,13 @@ class TestSolarAccuracyTracker:
             tracker.record_forecast(period_start, 4.0, "sunny")
             tracker.backfill_actual(period_start, 3.0)
 
-        # With bias=0.25 (25% overestimate), multiplier = 0.75, clamped to [0.5, 1.5]
-        # additive = 1.0 kWh
-        # corrected = 2.0 * 0.75 - 1.0 = 0.5
+        # With bias=0.25 (25% overestimate), multiplier = 0.75
+        # corrected = 2.0 * 0.75 = 1.5 (no additive subtraction)
         corrected = tracker.apply_bias_correction(2.0, "morning", "sunny", "summer")
-        assert corrected == pytest.approx(0.5, rel=0.1)
+        assert corrected == pytest.approx(1.5, rel=0.1)
 
     def test_apply_bias_correction_floors_at_zero(self, tracker):
+        """Test apply_bias_correction floors at zero with multiplicative-only."""
         # Add historical data (need 20+ samples)
         # Use month 1 (January) = summer in Southern hemisphere
         for i in range(20):
@@ -480,26 +486,12 @@ class TestSolarAccuracyTracker:
             tracker.backfill_actual(period_start, 0.4)
 
         # Bias = 0.6 (60% overestimate), multiplier = 0.4, clamped to 0.5
-        # corrected = 0.2 * 0.5 - additive = should floor at 0
+        # corrected = 0.2 * 0.5 = 0.1 (floors at 0.0 is still valid edge case)
         corrected = tracker.apply_bias_correction(0.2, "morning", "sunny", "summer")
-        assert corrected == 0.0
-
-    def test_apply_bias_correction_can_raise_zero_forecast_from_additive_history(
-        self, tracker
-    ):
-        # Add historical data (need 20+ samples)
-        # Use month 1 (January) = summer in Southern hemisphere
-        for i in range(20):
-            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
-            tracker.record_forecast(period_start, 0.0, "sunny")
-            tracker.backfill_actual(period_start, 0.5)
-
-        # With 20+ samples, additive correction IS applied
-        assert tracker.get_additive_correction(
-            "morning", "sunny", "summer"
-        ) == pytest.approx(-0.5, rel=0.1)
+        assert corrected == pytest.approx(0.1, rel=0.1)
 
     def test_get_additive_correction_is_context_specific(self, tracker):
+        """Test get_additive_correction returns 0.0 (deprecated, always returns 0)."""
         # Add historical data for different contexts (need 20+ samples for each)
         # Use month 1 (January) = summer in Southern hemisphere
         for i in range(20):
@@ -511,13 +503,14 @@ class TestSolarAccuracyTracker:
             tracker.record_forecast(afternoon, 2.0, "cloudy")
             tracker.backfill_actual(afternoon, 1.9)
 
+        # Deprecated - always returns 0.0 regardless of context
         sunny_correction = tracker.get_additive_correction("morning", "sunny", "summer")
         cloudy_correction = tracker.get_additive_correction(
             "afternoon", "cloudy", "summer"
         )
 
-        assert sunny_correction == pytest.approx(0.5, rel=0.1)
-        assert cloudy_correction == pytest.approx(0.1, rel=0.1)
+        assert sunny_correction == 0.0
+        assert cloudy_correction == 0.0
 
     @pytest.mark.asyncio
     async def test_async_load_no_data(self, tracker, mock_hass):
