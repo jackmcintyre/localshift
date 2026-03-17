@@ -175,7 +175,9 @@ class OptimizerFacade:
                 else "Australia/Sydney"
             )
             slot_builder = self._slot_builder_cls(
-                config_options=config_options, ha_timezone=ha_timezone
+                config_options=config_options,
+                ha_timezone=ha_timezone,
+                solar_accuracy_tracker=self._solar_accuracy_tracker,
             )
             slots, slot_metadata = slot_builder.build_slots(
                 data, data.adaptive_params, now_dt=now_dt
