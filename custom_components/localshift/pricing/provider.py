@@ -167,7 +167,22 @@ class AmberExpressProvider(_ProviderMixin):
     def read_forecasts(
         self, hass: HomeAssistant, price_entity_id: str
     ) -> list[ForecastSlot]:
-        """Read forecasts from _price_detailed entity with fallback."""
+        """Read forecasts from _price_detailed entity with fallback.
+
+        Auto-corrects non-Express entity IDs by adding the amber_express_ prefix.
+        This handles the case where _get_entity_id falls back to non-Express defaults.
+        """
+        # Auto-correct entity ID if missing Express prefix
+        # e.g., sensor.100h_general_price → sensor.amber_express_100h_general_price
+        if price_entity_id.startswith("sensor.100h_"):
+            corrected = price_entity_id.replace(
+                "sensor.100h_", "sensor.amber_express_100h_", 1
+            )
+            _LOGGER.warning(
+                "Auto-correcting Express entity ID: %s → %s", price_entity_id, corrected
+            )
+            price_entity_id = corrected
+
         detailed_entity = price_entity_id.replace("_price", "_price_detailed")
         raw_forecasts = self._read_attribute(hass, detailed_entity, "forecasts", [])
 

@@ -228,6 +228,50 @@ def test_amber_express_is_spike_true():
     assert provider.is_spike({"demand_window": True}) is True
 
 
+def test_amber_express_auto_corrects_non_express_entity_id():
+    """Test AmberExpressProvider auto-corrects non-Express entity IDs.
+
+    When read_forecasts receives sensor.100h_general_price instead of
+    sensor.amber_express_100h_general_price, it should auto-correct
+    the entity ID to look up the _detailed variant with the Express prefix.
+    """
+    from unittest.mock import MagicMock
+
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+
+    hass = MagicMock()
+    detailed_state = MagicMock()
+    detailed_state.attributes = {
+        "forecasts": [
+            {
+                "start_time": "2026-03-16T12:00:01+11:00",
+                "end_time": "2026-03-16T12:30:00+11:00",
+                "per_kwh": 0.25,
+                "demand_window": False,
+            },
+        ]
+    }
+
+    # Mock hass.states.get to return the detailed state ONLY when
+    # called with the corrected Express entity ID
+    def get_state(entity_id):
+        if entity_id == "sensor.amber_express_100h_general_price_detailed":
+            return detailed_state
+        return None
+
+    hass.states.get.side_effect = get_state
+
+    # Call with non-Express entity ID (what happens in production bug)
+    slots = provider.read_forecasts(hass, "sensor.100h_general_price")
+
+    # Should auto-correct and find the forecasts
+    assert len(slots) == 1
+    assert slots[0].per_kwh == 0.25
+    assert slots[0].duration == 30
+
+
 def test_amber_express_is_spike_false():
     """Test AmberExpressProvider.is_spike False when demand_window not set."""
     from custom_components.localshift.pricing.provider import AmberExpressProvider

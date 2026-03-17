@@ -68,12 +68,45 @@ class StateReader:
 
         Returns default from DEFAULT_ENTITY_IDS if key not in entry data
         (handles missing keys in existing config entries).
+
+        For Amber Express pricing source, applies the amber_express_ prefix to
+        pricing-related defaults (Option C for Issue #300).
         """
         if key in self.entry.data:
             return self.entry.data[key]
 
         # Fallback to default if key not in entry data
-        return DEFAULT_ENTITY_IDS.get(key, "")
+        default = DEFAULT_ENTITY_IDS.get(key, "")
+
+        # Option C: Apply Express prefix to pricing defaults when source is amber_express
+        # This ensures that even when config is missing specific pricing keys, we return
+        # the correct entity ID format for the selected pricing source.
+        if (
+            key
+            in (
+                CONF_PRICING_GENERAL_PRICE,
+                CONF_PRICING_FEED_IN_PRICE,
+                CONF_PRICING_GENERAL_FORECAST,
+                CONF_PRICING_FEED_IN_FORECAST,
+                CONF_PRICING_PRICE_SPIKE,
+            )
+            and default
+        ):
+            source = self.entry.data.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            )
+            if source == PRICING_SOURCE_AMBER_EXPRESS:
+                # Apply amber_express_ prefix to non-Express defaults
+                if default.startswith("sensor.100h_"):
+                    default = default.replace(
+                        "sensor.100h_", "sensor.amber_express_100h_", 1
+                    )
+                elif default.startswith("binary_sensor.100h_"):
+                    default = default.replace(
+                        "binary_sensor.100h_", "binary_sensor.amber_express_100h_", 1
+                    )
+
+        return default
 
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
         """Read a float value from an entity's state."""

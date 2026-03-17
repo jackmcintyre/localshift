@@ -299,6 +299,80 @@ class TestGetEntityId:
 
         assert result == ""
 
+    def test_get_entity_id_express_source_applies_prefix_to_defaults(
+        self, mock_hass, mock_entity_validator
+    ):
+        """Test _get_entity_id applies Express prefix when pricing source is amber_express.
+
+        When the pricing source is amber_express and a pricing entity key is NOT
+        in entry.data, the fallback to DEFAULT_ENTITY_IDS should still apply the
+        amber_express_ prefix so that the returned entity ID matches the Express
+        provider's entity naming convention.
+
+        This is the root cause fix for Issue #300: when config is missing
+        CONF_PRICING_GENERAL_PRICE, we want to return
+        sensor.amber_express_100h_general_price, not sensor.100h_general_price.
+        """
+        from custom_components.localshift.const import (
+            CONF_PRICING_DATA_SOURCE,
+            PRICING_SOURCE_AMBER_EXPRESS,
+        )
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            # Intentionally missing CONF_PRICING_GENERAL_PRICE
+            # to test fallback behavior
+        }
+
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
+        result = reader._get_entity_id(CONF_PRICING_GENERAL_PRICE)
+
+        # Should return Express-prefixed version of the default
+        assert result == "sensor.amber_express_100h_general_price"
+
+    def test_get_entity_id_express_source_applies_prefix_to_feed_in(
+        self, mock_hass, mock_entity_validator
+    ):
+        """Test Express prefix applied to feed_in_price default too."""
+        from custom_components.localshift.const import (
+            CONF_PRICING_DATA_SOURCE,
+            PRICING_SOURCE_AMBER_EXPRESS,
+        )
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            # Intentionally missing CONF_PRICING_FEED_IN_PRICE
+        }
+
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
+        result = reader._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
+
+        # Should return Express-prefixed version
+        assert result == "sensor.amber_express_100h_feed_in_price"
+
+    def test_get_entity_id_non_express_source_no_prefix(
+        self, mock_hass, mock_entity_validator
+    ):
+        """Test that non-Express sources don't get Express prefix on defaults."""
+        from custom_components.localshift.const import (
+            CONF_PRICING_DATA_SOURCE,
+            PRICING_SOURCE_AMBER,
+        )
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            # Intentionally missing CONF_PRICING_GENERAL_PRICE
+        }
+
+        reader = StateReader(mock_hass, entry, mock_entity_validator)
+        result = reader._get_entity_id(CONF_PRICING_GENERAL_PRICE)
+
+        # Should return non-Express default
+        assert result == "sensor.100h_general_price"
+
 
 # =============================================================================
 # SOLCAST FORECAST TESTS
