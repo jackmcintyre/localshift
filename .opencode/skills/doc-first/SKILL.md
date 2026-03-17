@@ -178,6 +178,19 @@ domain_mappings:
 
 I use `symdex_search_text()` to quickly find relevant sections in indexed docs. This is fast and precise.
 
+## Integration with OpenViking
+
+For semantic code understanding, I also use OpenViking:
+
+- **When to use:** "explain how X works", "find patterns", "analyze code structure"
+- **Start if not running:** `~/.local/bin/ov-start`
+- **Commands:**
+  - `ov search "query" --uri viking://resources/localshift` - semantic search
+  - `ov grep "exact_text" --uri viking://resources/localshift` - keyword search
+  - `ov tree viking://resources/localshift -L 2` - explore structure
+
+OpenViking provides AI-generated summaries and is particularly useful for understanding code intent and patterns across the codebase.
+
 ## Fallback
 
 If a doc isn't indexed in SymDex yet, I'll use `Read` to fetch it directly. No configuration needed.
