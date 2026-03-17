@@ -635,20 +635,36 @@ class TestOptions:
 
     def test_parse_time_option(self, coordinator):
         """Test parsing time option."""
+        from datetime import time
+
         coordinator.get_option = MagicMock(return_value="18:30:00")
+        # Mock entity_monitor to delegate correctly
+        mock_monitor = MagicMock()
+        mock_monitor.parse_time_option.return_value = time(18, 30, 0)
+        coordinator._entity_monitor = mock_monitor
 
         result = coordinator._parse_time_option("demand_window_start", "00:00:00")
 
+        mock_monitor.parse_time_option.assert_called_once_with(
+            "demand_window_start", "00:00:00"
+        )
         assert result.hour == 18
         assert result.minute == 30
         assert result.second == 0
 
     def test_parse_time_option_invalid(self, coordinator):
         """Test parsing invalid time option falls back to default."""
+        from datetime import time
+
         coordinator.get_option = MagicMock(return_value="invalid")
+        # Mock entity_monitor to delegate correctly (returns default on invalid)
+        mock_monitor = MagicMock()
+        mock_monitor.parse_time_option.return_value = time(18, 0, 0)
+        coordinator._entity_monitor = mock_monitor
 
         result = coordinator._parse_time_option("test", "18:00:00")
 
+        mock_monitor.parse_time_option.assert_called_once_with("test", "18:00:00")
         assert result.hour == 18
         assert result.minute == 0
 

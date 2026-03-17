@@ -773,22 +773,10 @@ class LocalShiftCoordinator:
         self._notify_listeners()
         await self.async_evaluate_state_machine()
 
-    def reset_entity_tracking_on_options_change(self) -> None:  # pragma: no cover
-        """Reset entity tracking when options change.
-
-        This is called when the user reconfigures the integration via options flow.
-        It resets tracking for entities that may have changed (e.g., weather_entity)
-        to clear broken status and allow recovery without restart.
-        """
-        if self._entity_validator is None:
-            return
-
-        # Reset tracking for weather entity (most commonly reconfigured optional entity)
-        from ..const import CONF_WEATHER_ENTITY
-
-        self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
-
-        _LOGGER.info("Reset entity tracking for options change")
+    def reset_entity_tracking_on_options_change(self) -> None:
+        """Reset entity tracking when options change."""
+        if self._entity_monitor is not None:
+            self._entity_monitor.reset_entity_tracking_on_options_change()
 
     def reschedule_daily_summary_timer(self) -> None:  # pragma: no cover
         """Reschedule the daily summary timer with current demand_window_end.
@@ -899,17 +887,13 @@ class LocalShiftCoordinator:
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
-        time_str = str(self.get_option(key, default))
-        parts = time_str.split(":")
-        try:
-            return time(
-                int(parts[0]),
-                int(parts[1]) if len(parts) > 1 else 0,
-                int(parts[2]) if len(parts) > 2 else 0,
-            )
-        except (ValueError, IndexError):
-            d_parts = default.split(":")
-            return time(int(d_parts[0]), int(d_parts[1]), int(d_parts[2]))
+        if self._entity_monitor is not None:
+            return self._entity_monitor.parse_time_option(key, default)
+        # Fallback if entity_monitor not initialized
+        parts = default.split(":")
+        return time(
+            int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
+        )
 
     async def async_clear_historical_cache(self) -> None:
         """Clear historical load cache to force forecast refresh."""
@@ -917,31 +901,7 @@ class LocalShiftCoordinator:
             self._computation_engine.clear_historical_cache()
             _LOGGER.info("Historical load cache cleared")
 
-    async def _refresh_weather_forecast(self) -> None:  # pragma: no cover
-        """Refresh temperature forecast from weather entity.
-
-        Uses the modern weather.get_forecasts service (HA 2024.3+) with caching.
-        Updates CoordinatorData with the latest forecast for use by sensors.
-        """
-        if self._computation_engine is None:
-            _LOGGER.debug(
-                "Computation engine not initialized, skipping weather forecast"
-            )
-            return
-
-        forecasts = await self._computation_engine.async_refresh_weather_forecast()
-
-        if forecasts is not None:
-            # Update CoordinatorData with the forecast data
-
-            self.data.weather_temperature_forecast = {}
-            for forecast in forecasts:
-                hour = forecast.slot_time.hour
-                temperature = forecast.temperature
-                if temperature is not None:
-                    self.data.weather_temperature_forecast[hour] = temperature
-
-            _LOGGER.debug(
-                "Updated weather forecast: %d hours of temperature data",
-                len(self.data.weather_temperature_forecast),
-            )
+    async def _refresh_weather_forecast(self) -> None:
+        """Refresh temperature forecast from weather entity."""
+        if self._entity_monitor is not None:
+            await self._entity_monitor.refresh_weather_forecast()

@@ -11,6 +11,7 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+from datetime import time
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
@@ -83,3 +84,74 @@ class EntityMonitor:
         if data.entity_warnings:
             for warning in data.entity_warnings:
                 _LOGGER.debug("Entity health warning: %s", warning)
+
+    def reset_entity_tracking_on_options_change(self) -> None:
+        """Reset entity tracking when options change.
+
+        Called when user reconfigures integration via options flow.
+        Resets tracking for entities that may have changed (e.g., weather_entity)
+        to clear broken status and allow recovery without restart.
+        """
+        if self._coordinator._entity_validator is None:
+            return
+
+        # Reset tracking for weather entity (most commonly reconfigured optional entity)
+        from ..const import CONF_WEATHER_ENTITY
+
+        self._coordinator._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
+
+        _LOGGER.info("Reset entity tracking for options change")
+
+    async def refresh_weather_forecast(self) -> None:
+        """Refresh temperature forecast from weather entity.
+
+        Uses the modern weather.get_forecasts service (HA 2024.3+) with caching.
+        Updates CoordinatorData with the latest forecast for use by sensors.
+        """
+        if self._coordinator._computation_engine is None:
+            _LOGGER.debug(
+                "Computation engine not initialized, skipping weather forecast"
+            )
+            return
+
+        forecasts = (
+            await self._coordinator._computation_engine.async_refresh_weather_forecast()
+        )
+
+        if forecasts is not None:
+            # Update CoordinatorData with the forecast data
+            self._coordinator.data.weather_temperature_forecast = {}
+            for forecast in forecasts:
+                hour = forecast.slot_time.hour
+                temperature = forecast.temperature
+                if temperature is not None:
+                    self._coordinator.data.weather_temperature_forecast[hour] = (
+                        temperature
+                    )
+
+            _LOGGER.debug(
+                "Updated weather forecast: %d hours of temperature data",
+                len(self._coordinator.data.weather_temperature_forecast),
+            )
+
+    def parse_time_option(self, key: str, default: str) -> time:
+        """Parse a time string option (HH:MM:SS) into a time object.
+
+        Args:
+            key: Config option key
+            default: Default time string if option not set
+
+        Returns:
+            Parsed time object
+        """
+        time_str = str(self._coordinator.get_option(key, default))
+        parts = time_str.split(":")
+        try:
+            return time(
+                int(parts[0]),
+                int(parts[1]) if len(parts) > 1 else 0,
+                int(parts[2]) if len(parts) > 2 else 0,
+            )
+        except (ValueError, IndexError):
+            d_parts = default.split(":")
+            return time(int(d_parts[0]), int(d_parts[1]), int(d_parts[2]))

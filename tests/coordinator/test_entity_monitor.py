@@ -233,3 +233,263 @@ class TestCheckEntityHealth:
 
         # ASSERT
         assert mock_data.required_entities_healthy is False
+
+
+class TestResetEntityTrackingOnOptionsChange:
+    """Test reset_entity_tracking_on_options_change method."""
+
+    def test_reset_with_validator(self) -> None:
+        """Test reset entity tracking when validator exists."""
+        # ARRANGE
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_validator = MagicMock()
+        mock_coordinator._entity_validator = mock_validator
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        monitor.reset_entity_tracking_on_options_change()
+
+        # ASSERT
+        mock_validator.reset_entity_tracking.assert_called_once()
+
+    def test_reset_without_validator(self) -> None:
+        """Test reset entity tracking when validator is None."""
+        # ARRANGE
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator._entity_validator = None
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        monitor.reset_entity_tracking_on_options_change()
+
+        # ASSERT - should return early without error
+        # No assertions needed, test passes if no exception raised
+
+
+class TestRefreshWeatherForecast:
+    """Test refresh_weather_forecast method."""
+
+    @pytest.mark.asyncio
+    async def test_refresh_success(self) -> None:
+        """Test successful weather forecast refresh."""
+        # ARRANGE
+        from unittest.mock import AsyncMock
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator._computation_engine = MagicMock()
+        mock_coordinator.data = MagicMock()
+        mock_coordinator.data.weather_temperature_forecast = {}
+
+        # Mock forecast data
+        mock_forecast = MagicMock()
+        mock_forecast.slot_time.hour = 14
+        mock_forecast.temperature = 25.5
+        mock_coordinator._computation_engine.async_refresh_weather_forecast = AsyncMock(
+            return_value=[mock_forecast]
+        )
+
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        await monitor.refresh_weather_forecast()
+
+        # ASSERT
+        mock_coordinator._computation_engine.async_refresh_weather_forecast.assert_called_once()
+        assert mock_coordinator.data.weather_temperature_forecast == {14: 25.5}
+
+    @pytest.mark.asyncio
+    async def test_refresh_without_computation_engine(self) -> None:
+        """Test weather forecast refresh when computation engine is None."""
+        # ARRANGE
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator._computation_engine = None
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        await monitor.refresh_weather_forecast()
+
+        # ASSERT - should return early without error
+        # No assertions needed, test passes if no exception raised
+
+    @pytest.mark.asyncio
+    async def test_refresh_no_forecasts(self) -> None:
+        """Test weather forecast refresh when no forecasts returned."""
+        # ARRANGE
+        from unittest.mock import AsyncMock
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator._computation_engine = MagicMock()
+        mock_coordinator.data = MagicMock()
+        mock_coordinator.data.weather_temperature_forecast = {}
+        mock_coordinator._computation_engine.async_refresh_weather_forecast = AsyncMock(
+            return_value=None
+        )
+
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        await monitor.refresh_weather_forecast()
+
+        # ASSERT - data should not be updated
+        assert mock_coordinator.data.weather_temperature_forecast == {}
+
+    @pytest.mark.asyncio
+    async def test_refresh_multiple_forecasts(self) -> None:
+        """Test weather forecast refresh with multiple hours."""
+        # ARRANGE
+        from unittest.mock import AsyncMock
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator._computation_engine = MagicMock()
+        mock_coordinator.data = MagicMock()
+        mock_coordinator.data.weather_temperature_forecast = {}
+
+        # Mock multiple forecast entries
+        forecasts = []
+        for hour, temp in [(10, 20.0), (11, 21.5), (12, 23.0)]:
+            mock_forecast = MagicMock()
+            mock_forecast.slot_time.hour = hour
+            mock_forecast.temperature = temp
+            forecasts.append(mock_forecast)
+
+        mock_coordinator._computation_engine.async_refresh_weather_forecast = AsyncMock(
+            return_value=forecasts
+        )
+
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        await monitor.refresh_weather_forecast()
+
+        # ASSERT
+        assert mock_coordinator.data.weather_temperature_forecast == {
+            10: 20.0,
+            11: 21.5,
+            12: 23.0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_refresh_skip_none_temperature(self) -> None:
+        """Test weather forecast refresh skips None temperature values."""
+        # ARRANGE
+        from unittest.mock import AsyncMock
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator._computation_engine = MagicMock()
+        mock_coordinator.data = MagicMock()
+        mock_coordinator.data.weather_temperature_forecast = {}
+
+        # Mock forecast with None temperature
+        forecasts = []
+        for hour, temp in [(10, 20.0), (11, None), (12, 23.0)]:
+            mock_forecast = MagicMock()
+            mock_forecast.slot_time.hour = hour
+            mock_forecast.temperature = temp
+            forecasts.append(mock_forecast)
+
+        mock_coordinator._computation_engine.async_refresh_weather_forecast = AsyncMock(
+            return_value=forecasts
+        )
+
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        await monitor.refresh_weather_forecast()
+
+        # ASSERT - hour 11 should be skipped
+        assert mock_coordinator.data.weather_temperature_forecast == {
+            10: 20.0,
+            12: 23.0,
+        }
+
+
+class TestParseTimeOption:
+    """Test parse_time_option method."""
+
+    def test_parse_valid_time_hms(self) -> None:
+        """Test parsing valid time string with hours, minutes, seconds."""
+        # ARRANGE
+        from datetime import time
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.get_option.return_value = "14:30:00"
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        result = monitor.parse_time_option("test_key", "12:00:00")
+
+        # ASSERT
+        mock_coordinator.get_option.assert_called_once_with("test_key", "12:00:00")
+        assert result == time(14, 30, 0)
+
+    def test_parse_valid_time_hm(self) -> None:
+        """Test parsing valid time string with hours and minutes only."""
+        # ARRANGE
+        from datetime import time
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.get_option.return_value = "09:15"
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        result = monitor.parse_time_option("test_key", "12:00:00")
+
+        # ASSERT
+        assert result == time(9, 15, 0)
+
+    def test_parse_invalid_format_uses_default(self) -> None:
+        """Test parsing invalid time format falls back to default."""
+        # ARRANGE
+        from datetime import time
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.get_option.return_value = "invalid"
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        result = monitor.parse_time_option("test_key", "08:00:00")
+
+        # ASSERT - should use default
+        assert result == time(8, 0, 0)
+
+    def test_parse_malformed_parts_uses_default(self) -> None:
+        """Test parsing malformed time parts falls back to default."""
+        # ARRANGE
+        from datetime import time
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.get_option.return_value = "99:99:99"
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        result = monitor.parse_time_option("test_key", "10:00:00")
+
+        # ASSERT - should use default due to ValueError
+        assert result == time(10, 0, 0)
+
+    def test_parse_empty_string_uses_default(self) -> None:
+        """Test parsing empty string falls back to default."""
+        # ARRANGE
+        from datetime import time
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.get_option.return_value = ""
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT
+        result = monitor.parse_time_option("test_key", "06:30:00")
+
+        # ASSERT - should use default
+        assert result == time(6, 30, 0)
