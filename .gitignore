@@ -28,8 +28,12 @@ Thumbs.db
 
 # Testing
 .pytest_cache/
+.pytest-of-*/
 .coverage
 htmlcov/
+
+# uv temporary files
+uv-*.lock
 
 # Pre-commit
 .pre-commit-config.yaml.cache
