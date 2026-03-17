@@ -25,7 +25,6 @@ _LOGGER = logging.getLogger(__name__)
 
 MAX_PERIOD_RECORDS = 1440
 BIAS_HALF_LIFE_DAYS = 7.0
-MAX_ADDITIVE_OFFSET_KWH = 2.0
 MIN_SOLAR_CORRECTION_SAMPLES = 20
 
 
@@ -546,20 +545,12 @@ class SolarAccuracyTracker:
     ) -> float:
         """Get additive correction offset for given context.
 
-        Returns 0.0 if insufficient samples (< MIN_SOLAR_CORRECTION_SAMPLES).
+        .. deprecated::
+            Additive correction is deprecated as of issue #760. This method
+            always returns 0.0 and is retained only for backward compatibility.
+            Use get_bias_correction() for multiplicative-only correction.
         """
-        result = self._compute_context_additive_bias(time_of_day, weather, season)
-        if result is None:
-            return 0.0
-
-        weighted_bias, sample_count = result
-        if sample_count < MIN_SOLAR_CORRECTION_SAMPLES:
-            return 0.0
-
-        return max(
-            -MAX_ADDITIVE_OFFSET_KWH,
-            min(MAX_ADDITIVE_OFFSET_KWH, weighted_bias),
-        )
+        return 0.0
 
     def apply_bias_correction(
         self,
@@ -568,6 +559,19 @@ class SolarAccuracyTracker:
         weather: str,
         season: str | None = None,
     ) -> float:
+        """Apply bias correction to a solar forecast.
+
+        Uses multiplicative correction only (issue #760 removed additive).
+        Returns 1.0 (no correction) if insufficient samples.
+
+        Args:
+            forecast_kwh: Raw forecast from Solcast
+            time_of_day: Time bucket for context
+            weather: Weather condition for context
+            season: Season for context (optional)
+
+        Returns:
+            Corrected forecast kWh (minimum 0.0)
+        """
         multiplier = self.get_bias_correction(time_of_day, weather, season)
-        additive_offset = self.get_additive_correction(time_of_day, weather, season)
-        return max(0.0, forecast_kwh * multiplier - additive_offset)
+        return max(0.0, forecast_kwh * multiplier)
