@@ -286,6 +286,9 @@ class ComputationEngine:
             self._history_fetcher._historical_load_sample_counts
         )
         data.consumption_source = self._history_fetcher._historical_load_source
+        data.consumption_profile_hours = len(
+            self._history_fetcher._historical_load_cache
+        )
 
         # Bridge recent load data
         data.recent_load_1hr_kw = self._history_fetcher._recent_load_1hr_kw
