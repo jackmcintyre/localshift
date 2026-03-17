@@ -184,16 +184,16 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
-    cycle_penalty_per_kwh: float = 0.05
+    cycle_penalty_per_kwh: float = 0.08
     """Penalty per kWh cycled to reflect true battery cycling cost.
 
     True cost components:
     - Efficiency loss (13% round-trip × avg price): ~$0.02/kWh
-    - Battery degradation: ~$0.01-0.03/kWh
-    - Total: $0.03-0.05/kWh
+    - Battery degradation: ~$0.03-0.05/kWh
+    - Total: $0.05-0.07/kWh
 
-    Using the upper bound ($0.05) ensures cheap-import arbitrage is only
-    attractive for spreads > 5¢/kWh, eliminating marginal trades that waste
+    Using upper-mid range ($0.08) ensures cheap-import arbitrage is only
+    attractive for spreads > 8¢/kWh, eliminating marginal trades that waste
     cycle life for minimal savings.
 
     Fixes #516.
