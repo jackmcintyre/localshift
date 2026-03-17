@@ -93,9 +93,17 @@ class BatteryModeSelect(SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """Return the current selected option."""
+        """Return the current selected option.
+
+        When automation is ON, shows the actual mode from the optimizer
+        (SELF_CONSUMPTION, GRID_CHARGING, DEMAND_BLOCK, HOLD, etc.).
+        When automation is OFF, shows the user's manual mode selection.
+        """
         if self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            return "automatic"
+            mode = self.coordinator.data.active_mode
+            if mode is not None:
+                return mode.value
+            return "self_consumption"
         return self._manual_mode
 
     async def async_select_option(self, option: str) -> None:
