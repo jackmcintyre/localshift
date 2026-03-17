@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from ..coordinator.data import AdaptiveParameters
 from ..forecast.solar import get_solar_for_slot_by_interval
+from ..forecast.solar_accuracy import SolarAccuracyTracker
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import TOTAL_SLOTS, compute_hybrid_slot_schedule
@@ -120,16 +121,19 @@ class SlotBuilder:
         self,
         config_options: dict[str, Any],
         ha_timezone: str,
+        solar_accuracy_tracker: SolarAccuracyTracker | None = None,
     ) -> None:
         """Store DW time config and timezone for slot generation.
 
         Args:
             config_options: Integration config options (for DW start/end parsing).
             ha_timezone: Home Assistant timezone string (e.g., "Australia/Sydney").
+            solar_accuracy_tracker: Optional tracker for bias correction readiness check.
 
         """
         self._config_options = config_options
         self._ha_timezone = ha_timezone
+        self._solar_accuracy_tracker = solar_accuracy_tracker
 
     def build_slots(
         self,
@@ -372,10 +376,25 @@ class SlotBuilder:
         interval_minutes: int,
         solar_confidence_factor: float,
     ) -> float:
-        """Get solar kWh for a slot with confidence factor applied."""
+        """Get solar kWh for a slot.
+
+        If bias correction has sufficient samples, return raw solar
+        (bias correction will be applied by OptimizerFacade).
+        Otherwise, apply solar_confidence_factor as fallback.
+        """
         solar_kwh = get_solar_for_slot_by_interval(
             all_solcast, slot_start, interval_minutes
         )
+
+        # Check if bias correction is ready
+        if (
+            self._solar_accuracy_tracker is not None
+            and self._solar_accuracy_tracker.has_sufficient_samples()
+        ):
+            # Bias correction will handle it - return raw
+            return max(0.0, solar_kwh)
+
+        # Fall back to solar_confidence_factor
         return max(0.0, solar_kwh * solar_confidence_factor)
 
     def _get_consumption_kwh(
