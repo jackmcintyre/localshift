@@ -69,6 +69,7 @@ from .schemas import (
     build_user_schema,
 )
 from .validators import (
+    discover_pricing_entities,
     get_current_notify_service,
     get_notify_services,
     get_weather_entities,
@@ -95,6 +96,12 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _get_notify_services(self) -> list[str]:
         """Get list of available notify services."""
         return await get_notify_services(self.hass)
+
+    async def _discover_pricing_defaults(self, pricing_source: str) -> dict[str, str]:
+        """Discover pricing entity defaults based on pricing source."""
+        discovered = await discover_pricing_entities(self.hass, pricing_source)
+        # Filter out None values and return only discovered entities
+        return {k: v for k, v in discovered.items() if v is not None}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -221,9 +228,24 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._pricing_data.setdefault(CONF_PRICING_FEED_IN_FORECAST, "")
             return await self.async_step_solcast()
 
+        # Get discovered defaults or fall back to static defaults
+        discovered_defaults = await self._discover_pricing_defaults(pricing_source)
+        static_defaults = {
+            CONF_PRICING_GENERAL_PRICE: "",
+            CONF_PRICING_FEED_IN_PRICE: "",
+            CONF_PRICING_PRICE_SPIKE: "",
+            CONF_PRICING_GENERAL_FORECAST: "",
+            CONF_PRICING_FEED_IN_FORECAST: "",
+        }
+
+        # Merge discovered defaults with static defaults (discovered takes precedence)
+        merged_defaults = {**static_defaults, **discovered_defaults}
+
         return self.async_show_form(
             step_id="pricing",
-            data_schema=build_pricing_schema(pricing_source=pricing_source),
+            data_schema=build_pricing_schema(
+                defaults=merged_defaults, pricing_source=pricing_source
+            ),
         )
 
     async def async_step_solcast(

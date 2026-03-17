@@ -74,7 +74,7 @@ class TestExpressDurationIntegration:
         state.attributes = {"forecasts": _build_realistic_express_forecast()}
         hass.states.get.return_value = state
 
-        slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
+        slots = provider.read_forecasts(hass, "sensor.amber_express_general_price")
 
         assert len(slots) == 11  # 7 five-min + 4 thirty-min
 
@@ -111,7 +111,7 @@ class TestExpressDurationIntegration:
         aedt = timezone(timedelta(hours=11))
         now = datetime(2026, 3, 16, 9, 25, 0, tzinfo=aedt)
         slots, metadata = compute_hybrid_slot_schedule(
-            now, forecast_slots, "Australia/Sydney"
+            now, [vars(slot) for slot in forecast_slots], "Australia/Sydney"
         )
 
         # Should have produced output slots

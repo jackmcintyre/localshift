@@ -6,6 +6,20 @@ and validate notify services.
 
 from __future__ import annotations
 
+import re
+
+from homeassistant.core import HomeAssistant
+
+from ..const import (
+    CONF_PRICING_FEED_IN_FORECAST,
+    CONF_PRICING_FEED_IN_PRICE,
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
+    PRICING_SOURCE_AMBER,
+    PRICING_SOURCE_AMBER_EXPRESS,
+)
+
 
 async def validate_all_entities(
     hass, entities: dict[str, tuple[str, str]]
@@ -128,3 +142,88 @@ def get_current_notify_service(config_entry) -> str:
     if CONF_NOTIFY_SERVICE in config_entry.data:
         return config_entry.data[CONF_NOTIFY_SERVICE]
     return ""
+
+
+async def discover_pricing_entities(
+    hass: HomeAssistant, pricing_source: str
+) -> dict[str, str | None]:
+    """Discover Amber pricing entities by suffix.
+
+    Searches for entities matching known suffixes that are consistent
+    across all Amber Electric installations.
+
+    Args:
+        hass: Home Assistant instance
+        pricing_source: Either PRICING_SOURCE_AMBER or PRICING_SOURCE_AMBER_EXPRESS
+
+    Returns:
+        Dict mapping config_key to discovered entity_id (or None if not found)
+    """
+    # Define suffixes for each pricing entity type
+    suffixes = {
+        CONF_PRICING_GENERAL_PRICE: "_general_price",
+        CONF_PRICING_FEED_IN_PRICE: "_feed_in_price",
+        CONF_PRICING_GENERAL_FORECAST: "_general_forecast",
+        CONF_PRICING_FEED_IN_FORECAST: "_feed_in_forecast",
+        CONF_PRICING_PRICE_SPIKE: "_price_spike",
+    }
+
+    # For Amber Express, we need to handle the prefixed variants
+    prefix = "amber_express_" if pricing_source == PRICING_SOURCE_AMBER_EXPRESS else ""
+
+    discovered = {}
+
+    # Get all sensor and binary_sensor states
+    sensor_states = [
+        state
+        for state in hass.states.async_all()
+        if state.domain in ("sensor", "binary_sensor")
+    ]
+
+    for config_key, suffix in suffixes.items():
+        # Build the expected entity ID pattern
+        if pricing_source == PRICING_SOURCE_AMBER:
+            # Standard Amber: sensor.100h_* or sensor.* (we match by suffix)
+            patterns = [
+                f"sensor.*{suffix}",
+                f"binary_sensor.*{suffix}" if "_price_spike" in suffix else None,
+            ]
+            # Filter out None patterns
+            patterns = [p for p in patterns if p is not None]
+        else:
+            # Amber Express: sensor.amber_express_100h_* or sensor.*amber_express_*
+            patterns = [
+                f"sensor.{prefix}.*{suffix}",
+                f"binary_sensor.{prefix}.*{suffix}"
+                if "_price_spike" in suffix
+                else None,
+            ]
+            patterns = [p for p in patterns if p is not None]
+
+        # Find matching entities
+        matches = []
+        for state in sensor_states:
+            entity_id = state.entity_id
+            # Check if entity matches any of our patterns
+            for pattern in patterns:
+                # Convert glob-like pattern to regex
+                regex_pattern = pattern.replace(".", r"\.").replace("*", ".*")
+                if re.match(regex_pattern, entity_id):
+                    matches.append((entity_id, state))
+                    break
+
+        # Select best match: prefer entities with 'amber' in name
+        if matches:
+            # Sort by preference: entities containing 'amber' first, then alphabetical
+            matches.sort(
+                key=lambda x: (
+                    "amber"
+                    not in x[0].lower(),  # False (0) comes first if contains 'amber'
+                    x[0],  # Then sort by entity ID
+                )
+            )
+            discovered[config_key] = matches[0][0]  # Entity ID of best match
+        else:
+            discovered[config_key] = None
+
+    return discovered

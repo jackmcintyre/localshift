@@ -459,19 +459,19 @@ def create_default_entity_states(
                 "options": ["pv_only", "battery_ok"],
             },
         ),
-        # Pricing entities (100h_* naming for Amber Electric)
-        "sensor.100h_general_price": create_price_state(
+        # Pricing entities (generic naming - discovered during config flow)
+        "sensor.general_price": create_price_state(
             general_price,
-            "sensor.100h_general_price",
+            "sensor.general_price",
             "General Price",
         ),
-        "sensor.100h_feed_in_price": create_price_state(
+        "sensor.feed_in_price": create_price_state(
             feed_in_price,
-            "sensor.100h_feed_in_price",
+            "sensor.feed_in_price",
             "Feed-in Price",
         ),
-        "binary_sensor.100h_price_spike": create_binary_sensor_state(
-            "binary_sensor.100h_price_spike",
+        "binary_sensor.price_spike": create_binary_sensor_state(
+            "binary_sensor.price_spike",
             price_spike,
         ),
     }

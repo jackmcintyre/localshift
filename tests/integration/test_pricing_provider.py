@@ -34,7 +34,7 @@ class TestPricingProviderIntegration:
         }
         hass.states.get.return_value = forecast_state
 
-        slots = provider.read_forecasts(hass, "sensor.100h_general_price")
+        slots = provider.read_forecasts(hass, "sensor.general_price")
 
         assert len(slots) == 1
         assert slots[0].per_kwh == 0.15
@@ -65,7 +65,7 @@ class TestPricingProviderIntegration:
         }
         hass.states.get.return_value = detailed_state
 
-        slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
+        slots = provider.read_forecasts(hass, "sensor.amber_express_general_price")
 
         assert len(slots) == 2
         assert slots[0].per_kwh == 0.20
@@ -112,11 +112,9 @@ class TestPricingProviderIntegration:
         }
         hass_express.states.get.return_value = state_express
 
-        amber_slots = amber_provider.read_forecasts(
-            hass_amber, "sensor.100h_general_price"
-        )
+        amber_slots = amber_provider.read_forecasts(hass_amber, "sensor.general_price")
         express_slots = express_provider.read_forecasts(
-            hass_express, "sensor.amber_express_100h_general_price"
+            hass_express, "sensor.amber_express_general_price"
         )
 
         assert len(amber_slots) == len(express_slots) == 1
@@ -152,7 +150,7 @@ class TestPricingProviderIntegration:
         }
         hass.states.get.return_value = forecast_state
 
-        slots = provider.read_forecasts(hass, "sensor.100h_general_price")
+        slots = provider.read_forecasts(hass, "sensor.general_price")
 
         assert len(slots) == 2
         assert slots[0].is_spike is True
