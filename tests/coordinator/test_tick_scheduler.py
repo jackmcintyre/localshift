@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from custom_components.localshift.coordinator.tick_scheduler import TickScheduler
 
 
