@@ -1,5 +1,6 @@
 """Tests for cost functions (stage_cost, terminal_cost, penalty factors)."""
 
+import pytest
 from datetime import UTC, datetime
 
 from custom_components.localshift.engine.cost import (
@@ -199,7 +200,7 @@ class TestStageCost:
         assert terms.uncertainty_penalty > 0
 
     def test_futile_cycling_penalty_applied(self):
-        """Futile cycling penalty applied for grid charging."""
+        """Futile cycling penalty applied for grid charging (eff_loss + margin)."""
         config = OptimizerConfig(charge_efficiency=0.95, discharge_efficiency=0.95)
         slot = SlotContext(
             slot_index=0,
@@ -221,8 +222,13 @@ class TestStageCost:
             futile_cycling_penalty_factor=0.5,
         )
 
-        # Futile cycling penalty should be > 0
-        assert terms.futile_cycling_penalty > 0
+        # Futile cycling penalty: grid_import × (eff_loss + 0.30) × buy_price × factor
+        # eff_loss = 1 - 0.95^2 = 0.0975
+        # (0.0975 + 0.30) × $30 × 0.5 = $5.96
+        eff_loss = 1.0 - 0.95 * 0.95
+        margin = 0.30
+        expected = 1.0 * (eff_loss + margin) * 30.0 * 0.5
+        assert terms.futile_cycling_penalty == pytest.approx(expected, abs=0.1)
 
     def test_self_consumption_value_with_soc_cap(self):
         """Self-consumption value capped by available SOC."""

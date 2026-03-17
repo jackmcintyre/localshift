@@ -307,14 +307,15 @@ class TestStageCostFutilePenalty:
         assert terms.futile_cycling_penalty == pytest.approx(0.0, abs=1e-9)
 
     def test_nonzero_factor_gives_positive_penalty(self, default_config):
-        """With factor=1.0, penalty should equal efficiency-loss cost."""
+        """With factor=1.0, penalty equals (eff_loss + margin) × import cost of wasted energy."""
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = self._make_charge_slot()
-        charge_eff = default_config.charge_efficiency
-        discharge_eff = default_config.discharge_efficiency
         grid_import = 1.65  # kWh
         buy_price = 0.14
+        charge_eff = default_config.charge_efficiency
+        discharge_eff = default_config.discharge_efficiency
+        eff_loss = 1.0 - charge_eff * discharge_eff
 
         terms = DPPlanner.stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
@@ -325,7 +326,9 @@ class TestStageCostFutilePenalty:
             soc_pct=30.0,
             futile_cycling_penalty_factor=1.0,
         )
-        expected = grid_import * (1.0 - charge_eff * discharge_eff) * buy_price
+        # New formula: (eff_loss + 0.30) × buy_price × factor
+        margin = 0.30
+        expected = grid_import * (eff_loss + margin) * buy_price
         assert terms.futile_cycling_penalty == pytest.approx(expected, rel=0.01)
 
     def test_penalty_scales_with_factor(self, default_config):

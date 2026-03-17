@@ -100,14 +100,22 @@ def stage_cost(
             self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
 
     # Issue #638: futile cycling penalty.
+    # Penalizes grid charging when the charged energy will drain through house load
+    # before reaching a useful period (solar surplus or demand window).
+    # Formula: grid_import_kWh × (eff_loss + margin) × buy_price × drain_factor
+    # The penalty includes efficiency loss plus a margin to discourage marginal cycling.
     futile_cycling_penalty = 0.0
     if action in (
         PlannerAction.CHARGE_GRID_NORMAL,
         PlannerAction.CHARGE_GRID_BOOST,
     ):
+        # Efficiency loss portion + margin to discourage marginal arbitrage
+        # Old formula: eff_loss only (~12.6% of import)
+        # New formula: eff_loss + margin (~50% of import) to prevent wasteful cycling
+        eff_loss = 1.0 - config.charge_efficiency * config.discharge_efficiency
         futile_cycling_penalty = (
             grid_import_kwh
-            * (1.0 - config.charge_efficiency * config.discharge_efficiency)
+            * (eff_loss + 0.30)  # eff_loss (~12.6%) + margin (30%)
             * slot.buy_price
             * futile_cycling_penalty_factor
         )
