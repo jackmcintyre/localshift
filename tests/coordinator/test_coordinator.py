@@ -326,11 +326,15 @@ class TestHandlePeriodicTick:
             side_effect=lambda coro, name=None: None
         )
 
+        # Mock entity monitor
+        coordinator._entity_monitor = MagicMock()
+        coordinator._entity_monitor.read_all_external_state = MagicMock()
+
         now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC)
         coordinator._handle_periodic_tick(now)
 
-        # Verify state was read
-        coordinator._state_reader.read_all_external_state.assert_called_once()
+        # Verify state was read through entity monitor
+        coordinator._entity_monitor.read_all_external_state.assert_called_once()
 
     def test_handle_periodic_tick_accumulates_costs(
         self, coordinator, coordinator_data
@@ -1024,7 +1028,9 @@ class TestCoordinatorHealthAndValidation:
         # Mock the entity validator
         mock_validator = MagicMock()
         mock_validator.status.value = "ok"
-        mock_validator.get_user_friendly_message.return_value = "All systems nominal"
+        mock_validator.get_user_friendly_message.return_value = (
+            "All systems operational"
+        )
         mock_validator.errors = []
         mock_validator.warnings = []
         mock_validator.get_required_entities_status.return_value = {
@@ -1038,33 +1044,49 @@ class TestCoordinatorHealthAndValidation:
 
         coordinator._entity_validator = mock_validator
 
+        # Mock entity monitor to delegate properly
+        from custom_components.localshift.coordinator.entity_monitor import (
+            EntityMonitor,
+        )
+
+        coordinator._entity_monitor = EntityMonitor(coordinator)
+
         # Call the method
         coordinator._check_entity_health()
 
         # Verify data was updated
         assert coordinator.data.integration_status == "ok"
-        assert coordinator.data.integration_status_message == "All systems nominal"
+        assert coordinator.data.integration_status_message == "All systems operational"
         assert coordinator.data.entity_errors == []
         assert coordinator.data.entity_warnings == []
         assert coordinator.data.required_entities_healthy is True
 
     def test_read_all_external_state_when_reader_is_none(self, coordinator):
         """Test _read_all_external_state returns early when reader is None."""
+        from custom_components.localshift.coordinator.entity_monitor import (
+            EntityMonitor,
+        )
+
         coordinator._state_reader = None
+        coordinator._entity_monitor = EntityMonitor(coordinator)
         # Should not raise, just return
         coordinator._read_all_external_state()
 
     def test_read_all_external_state_calls_reader_when_present(self, coordinator):
         """Test _read_all_external_state calls reader when present."""
         from unittest.mock import MagicMock
+        from custom_components.localshift.coordinator.entity_monitor import (
+            EntityMonitor,
+        )
 
         mock_reader = MagicMock()
         coordinator._state_reader = mock_reader
+        coordinator._entity_monitor = EntityMonitor(coordinator)
 
         # Call the method
         coordinator._read_all_external_state()
 
-        # Verify reader was called
+        # Verify reader was called through entity monitor
         mock_reader.read_all_external_state.assert_called_once_with(coordinator.data)
 
 
@@ -1165,6 +1187,13 @@ class TestCoordinatorEntityHealthLogging:
 
         coordinator._entity_validator = mock_validator
 
+        # Mock entity monitor to delegate properly
+        from custom_components.localshift.coordinator.entity_monitor import (
+            EntityMonitor,
+        )
+
+        coordinator._entity_monitor = EntityMonitor(coordinator)
+
         # Call the method with log capture
         with caplog.at_level(logging.WARNING):
             coordinator._check_entity_health()
@@ -1191,6 +1220,13 @@ class TestCoordinatorEntityHealthLogging:
         mock_validator.check_all_localshift_entities.return_value = {}
 
         coordinator._entity_validator = mock_validator
+
+        # Mock entity monitor to delegate properly
+        from custom_components.localshift.coordinator.entity_monitor import (
+            EntityMonitor,
+        )
+
+        coordinator._entity_monitor = EntityMonitor(coordinator)
 
         # Call the method with log capture
         with caplog.at_level(logging.DEBUG):

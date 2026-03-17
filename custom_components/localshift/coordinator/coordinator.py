@@ -44,6 +44,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..state.reader import StateReader
     from ..utils.costs import CostTracker
     from ..utils.validation import EntityValidator
+    from .entity_monitor import EntityMonitor
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ class LocalShiftCoordinator:
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
         self._entity_validator: EntityValidator | None = None
+        self._entity_monitor: EntityMonitor | None = None
 
         # Decision outcome tracker for learning system (Issue #170 Phase 1)
         self.decision_tracker = None
@@ -189,6 +191,13 @@ class LocalShiftCoordinator:
         from ..utils.validation import EntityValidator
 
         self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
+
+        # Import EntityMonitor
+        from .entity_monitor import EntityMonitor
+
+        # Create entity monitor
+        self._entity_monitor = EntityMonitor(self)
+
         from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
         from ..pricing import create_provider
 
@@ -454,52 +463,13 @@ class LocalShiftCoordinator:
 
     def _read_all_external_state(self) -> None:
         """Read current state of all monitored external entities."""
-        if self._state_reader is None:
-            return
-        self._state_reader.read_all_external_state(self.data)
+        if self._entity_monitor is not None:
+            self._entity_monitor.read_all_external_state()
 
     def _check_entity_health(self) -> None:
-        """Check health of all tracked entities and update data.
-
-        Populates integration status, errors, and warnings in CoordinatorData
-        for sensors to expose to users.
-        """
-        if self._entity_validator is None:
-            return
-
-        # Check all entities (external dependencies)
-        self._entity_validator.check_all_entities()
-
-        # Update coordinator data with health status
-        self.data.integration_status = self._entity_validator.status.value
-        self.data.integration_status_message = (
-            self._entity_validator.get_user_friendly_message()
-        )
-        self.data.entity_errors = self._entity_validator.errors
-        self.data.entity_warnings = self._entity_validator.warnings
-        self.data.required_entities_healthy = all(
-            self._entity_validator.get_required_entities_status().values()
-        )
-
-        # Get detailed health summary
-        health_summary = self._entity_validator.get_health_summary()
-        self.data.entity_health = health_summary.get("entities", {})
-        self.data.last_entity_check = health_summary.get("last_check", "")
-
-        # Check LocalShift internal entities
-        self.data.localshift_entity_health = (
-            self._entity_validator.check_all_localshift_entities()
-        )
-
-        # Log any new errors
-        if self.data.entity_errors:
-            for error in self.data.entity_errors:
-                _LOGGER.warning("Entity health error: %s", error)
-
-        # Log warnings at debug level
-        if self.data.entity_warnings:
-            for warning in self.data.entity_warnings:
-                _LOGGER.debug("Entity health warning: %s", warning)
+        """Check health of all tracked entities and update data."""
+        if self._entity_monitor is not None:
+            self._entity_monitor.check_entity_health()
 
     # ------------------------------------------------------------------
     # Event handlers
