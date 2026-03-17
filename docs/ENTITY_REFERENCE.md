@@ -1308,6 +1308,7 @@ Added in Issue #382 to replace manual control buttons with a single select entit
 
 | Option | Description |
 |--------|-------------|
+| `automatic` | Enable automation — optimizer controls mode selection |
 | `self_consumption` | Default — battery powers house, grid used as needed |
 | `grid_charging` | Force charging from grid at 3.3kW (backup mode) |
 | `boost_charging` | Force charging at 5kW (autonomous + reserve=100%) |
@@ -1315,16 +1316,20 @@ Added in Issue #382 to replace manual control buttons with a single select entit
 | `proactive_export` | Exporting battery before negative FIT periods |
 
 **Behavior:**
-- When automation is enabled: Select shows current automated mode (read-only display)
-- When user changes select: Automation automatically disables, user's choice is honored
-- When automation is re-enabled: System takes control of select immediately
+- When automation is ON: Select displays the actual mode from the optimizer (`self_consumption`, `grid_charging`, `demand_block`, `hold`, etc.)
+- When automation is OFF: Select displays the user's manually chosen mode
+- When user selects a mode (not "automatic"): Automation disables, user's choice is applied
+- When user selects "automatic": Automation enables, optimizer takes control
+
+**Displayed Values:** The select may show modes not in the options list (e.g., `demand_block`, `hold`) when the optimizer transitions to internal states. This reflects the actual system state.
 
 **Example Data:**
 ```
-State: grid_charging
+State: spike_discharge
+State: demand_block  (internal optimizer mode, shown when automation ON)
 ```
 
-**Use Case:** Manual control of battery mode. Select a mode to disable automation and apply that mode to the battery. Re-enable automation to return to automated control.
+**Use Case:** Manual control of battery mode. Select a mode to disable automation and apply that mode to the battery. Select "automatic" to return to automated control. Use `switch.localshift_automation_enabled` to toggle automation directly.
 
 ---
 
