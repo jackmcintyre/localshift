@@ -44,6 +44,18 @@ Use SymDex instead of grep/read:
 - `symdex_get_file_outline("file.py")` - file structure
 - `symdex_search_text("text")` - search content
 
+## Additional Tools
+
+**OpenViking** - Semantic search for code understanding:
+- Use for: "explain how X works", "find patterns", "analyze code"
+- Commands: `ov search "query"`, `ov read viking://...`
+- Start if not running: `~/.local/bin/ov-start`
+
+**context-mode** - Efficient large file handling:
+- Use for: log files, large data files, full file analysis
+- Commands: `ctx_execute_file`, `ctx_batch_execute`
+- Better than Read for files >100 lines
+
 ## Reference Files (load when needed)
 
 | File | When |
