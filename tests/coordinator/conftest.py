@@ -23,4 +23,9 @@ def mock_hass_with_services():
 @pytest.fixture
 def coordinator(mock_hass_with_services, mock_entry):
     """Create a LocalShiftCoordinator instance."""
-    return LocalShiftCoordinator(mock_hass_with_services, mock_entry)
+    from custom_components.localshift.coordinator.tick_scheduler import TickScheduler
+
+    coord = LocalShiftCoordinator(mock_hass_with_services, mock_entry)
+    # Initialize tick_scheduler for tests that don't call async_start
+    coord._tick_scheduler = TickScheduler(coord)
+    return coord

@@ -45,6 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..utils.costs import CostTracker
     from ..utils.validation import EntityValidator
     from .entity_monitor import EntityMonitor
+    from .tick_scheduler import TickScheduler
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -117,6 +118,7 @@ class LocalShiftCoordinator:
         self._forecast_bootstrapper: ForecastBootstrapper | None = None
         self._evaluation_dispatcher: EvaluationDispatcher | None = None
         self._subscription_manager: SubscriptionManager | None = None
+        self._tick_scheduler: TickScheduler | None = None
 
         # Solar energy tracking for backfill (Issue #513)
         self._last_solar_power_kw: float = 0.0
@@ -197,6 +199,12 @@ class LocalShiftCoordinator:
 
         # Create entity monitor
         self._entity_monitor = EntityMonitor(self)
+
+        # Import TickScheduler
+        from .tick_scheduler import TickScheduler
+
+        # Create tick scheduler
+        self._tick_scheduler = TickScheduler(self)
 
         from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
         from ..pricing import create_provider
@@ -478,10 +486,8 @@ class LocalShiftCoordinator:
     @callback
     def _handle_state_change(self, _event: Event) -> None:
         """Handle a state change from a monitored entity."""
-        if self._evaluation_dispatcher is None:
-            return
-
-        self._evaluation_dispatcher.on_state_change(_event)
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_state_change(_event)
 
     @callback
     def _handle_periodic_tick(self, now: datetime) -> None:
@@ -491,152 +497,27 @@ class LocalShiftCoordinator:
         New tiered handlers (_handle_fast_tick, _handle_medium_tick, _handle_slow_tick)
         are used instead. See async_start() for timer subscriptions.
         """
-        # Delegate to fast tick for backward compatibility
-        self._handle_fast_tick(now)
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_periodic_tick(now)
 
     @callback
-    def _handle_fast_tick(self, now: datetime) -> None:  # pragma: no cover
-        """Handle FAST tier periodic tasks (1 minute).
-
-        Checks automation ready state and triggers immediate optimizer evaluation
-        when it transitions from not-ready to ready (Issue #478).
-
-        Dispatches to state machine for mode transition evaluation regardless of
-        price changes (Issue #622 - legacy price gate removed).
-        """
-        # Read raw entity values now — needed for cost accumulation
-        self._read_all_external_state()
-
-        # Cost accumulation uses the raw state we just read (sync, no lock needed)
-        self._accumulate_costs()
-
-        # Skip evaluation dispatch during startup grace period
-        # This prevents errors when entities haven't populated yet (Issue #551)
-        if self._is_in_startup_grace():
-            _LOGGER.debug(
-                "Skipping state machine evaluation during startup grace period"
-            )
-            return
-
-        # Issue #478: Check if automation just became ready during startup
-        # Triggers immediate evaluation when transitioning from not-ready to ready
-        if self._evaluation_dispatcher is not None:
-            self._evaluation_dispatcher.maybe_trigger_on_startup_ready(
-                lambda: self.data.automation_ready if self.data else False
-            )
-
-        # Issue #622: Always dispatch to StateMachine
-        # StateMachine gates mode transitions based on price fingerprint
-        # This ensures optimizer runs every minute for plan updates
-        if self._evaluation_dispatcher is not None:
-            self._evaluation_dispatcher.on_fast_tick(now)
+    def _handle_fast_tick(self, now: datetime) -> None:
+        """Handle FAST tier periodic tasks (1 minute)."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_fast_tick(now)
 
     @callback
-    def _handle_medium_tick(self, now: datetime) -> None:  # pragma: no cover
-        """Handle MEDIUM tier periodic tasks (5 minutes).
-
-        Learning and monitoring tasks that don't need minute-level accuracy:
-        - Entity health check
-        - Load data refresh
-        - Decision backfill
-        - Weather learning
-        - Baseline calculation
-        """
-        # Read raw entity values
-        self._read_all_external_state()
-
-        # Skip expensive operations during startup grace period
-        # This prevents errors when entities haven't populated yet (Issue #551)
-        if self._is_in_startup_grace():
-            _LOGGER.debug("Skipping medium tick operations during startup grace period")
-            return
-
-        # Check entity health
-        self._check_entity_health()
-
-        # Refresh load data (historical and recent)
-        if self._computation_engine is not None:
-            load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-            self.hass.async_create_task(
-                self._computation_engine.async_get_recent_load_1hr(load_entity_id),
-                "localshift_fetch_recent_load",
-            )
-            self.hass.async_create_task(
-                self._computation_engine.async_get_historical_hourly_averages(
-                    load_entity_id
-                ),
-                "localshift_fetch_historical_load",
-            )
-
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.update_medium_tick(self.data)
-
-        # Backfill solar forecast accuracy for completed periods (Issue #378)
-        if (
-            hasattr(self, "solar_accuracy_tracker")
-            and self.solar_accuracy_tracker is not None
-        ):
-            # Record forecasts for upcoming periods (this would happen when slots are created elsewhere)
-            # But we can't do it here without major refactor
-
-            # For updating solar bias metrics from tracker and handling backfills if needed
-            # (backfills would happen somewhere when we have historical energy data)
-            pass
-
-        # Update solar bias metrics from tracker (Issue #378)
-        if (
-            hasattr(self, "solar_accuracy_tracker")
-            and self.solar_accuracy_tracker is not None
-        ):
-            self.data.solar_bias_metrics = self.solar_accuracy_tracker.metrics.to_dict()
-            self.data.solar_forecast_accuracy = (
-                self.solar_accuracy_tracker.metrics.accuracy
-            )
-
-        # Learn from current temperature/load for weather correlation
-        if self._computation_engine is not None:
-            self.hass.async_create_task(
-                self._computation_engine.async_learn_weather_sample(self.data),
-                "localshift_weather_learning",
-            )
-
-        _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
+    def _handle_medium_tick(self, now: datetime) -> None:
+        """Handle MEDIUM tier periodic tasks (5 minutes)."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_medium_tick(now)
 
     @callback
-    def _handle_slow_tick(self, now: datetime) -> None:  # pragma: no cover
-        """Handle SLOW tier periodic tasks (30 minutes).
-
-        Slow-changing data tasks:
-        - Weather forecast refresh
-        - Forecast accuracy metrics
-        - Forecast history save
-        """
-        # Refresh temperature forecast from weather entity (Issue #135)
-        if self._computation_engine is not None:
-            self.hass.async_create_task(
-                self._refresh_weather_forecast(),
-                "localshift_weather_forecast",
-            )
-            # Compute forecast accuracy metrics (Issue #37 Phase 2)
-            self.hass.async_create_task(
-                self._computation_engine.async_compute_forecast_accuracy(self.data),
-                "localshift_forecast_accuracy",
-            )
-            # Save forecast history periodically (Issue #131)
-            self.hass.async_create_task(
-                self._computation_engine.async_save_forecast_history(self.data),
-                "localshift_save_forecast_history",
-            )
-            # Save accuracy metrics periodically (Issue #706)
-            self.hass.async_create_task(
-                self._computation_engine.async_save_accuracy_metrics(self.data),
-                "localshift_save_accuracy_metrics",
-            )
-
-        # Backfill actual solar energy for completed periods (Issue #513)
-        self._backfill_solar_actual()
-
-        _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
+    @callback
+    def _handle_slow_tick(self, now: datetime) -> None:
+        """Handle SLOW tier periodic tasks (30 minutes)."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_slow_tick(now)
 
     def _is_in_startup_grace(self) -> bool:  # pragma: no cover
         """Check if we're still in the startup grace period.
@@ -692,42 +573,16 @@ class LocalShiftCoordinator:
         self._last_solar_power_kw = current_power
 
     @callback
-    def _handle_midnight_reset(self, now: datetime) -> None:  # pragma: no cover
-        """Reset cost accumulators and daily target flag at midnight.
-
-        Called when the daily clock ticks past midnight. Resets all cost
-        accumulators (battery_savings, battery_charge_cost, solar_yield_value,
-        grid_export_revenue) and the target_reached flag.
-
-        Notifies listeners and logs the reset for debugging.
-        """
-        self.data.grid_import_cost = 0.0
-        self.data.grid_export_revenue = 0.0
-        self.data.battery_savings = 0.0
-        self.data.battery_charge_cost = 0.0
-        self.data.target_reached_today = False
-
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.handle_midnight_reset(self.data)
-
-        self._notify_listeners()
-        _LOGGER.info("Midnight reset: cost accumulators and target flag")
+    def _handle_midnight_reset(self, now: datetime) -> None:
+        """Reset cost accumulators at midnight."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_midnight_reset(now)
 
     @callback
-    def _handle_daily_summary(self, now: datetime) -> None:  # pragma: no cover
-        """Send daily summary notification at demand window end.
-
-        Replaces YAML A15 (localshift_daily_summary).
-        """
-        from ..const import SWITCH_AUTOMATION_ENABLED
-
-        if not self.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            return
-
-        self.hass.async_create_task(
-            self._send_daily_summary(),
-            "localshift_daily_summary",
-        )
+    def _handle_daily_summary(self, now: datetime) -> None:
+        """Send daily summary notification at demand window end."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_daily_summary(now)
 
     # ------------------------------------------------------------------
     # Computation
