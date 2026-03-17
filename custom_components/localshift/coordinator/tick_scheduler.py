@@ -12,10 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING
-
-from homeassistant.core import Event, callback
 
 if TYPE_CHECKING:  # pragma: no cover
     from .coordinator import LocalShiftCoordinator
