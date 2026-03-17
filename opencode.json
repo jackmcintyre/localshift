@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["context-mode"],
+  "plugin": ["context-mode", "@tarquinen/opencode-dcp@latest"],
   "instructions": [
     ".opencode/rules",
     ".agents/rules/worktrees.md"
@@ -24,7 +24,7 @@
         "HOMEASSISTANT_URL": "https://homeassistant.nectaron.jackmcintyre.net",
         "HOMEASSISTANT_TOKEN": "{env:HA_LONG_LIVED_TOKEN}"
       },
-      "enabled": true
+      "enabled": false
     }
   },
   "agent": {
