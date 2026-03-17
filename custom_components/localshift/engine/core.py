@@ -1942,7 +1942,9 @@ class DPPlanner:
 
         # Calculate self-consumption value (Issue #406)
         # Battery energy used to cover household load has value because it avoids
-        # buying from grid at retail price
+        # buying from grid at retail price.
+        # However, we subtract cycle_penalty_per_kwh to avoid subsidizing marginal cycling.
+        # The battery must "earn" the cycle penalty back through the spread.
         self_consumption_value = 0.0
         if config.optimization_mode == "self_consumption":
             # Net load that battery covers = consumption - solar - grid_import
@@ -1976,7 +1978,10 @@ class DPPlanner:
                     )
                     battery_for_load = min(battery_for_load, max_load_kwh)
 
-                self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
+                # Credit the battery at (buy_price - cycle_penalty), not full buy_price
+                # This prevents the credit from subsidizing marginal cycling
+                sc_multiplier = max(0.0, slot.buy_price - config.cycle_penalty_per_kwh)
+                self_consumption_value = battery_for_load * sc_multiplier
 
         # Issue #638: futile cycling penalty.
         # Penalizes grid charging when the charged energy will drain through house load
