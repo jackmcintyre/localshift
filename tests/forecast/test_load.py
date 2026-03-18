@@ -1,6 +1,6 @@
 """Unit tests for LoadForecaster with exponential decay algorithm (Issue #381, #441)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -438,10 +438,17 @@ class TestLoadForecasterExponentialDecay:
         forecaster = LoadForecaster(entry)
 
         valid = forecaster.parse_time_option("valid", "01:02:03")
-        fallback = forecaster.parse_time_option("invalid", "01:02:03")
+        with patch("custom_components.localshift.forecast.load._LOGGER") as mock_logger:
+            fallback = forecaster.parse_time_option("invalid", "01:02:03")
 
         assert (valid.hour, valid.minute, valid.second) == (6, 30, 15)
         assert (fallback.hour, fallback.minute, fallback.second) == (1, 2, 3)
+        mock_logger.debug.assert_called_once_with(
+            "Invalid time format for %s: %s. Using default: %s",
+            "invalid",
+            "oops",
+            "01:02:03",
+        )
 
     def test_weather_correlation_invalid_adjustment_source_keeps_base_load(self):
         mock_entry = _create_mock_entry()

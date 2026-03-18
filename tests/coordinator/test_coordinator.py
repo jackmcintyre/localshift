@@ -580,13 +580,22 @@ class TestOptions:
         assert result.second == 0
 
     def test_parse_time_option_invalid(self, coordinator):
-        """Test parsing invalid time option falls back to default."""
+        """Test parsing invalid time option falls back to default with debug log."""
         coordinator.get_option = MagicMock(return_value="invalid")
 
-        result = coordinator._parse_time_option("test", "18:00:00")
+        with patch(
+            "custom_components.localshift.coordinator.coordinator._LOGGER"
+        ) as mock_logger:
+            result = coordinator._parse_time_option("test", "18:00:00")
 
         assert result.hour == 18
         assert result.minute == 0
+        mock_logger.debug.assert_called_once_with(
+            "Invalid time format for %s: %s. Using default: %s",
+            "test",
+            "invalid",
+            "18:00:00",
+        )
 
 
 # =============================================================================

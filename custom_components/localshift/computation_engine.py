@@ -656,6 +656,12 @@ class ComputationEngine:
                 int(parts[2]) if len(parts) > 2 else 0,
             )
         except (ValueError, IndexError):
+            _LOGGER.debug(
+                "Invalid time format for %s: %s. Using default: %s",
+                key,
+                time_str,
+                default,
+            )
             d_parts = default.split(":")
             return time(int(d_parts[0]), int(d_parts[1]), int(d_parts[2]))
 
