@@ -25,7 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 
 MAX_PERIOD_RECORDS = 1440
 BIAS_HALF_LIFE_DAYS = 7.0
-MAX_ADDITIVE_OFFSET_KWH = 2.0
+MIN_SOLAR_CORRECTION_SAMPLES = 20
 
 
 @dataclass
@@ -485,6 +485,14 @@ class SolarAccuracyTracker:
         else:
             return "unknown"
 
+    def has_sufficient_samples(self) -> bool:
+        """Check if we have enough samples for bias correction.
+
+        Returns:
+            True if sample_count >= MIN_SOLAR_CORRECTION_SAMPLES.
+        """
+        return self._metrics.sample_count >= MIN_SOLAR_CORRECTION_SAMPLES
+
     def get_bias_correction(
         self,
         time_of_day: str,
@@ -493,7 +501,8 @@ class SolarAccuracyTracker:
     ) -> float:
         """Get bias correction factor for given context.
 
-        Returns a multiplier (0.0 to 2.0) to apply to forecasts.
+        Returns a multiplier clamped to [0.5, 1.5].
+        Returns 1.0 if insufficient samples (< MIN_SOLAR_CORRECTION_SAMPLES).
         A positive bias means forecasts overestimate, so we reduce solar_kwh.
         A negative bias means forecasts underestimate, so we increase solar_kwh.
 
@@ -503,8 +512,9 @@ class SolarAccuracyTracker:
             season: Season ('summer', 'autumn', 'winter', 'spring'), optional for coarser granularity
 
         Returns:
-            Bias correction factor. Returns 1.0 if no historical data available.
-            Values < 1.0 reduce forecast (overestimate), > 1.0 increase (underestimate).
+            Bias correction factor. Returns 1.0 if no historical data available
+            or insufficient samples. Values < 1.0 reduce forecast (overestimate),
+            > 1.0 increase (underestimate). Clamped to [0.5, 1.5].
 
         """
         normalized_weather = self._normalize_weather(weather)
@@ -513,6 +523,9 @@ class SolarAccuracyTracker:
             return 1.0
 
         weighted_bias, sample_count = result
+        if sample_count < MIN_SOLAR_CORRECTION_SAMPLES:
+            return 1.0
+
         _LOGGER.debug(
             "Bias correction for %s/%s/%s: bias=%.2f%%, samples=%d",
             time_of_day,
@@ -521,7 +534,8 @@ class SolarAccuracyTracker:
             weighted_bias * 100,
             sample_count,
         )
-        return 1.0 - weighted_bias
+        correction = 1.0 - weighted_bias
+        return max(0.5, min(1.5, correction))
 
     def get_additive_correction(
         self,
@@ -529,15 +543,14 @@ class SolarAccuracyTracker:
         weather: str,
         season: str | None = None,
     ) -> float:
-        result = self._compute_context_additive_bias(time_of_day, weather, season)
-        if result is None:
-            return 0.0
+        """Get additive correction offset for given context.
 
-        weighted_bias, _sample_count = result
-        return max(
-            -MAX_ADDITIVE_OFFSET_KWH,
-            min(MAX_ADDITIVE_OFFSET_KWH, weighted_bias),
-        )
+        .. deprecated::
+            Additive correction is deprecated as of issue #760. This method
+            always returns 0.0 and is retained only for backward compatibility.
+            Use get_bias_correction() for multiplicative-only correction.
+        """
+        return 0.0
 
     def apply_bias_correction(
         self,
@@ -546,6 +559,19 @@ class SolarAccuracyTracker:
         weather: str,
         season: str | None = None,
     ) -> float:
+        """Apply bias correction to a solar forecast.
+
+        Uses multiplicative correction only (issue #760 removed additive).
+        Returns 1.0 (no correction) if insufficient samples.
+
+        Args:
+            forecast_kwh: Raw forecast from Solcast
+            time_of_day: Time bucket for context
+            weather: Weather condition for context
+            season: Season for context (optional)
+
+        Returns:
+            Corrected forecast kWh (minimum 0.0)
+        """
         multiplier = self.get_bias_correction(time_of_day, weather, season)
-        additive_offset = self.get_additive_correction(time_of_day, weather, season)
-        return max(0.0, forecast_kwh * multiplier - additive_offset)
+        return max(0.0, forecast_kwh * multiplier)

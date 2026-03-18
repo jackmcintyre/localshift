@@ -98,7 +98,7 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `sensor.localshift_forecast_grid` | Grid interaction forecast data for history collection |
 | `sensor.localshift_forecast_diagnostics` | Diagnostic and debug data for the forecast system |
 | `sensor.localshift_target_soc_minimum` | Minimum target SOC for discharge modes |
-| `sensor.localshift_excess_solar_kwh` | Forecasted excess solar for load shifting |
+| `sensor.localshift_excess_solar` | Forecasted excess solar for load shifting |
 | `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
 | `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |
 | `sensor.localshift_integration_status` | Overall integration health status (ok/degraded/error) |

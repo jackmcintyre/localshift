@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -11,6 +12,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPARISON_MODE_ENABLED,
+    CONF_COMPARISON_MODE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -27,9 +31,17 @@ from ..const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_WEATHER_ENTITY,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_ENTITY_IDS,
+    DEFAULT_PRICING_DATA_SOURCE,
 )
 from ..coordinator.data import CoordinatorData
+from ..pricing import (
+    PRICING_SOURCE_AMBER,
+    PRICING_SOURCE_AMBER_EXPRESS,
+    PricingProvider,
+)
+from ..pricing.types import ForecastSlot
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,24 +51,62 @@ class StateReader:
     """Handles reading state from external Home Assistant entities."""
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, entity_validator: EntityValidator
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        entity_validator: EntityValidator,
+        pricing_provider: PricingProvider | None = None,
     ) -> None:
         """Initialize the state reader."""
         self.hass = hass
         self.entry = entry
         self.entity_validator = entity_validator
+        self.pricing_provider = pricing_provider
 
     def _get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
 
         Returns default from DEFAULT_ENTITY_IDS if key not in entry data
         (handles missing keys in existing config entries).
+
+        For Amber Express pricing source, applies the amber_express_ prefix to
+        pricing-related defaults (Option C for Issue #300).
         """
         if key in self.entry.data:
             return self.entry.data[key]
 
         # Fallback to default if key not in entry data
-        return DEFAULT_ENTITY_IDS.get(key, "")
+        default = DEFAULT_ENTITY_IDS.get(key, "")
+
+        # Option C: Apply Express prefix to pricing defaults when source is amber_express
+        # This ensures that even when config is missing specific pricing keys, we return
+        # the correct entity ID format for the selected pricing source.
+        if (
+            key
+            in (
+                CONF_PRICING_GENERAL_PRICE,
+                CONF_PRICING_FEED_IN_PRICE,
+                CONF_PRICING_GENERAL_FORECAST,
+                CONF_PRICING_FEED_IN_FORECAST,
+                CONF_PRICING_PRICE_SPIKE,
+            )
+            and default
+        ):
+            source = self.entry.data.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            )
+            if source == PRICING_SOURCE_AMBER_EXPRESS:
+                # Apply amber_express_ prefix to non-Express defaults
+                if default.startswith("sensor.100h_"):
+                    default = default.replace(
+                        "sensor.100h_", "sensor.amber_express_100h_", 1
+                    )
+                elif default.startswith("binary_sensor.100h_"):
+                    default = default.replace(
+                        "binary_sensor.100h_", "binary_sensor.amber_express_100h_", 1
+                    )
+
+        return default
 
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
         """Read a float value from an entity's state."""
@@ -104,12 +154,136 @@ class StateReader:
             return default
         return state.attributes.get(attr, default)
 
+    def _read_shadow_prices(self) -> dict[str, Any]:
+        """Read alternate price source for comparison mode.
+
+        Issue #300: Read shadow prices when comparison mode is enabled.
+        Derives shadow entity IDs by manipulating user's configured entity IDs.
+
+        Returns:
+            Dict with shadow prices and forecasts
+        """
+        current_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+
+        # Get user's configured general price entity ID
+        general_price_entity = self.entry.data.get(CONF_PRICING_GENERAL_PRICE, "")
+        feed_in_price_entity = self.entry.data.get(CONF_PRICING_FEED_IN_PRICE, "")
+
+        # Derive shadow entity IDs by toggling "amber_express_" prefix
+        # Example: "sensor.100h_general_price" <-> "sensor.amber_express_100h_general_price"
+        AMBER_EXPRESS_PREFIX = "amber_express_"
+
+        def get_shadow_entity(entity_id: str, target_source: str) -> str:
+            """Derive shadow entity ID based on target source."""
+            if target_source == PRICING_SOURCE_AMBER_EXPRESS:
+                # Add amber_express_ prefix if not present
+                if AMBER_EXPRESS_PREFIX not in entity_id:
+                    # Insert "amber_express_" after "sensor."
+                    return entity_id.replace("sensor.", "sensor.amber_express_", 1)
+                return entity_id
+            else:
+                # Remove amber_express_ prefix if present
+                if AMBER_EXPRESS_PREFIX in entity_id:
+                    return entity_id.replace(AMBER_EXPRESS_PREFIX, "", 1)
+                return entity_id
+
+        # Determine target source (the opposite of current)
+        if current_source == PRICING_SOURCE_AMBER:
+            shadow_source = PRICING_SOURCE_AMBER_EXPRESS
+        else:
+            shadow_source = PRICING_SOURCE_AMBER
+
+        # Build shadow entity IDs
+        shadow_general_entity = get_shadow_entity(general_price_entity, shadow_source)
+        shadow_feed_in_entity = get_shadow_entity(feed_in_price_entity, shadow_source)
+
+        shadow_general_price = self._read_float_optional(shadow_general_entity)
+        shadow_feed_in_price = self._read_float_optional(shadow_feed_in_entity)
+
+        # Read shadow forecasts - use provider if available
+        if self.pricing_provider is not None:
+            # Use pricing provider to read shadow forecasts
+            shadow_general_forecast = [
+                asdict(slot)
+                for slot in self.pricing_provider.read_forecasts(
+                    self.hass, shadow_general_entity
+                )
+            ]
+            shadow_feed_in_forecast = [
+                asdict(slot)
+                for slot in self.pricing_provider.read_forecasts(
+                    self.hass, shadow_feed_in_entity
+                )
+            ]
+        elif shadow_source == PRICING_SOURCE_AMBER_EXPRESS:
+            # Amber Express embeds forecasts in price sensor attributes
+            shadow_general_forecast = self._read_attribute(
+                shadow_general_entity, "forecast", []
+            )
+            shadow_feed_in_forecast = self._read_attribute(
+                shadow_feed_in_entity, "forecast", []
+            )
+        else:
+            # For amber, need separate forecast entities - try to derive them
+            shadow_general_forecast = self._read_attribute(
+                shadow_general_entity.replace("_price", "_forecast"), "forecasts", []
+            )
+            shadow_feed_in_forecast = self._read_attribute(
+                shadow_feed_in_entity.replace("_price", "_forecast"), "forecasts", []
+            )
+
+        return {
+            "general_price_shadow": shadow_general_price or 0.0,
+            "feed_in_price_shadow": shadow_feed_in_price or 0.0,
+            "general_forecast_shadow": shadow_general_forecast or [],
+            "feed_in_forecast_shadow": shadow_feed_in_forecast or [],
+        }
+
+    @staticmethod
+    def _extract_price_and_time(
+        entry: Any,
+    ) -> tuple[float, datetime] | None:
+        """Extract price and start_time from a forecast entry.
+
+        Handles both ForecastSlot objects and legacy dict entries.
+
+        Returns:
+            Tuple of (price, start_time) or None if entry is invalid.
+
+        """
+        if hasattr(entry, "per_kwh") and hasattr(entry, "start_time"):
+            if entry.per_kwh is None or entry.start_time is None:
+                return None
+            return (float(entry.per_kwh), entry.start_time)
+
+        if isinstance(entry, dict):
+            price = entry.get("per_kwh")
+            if price is None:
+                return None
+            start_time_raw = entry.get("start_time")
+            if start_time_raw is None:
+                return None
+            try:
+                start_time = (
+                    datetime.fromisoformat(start_time_raw)
+                    if isinstance(start_time_raw, str)
+                    else start_time_raw
+                )
+            except (ValueError, TypeError):
+                return None
+            return (float(price), start_time)
+
+        return None
+
     def _calculate_current_day_average_price(
-        self, forecast: list[dict[str, Any]], now: datetime
+        self, forecast: list, now: datetime
     ) -> float:
         """Calculate average price from today's forecast slots.
 
         Issue #632: Used to compute assumed price for forecast extension.
+        Issue #300: Updated to handle both dict and ForecastSlot types.
 
         Args:
             forecast: List of forecast entries with per_kwh field
@@ -124,86 +298,202 @@ class StateReader:
 
         prices = []
         for entry in forecast:
-            if not isinstance(entry, dict):
+            result = self._extract_price_and_time(entry)
+            if result is None:
                 continue
-
-            price = entry.get("per_kwh")
-            if price is None:
-                continue
-
-            start_time_str = entry.get("start_time")
-            if not start_time_str:
-                continue
-
-            try:
-                start_time = datetime.fromisoformat(start_time_str)
-                if start_time <= now:
-                    prices.append(float(price))
-            except (ValueError, TypeError):
-                continue
+            price, start_time = result
+            start_time = self._normalize_tz(start_time, now)
+            if start_time <= now:
+                prices.append(price)
 
         if not prices:
             return 0.20
 
         return sum(prices) / len(prices)
 
+    @staticmethod
+    def _get_last_entry_timing(
+        last_entry: Any,
+    ) -> tuple[datetime, int] | None:
+        """Extract start_time and duration from the last forecast entry.
+
+        Returns:
+            Tuple of (last_time, last_duration) or None if invalid.
+
+        """
+        if hasattr(last_entry, "start_time") and hasattr(last_entry, "duration"):
+            last_duration = last_entry.duration
+            if not isinstance(last_duration, (int, float)):
+                return None
+            return (last_entry.start_time, int(last_duration))
+
+        if isinstance(last_entry, dict):
+            last_time_str = last_entry.get("start_time")
+            if not last_time_str:
+                return None
+            try:
+                last_time = (
+                    datetime.fromisoformat(last_time_str)
+                    if isinstance(last_time_str, str)
+                    else last_time_str
+                )
+            except (ValueError, TypeError):
+                return None
+            return (last_time, last_entry.get("duration", 30))
+
+        return None
+
+    @staticmethod
+    def _dict_to_forecast_slot(entry: dict) -> ForecastSlot | None:
+        """Convert a dict to a ForecastSlot, returning None if invalid."""
+        try:
+            start_time = entry.get("start_time")
+            if isinstance(start_time, str):
+                start_time = datetime.fromisoformat(start_time)
+            if start_time is None:
+                return None
+            return ForecastSlot(
+                start_time=start_time,
+                duration=entry.get("duration", 30),
+                per_kwh=entry.get("per_kwh", 0.0),
+                is_spike=entry.get("is_spike", False),
+                source_type=entry.get("source_type", "unknown"),
+            )
+        except (ValueError, TypeError, KeyError):
+            return None
+
+    @staticmethod
+    def _normalize_tz(
+        dt_value: datetime,
+        reference: datetime,
+    ) -> datetime:
+        """Align timezone awareness of dt_value to match reference."""
+        if reference.tzinfo is not None and dt_value.tzinfo is None:
+            return dt_value.replace(tzinfo=reference.tzinfo)
+        if reference.tzinfo is None and dt_value.tzinfo is not None:
+            return dt_value.replace(tzinfo=None)
+        return dt_value
+
     def _extend_forecast_with_assumed_prices(
-        self, forecast: list[dict[str, Any]], now: datetime, assumed_price: float
-    ) -> list[dict[str, Any]]:
+        self, forecast: list, now: datetime, assumed_price: float
+    ) -> list:
         """Extend forecast to guarantee 24-hour planning horizon.
 
         Issue #632: Ensures optimizer can see tomorrow's solar opportunities
         even when price forecast (e.g., Amber free tier) provides only ~16 hours.
+        Issue #300: Returns ForecastSlot objects consistently.
 
         Args:
-            forecast: List of forecast entries
+            forecast: List of ForecastSlot objects
             now: Current datetime
             assumed_price: Price to use for extended entries ($/kWh)
 
         Returns:
-            Extended forecast list with synthetic entries added if needed
+            Extended forecast list with synthetic ForecastSlot entries added if needed
 
         """
         if not forecast:
             return []
 
-        last_entry = forecast[-1]
-        if not isinstance(last_entry, dict):
+        timing = self._get_last_entry_timing(forecast[-1])
+        if timing is None:
             return forecast
-
-        last_time_str = last_entry.get("start_time")
-        if not last_time_str:
-            return forecast
-
-        try:
-            last_time = datetime.fromisoformat(last_time_str)
-        except (ValueError, TypeError):
-            return forecast
-
-        # Normalize timezone for comparison (Issue #632)
-        # datetime.fromisoformat() may return timezone-aware datetime
-        # while the 'now' parameter may be timezone-aware from dt_util.now()
-        if last_time.tzinfo is None and now.tzinfo is not None:
-            last_time = last_time.replace(tzinfo=now.tzinfo)
+        last_time, last_duration = timing
 
         target_time = now + timedelta(hours=24)
-        last_duration = last_entry.get("duration", 30)
-        last_entry_end = last_time + timedelta(minutes=last_duration)
+        last_entry_end = self._normalize_tz(
+            last_time + timedelta(minutes=last_duration),
+            now,
+        )
+
+        # If forecast already covers 24h, return unchanged
         if last_entry_end >= target_time:
             return forecast
 
-        extended = list(forecast)
-        current_time = last_time + timedelta(minutes=30)
+        # Convert input to ForecastSlot objects if needed
+        extended: list[ForecastSlot] = []
+        for entry in forecast:
+            if isinstance(entry, ForecastSlot):
+                extended.append(entry)
+            elif isinstance(entry, dict):
+                slot = self._dict_to_forecast_slot(entry)
+                if slot is not None:
+                    extended.append(slot)
+
+        # Calculate correct start time for first extension slot
+        current_time = last_entry_end
 
         while current_time < target_time:
-            extended.append({
-                "start_time": current_time.isoformat(),
-                "duration": 30,
-                "per_kwh": assumed_price,
-            })
+            extended.append(
+                ForecastSlot(
+                    start_time=current_time,
+                    duration=30,
+                    per_kwh=assumed_price,
+                    is_spike=False,
+                    source_type="extended",
+                )
+            )
             current_time += timedelta(minutes=30)
 
         return extended
+
+    def _read_legacy_forecasts(
+        self,
+        data: CoordinatorData,
+        pricing_source: str,
+        general_price_entity: str,
+        feed_in_price_entity: str,
+    ) -> None:
+        """Read forecasts directly from entities without pricing provider.
+
+        Legacy fallback for when no pricing provider is configured.
+        Handles both Amber Express (detailed entities) and standard forecast sensors.
+        """
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+            general_detailed = general_price_entity.replace("_price", "_price_detailed")
+            feed_in_detailed = feed_in_price_entity.replace("_price", "_price_detailed")
+
+            general_forecast = self._read_attribute(general_detailed, "forecasts", [])
+            feed_in_forecast = self._read_attribute(feed_in_detailed, "forecasts", [])
+
+            if not general_forecast:
+                _LOGGER.warning(
+                    "Amber Express detailed entity '%s' has no forecasts, "
+                    "falling back to simple entity. Spike detection may be limited.",
+                    general_detailed,
+                )
+                general_forecast = self._read_attribute(
+                    general_price_entity, "forecast", []
+                )
+            if not feed_in_forecast:
+                _LOGGER.warning(
+                    "Amber Express detailed entity '%s' has no forecasts, "
+                    "falling back to simple entity. Spike detection may be limited.",
+                    feed_in_detailed,
+                )
+                feed_in_forecast = self._read_attribute(
+                    feed_in_price_entity, "forecast", []
+                )
+
+            data.general_forecast = general_forecast or []
+            data.feed_in_forecast = feed_in_forecast or []
+        else:
+            data.general_forecast = (
+                self._read_attribute(
+                    self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
+                    "forecasts",
+                    [],
+                )
+                or []
+            )
+            data.feed_in_forecast = (
+                self._read_attribute(
+                    self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
+                    "forecasts",
+                    [],
+                )
+                or []
+            )
 
     def _read_solcast_forecast_list(self, entity_id: str) -> list[dict[str, Any]]:
         """Read Solcast forecast list using resilient attribute fallbacks."""
@@ -361,18 +651,27 @@ class StateReader:
         data.price_spike = self._read_bool(
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
         )
-        data.general_forecast = (
-            self._read_attribute(
-                self._get_entity_id(CONF_PRICING_GENERAL_FORECAST), "forecasts", []
-            )
-            or []
+
+        # Issue #300: Read forecasts via pricing provider abstraction
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
         )
-        data.feed_in_forecast = (
-            self._read_attribute(
-                self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST), "forecasts", []
+        if self.pricing_provider is not None:
+            # Use pricing provider to read forecasts, assign directly (ForecastSlot type)
+            general_slots = self.pricing_provider.read_forecasts(
+                self.hass, general_price_entity
             )
-            or []
-        )
+            feed_in_slots = self.pricing_provider.read_forecasts(
+                self.hass, feed_in_price_entity
+            )
+            # Assign ForecastSlot lists directly to CoordinatorData
+            data.general_forecast = general_slots
+            data.feed_in_forecast = feed_in_slots
+        else:
+            # Fallback: Read forecasts directly from entities (legacy behavior)
+            self._read_legacy_forecasts(
+                data, pricing_source, general_price_entity, feed_in_price_entity
+            )
 
         # Issue #632: Extend forecasts to 24 hours if needed
         # This ensures the optimizer can see tomorrow's solar opportunities
@@ -403,6 +702,54 @@ class StateReader:
                 len(data.feed_in_forecast),
                 avg_sell_price,
             )
+
+        # Issue #300: Read shadow prices for comparison mode
+        comparison_mode = self.entry.data.get(
+            CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
+        )
+        if comparison_mode == COMPARISON_MODE_ENABLED:
+            shadow = self._read_shadow_prices()
+            data.general_price_shadow = shadow["general_price_shadow"]
+            data.feed_in_price_shadow = shadow["feed_in_price_shadow"]
+            data.general_forecast_shadow = shadow["general_forecast_shadow"]
+            data.feed_in_forecast_shadow = shadow["feed_in_forecast_shadow"]
+
+            # Calculate price delta
+            data.price_delta = abs(data.general_price - data.general_price_shadow)
+            _LOGGER.debug(
+                "Shadow prices: general=$%.3f/kWh, feed_in=$%.3f/kWh, delta=$%.3f/kWh",
+                data.general_price_shadow,
+                data.feed_in_price_shadow,
+                data.price_delta,
+            )
+        else:
+            data.general_price_shadow = 0.0
+            data.feed_in_price_shadow = 0.0
+            data.general_forecast_shadow = []
+            data.feed_in_forecast_shadow = []
+            data.primary_decision = ""
+            data.shadow_decision = ""
+            data.comparison_match = True
+            data.price_delta = 0.0
+
+        # Issue #300: Read demand window from Amber Express
+        # Derive from user's configured price spike entity (replace _price_spike with _demand_window)
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+            price_spike_entity = self.entry.data.get(CONF_PRICING_PRICE_SPIKE, "")
+            if price_spike_entity:
+                # Replace "price_spike" with "demand_window" to get the entity
+                demand_window_entity = price_spike_entity.replace(
+                    "price_spike", "demand_window"
+                )
+                data.demand_window_amber = self._read_bool(demand_window_entity)
+                _LOGGER.debug(
+                    "Reading Amber Express demand window from: %s",
+                    demand_window_entity,
+                )
+            else:
+                data.demand_window_amber = False
+        else:
+            data.demand_window_amber = False
 
         # Solcast
         today_entity = self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY)

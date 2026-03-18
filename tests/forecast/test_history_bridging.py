@@ -205,3 +205,105 @@ class TestHistoryFetcherBridging:
             )
 
         assert coordinator_data.forecast_profile_selected == "weekday"
+
+    def test_consumption_profile_hours_bridged(
+        self, computation_engine, coordinator_data
+    ):
+        """Test that consumption_profile_hours is set from historical_load_cache size.
+
+        Issue #493: consumption_profile_hours should reflect the number of hours
+        with historical profile data, not always be 0.
+        """
+        # Setup: Mock history fetcher with 24 hours of profile data
+        expected_hours = {
+            0: 0.5,
+            1: 0.4,
+            2: 0.3,
+            3: 0.3,
+            4: 0.3,
+            5: 0.4,
+            6: 0.7,
+            7: 1.2,
+            8: 1.5,
+            9: 2.0,
+            10: 2.5,
+            11: 2.8,
+            12: 2.7,
+            13: 2.4,
+            14: 2.3,
+            15: 2.0,
+            16: 1.9,
+            17: 2.1,
+            18: 1.7,
+            19: 1.6,
+            20: 1.3,
+            21: 1.2,
+            22: 1.0,
+            23: 0.7,
+        }
+        computation_engine._history_fetcher._historical_load_cache = expected_hours
+        computation_engine._history_fetcher._historical_load_sample_counts = {
+            h: 28 for h in range(24)
+        }
+        computation_engine._history_fetcher._historical_load_source = "statistics"
+
+        # Execute the bridging logic
+        coordinator_data.consumption_hourly_profile_kw = dict(
+            computation_engine._history_fetcher._historical_load_cache
+        )
+        coordinator_data.consumption_source = (
+            computation_engine._history_fetcher._historical_load_source
+        )
+        coordinator_data.consumption_profile_hours = len(
+            computation_engine._history_fetcher._historical_load_cache
+        )
+
+        # Verify consumption_profile_hours reflects the number of hours in profile
+        assert coordinator_data.consumption_profile_hours == 24
+
+    def test_consumption_profile_hours_partial_data(
+        self, computation_engine, coordinator_data
+    ):
+        """Test consumption_profile_hours with partial historical data (e.g., new install)."""
+        # Setup: Mock history fetcher with only 12 hours of data (new installation)
+        partial_hours = {10: 1.5, 11: 2.0, 12: 2.5, 13: 2.2, 14: 2.0, 15: 1.8}
+        computation_engine._history_fetcher._historical_load_cache = partial_hours
+        computation_engine._history_fetcher._historical_load_source = "statistics"
+
+        # Execute the bridging logic
+        coordinator_data.consumption_hourly_profile_kw = dict(
+            computation_engine._history_fetcher._historical_load_cache
+        )
+        coordinator_data.consumption_source = (
+            computation_engine._history_fetcher._historical_load_source
+        )
+        coordinator_data.consumption_profile_hours = len(
+            computation_engine._history_fetcher._historical_load_cache
+        )
+
+        # Verify consumption_profile_hours reflects partial data
+        assert coordinator_data.consumption_profile_hours == 6
+
+    def test_consumption_profile_hours_no_data(
+        self, computation_engine, coordinator_data
+    ):
+        """Test consumption_profile_hours when no historical data available."""
+        # Setup: No historical data (very new installation or sensor unavailable)
+        computation_engine._history_fetcher._historical_load_cache = {}
+        computation_engine._history_fetcher._historical_load_source = (
+            "live_load_fallback"
+        )
+
+        # Execute the bridging logic
+        coordinator_data.consumption_hourly_profile_kw = dict(
+            computation_engine._history_fetcher._historical_load_cache
+        )
+        coordinator_data.consumption_source = (
+            computation_engine._history_fetcher._historical_load_source
+        )
+        coordinator_data.consumption_profile_hours = len(
+            computation_engine._history_fetcher._historical_load_cache
+        )
+
+        # Verify consumption_profile_hours is 0 when no data
+        assert coordinator_data.consumption_profile_hours == 0

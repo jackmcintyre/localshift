@@ -1,6 +1,7 @@
 """Sensor modules for LocalShift integration."""
 
 from .base import LocalShiftSensorBase
+from .cloud_event import CloudEventSensor
 from .forecast import (
     DecisionLogSensor,
     ForecastDiagnosticsSensor,
@@ -16,6 +17,7 @@ from .learning import (
     DecisionQualitySensor,
     LearningDecisionHistorySensor,
     LearningStatusSensor,
+    OptimizerAdvantageSensor,
 )
 from .load_deviation import LoadDeviationSensor
 from .misc import (
@@ -29,7 +31,9 @@ from .optimizer import (
 )
 from .pricing import (
     CheapChargeStopPriceSensor,
+    ComparisonResultSensor,
     EffectiveCheapPriceSensor,
+    PriceDeltaSensor,
     SolarWeightedAvgFITSensor,
 )
 from .status import (
@@ -45,10 +49,13 @@ from .status import (
 __all__ = [
     # Base
     "LocalShiftSensorBase",
+    "CloudEventSensor",
     # Pricing
     "EffectiveCheapPriceSensor",
     "CheapChargeStopPriceSensor",
     "SolarWeightedAvgFITSensor",
+    "ComparisonResultSensor",
+    "PriceDeltaSensor",
     # Forecast
     "SolarBatteryForecastSensor",
     "NetElectricityCostSensor",
@@ -68,6 +75,7 @@ __all__ = [
     "LearningStatusSensor",
     "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
+    "OptimizerAdvantageSensor",
     # Status
     "IntegrationStatusSensor",
     "EntityHealthSensor",

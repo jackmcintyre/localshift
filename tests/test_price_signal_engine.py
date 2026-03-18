@@ -8,6 +8,7 @@ import pytest
 from custom_components.localshift.engine.price_signal_engine import (
     PriceSignalEngine,
 )
+from custom_components.localshift.pricing.types import ForecastSlot
 
 
 @pytest.fixture
@@ -53,16 +54,24 @@ class TestPriceSignalEngineSpikeAnalysis:
         )
 
         coordinator_data.feed_in_forecast = [
-            {
-                "start_time": "2026-02-16T18:00:00+11:00",
-                "end_time": "2026-02-16T18:05:00+11:00",
-                "per_kwh": 0.08,
-            },
-            {
-                "start_time": "2026-02-16T18:05:00+11:00",
-                "end_time": "2026-02-16T18:10:00+11:00",
-                "per_kwh": 0.09,
-            },
+            ForecastSlot(
+                start_time=datetime(
+                    2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11))
+                ),
+                duration=5,
+                per_kwh=0.08,
+                is_spike=False,
+                source_type="test",
+            ),
+            ForecastSlot(
+                start_time=datetime(
+                    2026, 2, 16, 18, 5, 0, tzinfo=timezone(timedelta(hours=11))
+                ),
+                duration=5,
+                per_kwh=0.09,
+                is_spike=False,
+                source_type="test",
+            ),
         ]
 
         now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))

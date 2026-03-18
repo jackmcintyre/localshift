@@ -50,6 +50,8 @@ class ForecastPipeline:
         base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
         current_hour = base_slot.hour
 
+        self._load_forecaster.reset_weather_adjustment_applied()
+
         slots: list[float] = []
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
@@ -72,6 +74,9 @@ class ForecastPipeline:
             slots.append(load_kw)
 
         data.load_forecast_slots = slots
+        data.weather_adjustment_applied = (
+            self._load_forecaster.get_weather_adjustment_applied()
+        )
         _LOGGER.info(
             "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f",
             len(slots),

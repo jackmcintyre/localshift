@@ -12,7 +12,11 @@ import voluptuous as vol
 from homeassistant.helpers import selector
 
 from ..const import (
+    COMPARISON_MODE_DISABLED,
+    COMPARISON_MODE_ENABLED,
+    CONF_COMPARISON_MODE,
     CONF_NOTIFY_SERVICE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -28,9 +32,12 @@ from ..const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_WEATHER_ENTITY,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_ENTITY_IDS,
+    DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_WEATHER_ENTITY,
 )
+from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
 
 
 def build_user_schema(
@@ -93,10 +100,56 @@ def build_user_schema(
     })
 
 
+def build_pricing_source_schema(
+    defaults: dict[str, str] | None = None,
+) -> vol.Schema:
+    """Build schema for pricing source selection step.
+
+    Args:
+        defaults: Default values to use
+
+    Returns:
+        Voluptuous schema for pricing source step
+
+    """
+    if defaults is None:
+        defaults = {}
+
+    return vol.Schema({
+        vol.Required(
+            CONF_PRICING_DATA_SOURCE,
+            default=defaults.get(CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE),
+            description="Pricing data source",
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    PRICING_SOURCE_AMBER,
+                    PRICING_SOURCE_AMBER_EXPRESS,
+                ],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Required(
+            CONF_COMPARISON_MODE,
+            default=defaults.get(CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE),
+            description="Enable A/B comparison mode",
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    COMPARISON_MODE_DISABLED,
+                    COMPARISON_MODE_ENABLED,
+                ],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    })
+
+
 def build_pricing_schema(
     defaults: dict[str, str] | None = None,
     errors: dict[str, str] | None = None,
     user_input: dict[str, Any] | None = None,
+    pricing_source: str = PRICING_SOURCE_AMBER,
 ) -> vol.Schema:
     """Build schema for the pricing entity selection step.
 
@@ -104,6 +157,7 @@ def build_pricing_schema(
         defaults: Default entity IDs to use
         errors: Validation errors to display
         user_input: Previously submitted input to use as defaults
+        pricing_source: Which pricing source (amber or amber_express)
 
     Returns:
         Voluptuous schema for the pricing step form
@@ -114,35 +168,63 @@ def build_pricing_schema(
     if user_input is not None:
         defaults = user_input
 
-    return vol.Schema({
+    # Determine entity prefix based on source
+    if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+        prefix = "sensor.amber_express_100h_"
+    else:
+        prefix = "sensor.100h_"
+
+    merged_defaults = dict(defaults)
+    # Always override pricing entity defaults based on pricing_source
+    # (DEFAULT_ENTITY_IDS contains Amber IDs which we need to replace for Express)
+    merged_defaults[CONF_PRICING_GENERAL_PRICE] = f"{prefix}general_price"
+    merged_defaults[CONF_PRICING_FEED_IN_PRICE] = f"{prefix}feed_in_price"
+    merged_defaults[CONF_PRICING_PRICE_SPIKE] = (
+        "binary_sensor.amber_express_100h_price_spike"
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS
+        else "binary_sensor.100h_price_spike"
+    )
+    if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+        merged_defaults[CONF_PRICING_GENERAL_FORECAST] = ""
+        merged_defaults[CONF_PRICING_FEED_IN_FORECAST] = ""
+
+    schema_fields: dict[Any, Any] = {
         vol.Required(
             CONF_PRICING_GENERAL_PRICE,
-            default=defaults.get(CONF_PRICING_GENERAL_PRICE, ""),
+            default=merged_defaults.get(CONF_PRICING_GENERAL_PRICE, ""),
             description="Grid import price ($/kWh)",
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
         vol.Required(
             CONF_PRICING_FEED_IN_PRICE,
-            default=defaults.get(CONF_PRICING_FEED_IN_PRICE, ""),
+            default=merged_defaults.get(CONF_PRICING_FEED_IN_PRICE, ""),
             description="Solar export/feed-in price ($/kWh)",
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
         vol.Required(
-            CONF_PRICING_GENERAL_FORECAST,
-            default=defaults.get(CONF_PRICING_GENERAL_FORECAST, ""),
-            description="Grid import price forecast",
-        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-        vol.Required(
-            CONF_PRICING_FEED_IN_FORECAST,
-            default=defaults.get(CONF_PRICING_FEED_IN_FORECAST, ""),
-            description="Feed-in price forecast",
-        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-        vol.Required(
             CONF_PRICING_PRICE_SPIKE,
-            default=defaults.get(CONF_PRICING_PRICE_SPIKE, ""),
+            default=merged_defaults.get(CONF_PRICING_PRICE_SPIKE, ""),
             description="Price spike alert (binary sensor)",
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="binary_sensor")
         ),
-    })
+    }
+
+    if pricing_source != PRICING_SOURCE_AMBER_EXPRESS:
+        schema_fields[
+            vol.Required(
+                CONF_PRICING_GENERAL_FORECAST,
+                default=merged_defaults.get(CONF_PRICING_GENERAL_FORECAST, ""),
+                description="Grid import price forecast",
+            )
+        ] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+        schema_fields[
+            vol.Required(
+                CONF_PRICING_FEED_IN_FORECAST,
+                default=merged_defaults.get(CONF_PRICING_FEED_IN_FORECAST, ""),
+                description="Feed-in price forecast",
+            )
+        ] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+
+    return vol.Schema(schema_fields)
 
 
 def build_solcast_schema(

@@ -133,7 +133,7 @@ STALENESS_THRESHOLDS: dict[str, timedelta] = {
     CONF_TESLEMETRY_OPERATION_MODE: timedelta(minutes=5),
     CONF_PRICING_GENERAL_PRICE: timedelta(minutes=10),
     CONF_PRICING_FEED_IN_PRICE: timedelta(minutes=10),
-    CONF_SOLCAST_FORECAST_TODAY: timedelta(hours=1),
+    CONF_SOLCAST_FORECAST_TODAY: timedelta(hours=2),
     CONF_SOLCAST_FORECAST_TOMORROW: timedelta(hours=6),
 }
 
@@ -196,7 +196,7 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": float,
         "staleness_minutes": None,
     },
-    "sensor.localshift_excess_solar_kwh": {
+    "sensor.localshift_excess_solar": {
         "category": EntityCategory.REQUIRED,
         "expected_type": float,
         "staleness_minutes": 15,

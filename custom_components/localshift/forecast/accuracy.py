@@ -23,9 +23,9 @@ class ExtendedAccuracyMetrics:
     Issue #270: Multi-horizon forecast validation with bias detection.
     """
 
-    accuracy_24h: float = 100.0
-    accuracy_7d: float = 100.0
-    accuracy_30d: float = 100.0
+    accuracy_24h: float | None = None
+    accuracy_7d: float | None = None
+    accuracy_30d: float | None = None
     bias: float = 0.0  # Systematic over/under prediction (percentage points)
     mape: float = 0.0  # Mean Absolute Percentage Error
     sample_count: int = 0
@@ -55,9 +55,9 @@ class ExtendedAccuracyMetrics:
             except (ValueError, TypeError):
                 pass
         return cls(
-            accuracy_24h=data.get("accuracy_24h", 100.0),
-            accuracy_7d=data.get("accuracy_7d", 100.0),
-            accuracy_30d=data.get("accuracy_30d", 100.0),
+            accuracy_24h=data.get("accuracy_24h", None),
+            accuracy_7d=data.get("accuracy_7d", None),
+            accuracy_30d=data.get("accuracy_30d", None),
             bias=data.get("bias", 0.0),
             mape=data.get("mape", 0.0),
             sample_count=data.get("sample_count", 0),
@@ -127,6 +127,7 @@ class ForecastAccuracyEngine:
             )
             if result is not None and result["offset"] in comparisons:
                 comparisons[result["offset"]] = result
+                entry["consumed"] = True
 
         return comparisons
 
@@ -168,8 +169,13 @@ class ForecastAccuracyEngine:
         else:
             target_dt = dt_util.as_local(target_dt)
 
-        time_diff = abs((target_dt - now_dt).total_seconds())
-        if time_diff > 300:  # 5 minute window to tolerate scheduling drift
+        if entry.get("consumed", False):
+            return None
+
+        seconds_past_due = (now_dt - target_dt).total_seconds()
+        if seconds_past_due < 0:
+            return None
+        if seconds_past_due > 1800:
             return None
 
         offset = entry.get("offset_minutes")

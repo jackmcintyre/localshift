@@ -1,0 +1,6 @@
+# Ignore all files in tmp directory
+# This is for temporary build artifacts, logs, and working files
+*
+
+# Don't track any subdirectories either
+*/

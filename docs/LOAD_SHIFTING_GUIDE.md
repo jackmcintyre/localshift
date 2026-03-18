@@ -15,7 +15,7 @@ The LocalShift integration provides sensors that forecast excess solar productio
 
 ## Available Sensors
 
-### 1. `sensor.localshift_excess_solar_kwh`
+### 1. `sensor.localshift_excess_solar`
 
 **Purpose:** Forecasted excess solar energy available for discretionary loads.
 
@@ -80,7 +80,7 @@ Always check `can_add_load_now` before adding load:
 ```yaml
 condition:
   - condition: state
-    entity_id: sensor.localshift_excess_solar_kwh
+    entity_id: sensor.localshift_excess_solar
     attribute: can_add_load_now
     state: true
 ```
@@ -151,20 +151,20 @@ automation:
       # Negative FIT coming within 4 hours
       - condition: template
         value_template: >
-          {{ state_attr('sensor.localshift_excess_solar_kwh', 'negative_fit_window_start') is not none }}
+          {{ state_attr('sensor.localshift_excess_solar', 'negative_fit_window_start') is not none }}
       # At least 5kWh excess available
       - condition: numeric_state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: excess_until_negative_fit_kwh
         above: 5
       # Safe to add load
       - condition: state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: can_add_load_now
         state: true
       # AC capacity check
       - condition: numeric_state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: safe_additional_load_kw
         above: 2.0
     action:
@@ -176,9 +176,9 @@ automation:
       - service: notify.mobile_app
         data:
           message: >
-            Pre-cooling started. {{ state_attr('sensor.localshift_excess_solar_kwh', 
+            Pre-cooling started. {{ state_attr('sensor.localshift_excess_solar', 
             'excess_until_negative_fit_kwh') | round(1) }}kWh excess before negative FIT at 
-            {{ state_attr('sensor.localshift_excess_solar_kwh', 'negative_fit_window_start') }}
+            {{ state_attr('sensor.localshift_excess_solar', 'negative_fit_window_start') }}
 ```
 
 ### Example 3: Dynamic Temperature Based on Excess
@@ -191,14 +191,14 @@ automation:
     description: "Adjust cooling based on excess solar amount"
     trigger:
       - platform: state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
     condition:
       - condition: state
         entity_id: sensor.localshift_load_shift_signal
         state: "INCREASE_LOAD"
     action:
       - variables:
-          excess: "{{ state_attr('sensor.localshift_excess_solar_kwh', 'excess_next_2h_kwh') | float }}"
+          excess: "{{ state_attr('sensor.localshift_excess_solar', 'excess_next_2h_kwh') | float }}"
           # More excess = more aggressive cooling
           target_temp: >
             {% if excess > 8 %}
@@ -262,12 +262,12 @@ automation:
     condition:
       # Pool pump needs ~1.5kW
       - condition: numeric_state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: safe_additional_load_kw
         above: 1.5
       # At least 2 hours of excess (4kWh for 2h @ 2kW)
       - condition: numeric_state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: excess_next_4h_kwh
         above: 4
       # Hasn't run today
@@ -310,7 +310,7 @@ automation:
         below: 80
       # EV charger needs at least 1.4kW (6A @ 240V)
       - condition: numeric_state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: safe_additional_load_kw
         above: 1.4
     action:
@@ -320,7 +320,7 @@ automation:
         data:
           # Set current based on available excess (240V assumption)
           value: >
-            {% set excess_kw = state_attr('sensor.localshift_excess_solar_kwh', 'safe_additional_load_kw') %}
+            {% set excess_kw = state_attr('sensor.localshift_excess_solar', 'safe_additional_load_kw') %}
             {% set max_amps = (excess_kw * 1000 / 240) | int %}
             {{ [max_amps, 32] | min }}
       - service: switch.turn_on
@@ -344,7 +344,7 @@ automation:
     condition:
       # Hot water heater is typically 3-4kW
       - condition: numeric_state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
         attribute: safe_additional_load_kw
         above: 3.5
       # Water isn't already hot
@@ -382,10 +382,10 @@ automation:
   - alias: "Manage discretionary loads by priority"
     trigger:
       - platform: state
-        entity_id: sensor.localshift_excess_solar_kwh
+        entity_id: sensor.localshift_excess_solar
     action:
       - variables:
-          safe_kw: "{{ state_attr('sensor.localshift_excess_solar_kwh', 'safe_additional_load_kw') | float }}"
+          safe_kw: "{{ state_attr('sensor.localshift_excess_solar', 'safe_additional_load_kw') | float }}"
           signal: "{{ states('sensor.localshift_load_shift_signal') }}"
       - choose:
           # Priority 1: Hot water (3.5kW) - if we have lots of excess
@@ -463,7 +463,7 @@ Use hysteresis in conditions:
 ```yaml
 condition:
   - condition: numeric_state
-    entity_id: sensor.localshift_excess_solar_kwh
+    entity_id: sensor.localshift_excess_solar
     attribute: excess_next_2h_kwh
     above: 4  # Higher threshold to start
 ```
@@ -473,7 +473,7 @@ And a lower threshold to stop:
 ```yaml
 trigger:
   - platform: numeric_state
-    entity_id: sensor.localshift_excess_solar_kwh
+    entity_id: sensor.localshift_excess_solar
     attribute: excess_next_2h_kwh
     below: 1  # Lower threshold to stop
 ```

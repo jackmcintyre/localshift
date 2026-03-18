@@ -23,6 +23,18 @@
           "teslemetry_load_power": "Sensor showing home load power"
         }
       },
+      "pricing_source": {
+        "title": "Pricing Source",
+        "description": "Choose your pricing integration and optional comparison mode.",
+        "data": {
+          "pricing_data_source": "Pricing Data Source",
+          "comparison_mode": "Comparison Mode"
+        },
+        "data_description": {
+          "pricing_data_source": "Use Amber (separate forecast entities) or Amber Express (embedded forecast attributes)",
+          "comparison_mode": "Enable shadow source reading for side-by-side comparison sensors"
+        }
+      },
       "pricing": {
         "title": "Pricing Entities",
         "description": "Select the pricing entities (e.g., from Amber Electric or Octopus Energy).",
@@ -70,6 +82,8 @@
           "teslemetry_battery_power": "Battery Power",
           "teslemetry_solar_power": "Solar Power",
           "teslemetry_load_power": "Load Power",
+          "pricing_data_source": "Pricing Data Source",
+          "comparison_mode": "Comparison Mode",
           "pricing_general_price": "Import Price",
           "pricing_feed_in_price": "Export Price",
           "pricing_general_forecast": "Import Forecast",
@@ -116,6 +130,14 @@
       "solar_weighted_avg_fit": {
         "name": "Solar Weighted Avg FIT",
         "description": "Solar-production-weighted average feed-in tariff. Shows expected export revenue rate for remaining solar today."
+      },
+      "comparison_result": {
+        "name": "Comparison Result",
+        "description": "Whether primary and shadow sources currently agree (match/mismatch)."
+      },
+      "price_delta": {
+        "name": "Price Delta",
+        "description": "Absolute import price difference between the primary and shadow pricing sources."
       },
       "battery_mode": {
         "name": "Battery Mode",
@@ -234,6 +256,10 @@
       "tesla_override_active": {
         "name": "Tesla Override Active",
         "description": "Tesla has taken control (Storm Watch, Grid Event, or VPP). LocalShift commands are ignored until event ends."
+      },
+      "amber_demand_window": {
+        "name": "Amber Demand Window",
+        "description": "Demand window state reported by the Amber Express integration."
       }
     },
     "switch": {
