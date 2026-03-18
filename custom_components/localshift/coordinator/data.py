@@ -10,6 +10,7 @@ from ..const import BatteryMode
 
 if TYPE_CHECKING:
     from ..forecast.accuracy import ExtendedAccuracyMetrics
+    from ..forecast.solcast_analysis import SolcastAnalysis
     from ..pricing.types import ForecastSlot
 
 
@@ -202,6 +203,14 @@ class CoordinatorData:
     solcast_today: list[dict[str, Any]] = field(default_factory=list)
     solcast_tomorrow: list[dict[str, Any]] = field(default_factory=list)
     allow_export: str = "unknown"
+
+    # Solcast v4.5.1 analysis attribute data (Issue #778)
+    solcast_analysis_today: SolcastAnalysis | None = None
+    solcast_analysis_tomorrow: SolcastAnalysis | None = None
+    solcast_mape: float | None = None  # From sensor.solcast_pv_forecast_accuracy
+    avg_confidence_today: float = 1.0
+    avg_confidence_tomorrow: float = 1.0
+    low_confidence_periods: list[tuple[datetime, float]] = field(default_factory=list)
 
     # Computed binary sensors
     forecast_spike_within_window: bool = False
