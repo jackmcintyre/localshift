@@ -399,9 +399,33 @@ class CounterfactualEvaluator:
         }
 
     def is_degrading(self, window_days: int = 7, threshold: float = -0.50) -> bool:
-        """Check if optimizer advantage is trending negative."""
+        """Check if optimizer advantage is trending negative.
+
+        Returns True when the average optimizer advantage falls below ``threshold``
+        (default -$0.50/day), meaning the optimizer is performing worse than the
+        TOU baseline.
+
+        When the time-based rolling window contains no data (e.g. all stored
+        results are older than ``window_days``), the method falls back to
+        evaluating all stored results so that degradation is still detected.
+
+        Args:
+            window_days: Number of days to include in the rolling average.
+            threshold: Dollar-per-day advantage below which degradation is
+                declared. Typically negative (e.g. -0.50 means losing $0.50/day
+                vs the TOU baseline is considered degradation).
+        """
         metrics = self.get_rolling_advantage(window_days)
-        return metrics["advantage_daily_avg"] < threshold
+        if metrics["days_with_data"] > 0:
+            return metrics["advantage_daily_avg"] < threshold
+
+        # Fall back to all stored results when the time window has no data
+        if not self._daily_results:
+            return False
+        avg = sum(r.optimizer_advantage for r in self._daily_results) / len(
+            self._daily_results
+        )
+        return avg < threshold
 
     def update_performance_metrics(
         self,

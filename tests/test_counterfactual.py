@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.coordinator.data import PerformanceMetrics
@@ -311,9 +310,6 @@ class TestCounterfactualEvaluator:
 
         assert evaluator.is_degrading() is False
 
-    @pytest.mark.xfail(
-        reason="TODO(#771): is_degrading() logic may be incorrect for negative advantage"
-    )
     def test_is_degrading_negative(self):
         """Test degradation detection with negative advantage."""
         evaluator = CounterfactualEvaluator()
