@@ -1356,25 +1356,19 @@ class TestCoordinatorDailySummary:
     async def test_send_daily_summary_with_notification_service(
         self, coordinator, caplog
     ):
-        """Test sending daily summary when notification service is available."""
+        """Test sending daily summary with notification service."""
         from unittest.mock import AsyncMock, MagicMock
-        import logging
 
         # Setup mock notification service
         mock_notification_service = AsyncMock()
         coordinator._notification_service = mock_notification_service
 
-        # Call the method
-        with caplog.at_level(logging.INFO):
-            await coordinator._send_daily_summary()
+        # Call the method via tick_scheduler
+        await coordinator._tick_scheduler._send_daily_summary()
 
-        # Verify
+        # Verify notification service was called
         mock_notification_service.send_daily_summary.assert_called_once_with(
             coordinator.data
-        )
-        assert any(
-            "Daily summary notification sent" in record.message
-            for record in caplog.records
         )
 
     @pytest.mark.asyncio
@@ -1382,16 +1376,9 @@ class TestCoordinatorDailySummary:
         self, coordinator, caplog
     ):
         """Test sending daily summary when notification service is not available."""
-        import logging
-
         coordinator._notification_service = None
 
-        # Call the method
-        with caplog.at_level(logging.INFO):
-            await coordinator._send_daily_summary()
+        # Call the method via tick_scheduler - should return early without error
+        await coordinator._tick_scheduler._send_daily_summary()
 
-        # Verify it completes without error
-        assert any(
-            "Daily summary notification sent" in record.message
-            for record in caplog.records
-        )
+        # Verify it completes without error (no assertion needed, just check no exception)

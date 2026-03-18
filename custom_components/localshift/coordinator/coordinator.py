@@ -513,64 +513,10 @@ class LocalShiftCoordinator:
             self._tick_scheduler.handle_medium_tick(now)
 
     @callback
-    @callback
     def _handle_slow_tick(self, now: datetime) -> None:
         """Handle SLOW tier periodic tasks (30 minutes)."""
         if self._tick_scheduler is not None:
             self._tick_scheduler.handle_slow_tick(now)
-
-    def _is_in_startup_grace(self) -> bool:  # pragma: no cover
-        """Check if we're still in the startup grace period.
-
-        Returns True if the state machine has an active startup grace period,
-        False otherwise. Used to skip expensive operations during initialization
-        when entities may not be populated yet (Issue #551).
-        """
-        if self._state_machine is None:
-            return False
-        return self._state_machine._startup_grace_until is not None
-
-    def _backfill_solar_actual(self) -> None:  # pragma: no cover
-        """Backfill actual solar energy for completed 30-min periods.
-
-        Calculates energy produced since last tick using integrated power,
-        then calls backfill_actual() on the tracker for completed periods.
-        """
-        if not hasattr(self, "solar_accuracy_tracker"):
-            return
-
-        tracker = getattr(self, "solar_accuracy_tracker", None)
-        if tracker is None:
-            return
-
-        from homeassistant.util import dt as dt_util
-
-        now = dt_util.now()
-        current_power = self.data.solar_power_kw
-
-        if self._last_solar_power_timestamp is None:
-            self._last_solar_power_timestamp = now
-            self._last_solar_power_kw = current_power
-            return
-
-        time_delta_hours = (
-            now - self._last_solar_power_timestamp
-        ).total_seconds() / 3600.0
-        if time_delta_hours < 0.01:
-            return
-
-        avg_power_kw = (self._last_solar_power_kw + current_power) / 2.0
-        energy_kwh = avg_power_kw * time_delta_hours
-
-        if energy_kwh > 0.001 and current_power > 0.01:
-            now_local = now.astimezone()
-            period_start = now_local.replace(
-                minute=(now_local.minute // 30) * 30, second=0, microsecond=0
-            )
-            tracker.backfill_actual(period_start, energy_kwh)
-
-        self._last_solar_power_timestamp = now
-        self._last_solar_power_kw = current_power
 
     @callback
     def _handle_midnight_reset(self, now: datetime) -> None:
@@ -595,17 +541,6 @@ class LocalShiftCoordinator:
 
         # Run shadow optimizer after legacy forecast is computed (Issue #403 Phase 1)
         # This is non-invasive - it only populates shadow_* fields in CoordinatorData
-
-    def _accumulate_costs(self) -> None:  # pragma: no cover
-        """Accumulate per-minute energy costs from current power and price."""
-        if self._cost_tracker is not None:
-            self._cost_tracker.accumulate_costs(self.data)
-
-    async def _send_daily_summary(self) -> None:
-        """Send end-of-day summary notification."""
-        if self._notification_service is not None:
-            await self._notification_service.send_daily_summary(self.data)
-        _LOGGER.info("Daily summary notification sent")
 
     # ------------------------------------------------------------------
     # State machine
