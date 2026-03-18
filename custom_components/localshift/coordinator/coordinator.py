@@ -25,6 +25,7 @@ from ..const import (
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_TESLEMETRY_LOAD_POWER,
+    CONF_WEATHER_ENTITY,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     SWITCH_DEFAULTS,
@@ -790,8 +791,6 @@ class LocalShiftCoordinator:
             return
 
         # Reset tracking for weather entity (most commonly reconfigured optional entity)
-        from ..const import CONF_WEATHER_ENTITY
-
         self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
 
         _LOGGER.info("Reset entity tracking for options change")
