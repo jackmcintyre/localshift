@@ -53,7 +53,7 @@ def test_amber_provider_read_forecasts():
     }
     hass.states.get.return_value = forecast_state
 
-    slots = provider.read_forecasts(hass, "sensor.100h_general_price")
+    slots = provider.read_forecasts(hass, "sensor.general_price")
 
     assert len(slots) == 2
     assert slots[0].per_kwh == 0.15

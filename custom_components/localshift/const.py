@@ -160,11 +160,11 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_ALLOW_EXPORT: "select.my_home_allow_export",
     CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID: "switch.my_home_allow_charging_from_grid",
     CONF_TESLEMETRY_SOLAR_ENERGY: "sensor.my_home_solar_energy",
-    CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
-    CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-    CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-    CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
-    CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+    CONF_PRICING_GENERAL_PRICE: "",  # Empty - discovered during config flow
+    CONF_PRICING_FEED_IN_PRICE: "",  # Empty - discovered during config flow
+    CONF_PRICING_GENERAL_FORECAST: "",  # Empty - discovered during config flow
+    CONF_PRICING_FEED_IN_FORECAST: "",  # Empty - discovered during config flow
+    CONF_PRICING_PRICE_SPIKE: "",  # Empty - discovered during config flow
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
     CONF_WEATHER_ENTITY: DEFAULT_WEATHER_ENTITY,
