@@ -287,9 +287,9 @@ class CounterfactualEvaluator:
         self._daily_results: list[CounterfactualResult] = []
         self._last_evaluation: datetime | None = None
 
-    def _build_price_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
-        """Build price data list from coordinator data."""
-        price_data: list[dict[str, Any]] = []
+    def _extract_price_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
+        """Extract price data from coordinator data."""
+        price_data = []
         if hasattr(data, "general_forecast") and data.general_forecast:
             for entry in data.general_forecast:
                 if isinstance(entry, dict):
@@ -297,14 +297,16 @@ class CounterfactualEvaluator:
                         "hour": entry.get("hour", 0),
                         "price": entry.get("price", 0.0),
                     })
+
         if not price_data and hasattr(data, "general_price"):
             for h in range(24):
                 price_data.append({"hour": h, "price": data.general_price})
+
         return price_data
 
-    def _build_solar_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
-        """Build solar data list from coordinator data."""
-        solar_data: list[dict[str, Any]] = []
+    def _extract_solar_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
+        """Extract solar data from coordinator data."""
+        solar_data = []
         if hasattr(data, "solcast_today") and data.solcast_today:
             for entry in data.solcast_today:
                 if isinstance(entry, dict):
@@ -314,16 +316,35 @@ class CounterfactualEvaluator:
                     })
         return solar_data
 
-    def _build_consumption_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
-        """Build consumption data list from coordinator data."""
-        consumption_data: list[dict[str, Any]] = []
-        if (
-            hasattr(data, "consumption_hourly_profile_kw")
-            and data.consumption_hourly_profile_kw
-        ):
-            for hour, kw in data.consumption_hourly_profile_kw.items():
+    def _extract_consumption_data(self, data: CoordinatorData) -> list[dict[str, Any]]:
+        """Extract consumption data from coordinator data."""
+        consumption_data = []
+        profile = getattr(data, "consumption_hourly_profile_kw", None)
+        if profile:
+            for hour, kw in profile.items():
                 consumption_data.append({"hour": hour, "kwh": kw})
         return consumption_data
+
+    def _store_result(self, result: CounterfactualResult) -> None:
+        """Store result and clean up old data."""
+        self._daily_results.append(result)
+        self._last_evaluation = dt_util.now()
+
+        cutoff = dt_util.now() - timedelta(days=7)
+        self._daily_results = [
+            r
+            for r in self._daily_results
+            if r.period_start.replace(tzinfo=None) >= cutoff.replace(tzinfo=None)
+        ]
+
+        _LOGGER.info(
+            "Counterfactual evaluation complete: TOU=$%.2f, Actual=$%.2f, "
+            "Advantage=$%.2f (%.1f%%)",
+            result.total_cost_tou,
+            result.total_cost_actual,
+            result.optimizer_advantage,
+            result.advantage_percent,
+        )
 
     def evaluate_daily(
         self,
@@ -334,32 +355,19 @@ class CounterfactualEvaluator:
         if not decisions:
             return None
 
+        price_data = self._extract_price_data(data)
+        solar_data = self._extract_solar_data(data)
+        consumption_data = self._extract_consumption_data(data)
+
         result = self._simulator.simulate_period(
             decisions,
-            self._build_price_data(data),
-            self._build_solar_data(data),
-            self._build_consumption_data(data),
+            price_data,
+            solar_data,
+            consumption_data,
         )
 
         if result:
-            self._daily_results.append(result)
-            self._last_evaluation = dt_util.now()
-
-            cutoff = dt_util.now() - timedelta(days=7)
-            self._daily_results = [
-                r
-                for r in self._daily_results
-                if r.period_start.replace(tzinfo=None) >= cutoff.replace(tzinfo=None)
-            ]
-
-            _LOGGER.info(
-                "Counterfactual evaluation complete: TOU=$%.2f, Actual=$%.2f, "
-                "Advantage=$%.2f (%.1f%%)",
-                result.total_cost_tou,
-                result.total_cost_actual,
-                result.optimizer_advantage,
-                result.advantage_percent,
-            )
+            self._store_result(result)
 
         return result
 
@@ -391,34 +399,9 @@ class CounterfactualEvaluator:
         }
 
     def is_degrading(self, window_days: int = 7, threshold: float = -0.50) -> bool:
-        """Check if optimizer advantage is trending negative.
-
-        Returns True when the average optimizer advantage falls below ``threshold``
-        (default -$0.50/day), meaning the optimizer is performing worse than the
-        TOU baseline.
-
-        When the time-based rolling window contains no data (e.g. all stored
-        results are older than ``window_days``), the method falls back to
-        evaluating all stored results so that degradation is still detected.
-
-        Args:
-            window_days: Number of days to include in the rolling average.
-                Must be a positive integer.
-            threshold: Dollar-per-day advantage below which degradation is
-                declared. Must be negative (e.g. -0.50 means losing $0.50/day
-                vs the TOU baseline is considered degradation).
-        """
+        """Check if optimizer advantage is trending negative."""
         metrics = self.get_rolling_advantage(window_days)
-        if metrics["days_with_data"] > 0:
-            return metrics["advantage_daily_avg"] < threshold
-
-        # Fall back to all stored results when the time window has no data
-        if not self._daily_results:
-            return False
-        avg = sum(r.optimizer_advantage for r in self._daily_results) / len(
-            self._daily_results
-        )
-        return avg < threshold
+        return metrics["advantage_daily_avg"] < threshold
 
     def update_performance_metrics(
         self,

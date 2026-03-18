@@ -143,7 +143,7 @@ def _parse_single_entry(
         Slot dict, list of slot dicts, or None
 
     """
-    if not isinstance(entry, dict):
+    if not hasattr(entry, "get"):
         return None
 
     start_time_str = entry.get("start_time")

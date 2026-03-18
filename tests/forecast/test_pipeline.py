@@ -18,6 +18,12 @@ class _StubLoadForecaster:
         self.calls.append(_kwargs)
         return self._value, "stub"
 
+    def reset_weather_adjustment_applied(self) -> None:
+        pass
+
+    def get_weather_adjustment_applied(self) -> bool:
+        return False
+
 
 class _StubPriceSignals:
     @staticmethod

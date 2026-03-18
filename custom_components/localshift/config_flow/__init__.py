@@ -18,6 +18,7 @@ from ..const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
+    CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
@@ -26,6 +27,7 @@ from ..const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -46,6 +48,7 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
+    DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -53,16 +56,20 @@ from ..const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
 )
+from ..pricing import PRICING_SOURCE_AMBER_EXPRESS
 from .schemas import (
     build_pricing_schema,
+    build_pricing_source_schema,
     build_solcast_schema,
     build_user_schema,
 )
 from .validators import (
+    discover_pricing_entities,
     get_current_notify_service,
     get_notify_services,
     get_weather_entities,
@@ -89,6 +96,12 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _get_notify_services(self) -> list[str]:
         """Get list of available notify services."""
         return await get_notify_services(self.hass)
+
+    async def _discover_pricing_defaults(self, pricing_source: str) -> dict[str, str]:
+        """Discover pricing entity defaults based on pricing source."""
+        discovered = await discover_pricing_entities(self.hass, pricing_source)
+        # Filter out None values and return only discovered entities
+        return {k: v for k, v in discovered.items() if v is not None}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -137,17 +150,40 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
 
             # Store teslemetry config, move to pricing step
             self._teslemetry_data = user_input
-            return await self.async_step_pricing()
+            return await self.async_step_pricing_source()
 
         return self.async_show_form(
             step_id="user",
             data_schema=build_user_schema(),
         )
 
+    async def async_step_pricing_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle the pricing source selection step."""
+        if user_input is not None:
+            # Store pricing source config
+            self._pricing_source_data = user_input
+            return await self.async_step_pricing()
+
+        return self.async_show_form(
+            step_id="pricing_source",
+            data_schema=build_pricing_source_schema(),
+        )
+
     async def async_step_pricing(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the pricing entity selection step."""
+        # Get pricing source from previous step
+        pricing_source = (
+            self._pricing_source_data.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            )
+            if hasattr(self, "_pricing_source_data")
+            else DEFAULT_PRICING_DATA_SOURCE
+        )
+
         if user_input is not None:
             # Validate entities
             entities_to_validate = {
@@ -159,35 +195,57 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_PRICING_FEED_IN_PRICE],
                     "sensor",
                 ),
-                CONF_PRICING_GENERAL_FORECAST: (
-                    user_input[CONF_PRICING_GENERAL_FORECAST],
-                    "sensor",
-                ),
-                CONF_PRICING_FEED_IN_FORECAST: (
-                    user_input[CONF_PRICING_FEED_IN_FORECAST],
-                    "sensor",
-                ),
                 CONF_PRICING_PRICE_SPIKE: (
                     user_input[CONF_PRICING_PRICE_SPIKE],
                     "binary_sensor",
                 ),
             }
 
+            if pricing_source != PRICING_SOURCE_AMBER_EXPRESS:
+                entities_to_validate[CONF_PRICING_GENERAL_FORECAST] = (
+                    user_input[CONF_PRICING_GENERAL_FORECAST],
+                    "sensor",
+                )
+                entities_to_validate[CONF_PRICING_FEED_IN_FORECAST] = (
+                    user_input[CONF_PRICING_FEED_IN_FORECAST],
+                    "sensor",
+                )
+
             errors = await validate_all_entities(self.hass, entities_to_validate)
             if errors:
                 return self.async_show_form(
                     step_id="pricing",
-                    data_schema=build_pricing_schema(user_input=user_input),
+                    data_schema=build_pricing_schema(
+                        user_input=user_input, pricing_source=pricing_source
+                    ),
                     errors=errors,
                 )
 
             # Store pricing config, move to solcast step
-            self._pricing_data = user_input
+            self._pricing_data = dict(user_input)
+            if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+                self._pricing_data.setdefault(CONF_PRICING_GENERAL_FORECAST, "")
+                self._pricing_data.setdefault(CONF_PRICING_FEED_IN_FORECAST, "")
             return await self.async_step_solcast()
+
+        # Get discovered defaults or fall back to static defaults
+        discovered_defaults = await self._discover_pricing_defaults(pricing_source)
+        static_defaults = {
+            CONF_PRICING_GENERAL_PRICE: "",
+            CONF_PRICING_FEED_IN_PRICE: "",
+            CONF_PRICING_PRICE_SPIKE: "",
+            CONF_PRICING_GENERAL_FORECAST: "",
+            CONF_PRICING_FEED_IN_FORECAST: "",
+        }
+
+        # Merge discovered defaults with static defaults (discovered takes precedence)
+        merged_defaults = {**static_defaults, **discovered_defaults}
 
         return self.async_show_form(
             step_id="pricing",
-            data_schema=build_pricing_schema(),
+            data_schema=build_pricing_schema(
+                defaults=merged_defaults, pricing_source=pricing_source
+            ),
         )
 
     async def async_step_solcast(
@@ -235,6 +293,7 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
             # Note: notify_service goes into options, not data, so it can be changed later
             all_data = {
                 **self._teslemetry_data,
+                **self._pricing_source_data,
                 **self._pricing_data,
                 CONF_SOLCAST_FORECAST_TODAY: user_input[CONF_SOLCAST_FORECAST_TODAY],
                 CONF_SOLCAST_FORECAST_TOMORROW: user_input[
@@ -303,7 +362,12 @@ class LocalShiftOptionsFlow(OptionsFlow):
         errors = {}
         for config_key, entity_id in entities.items():
             # Skip non-entity fields
-            if config_key in (CONF_NOTIFY_SERVICE, CONF_WEATHER_ENTITY):
+            if config_key in (
+                CONF_NOTIFY_SERVICE,
+                CONF_WEATHER_ENTITY,
+                CONF_PRICING_DATA_SOURCE,
+                CONF_COMPARISON_MODE,
+            ):
                 continue
             if not entity_id:
                 errors[config_key] = "Entity is required"
@@ -318,8 +382,37 @@ class LocalShiftOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the first step: entity mappings."""
-        return await self.async_step_entity_mappings(user_input)
+        """Handle the first step: pricing source selection."""
+        return await self.async_step_options_pricing_source(user_input)
+
+    async def async_step_options_pricing_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle pricing source selection for options flow."""
+        if user_input is not None:
+            new_data = {**self.config_entry.data, **user_input}
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, data=new_data
+            )
+            return await self.async_step_entity_mappings()
+
+        current = self.config_entry.data
+        defaults = {
+            CONF_PRICING_DATA_SOURCE: current.get(
+                CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+            ),
+            CONF_COMPARISON_MODE: current.get(
+                CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
+            ),
+        }
+
+        return self.async_show_form(
+            step_id="options_pricing_source",
+            data_schema=build_pricing_source_schema(defaults),
+            description_placeholders={
+                "integration_name": "LocalShift",
+            },
+        )
 
     async def async_step_entity_mappings(
         self, user_input: dict[str, Any] | None = None
@@ -436,9 +529,26 @@ class LocalShiftOptionsFlow(OptionsFlow):
         """Build schema for entity mappings step."""
         import voluptuous as vol
 
-        # Build schemas and extract their dict contents
         user_schema = build_user_schema(values)
-        pricing_schema = build_pricing_schema()
+        pricing_source = values.get(
+            CONF_PRICING_DATA_SOURCE,
+            DEFAULT_PRICING_DATA_SOURCE,
+        )
+        pricing_values = {
+            k: v
+            for k, v in values.items()
+            if k
+            not in (
+                CONF_PRICING_GENERAL_PRICE,
+                CONF_PRICING_FEED_IN_PRICE,
+                CONF_PRICING_PRICE_SPIKE,
+                CONF_PRICING_GENERAL_FORECAST,
+                CONF_PRICING_FEED_IN_FORECAST,
+            )
+        }
+        pricing_schema = build_pricing_schema(
+            pricing_values, pricing_source=pricing_source
+        )
         solcast_schema = build_solcast_schema(
             notify_services, weather_entities, values, include_notify=False
         )

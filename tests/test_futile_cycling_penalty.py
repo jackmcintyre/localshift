@@ -307,14 +307,15 @@ class TestStageCostFutilePenalty:
         assert terms.futile_cycling_penalty == pytest.approx(0.0, abs=1e-9)
 
     def test_nonzero_factor_gives_positive_penalty(self, default_config):
-        """With factor=1.0, penalty should equal efficiency-loss cost."""
+        """With factor=1.0, penalty equals (eff_loss + margin) × import cost of wasted energy."""
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = self._make_charge_slot()
-        charge_eff = default_config.charge_efficiency
-        discharge_eff = default_config.discharge_efficiency
         grid_import = 1.65  # kWh
         buy_price = 0.14
+        charge_eff = default_config.charge_efficiency
+        discharge_eff = default_config.discharge_efficiency
+        eff_loss = 1.0 - charge_eff * discharge_eff
 
         terms = DPPlanner.stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
@@ -325,7 +326,9 @@ class TestStageCostFutilePenalty:
             soc_pct=30.0,
             futile_cycling_penalty_factor=1.0,
         )
-        expected = grid_import * (1.0 - charge_eff * discharge_eff) * buy_price
+        # New formula: (eff_loss + 0.30) × buy_price × factor
+        margin = 0.30
+        expected = grid_import * (eff_loss + margin) * buy_price
         assert terms.futile_cycling_penalty == pytest.approx(expected, rel=0.01)
 
     def test_penalty_scales_with_factor(self, default_config):
@@ -477,7 +480,7 @@ class TestSCDiscountNearFloor:
         assert terms_high.self_consumption_value > terms_low.self_consumption_value
 
     def test_sc_no_artificial_discount_at_mid_soc(self, default_config):
-        """No artificial discount is applied: SC at mid-SOC reflects full battery energy."""
+        """SC credit at mid-SOC is reduced by cycle_penalty to prevent subsidizing marginal cycling."""
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         # At SOC=25% (floor+15pp), available battery is 15/90 of capacity ≈ 0.675 kWh
@@ -497,8 +500,10 @@ class TestSCDiscountNearFloor:
         # Available energy well exceeds the 0.25 kWh load — battery should cover it fully
         available_kwh = (soc_pct - default_config.min_soc_pct) / 100.0 * capacity_kwh
         assert available_kwh > 0.25  # ensure the scenario is sensible
-        # SC value = full load × buy_price (no artificial discount)
-        expected_sc = 0.25 * 0.14
+        # SC value = full load × (buy_price - cycle_penalty)
+        # This prevents the credit from subsidizing marginal cycling
+        cycle_penalty = default_config.cycle_penalty_per_kwh
+        expected_sc = 0.25 * (0.14 - cycle_penalty)
         assert terms.self_consumption_value == pytest.approx(expected_sc, rel=0.05)
 
 

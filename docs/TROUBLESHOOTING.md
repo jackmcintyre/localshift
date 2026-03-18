@@ -229,7 +229,7 @@ For specific entity issues:
 **Solutions:**
 1. Check `sensor.localshift_decision_history` count — needs to be 50+
 2. Enable `switch.localshift_enable_learning`
-3. Verify state machine is running — check `sensor.localshift_battery_mode` for changes
+3. Verify state machine is running — check `select.localshift_battery_mode` for mode changes
 4. Wait 2-3 days for warm-up period to complete
 
 **Expected Timeline:**

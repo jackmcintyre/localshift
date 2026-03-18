@@ -14,6 +14,7 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan_detailed"
     _attr_name = "Optimizer Plan Detailed"
     _attr_icon = "mdi:format-list-bulleted"
+    _unrecorded_attributes = frozenset({"decisions"})
 
     def _update_from_coordinator(self) -> None:
         summary = self.coordinator.data.optimizer_summary or {}

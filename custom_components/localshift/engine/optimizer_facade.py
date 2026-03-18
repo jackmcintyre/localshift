@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -114,6 +114,32 @@ class OptimizerFacade:
                 corrected,
             )
 
+    def _apply_cloud_scale_factor_to_slots(
+        self, slots: list[Any], data: CoordinatorData, now_dt: datetime
+    ) -> None:
+        scale_factor = getattr(data, "cloud_event_solar_scale_factor", None)
+        if scale_factor is None:
+            return
+
+        window_end = now_dt + timedelta(minutes=30)
+        applied = 0
+        for slot in slots:
+            slot_dt = datetime.fromisoformat(slot.timestamp_iso)
+            slot_end = slot_dt + timedelta(
+                minutes=getattr(slot, "slot_interval_minutes", 30)
+            )
+            if slot_dt >= window_end or slot_end <= now_dt:
+                continue
+            slot.solar_kwh *= scale_factor
+            applied += 1
+
+        if applied > 0:
+            _LOGGER.info(
+                "Applied cloud event scale factor %.3f to %d slots",
+                scale_factor,
+                applied,
+            )
+
     @staticmethod
     def _is_backfillable_period_start(period_start: datetime) -> bool:
         return period_start.minute in (0, 30)
@@ -149,7 +175,9 @@ class OptimizerFacade:
                 else "Australia/Sydney"
             )
             slot_builder = self._slot_builder_cls(
-                config_options=config_options, ha_timezone=ha_timezone
+                config_options=config_options,
+                ha_timezone=ha_timezone,
+                solar_accuracy_tracker=self._solar_accuracy_tracker,
             )
             slots, slot_metadata = slot_builder.build_slots(
                 data, data.adaptive_params, now_dt=now_dt
@@ -158,6 +186,7 @@ class OptimizerFacade:
             weather_condition = getattr(data, "weather_condition", None) or "unknown"
             self._record_forecasts_for_slots(slots, weather_condition)
             self._apply_bias_correction_to_slots(slots, weather_condition)
+            self._apply_cloud_scale_factor_to_slots(slots, data, now_dt)
 
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
@@ -187,6 +216,9 @@ class OptimizerFacade:
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
+
+            # Run shadow optimizer for comparison if enabled
+            self._run_shadow_comparison(data, now_dt, config_options, slot_metadata)
 
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
@@ -305,3 +337,118 @@ class OptimizerFacade:
 
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "fallback"
+
+    def _run_shadow_comparison(
+        self,
+        data: CoordinatorData,
+        now_dt: Any,
+        config_options: dict[str, Any],
+        slot_metadata: Any,
+    ) -> None:
+        """Run shadow optimizer and compare decisions if comparison mode enabled."""
+        comparison_mode = config_options.get("comparison_mode", "disabled")
+        if comparison_mode != "enabled":
+            return
+
+        # Check if shadow prices are available
+        if data.general_price_shadow <= 0:
+            # Shadow unavailable - reset to neutral
+            data.comparison_match = True
+            data.primary_decision = ""
+            data.shadow_decision = ""
+            data.price_delta = 0.0
+            _LOGGER.debug("Shadow optimizer: shadow prices unavailable, skipping")
+            return
+
+        try:
+            ha_timezone = config_options.get("ha_timezone") or (
+                str(dt_util.DEFAULT_TIME_ZONE)
+                if dt_util.DEFAULT_TIME_ZONE
+                else "Australia/Sydney"
+            )
+            slot_builder = self._slot_builder_cls(
+                config_options=config_options, ha_timezone=ha_timezone
+            )
+
+            # Build slots with shadow prices
+            shadow_slots, _ = slot_builder.build_slots(
+                data,
+                data.adaptive_params,
+                now_dt=now_dt,
+                override_general_forecast=data.general_forecast_shadow,
+                override_feed_in_forecast=data.feed_in_forecast_shadow,
+            )
+
+            if not shadow_slots:
+                _LOGGER.warning("Shadow optimizer: no slots available")
+                return
+
+            optimizer_config = _build_optimizer_config(data, config_options)
+            initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
+            if initial_soc is None:
+                _LOGGER.warning("Shadow optimizer: invalid SOC")
+                return
+
+            cycle_id = f"shadow_{uuid.uuid4().hex[:12]}"
+            inputs = OptimizerInputs(
+                cycle_id=cycle_id,
+                initial_soc_pct=initial_soc,
+                slots=shadow_slots,
+                config=optimizer_config,
+                all_solcast=slot_metadata.all_solcast,
+            )
+            result = self._planner.plan(inputs)
+
+            # Extract shadow decision using same flow as primary
+            shadow_decisions = [_serialize_decision(d) for d in result.decisions]
+            if shadow_decisions:
+                # Find current slot index for shadow run
+                current_slot_idx = _find_current_slot_index(data)
+                shadow_apply_plan = _derive_runtime_apply_plan(
+                    shadow_decisions, current_slot_idx, optimizer_config
+                )
+                shadow_mode = shadow_apply_plan.get("battery_mode", "unknown")
+            else:
+                shadow_mode = "unknown"
+
+            # Compare decisions
+            primary_mode = data.active_mode.value if data.active_mode else ""
+            data.primary_decision = primary_mode
+            data.shadow_decision = shadow_mode
+            data.comparison_match = primary_mode == shadow_mode
+
+            # Calculate price delta
+            data.price_delta = abs(data.general_price - data.general_price_shadow)
+
+            # Log mismatch only
+            if not data.comparison_match:
+                self._log_comparison_mismatch(
+                    data, primary_mode, shadow_mode, data.price_delta
+                )
+                _LOGGER.info(
+                    "Shadow optimizer: decision mismatch - Primary=%s, Shadow=%s, Delta=$%.2f",
+                    primary_mode,
+                    shadow_mode,
+                    data.price_delta,
+                )
+
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Shadow optimizer failed: %s", exc)
+
+    def _log_comparison_mismatch(
+        self,
+        data: CoordinatorData,
+        primary_mode: str,
+        shadow_mode: str,
+        price_delta: float,
+    ) -> None:
+        """Log comparison mismatch to decision_log."""
+        entry = {
+            "timestamp": dt_util.utcnow().isoformat(),
+            "old_mode": primary_mode,
+            "new_mode": shadow_mode,
+            "reason": f"Decision mismatch: Primary={primary_mode}, Shadow={shadow_mode}, Delta=${price_delta:.2f}",
+        }
+        data.decision_log.append(entry)
+        if len(data.decision_log) > 50:
+            data.decision_log = data.decision_log[-50:]

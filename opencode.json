@@ -1,22 +1,50 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugin": ["context-mode", "@tarquinen/opencode-dcp@latest"],
   "instructions": [
     ".opencode/rules",
     ".agents/rules/worktrees.md"
   ],
   "skills": {
     "paths": [
-      ".opencode/skills/ha-mcp-debug",
-      ".opencode/skills/python-refactoring",
-      ".opencode/skills/ha-integration-testing"
+      ".opencode/skills/homeassistant",
+      ".opencode/skills/python-refactoring"
     ]
   },
-  "plugin": ["@tarquinen/opencode-dcp@latest"],
   "mcp": {
     "symdex": {
       "type": "local",
       "command": ["symdex", "serve"],
       "enabled": true
+    },
+    "homeassistant": {
+      "type": "local",
+      "command": ["uvx", "ha-mcp"],
+      "environment": {
+        "HOMEASSISTANT_URL": "https://homeassistant.nectaron.jackmcintyre.net",
+        "HOMEASSISTANT_TOKEN": "{env:HA_LONG_LIVED_TOKEN}"
+      },
+      "enabled": false
+    }
+  },
+  "agent": {
+    "homeassistant": {
+      "description": "Agent with HomeAssistant MCP enabled for debugging",
+      "mode": "subagent",
+      "mcp": {
+        "homeassistant": {
+          "type": "local",
+          "command": ["uvx", "ha-mcp"],
+          "environment": {
+            "HOMEASSISTANT_URL": "https://homeassistant.nectaron.jackmcintyre.net",
+            "HOMEASSISTANT_TOKEN": "{env:HA_LONG_LIVED_TOKEN}"
+          },
+          "enabled": true
+        }
+      },
+      "tools": {
+        "homeassistant_*": true
+      }
     }
   }
 }

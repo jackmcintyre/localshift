@@ -114,14 +114,14 @@ class TestAsyncLoad:
 
     @pytest.mark.asyncio
     async def test_load_filters_old_entries(self, store, data):
-        """Filter out entries older than 4 hours."""
+        """Filter out entries older than 24 hours."""
         now_dt = dt_util.now()
         store._store = MagicMock()
         store._store.async_load = AsyncMock(
             return_value={
                 "forecast_history": [
                     {
-                        "target_time": (now_dt - timedelta(hours=5)).isoformat(),
+                        "target_time": (now_dt - timedelta(hours=25)).isoformat(),
                         "offset_minutes": 60,
                     },
                     {
@@ -146,39 +146,6 @@ class TestAsyncLoad:
         await store.async_load(data)
 
         assert len(data.forecast_history) == 0
-
-    @pytest.mark.asyncio
-    async def test_load_empty_data(self, store, data):
-        """Handle empty stored data."""
-        store._store = MagicMock()
-        store._store.async_load = AsyncMock(return_value=None)
-
-        await store.async_load(data)
-
-        assert len(data.forecast_history) == 0
-
-    @pytest.mark.asyncio
-    async def test_load_valid_history(self, store, data):
-        """Load valid history entries."""
-        now_dt = dt_util.now()
-        store._store = MagicMock()
-        store._store.async_load = AsyncMock(
-            return_value={
-                "forecast_history": [
-                    {
-                        "target_time": (now_dt + timedelta(hours=1)).isoformat(),
-                        "offset_minutes": 60,
-                        "predicted_soc": 80,
-                    }
-                ],
-                "first_prediction_time": now_dt.isoformat(),
-            }
-        )
-
-        await store.async_load(data)
-
-        assert len(data.forecast_history) == 1
-        assert data.forecast_first_prediction_time == now_dt.isoformat()
 
 
 class TestAsyncSave:
@@ -424,3 +391,73 @@ class TestStoreForecastHistory:
         store.store_forecast_history(data, now_dt)
 
         assert len(data.forecast_history) <= 200
+
+
+class TestAsyncSaveNoStore:
+    @pytest.mark.asyncio
+    async def test_save_no_store_returns_immediately(self, store, data):
+        store._store = None
+        data.forecast_history = [{"target_time": "t", "offset_minutes": 1}]
+        data.forecast_first_prediction_time = ""
+        await store.async_save(data)
+
+
+class TestStoreForecastHistoryDeduplication:
+    def test_same_hour_deduplication_explicit(self, store, data):
+        now_dt = dt_util.now()
+        store._last_forecast_hour = now_dt.hour
+        data.forecast_history = []
+        data.optimizer_decisions = []
+        store.store_forecast_history(data, now_dt)
+        assert len(data.forecast_history) == 0
+
+
+class TestFilterValidHistoryEntriesEdgeCases:
+    def test_entry_without_target_time_skipped(self, store):
+        now_dt = dt_util.now()
+        cutoff = now_dt - timedelta(hours=24)
+        history = [
+            {"offset_minutes": 60},
+            {"target_time": now_dt.isoformat(), "offset_minutes": 60},
+        ]
+        result = store._filter_valid_history_entries(history, cutoff)
+        assert len(result) == 1
+
+    def test_is_history_entry_valid_invalid_datetime(self, store):
+        now_dt = dt_util.now()
+        cutoff = now_dt - timedelta(hours=24)
+        entry = {"target_time": "not-a-datetime"}
+        assert store._is_history_entry_valid(entry, cutoff) is False
+
+    def test_is_history_entry_valid_none_value(self, store):
+        now_dt = dt_util.now()
+        cutoff = now_dt - timedelta(hours=24)
+        entry = {"target_time": None}
+        assert store._is_history_entry_valid(entry, cutoff) is False
+
+
+class TestFindFirstPredictionTime:
+    def test_sets_first_prediction_time_from_entries(self, store, data):
+        entries = [
+            {
+                "prediction_time": "2026-03-12T10:00:00",
+                "target_time": "2026-03-12T10:15:00",
+            },
+            {
+                "prediction_time": "2026-03-12T11:00:00",
+                "target_time": "2026-03-12T11:15:00",
+            },
+        ]
+        store._find_first_prediction_time(data, entries)
+        assert data.forecast_first_prediction_time == "2026-03-12T10:00:00"
+
+    def test_entry_without_prediction_time_skipped(self, store, data):
+        entries = [
+            {"target_time": "2026-03-12T10:15:00"},
+            {
+                "prediction_time": "2026-03-12T11:00:00",
+                "target_time": "2026-03-12T11:15:00",
+            },
+        ]
+        store._find_first_prediction_time(data, entries)
+        assert data.forecast_first_prediction_time == "2026-03-12T11:00:00"

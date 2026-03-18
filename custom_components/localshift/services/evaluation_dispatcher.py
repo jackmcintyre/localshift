@@ -11,6 +11,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 
 from ..const import CONF_PRICING_GENERAL_PRICE
 from ..forecast.load_deviation import LoadDeviationDetector
+from ..forecast.solar_events import SolarEventDetector
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class EvaluationDispatcher:
         self._state_machine = state_machine
         self._stale_price_threshold = stale_price_threshold
         self._load_deviation_detector = LoadDeviationDetector()
+        self._solar_event_detector = SolarEventDetector()
 
     @callback
     def on_state_change(self, _event: Event) -> None:
@@ -62,6 +64,9 @@ class EvaluationDispatcher:
         Returns True if stale price was detected.
         """
         if self._trigger_load_deviation_reoptimization(_now):
+            return False
+
+        if self._trigger_solar_event_reoptimization(_now):
             return False
 
         stale_price = self._check_stale_price()
@@ -154,6 +159,20 @@ class EvaluationDispatcher:
         self.hass.async_create_task(
             coordinator.async_recompute_and_evaluate(),
             "localshift_reoptimize_load_deviation",
+        )
+        return True
+
+    def _trigger_solar_event_reoptimization(self, now: datetime) -> bool:
+        coordinator = getattr(self._read_state, "__self__", None)
+        if coordinator is None:
+            return False
+
+        if not self._solar_event_detector.evaluate(coordinator.data, now):
+            return False
+
+        self.hass.async_create_task(
+            coordinator.async_recompute_and_evaluate(),
+            "localshift_reoptimize_solar_event",
         )
         return True
 

@@ -98,7 +98,7 @@ class BatteryController:
             Current SOC percentage (0-100) if available, None if unavailable.
 
         """
-        from ..const import CONF_TESLEMETRY_SOC  # noqa: PLC0415
+        from custom_components.localshift.const import CONF_TESLEMETRY_SOC
 
         try:
             soc_entity_id = self._get_entity_id(CONF_TESLEMETRY_SOC)

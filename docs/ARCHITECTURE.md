@@ -2,17 +2,18 @@
 
 ## Overview
 
-The LocalShift integration optimizes battery charging/discharging based on:
+The LocalShift integration optimizes Tesla Powerwall battery charging/discharging based on:
 - Amber Electric spot prices (5-minute intervals)
-- Solcast solar forecasts (30-minute intervals)
+- Solcast solar forecasts (30-minute intervals)  
 - Tesla Powerwall state (via Teslemetry)
 - Household consumption patterns
+- Adaptive learning from past decisions
 
 ## System Design Goals
 
 The architecture was designed to solve several problems from the original YAML-based automation:
 
-1. **Eliminate "stuck state" bugs** — The YAML automations had edge cases where the battery could get stuck in a state. A state machine evaluates on every change.
+1. **Eliminate "stuck state" bugs** — A state machine evaluates on every change to prevent edge cases where the battery could get stuck in a state.
 
 2. **Single source of truth** — All mode decisions flow through one priority chain, not spread across 18 independent automations.
 
@@ -21,6 +22,8 @@ The architecture was designed to solve several problems from the original YAML-b
 4. **Configurable** — No more editing YAML for threshold changes. All options available via UI.
 
 5. **Observable** — Extensive sensors and logging for debugging.
+
+6. **Data-driven optimization** — Use dynamic programming (DP) to compute optimal charging schedules.
 
 ## High-Level Architecture
 
@@ -33,910 +36,353 @@ The architecture was designed to solve several problems from the original YAML-b
 │  │                                                                       │  │
 │  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────┐  │  │
 │  │  │  Config    │    │   Entity   │    │   Coordinator            │  │  │
-│  │  │  Flow      │───▶│   Platform │───▶│   (AmberPowerwall       │  │  │
-│  │  │            │    │   (sensor, │    │    Coordinator)          │  │  │
-│  │  │            │    │    binary,  │    │                         │  │  │
-│  │  │            │    │    switch, │    │   - Subscribes to      │  │  │
- │            │    │    number,│  │  │    │     external entities   │  │  │
-│  │  │            │    │    button) │    │   - 1-min periodic     │  │  │
-│  │  └─────────────┘    └─────────────┘    │   - Coordinates       │  │  │
-│  │                                          │     all modules        │  │  │
-│  │                                          └───────────┬───────────┘  │  │
+│  │  │  Flow      │───▶│   Platform │───▶│   (LocalShiftCoordinator)│  │  │
+│  │  │            │    │   (sensor, │    │                         │  │  │
+│  │  │            │    │    binary,  │    │   - Tiered tick       │  │  │
+│  │  │            │    │    switch, │    │     scheduling        │  │  │
+│  │  │            │    │    number, │    │   - Event evaluation   │  │  │
+│  │  │            │    │    select, │    │   - Entity subscriptions│  │  │
+│  │  │            │    │    button) │    │                         │  │  │
+│  │  └─────────────┘    └─────────────┘    └───────────┬───────────┘  │  │
 │  │                                                      │              │  │
 │  │          ┌───────────────────────────────────────────┼──────────────┤  │
 │  │          │                                           │              │  │
 │  │          ▼                                           ▼              │  │
 │  │  ┌─────────────────────────────────────────────────────────────────┐│  │
-│  │  │                      Internal Modules                          ││  │
+│  │  │                      Core Services                            ││  │
 │  │  │                                                                 ││  │
-│  │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  ││  │
-│  │  │  │  State      │  │ Computation │  │    State Machine     │  ││  │
-│  │  │  │  Reader     │─▶│   Engine    │─▶│    (evaluates        │  ││  │
-│  │  │  │             │  │             │  │     desired mode)     │  ││  │
-│  │  │  │  Reads      │  │  Computes   │  │                      │  ││  │
-│  │  │  │  external   │  │  derived    │  │  ┌──────────────────┴┐ ││  │
-│  │  │  │  entities   │  │  values     │  │  │                   │ ││  │
-│  │  │  │             │  │             │  │  ▼                   │ ││  │
-│  │  │  └──────────────┘  └──────┬───────┘  │  Battery Controller │ ││  │
-│  │  │                            │          │  (executes commands)│ ││  │
-│  │  │                            │          └──────────────────────┘  ││  │
-│  │  │                            │                                   ││  │
-│  │  │                            ▼                                   ││  │
-│  │  │              ┌─────────────────────────┐                       ││  │
-│  │  │              │  Forecast Computer      │                       ││  │
-│  │  │              │  (15-min simulation)   │                       ││  │
-│  │  │              └─────────────────────────┘                       ││  │
+│  │  │  ┌─────────────────┐  ┌──────────────────┐  ┌───────────────┐ ││  │
+│  │  │  │ Evaluation     │  │ Computation      │  │   State       │ ││  │
+│  │  │  │ Dispatcher     │─▶│   Engine         │─▶│   Machine     │ ││  │
+│  │  │  │                 │  │                  │  │               │ ││  │
+│  │  │  │ - State change │  │ - Prepares       │  │ - Evaluates   │ ││  │
+│  │  │  │   triggers     │  │   forecasts      │  │   desired     │ ││  │
+│  │  │  │ - Stale price  │  │ - Runs optimizer │  │   mode        │ ││  │
+│  │  │  │ - Load deviat. │  │ - Computes plan │  │ - Applies     │ ││  │
+│  │  │  │ - Solar events │  │                  │  │   commands    │ ││  │
+│  │  │  └─────────────────┘  └────────┬─────────┘  └───────────────┘ ││  │
+│  │  │                                │                               ││  │
+│  │  │                                ▼                               ││  │
+│  │  │              ┌─────────────────────────────────────────┐     ││  │
+│  │  │              │         Optimizer Engine (DP)           │     ││  │
+│  │  │              │                                          │     ││  │
+│  │  │              │  ┌─────────────────────────────────────┐ │     ││  │
+│  │  │              │  │  OptimizerFacade                   │ │     ││  │
+│  │  │              │  │  - Slot building                   │ │     ││  │
+│  │  │              │  │  - Solar/cloud corrections        │ │     ││  │
+│  │  │              │  │  - Planner execution               │ │     ││  │
+│  │  │              │  │  - Runtime mode assignment         │ │     ││  │
+│  │  │              │  └─────────────────────────────────────┘ │     ││  │
+│  │  │              │                                          │     ││  │
+│  │  │              │  ┌─────────────┐ ┌─────────────┐ ┌──────┐ │     ││  │
+│  │  │              │  │ constraints │ │    cost     │ │types │ │     ││  │
+│  │  │              │  │  (feasible) │ │ (penalties) │ │      │ │     ││  │
+│  │  │              │  └─────────────┘ └─────────────┘ └──────┘ │     ││  │
+│  │  │              │                                          │     ││  │
+│  │  │              │  ┌─────────────────────────────────────┐ │     ││  │
+│  │  │              │  │  optimizer_dp.py                   │ │     ││  │
+│  │  │              │  │  - Dynamic programming solver       │ │     ││  │
+│  │  │              │  │  - feasible_actions()               │ │     ││  │
+│  │  │              │  │  - stage_cost()                      │ │     ││  │
+│  │  │              │  │  - terminal_cost()                  │ │     ││  │
+│  │  │              │  └─────────────────────────────────────┘ │     ││  │
+│  │  │              └─────────────────────────────────────────┘     ││  │
 │  │  └─────────────────────────────────────────────────────────────────┘│  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                                                              │
-│  External Integrations (read):                                               │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                        │
-│  │  Teslemetry │  │   Amber     │  │   Solcast  │                        │
-│  │             │  │   Electric  │  │            │                        │
-│  │  Powerwall  │◀─│   Pricing  │◀─│   Solar    │                        │
-│  │   control   │  │   forecasts │  │  forecasts │                        │
-│  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘                        │
-│         │                 │                  │                               │
-│         ▼                 ▼                  ▼                               │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                     TESLA POWERWALL HARDWARE                        │    │
-│  │                                                                     │    │
-│  │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐    │    │
-│  │   │   Solar  │  │   Grid   │  │ Battery  │  │    Home      │    │    │
-│  │   │  Panels  │  │  Import/ │  │  (13.5  │  │   Load       │    │    │
-│  │   │          │  │  Export  │  │   kWh)   │  │              │    │    │
-│  │   └──────────┘  └──────────┘  └──────────┘  └───────────────┘    │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
+│  │                                          │                          │  │
+│  │     ┌────────────────────────────────────┼────────────────────────┐  │  │
+│  │     │                                    ▼                        │  │  │
+│  │     │  ┌─────────────────────────────────────────────────────────┐│  │  │
+│  │     │  │                    Forecast System                     ││  │  │
+│  │     │  │                                                          ││  │  │
+│  │     │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ ││  │  │
+│  │     │  │  │  load.py │  │ solar.py │  │ accuracy│  │ pipeline│ ││  │  │
+│  │     │  │  │          │  │          │  │         │  │        │ ││  │  │
+│  │     │  │  │ Load     │  │ Solar    │  │ Forecast │ │Orchestr.│ ││  │  │
+│  │     │  │  │ forecast │  │ forecast │  │ accuracy │ │        │ ││  │  │
+│  │     │  │  └──────────┘  └──────────┘  └──────────┘  └────────┘ ││  │  │
+│  │     │  │                                                          ││  │  │
+│  │     │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ││  │  │
+│  │     │  │  │load_deviation│  │ solar_events │  │ corrections │  ││  │  │
+│  │     │  │  │  (1-min tick)│  │ (mid-day     │  │ (cloud      │  ││  │  │
+│  │     │  │  │              │  │  re-opt)     │  │  bias)      │  ││  │  │
+│  │     │  │  └──────────────┘  └──────────────┘  └──────────────┘  ││  │  │
+│  │     │  └─────────────────────────────────────────────────────────┘│  │  │
+│  │     │                                                               │  │  │
+│  │     │  ┌─────────────────────────────────────────────────────────┐│  │  │
+│  │     │  │                    Learning System                      ││  │  │
+│  │     │  │                                                          ││  │  │
+│  │     │  │  ┌─────────────┐  ┌─────────────┐  ┌───────────────┐   ││  │  │
+│  │     │  │  │ parameters  │  │  outcomes   │  │pattern_analyzer│  ││  │  │
+│  │     │  │  │ (Thompson   │  │ (decision   │  │ (bias         │   ││  │  │
+│  │     │  │  │  sampling)  │  │  tracking)  │  │  detection)   │   ││  │  │
+│  │     │  │  └─────────────┘  └─────────────┘  └───────────────┘   ││  │  │
+│  │     │  └─────────────────────────────────────────────────────────┘│  │  │
+│  │     │                                                               │  │  │
+│  │     └───────────────────────────────────────────────────────────────┘  │  │
+│  │                                                                       │  │
+│  │  External Integrations (read):                                       │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                        │  │
+│  │  │  Teslemetry │  │   Amber     │  │   Solcast  │                        │  │
+│  │  │             │  │   Electric  │  │            │                        │  │
+│  │  │  Powerwall  │◀─│   Pricing  │◀─│   Solar    │                        │  │
+│  │  │   control   │  │   forecasts │  │  forecasts │                        │  │
+│  │  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘                        │  │
+│  │         │                 │                  │                               │  │
+│  │         ▼                 ▼                  ▼                               │  │
+│  │  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  │                     TESLA POWERWALL HARDWARE                        │    │
+│  │  │                                                                     │    │
+│  │  │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐    │    │
+│  │  │   │   Solar  │  │   Grid   │  │ Battery  │  │    Home      │    │    │
+│  │  │   │  Panels  │  │  Import/ │  │  (13.5  │  │   Load       │    │    │
+│  │  │   │          │  │  Export  │  │   kWh)   │  │              │    │    │
+│  │  │   └──────────┘  └──────────┘  └──────────┘  └───────────────┘    │    │
+│  │  └─────────────────────────────────────────────────────────────────────┘    │
+│  └──────────────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Module Structure
 
-The integration is organized into logical modules:
-
 ```
 custom_components/localshift/
-├── coordinator/              # Data coordination
-│   ├── coordinator.py        # Main coordinator, ties all modules together
-│   └── data.py               # CoordinatorData, ChargingDecision dataclasses
+├── __init__.py               # Integration entry point, creates coordinator
+├── const.py                  # Constants, enums, entity keys, defaults
+├── computation_engine.py     # Orchestrates forecast + optimizer execution
 │
-├── engine/                   # Optimization engine
-│   ├── optimizer_dp.py       # DP solver (core algorithm)
+├── coordinator/              # Data coordination
+│   ├── coordinator.py        # LocalShiftCoordinator: tiered ticks, event handling
+│   └── data.py               # CoordinatorData, OptimizerResult dataclasses
+│
+├── engine/                   # DP Optimization engine
+│   ├── optimizer_dp.py       # Core DP solver (feasible_actions, stage_cost, terminal_cost)
+│   ├── optimizer_facade.py   # Facade: slot building, corrections, planner, runtime mode
 │   ├── optimizer_runner.py   # Coordinator integration
-│   ├── optimizer_facade.py   # Facade for optimizer access
-│   ├── slot_builder.py       # SlotContext construction
-│   ├── slot_schedule.py      # Hybrid slot schedule
-│   ├── price_calculator.py   # Price calculations
+│   ├── constraints.py        # Hard constraint functions (feasible_actions)
+│   ├── cost.py               # Cost function components (stage_cost, terminal_cost)
+│   ├── types.py              # Type definitions (SlotContext, OptimizerConfig, etc.)
+│   ├── core.py               # Core optimizer logic
+│   ├── parameters.py          # Adaptive parameter management (Thompson sampling)
+│   ├── outcomes.py           # Decision outcome tracking
+│   ├── pattern_analyzer.py   # Bias detection (weekly patterns)
+│   ├── counterfactual.py     # TOU baseline scoring
+│   ├── optimization_controller.py # Real-time contextual adjustments
+│   ├── slots.py              # Slot building (SlotBuilder, SlotBuildMetadata)
+│   ├── slot_schedule.py      # Hybrid slot schedule (5-min + 15-min)
+│   ├── price_calculator.py  # Price calculations
 │   ├── price_signal_engine.py # Price signal orchestration
-│   ├── parameter_optimizer.py # Thompson sampling parameter tuning
-│   ├── pattern_analyzer.py   # Bias detection
-│   ├── decision_outcome_tracker.py # Decision tracking
-│   ├── optimization_controller.py # Real-time evaluation
-│   ├── excess_solar.py       # Excess solar engine
+│   ├── excess_solar.py      # Excess solar detection
 │   ├── excess_solar_signals.py # Load shift signals
-│   ├── soc_simulator.py      # SOC simulation
-│   ├── spike_analyzer.py     # Price spike detection
-│   ├── utils.py              # General utilities
-│   └── weather_diagnostics.py # Weather diagnostics
+│   ├── soc_simulator.py     # SOC simulation
+│   ├── spike_analyzer.py    # Price spike detection
+│   ├── dp_math.py           # DP math utilities
+│   ├── weather_diagnostics.py # Weather diagnostics
+│   └── utils.py             # Engine utilities
 │
 ├── forecast/                 # Forecasting modules
 │   ├── pipeline.py           # Forecast orchestration
-│   ├── history.py            # Historical data fetching
 │   ├── load.py               # Load forecasting
-│   ├── load_deviation.py     # Real-time load deviation detection
 │   ├── solar.py              # Solar calculations
-│   ├── solar_accuracy.py     # Solar accuracy tracking
 │   ├── accuracy.py           # Forecast accuracy engine
+│   ├── solar_accuracy.py     # Solar accuracy tracking
+│   ├── history.py            # Historical data fetching
 │   ├── history_store.py      # Forecast history storage
-│   └── bootstrapper.py       # Forecast initialization
+│   ├── bootstrapper.py       # Forecast initialization
+│   ├── load_deviation.py     # Real-time load deviation detection (1-min tick)
+│   ├── solar_events.py       # Mid-day solar re-optimization detection
+│   └── corrections.py        # Cloud bias corrections
 │
 ├── integration/              # External integrations
 │   ├── controller.py         # Battery controller (Teslemetry)
 │   └── client.py             # Powerwall service client
 │
-├── learning/                 # ML/Adaptive learning
+├── learning/                 # Adaptive learning system
 │   ├── orchestrator.py       # Learning system coordinator
 │   └── correlation.py        # Weather correlation engine
 │
-├── services/                 # Services
-│   ├── notification.py       # Notification service
-│   └── subscription.py       # Subscription manager
+├── services/                 # Core services
+│   ├── evaluation_dispatcher.py # Decides when to trigger re-evaluation
+│   ├── notification_service.py  # Notification dispatch
+│   └── subscription_manager.py  # Entity subscriptions and timers
 │
 ├── state/                    # State machine
-│   ├── machine.py            # State machine evaluator
+│   ├── machine.py            # StateMachine: state evaluation and transitions
+│   ├── mode_configs.py       # Per-mode configuration and executor mapping
 │   ├── reader.py             # External entity reader
 │   └── validator.py          # Transition validator
 │
+├── sensors/                  # Sensor implementations (organized by domain)
+│   ├── base.py               # Base sensor class
+│   ├── pricing.py            # Price-related sensors (3 sensors)
+│   ├── forecast.py           # Forecast/optimizer sensors (9 sensors)
+│   ├── status.py             # Status/health sensors (7 sensors)
+│   ├── learning.py           # Learning-related sensors (4 sensors)
+│   ├── optimizer.py          # Optimizer-specific sensors (3 sensors)
+│   ├── misc.py               # Miscellaneous sensors (2 sensors)
+│   ├── load_deviation.py     # Load deviation sensor (1 sensor)
+│   └── cloud_event.py        # Cloud event sensor (1 sensor)
+│
 ├── utils/                    # Shared utilities
 │   ├── validation.py         # Entity validation
-│   └── costs.py              # Cost tracking
+│   ├── costs.py              # Cost tracking
+│   └── entity_configs.py     # Entity configuration helpers
 │
-├── config_flow/              # Configuration flow (HA requires this name)
+├── config_flow/              # HA configuration flow
 │   ├── __init__.py           # Config flow entry point
 │   ├── schemas.py            # Config schemas
-│   └── validators.py         # Config validators
+│   └── validators.py        # Config validators
 │
-├── *.py (entities)           # Entity platforms at root (HA requires this)
-│   ├── sensor.py             # 28 sensor entities
+├── *.py (HA entity platforms - root level per HA convention)
+│   ├── sensor.py             # 30 sensor entities (delegates to sensors/ package)
 │   ├── binary_sensor.py      # 10 binary sensor entities
 │   ├── switch.py             # 8 switch entities
 │   ├── number.py             # 4 number entities
-│   ├── select.py             # 2 select entities
+│   ├── select.py             # 2 select entities (Battery Mode, Optimization Mode)
 │   └── button.py             # 2 button entities
 │
-├── __init__.py               # Integration entry point
-├── const.py                  # Constants, enums, defaults
-├── computation_engine.py     # Computation engine (orchestrates engine/)
 ├── manifest.json             # HA manifest
-└── strings.json              # Localization strings
+├── strings.json              # Localization strings
+└── dashboard.yaml            # Dashboard configuration
 ```
 
-## Current Architecture
+## Core Components
 
-### Component Responsibilities
+### LocalShiftCoordinator (`coordinator/coordinator.py`)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    coordinator/                              │
-│  - Subscribes to entity state changes                      │
-│  - Coordinates all modules                                  │
-│  - 1-minute periodic tick                                   │
-└──────────────────┬──────────────────────────────────────────┘
-                   │
-    ┌──────────────┼──────────────┬──────────────┐
-    │              │              │              │
-    ▼              ▼              ▼              ▼
-┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
-│  state/ │  │ engine/ │  │integration│ │  state/ │
-│  reader │  │         │  │controller │ │ machine │
-└─────────┘  └─────────┘  └─────────┘  └─────────┘
-                                    │
-                            ┌───────┴───────┐
-                            │  forecast/    │
-                            │  pipeline     │
-                            └───────────────┘
-```
+The main coordinator that ties all modules together:
 
-### Data Flow
+- **Tiered tick scheduling**: Fast (1-min), Medium (5-min), Slow (30-min), Daily summary
+- **Event handling**: Listens for state changes, prices, forecasts
+- **Entity subscriptions**: Manages all HA entity subscriptions
+- **Startup bootstrap**: Ensures forecasts are ready before first optimization
+- **Listener notification**: Notifies HA of state changes
 
-1. **State Reader** (`state/reader.py`)
-   - Reads Teslemetry entities (SOC, operation mode, grid/battery/solar/load power)
-   - Reads Amber entities (prices, forecasts, spike status)
-   - Reads Solcast entities (solar forecasts)
-   - Populates `CoordinatorData`
+### EvaluationDispatcher (`services/evaluation_dispatcher.py`)
 
-2. **Computation Engine** (`computation_engine.py`)
-   - Computes derived values (directional power, mode detection, forecasts)
-   - Delegates to DP optimizer (`engine/optimizer_dp.py`) for 24-hour SOC simulation and control decisions
-   - Delegates focused responsibilities to `engine/` helpers:
-     - `price_calculator.py` → effective cheap price + solar-weighted FIT
-     - `spike_analyzer.py` → conservative spike analysis + reserve SOC
-     - `excess_solar_signals.py` → excess-solar/load-shift signal orchestration
-     - `weather_diagnostics.py` → weather-learning diagnostic population
-   - Delegates to `forecast/` helpers:
-     - `accuracy.py` → planned-vs-actual forecast accuracy comparisons
-   - Determines `active_mode` based on all conditions
+Decides when to trigger re-evaluation/re-optimization:
 
-3. **State Machine** (`state/machine.py`)
-   - Compares `active_mode` with `commanded_mode`
-   - Applies debounce timers (2-5 minutes depending on transition)
-   - Executes mode transitions via `BatteryController`
+- **State change triggers**: When relevant entities change
+- **Stale price detection**: When price data becomes stale
+- **Load deviation detection**: When load deviates >1kW for 10min or >3kW for 5min
+- **Solar event detection**: When significant solar changes occur
 
-4. **Battery Controller** (`integration/controller.py`)
-   - Issues commands to Teslemetry (operation mode, backup reserve, export mode)
-   - Validates transitions completed successfully
+### ComputationEngine (`computation_engine.py`)
 
-5. **DP Optimizer** (`engine/optimizer_dp.py`)
-   - Core DP solver with SOC discretization (50 bins by default)
-   - Computes optimal 24-hour battery control decisions
-   - Handles demand window target preparation
-   - Provides `optimizer_result` with per-slot decisions
+Orchestrates forecast computation and optimizer execution:
 
-6. **Slot Builder** (`engine/slot_builder.py`)
-   - Builds `SlotContext` objects from raw coordinator data
-   - Applies adaptive parameters (consumption bias, solar factor, etc.)
-   - Shared between DP optimizer and load forecaster
-   - Applies adaptive parameters (consumption bias, solar factor, etc.)
-   - Shared between DP optimizer and load forecaster
-   - Applies adaptive parameters (consumption bias, solar factor, etc.)
-   - Shared between DP optimizer and load forecaster
+- Prepares forecasts (load, solar, prices)
+- Runs the optimizer to compute optimal plan
+- Handles errors gracefully with fallback modes
 
-## Current Architecture Issues
+### OptimizerFacade (`engine/optimizer_facade.py`)
 
-> **Note:** The following issues were addressed during the DP optimizer migration (#441). This section is retained as historical reference.
+Facade for optimizer access:
 
-### Issue 1: Duplicate Grid Charging Logic (RESOLVED)
+- **Slot building**: Constructs time slots for optimization
+- **Solar/cloud corrections**: Applies bias corrections
+- **Planner execution**: Runs the DP planner
+- **Runtime mode assignment**: Maps optimizer actions to battery modes with safety gate
 
-**Status:** ✅ Resolved — DP optimizer is now the single source of truth for all battery decisions.
+### StateMachine (`state/machine.py`)
 
-### Issue 2: No Change Detection for Forecasts (RESOLVED)
+Evaluates desired operating mode:
 
-**Status:** ✅ Resolved — Change detection implemented via `ForecastChangeTracker`.
+- Processes mode decisions
+- Applies battery commands via integration controller
+- Handles manual overrides
 
-### Issue 3: No Proactive Export Logic (RESOLVED)
+### Integration Controller (`integration/controller.py`)
 
-**Status:** ✅ Resolved — DP optimizer handles proactive export decisions.
+Interfaces with Tesla Powerwall via Teslemetry:
 
-## Target Architecture
+- Sends charge/discharge commands
+- Reads Powerwall state
+- Handles rate limiting and retries
 
-> **Note:** This target architecture is now implemented. The DP optimizer serves as the single source of truth.
-
-### Single Source of Truth
+## Data Flow
 
 ```
-Decision Logic (single source)
-    └─> optimizer_dp.py (DPPlanner)
-        ├─> Computes optimal 24-hour plan
-        └─> Outputs per-slot decisions with reason codes
-
-Slot Builder prepares inputs
-    └─> slot_builder.py (SlotBuilder)
-        ├─> Builds SlotContext from raw coordinator data
-        └─> Applies adaptive parameters
-
-Control follows optimizer plan
-    └─> computation_engine._derive_runtime_apply_plan()
-        ├─> Maps optimizer actions to battery modes
-        └─> State machine executes transitions
+1. External entities update (prices, solar, load, battery state)
+                      │
+                      ▼
+2. Coordinator receives state change notification
+                      │
+                      ▼
+3. EvaluationDispatcher checks if re-evaluation needed
+   - State change? Stale price? Load deviation? Solar event?
+                      │
+              ┌───────┴───────┐
+              │               │
+         No change       Re-evaluate needed
+              │               │
+              ▼               ▼
+         Wait for        ComputationEngine.run()
+         next tick              │
+                               ▼
+                        Forecast pipeline
+                        (load, solar, prices)
+                               │
+                               ▼
+                        OptimizerFacade.compute()
+                               │
+                    ┌──────────┴──────────┐
+                    │                     │
+              DP solver run          Fallback (error)
+                    │                     │
+                    ▼                     ▼
+              OptimizerResult       SELF_CONSUMPTION mode
+                    │                     │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                        StateMachine.apply()
+                               │
+                               ▼
+                        IntegrationController
+                        (Tesla Powerwall commands)
 ```
 
-### Key Principles
+## Entity Summary
 
-1. **Forecast as Plan**: The forecast IS the plan for battery behavior
-2. **Control Follows Plan**: Control logic just follows what forecast says
-3. **Single Decision Point**: Only one place makes charging/exporting decisions
-4. **Change Detection**: Only recompute forecast when inputs change significantly
-5. **Extensibility**: New features follow the same pattern
-6. **Spot Price Priority**: Current spot prices preferred over forecasts for decisions
-7. **Near-Term Load Correction**: Fast-tick deviation detection can request a fresh optimizer recompute when live load diverges materially from the current forecast slot
+| Platform | Count | Examples |
+|----------|-------|----------|
+| Sensors | 30 | `sensor.localshift_optimizer_plan`, `sensor.localshift_forecast_battery` |
+| Binary Sensors | 10 | `binary_sensor.localshift_charge_boost`, `binary_sensor.localshift_excess_solar_available` |
+| Switches | 8 | `switch.localshift_automation_enabled`, `switch.localshift_spike_discharge_enabled` |
+| Numbers | 4 | `number.localshift_cheap_price_percentile`, `number.localshift_battery_target` |
+| Selects | 2 | `select.localshift_battery_mode`, `select.localshift_optimization_mode` |
+| Buttons | 2 | `button.localshift_update_forecast`, `button.localshift_reset_learning` |
 
-### Price Decision Logic
+**Total: 56 entities**
 
-Both grid charging (buy) and proactive export (sell) decisions use a **spot price first** approach:
+See [ENTITY_REFERENCE.md](ENTITY_REFERENCE.md) for complete entity details.
 
-- **Grid Charging** (`_should_grid_charge_at_slot()`): Uses current spot buy price (`general_price`) as primary signal, falls back to forecast price when spot unavailable
-- **Proactive Export** (`_should_proactive_export_at_slot()`): Uses current spot feed-in price (`feed_in_price`) as primary signal, falls back to forecast when spot unavailable
+## State Machine
 
-This ensures the system captures real-time price opportunities rather than relying solely on forecasts which may be outdated or inaccurate.
+The state machine evaluates desired operating mode based on:
 
-### Benefits
+1. **Optimizer result**: If DP optimizer produces valid plan
+2. **Manual override**: User-selected mode via select entity
+3. **Price conditions**: Cheap/expensive periods
+4. **Solar availability**: Excess solar detection
+5. **Battery constraints**: SOC, target, limits
 
-| Aspect | Before Migration | After Migration |
-|---------|---------|---------|
-| Decision logic | Multiple places, independent | DP optimizer (single source) |
-| Forecast updates | Every change (wasteful) | On significant changes |
-| Control decisions | Current state only | Optimizer-driven plan |
-| Proactive exports | Not implemented | Built into optimizer |
-| Maintainability | High risk of divergence | Single source of truth |
-| Debugging | Hard to correlate | Optimizer output = plan |
+See [PLANNING_MODEL.md](PLANNING_MODEL.md) for optimizer constraint design.
 
-## Migration History
+## Learning System
 
-The following migration phases were completed as part of #441:
+The adaptive learning system adjusts optimizer parameters:
 
-- **Phase 1:** Extract load forecast as shared intermediate
-- **Phase 2:** SlotBuilder replaces legacy `_build_slot_contexts`
-- **Phase 3:** Eliminate one-cycle lag by inlining DP optimizer
-- **Phase 4:** Remove ForecastComputer and ModeDecisionEngine
-- **Phase 5:** Migrate HA sensor entities to DP optimizer
-- **Phase 6:** Config cleanup — retire shadow/assist modes
-- **Phase 7:** Wire learning system into DP optimizer
-- **Phase 8:** Scenario tests against DP optimizer outputs
-- **Phase 9:** Dashboard updates for DP optimizer entities
+- **Parameters**: Thompson sampling for price bias, solar confidence, etc.
+- **Outcomes**: Tracks decisions and backfills results
+- **Pattern Analysis**: Detects weekly systematic biases
+- **Safety Rails**: Warm-up period, step limits, bounds, rollback
 
-## Component Details
+See [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) for details.
 
-### Optimizer Data Structures
+## Related Documentation
 
-The DP optimizer produces `OptimizerResult` containing:
-- `decisions`: List of `PlannedSlotDecision` objects (one per forecast slot)
-- `net_cost`: Projected total cost for the plan
-- `solve_time_seconds`: Optimization runtime
-- `can_reach_target`: Whether demand window target is achievable
-
-Each `PlannedSlotDecision` includes:
-- `action`: CHARGE, DISCHARGE, EXPORT, or HOLD
-- `predicted_soc_pct`: Projected SOC after this slot
-- `grid_import_kwh` / `grid_export_kwh`: Energy quantities
-- `reason_code`: Why this action was chosen (e.g., CHEAP_SLOT, DW_PREP)
-
-### Slot Context
-
-`SlotContext` objects are built by `SlotBuilder` from raw coordinator data:
-- Timestamp and interval
-- Buy/sell prices
-- Solar forecast (kWh)
-- Consumption forecast (kWh)
-- Demand window flags
-
-### Optimizer Integration
-
-The DP optimizer is called during the medium tick (every 5 minutes):
-1. `SlotBuilder` constructs `SlotContext` objects from coordinator data
-2. `DPPlanner.plan()` computes optimal decisions
-3. `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
-4. State machine executes the derived plan
-
-### Change Detection
-
-The `ForecastChangeTracker` determines when to re-run the optimizer:
-- Price changes (any change in buy/sell price)
-- SOC changes (≥1% threshold)
-- Forecast age (>5 minutes)
-- Solar forecast updates
-
-Separately, `forecast/load_deviation.py` performs a 1-minute fast-tick check against the current forecast slot while an optimizer runtime apply plan is active. A sustained deviation of more than 1.0 kW for more than 10 minutes, or a spike of more than 3.0 kW for more than 5 minutes, triggers `LocalShiftCoordinator.async_recompute_and_evaluate()`. The detector enforces a 15-minute cooldown and only corrects the near-term plan; longer-horizon slots still rely on the normal forecast pipeline.
-
-This ensures efficient computation without missing critical changes.
-
-This architecture ensures accurate near-term decisions while maintaining computational efficiency for long-term planning.
-
-```python
-daily_forecast = [
-    # Near-term entry (5-min slot, first 2 h)
-    {
-        "hour": 10,
-        "minute": 0,
-        "timestamp": "2026-02-16T10:00:00+11:00",
-        "slot_interval_minutes": 5,          # 5 for near-term, 15 for long-term
-        "predicted_soc": 85.5,
-        "solar_kwh": 0.125,                  # 1/6 of 30-min Solcast period
-        "consumption_kwh": 0.042,            # load_kw × (5/60)
-        "net_kwh": 0.083,
-        "grid_import_kwh": 0.000,
-        "grid_export_kwh": 0.000,
-        "grid_charge": True,
-        "grid_charge_boost": False,
-        "proactive_export": False,
-        "export_amount_kwh": 0.0,
-    },
-    # ... 23 more 5-min entries ...
-    # Long-term entry (15-min slot, remaining 22 h)
-    {
-        "hour": 12,
-        "minute": 0,
-        "timestamp": "2026-02-16T12:00:00+11:00",
-        "slot_interval_minutes": 15,
-        "predicted_soc": 92.0,
-        "solar_kwh": 0.750,                  # 1/2 of 30-min Solcast period
-        "consumption_kwh": 0.125,            # load_kw × (15/60)
-        "net_kwh": 0.625,
-        "grid_import_kwh": 0.000,
-        "grid_export_kwh": 0.000,
-        "grid_charge": False,
-        "grid_charge_boost": False,
-        "proactive_export": False,
-        "export_amount_kwh": 0.0,
-    },
-    # ... 87 more 15-min entries
-]
-```
-
-### Mode Decision Flow
-
-```python
-# In computation_engine.py _compute_active_mode()
-
-# 1. Find the most-recent forecast entry whose timestamp ≤ now.
-#    Granularity-agnostic: works for 5-min and 15-min slots alike.
-forecast_entry = _get_forecast_entry_for_now(data, now_dt)
-
-if forecast_entry:
-    # Grid charging (boost takes priority over normal)
-    if forecast_entry.get("grid_charge_boost") and grid_import_kwh > threshold:
-        active_mode = BatteryMode.BOOST_CHARGING
-        return
-    if forecast_entry.get("grid_charge") and grid_import_kwh > threshold:
-        active_mode = BatteryMode.GRID_CHARGING
-        return
-
-    # Proactive export (note: `if`, not `elif` — evaluated independently
-    # even when grid_charge=True but no import is available)
-    if forecast_entry.get("proactive_export"):
-        active_mode = BatteryMode.PROACTIVE_EXPORT
-        return
-
-# 2. Fallback to spike discharge, demand block, or self-consumption
-```
-
-### Change Detection Flow
-
-```python
-# In computation_engine.py
-
-class ForecastChangeTracker:
-    def _should_recompute_forecast(
-        data: CoordinatorData,
-        now_dt: datetime
-    ) -> tuple[bool, str]:
-        """Check if forecast should recompute."""
-        
-        # Price changes (ANY change)
-        if data.general_price != self._last_price:
-            return True, f"price_change_{data.general_price:.2f}"
-        
-        if data.feed_in_price != self._last_feed_in:
-            return True, f"fit_change_{data.feed_in_price:.2f}"
-        
-        # SOC change (1% threshold)
-        soc_change = abs(data.soc - self._last_soc)
-        if soc_change >= 1.0:
-            return True, f"soc_change_{soc_change:.1f}%"
-        
-        # Age check (1-minute backup)
-        if now_dt - self._last_forecast_time > timedelta(minutes=1):
-            return True, "age_1min"
-        
-        return False, "no_change"
-```
-
-## Coordinator Event Loop
-
-### State Change Handling
-
-On every external entity state change, the coordinator:
-
-1. Reads raw entity state immediately (`_read_all_external_state`) so sensor entities reflect the new value without waiting for the async task.
-2. Notifies HA listeners synchronously for fast UI updates.
-3. Queues an async evaluate task — does NOT compute derived values here.
-
-Inside the async evaluate task (`evaluate_state_machine`), while holding the `_evaluate_lock`:
-
-4. Re-reads raw state to get the latest post-transition hardware values.
-5. Runs `compute_derived_values()` (including forecast recompute if needed).
-6. Notifies HA listeners again with fully-derived values.
-7. Applies debounce + executes transition if needed.
-8. `try/finally` ensures listener notification always fires regardless of which code path returns.
-
-This design eliminates the race condition where a queued evaluation used pre-transition stale state and could immediately revert a transition.
-
-### Periodic Tick Handling
-
-Every minute:
-1. Reads raw state.
-2. Runs cost accumulation synchronously (needs raw state, no lock needed).
-3. Queues an async evaluate task (same lock-protected flow as above).
-
-## State Machine Reliability
-
-### Debounce Timer Behaviour
-
-Debounce timers for price-driven modes are reset whenever the desired mode changes away from a mode. This prevents oscillating prices from accumulating time toward the debounce without the mode being continuously desired:
-
-- Timer for `GRID_CHARGING` starts when it first becomes desired.
-- If the mode flip-flops to `SELF_CONSUMPTION` and back, the timer resets.
-- Full 5-minute debounce is always served from a continuous period of stable desire.
-
-### Health Check Cooldown
-
-The health check runs every minute to detect hardware state drift. If a mismatch is found, correction commands are only re-issued if at least 5 minutes have elapsed since the last correction (`_MIN_CORRECTION_INTERVAL`). This prevents command spam during the 15–30 second window when Teslemetry's cloud state lags behind a legitimate transition.
-
-### Validation Timeout
-
-After issuing transition commands, the system polls for hardware confirmation for up to **10 seconds** (reduced from 20 seconds). The "operation_mode matches → success" early-exit logic ensures fast confirmation when Teslemetry responds promptly. The reduction lowers the maximum worst-case `in_mode_transition` lock time from ~40 s to ~25 s per transition.
-
-## Risks and Mitigations
-
-| Risk | Mitigation |
-|------|-------------|
-| Forecast cache becomes stale | 1-minute backup timer |
-| Forecast unavailable at startup | Always recompute if `_last_soc < 0` |
-| Mode transition during forecast recompute | Skip recompute if `in_mode_transition` |
-| Forecast and control diverge | Single source of truth design |
-| Solar forecast changes undetected | 1-minute timer catches all changes |
-
-## Future Enhancements
-
-1. **Dynamic thresholds**: Auto-tune change detection thresholds
-2. **Multi-battery support**: Extend for multiple Powerwalls
-3. **Cost optimization**: Goal-seeking algorithm for maximum savings
-
-## Computation Engine Modularization (Issue #146)
-
-To reduce `computation_engine.py` complexity and improve maintainability, forecast-adjacent logic has been extracted into dedicated helper modules under `custom_components/localshift/engine/` and `custom_components/localshift/forecast/`.
-
-### Why this extraction was done
-
-- Keep `ComputationEngine` focused on orchestration and lifecycle concerns
-- Make each algorithm area independently testable and easier to reason about
-- Reduce risk when modifying one decision area (e.g., spike logic) by isolating it from unrelated sections
-
-### Delegation pattern
-
-- `ComputationEngine` constructs helper engines in `__init__` and injects dependencies (callbacks/utilities/config).
-- Existing public/internal method signatures in `ComputationEngine` are retained as thin wrappers for compatibility.
-- Behavior remains forecast-driven and compatible with existing coordinator/state-machine flow.
-
-## Weather Correlation (Issue #61)
-
-The integration includes a weather-aware consumption prediction system using a degree-day model that learns the correlation between temperature and household load.
-
-### Component: WeatherCorrelation (`learning/correlation.py`)
-
-The `WeatherCorrelation` class manages:
-- Loading/saving learned coefficients to HA storage
-- Learning from temperature/load observations
-- Predicting load adjustments based on temperature forecasts
-
-### Degree-Day Model
-
-The model learns separate coefficients for each hour of the day:
-
-| Coefficient | Description |
-|-------------|-------------|
-| **Base load** | Minimum load at mild temperatures (18-24°C band) |
-| **Cooling coefficient** | Additional kW per °C above cooling threshold (default 24°C) |
-| **Heating coefficient** | Additional kW per °C below heating threshold (default 18°C) |
-
-### How It Works
-
-1. **Learning Phase**: The system observes temperature and load pairs, updating hourly coefficients using a moving average approach
-2. **Prediction Phase**: When forecasting consumption, the system applies learned coefficients based on forecasted temperatures
-3. **Confidence Levels**: Based on sample count:
-   - Low: < 7 samples
-   - Medium: 7-30 samples
-   - High: 30+ samples
-
-### Configuration
-
-Weather correlation is configured via the integration options:
-- **Weather Entity**: Home Assistant weather entity providing temperature forecasts
-- **Cooling Threshold**: Temperature above which cooling load increases (default 24°C)
-- **Heating Threshold**: Temperature below which heating load increases (default 18°C)
-
-### Benefits
-
-- More accurate consumption predictions during temperature extremes
-- Better battery SOC planning during hot/cold days
-- Reduced risk of unexpected grid imports during demand windows
-
-## Learning System Architecture (Issue #170)
-
-The integration includes an adaptive learning system that continuously optimizes battery decisions based on measured outcomes. This is a **feedback loop system** that starts in observation-only mode and progressively enables optimization as data accumulates.
-
-### High-Level Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        LEARNING SYSTEM LOOP                                  │
-│                                                                              │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         │
-│  │   State         │    │   Decision      │    │   Parameter     │         │
-│  │   Machine       │───▶│   Outcome       │───▶│   Optimizer     │         │
-│  │   (decisions)   │    │   Tracker       │    │   (tuning)      │         │
-│  └─────────────────┘    └─────────────────┘    └─────────────────┘         │
-│          │                      │                      │                    │
-│          │                      ▼                      │                    │
-│          │              ┌─────────────────┐            │                    │
-│          │              │   Pattern       │            │                    │
-│          │              │   Analyzer      │            │                    │
-│          │              └─────────────────┘            │                    │
-│          │                      │                      │                    │
-│          ▼                      ▼                      ▼                    │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Optimization Controller                           │   │
-│  │                    (real-time parameter evaluation)                  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                      │                                      │
-│                                      ▼                                      │
-│                          AdaptiveParameters                                 │
-│                          (applied to decisions)                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Component Responsibilities
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| **DecisionOutcomeTracker** | `engine/decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
-| **ParameterOptimizer** | `engine/parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
-| **PatternAnalyzer** | `engine/pattern_analyzer.py` | Detects systematic biases across contextual dimensions |
-| **OptimizationController** | `engine/optimization_controller.py` | Real-time parameter evaluation with contextual adjustments |
-
-### Data Flow
-
-1. **Decision Recording** (State Machine → Tracker)
-   - On every mode transition, `DecisionOutcomeTracker.record_decision()` is called
-   - Records: timestamp, mode, SOC, prices, forecasts, weather condition
-
-2. **Outcome Backfilling** (Coordinator → Tracker)
-   - On periodic tick, `backfill_outcomes()` fills in actual results
-   - Computes: actual cost, SOC change, export/import amounts, outcome score
-
-3. **Parameter Optimization** (Coordinator → Optimizer)
-   - Daily (after 50+ decisions), `ParameterOptimizer.optimize()` runs
-   - Uses Thompson sampling to find optimal parameter values
-   - Applies safety rails: step limits, bounds, rollback
-
-4. **Pattern Analysis** (Coordinator → Analyzer)
-   - Weekly, `PatternAnalyzer.analyze()` detects biases
-   - Generates `BiasCorrection` recommendations
-   - Feeds into parameter optimizer as priors
-
-5. **Real-time Evaluation** (Computation Engine → Controller)
-   - Every computation cycle, `OptimizationController.evaluate()` runs
-   - Applies contextual adjustments based on current conditions
-   - Returns final `AdaptiveParameters` for decision engines
-
-### Adaptive Parameters
-
-The learning system adjusts these parameters:
-
-| Parameter | Default | Range | Effect |
-|-----------|---------|-------|--------|
-| `cheap_price_bias` | 0.0 | -5.0 to +5.0 c/kWh | Adjusts cheap price threshold |
-| `solar_confidence_factor` | 1.0 | 0.5 to 1.5 | Multiplier on solar forecasts |
-| `overnight_drain_safety_margin` | 0.0 | -5.0 to +10.0 % | Extra SOC buffer for overnight |
-| `grid_charge_soc_headroom` | 0.0 | -5.0 to +10.0 % | Extra SOC above target |
-| `export_threshold_adjustment` | 0.0 | -3.0 to +3.0 c/kWh | Adjusts export profitability |
-| `consumption_forecast_bias` | 0.0 | -0.5 to +0.5 kW | Adjusts consumption predictions |
-
-### Multi-Objective Scoring
-
-Each decision is scored using weighted objectives:
-
-```
-score = 0.50 × cost_score 
-      + 0.20 × export_avoidance_score 
-      + 0.20 × target_achievement_score 
-      + 0.10 × cycle_reduction_score
-```
-
-### Safety Rails
-
-| Mechanism | Description |
-|-----------|-------------|
-| **Warm-up period** | No adjustments until 50+ decisions collected |
-| **Step limits** | Parameters move max 1 step per daily update |
-| **Bounds clamping** | All parameters stay within defined min/max |
-| **Rollback** | Revert if 7-day score decreases for 3 consecutive days |
-
-### Storage Keys
-
-Learning data persists across restarts using HA Storage:
-
-| Key | Content |
-|-----|---------|
-| `localshift.decision_outcomes.{entry_id}` | Decision records (last 500) |
-| `localshift.param_optimizer.{entry_id}` | Optimizer state |
-| `localshift.pattern_analysis.{entry_id}` | Pattern analysis data |
-| `localshift.opt_controller.{entry_id}` | Controller weights |
-
-### Integration Points
-
-```python
-# coordinator.py - Initialization
-self.decision_tracker = DecisionOutcomeTracker(hass, entry.entry_id)
-self.param_optimizer = ParameterOptimizer(hass, entry.entry_id)
-self.pattern_analyzer = PatternAnalyzer(hass, entry.entry_id)
-self.optimization_controller = OptimizationController(...)
-
-# coordinator.py - Periodic tick
-self.decision_tracker.backfill_outcomes(self.data)
-if self.param_optimizer.should_update(decision_count):
-    self.data.adaptive_params = self.param_optimizer.optimize(decisions)
-
-# computation_engine.py - Apply parameters
-data.adaptive_params = self._optimization_controller.evaluate(data)
-self._forecast_computer.set_adaptive_params(data.adaptive_params)
-```
-
-## Day-of-Week Aware Consumption Profiles (Issue #60)
-
-The integration supports separate weekday and weekend consumption profiles for improved forecast accuracy in households with different daily patterns.
-
-### How It Works
-
-1. **Sample Separation**: Historical load samples are separated by day type (weekday: Mon-Fri, weekend: Sat-Sun)
-2. **Profile Calculation**: Separate hourly averages are calculated for each profile
-3. **Profile Selection**: When forecasting consumption, the appropriate profile is selected based on the target day's day-of-week
-4. **Fallback**: If insufficient samples exist for day-specific profiles, the system falls back to combined averages
-
-### Requirements for Day-Specific Profiles
-
-- Minimum 12 hours with 3+ samples each in both weekday and weekend profiles
-- If requirements not met, falls back to combined profile
-
-### Diagnostic Fields
-
-| Field | Description |
-|-------|-------------|
-| `consumption_profile_type` | "weekday_weekend" or "combined_fallback" |
-| `weekday_sample_counts` | Sample counts per hour for weekdays |
-| `weekend_sample_counts` | Sample counts per hour for weekends |
-| `weekday_hourly_profile_kw` | Weekday hourly averages |
-| `weekend_hourly_profile_kw` | Weekend hourly averages |
-
-## Statistics API Integration (Issue #267-#270)
-
-The integration includes a Statistics API integration layer that enables long-term validation of forecast accuracy and decision outcomes using Home Assistant's built-in statistics database.
-
-### Component: StatisticsBackfiller (`statistics_backfiller.py`)
-
-The `StatisticsBackfiller` class provides ground-truth validation by comparing estimated outcomes from the decision log against actual metered statistics from Home Assistant's recorder.
-
-**Key Features:**
-
-| Feature | Description |
-|---------|-------------|
-| **Decision Validation** | Compares estimated vs actual grid import/export |
-| **Variance Tracking** | Calculates percentage variance between estimates and actuals |
-| **Discrepancy Detection** | Flags decisions where variance exceeds 10% |
-| **Multi-Entity Support** | Validates grid import, export, battery charge, and discharge |
-
-**Data Flow:**
-
-```
-Decision Log (estimates)     Home Assistant Recorder (actuals)
-         │                              │
-         │                              │
-         ▼                              ▼
-    ┌─────────────────────────────────────────┐
-    │         StatisticsBackfiller            │
-    │                                         │
-    │  1. Fetch statistics for period         │
-    │  2. Filter decisions by time range      │
-    │  3. Compare estimated vs actual         │
-    │  4. Generate BackfillReport             │
-    └─────────────────────────────────────────┘
-                        │
-                        ▼
-                BackfillReport
-                - decisions_validated
-                - discrepancies_found
-                - variance metrics
-```
-
-### Component: Extended Forecast Accuracy (`forecast_accuracy.py`)
-
-Extended accuracy tracking with multi-horizon validation and bias detection.
-
-**ExtendedAccuracyMetrics:**
-
-| Metric | Description |
-|--------|-------------|
-| `accuracy_24h` | 24-hour forecast accuracy (%) |
-| `accuracy_7d` | 7-day forecast accuracy (%) |
-| `accuracy_30d` | 30-day forecast accuracy (%) |
-| `bias` | Systematic prediction bias (+ = over-predict, - = under-predict) |
-| `mape` | Mean Absolute Percentage Error |
-
-**Use Cases:**
-
-1. **Model Calibration** - Identify systematic bias to adjust forecast models
-2. **Learning System Feedback** - Feed accuracy metrics into parameter optimization
-3. **Quality Monitoring** - Track forecast quality over time with long-term trends
-
-### Integration with Learning System
-
-The Statistics API integration provides ground-truth data for the learning system:
-
-```
-StatisticsBackfiller ──► Decision Quality Scores
-         │
-         ▼
-Pattern Analyzer ──► Bias Corrections
-         │
-         ▼
-Parameter Optimizer ──► Adjusted Parameters
-```
-
-This creates a closed feedback loop where actual outcomes inform parameter adjustments, enabling continuous improvement of forecast accuracy.
-
-### Configuration
-
-Statistics validation requires entities with `state_class: measurement` or `state_class: total_increasing`. The following sensors now support long-term statistics (Issue #266):
-
-| Sensor | State Class |
-|--------|-------------|
-| `sensor.localshift_forecast_battery` | measurement |
-| `sensor.localshift_forecast_prices` | measurement |
-| `sensor.localshift_forecast_grid` | measurement |
-| `sensor.localshift_forecast_accuracy` | measurement |
-
-### Storage
-
-Backfill reports and extended forecast accuracy data are stored in `CoordinatorData` and exposed via sensors:
-
-| Sensor | Data Source |
-|--------|-------------|
-| `sensor.localshift_backfill_status` | `BackfillReport` |
-| `sensor.localshift_extended_forecast_accuracy` | `ExtendedAccuracyMetrics` |
-
----
-
-## DP Optimizer Subsystem (Issue #403)
-
-The integration includes a DP (Dynamic Programming) optimizer subsystem that computes optimal battery control decisions using deterministic planning. It runs in **shadow mode** alongside the legacy planner to enable A/B comparison before any control changes.
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        COORDINATOR CYCLE                                     │
-│                                                                              │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         │
-│  │   Legacy        │    │   DP Optimizer  │    │   Planner       │         │
-│  │   Planner       │    │   (shadow)      │    │   Comparator    │         │
-│  │   (control)     │    │                 │    │                 │         │
-│  │                 │    │   DPPlanner     │    │ PlannerComparator│        │
-│  │ ForecastComputer│───▶│   .plan()       │───▶│   .compare()    │         │
-│  │                 │    │                 │    │                 │         │
-│  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘         │
-│           │                      │                      │                   │
-│           ▼                      ▼                      ▼                   │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    CoordinatorData                                   │   │
-│  │                                                                      │   │
-│  │  daily_forecast          optimizer_shadow_result                    │   │
-│  │  (legacy plan)           optimizer_shadow_decisions                 │   │
-│  │  [AUTHORITATIVE]         optimizer_shadow_summary                   │   │
-│  │                          optimizer_comparison                       │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                      │                                      │
-│                                      ▼                                      │
-│                          Optimizer Sensors                                  │
-│                          (shadow_plan, shadow_summary, comparison)          │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Component Responsibilities
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| **DPPlanner** | `engine/optimizer_dp.py` | Core DP solver with SOC discretization |
-| **SlotBuilder** | `engine/slot_builder.py` | Builds SlotContext from coordinator data |
-| **run_optimizer()** | `engine/optimizer_runner.py` | Coordinator integration entry point |
-
-### Data Flow
-
-1. **Optimizer Execution** (every medium tick)
-   - `SlotBuilder.build_slot_contexts()` constructs `SlotContext` objects
-   - `run_optimizer()` builds `OptimizerConfig` from integration options
-   - `DPPlanner.plan()` computes optimal decisions
-   - Populates optimizer fields in `CoordinatorData`
-
-2. **Apply Plan Derivation**
-   - `_derive_runtime_apply_plan()` maps optimizer actions to battery modes
-   - Safety gate validates prerequisites
-   - On failure: falls back to SELF_CONSUMPTION for this cycle
-   - Tracks `optimizer_last_apply_status` for diagnostics
-
-### CoordinatorData Optimizer Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `optimizer_result` | `OptimizerResult` | Full optimizer result (success, solve_time, net_cost, decisions) |
-| `optimizer_apply_plan` | `list[dict]` | Apply plan derived from optimizer for execution |
-| `optimizer_last_apply_status` | `dict` | Apply status (success/failure/block_reason) |
-| `optimizer_last_apply_timestamp` | `str` | ISO timestamp of last successful apply |
-
-### Optimizer Sensors
-
-| Sensor | Purpose |
-|--------|---------|
-| `sensor.localshift_optimizer_plan_detailed` | Per-slot optimizer decisions |
-| `sensor.localshift_optimizer_summary` | Aggregate optimizer metrics |
-
-### Safety Guarantees
-
-**Always Active:**
-- **Safety gate** validates prerequisites each cycle: solve success, slot alignment valid, forecast freshness acceptable
-- Any failed gate triggers immediate **fallback to SELF_CONSUMPTION**
-- **Cooldown period** after repeated failures prevents rapid re-attempts
-- Unsupported/ambiguous optimizer actions fall back to safe defaults
-- Feature can be **disabled** at any time via configuration
-
-### Related Documentation
-
-- [OPTIMIZER_DP_ROLLOUT.md](OPTIMIZER_DP_ROLLOUT.md) - Rollout history (completed)
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Optimizer troubleshooting
-
----
-
-## References
-
-- `FORECAST_DRIVEN_CONTROL.md` - Detailed design for forecast-driven control
-- `CHANGE_DETECTION.md` - Change detection system design
-- `README.md` - User-facing documentation
-- `TEST_SCENARIOS.md` - Test scenarios and validation
+- [PLANNING_MODEL.md](PLANNING_MODEL.md) - Optimizer constraint design (MUST READ for engine changes)
+- [ENTITY_REFERENCE.md](ENTITY_REFERENCE.md) - Complete entity catalog
+- [INDEX.md](INDEX.md) - Documentation index with domain-specific guides
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) - Development patterns and conventions

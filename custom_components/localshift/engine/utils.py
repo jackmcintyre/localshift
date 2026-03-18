@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.util import dt as dt_util
 
+from custom_components.localshift.pricing.types import ForecastSlot
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -136,53 +138,65 @@ def percentile(prices: list[float], percentile_value: float) -> float:
 
 
 def scan_forecast_for_spike(
-    forecasts: list[dict[str, Any]],
+    forecasts: list[ForecastSlot],
     now_dt: datetime,
     cutoff: datetime,
 ) -> bool:
-    """Return True if any forecast has spike_status == 'spike' in window."""
+    """Return True if any forecast indicates spike in window.
+
+    Issue #300: Simplified to use is_spike field from normalized ForecastSlot data.
+    Providers now normalize data to include is_spike, eliminating need for
+    provider-specific spike detection logic.
+
+    Args:
+        forecasts: List of ForecastSlot objects (normalized with is_spike field)
+        now_dt: Current datetime
+        cutoff: End of time window to check
+
+    Returns:
+        True if any spike detected in the window
+
+    """
     for f in forecasts:
-        start = parse_forecast_dt(f.get("start_time"))
-        if start is None:
-            continue
-        start_local = dt_util.as_local(start)
+        start = f.start_time
+        is_spike = f.is_spike
+
+        start_local = dt_util.as_local(start) if isinstance(start, datetime) else start
         if start_local >= now_dt and start_local <= cutoff:
-            if f.get("spike_status") == "spike":
+            if is_spike is True:
                 return True
     return False
 
 
 def max_forecast_price(
-    forecasts: list[dict[str, Any]],
+    forecasts: list[ForecastSlot],
     now_dt: datetime,
     cutoff: datetime,
 ) -> float:
     """Return maximum per_kwh price from forecasts within window."""
     max_price = 0.0
     for f in forecasts:
-        start = parse_forecast_dt(f.get("start_time"))
-        if start is None:
-            continue
-        start_local = dt_util.as_local(start)
+        start_local = dt_util.as_local(f.start_time)
         if start_local >= now_dt and start_local <= cutoff:
-            price = float(f.get("per_kwh", 0))
-            if price > max_price:
-                max_price = price
+            if f.per_kwh > max_price:
+                max_price = f.per_kwh
     return round(max_price, 2)
 
 
 def analyze_spike_window(
-    forecasts: list[dict[str, Any]],
+    forecasts: list[ForecastSlot],
     now_dt: datetime,
     max_lookahead_hours: float = 8.0,
 ) -> tuple[datetime | None, float, list[float]]:
     """Analyze feed-in forecast for spike window details.
 
+    Issue #300: Updated to use ForecastSlot type with direct attribute access.
+
     Scans the forecast to find the current/ongoing spike window and extracts
     key information for conservative spike discharge decisions.
 
     Args:
-        forecasts: Feed-in price forecast list
+        forecasts: Feed-in price forecast list of ForecastSlot objects
         now_dt: Current datetime
         max_lookahead_hours: Maximum hours to look ahead for spike analysis
 
@@ -201,19 +215,15 @@ def analyze_spike_window(
     all_spike_prices: list[float] = []
 
     for f in forecasts:
-        start = parse_forecast_dt(f.get("start_time"))
-        if start is None:
-            continue
-
-        start_local = dt_util.as_local(start)
+        start_local = dt_util.as_local(f.start_time)
 
         # Only consider slots within our lookahead window
         if start_local < now_dt or start_local > cutoff:
             continue
 
-        # Check if this is a spike slot
-        if f.get("spike_status") == "spike":
-            price = float(f.get("per_kwh", 0))
+        # Issue #300: Use is_spike field from ForecastSlot
+        if f.is_spike:
+            price = f.per_kwh
 
             if spike_start is None:
                 spike_start = start_local

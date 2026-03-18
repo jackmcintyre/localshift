@@ -26,3 +26,37 @@ def test_coordinator_data_has_independent_load_deviation_diagnostics():
 
     assert first.load_deviation_diagnostics == {"status": "triggered"}
     assert second.load_deviation_diagnostics == {}
+
+
+def test_coordinator_data_weather_anomaly_weight_defaults_to_1():
+    data = CoordinatorData()
+    assert data.weather_anomaly_weight == 1.0
+
+
+def test_coordinator_data_weather_anomaly_weight_can_be_set():
+    data = CoordinatorData()
+    data.weather_anomaly_weight = 0.3
+    assert data.weather_anomaly_weight == 0.3
+
+
+def test_coordinator_data_forecast_types():
+    """Test CoordinatorData forecast fields accept ForecastSlot."""
+    from datetime import datetime, timezone
+
+    from custom_components.localshift.pricing.types import ForecastSlot
+
+    data = CoordinatorData()
+
+    slot = ForecastSlot(
+        start_time=datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
+        duration=30,
+        per_kwh=0.15,
+        is_spike=False,
+        source_type="amber",
+    )
+
+    data.general_forecast = [slot]
+    data.feed_in_forecast = [slot]
+
+    assert len(data.general_forecast) == 1
+    assert data.general_forecast[0].per_kwh == 0.15

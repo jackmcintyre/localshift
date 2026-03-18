@@ -20,6 +20,7 @@ from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
 from custom_components.localshift.coordinator import CoordinatorData
+from custom_components.localshift.pricing.types import ForecastSlot
 from simulations.schema import Scenario, discover_scenarios
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,36 @@ def dt_aware(year, month, day, hour, minute=0, second=0, tz_offset_hours=11):
 # ---------------------------------------------------------------------------
 # Setup helpers
 # ---------------------------------------------------------------------------
+
+
+def _convert_forecast_to_slot(forecast_dict: dict) -> ForecastSlot:
+    """Convert forecast dict from JSON to ForecastSlot.
+
+    Handles two JSON formats:
+    - Legacy: {"start_time": "...", "end_time": "...", "per_kwh": ..., "is_spike": ...}
+    - New: {"start_time": "...", "duration": ..., "per_kwh": ..., "spike_status": "spike"|"none"}
+    """
+    start_time = datetime.fromisoformat(forecast_dict["start_time"])
+
+    # Calculate duration from either end_time or duration field
+    if "duration" in forecast_dict:
+        duration_minutes = forecast_dict["duration"]
+    else:
+        end_time = datetime.fromisoformat(forecast_dict["end_time"])
+        duration_minutes = int((end_time - start_time).total_seconds() / 60)
+
+    # Handle is_spike from either is_spike or spike_status field
+    is_spike = forecast_dict.get("is_spike", False)
+    if "spike_status" in forecast_dict:
+        is_spike = forecast_dict["spike_status"] == "spike"
+
+    return ForecastSlot(
+        start_time=start_time,
+        duration=duration_minutes,
+        per_kwh=forecast_dict["per_kwh"],
+        is_spike=is_spike,
+        source_type="test",
+    )
 
 
 def setup_coordinator_data(input_data: dict) -> CoordinatorData:
@@ -72,8 +103,17 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
     # Forecast data
     data.solcast_today = input_data.get("solcast_today", [])
     data.solcast_tomorrow = input_data.get("solcast_tomorrow", [])
-    data.general_forecast = input_data.get("general_forecast", [])
-    data.feed_in_forecast = input_data.get("feed_in_forecast", [])
+
+    # Convert dict forecasts to ForecastSlot objects
+    general_forecast_dicts = input_data.get("general_forecast", [])
+    data.general_forecast = [
+        _convert_forecast_to_slot(f) for f in general_forecast_dicts
+    ]
+
+    feed_in_forecast_dicts = input_data.get("feed_in_forecast", [])
+    data.feed_in_forecast = [
+        _convert_forecast_to_slot(f) for f in feed_in_forecast_dicts
+    ]
 
     # Initialize empty containers
     data.decision_log = []
@@ -566,6 +606,126 @@ def test_high_solar_no_export_at_negative_prices():
         )
 
 
+def test_recoverable_negative_fit_exports_before_bad_window():
+    """Recoverability-based negative-FIT avoidance (Issue #719).
+
+    Scenario: Evening start at 58% SOC, positive FIT overnight, strong solar
+    tomorrow with non-positive FIT during the solar spill window.
+
+    The optimizer should proactively export at positive FIT prices BEFORE
+    the first non-positive FIT slot to create headroom and reduce later
+    forced export at bad prices.
+
+    This test proves the feature works: proactive export occurs at positive
+    FIT slots before the bad-price window starts.
+    """
+    data = run_scenario("recoverable-negative-fit-preexport")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    export_slots = get_slots_by_action(decisions, "export_proactive")
+
+    first_bad_idx = next(
+        (i for i, slot in enumerate(decisions) if slot["sell_price"] <= 0), None
+    )
+
+    assert first_bad_idx is not None, (
+        "recoverable-negative-fit-preexport: no non-positive FIT slot found"
+    )
+
+    assert export_slots, (
+        f"recoverable-negative-fit-preexport: expected proactive export "
+        f"before bad-FIT window at slot {first_bad_idx}, but got none"
+    )
+
+    for slot in export_slots:
+        assert slot["sell_price"] > 0, (
+            f"recoverable-negative-fit-preexport: export at slot {slot['slot_index']} "
+            f"has non-positive sell_price={slot['sell_price']:.4f}"
+        )
+
+    for slot in export_slots:
+        assert slot["slot_index"] < first_bad_idx, (
+            f"recoverable-negative-fit-preexport: export at slot {slot['slot_index']} "
+            f"is at or after first bad-FIT slot {first_bad_idx}"
+        )
+
+    total_export_kwh = sum(slot.get("grid_export_kwh", 0) for slot in export_slots)
+    assert total_export_kwh > 0, (
+        "recoverable-negative-fit-preexport: export slots exist but "
+        "total grid_export_kwh is zero"
+    )
+
+
+def test_negative_fit_bounded_predischarge_exports_before_negative_window():
+    """Negative FIT bounded pre-discharge: exports at positive FIT before negative window.
+
+    When solar overflow is high and tomorrow has strong solar, the optimizer can
+    create SOC headroom by exporting proactively at earlier positive FIT slots,
+    thereby avoiding later negative-FIT export. This scenario validates that
+    bounded pre-discharge behavior exists.
+    """
+    data = run_scenario("negative-fit-bounded-predischarge")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    proactive_exports = get_slots_by_action(decisions, "export_proactive")
+    assert proactive_exports, "expected proactive export before negative FIT window"
+
+    first_negative_slot = min(
+        d["slot_index"] for d in decisions if d["sell_price"] <= 0
+    )
+
+    assert any(
+        slot["slot_index"] < first_negative_slot and slot["sell_price"] > 0
+        for slot in proactive_exports
+    ), "expected at least one positive-FIT proactive export before negative FIT"
+
+    assert all(slot["sell_price"] > 0 for slot in proactive_exports), (
+        "proactive export must never occur at non-positive FIT"
+    )
+
+
+def test_recoverable_negative_fit_exports_use_avoidance_reason_code():
+    """Pre-risk exports for bad-FIT avoidance should be labeled explicitly."""
+    data = run_scenario("recoverable-negative-fit-preexport")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    export_slots = get_slots_by_action(decisions, "export_proactive")
+    assert export_slots, "expected at least one proactive export slot"
+
+    for slot in export_slots:
+        assert slot.get("reason_code") == "NEGATIVE_FIT_AVOIDANCE", (
+            "recoverable-negative-fit-preexport: expected reason_code "
+            f"NEGATIVE_FIT_AVOIDANCE for export slot {slot['slot_index']}, "
+            f"got {slot.get('reason_code')}"
+        )
+
+
+def test_recoverable_negative_fit_prefers_higher_value_pre_risk_slots():
+    """Pre-risk exports should avoid low-value slots when better slots exist."""
+    data = run_scenario("recoverable-negative-fit-value-priority")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+
+    first_bad_idx = next(
+        (i for i, slot in enumerate(decisions) if slot["sell_price"] <= 0), None
+    )
+    assert first_bad_idx is not None, "scenario must include non-positive FIT window"
+
+    pre_risk = [d for d in decisions if d["slot_index"] < first_bad_idx]
+    export_slots = [d for d in pre_risk if d.get("action") == "export_proactive"]
+    assert export_slots, "expected proactive export before negative-FIT window"
+
+    best_pre_risk_price = max(d["sell_price"] for d in pre_risk)
+    exported_prices = [d["sell_price"] for d in export_slots]
+    assert max(exported_prices) == pytest.approx(best_pre_risk_price, rel=1e-6), (
+        "value-priority scenario: expected at least one export at the highest "
+        f"pre-risk FIT price {best_pre_risk_price}, got {sorted(exported_prices)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DP-native scenario assertion tests — hot day / price spike
 # ---------------------------------------------------------------------------
@@ -687,3 +847,66 @@ def test_solar_can_reach_target_matches_optimizer_result_cloudy():
         f"but optimizer_result['can_solar_reach_target']="
         f"{data.optimizer_result['can_solar_reach_target']}"
     )
+
+
+def test_allow_dw_entry_under_target_avoids_pre_dw_charging():
+    """Allow DW entry under target: no grid charging pre-DW when solar can reach target in DW.
+
+    With allow_dw_entry_under_target=True, the optimizer should not grid-charge
+    before the demand window if solar forecast shows target can be reached during
+    the window (not just at entry). This avoids unnecessary charging costs.
+    """
+    data = run_scenario("allow-dw-entry-under-target")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+    assert data.optimizer_result is not None, "optimizer did not run"
+    assert data.optimizer_result.get("success") is True
+
+    pre_dw_slots = decisions[:8]
+    for slot in pre_dw_slots:
+        assert slot["action"] not in ("charge_grid_normal", "charge_grid_boost"), (
+            f"should not grid-charge before DW when solar can reach target during DW: "
+            f"slot {slot['slot_index']} has action {slot['action']}"
+        )
+
+
+def test_cross_day_first_dw_only_ignores_second_window_pressure():
+    """Cross-day first DW only: planner should not charge overnight for second-day DW.
+
+    When tomorrow's DW has abundant solar but today's does not, the optimizer
+    should base its shortfall calculation on today's DW only, not tomorrow's.
+    Overnight charging purely for tomorrow's DW should not occur.
+    """
+    data = run_scenario("cross-day-first-dw-only")
+    decisions = data.optimizer_decisions
+    assert decisions, "optimizer produced no decisions"
+    assert data.optimizer_result is not None, "optimizer did not run"
+
+    overnight_slots = decisions[20:36]
+    overnight_charges = [
+        d
+        for d in overnight_slots
+        if d["action"] in ("charge_grid_normal", "charge_grid_boost")
+    ]
+    assert not overnight_charges, (
+        f"should not charge overnight for second-day DW, found {len(overnight_charges)} charge slots"
+    )
+
+    assert data.optimizer_result["terminal_shortfall_pct"] == pytest.approx(
+        0.0, abs=0.1
+    )
+
+
+def test_manual_override_bypasses_optimizer():
+    """Manual override bypass: optimizer should be skipped when manual_override=True.
+
+    When manual_override is set, the computation engine returns early and does not
+    run the optimizer. The active_mode should be MANUAL and no optimizer decisions
+    should be present.
+    """
+    data = run_scenario("manual-override-bypass")
+
+    assert data.active_mode == BatteryMode.MANUAL, (
+        f"active_mode should be MANUAL when manual_override=True, got {data.active_mode}"
+    )
+    assert data.manual_override is True

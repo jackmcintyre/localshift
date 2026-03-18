@@ -184,16 +184,16 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
-    cycle_penalty_per_kwh: float = 0.05
+    cycle_penalty_per_kwh: float = 0.08
     """Penalty per kWh cycled to reflect true battery cycling cost.
 
     True cost components:
     - Efficiency loss (13% round-trip × avg price): ~$0.02/kWh
-    - Battery degradation: ~$0.01-0.03/kWh
-    - Total: $0.03-0.05/kWh
+    - Battery degradation: ~$0.03-0.05/kWh
+    - Total: $0.05-0.07/kWh
 
-    Using the upper bound ($0.05) ensures cheap-import arbitrage is only
-    attractive for spreads > 5¢/kWh, eliminating marginal trades that waste
+    Using upper-mid range ($0.08) ensures cheap-import arbitrage is only
+    attractive for spreads > 8¢/kWh, eliminating marginal trades that waste
     cycle life for minimal savings.
 
     Fixes #516.
@@ -420,6 +420,39 @@ class OptimizerResult:
 
     reason_code_histogram: dict[str, int] = field(default_factory=dict)
     """Count of each reason code across all slots (for diagnostics)."""
+
+
+# -----------------------------------------------------------------------------
+# Negative FIT avoidance context
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NegativeFitAvoidanceContext:
+    """Immutable context for recoverability-based negative-FIT avoidance.
+
+    The planner may proactively discharge at positive FIT before a bad-price
+    spill window when conservative future solar can still recover the battery
+    to target by the relevant deadline.
+    """
+
+    risk_window_start_idx: int
+    """Index of the first slot in the spill-risk window (first sell_price <= 0)."""
+
+    risk_window_end_idx: int
+    """Index of the last slot in the spill-risk window (inclusive)."""
+
+    required_headroom_kwh: float
+    """Estimated storage space (kWh) needed to absorb spill during risk window."""
+
+    recovery_deadline_idx: int | None
+    """Slot index by which target must be recoverable (demand window or horizon end)."""
+
+    conservative_recovery_kwh_by_slot: tuple[float, ...]
+    """Conservative recoverable solar (kWh) from each slot to recovery deadline."""
+
+    recoverability_floor_pct_by_slot: tuple[float, ...]
+    """Precomputed recoverability floor (%) for each slot based on future recovery potential."""
 
 
 # -----------------------------------------------------------------------------

@@ -67,10 +67,10 @@ def mock_coordinator_data():
                 {"start_time": "2026-03-03T05:42:00", "per_kwh": 0.1},
                 {"start_time": "2026-03-03T05:57:00", "per_kwh": 0.12000000000000001},
                 {"start_time": "2026-03-03T06:12:00", "per_kwh": 0.14},
-            ]  # noqa: E501
+            ]
             self.feed_in_forecast = [
                 {"start_time": "2026-03-02T22:12:00", "per_kwh": 0.05}
-            ]  # noqa: E501
+            ]
             self.solcast_today = [
                 {"period_end": "2026-03-02T22:12:00", "pv_estimate": 0},
                 {"period_end": "2026-03-02T22:42:00", "pv_estimate": 0},
@@ -90,7 +90,7 @@ def mock_coordinator_data():
                 {"period_end": "2026-03-03T05:42:00", "pv_estimate": 1.8},
                 {"period_end": "2026-03-03T06:12:00", "pv_estimate": 2.0},
                 {"period_end": "2026-03-03T06:42:00", "pv_estimate": 1.8},
-            ]  # noqa: E501
+            ]
             self.solcast_tomorrow = []
             self.load_forecast_slots = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
             self.adaptive_params = None
@@ -198,7 +198,7 @@ class TestBuildOptimizerConfig:
         # 0.12 * 13.5 / 100 * 1.5 = 0.02430
         assert config.target_shortfall_penalty_per_pct != 1.0
         assert 0.010 <= config.target_shortfall_penalty_per_pct <= 0.100
-        assert config.cycle_penalty_per_kwh == 0.05
+        assert config.cycle_penalty_per_kwh == 0.08
 
     def test_config_penalty_calibrated_to_tariff(
         self, mock_coordinator_data, config_options

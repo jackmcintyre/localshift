@@ -1,5 +1,5 @@
 ---
-trigger: always_on
+trigger: on_tdd
 ---
 
 # ⚠️ MANDATORY: TEST-DRIVEN DEVELOPMENT

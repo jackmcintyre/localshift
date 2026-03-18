@@ -51,6 +51,7 @@ Determines which actions are physically/legal possible for a given state.
 | Price thresholds | Only charge if price is cheap (self-consumption mode) | L1419-1428 |
 | Solar sufficiency | Suppress grid charging when solar covers deficit | L1378-1416 |
 | Export profitability | Only export if sell price exceeds threshold | L1437-1446 |
+| Negative-FIT DW guardrail | In avoidance mode, DW export allowed only if net benefit >= $0.02/kWh | `engine/constraints.py` / `engine/core.py` |
 
 ### When to Add Hard Constraints
 
@@ -93,7 +94,7 @@ Encodes preferences, costs, and behavioral biases into a scalar cost.
 |---------|---------|---------|---------------|
 | `import_cost` | `grid_import × buy_price` | Direct cost of buying from grid | L1754 |
 | `export_revenue` | `grid_export × sell_price` | Revenue from selling (negative cost) | L1755 |
-| `cycle_penalty` | `(import + export) × $0.05/kWh` | Anti-wear, discourages frivolous cycling | L1757 |
+| `cycle_penalty` | `(import + export) × $0.08/kWh` | Anti-wear, discourages marginal cycling | L1757 |
 | `switching_penalty` | `$0.02` if action ≠ current | Stability, hysteresis against flip-flopping | L1761 |
 | `uncertainty_penalty` | Scales with horizon gap | Risk aversion when forecast is short | L1765-1774 |
 | `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportunity cost of exporting | L1779-1814 |
@@ -266,7 +267,7 @@ All penalty rates are configurable via `OptimizerConfig`:
 class OptimizerConfig:
     # Penalty rates
     target_shortfall_penalty_per_pct: float = 0.030  # $/%-point
-    cycle_penalty_per_kwh: float = 0.01              # $/kWh
+    cycle_penalty_per_kwh: float = 0.08              # $/kWh (battery wear + efficiency)
     switching_penalty: float = 0.05                  # $ per mode switch
     self_consumption_value_per_kwh: float = 0.25     # $/kWh
     export_price_margin: float = 0.02                # $/kWh above self-consumption

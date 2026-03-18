@@ -15,6 +15,7 @@ from custom_components.localshift.engine.dp_math import (
     _simulate_solar_only_terminal_soc,
 )
 from custom_components.localshift.engine.types import (
+    NegativeFitAvoidanceContext,
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
@@ -83,6 +84,225 @@ class DPPlanner:
         return result
 
     # ------------------------------------------------------------------
+    # Negative FIT Avoidance Context Derivation (Issue #719)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_risk_window(slots: list) -> tuple[int | None, int | None]:
+        """Find the spill-risk window (first bad-FIT through end of bad window)."""
+        risk_start_idx = None
+        n_slots = len(slots)
+
+        for idx, slot in enumerate(slots):
+            if slot.sell_price <= 0:
+                risk_start_idx = idx
+                break
+
+        if risk_start_idx is None:
+            return None, None
+
+        risk_end_idx = risk_start_idx
+        for idx in range(risk_start_idx, n_slots):
+            if slots[idx].sell_price <= 0:
+                risk_end_idx = idx
+            else:
+                break
+
+        return risk_start_idx, risk_end_idx
+
+    @staticmethod
+    def _compute_required_headroom(
+        slots: list,
+        risk_start_idx: int,
+        risk_end_idx: int,
+        charge_efficiency: float,
+        max_headroom_kwh: float,
+    ) -> float:
+        """Compute storage needed to absorb spill during risk window.
+
+        Capped at max_headroom_kwh (battery capacity minus minimum floor).
+        """
+        from custom_components.localshift.const import (
+            NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR,
+        )
+
+        required_headroom_kwh = 0.0
+        for idx in range(risk_start_idx, risk_end_idx + 1):
+            slot = slots[idx]
+            net_kwh = slot.solar_kwh - slot.consumption_kwh
+            if net_kwh > 0:
+                required_headroom_kwh += net_kwh * charge_efficiency
+
+        required_headroom_kwh *= NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR
+        return min(required_headroom_kwh, max_headroom_kwh)
+
+    @staticmethod
+    def _compute_recovery_by_slot(
+        slots: list, recovery_deadline_idx: int, charge_efficiency: float
+    ) -> list[float]:
+        """Precompute conservative recovery potential from each slot to deadline."""
+        recovery_by_slot = []
+        for slot_idx in range(len(slots)):
+            recoverable_kwh = 0.0
+            for future_idx in range(slot_idx + 1, recovery_deadline_idx + 1):
+                future_slot = slots[future_idx]
+                net_kwh = future_slot.solar_kwh - future_slot.consumption_kwh
+                if net_kwh > 0:
+                    recoverable_kwh += net_kwh * charge_efficiency * 0.8
+            recovery_by_slot.append(recoverable_kwh)
+        return recovery_by_slot
+
+    @staticmethod
+    def _compute_floor_by_slot(
+        n_slots: int,
+        current_kwh: float,
+        target_kwh: float,
+        min_floor_kwh: float,
+        battery_capacity_kwh: float,
+        recovery_by_slot: list[float],
+    ) -> list[float]:
+        """Precompute recoverability floor for each slot."""
+        floor_by_slot = []
+        for slot_idx in range(n_slots):
+            recoverable_kwh = recovery_by_slot[slot_idx]
+
+            max_discharge_kwh = min(
+                current_kwh - min_floor_kwh,
+                recoverable_kwh,
+            )
+            max_discharge_kwh = max(max_discharge_kwh, 0.0)
+
+            floor_kwh = current_kwh - max_discharge_kwh
+            floor_kwh = max(floor_kwh, min_floor_kwh)
+            floor_kwh = min(floor_kwh, target_kwh)
+
+            floor_pct = floor_kwh / battery_capacity_kwh * 100.0
+            floor_by_slot.append(floor_pct)
+        return floor_by_slot
+
+    def _derive_negative_fit_avoidance_context(
+        self, inputs: OptimizerInputs
+    ) -> NegativeFitAvoidanceContext | None:
+        """Derive context for recoverability-based negative-FIT avoidance.
+
+        The planner may proactively discharge at positive FIT before a bad-price
+        spill window when conservative future solar can still recover the battery
+        to target by the relevant deadline.
+
+        Returns None if any of:
+        - No negative-FIT window within horizon
+        - No earlier positive-FIT slots
+        - No recovery path to target (cannot safely pre-discharge)
+        """
+        slots = inputs.slots
+        config = inputs.config
+        battery_capacity_kwh = config.battery_capacity_kwh
+        n_slots = len(slots)
+
+        if n_slots == 0:
+            return None
+
+        risk_start_idx, risk_end_idx = self._find_risk_window(slots)
+        if risk_start_idx is None or risk_end_idx is None:
+            return None
+
+        has_positive_before = any(s.sell_price > 0 for s in slots[:risk_start_idx])
+        if not has_positive_before:
+            return None
+
+        min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
+        max_headroom_kwh = battery_capacity_kwh - min_floor_kwh
+
+        required_headroom_kwh = self._compute_required_headroom(
+            slots,
+            risk_start_idx,
+            risk_end_idx,
+            config.charge_efficiency,
+            max_headroom_kwh,
+        )
+        if required_headroom_kwh <= 0:
+            return None
+
+        target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
+        current_kwh = inputs.initial_soc_pct / 100.0 * battery_capacity_kwh
+        existing_headroom_kwh = max(target_kwh - current_kwh, 0.0)
+
+        if existing_headroom_kwh >= required_headroom_kwh:
+            return None
+
+        recovery_deadline_idx = None
+        for idx, slot in enumerate(slots):
+            if slot.is_demand_window_slot:
+                recovery_deadline_idx = idx
+                break
+        if recovery_deadline_idx is None:
+            recovery_deadline_idx = n_slots - 1
+
+        recovery_by_slot = self._compute_recovery_by_slot(
+            slots, recovery_deadline_idx, config.charge_efficiency
+        )
+
+        floor_by_slot = self._compute_floor_by_slot(
+            n_slots,
+            current_kwh,
+            target_kwh,
+            min_floor_kwh,
+            battery_capacity_kwh,
+            recovery_by_slot,
+        )
+
+        return NegativeFitAvoidanceContext(
+            risk_window_start_idx=risk_start_idx,
+            risk_window_end_idx=risk_end_idx,
+            required_headroom_kwh=required_headroom_kwh,
+            recovery_deadline_idx=recovery_deadline_idx,
+            conservative_recovery_kwh_by_slot=tuple(recovery_by_slot),
+            recoverability_floor_pct_by_slot=tuple(floor_by_slot),
+        )
+
+    def _compute_recoverability_floor_pct(
+        self,
+        *,
+        current_soc_pct: float,
+        slot_idx: int,
+        context: NegativeFitAvoidanceContext,
+        config: OptimizerConfig,
+        inputs: OptimizerInputs,
+    ) -> float:
+        """Compute the minimum SOC that still allows recovery to target.
+
+        The recoverability floor is how low SOC can go now while still being
+        able to recover to demand_window_target_soc_pct by the deadline using
+        conservative future solar estimates.
+
+        This is the planner-side guardrail. The Tesla-side PROACTIVE_EXPORT
+        throttling (SOC - 5%, min 4%) remains the actuator guardrail.
+        """
+        battery_capacity_kwh = config.battery_capacity_kwh
+        target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
+        min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
+
+        current_kwh = current_soc_pct / 100.0 * battery_capacity_kwh
+
+        if slot_idx >= len(context.conservative_recovery_kwh_by_slot):
+            return config.demand_window_target_soc_pct
+
+        recoverable_kwh = context.conservative_recovery_kwh_by_slot[slot_idx]
+
+        max_discharge_kwh = min(
+            current_kwh - min_floor_kwh,
+            recoverable_kwh,
+        )
+        max_discharge_kwh = max(max_discharge_kwh, 0.0)
+
+        floor_kwh = current_kwh - max_discharge_kwh
+        floor_kwh = max(floor_kwh, min_floor_kwh)
+        floor_kwh = min(floor_kwh, target_kwh)
+
+        floor_pct = floor_kwh / battery_capacity_kwh * 100.0
+        return floor_pct
+
+    # ------------------------------------------------------------------
     # Internal solve — Full DP Implementation (Phase C)
     # ------------------------------------------------------------------
 
@@ -113,11 +333,29 @@ class DPPlanner:
         dp = self._initialize_dp_tables(
             n_slots, soc_grid, config, terminal_penalty_idx, solar_capable, inputs
         )
+
+        # Issue #719: Derive negative-FIT avoidance context before backward induction
+        negative_fit_avoidance_context = self._derive_negative_fit_avoidance_context(
+            inputs
+        )
+
         states_explored = self._backward_induction(
-            dp, slots, soc_grid, config, terminal_penalty_idx, inputs
+            dp,
+            slots,
+            soc_grid,
+            config,
+            terminal_penalty_idx,
+            inputs,
+            negative_fit_avoidance_context,
         )
         decisions, totals, reason_histogram = self._forward_reconstruct(
-            dp, inputs, slots, soc_grid, config, terminal_penalty_idx
+            dp,
+            inputs,
+            slots,
+            soc_grid,
+            config,
+            terminal_penalty_idx,
+            negative_fit_avoidance_context,
         )
 
         terminal_shortfall = self._compute_terminal_shortfall(
@@ -332,6 +570,7 @@ class DPPlanner:
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
         inputs: OptimizerInputs,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> int:
         """Perform backward induction to fill DP tables.
 
@@ -363,6 +602,7 @@ class DPPlanner:
                     terminal_penalty_idx,
                     slots,
                     inputs,
+                    negative_fit_avoidance_context,
                 )
                 dp[slot_idx][bin_idx] = best
                 states_explored += action_count
@@ -380,6 +620,7 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         slots: list[SlotContext],
         inputs: OptimizerInputs,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> tuple[tuple[float, PlannerAction, int, float, float, float], int]:
         """Compute best action for a state.
 
@@ -405,6 +646,7 @@ class DPPlanner:
             slot_idx=slot_idx,
             slots=slots,
             terminal_penalty_idx=terminal_penalty_idx,
+            negative_fit_avoidance_context=negative_fit_avoidance_context,
         )
 
         best_cost = float("inf")
@@ -501,6 +743,7 @@ class DPPlanner:
         soc_grid: list[float],
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> tuple[list[PlannedSlotDecision], dict[str, float], dict[str, int]]:
         """Reconstruct optimal path forward.
 
@@ -584,6 +827,7 @@ class DPPlanner:
                 terminal_penalty_idx,
                 stage,
                 inputs=inputs,
+                negative_fit_avoidance_context=negative_fit_avoidance_context,
             )
 
             decision = PlannedSlotDecision(
@@ -841,6 +1085,7 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         objective_terms: ObjectiveTerms | None = None,
         inputs: OptimizerInputs | None = None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> PlannerReasonCode:
         """
         Classify the reason for a decision based on action and context.
@@ -860,7 +1105,11 @@ class DPPlanner:
                 inputs=inputs,
             )
         if action == PlannerAction.EXPORT_PROACTIVE:
-            return self._classify_export_reason(slot)
+            return self._classify_export_reason(
+                slot,
+                slot_idx=slot_idx,
+                negative_fit_avoidance_context=negative_fit_avoidance_context,
+            )
         if action in (
             PlannerAction.CHARGE_GRID_NORMAL,
             PlannerAction.CHARGE_GRID_BOOST,
@@ -927,7 +1176,13 @@ class DPPlanner:
 
         return PlannerReasonCode.IDLE
 
-    def _classify_export_reason(self, slot: SlotContext) -> PlannerReasonCode:
+    def _classify_export_reason(
+        self,
+        slot: SlotContext,
+        *,
+        slot_idx: int | None = None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
+    ) -> PlannerReasonCode:
         """Classify EXPORT action reason.
 
         Args:
@@ -937,6 +1192,13 @@ class DPPlanner:
             Reason code for EXPORT action
 
         """
+        if (
+            negative_fit_avoidance_context is not None
+            and slot_idx is not None
+            and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
+        ):
+            return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
+
         if slot.sell_price > 0:
             return PlannerReasonCode.HIGH_SELL_PRICE_EXPORT
         return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
@@ -1155,14 +1417,11 @@ class DPPlanner:
     ) -> bool:
         """Check if remaining solar in the full horizon covers the SOC deficit to target.
 
-        Unlike the demand-window-based solar gate, this check works across the
-        entire remaining horizon regardless of whether a demand window (and its
-        terminal_penalty_idx) exists.  It prevents nighttime grid charging when
-        tomorrow's solar will naturally fill the battery to the demand window target.
+        Uses realistic simulation that accounts for charge rate limits and efficiency,
+        ensuring consistency with solar_can_reach_target sensor.
 
-        Fixes Issue #559 Root Cause 1: the original _solar_covers_deficit gate is
-        skipped entirely when terminal_penalty_idx is None (no demand window), so
-        the optimizer was free to panic-buy grid power overnight.
+        Fixes Issue #701: Previous implementation used raw surplus without rate limits,
+        incorrectly blocking cheap grid charging when solar was insufficient in reality.
 
         Args:
             soc_pct: Current battery SOC percentage.
@@ -1171,26 +1430,87 @@ class DPPlanner:
             config: Optimizer configuration.
 
         Returns:
-            True if projected solar SURPLUS (max(0, solar - consumption)) from slot_idx
-            to end of horizon is sufficient to raise SOC from soc_pct to demand_window_target_soc_pct.
+            True if realistic solar simulation can raise SOC from soc_pct to demand_window_target_soc_pct.
 
         """
         if not slots:
             return False
 
-        # Only suppress charging if we have a meaningful deficit to the target.
-        # If we're already at or above target, the existing price-based logic handles it.
         soc_deficit_pct = config.demand_window_target_soc_pct - soc_pct
         if soc_deficit_pct <= 0:
             return False
 
-        projected_surplus_kwh = sum(
-            max(0.0, s.solar_kwh - s.consumption_kwh) for s in slots[slot_idx:]
+        from custom_components.localshift.engine.dp_math import (
+            _simulate_solar_only_terminal_soc,
         )
-        potential_gain_pct = (
-            projected_surplus_kwh / config.battery_capacity_kwh
-        ) * 100.0
-        return potential_gain_pct >= soc_deficit_pct
+
+        remaining_slots = slots[slot_idx:]
+        simulated_terminal_soc = _simulate_solar_only_terminal_soc(
+            soc_pct, remaining_slots, None, config
+        )
+        return simulated_terminal_soc >= config.demand_window_target_soc_pct
+
+    @staticmethod
+    def _determine_export_actions(
+        soc_pct: float,
+        slot: SlotContext,
+        config: OptimizerConfig,
+        slot_idx: int,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None,
+    ) -> list[PlannerAction]:
+        """Determine export actions based on mode and negative-FIT avoidance context.
+
+        Issue #719: Recoverability-based negative-FIT avoidance.
+
+        Allows proactive export at positive FIT before the risk window when:
+        - SOC is above the recoverability floor + buffer
+        - The slot is before the risk window starts
+        - The slot has positive sell price
+
+        The recoverability floor ensures we only discharge energy that can be
+        recovered via future solar before the deadline, avoiding later grid import.
+        """
+        actions = []
+        can_discharge = soc_pct > config.min_soc_pct
+
+        if not can_discharge:
+            return actions
+
+        use_avoidance = (
+            negative_fit_avoidance_context is not None
+            and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
+        )
+
+        if use_avoidance and negative_fit_avoidance_context is not None:
+            if slot.sell_price > 0:
+                if slot.is_demand_window_slot:
+                    from custom_components.localshift.const import (
+                        NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH,
+                    )
+
+                    net_benefit = slot.sell_price - max(0.0, slot.buy_price)
+                    if net_benefit < NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH:
+                        return actions
+
+                floor_pct = (
+                    negative_fit_avoidance_context.recoverability_floor_pct_by_slot[
+                        slot_idx
+                    ]
+                )
+                if soc_pct > floor_pct + 2.0:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+        else:
+            if config.optimization_mode == "self_consumption":
+                min_profitable_sell = (
+                    max(0.0, slot.buy_price) + config.export_price_margin
+                )
+                if slot.sell_price >= min_profitable_sell:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+            else:
+                if slot.sell_price > 0:
+                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+
+        return actions
 
     @staticmethod
     def feasible_actions(
@@ -1200,6 +1520,7 @@ class DPPlanner:
         slot_idx: int = 0,
         slots: list[SlotContext] | None = None,
         terminal_penalty_idx: int | None = None,
+        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
     ) -> list[PlannerAction]:
         """
         Return list of actions feasible from given SOC and slot context.
@@ -1226,7 +1547,6 @@ class DPPlanner:
         actions = []
 
         can_charge = soc_pct < config.max_soc_pct
-        can_discharge = soc_pct > config.min_soc_pct
 
         actions.append(PlannerAction.HOLD)
 
@@ -1277,19 +1597,12 @@ class DPPlanner:
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
                 actions.append(PlannerAction.CHARGE_GRID_BOOST)
 
-        # Export constraints (Issue #406)
-        if can_discharge:
-            # In self-consumption mode, only export if profitable vs keeping energy for load
-            if config.optimization_mode == "self_consumption":
-                min_profitable_sell = (
-                    max(0.0, slot.buy_price) + config.export_price_margin
-                )
-                if slot.sell_price >= min_profitable_sell:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
-            else:
-                # Arbitrage mode: export if positive price
-                if slot.sell_price > 0:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
+        # Export constraints (Issue #406, #719)
+        actions.extend(
+            DPPlanner._determine_export_actions(
+                soc_pct, slot, config, slot_idx, negative_fit_avoidance_context
+            )
+        )
 
         return actions
 
@@ -1629,7 +1942,9 @@ class DPPlanner:
 
         # Calculate self-consumption value (Issue #406)
         # Battery energy used to cover household load has value because it avoids
-        # buying from grid at retail price
+        # buying from grid at retail price.
+        # However, we subtract cycle_penalty_per_kwh to avoid subsidizing marginal cycling.
+        # The battery must "earn" the cycle penalty back through the spread.
         self_consumption_value = 0.0
         if config.optimization_mode == "self_consumption":
             # Net load that battery covers = consumption - solar - grid_import
@@ -1663,20 +1978,28 @@ class DPPlanner:
                     )
                     battery_for_load = min(battery_for_load, max_load_kwh)
 
-                self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
+                # Credit the battery at (buy_price - cycle_penalty), not full buy_price
+                # This prevents the credit from subsidizing marginal cycling
+                sc_multiplier = max(0.0, slot.buy_price - config.cycle_penalty_per_kwh)
+                self_consumption_value = battery_for_load * sc_multiplier
 
         # Issue #638: futile cycling penalty.
-        # Penalise grid charging when the charged energy will drain through house load
+        # Penalizes grid charging when the charged energy will drain through house load
         # before reaching a useful period (solar surplus or demand window).
+        # Formula: grid_import_kWh × (eff_loss + margin) × buy_price × drain_factor
+        # The penalty includes efficiency loss plus a margin to discourage marginal cycling.
         futile_cycling_penalty = 0.0
         if action in (
             PlannerAction.CHARGE_GRID_NORMAL,
             PlannerAction.CHARGE_GRID_BOOST,
         ):
-            # Penalty = efficiency loss cost of the futile round-trip
+            # Efficiency loss portion + margin to discourage marginal arbitrage
+            # Old formula: eff_loss only (~12.6% of import)
+            # New formula: eff_loss + margin (~50% of import) to prevent wasteful cycling
+            eff_loss = 1.0 - config.charge_efficiency * config.discharge_efficiency
             futile_cycling_penalty = (
                 grid_import_kwh
-                * (1.0 - config.charge_efficiency * config.discharge_efficiency)
+                * (eff_loss + 0.30)  # eff_loss (~12.6%) + margin (30%)
                 * slot.buy_price
                 * futile_cycling_penalty_factor
             )

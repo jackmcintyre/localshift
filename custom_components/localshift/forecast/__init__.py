@@ -1,6 +1,7 @@
 """Forecast package for LocalShift integration."""
 
 from .accuracy import ForecastAccuracyEngine
+from .accuracy_store import AccuracyMetricsStore
 from .bootstrapper import ForecastBootstrapper
 from .corrections import ForecastCorrectionProvider
 from .history import HistoryFetcher
@@ -15,6 +16,7 @@ from .solar import (
 from .solar_accuracy import SolarAccuracyTracker
 
 __all__ = [
+    "AccuracyMetricsStore",
     "ForecastAccuracyEngine",
     "ForecastBootstrapper",
     "ForecastCorrectionProvider",

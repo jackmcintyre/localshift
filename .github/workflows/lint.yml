@@ -7,16 +7,14 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
@@ -29,61 +27,30 @@ jobs:
       - name: Run ruff format check
         run: uv run ruff format --check custom_components/localshift
 
-  vulture:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync
-
       - name: Run vulture
         run: uv run vulture custom_components/localshift --min-confidence 80
 
-  bandit:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync
-
       - name: Run bandit
         run: uv run bandit -r custom_components/localshift -x tests/
+
+      - name: Run interrogate
+        run: uv run interrogate custom_components/localshift --fail-under 50
+
+      - name: Run deptry
+        run: uv run deptry custom_components/localshift --ignore DEP002,DEP003 || true
 
   pyright:
     runs-on: ubuntu-latest
     continue-on-error: true  # Pre-existing type issues - non-blocking
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
@@ -92,45 +59,3 @@ jobs:
 
       - name: Run pyright
         run: npx pyright custom_components/localshift
-
-  interrogate:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Run interrogate
-        run: uv run interrogate custom_components/localshift --fail-under 50
-
-  deptry:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Run deptry
-        run: uv run deptry custom_components/localshift --ignore DEP002,DEP003 || true  # Pre-existing type issues

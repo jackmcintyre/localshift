@@ -229,9 +229,7 @@ class TestStateReaderMalformedValues:
         self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test that non-numeric price returns default value."""
-        mock_hass_with_states._mock_states.set(
-            "sensor.100h_general_price", "invalid", {}
-        )
+        mock_hass_with_states._mock_states.set("sensor.general_price", "invalid", {})
 
         state_reader = StateReader(
             mock_hass_with_states, mock_entry, mock_entity_validator
@@ -305,9 +303,9 @@ class TestStateReaderAttributes:
         self, mock_hass_with_states, mock_entry, mock_entity_validator
     ):
         """Test that missing forecast attribute returns empty list."""
-        # Set entity without forecasts attribute (using DEFAULT_ENTITY_IDS naming)
+        # Set entity without forecasts attribute (using generic naming)
         mock_hass_with_states._mock_states.set(
-            "sensor.100h_general_forecast",
+            "sensor.general_forecast",
             "on",
             {},  # No attributes
         )
@@ -325,7 +323,7 @@ class TestStateReaderAttributes:
     ):
         """Test that None forecast attribute returns empty list."""
         mock_hass_with_states._mock_states.set(
-            "sensor.100h_general_forecast",
+            "sensor.general_forecast",
             "on",
             {"forecasts": None},
         )
