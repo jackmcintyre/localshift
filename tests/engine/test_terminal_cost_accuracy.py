@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
+
 from custom_components.localshift.engine.core import DPPlanner
 
 
@@ -114,9 +114,9 @@ class TestTerminalDiagnostics:
 
     def test_returns_all_diagnostic_fields(self):
         """Verify all diagnostic fields are returned."""
-        mock_slot = Mock()
-        mock_slot.predicted_soc = 85.0
-        slots: list = [mock_slot]
+        mock_decision = Mock()
+        mock_decision.predicted_soc_pct = 85.0
+        decisions: list = [mock_decision]
 
         planner = DPPlanner.__new__(DPPlanner)
         result = planner._get_terminal_diagnostics(
@@ -125,7 +125,7 @@ class TestTerminalDiagnostics:
             projected_solar_gain_pct=30.0,
             accuracy_discount=0.5,
             future_solar_gain_pct=5.0,
-            slots=slots,
+            decisions=decisions,
             terminal_penalty_idx=0,
         )
 
@@ -145,7 +145,7 @@ class TestTerminalDiagnostics:
             projected_solar_gain_pct=30.0,
             accuracy_discount=0.5,
             future_solar_gain_pct=5.0,
-            slots=[],
+            decisions=[],
             terminal_penalty_idx=None,
         )
 
@@ -153,13 +153,13 @@ class TestTerminalDiagnostics:
 
     def test_peak_soc_from_slots(self):
         """Verify peak_soc is correctly calculated from slots."""
-        mock_slot1 = Mock()
-        mock_slot1.predicted_soc = 75.0
-        mock_slot2 = Mock()
-        mock_slot2.predicted_soc = 90.0
-        mock_slot3 = Mock()
-        mock_slot3.predicted_soc = 85.0
-        slots: list = [mock_slot1, mock_slot2, mock_slot3]
+        mock_decision1 = Mock()
+        mock_decision1.predicted_soc_pct = 75.0
+        mock_decision2 = Mock()
+        mock_decision2.predicted_soc_pct = 90.0
+        mock_decision3 = Mock()
+        mock_decision3.predicted_soc_pct = 85.0
+        decisions: list = [mock_decision1, mock_decision2, mock_decision3]
 
         planner = DPPlanner.__new__(DPPlanner)
         result = planner._get_terminal_diagnostics(
@@ -168,7 +168,7 @@ class TestTerminalDiagnostics:
             projected_solar_gain_pct=30.0,
             accuracy_discount=0.5,
             future_solar_gain_pct=5.0,
-            slots=slots,
+            decisions=decisions,
             terminal_penalty_idx=1,
         )
 

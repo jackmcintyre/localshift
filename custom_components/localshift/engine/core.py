@@ -587,7 +587,7 @@ class DPPlanner:
         projected_solar_gain_pct: float,
         accuracy_discount: float,
         future_solar_gain_pct: float,
-        slots: list[SlotContext],
+        decisions: list[PlannedSlotDecision],
         terminal_penalty_idx: int | None,
     ) -> dict[str, Any]:
         """Extract diagnostic metrics for terminal cost calculation.
@@ -598,7 +598,7 @@ class DPPlanner:
             projected_solar_gain_pct: Raw solar projection
             accuracy_discount: Applied discount factor
             future_solar_gain_pct: Beyond-horizon solar gain
-            slots: All time slots in plan
+            decisions: All optimizer decisions with predicted SOC
             terminal_penalty_idx: Index of terminal penalty slot
 
         Returns:
@@ -607,11 +607,11 @@ class DPPlanner:
         adjusted_solar_gain = projected_solar_gain_pct * accuracy_discount
         effective_soc = soc_pct + future_solar_gain_pct + adjusted_solar_gain
 
-        peak_soc = max(slot.predicted_soc for slot in slots) if slots else soc_pct
+        peak_soc = max(d.predicted_soc_pct for d in decisions) if decisions else soc_pct
 
         dw_entry_soc = None
-        if terminal_penalty_idx is not None and slots:
-            dw_entry_soc = slots[terminal_penalty_idx].predicted_soc
+        if terminal_penalty_idx is not None and decisions:
+            dw_entry_soc = decisions[terminal_penalty_idx].predicted_soc_pct
 
         return {
             "projected_solar_gain_pct": round(projected_solar_gain_pct, 2),
