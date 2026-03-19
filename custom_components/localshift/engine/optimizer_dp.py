@@ -18,6 +18,9 @@ from custom_components.localshift.engine.core import DPPlanner
 # Re-export cost functions
 from custom_components.localshift.engine.cost import stage_cost, terminal_cost
 
+# Re-export transition function
+from custom_components.localshift.engine.transitions import transition
+
 # Re-export math functions from dp_math
 from custom_components.localshift.engine.dp_math import (
     _build_soc_grid,
@@ -42,6 +45,7 @@ __all__ = [
     "feasible_actions",
     "stage_cost",
     "terminal_cost",
+    "transition",
     "ObjectiveTerms",
     "OptimizerConfig",
     "OptimizerInputs",

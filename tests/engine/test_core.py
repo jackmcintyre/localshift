@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.transitions import transition
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
     OptimizerConfig,
@@ -441,7 +442,7 @@ class TestCoreRegressionCoverage:
     def test_transition_unknown_action_returns_noop(self):
         """Unknown action falls back to no-op transition."""
         slot = self._slot(0)
-        soc, imp, exp = DPPlanner.transition(
+        soc, imp, exp = transition(
             soc_pct=55.0,
             action="unknown",  # type: ignore[arg-type]
             slot=slot,

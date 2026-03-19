@@ -16,6 +16,10 @@ from custom_components.localshift.engine.constraints import (
     feasible_actions,
 )
 from custom_components.localshift.engine.cost import stage_cost
+from custom_components.localshift.engine.transitions import (
+    transition,
+    _transition_hold_deficit,
+)
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     ObjectiveTerms,
@@ -145,7 +149,7 @@ def test_transition_hold_at_soc_floor_emits_passive_grid_import(default_config):
         consumption_kwh=1.0,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         soc_pct=default_config.min_soc_pct,
         action=PlannerAction.HOLD,
         slot=slot,
@@ -177,7 +181,7 @@ def test_transition_hold_at_soc_ceiling_emits_passive_grid_export(default_config
         consumption_kwh=0.0,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         soc_pct=default_config.max_soc_pct,
         action=PlannerAction.HOLD,
         slot=slot,
@@ -213,7 +217,7 @@ def test_transition_hold_respects_separate_rates():
 
     # 1. Discharge (net_kwh = -10): should be capped by discharge_rate_kw (4.0 kW * 1h = 4.0 kWh)
     slot.consumption_kwh = 10.0
-    _, grid_import, _ = DPPlanner.transition(
+    _, grid_import, _ = transition(
         soc_pct=50.0, action=PlannerAction.HOLD, slot=slot, config=config
     )
     assert grid_import == pytest.approx(6.0)  # 10.0 - 4.0
@@ -221,7 +225,7 @@ def test_transition_hold_respects_separate_rates():
     # 2. Charge (net_kwh = 10): should be capped by solar_charge_rate_kw (2.0 kW * 1h = 2.0 kWh)
     slot.consumption_kwh = 0.0
     slot.solar_kwh = 10.0
-    _, _, grid_export = DPPlanner.transition(
+    _, _, grid_export = transition(
         soc_pct=50.0, action=PlannerAction.HOLD, slot=slot, config=config
     )
     assert grid_export == pytest.approx(8.0)  # 10.0 - 2.0
@@ -1756,7 +1760,7 @@ def test_hold_soc_enforces_no_discharge():
         hold_soc=True,  # Enforce strict no-discharge
     )
 
-    next_soc, grid_import, grid_export = DPPlanner._transition_hold_deficit(
+    next_soc, grid_import, grid_export = _transition_hold_deficit(
         soc_pct=50.0,
         net_kwh=-0.5,  # 0.5 kWh load deficit
         slot_hours=1.0,
@@ -1781,7 +1785,7 @@ def test_hold_soc_false_allows_discharge():
         hold_soc=False,  # Normal discharge allowed
     )
 
-    next_soc, grid_import, grid_export = DPPlanner._transition_hold_deficit(
+    next_soc, grid_import, grid_export = _transition_hold_deficit(
         soc_pct=50.0,
         net_kwh=-0.5,
         slot_hours=1.0,
@@ -2384,7 +2388,7 @@ def test_transition_hold_surplus_zero_efficiency():
         soc_bins=20,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         50.0, PlannerAction.HOLD, slot, config
     )
     assert next_soc == 50.0
@@ -2401,7 +2405,7 @@ def test_transition_hold_deficit_zero_efficiency():
         soc_bins=20,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         50.0, PlannerAction.HOLD, slot, config
     )
     assert next_soc == 50.0
@@ -2426,7 +2430,7 @@ def test_transition_export_zero_efficiency():
         soc_bins=20,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         50.0, PlannerAction.EXPORT_PROACTIVE, slot, config
     )
     assert next_soc == 50.0
