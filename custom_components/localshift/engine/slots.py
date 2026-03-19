@@ -183,6 +183,16 @@ class SlotBuilder:
         base_slot = self._compute_base_slot(now_local)
         local_tz = self._get_local_timezone()
 
+        # Create ConfidenceResolver for cross-day confidence lookup
+        from custom_components.localshift.forecast.analysis_resolver import (
+            ConfidenceResolver,
+        )
+
+        resolver = ConfidenceResolver(
+            getattr(data, "solcast_analysis_today", None),
+            getattr(data, "solcast_analysis_tomorrow", None),
+        )
+
         contexts, counts = self._process_all_slots(
             hybrid_slots=hybrid_slots,
             data=data,
@@ -193,6 +203,7 @@ class SlotBuilder:
             dw_start_time=dw_start_time,
             dw_end_time=dw_end_time,
             feed_in_forecast=feed_in_forecast,
+            resolver=resolver,
         )
 
         metadata = SlotBuildMetadata(
@@ -253,6 +264,7 @@ class SlotBuilder:
         dw_start_time: time,
         dw_end_time: time,
         feed_in_forecast: list[dict[str, Any]] | None = None,
+        resolver: Any | None = None,
     ) -> tuple[list[SlotContext], dict[str, int]]:
         """Process all hybrid slots and return contexts with counts."""
         contexts: list[SlotContext] = []
@@ -278,6 +290,7 @@ class SlotBuilder:
                 dw_end_time=dw_end_time,
                 prev_in_demand_window=prev_in_demand_window,
                 feed_in_forecast=feed_in_forecast,
+                resolver=resolver,
             )
             contexts.append(ctx)
             for key in counts:
@@ -299,6 +312,7 @@ class SlotBuilder:
         dw_end_time: time,
         prev_in_demand_window: bool,
         feed_in_forecast: list[dict[str, Any]] | None = None,
+        resolver: Any | None = None,
     ) -> tuple[SlotContext, dict[str, int], bool]:
         """Process a single slot, returning (context, counts, in_demand_window)."""
         slot_start: datetime = slot["start"]
@@ -321,8 +335,14 @@ class SlotBuilder:
             slot_start,
         )
 
+        # Get confidence from resolver (defaults to 1.0 if no resolver)
+        confidence = resolver.get_confidence(slot_start) if resolver else 1.0
         solar_kwh = self._get_solar_kwh(
-            all_solcast, slot_start, interval_minutes, solar_confidence_factor
+            all_solcast,
+            slot_start,
+            interval_minutes,
+            solar_confidence_factor,
+            confidence,
         )
         if solar_kwh < 0.001:
             counts["defaulted_solar"] = 1
@@ -375,6 +395,7 @@ class SlotBuilder:
         slot_start: datetime,
         interval_minutes: int,
         solar_confidence_factor: float,
+        confidence: float = 1.0,
     ) -> float:
         """Get solar kWh for a slot.
 
@@ -383,7 +404,7 @@ class SlotBuilder:
         Otherwise, apply solar_confidence_factor as fallback.
         """
         solar_kwh = get_solar_for_slot_by_interval(
-            all_solcast, slot_start, interval_minutes
+            all_solcast, slot_start, interval_minutes, confidence
         )
 
         # Check if bias correction is ready
