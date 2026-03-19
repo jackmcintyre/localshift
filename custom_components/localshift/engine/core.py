@@ -534,9 +534,26 @@ class DPPlanner:
                 battery_capacity_kwh=config.battery_capacity_kwh,
             )
 
+            # Apply accuracy-based discount to projected solar (Issue #785)
+            forecast_accuracy = self._get_forecast_accuracy(
+                inputs.solar_accuracy_tracker
+            )
+            accuracy_discount = max(0.5, min(1.0, forecast_accuracy))
+            adjusted_solar_gain_pct = projected_solar_gain_pct * accuracy_discount
+
+            # Add debug logging
+            _LOGGER.debug(
+                "Terminal cost discount: accuracy=%.1f%%, discount=%.2f, "
+                "raw_solar_gain=%.1f%%, adjusted=%.1f%%",
+                forecast_accuracy * 100,
+                accuracy_discount,
+                projected_solar_gain_pct,
+                adjusted_solar_gain_pct,
+            )
+
             for bin_idx, soc in enumerate(soc_grid):
                 # Subtract future solar gain from shortfall (Issue #619)
-                effective_soc = soc + future_solar_gain_pct + projected_solar_gain_pct
+                effective_soc = soc + future_solar_gain_pct + adjusted_solar_gain_pct
 
                 if use_hard_constraint and effective_soc < target:
                     # Hard constraint: very high penalty for states below target
@@ -1421,7 +1438,10 @@ class DPPlanner:
         if solar_accuracy_tracker is None:
             return 1.0
 
-        accuracy_pct = solar_accuracy_tracker.get_overall_accuracy()
+        try:
+            accuracy_pct = solar_accuracy_tracker.metrics.accuracy
+        except AttributeError:
+            return 1.0
 
         if accuracy_pct is None or accuracy_pct <= 0:
             return 1.0

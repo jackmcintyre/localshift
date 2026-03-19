@@ -208,6 +208,7 @@ class OptimizerFacade:
                 slots=slots,
                 config=optimizer_config,
                 all_solcast=slot_metadata.all_solcast,
+                solar_accuracy_tracker=self._solar_accuracy_tracker,
             )
             result = self._planner.plan(inputs)
 
