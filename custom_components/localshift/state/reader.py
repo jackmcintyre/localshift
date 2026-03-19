@@ -20,6 +20,7 @@ from ..const import (
     CONF_PRICING_GENERAL_FORECAST,
     CONF_PRICING_GENERAL_PRICE,
     CONF_PRICING_PRICE_SPIKE,
+    CONF_SOLCAST_ACCURACY,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_TESLEMETRY_ALLOW_EXPORT,
@@ -551,6 +552,72 @@ class StateReader:
         )
         return []
 
+    def _read_solcast_analysis(
+        self,
+        data: CoordinatorData,
+        today_entity: str,
+        tomorrow_entity: str,
+    ) -> None:
+        """Extract Solcast v4.5.1 analysis attributes and MAPE sensor.
+
+        Issue #778: Extracts confidence scores, estimate10/90 spreads, and
+        accuracy metrics from Solcast entities for risk-based planning.
+
+        Args:
+            data: CoordinatorData instance to populate
+            today_entity: Entity ID for today's forecast
+            tomorrow_entity: Entity ID for tomorrow's forecast
+
+        """
+        from ..forecast.solcast_analysis import extract_analysis_from_entity
+
+        # Extract analysis from forecast entities
+        data.solcast_analysis_today = extract_analysis_from_entity(
+            self.hass, today_entity
+        )
+        data.solcast_analysis_tomorrow = extract_analysis_from_entity(
+            self.hass, tomorrow_entity
+        )
+
+        # Read Solcast MAPE accuracy sensor if available
+        accuracy_entity = self._get_entity_id(CONF_SOLCAST_ACCURACY)
+        if accuracy_state := self.hass.states.get(accuracy_entity):
+            try:
+                if accuracy_state.state not in ("unknown", "unavailable"):
+                    data.solcast_mape = float(accuracy_state.state)
+            except (ValueError, TypeError):
+                _LOGGER.debug(
+                    "Failed to parse Solcast MAPE from %s: %s",
+                    accuracy_entity,
+                    accuracy_state.state,
+                )
+
+        # Calculate average confidence for diagnostic purposes
+        if data.solcast_analysis_today:
+            data.avg_confidence_today = data.solcast_analysis_today.day_confidence
+        if data.solcast_analysis_tomorrow:
+            data.avg_confidence_tomorrow = data.solcast_analysis_tomorrow.day_confidence
+
+        # Identify low confidence periods (< 0.7 threshold)
+        data.low_confidence_periods = []
+        for analysis in (data.solcast_analysis_today, data.solcast_analysis_tomorrow):
+            if analysis and analysis.intervals:
+                for interval in analysis.intervals:
+                    if interval.confidence < 0.7:
+                        data.low_confidence_periods.append((
+                            interval.period_start,
+                            interval.confidence,
+                        ))
+
+        _LOGGER.debug(
+            "Solcast analysis: today_confidence=%.2f, tomorrow_confidence=%.2f, "
+            "mape=%s, low_confidence_periods=%d",
+            data.avg_confidence_today,
+            data.avg_confidence_tomorrow,
+            data.solcast_mape if data.solcast_mape is not None else "N/A",
+            len(data.low_confidence_periods),
+        )
+
     def _discover_solcast_entity(self, requested_entity_id: str) -> str | None:
         """Try to discover a Solcast forecast sensor when configured ID is missing."""
         hint = "tomorrow" if "tomorrow" in requested_entity_id else "today"
@@ -765,6 +832,9 @@ class StateReader:
             tomorrow_entity,
             len(data.solcast_tomorrow),
         )
+
+        # Extract Solcast v4.5.1 analysis attributes (Issue #778)
+        self._read_solcast_analysis(data, today_entity, tomorrow_entity)
 
         # Weather
         self._read_weather_state(data)
