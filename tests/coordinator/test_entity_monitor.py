@@ -462,6 +462,28 @@ class TestParseTimeOption:
         # ASSERT - should use default
         assert result == time(8, 0, 0)
 
+    def test_parse_invalid_format_logs_debug(self) -> None:
+        """Test that parsing an invalid time format emits a debug log."""
+        # ARRANGE
+        from unittest.mock import patch
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.get_option.return_value = "invalid"
+        monitor = EntityMonitor(mock_coordinator)
+
+        # ACT / ASSERT
+        with patch(
+            "custom_components.localshift.coordinator.entity_monitor._LOGGER"
+        ) as mock_logger:
+            monitor.parse_time_option("test_key", "08:00:00")
+            mock_logger.debug.assert_called_once_with(
+                "Invalid time format for %s: %s. Using default: %s",
+                "test_key",
+                "invalid",
+                "08:00:00",
+            )
+
     def test_parse_malformed_parts_uses_default(self) -> None:
         """Test parsing malformed time parts falls back to default."""
         # ARRANGE
