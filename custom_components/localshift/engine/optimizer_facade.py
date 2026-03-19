@@ -51,7 +51,7 @@ class OptimizerFacade:
         self._solar_accuracy_tracker = tracker
 
     def _record_forecasts_for_slots(
-        self, slots: list[Any], weather_condition: str
+        self, slots: list[Any], weather_condition: str, is_boost: bool = False
     ) -> None:
         """Record solar forecasts for accuracy tracking.
 
@@ -73,6 +73,7 @@ class OptimizerFacade:
                 period_start=period_start,
                 forecast_kwh=slot.solar_kwh,
                 weather_condition=weather_condition,
+                is_boost=is_boost,
             )
             recorded += 1
 
@@ -184,7 +185,11 @@ class OptimizerFacade:
             )
 
             weather_condition = getattr(data, "weather_condition", None) or "unknown"
-            self._record_forecasts_for_slots(slots, weather_condition)
+            self._record_forecasts_for_slots(
+                slots,
+                weather_condition,
+                is_boost=getattr(data, "boost_charge_active", False),
+            )
             self._apply_bias_correction_to_slots(slots, weather_condition)
             self._apply_cloud_scale_factor_to_slots(slots, data, now_dt)
 

@@ -231,11 +231,31 @@ def test_record_forecasts_for_slots_records_only_backfillable_timestamps():
         period_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
         forecast_kwh=0.0,
         weather_condition="sunny",
+        is_boost=False,
     )
     tracker.record_forecast.assert_any_call(
         period_start=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
         forecast_kwh=0.2,
         weather_condition="sunny",
+        is_boost=False,
+    )
+
+
+def test_record_forecasts_for_slots_passes_boost_flag():
+    tracker = MagicMock()
+    slots = [
+        SimpleNamespace(solar_kwh=0.2, timestamp_iso="2026-01-15T10:30:00+00:00"),
+    ]
+
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    facade.set_solar_accuracy_tracker(tracker)
+    facade._record_forecasts_for_slots(slots, "sunny", is_boost=True)
+
+    tracker.record_forecast.assert_called_once_with(
+        period_start=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
+        forecast_kwh=0.2,
+        weather_condition="sunny",
+        is_boost=True,
     )
 
 

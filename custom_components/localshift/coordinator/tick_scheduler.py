@@ -300,6 +300,9 @@ class TickScheduler:
         if tracker is None:
             return
 
+        if getattr(self._coordinator.data, "boost_charge_active", False) is True:
+            return
+
         from homeassistant.util import dt as dt_util
 
         now = dt_util.now()

@@ -51,6 +51,7 @@ class SolarPeriodRecord:
     season: str
     bias: float = 0.0
     additive_bias: float = 0.0
+    is_boost_period: bool = False
 
     def __post_init__(self) -> None:
         """Calculate bias after initialization."""
@@ -76,6 +77,7 @@ class SolarPeriodRecord:
             "season": self.season,
             "bias": self.bias,
             "additive_bias": self.additive_bias,
+            "is_boost_period": self.is_boost_period,
         }
 
     @classmethod
@@ -99,6 +101,7 @@ class SolarPeriodRecord:
             season=data.get("season", "unknown"),
             bias=data.get("bias", 0.0),
             additive_bias=data.get("additive_bias", 0.0),
+            is_boost_period=data.get("is_boost_period", False),
         )
 
 
@@ -260,6 +263,7 @@ class SolarAccuracyTracker:
         period_start: datetime,
         forecast_kwh: float,
         weather_condition: str,
+        is_boost: bool = False,
     ) -> None:
         """Record a solar forecast for a 30-min period.
 
@@ -277,6 +281,7 @@ class SolarAccuracyTracker:
             weather_condition=self._normalize_weather(weather_condition),
             time_of_day=time_of_day,
             season=season,
+            is_boost_period=is_boost,
         )
         self._pending_forecasts[key] = record
         _LOGGER.debug(
@@ -329,7 +334,10 @@ class SolarAccuracyTracker:
         if not self._period_records:
             return
 
-        records = list(self._period_records)
+        records = [r for r in self._period_records if not r.is_boost_period]
+        if not records:
+            self._metrics = SolarBiasMetrics()
+            return
 
         self._metrics.sample_count = len(records)
         self._metrics.overall_bias = sum(r.bias for r in records) / len(records)

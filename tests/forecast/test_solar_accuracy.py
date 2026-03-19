@@ -59,6 +59,19 @@ class TestSolarPeriodRecord:
         assert record.bias == 0.0
         assert record.additive_bias == pytest.approx(0.001)
 
+    def test_initialization_with_boost_flag(self):
+        """Boost-tagged records preserve the boost marker."""
+        record = SolarPeriodRecord(
+            period_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+            forecast_kwh=2.0,
+            actual_kwh=1.0,
+            weather_condition="sunny",
+            time_of_day="morning",
+            season="summer",
+            is_boost_period=True,
+        )
+        assert record.is_boost_period is True
+
     def test_to_dict(self):
         """Test serialization to dictionary."""
         record = SolarPeriodRecord(
@@ -214,6 +227,14 @@ class TestSolarAccuracyTracker:
         assert record.time_of_day == "morning"
         assert record.season == "summer"
 
+    def test_record_forecast_sets_boost_flag(self, tracker):
+        """Boost periods are tagged when forecasts are recorded."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.5, "sunny", is_boost=True)
+
+        record = tracker._pending_forecasts[period_start.isoformat()]
+        assert record.is_boost_period is True
+
     def test_record_forecast_normalizes_weather(self, tracker):
         """Test weather normalization when recording forecast."""
         period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
@@ -341,6 +362,21 @@ class TestSolarAccuracyTracker:
 
         # With perfect forecasts, accuracy should be high
         assert tracker._metrics.accuracy > 90
+
+    def test_boost_periods_are_excluded_from_metrics(self, tracker):
+        """Boost-tagged periods remain in history but not in learning metrics."""
+        normal_period = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        boost_period = datetime(2026, 1, 15, 10, 30, tzinfo=UTC)
+
+        tracker.record_forecast(normal_period, 5.0, "sunny")
+        tracker.backfill_actual(normal_period, 2.0)
+
+        tracker.record_forecast(boost_period, 5.0, "sunny", is_boost=True)
+        tracker.backfill_actual(boost_period, 1.0)
+
+        assert len(tracker._period_records) == 2
+        assert tracker._metrics.sample_count == 1
+        assert tracker._period_records[-1].is_boost_period is True
 
     def test_get_bias_correction_no_data(self, tracker):
         """Test get_bias_correction with no historical data returns 1.0."""

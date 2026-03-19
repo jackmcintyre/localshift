@@ -499,6 +499,28 @@ async def test_backfill_solar_actual_success(coordinator):
 
 
 @pytest.mark.asyncio
+async def test_backfill_solar_actual_skips_during_boost(coordinator):
+    """Boost charging periods should not contaminate solar accuracy backfill."""
+    from homeassistant.util import dt as dt_util
+
+    scheduler = TickScheduler(coordinator)
+
+    coordinator.solar_accuracy_tracker = MagicMock()
+    coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
+
+    now = dt_util.now()
+    coordinator._last_solar_power_timestamp = now - timedelta(minutes=30)
+    coordinator._last_solar_power_kw = 4.0
+    coordinator.data = MagicMock()
+    coordinator.data.solar_power_kw = 6.0
+    coordinator.data.boost_charge_active = True
+
+    scheduler._backfill_solar_actual()
+
+    coordinator.solar_accuracy_tracker.backfill_actual.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_handle_medium_tick_with_solar_tracker(coordinator):
     """Test handle_medium_tick updates solar bias metrics."""
     scheduler = TickScheduler(coordinator)
