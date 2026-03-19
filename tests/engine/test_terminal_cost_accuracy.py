@@ -173,3 +173,43 @@ class TestTerminalDiagnostics:
         )
 
         assert result["peak_soc_pct"] == 90.0  # max of 75, 90, 85
+
+
+class TestOptimizerResultDiagnosticFields:
+    """Tests for diagnostic fields on OptimizerResult."""
+
+    def test_diagnostic_fields_default_to_none(self):
+        """New diagnostic fields should default to None."""
+        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+
+        result = OptimizerResult(success=True, total_slots=3)
+        assert result.forecast_accuracy is None
+        assert result.projected_solar_gain_pct is None
+        assert result.accuracy_discount_factor is None
+        assert result.adjusted_solar_gain_pct is None
+        assert result.effective_soc_at_terminal is None
+        assert result.peak_soc_pct is None
+        assert result.dw_entry_soc_pct is None
+
+    def test_diagnostic_fields_set_explicitly(self):
+        """Diagnostic fields can be set via constructor."""
+        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+
+        result = OptimizerResult(
+            success=True,
+            total_slots=3,
+            forecast_accuracy=0.75,
+            projected_solar_gain_pct=30.0,
+            accuracy_discount_factor=0.75,
+            adjusted_solar_gain_pct=22.5,
+            effective_soc_at_terminal=85.0,
+            peak_soc_pct=92.0,
+            dw_entry_soc_pct=88.0,
+        )
+        assert result.forecast_accuracy == 0.75
+        assert result.projected_solar_gain_pct == 30.0
+        assert result.accuracy_discount_factor == 0.75
+        assert result.adjusted_solar_gain_pct == 22.5
+        assert result.effective_soc_at_terminal == 85.0
+        assert result.peak_soc_pct == 92.0
+        assert result.dw_entry_soc_pct == 88.0
