@@ -411,7 +411,7 @@ def sum_solar_before_target(
     solcast: list[dict[str, Any]],
     now_dt: datetime,
     target_hour: int,
-    confidence: float = 1.0,
+    resolver: Any | None = None,
 ) -> float:
     """Sum expected solar kWh (pv_estimate) from now until target_hour.
 
@@ -430,6 +430,8 @@ def sum_solar_before_target(
         # Extract median and P10 estimates separately for blending
         raw_estimate = float(period.get("pv_estimate", 0))
         raw_p10 = float(period.get("pv_estimate10", 0))
+        # Get confidence from resolver (defaults to 1.0 if no resolver)
+        confidence = resolver.get_confidence(ps_local) if resolver else 1.0
         # Blend based on confidence
         kwh_per_hour = _blend_solar_estimate(raw_estimate, raw_p10, confidence)
 
