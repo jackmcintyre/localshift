@@ -1,6 +1,14 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
+import pytest
+
 from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
+    OptimizerConfig,
+    OptimizerInputs,
+    SlotContext,
+)
 
 
 class TestGetForecastAccuracy:
@@ -213,3 +221,106 @@ class TestOptimizerResultDiagnosticFields:
         assert result.effective_soc_at_terminal == 85.0
         assert result.peak_soc_pct == 92.0
         assert result.dw_entry_soc_pct == 88.0
+
+
+class TestSolveDiagnostics:
+    """Integration tests: _solve() populates diagnostic fields on OptimizerResult."""
+
+    def _make_inputs(self, *, accuracy: float | None = 75.0) -> OptimizerInputs:
+        """Build minimal OptimizerInputs for a 4-slot horizon with a demand window."""
+        base = datetime(2026, 3, 20, 14, 0, tzinfo=timezone.utc)
+        slots = []
+        for i in range(4):
+            ts = base + timedelta(minutes=30 * i)
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=ts.isoformat(),
+                    slot_interval_minutes=30,
+                    buy_price=0.30,
+                    sell_price=0.05,
+                    consumption_kwh=0.5,
+                    solar_kwh=1.0,
+                    is_demand_window_entry=i == 3,  # last slot is DW entry
+                    is_demand_window_slot=i >= 3,  # last slot is DW
+                ),
+            )
+
+        tracker = None
+        if accuracy is not None:
+            tracker = Mock()
+            tracker.metrics.accuracy = accuracy
+
+        return OptimizerInputs(
+            cycle_id="test_cycle",
+            initial_soc_pct=60.0,
+            slots=slots,
+            config=self._make_config(),
+            solar_accuracy_tracker=tracker,
+            all_solcast=[],
+        )
+
+    def _make_config(self) -> OptimizerConfig:
+        """Build minimal OptimizerConfig."""
+        return OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            discharge_rate_kw=5.0,
+            demand_window_target_soc_pct=95.0,
+            optimization_mode="self_consumption",
+            allow_dw_entry_under_target=False,
+            switching_penalty=0.02,
+            cycle_penalty_per_kwh=0.08,
+            target_shortfall_penalty_per_pct=0.015,
+        )
+
+    def test_diagnostic_fields_populated_with_terminal_penalty(self):
+        """When terminal penalty exists, diagnostic fields should be populated."""
+        inputs = self._make_inputs(accuracy=75.0)
+        planner = DPPlanner()
+        result = planner._solve(inputs)
+
+        assert result.success is True
+        assert result.forecast_accuracy is not None
+        assert result.forecast_accuracy == pytest.approx(0.75)
+        assert result.accuracy_discount_factor is not None
+        assert result.projected_solar_gain_pct is not None
+        assert result.adjusted_solar_gain_pct is not None
+        assert result.effective_soc_at_terminal is not None
+        assert result.peak_soc_pct is not None
+        # dw_entry_soc_pct may or may not be None depending on terminal_penalty_idx
+
+    def test_diagnostic_fields_none_without_demand_window(self):
+        """When no demand window, diagnostic fields should remain None."""
+        # Build inputs with NO demand window slots
+        base = datetime(2026, 3, 20, 14, 0, tzinfo=timezone.utc)
+        slots = []
+        for i in range(4):
+            ts = base + timedelta(minutes=30 * i)
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=ts.isoformat(),
+                    slot_interval_minutes=30,
+                    buy_price=0.30,
+                    sell_price=0.05,
+                    consumption_kwh=0.5,
+                    solar_kwh=1.0,
+                    is_demand_window_entry=False,
+                    is_demand_window_slot=False,
+                ),
+            )
+        inputs = OptimizerInputs(
+            cycle_id="test_no_dw",
+            initial_soc_pct=60.0,
+            slots=slots,
+            config=self._make_config(),
+            solar_accuracy_tracker=None,
+            all_solcast=[],
+        )
+        planner = DPPlanner()
+        result = planner._solve(inputs)
+
+        assert result.success is True
+        assert result.forecast_accuracy is None
+        assert result.projected_solar_gain_pct is None
