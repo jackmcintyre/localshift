@@ -258,7 +258,7 @@ def test_get_confidence_for_period_no_intervals():
 
     confidence = get_confidence_for_period(analysis, now)
 
-    assert confidence == 1.0  # Default when no intervals
+    assert confidence == 0.75  # Falls back to day_confidence when no intervals
 
 
 def test_get_confidence_for_period_exact_match():

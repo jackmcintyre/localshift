@@ -182,8 +182,12 @@ def get_confidence_for_period(
         Confidence score (0-1), defaults to 1.0 if no data available
 
     """
-    if analysis is None or not analysis.intervals:
+    if analysis is None:
         return 1.0
+
+    if not analysis.intervals:
+        # No intervals available, return day-level confidence
+        return analysis.day_confidence
 
     # Find matching interval (allow 5-minute tolerance for rounding)
     period_start_local = dt_util.as_local(period_start)
