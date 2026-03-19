@@ -419,6 +419,9 @@ class CoordinatorData:
         default_factory=dict
     )  # Solar forecast bias metrics and correction factors
     solar_forecast_accuracy: float = 100.0  # Overall solar forecast accuracy percentage
+    hybrid_solar_accuracy: float | None = (
+        None  # Combined LocalShift + Solcast MAPE accuracy
+    )
 
     # --- Optimization controller (Issue #170 Phase 4) ---
     optimization_weights: dict[str, float] = field(
