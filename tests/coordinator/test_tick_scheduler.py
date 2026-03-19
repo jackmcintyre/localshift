@@ -171,7 +171,11 @@ async def test_handle_slow_tick(coordinator):
     coordinator._entity_monitor = MagicMock()
     coordinator._entity_monitor.refresh_weather_forecast = AsyncMock()
     coordinator.hass = MagicMock()
-    coordinator.hass.async_create_task = MagicMock()
+    coordinator.hass.async_create_task = MagicMock(
+        side_effect=lambda coro, name=None: coro.close()
+        if hasattr(coro, "close")
+        else None
+    )
 
     # Mock backfill method
     scheduler._backfill_solar_actual = MagicMock()
@@ -222,7 +226,11 @@ async def test_handle_daily_summary(coordinator):
 
     # Mock dependencies
     coordinator.hass = MagicMock()
-    coordinator.hass.async_create_task = MagicMock()
+    coordinator.hass.async_create_task = MagicMock(
+        side_effect=lambda coro, name=None: coro.close()
+        if hasattr(coro, "close")
+        else None
+    )
     coordinator.get_switch_state = MagicMock(return_value=True)
 
     # Mock _send_daily_summary
@@ -314,7 +322,11 @@ async def test_handle_medium_tick_with_computation_engine(coordinator):
     coordinator._computation_engine.async_learn_weather_sample = AsyncMock()
     coordinator._get_entity_id = MagicMock(return_value="sensor.load")
     coordinator.hass = MagicMock()
-    coordinator.hass.async_create_task = MagicMock()
+    coordinator.hass.async_create_task = MagicMock(
+        side_effect=lambda coro, name=None: coro.close()
+        if hasattr(coro, "close")
+        else None
+    )
     coordinator.data = MagicMock()
 
     scheduler.handle_medium_tick(now)
@@ -337,7 +349,11 @@ async def test_handle_slow_tick_with_computation_engine(coordinator):
     coordinator._computation_engine.async_save_forecast_history = AsyncMock()
     coordinator._computation_engine.async_save_accuracy_metrics = AsyncMock()
     coordinator.hass = MagicMock()
-    coordinator.hass.async_create_task = MagicMock()
+    coordinator.hass.async_create_task = MagicMock(
+        side_effect=lambda coro, name=None: coro.close()
+        if hasattr(coro, "close")
+        else None
+    )
     coordinator.data = MagicMock()
 
     # Mock backfill method
