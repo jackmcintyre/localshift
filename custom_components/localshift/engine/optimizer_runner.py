@@ -579,6 +579,15 @@ def _build_summary(
         if alignment.get("warnings"):
             summary["alignment_warnings"] = alignment["warnings"]
 
+    # Terminal diagnostics (PR #789)
+    summary["forecast_accuracy"] = result.forecast_accuracy
+    summary["projected_solar_gain_pct"] = result.projected_solar_gain_pct
+    summary["accuracy_discount_factor"] = result.accuracy_discount_factor
+    summary["adjusted_solar_gain_pct"] = result.adjusted_solar_gain_pct
+    summary["effective_soc_at_terminal"] = result.effective_soc_at_terminal
+    summary["peak_soc_pct"] = result.peak_soc_pct
+    summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
+
     return summary
 
 

@@ -39,17 +39,32 @@ When modifying DP optimizer, you MUST consult `docs/PLANNING_MODEL.md` first:
 
 ## Navigation
 
-Use SymDex instead of grep/read:
-- `symdex_search_symbols("function")` - find symbol
+Use the right tool for the task:
+
+**SymDex** - Precise code navigation:
+- `symdex_search_symbols("function")` - find symbol/class by exact name
 - `symdex_get_file_outline("file.py")` - file structure
-- `symdex_search_text("text")` - search content
+- `symdex_search_text("text")` - exact content search
+- Use when: you know the name, need structure, or want fast lookups
+
+**OpenViking** - Semantic code understanding:
+- `ov search "query"` - semantic search across codebase
+- `ov read viking://resources/localshift/path/to/file` - read file content
+- `ov abstract viking://...` - get directory summary
+- Use when: exploring how/why code works, finding patterns, conceptual queries
+- Start if not running: `~/.local/bin/ov-start`
+
+**Quick decision guide:**
+
+| You need... | Use |
+|--------------|-----|
+| Find function `foo` by name | SymDex |
+| Understand how auth works | OpenViking |
+| See file structure | SymDex |
+| Find code related to "grid charging" | OpenViking |
+| Navigate to line N | SymDex |
 
 ## Additional Tools
-
-**OpenViking** - Semantic search for code understanding:
-- Use for: "explain how X works", "find patterns", "analyze code"
-- Commands: `ov search "query"`, `ov read viking://...`
-- Start if not running: `~/.local/bin/ov-start`
 
 **context-mode** - Efficient large file handling:
 - Use for: log files, large data files, full file analysis
