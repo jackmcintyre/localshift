@@ -8,6 +8,10 @@ from tests.test_optimizer_self_consumption import *  # noqa: F403
 
 from datetime import UTC, datetime
 
+from custom_components.localshift.engine.negative_fit import (
+    compute_recoverability_floor_pct,
+    derive_negative_fit_avoidance_context,
+)
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.transitions import transition
@@ -179,7 +183,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=OptimizerConfig(),
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None
 
     def test_no_positive_slots_before_risk_returns_none(self):
@@ -194,7 +198,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=OptimizerConfig(),
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None
 
     def test_no_recovery_solar_returns_none(self):
@@ -210,7 +214,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None
 
     def test_ha_style_case_with_solar_during_bad_fit_creates_context(self):
@@ -239,7 +243,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
         assert isinstance(ctx, NegativeFitAvoidanceContext)
         assert ctx.risk_window_start_idx == 12
@@ -273,9 +277,9 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
-        floor_pct = planner._compute_recoverability_floor_pct(
+        floor_pct = compute_recoverability_floor_pct(
             current_soc_pct=58.0,
             slot_idx=5,
             context=ctx,
@@ -312,9 +316,9 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
-        floor_pct = planner._compute_recoverability_floor_pct(
+        floor_pct = compute_recoverability_floor_pct(
             current_soc_pct=95.0,
             slot_idx=5,
             context=ctx,
@@ -345,7 +349,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None or ctx.required_headroom_kwh <= 0.5
 
 

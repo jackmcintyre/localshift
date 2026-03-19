@@ -16,6 +16,9 @@ from custom_components.localshift.engine.constraints import (
     feasible_actions,
 )
 from custom_components.localshift.engine.cost import stage_cost
+from custom_components.localshift.engine.negative_fit import (
+    derive_negative_fit_avoidance_context,
+)
 from custom_components.localshift.engine.transitions import (
     transition,
     _transition_hold_deficit,
@@ -2605,7 +2608,7 @@ def test_negative_fit_context_no_window(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is None
 
 
@@ -2622,7 +2625,7 @@ def test_negative_fit_context_no_overflow(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is None
 
 
@@ -2639,7 +2642,7 @@ def test_negative_fit_context_no_positive_slots(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is None
 
 
@@ -2662,7 +2665,7 @@ def test_negative_fit_context_computes_floor(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is not None
     assert ctx.risk_window_start_idx == 4
     assert ctx.required_headroom_kwh > 0
