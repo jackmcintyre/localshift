@@ -8,6 +8,7 @@ from datetime import datetime
 
 import pytest
 
+from custom_components.localshift.engine.cost import stage_cost
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     OptimizerConfig,
@@ -527,7 +528,7 @@ class TestSelfConsumptionCreditFix:
         )
         # battery_for_load = 1.0 kWh (HOLD, battery covers full load)
         # With slot.buy_price - cycle_penalty: credit = 1.0 * (0.14 - 0.08) = 0.06
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
@@ -558,7 +559,7 @@ class TestSelfConsumptionCreditFix:
             consumption_kwh=1.0,
             interval_minutes=30,
         )
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
@@ -733,7 +734,7 @@ class TestSolarOpportunityPenaltyStrengthened:
 
         import_cost = grid_import_kwh * 0.14  # = $0.07
 
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=grid_import_kwh,
             grid_export_kwh=0.0,

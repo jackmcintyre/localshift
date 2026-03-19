@@ -14,9 +14,13 @@ def mock_hass_with_services():
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
     hass.states = MagicMock()
-    # async_create_task receives coroutines - use a mock that consumes them
-    # to avoid "coroutine was never awaited" warnings
-    hass.async_create_task = MagicMock(side_effect=lambda coro, name=None: None)
+    # async_create_task receives coroutines - close them to avoid
+    # "coroutine was never awaited" RuntimeWarnings
+    hass.async_create_task = MagicMock(
+        side_effect=lambda coro, name=None: coro.close()
+        if hasattr(coro, "close")
+        else None
+    )
     return hass
 
 

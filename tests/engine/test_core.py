@@ -8,7 +8,17 @@ from tests.test_optimizer_self_consumption import *  # noqa: F403
 
 from datetime import UTC, datetime
 
+from custom_components.localshift.engine.negative_fit import (
+    compute_recoverability_floor_pct,
+    derive_negative_fit_avoidance_context,
+)
+from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.penalties import (
+    get_solar_opportunity_penalty_factor,
+)
+from custom_components.localshift.engine.reason_codes import classify_export_reason
+from custom_components.localshift.engine.transitions import transition
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
     OptimizerConfig,
@@ -177,7 +187,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=OptimizerConfig(),
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None
 
     def test_no_positive_slots_before_risk_returns_none(self):
@@ -192,7 +202,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=OptimizerConfig(),
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None
 
     def test_no_recovery_solar_returns_none(self):
@@ -208,7 +218,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None
 
     def test_ha_style_case_with_solar_during_bad_fit_creates_context(self):
@@ -237,7 +247,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
         assert isinstance(ctx, NegativeFitAvoidanceContext)
         assert ctx.risk_window_start_idx == 12
@@ -271,9 +281,9 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
-        floor_pct = planner._compute_recoverability_floor_pct(
+        floor_pct = compute_recoverability_floor_pct(
             current_soc_pct=58.0,
             slot_idx=5,
             context=ctx,
@@ -310,9 +320,9 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
-        floor_pct = planner._compute_recoverability_floor_pct(
+        floor_pct = compute_recoverability_floor_pct(
             current_soc_pct=95.0,
             slot_idx=5,
             context=ctx,
@@ -343,7 +353,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = planner._derive_negative_fit_avoidance_context(inputs)
+        ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None or ctx.required_headroom_kwh <= 0.5
 
 
@@ -383,7 +393,7 @@ class TestCoreRegressionCoverage:
             recoverability_floor_pct_by_slot=(20.0,) * 8,
         )
 
-        reason = planner._classify_export_reason(
+        reason = classify_export_reason(
             self._slot(1, sell=0.09),
             slot_idx=1,
             negative_fit_avoidance_context=ctx,
@@ -403,7 +413,7 @@ class TestCoreRegressionCoverage:
         )
         config = OptimizerConfig(min_soc_pct=10.0)
 
-        actions = DPPlanner._determine_export_actions(
+        actions = _determine_export_actions(
             soc_pct=80.0,
             slot=slot,
             config=config,
@@ -424,7 +434,7 @@ class TestCoreRegressionCoverage:
             {"period_start": "2026-01-03T03:00:00", "pv_estimate": 10.0},
         ]
 
-        factor = planner._get_solar_opportunity_penalty_factor(
+        factor = get_solar_opportunity_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=1.0,
             slot=slots[0],
@@ -440,7 +450,7 @@ class TestCoreRegressionCoverage:
     def test_transition_unknown_action_returns_noop(self):
         """Unknown action falls back to no-op transition."""
         slot = self._slot(0)
-        soc, imp, exp = DPPlanner.transition(
+        soc, imp, exp = transition(
             soc_pct=55.0,
             action="unknown",  # type: ignore[arg-type]
             slot=slot,
@@ -467,3 +477,10 @@ class TestCoreRegressionCoverage:
             demand_bounds=None,
         )
         assert shortfall == 0.0
+
+
+def test_dpplanner_no_longer_exposes_cost_and_constraints_wrappers():
+    """Chunk 1: Ensure DPPlanner cost/constraint static methods are removed."""
+    assert not hasattr(DPPlanner, "stage_cost")
+    assert not hasattr(DPPlanner, "terminal_cost")
+    assert not hasattr(DPPlanner, "feasible_actions")

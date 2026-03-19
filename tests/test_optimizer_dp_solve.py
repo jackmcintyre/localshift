@@ -11,6 +11,32 @@ from __future__ import annotations
 
 import pytest
 
+from custom_components.localshift.engine.constraints import (
+    check_global_solar_sufficiency,
+    feasible_actions,
+)
+from custom_components.localshift.engine.cost import stage_cost
+from custom_components.localshift.engine.penalties import (
+    get_futile_cycling_penalty_factor,
+)
+from custom_components.localshift.engine.reason_codes import (
+    _is_cheap_import_window,
+    _is_target_shortfall_risk,
+    classify_charge_reason,
+    classify_export_reason,
+    classify_reason,
+)
+from custom_components.localshift.engine.solar import (
+    projected_solar_soc_gain_pct,
+    projected_solcast_gain_pct,
+)
+from custom_components.localshift.engine.negative_fit import (
+    derive_negative_fit_avoidance_context,
+)
+from custom_components.localshift.engine.transitions import (
+    transition,
+    _transition_hold_deficit,
+)
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     ObjectiveTerms,
@@ -140,7 +166,7 @@ def test_transition_hold_at_soc_floor_emits_passive_grid_import(default_config):
         consumption_kwh=1.0,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         soc_pct=default_config.min_soc_pct,
         action=PlannerAction.HOLD,
         slot=slot,
@@ -151,7 +177,7 @@ def test_transition_hold_at_soc_floor_emits_passive_grid_import(default_config):
     assert grid_import == pytest.approx(1.0)
     assert grid_export == pytest.approx(0.0)
 
-    terms = DPPlanner.stage_cost(
+    terms = stage_cost(
         action=PlannerAction.HOLD,
         grid_import_kwh=grid_import,
         grid_export_kwh=grid_export,
@@ -172,7 +198,7 @@ def test_transition_hold_at_soc_ceiling_emits_passive_grid_export(default_config
         consumption_kwh=0.0,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         soc_pct=default_config.max_soc_pct,
         action=PlannerAction.HOLD,
         slot=slot,
@@ -183,7 +209,7 @@ def test_transition_hold_at_soc_ceiling_emits_passive_grid_export(default_config
     assert grid_import == pytest.approx(0.0)
     assert grid_export == pytest.approx(1.2)
 
-    terms = DPPlanner.stage_cost(
+    terms = stage_cost(
         action=PlannerAction.HOLD,
         grid_import_kwh=grid_import,
         grid_export_kwh=grid_export,
@@ -208,7 +234,7 @@ def test_transition_hold_respects_separate_rates():
 
     # 1. Discharge (net_kwh = -10): should be capped by discharge_rate_kw (4.0 kW * 1h = 4.0 kWh)
     slot.consumption_kwh = 10.0
-    _, grid_import, _ = DPPlanner.transition(
+    _, grid_import, _ = transition(
         soc_pct=50.0, action=PlannerAction.HOLD, slot=slot, config=config
     )
     assert grid_import == pytest.approx(6.0)  # 10.0 - 4.0
@@ -216,7 +242,7 @@ def test_transition_hold_respects_separate_rates():
     # 2. Charge (net_kwh = 10): should be capped by solar_charge_rate_kw (2.0 kW * 1h = 2.0 kWh)
     slot.consumption_kwh = 0.0
     slot.solar_kwh = 10.0
-    _, _, grid_export = DPPlanner.transition(
+    _, _, grid_export = transition(
         soc_pct=50.0, action=PlannerAction.HOLD, slot=slot, config=config
     )
     assert grid_export == pytest.approx(8.0)  # 10.0 - 2.0
@@ -471,7 +497,7 @@ def test_feasible_actions_blocks_grid_charging_in_demand_window(default_config):
         is_demand_window_slot=True,
     )
 
-    actions = DPPlanner.feasible_actions(50.0, slot, default_config)
+    actions = feasible_actions(50.0, slot, default_config)
 
     assert PlannerAction.HOLD in actions
     assert PlannerAction.CHARGE_GRID_NORMAL not in actions
@@ -849,7 +875,7 @@ def test_classify_reason_target_shortfall_uses_future_slots():
         ),
     ]
 
-    reason = planner._classify_reason(  # noqa: SLF001 - unit test for internal logic
+    reason = classify_reason(  # noqa: SLF001 - unit test for internal logic
         action=PlannerAction.CHARGE_GRID_NORMAL,
         slot=slots[0],
         slot_idx=0,
@@ -905,7 +931,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
         ),
     ]
 
-    reason = planner._classify_reason(  # noqa: SLF001 - unit test for internal logic
+    reason = classify_reason(  # noqa: SLF001 - unit test for internal logic
         action=PlannerAction.CHARGE_GRID_NORMAL,
         slot=slots[0],
         slot_idx=0,
@@ -967,7 +993,7 @@ def test_feasible_actions_suppresses_grid_charge_when_solar_covers_deficit():
         soc_bins=20,
     )
 
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=70.0,
         slot=slots[0],
         config=config,
@@ -992,7 +1018,7 @@ def test_check_global_solar_sufficiency_empty_slots_returns_false():
         soc_bins=20,
     )
 
-    result = DPPlanner._check_global_solar_sufficiency(
+    result = check_global_solar_sufficiency(
         soc_pct=70.0,  # 10% deficit
         config=config,
         slot_idx=0,
@@ -1015,7 +1041,7 @@ def test_check_global_solar_sufficiency_no_deficit_returns_false():
     ]
 
     # SOC=85 >= target=80 → deficit <= 0
-    result = DPPlanner._check_global_solar_sufficiency(
+    result = check_global_solar_sufficiency(
         soc_pct=85.0,
         config=config,
         slot_idx=0,
@@ -1042,7 +1068,7 @@ def test_feasible_actions_allows_grid_charge_when_solar_insufficient():
         soc_bins=20,
     )
 
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=70.0,
         slot=slots[0],
         config=config,
@@ -1071,7 +1097,7 @@ def test_feasible_actions_no_context_behaves_as_before():
     )
 
     # 3-argument form: no solar context → gate disabled → grid charge offered normally
-    actions = DPPlanner.feasible_actions(70.0, slot, config)
+    actions = feasible_actions(70.0, slot, config)
 
     assert PlannerAction.HOLD in actions
     # Price is cheap, no gate in effect → grid charge should be available
@@ -1093,7 +1119,7 @@ def test_feasible_actions_gate_disabled_in_arbitrage_mode():
         soc_bins=20,
     )
 
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=70.0,
         slot=slots[0],
         config=config,
@@ -1122,7 +1148,7 @@ def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
         soc_bins=20,
     )
 
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=85.0,
         slot=slots[0],
         config=config,
@@ -1142,7 +1168,7 @@ def test_projected_solar_soc_gain_pct_positive_surplus():
         _make_slot(slot_index=i, solar_kwh=1.0, consumption_kwh=0.3) for i in range(4)
     ]
     # 4 slots * (1.0 - 0.3) = 2.8 kWh net; 2.8/13.5 * 100 = ~20.7%
-    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+    result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=0,
         slots=slots,
         terminal_penalty_idx=4,
@@ -1156,7 +1182,7 @@ def test_projected_solar_soc_gain_pct_negative_when_consumption_dominates():
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.1, consumption_kwh=0.5) for i in range(4)
     ]
-    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+    result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=0,
         slots=slots,
         terminal_penalty_idx=4,
@@ -1174,7 +1200,7 @@ def test_projected_solar_soc_gain_pct_respects_slot_range():
         _make_slot(slot_index=3, solar_kwh=3.0, consumption_kwh=0.1),  # ignored
     ]
     # Only slots 1–2 (slot_idx=1, terminal=3); both are net deficit
-    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+    result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=1,
         slots=slots,
         terminal_penalty_idx=3,
@@ -1487,13 +1513,13 @@ def test_global_solar_gate_fires_when_no_demand_window():
     )
 
     # Test the helper method directly
-    result = DPPlanner._check_global_solar_sufficiency(60.0, 0, slots, config)
+    result = check_global_solar_sufficiency(60.0, 0, slots, config)
     assert result is True, (
         "Global solar sufficiency should return True when solar >= deficit"
     )
 
     # With gate ENABLED, feasible_actions should suppress grid charging
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=60.0,
         slot=slots[0],
         config=config,
@@ -1531,13 +1557,13 @@ def test_global_solar_gate_allows_charge_when_solar_insufficient():
     )
 
     # Test the helper method directly
-    result = DPPlanner._check_global_solar_sufficiency(60.0, 0, slots, config)
+    result = check_global_solar_sufficiency(60.0, 0, slots, config)
     assert result is False, (
         "Global solar sufficiency should return False when solar < deficit"
     )
 
     # With gate enabled but solar insufficient, charge is allowed via price gate
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=60.0,
         slot=slots[0],
         config=config,
@@ -1601,7 +1627,7 @@ def test_global_solar_sufficiency_uses_realistic_simulation():
         discharge_efficiency=0.95,
     )
 
-    result = DPPlanner._check_global_solar_sufficiency(60.0, 0, slots, config)
+    result = check_global_solar_sufficiency(60.0, 0, slots, config)
     assert result is True, (
         "Gate should return True when realistic simulation reaches target"
     )
@@ -1644,7 +1670,7 @@ def test_global_solar_sufficiency_realistic_returns_false_when_insufficient():
         solar_charge_rate_kw=5.0,
     )
 
-    result = DPPlanner._check_global_solar_sufficiency(10.0, 0, daytime, config)
+    result = check_global_solar_sufficiency(10.0, 0, daytime, config)
     assert result is False, (
         "Gate should return False when rate limits prevent reaching target"
     )
@@ -1681,7 +1707,7 @@ def test_global_solar_gate_fires_with_demand_window():
         soc_bins=20,
     )
 
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=50.0,
         slot=slots[0],
         config=config,
@@ -1723,7 +1749,7 @@ def test_global_solar_gate_allows_charge_with_dw_when_insufficient():
         soc_bins=20,
     )
 
-    actions = DPPlanner.feasible_actions(
+    actions = feasible_actions(
         soc_pct=50.0,
         slot=slots[0],
         config=config,
@@ -1751,7 +1777,7 @@ def test_hold_soc_enforces_no_discharge():
         hold_soc=True,  # Enforce strict no-discharge
     )
 
-    next_soc, grid_import, grid_export = DPPlanner._transition_hold_deficit(
+    next_soc, grid_import, grid_export = _transition_hold_deficit(
         soc_pct=50.0,
         net_kwh=-0.5,  # 0.5 kWh load deficit
         slot_hours=1.0,
@@ -1776,7 +1802,7 @@ def test_hold_soc_false_allows_discharge():
         hold_soc=False,  # Normal discharge allowed
     )
 
-    next_soc, grid_import, grid_export = DPPlanner._transition_hold_deficit(
+    next_soc, grid_import, grid_export = _transition_hold_deficit(
         soc_pct=50.0,
         net_kwh=-0.5,
         slot_hours=1.0,
@@ -2243,7 +2269,7 @@ def test_classify_export_reason_negative_fit():
         solar_kwh=0.0,
         consumption_kwh=0.3,
     )
-    reason = planner._classify_export_reason(slot)
+    reason = classify_export_reason(slot)
     assert reason == PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
 
 
@@ -2278,7 +2304,7 @@ def test_classify_charge_reason_solar_opportunity_wait():
         futile_cycling_penalty=0.0,
     )
 
-    reason = planner._classify_charge_reason(
+    reason = classify_charge_reason(
         slot, 0, [slot], 50.0, config, None, objective_terms=objective_terms
     )
     assert reason == PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
@@ -2297,7 +2323,7 @@ def test_is_target_shortfall_risk_no_deficit():
         soc_bins=20,
     )
 
-    result = planner._is_target_shortfall_risk(0, slots, 85.0, config, 3)
+    result = _is_target_shortfall_risk(0, slots, 85.0, config, 3)
     assert result is False
 
 
@@ -2338,7 +2364,7 @@ def test_is_target_shortfall_risk_with_solcast():
         all_solcast=all_solcast,
     )
 
-    result = planner._is_target_shortfall_risk(0, slots, 50.0, config, 3, inputs=inputs)
+    result = _is_target_shortfall_risk(0, slots, 50.0, config, 3, inputs=inputs)
     assert isinstance(result, bool)
 
 
@@ -2361,7 +2387,7 @@ def test_is_cheap_import_window_expensive_price():
         soc_bins=20,
     )
 
-    result = planner._is_cheap_import_window(slot, config, None, [slot])
+    result = _is_cheap_import_window(slot, config, None, [slot])
     assert result is False
 
 
@@ -2379,7 +2405,7 @@ def test_transition_hold_surplus_zero_efficiency():
         soc_bins=20,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         50.0, PlannerAction.HOLD, slot, config
     )
     assert next_soc == 50.0
@@ -2396,7 +2422,7 @@ def test_transition_hold_deficit_zero_efficiency():
         soc_bins=20,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         50.0, PlannerAction.HOLD, slot, config
     )
     assert next_soc == 50.0
@@ -2421,7 +2447,7 @@ def test_transition_export_zero_efficiency():
         soc_bins=20,
     )
 
-    next_soc, grid_import, grid_export = DPPlanner.transition(
+    next_soc, grid_import, grid_export = transition(
         50.0, PlannerAction.EXPORT_PROACTIVE, slot, config
     )
     assert next_soc == 50.0
@@ -2445,7 +2471,7 @@ def test_stage_cost_uncertainty_penalty():
         soc_bins=20,
     )
 
-    terms = DPPlanner.stage_cost(
+    terms = stage_cost(
         PlannerAction.CHARGE_GRID_NORMAL,
         grid_import_kwh=0.5,
         grid_export_kwh=0.0,
@@ -2496,7 +2522,7 @@ def test_projected_solcast_gain_pct():
     start_time = datetime.fromisoformat("2026-01-03T09:00:00")
     end_time = datetime.fromisoformat("2026-01-03T11:00:00")
 
-    result = DPPlanner._projected_solcast_gain_pct(
+    result = projected_solcast_gain_pct(
         all_solcast, start_time, end_time, battery_capacity_kwh=13.5
     )
 
@@ -2515,7 +2541,7 @@ def test_futile_cycling_battery_at_floor():
         soc_bins=20,
     )
 
-    factor = planner._get_futile_cycling_penalty_factor(
+    factor = get_futile_cycling_penalty_factor(
         action=PlannerAction.CHARGE_GRID_NORMAL,
         slot_idx=0,
         slots=slots,
@@ -2596,7 +2622,7 @@ def test_negative_fit_context_no_window(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is None
 
 
@@ -2613,7 +2639,7 @@ def test_negative_fit_context_no_overflow(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is None
 
 
@@ -2630,7 +2656,7 @@ def test_negative_fit_context_no_positive_slots(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is None
 
 
@@ -2653,7 +2679,7 @@ def test_negative_fit_context_computes_floor(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = planner._derive_negative_fit_avoidance_context(inputs)
+    ctx = derive_negative_fit_avoidance_context(inputs)
     assert ctx is not None
     assert ctx.risk_window_start_idx == 4
     assert ctx.required_headroom_kwh > 0

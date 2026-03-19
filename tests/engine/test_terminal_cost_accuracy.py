@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.solar import get_forecast_accuracy
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
@@ -22,7 +23,7 @@ class TestGetForecastAccuracy:
     def test_no_tracker_returns_one(self):
         """When no tracker exists, return 1.0 (no discount)."""
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(None)
+        result = get_forecast_accuracy(None)
         assert result == 1.0
 
     def test_tracker_returns_100_returns_one(self):
@@ -30,7 +31,7 @@ class TestGetForecastAccuracy:
         tracker = Mock()
         tracker.metrics.accuracy = 100
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
     def test_tracker_returns_50_returns_point_five(self):
@@ -38,7 +39,7 @@ class TestGetForecastAccuracy:
         tracker = Mock()
         tracker.metrics.accuracy = 50
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 0.5
 
     def test_tracker_returns_37_returns_point_three_seven(self):
@@ -46,7 +47,7 @@ class TestGetForecastAccuracy:
         tracker = Mock()
         tracker.metrics.accuracy = 37
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 0.37
 
     def test_tracker_returns_none_returns_one(self):
@@ -54,7 +55,7 @@ class TestGetForecastAccuracy:
         tracker = Mock()
         tracker.metrics.accuracy = None
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
     def test_tracker_returns_zero_returns_one(self):
@@ -62,7 +63,7 @@ class TestGetForecastAccuracy:
         tracker = Mock()
         tracker.metrics.accuracy = 0
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
     def test_tracker_returns_negative_returns_one(self):
@@ -70,14 +71,14 @@ class TestGetForecastAccuracy:
         tracker = Mock()
         tracker.metrics.accuracy = -10
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
     def test_tracker_no_metrics_attribute_returns_one(self):
         """When tracker has no metrics attribute, return 1.0."""
         tracker = Mock(spec=[])  # No attributes at all
         planner = DPPlanner.__new__(DPPlanner)
-        result = planner._get_forecast_accuracy(tracker)
+        result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
 
