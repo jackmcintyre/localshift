@@ -374,6 +374,10 @@ class DPPlanner:
             # Recompute terminal context values for diagnostics
             future_solar_gain_pct = 0.0
             if inputs.all_solcast and inputs.slots:
+                from custom_components.localshift.forecast.analysis_resolver import (
+                    ConfidenceResolver,
+                )
+
                 last_slot = inputs.slots[-1]
                 last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
                 last_slot_end = last_slot_start + timedelta(
@@ -381,11 +385,16 @@ class DPPlanner:
                 )
                 target_slot = inputs.slots[terminal_penalty_idx]
                 target_time = datetime.fromisoformat(target_slot.timestamp_iso)
+                confidence_resolver = ConfidenceResolver(
+                    inputs.solcast_analysis_today,
+                    inputs.solcast_analysis_tomorrow,
+                )
                 future_solar_gain_pct = DPPlanner._projected_solcast_gain_pct(
                     inputs.all_solcast,
                     start_time=last_slot_end,
                     end_time=target_time,
                     battery_capacity_kwh=config.battery_capacity_kwh,
+                    confidence_resolver=confidence_resolver,
                 )
 
             projected_solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
@@ -549,6 +558,10 @@ class DPPlanner:
             # reach the target by the demand window entry.
             future_solar_gain_pct = 0.0
             if inputs.all_solcast and inputs.slots:
+                from custom_components.localshift.forecast.analysis_resolver import (
+                    ConfidenceResolver,
+                )
+
                 last_slot = inputs.slots[-1]
                 last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
                 last_slot_end = last_slot_start + timedelta(
@@ -556,6 +569,10 @@ class DPPlanner:
                 )
                 target_slot = inputs.slots[terminal_penalty_idx]
                 target_time = datetime.fromisoformat(target_slot.timestamp_iso)
+                confidence_resolver = ConfidenceResolver(
+                    inputs.solcast_analysis_today,
+                    inputs.solcast_analysis_tomorrow,
+                )
 
                 # Helper computes gain between end of plan and target time
                 future_solar_gain_pct = DPPlanner._projected_solcast_gain_pct(
@@ -563,6 +580,7 @@ class DPPlanner:
                     start_time=last_slot_end,
                     end_time=target_time,
                     battery_capacity_kwh=config.battery_capacity_kwh,
+                    confidence_resolver=confidence_resolver,
                 )
 
             # Issue #624: Hard constraint in self_consumption mode
@@ -1383,6 +1401,10 @@ class DPPlanner:
 
         # 2. Gain from solar beyond horizon (Issue #619)
         if inputs and inputs.all_solcast:
+            from custom_components.localshift.forecast.analysis_resolver import (
+                ConfidenceResolver,
+            )
+
             last_slot = slots[-1]
             last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
             last_slot_end = last_slot_start + timedelta(
@@ -1390,12 +1412,17 @@ class DPPlanner:
             )
             target_slot = slots[terminal_penalty_idx]
             target_time = datetime.fromisoformat(target_slot.timestamp_iso)
+            confidence_resolver = ConfidenceResolver(
+                inputs.solcast_analysis_today,
+                inputs.solcast_analysis_tomorrow,
+            )
 
             future_gain = DPPlanner._projected_solcast_gain_pct(
                 inputs.all_solcast,
                 start_time=last_slot_end,
                 end_time=target_time,
                 battery_capacity_kwh=config.battery_capacity_kwh,
+                confidence_resolver=confidence_resolver,
             )
             potential_soc_gain_pct += future_gain
 
@@ -1490,6 +1517,7 @@ class DPPlanner:
         end_time: datetime,
         battery_capacity_kwh: float,
         avg_load_kw: float = 0.5,
+        confidence_resolver: Any | None = None,
     ) -> float:
         """Estimate net SOC gain (%) from solar in Solcast beyond the DP horizon.
 
@@ -1509,7 +1537,23 @@ class DPPlanner:
                 p_start = datetime.fromisoformat(str(p_start_str))
                 # Solcast periods are typically 30 mins
                 if start_time <= p_start < end_time:
-                    solar_kwh += float(period.get("pv_estimate", 0)) * 0.5
+                    # Extract median and P10 estimates separately for blending
+                    raw_estimate = float(period.get("pv_estimate", 0))
+                    raw_p10 = float(period.get("pv_estimate10", 0))
+                    confidence = (
+                        confidence_resolver.get_confidence(p_start)
+                        if confidence_resolver is not None
+                        else 1.0
+                    )
+                    # Blend based on confidence
+                    from custom_components.localshift.forecast.solar import (
+                        _blend_solar_estimate,
+                    )
+
+                    blended_estimate = _blend_solar_estimate(
+                        raw_estimate, raw_p10, confidence
+                    )
+                    solar_kwh += blended_estimate * 0.5
             except (ValueError, TypeError):
                 continue
 

@@ -208,6 +208,10 @@ class OptimizerFacade:
                 slots=slots,
                 config=optimizer_config,
                 all_solcast=slot_metadata.all_solcast,
+                solcast_analysis_today=getattr(data, "solcast_analysis_today", None),
+                solcast_analysis_tomorrow=getattr(
+                    data, "solcast_analysis_tomorrow", None
+                ),
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
             )
             result = self._planner.plan(inputs)
@@ -397,6 +401,10 @@ class OptimizerFacade:
                 slots=shadow_slots,
                 config=optimizer_config,
                 all_solcast=slot_metadata.all_solcast,
+                solcast_analysis_today=getattr(data, "solcast_analysis_today", None),
+                solcast_analysis_tomorrow=getattr(
+                    data, "solcast_analysis_tomorrow", None
+                ),
             )
             result = self._planner.plan(inputs)
 

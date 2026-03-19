@@ -9,6 +9,11 @@ from custom_components.localshift.engine.types import (
     OptimizerInputs,
     SlotContext,
 )
+from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+from custom_components.localshift.forecast.solcast_analysis import (
+    ConfidenceInterval,
+    SolcastAnalysis,
+)
 
 
 class TestGetForecastAccuracy:
@@ -199,6 +204,95 @@ class TestOptimizerResultDiagnosticFields:
         assert result.peak_soc_pct is None
         assert result.dw_entry_soc_pct is None
 
+
+class TestProjectedSolcastGainWithConfidence:
+    """Tests for confidence-aware terminal solar projection."""
+
+    def test_low_confidence_reduces_projected_gain(self):
+        start = datetime(2026, 3, 19, 12, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 19, 12, 30, tzinfo=timezone.utc)
+        solcast = [
+            {
+                "period_start": start.isoformat(),
+                "pv_estimate": 6.0,
+                "pv_estimate10": 1.0,
+            }
+        ]
+
+        optimistic_gain = DPPlanner._projected_solcast_gain_pct(
+            solcast,
+            start,
+            end,
+            13.5,
+        )
+
+        analysis = SolcastAnalysis(
+            entity_id="sensor.test",
+            last_updated=start,
+            day_confidence=0.2,
+            day_spread_kwh=0.0,
+            estimate10_kwh=0.0,
+            estimate90_kwh=0.0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=start,
+                    spread_kwh=0.0,
+                    confidence=0.2,
+                )
+            ],
+        )
+        resolver = ConfidenceResolver(analysis, None)
+
+        conservative_gain = DPPlanner._projected_solcast_gain_pct(
+            solcast,
+            start,
+            end,
+            13.5,
+            confidence_resolver=resolver,
+        )
+
+        assert conservative_gain < optimistic_gain
+        assert conservative_gain > 0.0
+
+    def test_tomorrow_analysis_is_used_for_cross_day_projection(self):
+        start = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 20, 8, 30, tzinfo=timezone.utc)
+        solcast = [
+            {
+                "period_start": start.isoformat(),
+                "pv_estimate": 4.0,
+                "pv_estimate10": 0.5,
+            }
+        ]
+        tomorrow_analysis = SolcastAnalysis(
+            entity_id="sensor.tomorrow",
+            last_updated=start,
+            day_confidence=0.1,
+            day_spread_kwh=0.0,
+            estimate10_kwh=0.0,
+            estimate90_kwh=0.0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=start,
+                    spread_kwh=0.0,
+                    confidence=0.1,
+                )
+            ],
+        )
+
+        optimistic_gain = DPPlanner._projected_solcast_gain_pct(
+            solcast, start, end, 13.5
+        )
+        conservative_gain = DPPlanner._projected_solcast_gain_pct(
+            solcast,
+            start,
+            end,
+            13.5,
+            confidence_resolver=ConfidenceResolver(None, tomorrow_analysis),
+        )
+
+        assert conservative_gain < optimistic_gain
+
     def test_diagnostic_fields_set_explicitly(self):
         """Diagnostic fields can be set via constructor."""
         from custom_components.localshift.engine.optimizer_dp import OptimizerResult
@@ -324,3 +418,40 @@ class TestSolveDiagnostics:
         assert result.success is True
         assert result.forecast_accuracy is None
         assert result.projected_solar_gain_pct is None
+
+    def test_future_solcast_projection_uses_confidence_resolver(self):
+        """Future solar beyond the slot horizon uses confidence-aware projection."""
+        inputs = self._make_inputs(accuracy=75.0)
+        inputs.initial_soc_pct = 20.0
+        future_start = datetime(2026, 3, 20, 16, 0, tzinfo=timezone.utc)
+        inputs.all_solcast = [
+            {
+                "period_start": future_start.isoformat(),
+                "pv_estimate": 6.0,
+                "pv_estimate10": 1.0,
+            }
+        ]
+        inputs.solcast_analysis_today = SolcastAnalysis(
+            entity_id="sensor.today",
+            last_updated=future_start,
+            day_confidence=0.2,
+            day_spread_kwh=0.0,
+            estimate10_kwh=0.0,
+            estimate90_kwh=0.0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=future_start,
+                    spread_kwh=0.0,
+                    confidence=0.2,
+                )
+            ],
+        )
+
+        planner = DPPlanner()
+        result = planner._solve(inputs)
+
+        assert result.success is True
+        assert result.projected_solar_gain_pct is not None
+        assert result.adjusted_solar_gain_pct is not None
+        assert result.projected_solar_gain_pct > 0.0
+        assert result.adjusted_solar_gain_pct < result.projected_solar_gain_pct
