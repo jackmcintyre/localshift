@@ -4,14 +4,14 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **58 entities** grouped under a single "LocalShift" device:
+The integration creates **60 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 32 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
-| Numbers | 4 | `number` |
+| Numbers | 6 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
 
@@ -1242,6 +1242,10 @@ State: on
 
 ## Numbers (Configuration Thresholds)
 
+> **Note:** These entities have `entity_category="config"` and are hidden from the main dashboard by default. Access them via:
+> - Device → Configuration section
+> - Settings → Devices & Services → LocalShift → Configure → Advanced
+
 ### 1. number.localshift_cheap_price_percentile
 
 **Purpose:** Percentile of near-term forecast prices used as base cheap threshold.
@@ -1306,6 +1310,52 @@ State: 95.0
 **Example Data:**
 ```
 State: 10.0
+```
+
+---
+
+### 5. number.localshift_cycle_penalty
+
+**Purpose:** Cost penalty per kWh of battery cycling (wear + efficiency loss).
+
+| Property | Value |
+|----------|-------|
+| Range | $0.00-$0.20/kWh |
+| Default | $0.08/kWh |
+| Unit | $/kWh |
+
+**Tuning Guide:**
+- **Increase** to reduce cycling frequency (more conservative, less arbitrage)
+- **Decrease** to enable more arbitrage opportunities
+- **$0.00** disables cycle penalty (pure cost minimization, ignores battery wear)
+
+**Example Data:**
+```
+State: 0.08
+```
+
+---
+
+### 6. number.localshift_target_shortfall_penalty
+
+**Purpose:** Penalty per percentage-point below demand window target SOC.
+
+| Property | Value |
+|----------|-------|
+| Range | $0.000-$0.100/%-point |
+| Default | $0.015/%-point |
+| Unit | $/%-point |
+
+**Tuning Guide:**
+- **Increase** to force earlier/more aggressive grid charging to hit target
+- **Decrease** to rely more on solar (wait longer before grid charging)
+- **$0.000** disables demand window target enforcement (not recommended)
+
+**Impact:** Lower values (e.g., $0.015 vs $0.030) reduce overnight grid charging urgency.
+
+**Example Data:**
+```
+State: 0.015
 ```
 
 ---
