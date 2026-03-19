@@ -367,12 +367,12 @@ class LocalShiftOptionsFlow(OptionsFlow):
         """Handle the first step: show menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=[
-                "options_pricing_source",
-                "entity_mappings",
-                "settings",
-                "advanced",
-            ],
+            menu_options={
+                "options_pricing_source": "Pricing Source",
+                "entity_mappings": "Entity Mappings",
+                "settings": "Settings",
+                "advanced": "Advanced",
+            },
         )
 
     async def async_step_options_pricing_source(
