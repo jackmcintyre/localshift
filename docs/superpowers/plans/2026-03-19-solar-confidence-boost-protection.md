@@ -10,14 +10,25 @@
 
 ---
 
+## Design Note: Interaction with `solar_confidence_factor`
+
+The existing adaptive `solar_confidence_factor` (in `engine/slots.py`, default 1.0, range [0.5, 1.5]) is applied when solar accuracy tracking has insufficient samples (<20). When confidence blending is active AND `solar_confidence_factor` is in play, both adjustments apply multiplicatively. This is acceptable because:
+- `solar_confidence_factor` adjusts for **systemic** forecast bias (learned over time)
+- Confidence blending adjusts for **specific forecast uncertainty** (from Solcast data)
+- They address different concerns and the combined effect is bounded
+- As accuracy tracking matures (≥20 samples), `solar_confidence_factor` falls out and only confidence blending remains
+
+No change to the `solar_confidence_factor` mechanism is needed.
+
 ## File Structure
 
 | File | Change | Responsibility |
 |------|--------|---------------|
 | `forecast/solar.py` | Add `_blend_solar_estimate()`, add `confidence` param to getters and `sum_solar_before_target` | Core blending algorithm |
-| `engine/slots.py` | Thread confidence from `data.solcast_analysis_*` into `_get_solar_kwh()` | Slot builder confidence |
-| `forecast/pipeline.py` | Pass analysis to `sum_solar_before_target()` at both call sites | Forecast battery confidence |
-| `engine/types.py` | Add `solcast_analysis_today` field to `OptimizerInputs` | Data threading |
+| `engine/slots.py` | Thread confidence via resolver into `_get_solar_kwh()` | Slot builder confidence |
+| `forecast/pipeline.py` | Pass both today/tomorrow analyses to `sum_solar_before_target()` | Forecast battery confidence |
+| `forecast/analysis_resolver.py` | New: `ConfidenceResolver` to unify today+tomorrow lookup | Cross-day confidence |
+| `engine/types.py` | Add `solcast_analysis_today` and `solcast_analysis_tomorrow` to `OptimizerInputs` | Data threading |
 | `engine/core.py` | Use blended solar in `_projected_solcast_gain_pct()` | Terminal cost projection |
 | `forecast/solar_accuracy.py` | Add `is_boost_period` to `SolarPeriodRecord`, add `is_boost` param to `record_forecast()`, filter in `_recompute_metrics()` | Boost tagging |
 | `engine/optimizer_facade.py` | Pass `is_boost` flag to `record_forecast()` | Boost detection |
@@ -25,7 +36,7 @@
 | `sensors/optimizer.py` | Add confidence diagnostic attributes | Observability |
 | `sensors/forecast.py` | Add confidence diagnostic attributes | Observability |
 | `tests/forecast/test_solar_confidence.py` | New: confidence blending unit tests | Test coverage |
-| `tests/test_solar_confidence_scenarios.py` | New: integration scenarios | Test coverage |
+| `tests/forecast/test_solar_confidence_scenarios.py` | New: integration scenarios | Test coverage |
 | `tests/forecast/test_solar_accuracy.py` | Extend: boost contamination tests | Test coverage |
 
 ---
@@ -478,59 +489,235 @@ git commit -m "feat(solar): add analysis-based confidence to sum_solar_before_ta
 
 ---
 
-## Chunk 2: Confidence Threading to Slot Builder
+## Chunk 2: Cross-Day Confidence Resolver
 
-### Task 2.1: Thread confidence through `slots.py`
+### Task 2.1: Create `forecast/analysis_resolver.py`
+
+**Problem:** Slots and forecasts can span today and tomorrow. Threading `solcast_analysis_today` alone gives wrong confidence for tomorrow's slots. A resolver unifies both analyses.
+
+**Files:**
+- Create: `custom_components/localshift/forecast/analysis_resolver.py`
+- Test: `tests/forecast/test_solar_confidence.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+class TestConfidenceResolver:
+    """Tests for ConfidenceResolver cross-day lookup."""
+
+    def test_returns_today_confidence_for_today_slot(self):
+        from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+        from custom_components.localshift.forecast.solcast_analysis import (
+            SolcastAnalysis, ConfidenceInterval,
+        )
+        from datetime import datetime, timezone, timedelta
+
+        today_analysis = SolcastAnalysis(
+            entity_id="today", last_updated=datetime.now(timezone.utc),
+            day_confidence=0.8, day_spread_kwh=0,
+            estimate10_kwh=0, estimate90_kwh=0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+                    spread_kwh=0, confidence=0.9,
+                ),
+            ],
+        )
+        tomorrow_analysis = SolcastAnalysis(
+            entity_id="tomorrow", last_updated=datetime.now(timezone.utc),
+            day_confidence=0.3, day_spread_kwh=0,
+            estimate10_kwh=0, estimate90_kwh=0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=datetime(2026, 3, 20, 10, 0, tzinfo=timezone.utc),
+                    spread_kwh=0, confidence=0.4,
+                ),
+            ],
+        )
+
+        resolver = ConfidenceResolver(today_analysis, tomorrow_analysis)
+        # Today slot should get today's interval confidence
+        conf = resolver.get_confidence(datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        assert conf == pytest.approx(0.9)
+
+    def test_returns_tomorrow_confidence_for_tomorrow_slot(self):
+        from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+        from custom_components.localshift.forecast.solcast_analysis import (
+            SolcastAnalysis, ConfidenceInterval,
+        )
+        from datetime import datetime, timezone
+
+        today_analysis = SolcastAnalysis(
+            entity_id="today", last_updated=datetime.now(timezone.utc),
+            day_confidence=0.8, day_spread_kwh=0,
+            estimate10_kwh=0, estimate90_kwh=0,
+            intervals=[],
+        )
+        tomorrow_analysis = SolcastAnalysis(
+            entity_id="tomorrow", last_updated=datetime.now(timezone.utc),
+            day_confidence=0.3, day_spread_kwh=0,
+            estimate10_kwh=0, estimate90_kwh=0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=datetime(2026, 3, 20, 10, 0, tzinfo=timezone.utc),
+                    spread_kwh=0, confidence=0.4,
+                ),
+            ],
+        )
+
+        resolver = ConfidenceResolver(today_analysis, tomorrow_analysis)
+        conf = resolver.get_confidence(datetime(2026, 3, 20, 10, 0, tzinfo=timezone.utc))
+        assert conf == pytest.approx(0.4)
+
+    def test_fallback_to_day_confidence_when_no_match(self):
+        from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+        from custom_components.localshift.forecast.solcast_analysis import SolcastAnalysis
+        from datetime import datetime, timezone
+
+        analysis = SolcastAnalysis(
+            entity_id="today", last_updated=datetime.now(timezone.utc),
+            day_confidence=0.6, day_spread_kwh=0,
+            estimate10_kwh=0, estimate90_kwh=0,
+            intervals=[],
+        )
+        resolver = ConfidenceResolver(analysis, None)
+        conf = resolver.get_confidence(datetime(2026, 3, 19, 15, 0, tzinfo=timezone.utc))
+        assert conf == pytest.approx(0.6)  # Falls back to day_confidence
+
+    def test_no_analysis_returns_1(self):
+        from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+        from datetime import datetime, timezone
+
+        resolver = ConfidenceResolver(None, None)
+        conf = resolver.get_confidence(datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        assert conf == 1.0
+```
+
+- [ ] **Step 2: Create `ConfidenceResolver` class**
+
+```python
+"""Cross-day confidence resolver for solar forecast analysis.
+
+Provides a single interface to look up per-period confidence from
+today and tomorrow SolcastAnalysis objects.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from custom_components.localshift.forecast.solcast_analysis import (
+    get_confidence_for_period,
+)
+
+
+class ConfidenceResolver:
+    """Resolves per-period confidence across today and tomorrow analyses.
+
+    Uses date-based matching: if the slot date matches the analysis date,
+    use that analysis for confidence lookup. Falls back to day_confidence.
+    """
+
+    def __init__(
+        self,
+        analysis_today: Any | None,
+        analysis_tomorrow: Any | None,
+    ) -> None:
+        self._today = analysis_today
+        self._tomorrow = analysis_tomorrow
+
+    def get_confidence(self, period_start: datetime) -> float:
+        """Get confidence for a specific period, selecting the right analysis by date."""
+        slot_date = period_start.date()
+
+        # Check today's analysis
+        if self._today and self._today.intervals:
+            for interval in self._today.intervals:
+                if interval.period_start.date() == slot_date:
+                    return get_confidence_for_period(self._today, period_start)
+
+        # Check tomorrow's analysis
+        if self._tomorrow and self._tomorrow.intervals:
+            for interval in self._tomorrow.intervals:
+                if interval.period_start.date() == slot_date:
+                    return get_confidence_for_period(self._tomorrow, period_start)
+
+        # Fallback: try today's day_confidence, then tomorrow's, then 1.0
+        if self._today:
+            return get_confidence_for_period(self._today, period_start)
+        if self._tomorrow:
+            return get_confidence_for_period(self._tomorrow, period_start)
+        return 1.0
+
+    def get_analysis_for_period(self, period_start: datetime) -> Any | None:
+        """Return the SolcastAnalysis object that covers the given period."""
+        slot_date = period_start.date()
+
+        if self._today and self._today.intervals:
+            for interval in self._today.intervals:
+                if interval.period_start.date() == slot_date:
+                    return self._today
+
+        if self._tomorrow and self._tomorrow.intervals:
+            for interval in self._tomorrow.intervals:
+                if interval.period_start.date() == slot_date:
+                    return self._tomorrow
+
+        return self._today
+```
+
+- [ ] **Step 3: Run test to verify it passes**
+
+Run: `uv run pytest tests/forecast/test_solar_confidence.py::TestConfidenceResolver -v`
+Expected: All 4 tests PASS
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add custom_components/localshift/forecast/analysis_resolver.py tests/forecast/test_solar_confidence.py
+git commit -m "feat(forecast): add cross-day ConfidenceResolver for today+tomorrow analysis (#794)"
+```
+
+---
+
+## Chunk 3: Confidence Threading to Slot Builder
+
+### Task 3.1: Thread confidence through `slots.py`
 
 **Files:**
 - Modify: `custom_components/localshift/engine/slots.py`
 
-- [ ] **Step 1: Add helper method to SlotBuilder**
+- [ ] **Step 1: Create ConfidenceResolver in SlotBuilder**
 
-Add `_get_analysis_for_slot()` method to pick the right `SolcastAnalysis` based on slot date:
+In `SlotBuilder.build_slots()`, create a resolver from `data`:
 
 ```python
-def _get_analysis_for_slot(self, data: Any, slot_start: datetime) -> Any:
-    """Get the SolcastAnalysis for a slot based on its date."""
-    analysis_today = getattr(data, "solcast_analysis_today", None)
-    analysis_tomorrow = getattr(data, "solcast_analysis_tomorrow", None)
+from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
 
-    # Check if slot matches today's analysis intervals
-    if analysis_today and analysis_today.intervals:
-        for interval in analysis_today.intervals:
-            if abs((slot_start - interval.period_start).total_seconds()) <= 1800:
-                return analysis_today
-
-    # Check tomorrow
-    if analysis_tomorrow and analysis_tomorrow.intervals:
-        for interval in analysis_tomorrow.intervals:
-            if abs((slot_start - interval.period_start).total_seconds()) <= 1800:
-                return analysis_tomorrow
-
-    # Fallback to today (has day_confidence fallback)
-    return analysis_today
+# In build_slots(), after data is received:
+resolver = ConfidenceResolver(
+    getattr(data, "solcast_analysis_today", None),
+    getattr(data, "solcast_analysis_tomorrow", None),
+)
 ```
+
+Pass `resolver` through to `_process_all_slots()` and `_process_single_slot()`.
 
 - [ ] **Step 2: Modify `_process_single_slot()` to extract confidence**
 
-Add import at top of file:
+In `_process_single_slot()`, before the `_get_solar_kwh()` call, get confidence from the resolver:
+
 ```python
-from custom_components.localshift.forecast.solcast_analysis import get_confidence_for_period
+        confidence = resolver.get_confidence(slot_start)
 ```
 
-Before the `_get_solar_kwh()` call at line 324, add:
-```python
-        analysis = self._get_analysis_for_slot(data, slot_start)
-        confidence = get_confidence_for_period(analysis, slot_start)
-```
-
-Change the call at line 324 to pass `confidence=confidence`.
+Pass `confidence=confidence` to `_get_solar_kwh()`.
 
 - [ ] **Step 3: Modify `_get_solar_kwh()` to accept confidence**
 
 Add `confidence: float = 1.0` parameter to signature.
 
-Change line 385 to pass `confidence=confidence` to `get_solar_for_slot_by_interval()`.
+Pass `confidence=confidence` to `get_solar_for_slot_by_interval()`.
 
 - [ ] **Step 4: Run existing tests**
 
@@ -541,61 +728,75 @@ Expected: All PASS (backward compat via default `confidence=1.0`)
 
 ```bash
 git add custom_components/localshift/engine/slots.py
-git commit -m "feat(solar): thread confidence through slot builder to getter functions (#794)"
+git commit -m "feat(solar): thread confidence via resolver through slot builder (#794)"
 ```
 
 ---
 
-## Chunk 3: Confidence Threading to Forecast Battery + Terminal Cost
+## Chunk 4: Confidence Threading to Forecast Battery + Terminal Cost
 
-### Task 3.1: Pass analysis to `sum_solar_before_target()` in pipeline.py
+### Task 4.1: Pass both analyses to `sum_solar_before_target()` in pipeline.py
 
 **Files:**
-- Modify: `custom_components/localshift/forecast/pipeline.py:141-142, 173-174`
+- Modify: `custom_components/localshift/forecast/pipeline.py`
 
 - [ ] **Step 1: Modify both call sites**
 
-Change both call sites (line 142 and 174) from:
+At both call sites (forecast battery solar sum), use `ConfidenceResolver` instead of just today's analysis:
 ```python
-            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour)
-```
-to:
-```python
-            analysis = getattr(data, "solcast_analysis_today", None)
-            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour, analysis=analysis)
+            from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+            resolver = ConfidenceResolver(
+                getattr(data, "solcast_analysis_today", None),
+                getattr(data, "solcast_analysis_tomorrow", None),
+            )
+            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour, resolver=resolver)
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Update `sum_solar_before_target()` to accept resolver**
+
+Change signature: add `resolver: Any | None = None` parameter.
+
+In the loop body, replace per-period confidence lookup with:
+```python
+        if resolver is not None:
+            confidence = resolver.get_confidence(ps_local)
+        else:
+            confidence = 1.0
+```
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add custom_components/localshift/forecast/pipeline.py
-git commit -m "feat(solar): pass Solcast analysis to forecast battery solar sum (#794)"
+git add custom_components/localshift/forecast/pipeline.py custom_components/localshift/forecast/solar.py
+git commit -m "feat(solar): pass cross-day ConfidenceResolver to forecast battery solar sum (#794)"
 ```
 
-### Task 3.2: Add SolcastAnalysis to OptimizerInputs
+### Task 4.2: Add both analyses to OptimizerInputs
 
 **Files:**
-- Modify: `custom_components/localshift/engine/types.py:468-496`
+- Modify: `custom_components/localshift/engine/types.py`
 
-- [ ] **Step 1: Add field to `OptimizerInputs`**
+- [ ] **Step 1: Add both fields to `OptimizerInputs`**
 
-After `solar_accuracy_tracker` field (line 496), add:
 ```python
     solcast_analysis_today: Any | None = None
-    """Solcast analysis with confidence data for solar blending (Issue #794)."""
+    """Solcast analysis for today with confidence data (Issue #794)."""
+
+    solcast_analysis_tomorrow: Any | None = None
+    """Solcast analysis for tomorrow with confidence data (Issue #794)."""
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add custom_components/localshift/engine/types.py
-git commit -m "feat(optimizer): add solcast_analysis_today to OptimizerInputs (#794)"
+git commit -m "feat(optimizer): add both today/tomorrow solcast analysis to OptimizerInputs (#794)"
 ```
 
-### Task 3.3: Use blended solar in terminal cost projection
+### Task 4.3: Use blended solar in terminal cost projection
 
 **Files:**
-- Modify: `custom_components/localshift/engine/core.py:1435-1463`
+- Modify: `custom_components/localshift/engine/core.py`
 
 - [ ] **Step 1: Write failing test**
 
@@ -617,10 +818,12 @@ class TestProjectedSolcastGainWithConfidence:
     """Tests for _projected_solcast_gain_pct() with confidence."""
 
     def test_low_confidence_reduces_projected_gain(self):
+        """Low confidence should reduce the projected solar gain."""
         solcast = [{"period_start": "2026-03-19T12:00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0}]
         start = datetime(2026, 3, 19, 12, 0, tzinfo=timezone.utc)
         end = datetime(2026, 3, 19, 12, 30, tzinfo=timezone.utc)
 
+        # No analysis = full median
         gain_high = DPPlanner._projected_solcast_gain_pct(solcast, start, end, 13.5)
 
         analysis_low = SolcastAnalysis(
@@ -633,10 +836,19 @@ class TestProjectedSolcastGainWithConfidence:
         )
 
         assert gain_low < gain_high
-        assert gain_low == pytest.approx(gain_high * 0.2 / 1.0 + (1 - 0.2) * (1.0 / 6.0) * gain_high, rel=0.1)
+        assert gain_low > 0
+
+    def test_no_analysis_backward_compatible(self):
+        """Without analysis, behavior is identical to current."""
+        solcast = [{"period_start": "2026-03-19T12:00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0}]
+        start = datetime(2026, 3, 19, 12, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 19, 12, 30, tzinfo=timezone.utc)
+
+        gain = DPPlanner._projected_solcast_gain_pct(solcast, start, end, 13.5)
+        assert gain > 0.2  # Uses pv_estimate=6.0
 ```
 
-- [ ] **Step 2: Modify `_projected_solcast_gain_pct()` signature**
+- [ ] **Step 2: Modify `_projected_solcast_gain_pct()`**
 
 Add `solcast_analysis: Any | None = None` parameter.
 
@@ -646,53 +858,44 @@ from custom_components.localshift.forecast.solar import _blend_solar_estimate
 from custom_components.localshift.forecast.solcast_analysis import get_confidence_for_period
 ```
 
-Change the solar accumulation loop (lines 1452-1463) to use `_blend_solar_estimate()` with per-period confidence from `get_confidence_for_period(solcast_analysis, p_start)`.
+Change the solar accumulation loop to use `_blend_solar_estimate()` with per-period confidence.
 
 - [ ] **Step 3: Update caller in `_initialize_dp_tables()`**
 
-Pass `solcast_analysis=inputs.solcast_analysis_today` when calling `_projected_solcast_gain_pct()`.
+Create a `ConfidenceResolver` from `inputs.solcast_analysis_today` and `inputs.solcast_analysis_tomorrow`. Use it to get the appropriate analysis for the terminal cost projection time range, then pass to `_projected_solcast_gain_pct()`.
 
-- [ ] **Step 4: Run tests**
-
-Run: `uv run pytest tests/engine/test_terminal_cost_confidence.py -v`
-Expected: All PASS
-
-- [ ] **Step 5: Run existing optimizer tests**
-
-Run: `uv run pytest tests/engine/ -v`
-Expected: All PASS
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Run tests and commit**
 
 ```bash
+uv run pytest tests/engine/test_terminal_cost_confidence.py tests/engine/ -v
 git add custom_components/localshift/engine/core.py custom_components/localshift/engine/types.py tests/engine/test_terminal_cost_confidence.py
 git commit -m "feat(optimizer): apply confidence blending in terminal cost projection (#794)"
 ```
 
-### Task 3.4: Thread analysis through OptimizerFacade to OptimizerInputs
+### Task 4.4: Thread both analyses through OptimizerFacade
 
 **Files:**
-- Modify: `custom_components/localshift/engine/optimizer_facade.py:205-212`
+- Modify: `custom_components/localshift/engine/optimizer_facade.py`
 
-- [ ] **Step 1: Pass analysis when constructing OptimizerInputs**
+- [ ] **Step 1: Pass both analyses when constructing OptimizerInputs**
 
-Change `OptimizerInputs` construction to add:
 ```python
                 solcast_analysis_today=getattr(data, "solcast_analysis_today", None),
+                solcast_analysis_tomorrow=getattr(data, "solcast_analysis_tomorrow", None),
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add custom_components/localshift/engine/optimizer_facade.py
-git commit -m "feat(optimizer): thread SolcastAnalysis from coordinator data to DP planner (#794)"
+git commit -m "feat(optimizer): thread both SolcastAnalysis objects from coordinator to DP planner (#794)"
 ```
 
 ---
 
-## Chunk 4: Boost Contamination Protection
+## Chunk 5: Boost Contamination Protection
 
-### Task 4.1: Add boost period tagging to SolarPeriodRecord
+### Task 5.1: Add boost period tagging to SolarPeriodRecord
 
 **Files:**
 - Modify: `custom_components/localshift/forecast/solar_accuracy.py:31-61`
@@ -746,7 +949,7 @@ git add custom_components/localshift/forecast/solar_accuracy.py tests/forecast/t
 git commit -m "feat(accuracy): add is_boost_period field to SolarPeriodRecord (#794)"
 ```
 
-### Task 4.2: Add `is_boost` param to `record_forecast()`
+### Task 5.2: Add `is_boost` param to `record_forecast()`
 
 **Files:**
 - Modify: `custom_components/localshift/forecast/solar_accuracy.py:258-289`
@@ -790,7 +993,7 @@ git add custom_components/localshift/forecast/solar_accuracy.py tests/forecast/t
 git commit -m "feat(accuracy): add is_boost parameter to record_forecast() (#794)"
 ```
 
-### Task 4.3: Filter boost records in `_recompute_metrics()`
+### Task 5.3: Filter boost records in `_recompute_metrics()`
 
 **Files:**
 - Modify: `custom_components/localshift/forecast/solar_accuracy.py:327-381`
@@ -859,7 +1062,7 @@ git add custom_components/localshift/forecast/solar_accuracy.py tests/forecast/t
 git commit -m "feat(accuracy): exclude boost-tagged records from MAPE and bias computation (#794)"
 ```
 
-### Task 4.4: Pass boost flag from OptimizerFacade
+### Task 5.4: Pass boost flag from OptimizerFacade
 
 **Files:**
 - Modify: `custom_components/localshift/engine/optimizer_facade.py:53-80, 187`
@@ -913,7 +1116,7 @@ git add custom_components/localshift/engine/optimizer_facade.py tests/test_boost
 git commit -m "feat(accuracy): pass boost flag from OptimizerFacade to record_forecast() (#794)"
 ```
 
-### Task 4.5: Skip SOC accuracy recording during boost
+### Task 5.5: Skip SOC accuracy recording during boost
 
 **Files:**
 - Modify: `custom_components/localshift/coordinator/tick_scheduler.py`
@@ -938,12 +1141,12 @@ git commit -m "feat(accuracy): skip SOC accuracy recording during boost charge (
 
 ## Chunk 5: Integration Tests & Diagnostics
 
-### Task 5.1: Integration tests for low-confidence scenarios
+### Task 6.1: Integration tests for low-confidence scenarios
 
 **Files:**
-- Create: `tests/test_solar_confidence_scenarios.py`
+- Create: `tests/forecast/test_solar_confidence_scenarios.py`
 
-- [ ] **Step 1: Write scenario tests**
+- [ ] **Step 1: Write scenario tests with timezone-aware timestamps**
 
 ```python
 """Integration tests for solar confidence blending scenarios (Issue #794)."""
@@ -959,6 +1162,7 @@ from custom_components.localshift.forecast.solar import (
 from custom_components.localshift.forecast.solcast_analysis import (
     SolcastAnalysis, ConfidenceInterval,
 )
+from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
 
 
 class TestLowConfidenceScenarios:
@@ -972,7 +1176,7 @@ class TestLowConfidenceScenarios:
 
     def test_high_confidence_no_regression(self):
         """High confidence (>=0.9) should behave like current system."""
-        forecasts = [{"period_start": "2026-03-19T10:00:00", "pv_estimate": 4.0, "pv_estimate10": 1.0}]
+        forecasts = [{"period_start": "2026-03-19T10:00:00+00:00", "pv_estimate": 4.0, "pv_estimate10": 1.0}]
         slot_start = datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
         result_high = get_solar_for_slot_by_interval(forecasts, slot_start, 30, confidence=0.95)
         result_legacy = get_solar_for_slot_by_interval(forecasts, slot_start, 30, confidence=1.0)
@@ -982,9 +1186,9 @@ class TestLowConfidenceScenarios:
         """Low confidence sum should be much less than optimistic sum."""
         now = datetime(2026, 3, 19, 9, 0, tzinfo=timezone.utc)
         forecasts = [
-            {"period_start": "2026-03-19T09:00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0},
-            {"period_start": "2026-03-19T09:30:00", "pv_estimate": 6.0, "pv_estimate10": 1.0},
-            {"period_start": "2026-03-19T10:00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0},
+            {"period_start": "2026-03-19T09:00:00+00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0},
+            {"period_start": "2026-03-19T09:30:00+00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0},
+            {"period_start": "2026-03-19T10:00:00+00:00", "pv_estimate": 6.0, "pv_estimate10": 1.0},
         ]
         analysis = SolcastAnalysis(
             entity_id="test", last_updated=now, day_confidence=0.2,
@@ -996,15 +1200,16 @@ class TestLowConfidenceScenarios:
                 ) for h, m in [(9, 0), (9, 30), (10, 0)]
             ],
         )
+        resolver = ConfidenceResolver(analysis, None)
         solar_optimistic = sum_solar_before_target(forecasts, now, 11)
-        solar_conservative = sum_solar_before_target(forecasts, now, 11, analysis=analysis)
+        solar_conservative = sum_solar_before_target(forecasts, now, 11, resolver=resolver)
         assert solar_conservative < solar_optimistic * 0.5
         assert solar_optimistic == pytest.approx(9.0)  # 3 * 6.0 * 0.5
         assert solar_conservative == pytest.approx(3.0, abs=0.1)  # 3 * 2.0 * 0.5
 
     def test_no_analysis_backward_compatible(self):
         """Without SolcastAnalysis, behavior identical to current system."""
-        forecasts = [{"period_start": "2026-03-19T10:00:00", "pv_estimate": 4.0, "pv_estimate10": 1.0}]
+        forecasts = [{"period_start": "2026-03-19T10:00:00+00:00", "pv_estimate": 4.0, "pv_estimate10": 1.0}]
         slot_start = datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
         result = get_solar_for_slot_by_interval(forecasts, slot_start, 30)
         assert result == pytest.approx(4.0 * 0.5)  # 2.0 kWh
@@ -1012,17 +1217,17 @@ class TestLowConfidenceScenarios:
 
 - [ ] **Step 2: Run all new tests**
 
-Run: `uv run pytest tests/forecast/test_solar_confidence.py tests/test_solar_confidence_scenarios.py tests/test_boost_contamination.py -v`
+Run: `uv run pytest tests/forecast/test_solar_confidence.py tests/forecast/test_solar_confidence_scenarios.py tests/forecast/test_boost_contamination.py -v`
 Expected: All PASS
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/test_solar_confidence_scenarios.py
+git add tests/forecast/test_solar_confidence_scenarios.py
 git commit -m "test(solar): add integration tests for confidence blending scenarios (#794)"
 ```
 
-### Task 5.2: Add diagnostic attributes to sensors
+### Task 6.2: Add diagnostic attributes to sensors
 
 **Files:**
 - Modify: `custom_components/localshift/sensors/forecast.py`
@@ -1030,23 +1235,52 @@ git commit -m "test(solar): add integration tests for confidence blending scenar
 
 - [ ] **Step 1: Add confidence attributes to forecast battery sensor**
 
-In `sensors/forecast.py`, where `ForecastBatterySensor` builds attributes, add:
+In `sensors/forecast.py`, `SolarBatteryForecastSensor.extra_state_attributes`, add:
 ```python
-"solar_confidence_used": getattr(data, "avg_confidence_today", 1.0),
-"solar_blend_applied": getattr(data, "avg_confidence_today", 1.0) < 1.0,
+        # Add confidence diagnostics
+        analysis_today = self.coordinator.data.solcast_analysis_today
+        analysis_tomorrow = self.coordinator.data.solcast_analysis_tomorrow
+        resolver = ConfidenceResolver(analysis_today, analysis_tomorrow)
+        
+        # Get confidence for the current time
+        from homeassistant.util import dt as dt_util
+        now = dt_util.now()
+        confidence = resolver.get_confidence(now)
+        
+        return {
+            **self.coordinator.data.solar_battery_forecast,
+            "solar_confidence_used": confidence,
+            "solar_blend_applied": confidence < 1.0,
+        }
 ```
 
 - [ ] **Step 2: Add confidence attributes to optimizer summary sensor**
 
-In `sensors/optimizer.py`, add to optimizer plan detailed attributes:
+In `sensors/optimizer.py`, `OptimizerPlanDetailedSensor.extra_state_attributes`, add:
 ```python
-"solar_confidence_avg": getattr(data, "avg_confidence_today", 1.0),
-"solar_confidence_regime": (
-    "high" if getattr(data, "avg_confidence_today", 1.0) >= 0.7
-    else "medium" if getattr(data, "avg_confidence_today", 1.0) >= 0.4
-    else "low"
-),
-"solar_blend_applied": getattr(data, "avg_confidence_today", 1.0) < 1.0,
+        # Add confidence diagnostics
+        analysis_today = d.solcast_analysis_today
+        analysis_tomorrow = d.solcast_analysis_tomorrow
+        from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
+        resolver = ConfidenceResolver(analysis_today, analysis_tomorrow)
+        
+        # Get average confidence across next 24 hours
+        from homeassistant.util import dt as dt_util
+        from datetime import timedelta
+        now = dt_util.now()
+        confidences = [resolver.get_confidence(now + timedelta(hours=i)) for i in range(24)]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
+        
+        return {
+            **existing_attrs,
+            "solar_confidence_avg": avg_confidence,
+            "solar_confidence_regime": (
+                "high" if avg_confidence >= 0.7
+                else "medium" if avg_confidence >= 0.4
+                else "low"
+            ),
+            "solar_blend_applied": avg_confidence < 1.0,
+        }
 ```
 
 - [ ] **Step 3: Commit**
@@ -1056,7 +1290,7 @@ git add custom_components/localshift/sensors/forecast.py custom_components/local
 git commit -m "feat(sensors): add confidence diagnostic attributes (#794)"
 ```
 
-### Task 5.3: Final verification
+### Task 6.3: Final verification
 
 - [ ] **Step 1: Run full test suite with coverage**
 
@@ -1077,10 +1311,10 @@ Expected: No new errors
 
 ## Summary
 
-**Total tasks:** 19 across 5 chunks
-**Estimated commits:** 15-19
-**Files modified:** 8 production files
-**Files created:** 3 test files
+**Total tasks:** 20 across 6 chunks
+**Estimated commits:** 16-20
+**Files modified:** 9 production files
+**Files created:** 4 test files
 
 **Key behavioral changes:**
 1. Solar getter functions blend median and P10 based on per-period Solcast confidence
@@ -1091,3 +1325,5 @@ Expected: No new errors
 6. Diagnostic attributes expose confidence regime and blending status
 
 **Backward compatibility:** When `SolcastAnalysis` is None (older Solcast, parsing failure), all functions default to `confidence=1.0` — identical to current behavior.
+
+**Cross-day handling:** The new `ConfidenceResolver` class correctly selects today's or tomorrow's analysis based on the slot date, ensuring overnight and next-day forecasts use the correct confidence data.
