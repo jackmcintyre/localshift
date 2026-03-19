@@ -32,6 +32,7 @@ from custom_components.localshift.engine.penalties import (
 from custom_components.localshift.engine.reason_codes import classify_reason
 from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
+    can_solar_reach_target_feasible,
     get_forecast_accuracy,
     projected_solar_soc_gain_pct,
     projected_solcast_gain_pct,
@@ -291,7 +292,9 @@ class DPPlanner:
                 terminal_penalty_idx=terminal_penalty_idx,
             )
 
-        can_solar = can_solar_reach_target(inputs, slots, config, demand_bounds)
+        can_solar = can_solar_reach_target_feasible(
+            inputs, slots, config, terminal_penalty_idx
+        )
 
         return OptimizerResult(
             success=True,

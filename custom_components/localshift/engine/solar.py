@@ -18,7 +18,11 @@ def can_solar_reach_target(
     config: OptimizerConfig,
     demand_bounds: dict[str, int | None],
 ) -> bool:
-    """Check if solar can reach target during demand window."""
+    """Check if solar can reach target during demand window.
+
+    This function checks if solar alone can reach target at any point during
+    the demand window (when allow_dw_entry_under_target is True).
+    """
     from custom_components.localshift.engine.dp_math import (
         _simulate_max_soc_in_demand_window,
     )
@@ -32,6 +36,40 @@ def can_solar_reach_target(
         inputs.initial_soc_pct, slots, config, demand_bounds
     )
     return max_soc_in_dw >= config.demand_window_target_soc_pct
+
+
+def can_solar_reach_target_feasible(
+    inputs: OptimizerInputs,
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int | None,
+) -> bool:
+    """Check if solar alone can reach target at terminal penalty index.
+
+    This function checks pure solar feasibility without the allow_dw_entry_under_target
+    gate. It returns True if solar alone can reach the target SOC at the terminal
+    penalty index (typically DW entry).
+
+    Args:
+        inputs: Optimizer inputs
+        slots: Slot contexts
+        config: Optimizer config
+        terminal_penalty_idx: Terminal penalty index (typically DW entry)
+
+    Returns:
+        True if solar alone can reach target at terminal penalty index
+    """
+    from custom_components.localshift.engine.dp_math import (
+        _simulate_solar_only_terminal_soc,
+    )
+
+    terminal_soc = _simulate_solar_only_terminal_soc(
+        initial_soc_pct=inputs.initial_soc_pct,
+        slots=slots,
+        terminal_penalty_idx=terminal_penalty_idx,
+        config=config,
+    )
+    return terminal_soc >= config.demand_window_target_soc_pct
 
 
 def projected_solar_soc_gain_pct(
