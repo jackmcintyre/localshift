@@ -25,6 +25,7 @@ from custom_components.localshift.engine.types import (
     PlannerReasonCode,
     SlotContext,
 )
+from custom_components.localshift.forecast.solar_accuracy import SolarAccuracyTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1407,6 +1408,25 @@ class DPPlanner:
 
         net_kwh = max(0.0, solar_kwh - consumption_kwh)
         return (net_kwh / battery_capacity_kwh) * 100.0
+
+    def _get_forecast_accuracy(
+        self,
+        solar_accuracy_tracker: SolarAccuracyTracker | None,
+    ) -> float:
+        """Get overall forecast accuracy from tracker.
+
+        Returns:
+            float: Accuracy as decimal (0.0 to 1.0), or 1.0 if unavailable/invalid
+        """
+        if solar_accuracy_tracker is None:
+            return 1.0
+
+        accuracy_pct = solar_accuracy_tracker.get_overall_accuracy()
+
+        if accuracy_pct is None or accuracy_pct <= 0:
+            return 1.0
+
+        return accuracy_pct / 100.0
 
     @staticmethod
     def _check_global_solar_sufficiency(
