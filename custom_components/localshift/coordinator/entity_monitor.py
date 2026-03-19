@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 
+from ..const import CONF_WEATHER_ENTITY
+
 if TYPE_CHECKING:  # pragma: no cover
     from .coordinator import LocalShiftCoordinator
 
@@ -96,8 +98,6 @@ class EntityMonitor:
             return
 
         # Reset tracking for weather entity (most commonly reconfigured optional entity)
-        from ..const import CONF_WEATHER_ENTITY
-
         self._coordinator._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
 
         _LOGGER.info("Reset entity tracking for options change")
