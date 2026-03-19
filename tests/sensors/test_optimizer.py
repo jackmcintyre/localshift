@@ -6,9 +6,14 @@ Tests cover:
 - SolarForecastAccuracySensor: native_value, extra_state_attributes
 """
 
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 from custom_components.localshift.coordinator.data import CoordinatorData
+from custom_components.localshift.forecast.solcast_analysis import (
+    ConfidenceInterval,
+    SolcastAnalysis,
+)
 from custom_components.localshift.sensors.optimizer import (
     OptimizerPlanDetailedSensor,
     OptimizerSummarySensor,
@@ -104,6 +109,43 @@ class TestOptimizerPlanDetailedSensor:
         assert attrs["total_slots"] == 2
         assert attrs["forecast_horizon_hours"] == 24
         assert attrs["computed_at"] == "2026-03-13T10:00:00"
+        assert attrs["solar_confidence_avg"] == 1.0
+        assert attrs["solar_confidence_regime"] == "high"
+        assert attrs["solar_blend_applied"] is False
+
+    def test_extra_state_attributes_with_confidence_diagnostics(self):
+        analysis = SolcastAnalysis(
+            entity_id="sensor.today",
+            last_updated=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+            day_confidence=0.3,
+            day_spread_kwh=0.0,
+            estimate10_kwh=0.0,
+            estimate90_kwh=0.0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+                    spread_kwh=0.0,
+                    confidence=0.3,
+                )
+            ],
+        )
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_decisions=[],
+            optimizer_summary={"enabled": True, "success": True},
+            forecast_horizon_hours=24,
+            solcast_analysis_today=analysis,
+        )
+        sensor = OptimizerPlanDetailedSensor(mock_coordinator, MagicMock())
+
+        with patch(
+            "custom_components.localshift.sensors.optimizer.dt_util.now",
+            return_value=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        ):
+            attrs = sensor.extra_state_attributes
+
+        assert attrs["solar_confidence_avg"] == 0.3
+        assert attrs["solar_confidence_regime"] == "low"
+        assert attrs["solar_blend_applied"] is True
 
     def test_icon_computed(self):
         """Test icon for computed state."""
@@ -200,6 +242,38 @@ class TestOptimizerSummarySensor:
         sensor._update_from_coordinator()
 
         assert sensor._attr_native_value == "failed"
+
+    def test_extra_state_attributes_add_confidence_diagnostics(self):
+        analysis = SolcastAnalysis(
+            entity_id="sensor.today",
+            last_updated=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+            day_confidence=0.5,
+            day_spread_kwh=0.0,
+            estimate10_kwh=0.0,
+            estimate90_kwh=0.0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+                    spread_kwh=0.0,
+                    confidence=0.5,
+                )
+            ],
+        )
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+            solcast_analysis_today=analysis,
+        )
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+
+        with patch(
+            "custom_components.localshift.sensors.optimizer.dt_util.now",
+            return_value=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        ):
+            attrs = sensor.extra_state_attributes
+
+        assert attrs["solar_confidence_avg"] == 0.5
+        assert attrs["solar_confidence_regime"] == "medium"
+        assert attrs["solar_blend_applied"] is True
 
     def test_native_value_no_summary(self):
         """Test native_value returns 'disabled' when no summary."""

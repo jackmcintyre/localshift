@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.util import dt as dt_util
 
 from ..pricing.types import ForecastSlot
 from .base import LocalShiftSensorBase
@@ -38,7 +39,19 @@ class SolarBatteryForecastSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return self.coordinator.data.solar_battery_forecast
+        attrs = dict(self.coordinator.data.solar_battery_forecast)
+        from custom_components.localshift.forecast.analysis_resolver import (
+            ConfidenceResolver,
+        )
+
+        resolver = ConfidenceResolver(
+            getattr(self.coordinator.data, "solcast_analysis_today", None),
+            getattr(self.coordinator.data, "solcast_analysis_tomorrow", None),
+        )
+        confidence = resolver.get_confidence(dt_util.now())
+        attrs["solar_confidence_used"] = confidence
+        attrs["solar_blend_applied"] = confidence < 1.0
+        return attrs
 
 
 class NetElectricityCostSensor(LocalShiftSensorBase):
