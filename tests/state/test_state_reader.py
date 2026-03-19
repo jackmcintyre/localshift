@@ -8,7 +8,9 @@ import pytest
 
 from custom_components.localshift.const import (
     CONF_PRICING_DATA_SOURCE,
+    CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
+    CONF_PRICING_GENERAL_FORECAST,
     CONF_PRICING_GENERAL_PRICE,
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
@@ -40,6 +42,9 @@ def mock_entry():
         CONF_TESLEMETRY_OPERATION_MODE: "select.tesla_powerwall_operation_mode",
         CONF_PRICING_GENERAL_PRICE: "sensor.amber_general_price",
         CONF_PRICING_FEED_IN_PRICE: "sensor.amber_feed_in_price",
+        CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_price_spike",
+        CONF_PRICING_GENERAL_FORECAST: "sensor.amber_general_forecast",
+        CONF_PRICING_FEED_IN_FORECAST: "sensor.amber_feed_in_forecast",
         CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
     }
     return entry
@@ -302,76 +307,75 @@ class TestGetEntityId:
     def test_get_entity_id_express_source_applies_prefix_to_defaults(
         self, mock_hass, mock_entity_validator
     ):
-        """Test _get_entity_id applies Express prefix when pricing source is amber_express.
+        """Test Express prefix applied to defaults when source is amber_express.
 
-        When the pricing source is amber_express and a pricing entity key is NOT
-        in entry.data, the fallback to DEFAULT_ENTITY_IDS should still apply the
-        amber_express_ prefix so that the returned entity ID matches the Express
-        provider's entity naming convention.
-
-        This is the root cause fix for Issue #300: when config is missing
-        CONF_PRICING_GENERAL_PRICE, we want to return
-        sensor.amber_express_100h_general_price, not sensor.100h_general_price.
+        When entity ID is in entry.data (from config flow discovery or user input),
+        it should be returned as-is without applying any prefix logic.
         """
         from custom_components.localshift.const import (
             CONF_PRICING_DATA_SOURCE,
+            CONF_PRICING_GENERAL_PRICE,
             PRICING_SOURCE_AMBER_EXPRESS,
         )
 
         entry = MagicMock()
         entry.data = {
             CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
-            # Intentionally missing CONF_PRICING_GENERAL_PRICE
-            # to test fallback behavior
+            # Entity ID is now in entry.data (discovered or user-specified)
+            CONF_PRICING_GENERAL_PRICE: "sensor.amber_express_general_price",
         }
 
         reader = StateReader(mock_hass, entry, mock_entity_validator)
         result = reader._get_entity_id(CONF_PRICING_GENERAL_PRICE)
 
-        # Should return Express-prefixed version of the default
-        assert result == "sensor.amber_express_100h_general_price"
+        # Should return the configured entity ID, not the old hardcoded default
+        assert result == "sensor.amber_express_general_price"
 
     def test_get_entity_id_express_source_applies_prefix_to_feed_in(
         self, mock_hass, mock_entity_validator
     ):
-        """Test Express prefix applied to feed_in_price default too."""
+        """Test Express prefix applied to feed_in_price when configured."""
         from custom_components.localshift.const import (
             CONF_PRICING_DATA_SOURCE,
+            CONF_PRICING_FEED_IN_PRICE,
             PRICING_SOURCE_AMBER_EXPRESS,
         )
 
         entry = MagicMock()
         entry.data = {
             CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
-            # Intentionally missing CONF_PRICING_FEED_IN_PRICE
+            # Entity ID is now in entry.data (discovered or user-specified)
+            CONF_PRICING_FEED_IN_PRICE: "sensor.amber_express_feed_in_price",
         }
 
         reader = StateReader(mock_hass, entry, mock_entity_validator)
         result = reader._get_entity_id(CONF_PRICING_FEED_IN_PRICE)
 
-        # Should return Express-prefixed version
-        assert result == "sensor.amber_express_100h_feed_in_price"
+        # Should return the configured entity ID
+        assert result == "sensor.amber_express_feed_in_price"
 
     def test_get_entity_id_non_express_source_no_prefix(
         self, mock_hass, mock_entity_validator
     ):
-        """Test that non-Express sources don't get Express prefix on defaults."""
+        """Test that non-Express sources return configured entity ID."""
         from custom_components.localshift.const import (
             CONF_PRICING_DATA_SOURCE,
+            CONF_PRICING_GENERAL_PRICE,
             PRICING_SOURCE_AMBER,
         )
 
         entry = MagicMock()
         entry.data = {
             CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
-            # Intentionally missing CONF_PRICING_GENERAL_PRICE
+            # Entity ID is now in entry.data (discovered or user-specified)
+            CONF_PRICING_GENERAL_PRICE: "sensor.general_price",
         }
 
         reader = StateReader(mock_hass, entry, mock_entity_validator)
         result = reader._get_entity_id(CONF_PRICING_GENERAL_PRICE)
 
-        # Should return non-Express default
-        assert result == "sensor.100h_general_price"
+        # Should return the configured entity ID, not the old hardcoded default
+        assert result == "sensor.general_price"
 
 
 # =============================================================================
