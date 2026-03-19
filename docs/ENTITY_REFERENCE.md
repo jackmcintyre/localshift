@@ -866,6 +866,20 @@ Attributes:
     cheap_price_percentile: 25
 ```
 
+**Attributes (existing):**
+- `terminal_shortfall_pct` - Projected % shortfall from target at horizon end
+- `computed_at` - Timestamp of last optimization run
+- `solve_status` - Status of optimizer solve
+
+**Attributes (new):**
+- `peak_soc_pct` - Maximum SOC projected in the plan
+- `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
+- `projected_solar_gain_pct` - Raw projected solar SOC gain
+- `forecast_accuracy` - Current forecast accuracy (0-1)
+- `accuracy_discount_factor` - Applied discount (0.5-1.0)
+- `adjusted_solar_gain_pct` - Discounted projected solar SOC gain
+- `effective_soc_at_terminal` - SOC used in terminal cost calculation
+
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
 ---

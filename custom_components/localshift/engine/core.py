@@ -25,6 +25,7 @@ from custom_components.localshift.engine.types import (
     PlannerReasonCode,
     SlotContext,
 )
+from custom_components.localshift.forecast.solar_accuracy import SolarAccuracyTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -533,9 +534,26 @@ class DPPlanner:
                 battery_capacity_kwh=config.battery_capacity_kwh,
             )
 
+            # Apply accuracy-based discount to projected solar (Issue #785)
+            forecast_accuracy = self._get_forecast_accuracy(
+                inputs.solar_accuracy_tracker
+            )
+            accuracy_discount = max(0.5, min(1.0, forecast_accuracy))
+            adjusted_solar_gain_pct = projected_solar_gain_pct * accuracy_discount
+
+            # Add debug logging
+            _LOGGER.debug(
+                "Terminal cost discount: accuracy=%.1f%%, discount=%.2f, "
+                "raw_solar_gain=%.1f%%, adjusted=%.1f%%",
+                forecast_accuracy * 100,
+                accuracy_discount,
+                projected_solar_gain_pct,
+                adjusted_solar_gain_pct,
+            )
+
             for bin_idx, soc in enumerate(soc_grid):
                 # Subtract future solar gain from shortfall (Issue #619)
-                effective_soc = soc + future_solar_gain_pct + projected_solar_gain_pct
+                effective_soc = soc + future_solar_gain_pct + adjusted_solar_gain_pct
 
                 if use_hard_constraint and effective_soc < target:
                     # Hard constraint: very high penalty for states below target
@@ -561,6 +579,48 @@ class DPPlanner:
                 dp[n_slots][bin_idx] = (0.0, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
 
         return dp
+
+    def _get_terminal_diagnostics(
+        self,
+        soc_pct: float,
+        target: float,
+        projected_solar_gain_pct: float,
+        accuracy_discount: float,
+        future_solar_gain_pct: float,
+        decisions: list[PlannedSlotDecision],
+        terminal_penalty_idx: int | None,
+    ) -> dict[str, Any]:
+        """Extract diagnostic metrics for terminal cost calculation.
+
+        Args:
+            soc_pct: Current state of charge percentage
+            target: Target SOC percentage
+            projected_solar_gain_pct: Raw solar projection
+            accuracy_discount: Applied discount factor
+            future_solar_gain_pct: Beyond-horizon solar gain
+            decisions: All optimizer decisions with predicted SOC
+            terminal_penalty_idx: Index of terminal penalty slot
+
+        Returns:
+            Dictionary of diagnostic metrics
+        """
+        adjusted_solar_gain = projected_solar_gain_pct * accuracy_discount
+        effective_soc = soc_pct + future_solar_gain_pct + adjusted_solar_gain
+
+        peak_soc = max(d.predicted_soc_pct for d in decisions) if decisions else soc_pct
+
+        dw_entry_soc = None
+        if terminal_penalty_idx is not None and decisions:
+            dw_entry_soc = decisions[terminal_penalty_idx].predicted_soc_pct
+
+        return {
+            "projected_solar_gain_pct": round(projected_solar_gain_pct, 2),
+            "accuracy_discount_factor": round(accuracy_discount, 2),
+            "adjusted_solar_gain_pct": round(adjusted_solar_gain, 2),
+            "effective_soc_at_terminal": round(effective_soc, 2),
+            "peak_soc_pct": round(peak_soc, 2),
+            "dw_entry_soc_pct": round(dw_entry_soc, 2) if dw_entry_soc else None,
+        }
 
     def _backward_induction(
         self,
@@ -1407,6 +1467,28 @@ class DPPlanner:
 
         net_kwh = max(0.0, solar_kwh - consumption_kwh)
         return (net_kwh / battery_capacity_kwh) * 100.0
+
+    def _get_forecast_accuracy(
+        self,
+        solar_accuracy_tracker: SolarAccuracyTracker | None,
+    ) -> float:
+        """Get overall forecast accuracy from tracker.
+
+        Returns:
+            float: Accuracy as decimal (0.0 to 1.0), or 1.0 if unavailable/invalid
+        """
+        if solar_accuracy_tracker is None:
+            return 1.0
+
+        try:
+            accuracy_pct = solar_accuracy_tracker.metrics.accuracy
+        except AttributeError:
+            return 1.0
+
+        if accuracy_pct is None or accuracy_pct <= 0:
+            return 1.0
+
+        return accuracy_pct / 100.0
 
     @staticmethod
     def _check_global_solar_sufficiency(

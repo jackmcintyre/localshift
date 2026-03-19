@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from custom_components.localshift.forecast.solar_accuracy import (
+        SolarAccuracyTracker,
+    )
 
 # -----------------------------------------------------------------------------
 # Action vocabulary
@@ -486,3 +491,6 @@ class OptimizerInputs:
 
     all_solcast: list[dict[str, Any]] = field(default_factory=list)
     """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
+
+    solar_accuracy_tracker: SolarAccuracyTracker | None = None
+    """Tracker for forecast accuracy to apply discount to terminal cost (Issue #785)."""
