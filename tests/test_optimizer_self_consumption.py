@@ -2,6 +2,8 @@
 
 import pytest
 
+from custom_components.localshift.engine.constraints import feasible_actions
+from custom_components.localshift.engine.cost import stage_cost
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     OptimizerConfig,
@@ -57,7 +59,7 @@ class TestSelfConsumptionFeasibleActions:
             solar_kwh=0.5,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(50.0, slot, config)
+        actions = feasible_actions(50.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.CHARGE_GRID_NORMAL not in actions
@@ -75,7 +77,7 @@ class TestSelfConsumptionFeasibleActions:
             solar_kwh=0.0,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(50.0, slot, config)
+        actions = feasible_actions(50.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.CHARGE_GRID_NORMAL in actions
@@ -93,7 +95,7 @@ class TestSelfConsumptionFeasibleActions:
             solar_kwh=0.0,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(50.0, slot, config)
+        actions = feasible_actions(50.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.CHARGE_GRID_NORMAL in actions
@@ -111,7 +113,7 @@ class TestSelfConsumptionFeasibleActions:
             solar_kwh=0.0,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(80.0, slot, config)
+        actions = feasible_actions(80.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.EXPORT_PROACTIVE not in actions
@@ -128,7 +130,7 @@ class TestSelfConsumptionFeasibleActions:
             solar_kwh=0.0,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(80.0, slot, config)
+        actions = feasible_actions(80.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.EXPORT_PROACTIVE in actions
@@ -149,7 +151,7 @@ class TestArbitrageModeFeasibleActions:
             solar_kwh=0.5,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(50.0, slot, config)
+        actions = feasible_actions(50.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.CHARGE_GRID_NORMAL in actions
@@ -167,7 +169,7 @@ class TestArbitrageModeFeasibleActions:
             solar_kwh=0.0,
             consumption_kwh=0.3,
         )
-        actions = DPPlanner.feasible_actions(80.0, slot, config)
+        actions = feasible_actions(80.0, slot, config)
 
         assert PlannerAction.HOLD in actions
         assert PlannerAction.EXPORT_PROACTIVE in actions
@@ -190,7 +192,7 @@ class TestSelfConsumptionObjectiveTerms:
             consumption_kwh=0.5,
         )
 
-        terms = planner.stage_cost(
+        terms = stage_cost(
             slot=slot,
             config=config,
             action=PlannerAction.HOLD,
@@ -214,7 +216,7 @@ class TestSelfConsumptionObjectiveTerms:
             consumption_kwh=0.3,
         )
 
-        terms = planner.stage_cost(
+        terms = stage_cost(
             slot=slot,
             config=config,
             action=PlannerAction.HOLD,
@@ -238,7 +240,7 @@ class TestSelfConsumptionObjectiveTerms:
             consumption_kwh=0.5,
         )
 
-        terms = planner.stage_cost(
+        terms = stage_cost(
             slot=slot,
             config=config,
             action=PlannerAction.HOLD,
