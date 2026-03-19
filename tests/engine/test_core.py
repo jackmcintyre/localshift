@@ -14,6 +14,10 @@ from custom_components.localshift.engine.negative_fit import (
 )
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.penalties import (
+    get_solar_opportunity_penalty_factor,
+)
+from custom_components.localshift.engine.reason_codes import classify_export_reason
 from custom_components.localshift.engine.transitions import transition
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
@@ -389,7 +393,7 @@ class TestCoreRegressionCoverage:
             recoverability_floor_pct_by_slot=(20.0,) * 8,
         )
 
-        reason = planner._classify_export_reason(
+        reason = classify_export_reason(
             self._slot(1, sell=0.09),
             slot_idx=1,
             negative_fit_avoidance_context=ctx,
@@ -430,7 +434,7 @@ class TestCoreRegressionCoverage:
             {"period_start": "2026-01-03T03:00:00", "pv_estimate": 10.0},
         ]
 
-        factor = planner._get_solar_opportunity_penalty_factor(
+        factor = get_solar_opportunity_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=1.0,
             slot=slots[0],

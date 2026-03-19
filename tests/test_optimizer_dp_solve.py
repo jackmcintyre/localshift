@@ -16,6 +16,20 @@ from custom_components.localshift.engine.constraints import (
     feasible_actions,
 )
 from custom_components.localshift.engine.cost import stage_cost
+from custom_components.localshift.engine.penalties import (
+    get_futile_cycling_penalty_factor,
+)
+from custom_components.localshift.engine.reason_codes import (
+    _is_cheap_import_window,
+    _is_target_shortfall_risk,
+    classify_charge_reason,
+    classify_export_reason,
+    classify_reason,
+)
+from custom_components.localshift.engine.solar import (
+    projected_solar_soc_gain_pct,
+    projected_solcast_gain_pct,
+)
 from custom_components.localshift.engine.negative_fit import (
     derive_negative_fit_avoidance_context,
 )
@@ -861,7 +875,7 @@ def test_classify_reason_target_shortfall_uses_future_slots():
         ),
     ]
 
-    reason = planner._classify_reason(  # noqa: SLF001 - unit test for internal logic
+    reason = classify_reason(  # noqa: SLF001 - unit test for internal logic
         action=PlannerAction.CHARGE_GRID_NORMAL,
         slot=slots[0],
         slot_idx=0,
@@ -917,7 +931,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
         ),
     ]
 
-    reason = planner._classify_reason(  # noqa: SLF001 - unit test for internal logic
+    reason = classify_reason(  # noqa: SLF001 - unit test for internal logic
         action=PlannerAction.CHARGE_GRID_NORMAL,
         slot=slots[0],
         slot_idx=0,
@@ -1154,7 +1168,7 @@ def test_projected_solar_soc_gain_pct_positive_surplus():
         _make_slot(slot_index=i, solar_kwh=1.0, consumption_kwh=0.3) for i in range(4)
     ]
     # 4 slots * (1.0 - 0.3) = 2.8 kWh net; 2.8/13.5 * 100 = ~20.7%
-    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+    result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=0,
         slots=slots,
         terminal_penalty_idx=4,
@@ -1168,7 +1182,7 @@ def test_projected_solar_soc_gain_pct_negative_when_consumption_dominates():
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.1, consumption_kwh=0.5) for i in range(4)
     ]
-    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+    result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=0,
         slots=slots,
         terminal_penalty_idx=4,
@@ -1186,7 +1200,7 @@ def test_projected_solar_soc_gain_pct_respects_slot_range():
         _make_slot(slot_index=3, solar_kwh=3.0, consumption_kwh=0.1),  # ignored
     ]
     # Only slots 1–2 (slot_idx=1, terminal=3); both are net deficit
-    result = DPPlanner._projected_solar_soc_gain_pct(  # noqa: SLF001
+    result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=1,
         slots=slots,
         terminal_penalty_idx=3,
@@ -2255,7 +2269,7 @@ def test_classify_export_reason_negative_fit():
         solar_kwh=0.0,
         consumption_kwh=0.3,
     )
-    reason = planner._classify_export_reason(slot)
+    reason = classify_export_reason(slot)
     assert reason == PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
 
 
@@ -2290,7 +2304,7 @@ def test_classify_charge_reason_solar_opportunity_wait():
         futile_cycling_penalty=0.0,
     )
 
-    reason = planner._classify_charge_reason(
+    reason = classify_charge_reason(
         slot, 0, [slot], 50.0, config, None, objective_terms=objective_terms
     )
     assert reason == PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
@@ -2309,7 +2323,7 @@ def test_is_target_shortfall_risk_no_deficit():
         soc_bins=20,
     )
 
-    result = planner._is_target_shortfall_risk(0, slots, 85.0, config, 3)
+    result = _is_target_shortfall_risk(0, slots, 85.0, config, 3)
     assert result is False
 
 
@@ -2350,7 +2364,7 @@ def test_is_target_shortfall_risk_with_solcast():
         all_solcast=all_solcast,
     )
 
-    result = planner._is_target_shortfall_risk(0, slots, 50.0, config, 3, inputs=inputs)
+    result = _is_target_shortfall_risk(0, slots, 50.0, config, 3, inputs=inputs)
     assert isinstance(result, bool)
 
 
@@ -2373,7 +2387,7 @@ def test_is_cheap_import_window_expensive_price():
         soc_bins=20,
     )
 
-    result = planner._is_cheap_import_window(slot, config, None, [slot])
+    result = _is_cheap_import_window(slot, config, None, [slot])
     assert result is False
 
 
@@ -2508,7 +2522,7 @@ def test_projected_solcast_gain_pct():
     start_time = datetime.fromisoformat("2026-01-03T09:00:00")
     end_time = datetime.fromisoformat("2026-01-03T11:00:00")
 
-    result = DPPlanner._projected_solcast_gain_pct(
+    result = projected_solcast_gain_pct(
         all_solcast, start_time, end_time, battery_capacity_kwh=13.5
     )
 
@@ -2527,7 +2541,7 @@ def test_futile_cycling_battery_at_floor():
         soc_bins=20,
     )
 
-    factor = planner._get_futile_cycling_penalty_factor(
+    factor = get_futile_cycling_penalty_factor(
         action=PlannerAction.CHARGE_GRID_NORMAL,
         slot_idx=0,
         slots=slots,

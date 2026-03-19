@@ -17,6 +17,9 @@ from datetime import datetime
 import pytest
 
 from custom_components.localshift.engine.cost import stage_cost
+from custom_components.localshift.engine.penalties import (
+    get_futile_cycling_penalty_factor,
+)
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     ObjectiveTerms,
@@ -168,7 +171,7 @@ class TestFutileCyclingPenaltyFactor:
             make_slot(1, 6, 30, solar_kwh=1.5, consumption_kwh=0.25),  # surplus
         ]
         planner = DPPlanner()
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             slot_idx=0,
             slots=slots,
@@ -187,7 +190,7 @@ class TestFutileCyclingPenaltyFactor:
             ),
         ]
         planner = DPPlanner()
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             slot_idx=0,
             slots=slots,
@@ -205,7 +208,7 @@ class TestFutileCyclingPenaltyFactor:
         # Charge only 1 kWh; overnight consumption at 0.25 kWh/slot will drain it in 4 slots.
         # Factor may not reach exactly 1.0 because SOC physically floors at min_soc,
         # leaving a tiny residual in the battery. Allow abs=0.10 tolerance.
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             slot_idx=0,
             slots=slots,
@@ -226,7 +229,7 @@ class TestFutileCyclingPenaltyFactor:
             solar_kwh_per_slot=1.5,
         )
         planner = DPPlanner()
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             slot_idx=0,
             slots=slots,
@@ -241,7 +244,7 @@ class TestFutileCyclingPenaltyFactor:
         """HOLD action is not grid charging — factor must be 0."""
         slots = make_overnight_slots(n_overnight=12, n_morning_solar=0)
         planner = DPPlanner()
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.HOLD,
             slot_idx=0,
             slots=slots,
@@ -255,7 +258,7 @@ class TestFutileCyclingPenaltyFactor:
         """EXPORT_PROACTIVE action is not grid charging — factor must be 0."""
         slots = make_overnight_slots(n_overnight=12, n_morning_solar=0)
         planner = DPPlanner()
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.EXPORT_PROACTIVE,
             slot_idx=0,
             slots=slots,
@@ -269,7 +272,7 @@ class TestFutileCyclingPenaltyFactor:
         """If no energy is charged there is nothing to drain — factor must be 0."""
         slots = make_overnight_slots(n_overnight=12, n_morning_solar=0)
         planner = DPPlanner()
-        factor = planner._get_futile_cycling_penalty_factor(
+        factor = get_futile_cycling_penalty_factor(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             slot_idx=0,
             slots=slots,
