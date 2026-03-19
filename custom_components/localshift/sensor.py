@@ -12,6 +12,7 @@ from .sensors import (
     EntityHealthSensor,
     ExcessSolarSensor,
     ExtendedForecastAccuracySensor,
+    ForecastAccuracyComparisonSensor,
     ForecastAccuracySensor,
     ForecastDiagnosticsSensor,
     ForecastHistorySensor,
@@ -33,6 +34,8 @@ from .sensors import (
     SolarBatteryForecastSensor,
     SolarForecastAccuracySensor,
     SolarWeightedAvgFITSensor,
+    SolcastConfidenceTodaySensor,
+    SolcastConfidenceTomorrowSensor,
 )
 from .sensors.base import LocalShiftSensorBase
 
@@ -72,6 +75,10 @@ __all__ = [
     # Comparison sensors (Issue #300)
     "ComparisonResultSensor",
     "PriceDeltaSensor",
+    # Solcast confidence sensors (Issue #778)
+    "SolcastConfidenceTodaySensor",
+    "SolcastConfidenceTomorrowSensor",
+    "ForecastAccuracyComparisonSensor",
 ]
 
 
@@ -90,6 +97,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         EntityHealthSensor,
         ExcessSolarSensor,
         ExtendedForecastAccuracySensor,
+        ForecastAccuracyComparisonSensor,
         ForecastAccuracySensor,
         ForecastDiagnosticsSensor,
         ForecastHistorySensor,
@@ -111,6 +119,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         SolarBatteryForecastSensor,
         SolarForecastAccuracySensor,
         SolarWeightedAvgFITSensor,
+        SolcastConfidenceTodaySensor,
+        SolcastConfidenceTomorrowSensor,
     )
 
     coordinator = entry.runtime_data
@@ -164,6 +174,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         # Comparison sensors (Issue #300)
         ComparisonResultSensor(coordinator, entry),
         PriceDeltaSensor(coordinator, entry),
+        # Solcast confidence sensors (Issue #778)
+        SolcastConfidenceTodaySensor(coordinator, entry),
+        SolcastConfidenceTomorrowSensor(coordinator, entry),
+        ForecastAccuracyComparisonSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)

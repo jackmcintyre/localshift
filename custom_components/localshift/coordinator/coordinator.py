@@ -157,6 +157,17 @@ class LocalShiftCoordinator:
 
         return DEFAULT_ENTITY_IDS.get(key, "")
 
+    def _is_in_startup_grace(self) -> bool:
+        """Check if we're still in the startup grace period.
+
+        Returns True if the state machine has an active startup grace period,
+        False otherwise. Used to skip expensive operations during initialization
+        when entities may not be populated yet (Issue #551).
+        """
+        if self._state_machine is None:
+            return True
+        return self._state_machine._startup_grace_until is not None
+
     # ------------------------------------------------------------------
     # Options helpers (read from config entry options)
     # ------------------------------------------------------------------
@@ -507,10 +518,131 @@ class LocalShiftCoordinator:
             self._tick_scheduler.handle_fast_tick(now)
 
     @callback
-    def _handle_medium_tick(self, now: datetime) -> None:
-        """Handle MEDIUM tier periodic tasks (5 minutes)."""
-        if self._tick_scheduler is not None:
-            self._tick_scheduler.handle_medium_tick(now)
+    def _handle_medium_tick(self, now: datetime) -> None:  # pragma: no cover
+        """Handle MEDIUM tier periodic tasks (5 minutes).
+
+        Learning and monitoring tasks that don't need minute-level accuracy:
+        - Entity health check
+        - Load data refresh
+        - Decision backfill
+        - Weather learning
+        - Baseline calculation
+        """
+        # Read raw entity values
+        self._read_all_external_state()
+
+        # Skip expensive operations during startup grace period
+        # This prevents errors when entities haven't populated yet (Issue #551)
+        if self._is_in_startup_grace():
+            _LOGGER.debug("Skipping medium tick operations during startup grace period")
+            return
+
+        # Check entity health
+        self._check_entity_health()
+
+        # Refresh load data (historical and recent)
+        if self._computation_engine is not None:
+            load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+            self.hass.async_create_task(
+                self._computation_engine.async_get_recent_load_1hr(load_entity_id),
+                "localshift_fetch_recent_load",
+            )
+            self.hass.async_create_task(
+                self._computation_engine.async_get_historical_hourly_averages(
+                    load_entity_id
+                ),
+                "localshift_fetch_historical_load",
+            )
+
+        if self._learning_orchestrator is not None:
+            self._learning_orchestrator.update_medium_tick(self.data)
+
+        # Backfill solar forecast accuracy for completed periods (Issue #378)
+        if (
+            hasattr(self, "solar_accuracy_tracker")
+            and self.solar_accuracy_tracker is not None
+        ):
+            pass
+
+        # Update solar bias metrics from tracker (Issue #378)
+        if (
+            hasattr(self, "solar_accuracy_tracker")
+            and self.solar_accuracy_tracker is not None
+        ):
+            self.data.solar_bias_metrics = self.solar_accuracy_tracker.metrics.to_dict()
+            self.data.solar_forecast_accuracy = (
+                self.solar_accuracy_tracker.metrics.accuracy
+            )
+
+        # Compute hybrid accuracy combining LocalShift tracker + Solcast MAPE (Issue #778 Phase 2)
+        self._update_hybrid_accuracy()
+
+        # Learn from current temperature/load for weather correlation
+        if self._computation_engine is not None:
+            self.hass.async_create_task(
+                self._computation_engine.async_learn_weather_sample(self.data),
+                "localshift_weather_learning",
+            )
+
+        _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
+
+    def _update_hybrid_accuracy(self) -> None:
+        """Compute hybrid accuracy combining LocalShift tracker with Solcast MAPE.
+
+        Issue #778 Phase 2: Combines LocalShift's internal accuracy tracking
+        with Solcast's reported MAPE for more robust accuracy estimation.
+
+        Strategy:
+        - If Solcast MAPE unavailable: use LocalShift accuracy (100% default)
+        - If LocalShift has insufficient samples (<10): weight Solcast more
+        - Otherwise: weighted average favoring the more confident source
+        """
+        localshift_accuracy = self.data.solar_forecast_accuracy
+        solcast_mape = self.data.solcast_mape
+
+        # If no Solcast data, use LocalShift only
+        if solcast_mape is None:
+            self.data.hybrid_solar_accuracy = localshift_accuracy
+            return
+
+        # Convert MAPE to accuracy
+        solcast_accuracy = max(0, 100 - solcast_mape)
+
+        # Check LocalShift sample count for confidence weighting
+        localshift_samples = 0
+        if hasattr(self, "solar_accuracy_tracker") and self.solar_accuracy_tracker:
+            localshift_samples = self.solar_accuracy_tracker.metrics.sample_count
+
+        # Weighted combination based on sample confidence
+        if localshift_samples < 10:
+            # Low confidence in LocalShift - favor Solcast
+            weight_solcast = 0.7
+        elif localshift_samples < 30:
+            # Medium confidence - equal weight
+            weight_solcast = 0.5
+        else:
+            # High confidence - check divergence
+            divergence = abs(localshift_accuracy - solcast_accuracy)
+            if divergence > 15:
+                weight_solcast = 0.6
+            elif divergence > 10:
+                weight_solcast = 0.5
+            else:
+                weight_solcast = 0.4
+
+        # Compute weighted hybrid accuracy
+        hybrid = (
+            1 - weight_solcast
+        ) * localshift_accuracy + weight_solcast * solcast_accuracy
+        self.data.hybrid_solar_accuracy = round(hybrid, 1)
+
+        _LOGGER.debug(
+            "Hybrid accuracy: %.1f%% (LS: %.1f%%, Solcast MAPE: %.1f%%, weight: %.0f%%)",
+            hybrid,
+            localshift_accuracy,
+            solcast_mape,
+            weight_solcast * 100,
+        )
 
     @callback
     def _handle_slow_tick(self, now: datetime) -> None:

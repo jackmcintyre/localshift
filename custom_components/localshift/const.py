@@ -120,6 +120,7 @@ COMPARISON_MODE_ENABLED = "enabled"
 # Solcast entities
 CONF_SOLCAST_FORECAST_TODAY = "solcast_forecast_today"
 CONF_SOLCAST_FORECAST_TOMORROW = "solcast_forecast_tomorrow"
+CONF_SOLCAST_ACCURACY = "solcast_accuracy"  # Issue #778: Solcast v4.5.1 MAPE sensor
 
 # Notification service
 CONF_NOTIFY_SERVICE = "notify_service"
@@ -167,6 +168,7 @@ DEFAULT_ENTITY_IDS = {
     CONF_PRICING_PRICE_SPIKE: "",  # Empty - discovered during config flow
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
+    CONF_SOLCAST_ACCURACY: "sensor.solcast_pv_forecast_accuracy",  # Issue #778
     CONF_WEATHER_ENTITY: DEFAULT_WEATHER_ENTITY,
     CONF_PRICING_DATA_SOURCE: DEFAULT_PRICING_DATA_SOURCE,
     CONF_COMPARISON_MODE: DEFAULT_COMPARISON_MODE,

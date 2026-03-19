@@ -36,6 +36,11 @@ from .pricing import (
     PriceDeltaSensor,
     SolarWeightedAvgFITSensor,
 )
+from .solcast import (
+    ForecastAccuracyComparisonSensor,
+    SolcastConfidenceTodaySensor,
+    SolcastConfidenceTomorrowSensor,
+)
 from .status import (
     AutomationReadySensor,
     DecisionLagSensor,
@@ -87,4 +92,8 @@ __all__ = [
     # Misc
     "ExcessSolarSensor",
     "LoadShiftSignalSensor",
+    # Solcast (Issue #778)
+    "SolcastConfidenceTodaySensor",
+    "SolcastConfidenceTomorrowSensor",
+    "ForecastAccuracyComparisonSensor",
 ]
