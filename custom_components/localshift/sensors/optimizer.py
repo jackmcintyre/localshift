@@ -88,6 +88,13 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "projected_net_cost": summary.get("projected_net_cost"),
             "terminal_shortfall_pct": summary.get("terminal_shortfall_pct"),
             "initial_soc_pct": summary.get("initial_soc_pct"),
+            "peak_soc_pct": summary.get("peak_soc_pct"),
+            "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+            "projected_solar_gain_pct": summary.get("projected_solar_gain_pct"),
+            "forecast_accuracy": summary.get("forecast_accuracy"),
+            "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
+            "adjusted_solar_gain_pct": summary.get("adjusted_solar_gain_pct"),
+            "effective_soc_at_terminal": summary.get("effective_soc_at_terminal"),
         }
 
     @property

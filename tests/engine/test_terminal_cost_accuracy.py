@@ -107,3 +107,69 @@ class TestTerminalCostWithAccuracyDiscount:
         shortfall_discounted = max(0, target - effective_soc_discounted)
 
         assert shortfall_discounted > shortfall_full
+
+
+class TestTerminalDiagnostics:
+    """Tests for _get_terminal_diagnostics helper."""
+
+    def test_returns_all_diagnostic_fields(self):
+        """Verify all diagnostic fields are returned."""
+        mock_slot = Mock()
+        mock_slot.predicted_soc = 85.0
+        slots: list = [mock_slot]
+
+        planner = DPPlanner.__new__(DPPlanner)
+        result = planner._get_terminal_diagnostics(
+            soc_pct=60.0,
+            target=95.0,
+            projected_solar_gain_pct=30.0,
+            accuracy_discount=0.5,
+            future_solar_gain_pct=5.0,
+            slots=slots,
+            terminal_penalty_idx=0,
+        )
+
+        assert "projected_solar_gain_pct" in result
+        assert "accuracy_discount_factor" in result
+        assert "adjusted_solar_gain_pct" in result
+        assert "effective_soc_at_terminal" in result
+        assert "peak_soc_pct" in result
+        assert "dw_entry_soc_pct" in result
+
+    def test_none_dw_entry_when_no_penalty_idx(self):
+        """Verify dw_entry_soc is None when terminal_penalty_idx is None."""
+        planner = DPPlanner.__new__(DPPlanner)
+        result = planner._get_terminal_diagnostics(
+            soc_pct=60.0,
+            target=95.0,
+            projected_solar_gain_pct=30.0,
+            accuracy_discount=0.5,
+            future_solar_gain_pct=5.0,
+            slots=[],
+            terminal_penalty_idx=None,
+        )
+
+        assert result["dw_entry_soc_pct"] is None
+
+    def test_peak_soc_from_slots(self):
+        """Verify peak_soc is correctly calculated from slots."""
+        mock_slot1 = Mock()
+        mock_slot1.predicted_soc = 75.0
+        mock_slot2 = Mock()
+        mock_slot2.predicted_soc = 90.0
+        mock_slot3 = Mock()
+        mock_slot3.predicted_soc = 85.0
+        slots: list = [mock_slot1, mock_slot2, mock_slot3]
+
+        planner = DPPlanner.__new__(DPPlanner)
+        result = planner._get_terminal_diagnostics(
+            soc_pct=60.0,
+            target=95.0,
+            projected_solar_gain_pct=30.0,
+            accuracy_discount=0.5,
+            future_solar_gain_pct=5.0,
+            slots=slots,
+            terminal_penalty_idx=1,
+        )
+
+        assert result["peak_soc_pct"] == 90.0  # max of 75, 90, 85

@@ -580,6 +580,48 @@ class DPPlanner:
 
         return dp
 
+    def _get_terminal_diagnostics(
+        self,
+        soc_pct: float,
+        target: float,
+        projected_solar_gain_pct: float,
+        accuracy_discount: float,
+        future_solar_gain_pct: float,
+        slots: list[SlotContext],
+        terminal_penalty_idx: int | None,
+    ) -> dict[str, Any]:
+        """Extract diagnostic metrics for terminal cost calculation.
+
+        Args:
+            soc_pct: Current state of charge percentage
+            target: Target SOC percentage
+            projected_solar_gain_pct: Raw solar projection
+            accuracy_discount: Applied discount factor
+            future_solar_gain_pct: Beyond-horizon solar gain
+            slots: All time slots in plan
+            terminal_penalty_idx: Index of terminal penalty slot
+
+        Returns:
+            Dictionary of diagnostic metrics
+        """
+        adjusted_solar_gain = projected_solar_gain_pct * accuracy_discount
+        effective_soc = soc_pct + future_solar_gain_pct + adjusted_solar_gain
+
+        peak_soc = max(slot.predicted_soc for slot in slots) if slots else soc_pct
+
+        dw_entry_soc = None
+        if terminal_penalty_idx is not None and slots:
+            dw_entry_soc = slots[terminal_penalty_idx].predicted_soc
+
+        return {
+            "projected_solar_gain_pct": round(projected_solar_gain_pct, 2),
+            "accuracy_discount_factor": round(accuracy_discount, 2),
+            "adjusted_solar_gain_pct": round(adjusted_solar_gain, 2),
+            "effective_soc_at_terminal": round(effective_soc, 2),
+            "peak_soc_pct": round(peak_soc, 2),
+            "dw_entry_soc_pct": round(dw_entry_soc, 2) if dw_entry_soc else None,
+        }
+
     def _backward_induction(
         self,
         dp: list[dict],
