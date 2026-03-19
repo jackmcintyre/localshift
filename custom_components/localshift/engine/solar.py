@@ -5,11 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from custom_components.localshift.engine.types import OptimizerConfig, SlotContext
+from custom_components.localshift.engine.types import (
+    OptimizerConfig,
+    OptimizerInputs,
+    SlotContext,
+)
 
 
 def can_solar_reach_target(
-    inputs: object,
+    inputs: OptimizerInputs,
     slots: list[SlotContext],
     config: OptimizerConfig,
     demand_bounds: dict[str, int | None],
@@ -87,7 +91,7 @@ def projected_solcast_gain_pct(
 
 
 def get_forecast_accuracy(
-    solar_accuracy_tracker: object | None,
+    solar_accuracy_tracker: Any | None,
 ) -> float:
     """Get overall forecast accuracy from tracker.
 

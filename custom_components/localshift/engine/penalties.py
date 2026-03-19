@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
@@ -19,7 +20,7 @@ def get_solar_opportunity_penalty_factor(
     slots: list[SlotContext],
     config: OptimizerConfig,
     terminal_penalty_idx: int | None,
-    all_solcast: list[dict[str, object]] | None = None,
+    all_solcast: list[dict[str, Any]] | None = None,
 ) -> float:
     """Calculate the solar opportunity penalty factor for a slot (#610).
 
