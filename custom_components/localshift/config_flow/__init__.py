@@ -650,7 +650,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
     async def async_step_advanced(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage advanced optimizer penalties."""
+        """Manage advanced optimizer settings (all number entities)."""
         if user_input is not None:
             merged_options = dict(self.config_entry.options)
             merged_options.update(user_input)
@@ -660,6 +660,18 @@ class LocalShiftOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="advanced",
             data_schema=self._build_advanced_schema({
+                CONF_CHEAP_PRICE_PERCENTILE: current.get(
+                    CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
+                ),
+                CONF_MAX_PRECHARGE_PRICE: current.get(
+                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                ),
+                CONF_BATTERY_TARGET: current.get(
+                    CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET
+                ),
+                CONF_MINIMUM_TARGET_SOC: current.get(
+                    CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
+                ),
                 CONF_CYCLE_PENALTY: current.get(
                     CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY
                 ),
@@ -673,11 +685,67 @@ class LocalShiftOptionsFlow(OptionsFlow):
         )
 
     def _build_advanced_schema(self, values: dict[str, Any]):
-        """Build schema for advanced penalty settings."""
+        """Build schema for all configurable number entities."""
         import voluptuous as vol
         from homeassistant.helpers import selector
 
         return vol.Schema({
+            vol.Required(
+                CONF_CHEAP_PRICE_PERCENTILE,
+                default=values.get(
+                    CONF_CHEAP_PRICE_PERCENTILE, DEFAULT_CHEAP_PRICE_PERCENTILE
+                ),
+                description="Percentile of near-term prices used as cheap threshold",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5,
+                    max=50,
+                    step=1,
+                    unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_MAX_PRECHARGE_PRICE,
+                default=values.get(
+                    CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
+                ),
+                description="Maximum price willing to pay for urgent grid charging",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=0.50,
+                    step=0.01,
+                    unit_of_measurement="$/kWh",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_BATTERY_TARGET,
+                default=values.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET),
+                description="Target SOC for demand window",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=50,
+                    max=100,
+                    step=5,
+                    unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_MINIMUM_TARGET_SOC,
+                default=values.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC),
+                description="Minimum SOC maintained during discharge modes",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5,
+                    max=30,
+                    step=1,
+                    unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
             vol.Required(
                 CONF_CYCLE_PENALTY,
                 default=values.get(CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY),
