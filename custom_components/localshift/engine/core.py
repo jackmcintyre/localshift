@@ -7,6 +7,15 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+from custom_components.localshift.engine.constraints import (
+    _determine_export_actions,
+    check_global_solar_sufficiency,
+    feasible_actions as _constraints_feasible_actions,
+)
+from custom_components.localshift.engine.cost import (
+    stage_cost as _cost_stage_cost,
+    terminal_cost as _cost_terminal_cost,
+)
 from custom_components.localshift.engine.dp_math import (
     _build_soc_grid,
     _interpolate_cost_to_soc,
@@ -562,7 +571,7 @@ class DPPlanner:
                     shortfall_penalty = shortfall * hard_constraint_penalty
                 else:
                     # Soft penalty for states at or above target, or in arbitrage mode
-                    shortfall_penalty = DPPlanner.terminal_cost(
+                    shortfall_penalty = _cost_terminal_cost(
                         effective_soc, target, config
                     )
                 dp[n_slots][bin_idx] = (
@@ -699,7 +708,7 @@ class DPPlanner:
             Tuple of (best result tuple, actions explored count)
 
         """
-        actions = DPPlanner.feasible_actions(
+        actions = _constraints_feasible_actions(
             soc,
             slot,
             config,
@@ -756,7 +765,7 @@ class DPPlanner:
                 soc_after_charge_pct=next_soc,
                 charge_kwh=charge_kwh,
             )
-            stage = DPPlanner.stage_cost(
+            stage = _cost_stage_cost(
                 action,
                 grid_import,
                 grid_export,
@@ -864,7 +873,7 @@ class DPPlanner:
                 soc_after_charge_pct=next_soc,
                 charge_kwh=recon_charge_kwh,
             )
-            stage = DPPlanner.stage_cost(
+            stage = _cost_stage_cost(
                 action,
                 grid_import,
                 grid_export,
@@ -1491,204 +1500,6 @@ class DPPlanner:
         return accuracy_pct / 100.0
 
     @staticmethod
-    def _check_global_solar_sufficiency(
-        soc_pct: float,
-        slot_idx: int,
-        slots: list[SlotContext],
-        config: OptimizerConfig,
-    ) -> bool:
-        """Check if remaining solar in the full horizon covers the SOC deficit to target.
-
-        Uses realistic simulation that accounts for charge rate limits and efficiency,
-        ensuring consistency with solar_can_reach_target sensor.
-
-        Fixes Issue #701: Previous implementation used raw surplus without rate limits,
-        incorrectly blocking cheap grid charging when solar was insufficient in reality.
-
-        Args:
-            soc_pct: Current battery SOC percentage.
-            slot_idx: Index of the current slot in the planning horizon.
-            slots: Full list of planning slots.
-            config: Optimizer configuration.
-
-        Returns:
-            True if realistic solar simulation can raise SOC from soc_pct to demand_window_target_soc_pct.
-
-        """
-        if not slots:
-            return False
-
-        soc_deficit_pct = config.demand_window_target_soc_pct - soc_pct
-        if soc_deficit_pct <= 0:
-            return False
-
-        from custom_components.localshift.engine.dp_math import (
-            _simulate_solar_only_terminal_soc,
-        )
-
-        remaining_slots = slots[slot_idx:]
-        simulated_terminal_soc = _simulate_solar_only_terminal_soc(
-            soc_pct, remaining_slots, None, config
-        )
-        return simulated_terminal_soc >= config.demand_window_target_soc_pct
-
-    @staticmethod
-    def _determine_export_actions(
-        soc_pct: float,
-        slot: SlotContext,
-        config: OptimizerConfig,
-        slot_idx: int,
-        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None,
-    ) -> list[PlannerAction]:
-        """Determine export actions based on mode and negative-FIT avoidance context.
-
-        Issue #719: Recoverability-based negative-FIT avoidance.
-
-        Allows proactive export at positive FIT before the risk window when:
-        - SOC is above the recoverability floor + buffer
-        - The slot is before the risk window starts
-        - The slot has positive sell price
-
-        The recoverability floor ensures we only discharge energy that can be
-        recovered via future solar before the deadline, avoiding later grid import.
-        """
-        actions = []
-        can_discharge = soc_pct > config.min_soc_pct
-
-        if not can_discharge:
-            return actions
-
-        use_avoidance = (
-            negative_fit_avoidance_context is not None
-            and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
-        )
-
-        if use_avoidance and negative_fit_avoidance_context is not None:
-            if slot.sell_price > 0:
-                if slot.is_demand_window_slot:
-                    from custom_components.localshift.const import (
-                        NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH,
-                    )
-
-                    net_benefit = slot.sell_price - max(0.0, slot.buy_price)
-                    if net_benefit < NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH:
-                        return actions
-
-                floor_pct = (
-                    negative_fit_avoidance_context.recoverability_floor_pct_by_slot[
-                        slot_idx
-                    ]
-                )
-                if soc_pct > floor_pct + 2.0:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
-        else:
-            if config.optimization_mode == "self_consumption":
-                min_profitable_sell = (
-                    max(0.0, slot.buy_price) + config.export_price_margin
-                )
-                if slot.sell_price >= min_profitable_sell:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
-            else:
-                if slot.sell_price > 0:
-                    actions.append(PlannerAction.EXPORT_PROACTIVE)
-
-        return actions
-
-    @staticmethod
-    def feasible_actions(
-        soc_pct: float,
-        slot: SlotContext,
-        config: OptimizerConfig,
-        slot_idx: int = 0,
-        slots: list[SlotContext] | None = None,
-        terminal_penalty_idx: int | None = None,
-        negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
-    ) -> list[PlannerAction]:
-        """
-        Return list of actions feasible from given SOC and slot context.
-
-        Constraints checked:
-        - SOC floor/ceiling
-        - Demand window: no grid import during DW slots
-        - Optimization mode (self_consumption vs arbitrage)
-        - Price thresholds for self-consumption mode
-        - Solar surplus gate: suppresses grid charging when solar will cover
-          the full SOC deficit before the demand window (self_consumption mode only)
-        - Slot duration vs transfer limits
-
-        Args:
-            soc_pct: Current battery SOC percentage.
-            slot: Per-slot context (price, solar, consumption, flags).
-            config: Optimizer configuration and constraints.
-            slot_idx: Index of the current slot in the planning horizon (default 0).
-            slots: Full list of planning slots (None disables solar gate).
-            terminal_penalty_idx: Index at which the shortfall penalty is applied
-                (None disables solar gate).
-
-        """
-        actions = []
-
-        can_charge = soc_pct < config.max_soc_pct
-
-        actions.append(PlannerAction.HOLD)
-
-        # Solar surplus gate: if projected solar can cover the full SOC deficit
-        # before the demand window, suppress grid charging entirely.
-        # This prevents the solver from grid-charging during solar-peak hours
-        # when solar will naturally fill the battery at zero cost.
-        _solar_covers_deficit = False
-        # DISABLED: The solar gate is too aggressive and incorrectly suppresses
-        # grid charging when solar is insufficient. The penalty-based approach
-        # should be sufficient to handle this case.
-        # Original code removed for Issue #562 fix
-
-        # Issue #559 Root Cause 1: global solar gate for no-DW scenarios.
-        # The existing gate above is bypassed when terminal_penalty_idx is None
-        # (no demand window tonight).  This second check looks at the full
-        # remaining horizon so overnight solar-sufficient days suppress grid
-        # charging even without a demand window.
-        #
-        # Issue #638: Removed terminal_penalty_idx is None guard so the gate
-        # also applies when a DW exists. If solar surplus can fill the battery
-        # before DW entry, suppress grid charging overnight.
-        _global_solar_covers = False
-        if config.optimization_mode == "self_consumption" and slots is not None:
-            _global_solar_covers = DPPlanner._check_global_solar_sufficiency(
-                soc_pct, slot_idx, slots, config
-            )
-
-        # Grid charging constraints (Issue #406)
-        if (
-            can_charge
-            and not slot.is_demand_window_slot
-            and not (_solar_covers_deficit or _global_solar_covers)
-        ):
-            # In self-consumption mode, only charge if price is cheap
-            if config.optimization_mode == "self_consumption":
-                price_is_cheap = slot.buy_price <= config.effective_cheap_price
-                price_is_very_cheap = (
-                    slot.buy_price <= config.effective_cheap_price * 0.8
-                )
-
-                if price_is_cheap:
-                    actions.append(PlannerAction.CHARGE_GRID_NORMAL)
-                    if price_is_very_cheap:
-                        actions.append(PlannerAction.CHARGE_GRID_BOOST)
-            else:
-                # Arbitrage mode: charge whenever below max (no solar gate)
-                actions.append(PlannerAction.CHARGE_GRID_NORMAL)
-                actions.append(PlannerAction.CHARGE_GRID_BOOST)
-
-        # Export constraints (Issue #406, #719)
-        actions.extend(
-            DPPlanner._determine_export_actions(
-                soc_pct, slot, config, slot_idx, negative_fit_avoidance_context
-            )
-        )
-
-        return actions
-
-    @staticmethod
     def transition(
         soc_pct: float,
         action: PlannerAction,
@@ -1957,156 +1768,3 @@ class DPPlanner:
 
         grid_export_kwh = max(0.0, battery_discharge_kwh + net_kwh)
         return next_soc, 0.0, grid_export_kwh
-
-    @staticmethod
-    def stage_cost(
-        action: PlannerAction,
-        grid_import_kwh: float,
-        grid_export_kwh: float,
-        slot: SlotContext,
-        config: OptimizerConfig,
-        *,
-        soc_pct: float | None = None,
-        is_switch: bool = False,
-        solar_opportunity_penalty_factor: float = 0.0,
-        futile_cycling_penalty_factor: float = 0.0,
-    ) -> ObjectiveTerms:
-        """
-        Compute per-slot stage cost terms for an action.
-
-        In self-consumption mode, adds value for battery energy used to cover load.
-        This makes the optimizer prefer keeping energy for household use over exporting
-        unless the export price exceeds the self-consumption value + margin.
-
-        Args:
-            soc_pct: Current SOC percentage *before* this slot's transition.
-                     When provided, caps self-consumption credit by the
-                     battery's physical discharge capacity (Fixes #417).
-            is_switch: True if this action represents a mode switch from the
-                       currently active hardware state (Issue #524).
-
-        """
-        import_cost = grid_import_kwh * slot.buy_price
-        export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
-        cycle_kwh = grid_import_kwh + grid_export_kwh
-        cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
-
-        # Switching penalty (Issue #524)
-        # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
-        switching_penalty = config.switching_penalty if is_switch else 0.0
-
-        # Issue #610: horizon-aware solar opportunity cost
-        # Penalizes grid import when significant solar is expected later in the horizon.
-        # Penalty reflects the full economic benefit of charging:
-        # import cost + the value of the energy stored (self-consumption credit).
-        sc_value = (
-            max(0.0, slot.buy_price)
-            if config.optimization_mode == "self_consumption"
-            else 0.0
-        )
-        full_economic_benefit = import_cost + grid_import_kwh * sc_value
-        solar_opportunity_penalty = (
-            full_economic_benefit * solar_opportunity_penalty_factor
-        )
-
-        # Issue #431: uncertainty penalty for grid charging when horizon is short.
-        # This biases the optimizer toward HOLD (waiting for more data) when blind.
-        uncertainty_penalty = 0.0
-        if action in (
-            PlannerAction.CHARGE_GRID_NORMAL,
-            PlannerAction.CHARGE_GRID_BOOST,
-        ):
-            if config.forecast_horizon_hours < 20.0:
-                # Add a meaningful penalty proportional to "blindness"
-                horizon_penalty_factor = (20.0 - config.forecast_horizon_hours) / 20.0
-                # Multiply by import amount. 0.05 $/kWh is a strong deterrent.
-                uncertainty_penalty = 0.05 * horizon_penalty_factor * grid_import_kwh
-
-        # Calculate self-consumption value (Issue #406)
-        # Battery energy used to cover household load has value because it avoids
-        # buying from grid at retail price.
-        # However, we subtract cycle_penalty_per_kwh to avoid subsidizing marginal cycling.
-        # The battery must "earn" the cycle penalty back through the spread.
-        self_consumption_value = 0.0
-        if config.optimization_mode == "self_consumption":
-            # Net load that battery covers = consumption - solar - grid_import
-            # (If positive, battery discharges for load; if negative, battery is being charged)
-            net_load = slot.consumption_kwh - slot.solar_kwh
-            if net_load > 0:
-                # Household needs energy beyond what solar provides
-                # Battery covers some of this (the rest would be grid import)
-                # Grid export takes energy away from load coverage
-                battery_for_load = max(
-                    0.0, net_load - grid_import_kwh - grid_export_kwh
-                )
-
-                # Cap by physical discharge capacity when SOC is known.
-                # Without this cap, the formula can credit load coverage
-                # that the battery cannot physically deliver — e.g. at SOC
-                # floor or during EXPORT_PROACTIVE where all discharge goes
-                # to grid, not to load.  (Fixes #417)
-                if soc_pct is not None:
-                    slot_hours = slot.slot_interval_minutes / 60.0
-                    max_discharge_kwh = config.discharge_rate_kw * slot_hours
-                    available_kwh = max(
-                        0.0,
-                        (soc_pct - config.min_soc_pct)
-                        / 100.0
-                        * config.battery_capacity_kwh,
-                    )
-                    max_load_kwh = min(
-                        max_discharge_kwh,
-                        available_kwh * config.discharge_efficiency,
-                    )
-                    battery_for_load = min(battery_for_load, max_load_kwh)
-
-                # Credit the battery at (buy_price - cycle_penalty), not full buy_price
-                # This prevents the credit from subsidizing marginal cycling
-                sc_multiplier = max(0.0, slot.buy_price - config.cycle_penalty_per_kwh)
-                self_consumption_value = battery_for_load * sc_multiplier
-
-        # Issue #638: futile cycling penalty.
-        # Penalizes grid charging when the charged energy will drain through house load
-        # before reaching a useful period (solar surplus or demand window).
-        # Formula: grid_import_kWh × (eff_loss + margin) × buy_price × drain_factor
-        # The penalty includes efficiency loss plus a margin to discourage marginal cycling.
-        futile_cycling_penalty = 0.0
-        if action in (
-            PlannerAction.CHARGE_GRID_NORMAL,
-            PlannerAction.CHARGE_GRID_BOOST,
-        ):
-            # Efficiency loss portion + margin to discourage marginal arbitrage
-            # Old formula: eff_loss only (~12.6% of import)
-            # New formula: eff_loss + margin (~50% of import) to prevent wasteful cycling
-            eff_loss = 1.0 - config.charge_efficiency * config.discharge_efficiency
-            futile_cycling_penalty = (
-                grid_import_kwh
-                * (eff_loss + 0.30)  # eff_loss (~12.6%) + margin (30%)
-                * slot.buy_price
-                * futile_cycling_penalty_factor
-            )
-
-        return ObjectiveTerms(
-            import_cost=import_cost,
-            export_revenue=export_revenue,
-            cycle_penalty=cycle_penalty,
-            self_consumption_value=self_consumption_value,
-            uncertainty_penalty=uncertainty_penalty,
-            switching_penalty=switching_penalty,
-            solar_opportunity_penalty=solar_opportunity_penalty,
-            futile_cycling_penalty=futile_cycling_penalty,
-        )
-
-    @staticmethod
-    def terminal_cost(
-        final_soc_pct: float,
-        target_soc_pct: float,
-        config: OptimizerConfig,
-    ) -> float:
-        """
-        Compute penalty for missing the demand-window SOC target.
-
-        Returns 0 if target is met; positive penalty per % shortfall otherwise.
-        """
-        shortfall = max(0.0, target_soc_pct - final_soc_pct)
-        return shortfall * config.target_shortfall_penalty_per_pct

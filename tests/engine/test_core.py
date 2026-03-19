@@ -8,6 +8,7 @@ from tests.test_optimizer_self_consumption import *  # noqa: F403
 
 from datetime import UTC, datetime
 
+from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
@@ -403,7 +404,7 @@ class TestCoreRegressionCoverage:
         )
         config = OptimizerConfig(min_soc_pct=10.0)
 
-        actions = DPPlanner._determine_export_actions(
+        actions = _determine_export_actions(
             soc_pct=80.0,
             slot=slot,
             config=config,
@@ -467,3 +468,10 @@ class TestCoreRegressionCoverage:
             demand_bounds=None,
         )
         assert shortfall == 0.0
+
+
+def test_dpplanner_no_longer_exposes_cost_and_constraints_wrappers():
+    """Chunk 1: Ensure DPPlanner cost/constraint static methods are removed."""
+    assert not hasattr(DPPlanner, "stage_cost")
+    assert not hasattr(DPPlanner, "terminal_cost")
+    assert not hasattr(DPPlanner, "feasible_actions")

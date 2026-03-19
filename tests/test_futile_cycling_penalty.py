@@ -16,6 +16,7 @@ from datetime import datetime
 
 import pytest
 
+from custom_components.localshift.engine.cost import stage_cost
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     ObjectiveTerms,
@@ -295,7 +296,7 @@ class TestStageCostFutilePenalty:
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = self._make_charge_slot()
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=1.65,
             grid_export_kwh=0.0,
@@ -317,7 +318,7 @@ class TestStageCostFutilePenalty:
         discharge_eff = default_config.discharge_efficiency
         eff_loss = 1.0 - charge_eff * discharge_eff
 
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=grid_import,
             grid_export_kwh=0.0,
@@ -336,7 +337,7 @@ class TestStageCostFutilePenalty:
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = self._make_charge_slot()
-        terms_half = DPPlanner.stage_cost(
+        terms_half = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=2.0,
             grid_export_kwh=0.0,
@@ -345,7 +346,7 @@ class TestStageCostFutilePenalty:
             soc_pct=30.0,
             futile_cycling_penalty_factor=0.5,
         )
-        terms_full = DPPlanner.stage_cost(
+        terms_full = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=2.0,
             grid_export_kwh=0.0,
@@ -363,7 +364,7 @@ class TestStageCostFutilePenalty:
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = self._make_charge_slot()
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.25,
             grid_export_kwh=0.0,
@@ -379,7 +380,7 @@ class TestStageCostFutilePenalty:
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = self._make_charge_slot()
-        terms_no_penalty = DPPlanner.stage_cost(
+        terms_no_penalty = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=1.65,
             grid_export_kwh=0.0,
@@ -388,7 +389,7 @@ class TestStageCostFutilePenalty:
             soc_pct=30.0,
             futile_cycling_penalty_factor=0.0,
         )
-        terms_with_penalty = DPPlanner.stage_cost(
+        terms_with_penalty = stage_cost(
             action=PlannerAction.CHARGE_GRID_NORMAL,
             grid_import_kwh=1.65,
             grid_export_kwh=0.0,
@@ -417,7 +418,7 @@ class TestSCDiscountNearFloor:
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = make_slot(0, 2, 0, solar_kwh=0.0, consumption_kwh=0.25, buy_price=0.14)
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
@@ -434,7 +435,7 @@ class TestSCDiscountNearFloor:
         from custom_components.localshift.engine.optimizer_dp import DPPlanner
 
         slot = make_slot(0, 2, 0, solar_kwh=0.0, consumption_kwh=0.25, buy_price=0.14)
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
@@ -457,7 +458,7 @@ class TestSCDiscountNearFloor:
         slot = make_slot(0, 2, 0, solar_kwh=0.0, consumption_kwh=3.0, buy_price=0.14)
 
         # At floor+5pp there is a small amount of energy available
-        terms_low = DPPlanner.stage_cost(
+        terms_low = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
@@ -467,7 +468,7 @@ class TestSCDiscountNearFloor:
         )
 
         # At floor+40pp there is much more energy available
-        terms_high = DPPlanner.stage_cost(
+        terms_high = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
@@ -488,7 +489,7 @@ class TestSCDiscountNearFloor:
         slot = make_slot(0, 2, 0, solar_kwh=0.0, consumption_kwh=0.25, buy_price=0.14)
         capacity_kwh = default_config.battery_capacity_kwh
         soc_pct = default_config.min_soc_pct + 15.0
-        terms = DPPlanner.stage_cost(
+        terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
             grid_export_kwh=0.0,
