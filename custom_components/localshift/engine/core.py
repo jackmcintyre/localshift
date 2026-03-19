@@ -50,6 +50,9 @@ from custom_components.localshift.engine.types import (
     PlannerReasonCode,
     SlotContext,
 )
+from custom_components.localshift.forecast.solar_accuracy import (
+    SolarAccuracyTracker,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
