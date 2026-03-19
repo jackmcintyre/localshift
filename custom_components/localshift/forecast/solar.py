@@ -48,6 +48,23 @@ def _get_period_estimate(entry: dict[str, Any]) -> float:
     )
 
 
+def _blend_solar_estimate(
+    pv_estimate: float,
+    pv_estimate10: float,
+    confidence: float,
+) -> float:
+    """Continuous linear blending between median and P10 based on confidence.
+
+    At high confidence (1.0), returns pv_estimate (median).
+    At low confidence (0.0), returns pv_estimate10 (pessimistic).
+    """
+    if confidence >= 1.0:
+        return pv_estimate
+    if confidence <= 0.0:
+        return pv_estimate10
+    return confidence * pv_estimate + (1.0 - confidence) * pv_estimate10
+
+
 def _process_forecast_entry(
     entry: dict[str, Any] | Any,
     slot_start: datetime,
