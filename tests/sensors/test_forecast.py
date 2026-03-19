@@ -12,11 +12,16 @@ Tests cover:
 - MinimumTargetSOCSensor: native_value
 """
 
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 from custom_components.localshift.coordinator.data import (
     AdaptiveParameters,
     CoordinatorData,
+)
+from custom_components.localshift.forecast.solcast_analysis import (
+    ConfidenceInterval,
+    SolcastAnalysis,
 )
 from custom_components.localshift.sensors.forecast import (
     DecisionLogSensor,
@@ -90,7 +95,44 @@ class TestSolarBatteryForecastSensor:
 
         sensor = SolarBatteryForecastSensor(mock_coordinator, mock_entry)
 
-        assert sensor.extra_state_attributes == forecast
+        attrs = sensor.extra_state_attributes
+        assert attrs["predicted_soc"] == 75.5
+        assert attrs["hours_to_target"] == 4
+        assert attrs["solar_kwh"] == 12.5
+        assert attrs["solar_confidence_used"] == 1.0
+        assert attrs["solar_blend_applied"] is False
+
+    def test_extra_state_attributes_adds_confidence_diagnostics(self):
+        forecast = {"predicted_soc": 75.5}
+        analysis = SolcastAnalysis(
+            entity_id="sensor.today",
+            last_updated=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+            day_confidence=0.2,
+            day_spread_kwh=0.0,
+            estimate10_kwh=0.0,
+            estimate90_kwh=0.0,
+            intervals=[
+                ConfidenceInterval(
+                    period_start=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+                    spread_kwh=0.0,
+                    confidence=0.2,
+                )
+            ],
+        )
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            solar_battery_forecast=forecast,
+            solcast_analysis_today=analysis,
+        )
+        sensor = SolarBatteryForecastSensor(mock_coordinator, MagicMock())
+
+        with patch(
+            "custom_components.localshift.sensors.forecast.dt_util.now",
+            return_value=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        ):
+            attrs = sensor.extra_state_attributes
+
+        assert attrs["solar_confidence_used"] == 0.2
+        assert attrs["solar_blend_applied"] is True
 
 
 class TestNetElectricityCostSensor:

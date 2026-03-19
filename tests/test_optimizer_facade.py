@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -230,11 +231,31 @@ def test_record_forecasts_for_slots_records_only_backfillable_timestamps():
         period_start=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
         forecast_kwh=0.0,
         weather_condition="sunny",
+        is_boost=False,
     )
     tracker.record_forecast.assert_any_call(
         period_start=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
         forecast_kwh=0.2,
         weather_condition="sunny",
+        is_boost=False,
+    )
+
+
+def test_record_forecasts_for_slots_passes_boost_flag():
+    tracker = MagicMock()
+    slots = [
+        SimpleNamespace(solar_kwh=0.2, timestamp_iso="2026-01-15T10:30:00+00:00"),
+    ]
+
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    facade.set_solar_accuracy_tracker(tracker)
+    facade._record_forecasts_for_slots(slots, "sunny", is_boost=True)
+
+    tracker.record_forecast.assert_called_once_with(
+        period_start=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
+        forecast_kwh=0.2,
+        weather_condition="sunny",
+        is_boost=True,
     )
 
 
@@ -378,3 +399,186 @@ def test_assign_active_mode_falls_back_on_invalid_battery_mode():
 
     assert data.active_mode == BatteryMode.SELF_CONSUMPTION
     assert data.optimizer_last_apply_status == "fallback"
+
+
+class _ShadowSlotBuilderWithOneSlot:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    def build_slots(
+        self,
+        _data,
+        _adaptive_params,
+        now_dt=None,
+        override_general_forecast=None,
+        override_feed_in_forecast=None,
+    ):
+        assert now_dt is not None
+        assert override_general_forecast is not None
+        assert override_feed_in_forecast is not None
+        return [SimpleNamespace(timestamp_iso="2026-01-15T10:00:00+00:00")], MagicMock()
+
+
+class _ShadowSlotBuilderEmpty:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    def build_slots(self, *_args, **_kwargs):
+        return [], MagicMock()
+
+
+class _ShadowSlotBuilderBoom:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    def build_slots(self, *_args, **_kwargs):
+        raise RuntimeError("shadow boom")
+
+
+def test_run_shadow_comparison_disabled_returns_early():
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = CoordinatorData()
+    data.general_price_shadow = 0.25
+
+    facade._run_shadow_comparison(
+        data,
+        datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+        {"comparison_mode": "disabled"},
+        MagicMock(all_solcast=[]),
+    )
+
+    assert data.primary_decision == ""
+    assert data.shadow_decision == ""
+
+
+def test_run_shadow_comparison_resets_when_shadow_price_unavailable():
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = CoordinatorData()
+    data.general_price_shadow = 0.0
+    data.comparison_match = False
+    data.primary_decision = "old"
+    data.shadow_decision = "other"
+    data.price_delta = 99.0
+
+    facade._run_shadow_comparison(
+        data,
+        datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+        {"comparison_mode": "enabled"},
+        MagicMock(all_solcast=[]),
+    )
+
+    assert data.comparison_match is True
+    assert data.primary_decision == ""
+    assert data.shadow_decision == ""
+    assert data.price_delta == 0.0
+
+
+def test_run_shadow_comparison_threads_solcast_analysis_and_logs_mismatch():
+    facade = OptimizerFacade(slot_builder_cls=_ShadowSlotBuilderWithOneSlot)
+    facade._planner = MagicMock(
+        plan=MagicMock(return_value=SimpleNamespace(decisions=[SimpleNamespace()]))
+    )
+    data = CoordinatorData()
+    data.general_price_shadow = 0.15
+    data.general_price = 0.25
+    data.general_forecast_shadow = cast(Any, [{"start": "shadow"}])
+    data.feed_in_forecast_shadow = cast(Any, [{"start": "shadow-fit"}])
+    data.adaptive_params = cast(Any, None)
+    data.soc = 55.0
+    data.active_mode = BatteryMode.SELF_CONSUMPTION
+    data.solcast_analysis_today = cast(Any, object())
+    data.solcast_analysis_tomorrow = cast(Any, object())
+    data.decision_log = []
+
+    with (
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._build_optimizer_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._normalize_initial_soc",
+            return_value=(55.0, {}),
+        ),
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._serialize_decision",
+            return_value={"action": "hold"},
+        ),
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._find_current_slot_index",
+            return_value=0,
+        ),
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
+            return_value={"battery_mode": BatteryMode.GRID_CHARGING.value},
+        ),
+    ):
+        facade._run_shadow_comparison(
+            data,
+            datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+            {"comparison_mode": "enabled"},
+            MagicMock(all_solcast=[{"period_start": "2026-01-15T10:00:00+00:00"}]),
+        )
+
+    inputs = facade._planner.plan.call_args.args[0]
+    assert inputs.solcast_analysis_today is data.solcast_analysis_today
+    assert inputs.solcast_analysis_tomorrow is data.solcast_analysis_tomorrow
+    assert data.primary_decision == BatteryMode.SELF_CONSUMPTION.value
+    assert data.shadow_decision == BatteryMode.GRID_CHARGING.value
+    assert data.comparison_match is False
+    assert data.price_delta == pytest.approx(0.10)
+    assert len(data.decision_log) == 1
+
+
+def test_run_shadow_comparison_handles_empty_slots_invalid_soc_and_exceptions(caplog):
+    data = CoordinatorData()
+    data.general_price_shadow = 0.15
+    data.general_forecast_shadow = cast(Any, [{"start": "shadow"}])
+    data.feed_in_forecast_shadow = cast(Any, [{"start": "shadow-fit"}])
+    data.adaptive_params = cast(Any, None)
+    data.soc = 55.0
+
+    empty_facade = OptimizerFacade(slot_builder_cls=_ShadowSlotBuilderEmpty)
+    with caplog.at_level("WARNING"):
+        empty_facade._run_shadow_comparison(
+            data,
+            datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+            {"comparison_mode": "enabled"},
+            MagicMock(all_solcast=[]),
+        )
+    assert "Shadow optimizer: no slots available" in caplog.text
+
+    invalid_soc_facade = OptimizerFacade(slot_builder_cls=_ShadowSlotBuilderWithOneSlot)
+    with patch(
+        "custom_components.localshift.engine.optimizer_facade._normalize_initial_soc",
+        return_value=(None, {"error": "invalid"}),
+    ):
+        with caplog.at_level("WARNING"):
+            invalid_soc_facade._run_shadow_comparison(
+                data,
+                datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+                {"comparison_mode": "enabled"},
+                MagicMock(all_solcast=[]),
+            )
+    assert "Shadow optimizer: invalid SOC" in caplog.text
+
+    exploding_facade = OptimizerFacade(slot_builder_cls=_ShadowSlotBuilderBoom)
+    with caplog.at_level("WARNING"):
+        exploding_facade._run_shadow_comparison(
+            data,
+            datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+            {"comparison_mode": "enabled"},
+            MagicMock(all_solcast=[]),
+        )
+    assert "Shadow optimizer failed: shadow boom" in caplog.text
+
+
+def test_log_comparison_mismatch_trims_decision_log_to_50_entries():
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = CoordinatorData()
+    data.decision_log = [{"idx": i} for i in range(50)]
+
+    facade._log_comparison_mismatch(data, "self_consumption", "grid_charging", 0.12)
+
+    assert len(data.decision_log) == 50
+    assert data.decision_log[-1]["old_mode"] == "self_consumption"
+    assert data.decision_log[-1]["new_mode"] == "grid_charging"

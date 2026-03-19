@@ -98,6 +98,7 @@ def projected_solcast_gain_pct(
     end_time: datetime,
     battery_capacity_kwh: float,
     avg_load_kw: float = 0.5,
+    confidence_resolver: Any | None = None,
 ) -> float:
     """Estimate net SOC gain (%) from solar in Solcast beyond the DP horizon.
 
@@ -117,7 +118,21 @@ def projected_solcast_gain_pct(
             p_start = datetime.fromisoformat(str(p_start_str))
             # Solcast periods are typically 30 mins
             if start_time <= p_start < end_time:
-                solar_kwh += float(period.get("pv_estimate", 0)) * 0.5
+                raw_estimate = float(period.get("pv_estimate", 0))
+                raw_p10 = float(period.get("pv_estimate10", 0))
+                confidence = (
+                    confidence_resolver.get_confidence(p_start)
+                    if confidence_resolver is not None
+                    else 1.0
+                )
+
+                from custom_components.localshift.forecast.solar import (
+                    _blend_solar_estimate,
+                )
+
+                solar_kwh += (
+                    _blend_solar_estimate(raw_estimate, raw_p10, confidence) * 0.5
+                )
         except (ValueError, TypeError):
             continue
 

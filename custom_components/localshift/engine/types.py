@@ -514,5 +514,11 @@ class OptimizerInputs:
     all_solcast: list[dict[str, Any]] = field(default_factory=list)
     """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
 
+    solcast_analysis_today: Any | None = None
+    """Solcast analysis for today with confidence data (Issue #794)."""
+
+    solcast_analysis_tomorrow: Any | None = None
+    """Solcast analysis for tomorrow with confidence data (Issue #794)."""
+
     solar_accuracy_tracker: SolarAccuracyTracker | None = None
     """Tracker for forecast accuracy to apply discount to terminal cost (Issue #785)."""

@@ -48,11 +48,29 @@ def _get_period_estimate(entry: dict[str, Any]) -> float:
     )
 
 
+def _blend_solar_estimate(
+    pv_estimate: float,
+    pv_estimate10: float,
+    confidence: float,
+) -> float:
+    """Continuous linear blending between median and P10 based on confidence.
+
+    At high confidence (1.0), returns pv_estimate (median).
+    At low confidence (0.0), returns pv_estimate10 (pessimistic).
+    """
+    if confidence >= 1.0:
+        return pv_estimate
+    if confidence <= 0.0:
+        return pv_estimate10
+    return confidence * pv_estimate + (1.0 - confidence) * pv_estimate10
+
+
 def _process_forecast_entry(
     entry: dict[str, Any] | Any,
     slot_start: datetime,
     slot_end: datetime,
     period_duration: timedelta,
+    confidence: float = 1.0,
 ) -> dict[str, Any] | None:
     """Process a single forecast entry and return contribution if overlapping.
 
@@ -85,7 +103,11 @@ def _process_forecast_entry(
     if overlap_seconds <= 0:
         return None
 
-    period_kwh = _get_period_estimate(entry)
+    # Extract median and P10 estimates separately for blending
+    raw_estimate = float(entry.get("pv_estimate") or entry.get("estimate") or 0.0)
+    raw_p10 = float(entry.get("pv_estimate10") or entry.get("estimate10") or 0.0)
+    # Blend based on confidence
+    period_kwh = _blend_solar_estimate(raw_estimate, raw_p10, confidence)
     overlap_fraction = overlap_seconds / 3600.0
     contribution = period_kwh * overlap_fraction
 
@@ -155,6 +177,7 @@ def get_solar_for_15min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
     debug_log: bool = False,
+    confidence: float = 1.0,
 ) -> float:
     """Get solar forecast (kWh) for a 15-minute slot from Solcast 30-min periods.
 
@@ -182,7 +205,9 @@ def get_solar_for_15min_slot(
     matched_entries: list[dict[str, Any]] = []
 
     for entry in solcast_forecasts:
-        result = _process_forecast_entry(entry, slot_start, slot_end, period_duration)
+        result = _process_forecast_entry(
+            entry, slot_start, slot_end, period_duration, confidence
+        )
         if result is not None:
             total_solar += result["contribution"]
             matched_entries.append(result)
@@ -196,6 +221,7 @@ def get_solar_for_15min_slot(
 def get_solar_for_5min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
+    confidence: float = 1.0,
 ) -> float:
     """Get solar forecast (kWh) for a 5-minute slot from Solcast 30-min periods.
 
@@ -211,6 +237,7 @@ def get_solar_for_5min_slot(
     Args:
         solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
         slot_start: Start of the 5-minute slot (timezone-aware or naive local).
+        confidence: Confidence score (0.0-1.0) for blending median and P10 estimates.
 
     Returns:
         Solar energy in kWh for the 5-minute slot, or 0.0 if no data found.
@@ -250,14 +277,15 @@ def get_solar_for_5min_slot(
         overlap_seconds = (overlap_end - overlap_start).total_seconds()
 
         if overlap_seconds > 0:
-            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
-            period_kwh = float(
-                entry.get("pv_estimate")
-                or entry.get("estimate")
-                or entry.get("pv_estimate10")
-                or entry.get("estimate10")
-                or 0.0
+            # Extract median and P10 estimates separately for blending
+            raw_estimate = float(
+                entry.get("pv_estimate") or entry.get("estimate") or 0.0
             )
+            raw_p10 = float(
+                entry.get("pv_estimate10") or entry.get("estimate10") or 0.0
+            )
+            # Blend based on confidence
+            period_kwh = _blend_solar_estimate(raw_estimate, raw_p10, confidence)
             # pv_estimate is kWh per HOUR, so divide by 3600 seconds
             overlap_fraction = overlap_seconds / 3600.0
             total_solar += period_kwh * overlap_fraction
@@ -268,6 +296,7 @@ def get_solar_for_5min_slot(
 def get_solar_for_30min_slot(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
+    confidence: float = 1.0,
 ) -> float:
     """Get solar forecast (kWh) for a 30-minute slot from Solcast 30-min periods.
 
@@ -283,6 +312,7 @@ def get_solar_for_30min_slot(
     Args:
         solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
         slot_start: Start of the 30-minute slot (timezone-aware or naive local).
+        confidence: Confidence score (0.0-1.0) for blending median and P10 estimates.
 
     Returns:
         Solar energy in kWh for the 30-minute slot, or 0.0 if no data found.
@@ -322,14 +352,15 @@ def get_solar_for_30min_slot(
         overlap_seconds = (overlap_end - overlap_start).total_seconds()
 
         if overlap_seconds > 0:
-            # Use pv_estimate (expected) as primary, fallback to pv_estimate10 (pessimistic)
-            period_kwh = float(
-                entry.get("pv_estimate")
-                or entry.get("estimate")
-                or entry.get("pv_estimate10")
-                or entry.get("estimate10")
-                or 0.0
+            # Extract median and P10 estimates separately for blending
+            raw_estimate = float(
+                entry.get("pv_estimate") or entry.get("estimate") or 0.0
             )
+            raw_p10 = float(
+                entry.get("pv_estimate10") or entry.get("estimate10") or 0.0
+            )
+            # Blend based on confidence
+            period_kwh = _blend_solar_estimate(raw_estimate, raw_p10, confidence)
             # pv_estimate is kWh per HOUR, so divide by 3600 seconds
             overlap_fraction = overlap_seconds / 3600.0
             total_solar += period_kwh * overlap_fraction
@@ -341,6 +372,7 @@ def get_solar_for_slot_by_interval(
     solcast_forecasts: list[dict[str, Any]],
     slot_start: datetime,
     interval_minutes: int,
+    confidence: float = 1.0,
 ) -> float:
     """Get solar forecast (kWh) for a slot with variable duration.
 
@@ -351,29 +383,35 @@ def get_solar_for_slot_by_interval(
         solcast_forecasts: List of Solcast forecast dicts (today + tomorrow).
         slot_start: Start of the slot (timezone-aware or naive local).
         interval_minutes: Slot duration in minutes (5, 15, or 30).
+        confidence: Confidence score (0.0-1.0) for blending median and P10 estimates.
 
     Returns:
         Solar energy in kWh for the slot, or 0.0 if no data found.
 
     """
     if interval_minutes == 5:
-        return get_solar_for_5min_slot(solcast_forecasts, slot_start)
+        return get_solar_for_5min_slot(solcast_forecasts, slot_start, confidence)
     elif interval_minutes == 15:
-        return get_solar_for_15min_slot(solcast_forecasts, slot_start)
+        return get_solar_for_15min_slot(
+            solcast_forecasts, slot_start, confidence=confidence
+        )
     elif interval_minutes == 30:
-        return get_solar_for_30min_slot(solcast_forecasts, slot_start)
+        return get_solar_for_30min_slot(solcast_forecasts, slot_start, confidence)
     else:
         _LOGGER.warning(
             "Unsupported slot interval %d minutes, defaulting to 15-min",
             interval_minutes,
         )
-        return get_solar_for_15min_slot(solcast_forecasts, slot_start)
+        return get_solar_for_15min_slot(
+            solcast_forecasts, slot_start, confidence=confidence
+        )
 
 
 def sum_solar_before_target(
     solcast: list[dict[str, Any]],
     now_dt: datetime,
     target_hour: int,
+    resolver: Any | None = None,
 ) -> float:
     """Sum expected solar kWh (pv_estimate) from now until target_hour.
 
@@ -389,8 +427,13 @@ def sum_solar_before_target(
             continue
         ps_local = dt_util.as_local(period_start)
         period_end = ps_local + period_duration
-        # pv_estimate is kWh per HOUR (average power)
-        kwh_per_hour = float(period.get("pv_estimate", 0))
+        # Extract median and P10 estimates separately for blending
+        raw_estimate = float(period.get("pv_estimate", 0))
+        raw_p10 = float(period.get("pv_estimate10", 0))
+        # Get confidence from resolver (defaults to 1.0 if no resolver)
+        confidence = resolver.get_confidence(ps_local) if resolver else 1.0
+        # Blend based on confidence
+        kwh_per_hour = _blend_solar_estimate(raw_estimate, raw_p10, confidence)
 
         if ps_local >= target_dt:
             # Period starts at or after target — skip

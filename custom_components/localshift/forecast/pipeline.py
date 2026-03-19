@@ -139,7 +139,17 @@ class ForecastPipeline:
             deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
 
             all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour)
+            from custom_components.localshift.forecast.analysis_resolver import (
+                ConfidenceResolver,
+            )
+
+            resolver = ConfidenceResolver(
+                getattr(data, "solcast_analysis_today", None),
+                getattr(data, "solcast_analysis_tomorrow", None),
+            )
+            solar_kwh = sum_solar_before_target(
+                all_solcast, now_dt, target_hour, resolver=resolver
+            )
 
             target_dt = now_dt.replace(
                 hour=target_hour, minute=0, second=0, microsecond=0
@@ -171,7 +181,17 @@ class ForecastPipeline:
             deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
 
             all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour)
+            from custom_components.localshift.forecast.analysis_resolver import (
+                ConfidenceResolver,
+            )
+
+            resolver = ConfidenceResolver(
+                getattr(data, "solcast_analysis_today", None),
+                getattr(data, "solcast_analysis_tomorrow", None),
+            )
+            solar_kwh = sum_solar_before_target(
+                all_solcast, now_dt, target_hour, resolver=resolver
+            )
 
             expected_load_kw = self._price_signals.get_expected_load_kw_from_slots(
                 data, hours_to_target
