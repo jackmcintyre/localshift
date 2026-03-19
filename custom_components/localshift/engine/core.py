@@ -366,6 +366,49 @@ class DPPlanner:
             inputs, slots, config, terminal_penalty_idx
         )
 
+        # Compute terminal diagnostics (PR #789 wiring fix)
+        terminal_diags: dict[str, Any] = {}
+        forecast_accuracy_val: float | None = None
+
+        if terminal_penalty_idx is not None and not solar_capable:
+            # Recompute terminal context values for diagnostics
+            future_solar_gain_pct = 0.0
+            if inputs.all_solcast and inputs.slots:
+                last_slot = inputs.slots[-1]
+                last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
+                last_slot_end = last_slot_start + timedelta(
+                    minutes=last_slot.slot_interval_minutes
+                )
+                target_slot = inputs.slots[terminal_penalty_idx]
+                target_time = datetime.fromisoformat(target_slot.timestamp_iso)
+                future_solar_gain_pct = DPPlanner._projected_solcast_gain_pct(
+                    inputs.all_solcast,
+                    start_time=last_slot_end,
+                    end_time=target_time,
+                    battery_capacity_kwh=config.battery_capacity_kwh,
+                )
+
+            projected_solar_gain_pct = DPPlanner._projected_solar_soc_gain_pct(
+                slot_idx=0,
+                slots=inputs.slots,
+                terminal_penalty_idx=terminal_penalty_idx,
+                battery_capacity_kwh=config.battery_capacity_kwh,
+            )
+            forecast_accuracy_val = self._get_forecast_accuracy(
+                inputs.solar_accuracy_tracker
+            )
+            accuracy_discount = max(0.5, min(1.0, forecast_accuracy_val))
+
+            terminal_diags = self._get_terminal_diagnostics(
+                soc_pct=inputs.initial_soc_pct,
+                target=config.demand_window_target_soc_pct,
+                projected_solar_gain_pct=projected_solar_gain_pct,
+                accuracy_discount=accuracy_discount,
+                future_solar_gain_pct=future_solar_gain_pct,
+                decisions=decisions,
+                terminal_penalty_idx=terminal_penalty_idx,
+            )
+
         return OptimizerResult(
             success=True,
             planner_version=self.VERSION,
@@ -379,6 +422,14 @@ class DPPlanner:
             can_solar_reach_target=can_solar,
             can_solar_reach_target_in_dw=solar_capable,
             reason_code_histogram=reason_histogram,
+            # Terminal diagnostics (PR #789 wiring fix)
+            forecast_accuracy=forecast_accuracy_val,
+            projected_solar_gain_pct=terminal_diags.get("projected_solar_gain_pct"),
+            accuracy_discount_factor=terminal_diags.get("accuracy_discount_factor"),
+            adjusted_solar_gain_pct=terminal_diags.get("adjusted_solar_gain_pct"),
+            effective_soc_at_terminal=terminal_diags.get("effective_soc_at_terminal"),
+            peak_soc_pct=terminal_diags.get("peak_soc_pct"),
+            dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
         )
 
     def _empty_result(self) -> OptimizerResult:

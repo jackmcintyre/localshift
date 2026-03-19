@@ -445,6 +445,41 @@ class TestBuildSummary:
         assert summary["cycle_timestamp_iso"] == "2025-01-15T06:00:00Z"
         assert summary["computed_at"] == "2025-01-15T06:00:00Z"
 
+    def test_includes_terminal_diagnostics(self, mock_coordinator_data):
+        """Verify terminal diagnostic fields included in summary."""
+        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+
+        result = OptimizerResult(
+            success=True,
+            total_slots=3,
+            forecast_accuracy=0.75,
+            projected_solar_gain_pct=30.0,
+            accuracy_discount_factor=0.75,
+            adjusted_solar_gain_pct=22.5,
+            effective_soc_at_terminal=85.0,
+            peak_soc_pct=92.0,
+            dw_entry_soc_pct=88.0,
+        )
+        summary = _build_summary(result, "cycle123", "2025-01-15T06:00:00Z")
+
+        assert summary["forecast_accuracy"] == 0.75
+        assert summary["projected_solar_gain_pct"] == 30.0
+        assert summary["accuracy_discount_factor"] == 0.75
+        assert summary["adjusted_solar_gain_pct"] == 22.5
+        assert summary["effective_soc_at_terminal"] == 85.0
+        assert summary["peak_soc_pct"] == 92.0
+        assert summary["dw_entry_soc_pct"] == 88.0
+
+    def test_terminal_diagnostics_none_when_not_set(self, mock_coordinator_data):
+        """Verify None diagnostics pass through as None."""
+        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+
+        result = OptimizerResult(success=True, total_slots=3)
+        summary = _build_summary(result, "cycle123", "2025-01-15T06:00:00Z")
+
+        assert summary["forecast_accuracy"] is None
+        assert summary["peak_soc_pct"] is None
+
 
 class TestNormalizeInitialSoc:
     """Tests for initial SOC normalization and validation guard."""
