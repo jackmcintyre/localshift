@@ -16,12 +16,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
+    CONF_CYCLE_PENALTY,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
+    CONF_TARGET_PENALTY,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
+    DEFAULT_CYCLE_PENALTY,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
+    DEFAULT_TARGET_PENALTY,
     DOMAIN,
     THRESHOLD_RANGES,
 )
@@ -42,6 +46,8 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         "Minimum Target SOC",
         DEFAULT_MINIMUM_TARGET_SOC,
     ),
+    (CONF_CYCLE_PENALTY, "Cycle Penalty", DEFAULT_CYCLE_PENALTY),
+    (CONF_TARGET_PENALTY, "Target Shortfall Penalty", DEFAULT_TARGET_PENALTY),
 ]
 
 
@@ -65,6 +71,7 @@ class LocalShiftNumber(NumberEntity):
     """A user-configurable threshold backed by config entry options."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = "config"
 
     def __init__(
         self,

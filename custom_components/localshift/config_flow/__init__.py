@@ -19,6 +19,7 @@ from ..const import (
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_COMPARISON_MODE,
+    CONF_CYCLE_PENALTY,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
@@ -35,6 +36,7 @@ from ..const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -49,6 +51,7 @@ from ..const import (
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_COMPARISON_MODE,
+    DEFAULT_CYCLE_PENALTY,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -57,6 +60,7 @@ from ..const import (
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRICING_DATA_SOURCE,
+    DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     DOMAIN,
@@ -360,8 +364,16 @@ class LocalShiftOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the first step: pricing source selection."""
-        return await self.async_step_options_pricing_source(user_input)
+        """Handle the first step: show menu."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=[
+                "options_pricing_source",
+                "entity_mappings",
+                "settings",
+                "advanced",
+            ],
+        )
 
     async def async_step_options_pricing_source(
         self, user_input: dict[str, Any] | None = None
@@ -631,6 +643,65 @@ class LocalShiftOptionsFlow(OptionsFlow):
                         },
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        })
+
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage advanced optimizer penalties."""
+        if user_input is not None:
+            merged_options = dict(self.config_entry.options)
+            merged_options.update(user_input)
+            return self.async_create_entry(data=merged_options)
+
+        current = self.config_entry.options
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=self._build_advanced_schema({
+                CONF_CYCLE_PENALTY: current.get(
+                    CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY
+                ),
+                CONF_TARGET_PENALTY: current.get(
+                    CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY
+                ),
+            }),
+            description_placeholders={
+                "integration_name": "LocalShift",
+            },
+        )
+
+    def _build_advanced_schema(self, values: dict[str, Any]):
+        """Build schema for advanced penalty settings."""
+        import voluptuous as vol
+        from homeassistant.helpers import selector
+
+        return vol.Schema({
+            vol.Required(
+                CONF_CYCLE_PENALTY,
+                default=values.get(CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY),
+                description="Penalty per kWh cycled (battery wear + efficiency loss)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=0.20,
+                    step=0.01,
+                    unit_of_measurement="$/kWh",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_TARGET_PENALTY,
+                default=values.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY),
+                description="Penalty per % below demand window target SOC",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.000,
+                    max=0.100,
+                    step=0.005,
+                    unit_of_measurement="$/%-point",
+                    mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
         })

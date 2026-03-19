@@ -34,15 +34,6 @@ from .slots import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
 
-# Safety multiplier for shortfall penalty calibration.
-# The penalty is set to (cheapest_grid_price * battery_kwh / 100) * this factor.
-# A value of 1.5 means the optimizer mildly prefers pre-charging over risking
-# a shortfall, but won't pay more than 1.5x the remediation cost to do so.
-# Reduced from 3.0 → 1.5 (Issue #610): at 3.0 the shortfall penalty overwhelmed
-# the solar opportunity penalty, causing compulsive overnight charging even when
-# large solar surplus was forecast for the next day.
-_SHORTFALL_PENALTY_SAFETY_FACTOR = 1.5
-
 
 def _get_ha_timezone() -> str:
     """Get Home Assistant timezone string.
@@ -255,16 +246,20 @@ def _build_optimizer_config(
         CHARGE_RATE_SOLAR_KW,
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
+        CONF_CYCLE_PENALTY,
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_SWITCHING_PENALTY,
+        CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_CYCLE_PENALTY,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_SWITCHING_PENALTY,
+        DEFAULT_TARGET_PENALTY,
     )
 
     # User-configurable target SOC for demand window
@@ -297,6 +292,12 @@ def _build_optimizer_config(
 
     switching_penalty = float(
         config_options.get(CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY)
+    )
+
+    cycle_penalty = float(config_options.get(CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY))
+
+    target_penalty = float(
+        config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
     )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
@@ -339,21 +340,10 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
-        # --- Objective weights ---
-        # Calibrated to the actual cost of buying 1% SOC at the cheapest grid price,
-        # with a safety margin so the optimizer mildly prefers pre-charging over shortfall.
-        # Formula: effective_cheap_price ($/kWh) * battery_kwh / 100 * safety_factor
-        # Example at typical Amber overnight rates: 0.15 * 13.5 / 100 * 1.5 = $0.030/%-pt
-        # (Fixes #438 — original hardcoded 1.0 was ~53x the actual remediation cost)
-        # (Issue #610 — reduced safety_factor from 3.0→1.5 to avoid overwhelming the
-        #  solar opportunity penalty, which caused compulsive overnight grid charging)
-        target_shortfall_penalty_per_pct=(
-            effective_cheap_price
-            * BATTERY_CAPACITY_KWH
-            / 100.0
-            * _SHORTFALL_PENALTY_SAFETY_FACTOR
-        ),
-        # cycle_penalty_per_kwh uses OptimizerConfig default (see types.py)
+        # --- Objective weights (user-configurable via Number entities or Options Flow) ---
+        # Issue #779: Previously auto-computed from tariff, now user-configurable
+        target_shortfall_penalty_per_pct=target_penalty,
+        cycle_penalty_per_kwh=cycle_penalty,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---

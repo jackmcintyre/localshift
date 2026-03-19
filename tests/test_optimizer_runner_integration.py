@@ -193,40 +193,41 @@ class TestBuildOptimizerConfig:
     ):
         """Verify objective weight defaults (calibrated formula, not hardcoded 1.0)."""
         config = _build_optimizer_config(mock_coordinator_data, config_options)
-        # Penalty must be calibrated: effective_cheap_price * battery_kwh / 100 * factor
-        # With effective_cheap_price=0.12, battery=13.5 kWh, safety_factor=1.5:
-        # 0.12 * 13.5 / 100 * 1.5 = 0.02430
+        # Issue #779: Penalties are now user-configurable, not auto-computed
+        # Values come from config_options or fall back to defaults
         assert config.target_shortfall_penalty_per_pct != 1.0
-        assert 0.010 <= config.target_shortfall_penalty_per_pct <= 0.100
+        assert 0.000 <= config.target_shortfall_penalty_per_pct <= 0.100
         assert config.cycle_penalty_per_kwh == 0.08
 
-    def test_config_penalty_calibrated_to_tariff(
+    def test_config_penalty_from_options(self, mock_coordinator_data, config_options):
+        """target_shortfall_penalty_per_pct is read from config options."""
+        custom_options = {**config_options, "target_penalty": 0.050}
+        config = _build_optimizer_config(mock_coordinator_data, custom_options)
+        assert config.target_shortfall_penalty_per_pct == 0.050
+
+    def test_config_penalty_uses_default_when_not_in_options(
+        self, mock_coordinator_data
+    ):
+        """target_shortfall_penalty_per_pct defaults when not in options."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+        # Default is 0.015 (DEFAULT_TARGET_PENALTY)
+        assert config.target_shortfall_penalty_per_pct == 0.015
+
+    def test_config_cycle_penalty_from_options(
         self, mock_coordinator_data, config_options
     ):
-        """target_shortfall_penalty_per_pct is calibrated from effective_cheap_price."""
-        # mock_coordinator_data has effective_cheap_price=0.12
-        config = _build_optimizer_config(mock_coordinator_data, config_options)
-        # Safety factor = 1.5 (Issue #610: reduced from 3.0 to avoid overwhelming solar penalty)
-        expected = pytest.approx(0.12 * 13.5 / 100.0 * 1.5, rel=1e-4)
-        assert config.target_shortfall_penalty_per_pct == expected
+        """cycle_penalty_per_kwh is read from config options."""
+        custom_options = {**config_options, "cycle_penalty": 0.12}
+        config = _build_optimizer_config(mock_coordinator_data, custom_options)
+        assert config.cycle_penalty_per_kwh == 0.12
 
-    def test_config_penalty_not_hardcoded_to_1(
-        self, mock_coordinator_data, config_options
+    def test_config_cycle_penalty_uses_default_when_not_in_options(
+        self, mock_coordinator_data
     ):
-        """The penalty must not be 1.0 (the original miscalibrated value). Fixes #438."""
-        config = _build_optimizer_config(mock_coordinator_data, config_options)
-        assert config.target_shortfall_penalty_per_pct != 1.0
-
-    def test_config_penalty_scales_with_cheap_price(self, mock_coordinator_data):
-        """Penalty scales proportionally with effective_cheap_price."""
-        mock_coordinator_data.effective_cheap_price = 0.20
-        config_high = _build_optimizer_config(mock_coordinator_data, {})
-        mock_coordinator_data.effective_cheap_price = 0.10
-        config_low = _build_optimizer_config(mock_coordinator_data, {})
-        # Higher cheap price → higher penalty (2x cheap price → 2x penalty)
-        assert config_high.target_shortfall_penalty_per_pct == pytest.approx(
-            config_low.target_shortfall_penalty_per_pct * 2.0, rel=1e-4
-        )
+        """cycle_penalty_per_kwh defaults when not in options."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+        # Default is 0.08 (DEFAULT_CYCLE_PENALTY)
+        assert config.cycle_penalty_per_kwh == 0.08
 
     def test_config_uses_default_allow_dw_entry_under_target(
         self, mock_coordinator_data

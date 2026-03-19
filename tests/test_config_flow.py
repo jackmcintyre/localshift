@@ -555,8 +555,13 @@ class TestOptionsFlow:
 
         result = await flow.async_step_init()
 
-        assert result["type"] == FlowResultType.FORM
-        assert result["step_id"] == "options_pricing_source"
+        # Issue #779: async_step_init now shows a menu with 4 options
+        assert result["type"] == FlowResultType.MENU
+        assert result["step_id"] == "init"
+        assert "options_pricing_source" in result["menu_options"]
+        assert "entity_mappings" in result["menu_options"]
+        assert "settings" in result["menu_options"]
+        assert "advanced" in result["menu_options"]
 
     @pytest.mark.asyncio
     async def test_options_flow_pricing_source_updates_and_proceeds(
@@ -932,20 +937,13 @@ class TestOptionsFlowMigration:
         mock_hass.config_entries = mock_config_entries
         flow.hass = mock_hass
 
-        # Update only one field
-        user_input = {
-            CONF_NOTIFY_SERVICE: "notify.new_service",
-            CONF_DEMAND_WINDOW_START: "17:00:00",
-            CONF_DEMAND_WINDOW_END: "21:00:00",
-            CONF_MANUAL_OVERRIDE_TIMEOUT: 12,
-        }
+        # Issue #779: async_step_init now shows a menu, not a form
+        # So user_input should be None to get the menu
+        result = await flow.async_step_init(None)
 
-        result = await flow.async_step_init(user_input)
-
-        # Should either create entry or show form (depending on validation)
-        assert result["type"] in [FlowResultType.CREATE_ENTRY, FlowResultType.FORM]
-        if result["type"] == FlowResultType.CREATE_ENTRY:
-            assert result["data"][CONF_NOTIFY_SERVICE] == "notify.new_service"
+        # Should show menu
+        assert result["type"] == FlowResultType.MENU
+        assert result["step_id"] == "init"
 
     @pytest.mark.asyncio
     async def test_options_flow_empty_initial_options(
