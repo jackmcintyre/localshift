@@ -149,11 +149,6 @@ def classify_charge_reason(
     inputs: OptimizerInputs | None = None,
 ) -> PlannerReasonCode:
     """Classify CHARGE action reason."""
-    from custom_components.localshift.engine.solar import (
-        projected_solar_soc_gain_pct,
-        projected_solcast_gain_pct,
-    )
-    from datetime import datetime, timedelta
 
     if _is_target_shortfall_risk(
         slot_idx,
@@ -190,6 +185,7 @@ def _is_target_shortfall_risk(
     Incorporates future solar gain from Solcast beyond the horizon (Issue #619).
     """
     from datetime import datetime, timedelta
+
     from custom_components.localshift.engine.solar import (
         projected_solar_soc_gain_pct,
         projected_solcast_gain_pct,

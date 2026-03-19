@@ -6,7 +6,6 @@ from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
     OptimizerConfig,
     OptimizerInputs,
-    SlotContext,
 )
 
 

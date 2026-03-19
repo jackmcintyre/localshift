@@ -4,129 +4,50 @@
 
 from __future__ import annotations
 
-
-
-
-
 import logging
-
-
-
 import time
-
-
-
 from datetime import datetime, timedelta
-
-
-
 from typing import Any
 
-
-
-
-
 from custom_components.localshift.engine.constraints import (
-
-    _determine_export_actions,
-
-    check_global_solar_sufficiency,
-
     feasible_actions as _constraints_feasible_actions,
-
 )
-
-
-
 from custom_components.localshift.engine.cost import (
-
     stage_cost as _cost_stage_cost,
-
+)
+from custom_components.localshift.engine.cost import (
     terminal_cost as _cost_terminal_cost,
-
 )
-
-
-
 from custom_components.localshift.engine.dp_math import (
-
     _build_soc_grid,
-
     _interpolate_cost_to_soc,
-
     _map_soc_to_bin,
-
     _simulate_max_soc_in_demand_window,
-
-    _simulate_solar_only_terminal_soc,
-
 )
-
-
-
-from custom_components.localshift.engine.types import (
-
-    NegativeFitAvoidanceContext,
-
-    ObjectiveTerms,
-
-    OptimizerConfig,
-
-    OptimizerInputs,
-
-    OptimizerResult,
-
-    PlannedSlotDecision,
-
-    PlannerAction,
-
-    PlannerReasonCode,
-
-    SlotContext,
-
-)
-
-
-
 from custom_components.localshift.engine.negative_fit import (
-
-    compute_recoverability_floor_pct,
-
     derive_negative_fit_avoidance_context,
-
 )
-
 from custom_components.localshift.engine.penalties import (
-
     get_futile_cycling_penalty_factor,
-
     get_solar_opportunity_penalty_factor,
-
 )
-
 from custom_components.localshift.engine.reason_codes import classify_reason
-
 from custom_components.localshift.engine.solar import (
-
     can_solar_reach_target,
-
     get_forecast_accuracy,
-
     projected_solar_soc_gain_pct,
-
     projected_solcast_gain_pct,
-
 )
-
 from custom_components.localshift.engine.transitions import transition as _transition
-
-
-
-from custom_components.localshift.forecast.solar_accuracy import SolarAccuracyTracker
-
-
-
-
+from custom_components.localshift.engine.types import (
+    NegativeFitAvoidanceContext,
+    OptimizerConfig,
+    OptimizerInputs,
+    OptimizerResult,
+    PlannedSlotDecision,
+    PlannerAction,
+    SlotContext,
+)
 
 _LOGGER = logging.getLogger(__name__)
 

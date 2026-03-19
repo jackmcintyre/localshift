@@ -18,9 +18,6 @@ from custom_components.localshift.engine.core import DPPlanner
 # Re-export cost functions
 from custom_components.localshift.engine.cost import stage_cost, terminal_cost
 
-# Re-export transition function
-from custom_components.localshift.engine.transitions import transition
-
 # Re-export math functions from dp_math
 from custom_components.localshift.engine.dp_math import (
     _build_soc_grid,
@@ -29,6 +26,9 @@ from custom_components.localshift.engine.dp_math import (
     _simulate_max_soc_in_demand_window,
     _simulate_solar_only_terminal_soc,
 )
+
+# Re-export transition function
+from custom_components.localshift.engine.transitions import transition
 from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
