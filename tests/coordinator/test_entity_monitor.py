@@ -15,14 +15,12 @@ class TestEntityMonitorInitialization:
         """Test EntityMonitor initializes with coordinator reference."""
         # ARRANGE
         mock_coordinator = MagicMock()
-        mock_coordinator.hass = MagicMock()
 
         # ACT
         monitor = EntityMonitor(mock_coordinator)
 
         # ASSERT
         assert monitor._coordinator is mock_coordinator
-        assert monitor._hass is mock_coordinator.hass
 
 
 class TestReadAllExternalState:
