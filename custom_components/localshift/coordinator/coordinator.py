@@ -157,6 +157,17 @@ class LocalShiftCoordinator:
 
         return DEFAULT_ENTITY_IDS.get(key, "")
 
+    def _is_in_startup_grace(self) -> bool:
+        """Check if we're still in the startup grace period.
+
+        Returns True if the state machine has an active startup grace period,
+        False otherwise. Used to skip expensive operations during initialization
+        when entities may not be populated yet (Issue #551).
+        """
+        if self._state_machine is None:
+            return True
+        return self._state_machine._startup_grace_until is not None
+
     # ------------------------------------------------------------------
     # Options helpers (read from config entry options)
     # ------------------------------------------------------------------
