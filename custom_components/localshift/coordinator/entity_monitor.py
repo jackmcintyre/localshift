@@ -14,8 +14,6 @@ import logging
 from datetime import time
 from typing import TYPE_CHECKING
 
-from homeassistant.core import HomeAssistant
-
 from ..const import CONF_WEATHER_ENTITY
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -37,7 +35,6 @@ class EntityMonitor:
             coordinator: Parent coordinator instance
         """
         self._coordinator = coordinator
-        self._hass: HomeAssistant = coordinator.hass
 
     def read_all_external_state(self) -> None:
         """Read current state of all monitored external entities."""
