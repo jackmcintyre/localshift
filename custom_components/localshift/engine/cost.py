@@ -111,6 +111,9 @@ def stage_cost(
     # before reaching a useful period (solar surplus or demand window).
     # Formula: grid_import_kWh × (eff_loss + margin) × buy_price × drain_factor
     # The penalty includes efficiency loss plus a margin to discourage marginal cycling.
+    # PHILOSOPHY NOTE: in self_consumption, overnight charging is generally wasteful
+    # and should stay penalized. Do not reduce these penalties to encourage
+    # reserve-holding behavior. See docs/PLANNING_MODEL.md "Control Philosophy".
     futile_cycling_penalty = 0.0
     if action in (
         PlannerAction.CHARGE_GRID_NORMAL,

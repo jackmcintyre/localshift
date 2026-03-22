@@ -97,6 +97,14 @@ def feasible_actions(
     - Slot duration vs transfer limits
     - Negative FIT avoidance (Issue #719)
 
+    PHILOSOPHY NOTE (self_consumption):
+    - Low overnight SOC is acceptable. Do not add reserve-holding behavior
+      that penalizes the battery hitting minimum SOC overnight.
+    - Charging from grid is gated by price AND solar sufficiency —
+      not by a desire to avoid low SOC.
+    - If battery runs out overnight, grid import is the correct outcome.
+      See docs/PLANNING_MODEL.md "Control Philosophy".
+
     Args:
         soc_pct: Current battery SOC percentage.
         slot: Per-slot context (price, solar, consumption, flags).

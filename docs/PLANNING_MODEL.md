@@ -303,6 +303,37 @@ When adding a constraint or penalty:
    # Verify behavior change is as expected
    ```
 
+## Control Philosophy
+
+These rules define the intended operating philosophy for `self_consumption` mode.
+They are **not** just preferences — they are part of the system's identity.
+Future changes should not violate them without explicit discussion.
+
+### Principles
+
+1. **Economics over comfort.** The goal is to minimize electricity cost, not to keep the battery full.
+2. **Grid import is acceptable overnight.** If the battery runs down and the house uses the grid, that is often the correct outcome. Overnight charging is generally wasteful and should stay penalized.
+3. **Low overnight SOC is not a bug.** The battery spending hours at 10% SOC is acceptable if that is the cheapest path. Do not interpret this as a problem that needs fixing.
+4. **Proactive charging needs strong justification.** Charging before a deadline is justified only when target-feasibility says so, not just to avoid low SOC or to feel "ready."
+5. **Anti-goal: do not optimize for overnight reserve.** In `self_consumption`, there is no implicit objective to "hold reserve overnight at all costs." If you find yourself adding reserve-holding behavior, stop and check whether it was requested.
+
+### Anti-Goals
+
+These are behaviors that should **not** appear in `self_consumption` unless explicitly requested:
+
+- Holding a meaningful reserve overnight (e.g., 25–35%) without explicit reason
+- Charging from the grid to avoid falling below minimum SOC
+- Reducing anti-cycling penalties to enable more overnight charging
+- Interpreting low overnight SOC as a reason to change the planning model
+
+### Guardrail Questions
+
+Before proposing changes to optimizer behavior, ask:
+
+- "Is this adding reserve-holding behavior?" If yes, it needs explicit approval.
+- "Am I treating low overnight SOC as a bug?" If yes, reconsider the framing.
+- "Does this change make proactive charging easier?" If yes, make sure it is gated by a real deadline, not just comfort.
+
 ## References
 
 - `optimizer_dp.py` - Core DP implementation
