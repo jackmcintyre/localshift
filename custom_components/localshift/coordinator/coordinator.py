@@ -120,10 +120,6 @@ class LocalShiftCoordinator:
         self._subscription_manager: SubscriptionManager | None = None
         self._tick_scheduler: TickScheduler | None = None
 
-        # Solar energy tracking for backfill (Issue #513)
-        self._last_solar_power_kw: float = 0.0
-        self._last_solar_power_timestamp: datetime | None = None
-
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
