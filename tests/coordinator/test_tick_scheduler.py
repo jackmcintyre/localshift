@@ -172,9 +172,9 @@ async def test_handle_slow_tick(coordinator):
     coordinator._entity_monitor.refresh_weather_forecast = AsyncMock()
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
 
     # Mock backfill method
@@ -203,7 +203,7 @@ async def test_handle_midnight_reset(coordinator):
     coordinator.data.target_reached_today = True
     coordinator._learning_orchestrator = MagicMock()
     coordinator._learning_orchestrator.handle_midnight_reset = MagicMock()
-    coordinator._notify_listeners = MagicMock()
+    coordinator.notify_listeners = MagicMock()
 
     scheduler.handle_midnight_reset(now)
 
@@ -215,7 +215,7 @@ async def test_handle_midnight_reset(coordinator):
     coordinator._learning_orchestrator.handle_midnight_reset.assert_called_once_with(
         coordinator.data
     )
-    coordinator._notify_listeners.assert_called_once()
+    coordinator.notify_listeners.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -227,9 +227,9 @@ async def test_handle_daily_summary(coordinator):
     # Mock dependencies
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
     coordinator.get_switch_state = MagicMock(return_value=True)
 
@@ -323,9 +323,9 @@ async def test_handle_medium_tick_with_computation_engine(coordinator):
     coordinator._get_entity_id = MagicMock(return_value="sensor.load")
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
     coordinator.data = MagicMock()
 
@@ -350,9 +350,9 @@ async def test_handle_slow_tick_with_computation_engine(coordinator):
     coordinator._computation_engine.async_save_accuracy_metrics = AsyncMock()
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
     coordinator.data = MagicMock()
 
@@ -598,7 +598,7 @@ async def test_handle_midnight_reset_no_learning_orchestrator(coordinator):
     coordinator.data.battery_charge_cost = 10.0
     coordinator.data.target_reached_today = True
     coordinator._learning_orchestrator = None
-    coordinator._notify_listeners = MagicMock()
+    coordinator.notify_listeners = MagicMock()
 
     scheduler.handle_midnight_reset(now)
 
@@ -608,7 +608,7 @@ async def test_handle_midnight_reset_no_learning_orchestrator(coordinator):
     assert coordinator.data.battery_savings == 0.0
     assert coordinator.data.battery_charge_cost == 0.0
     assert coordinator.data.target_reached_today is False
-    coordinator._notify_listeners.assert_called_once()
+    coordinator.notify_listeners.assert_called_once()
 
 
 @pytest.mark.asyncio

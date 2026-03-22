@@ -382,7 +382,7 @@ class TestHandleMidnightReset:
         coordinator.data.target_reached_today = True
 
         # Mock listeners
-        coordinator._notify_listeners = MagicMock()
+        coordinator.notify_listeners = MagicMock()
 
         now = datetime(2026, 2, 17, 0, 0, 0)
         coordinator._handle_midnight_reset(now)
@@ -401,12 +401,12 @@ class TestHandleMidnightReset:
         coordinator.data = coordinator_data
 
         # Mock listeners
-        coordinator._notify_listeners = MagicMock()
+        coordinator.notify_listeners = MagicMock()
 
         now = datetime(2026, 2, 17, 0, 0, 0)
         coordinator._handle_midnight_reset(now)
 
-        coordinator._notify_listeners.assert_called_once()
+        coordinator.notify_listeners.assert_called_once()
 
 
 # =============================================================================
@@ -432,7 +432,7 @@ class TestEvaluateStateMachine:
         coordinator._state_reader.read_all_external_state = MagicMock()
 
         # Mock notify
-        coordinator._notify_listeners = MagicMock()
+        coordinator.notify_listeners = MagicMock()
 
         await coordinator._evaluate_state_machine()
 
@@ -462,7 +462,7 @@ class TestEvaluateStateMachine:
         coordinator._state_reader.read_all_external_state = MagicMock()
 
         # Mock notify
-        coordinator._notify_listeners = MagicMock()
+        coordinator.notify_listeners = MagicMock()
 
         await coordinator.async_evaluate_state_machine()
 
@@ -582,7 +582,7 @@ class TestListeners:
         coordinator.async_add_listener(callback1)
         coordinator.async_add_listener(callback2)
 
-        coordinator._notify_listeners()
+        coordinator.notify_listeners()
 
         callback1.assert_called_once()
         callback2.assert_called_once()
@@ -919,7 +919,7 @@ class TestFastTickPriceGate:
 
 
 class TestCoordinatorEntityIds:
-    """Tests for entity_ids property and _get_entity_id method."""
+    """Tests for entity_ids property and get_entity_id method."""
 
     def test_entity_ids_property_returns_entry_data(self, mock_hass, mock_entry):
         """Test that entity_ids property returns entry.data."""
@@ -935,31 +935,31 @@ class TestCoordinatorEntityIds:
         assert coordinator.entity_ids["teslemetry_soc"] == "sensor.tesla_soc"
 
     def test_get_entity_id_from_entry_data(self, mock_hass, mock_entry):
-        """Test _get_entity_id retrieves from entry.data."""
+        """Test get_entity_id retrieves from entry.data."""
         coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
 
         # Mock entry data with a key
         mock_entry.data = {"teslemetry_soc": "sensor.tesla_soc"}
 
-        entity_id = coordinator._get_entity_id("teslemetry_soc")
+        entity_id = coordinator.get_entity_id("teslemetry_soc")
         assert entity_id == "sensor.tesla_soc"
 
     def test_get_entity_id_returns_default_when_not_found(self, mock_hass, mock_entry):
-        """Test _get_entity_id returns default when key not found."""
+        """Test get_entity_id returns default when key not found."""
         coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
 
         # Mock entry with no matching key
         mock_entry.data = {}
 
         # Should return default from DEFAULT_ENTITY_IDS
-        entity_id = coordinator._get_entity_id("unknown_key")
+        entity_id = coordinator.get_entity_id("unknown_key")
         # The default might be from DEFAULT_ENTITY_IDS, or empty string
         assert isinstance(entity_id, str)
 
     def test_get_entity_id_notify_service_checks_options_first(
         self, mock_hass, mock_entry
     ):
-        """Test _get_entity_id for notify_service checks options first."""
+        """Test get_entity_id for notify_service checks options first."""
         from custom_components.localshift.const import CONF_NOTIFY_SERVICE
 
         coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
@@ -970,13 +970,13 @@ class TestCoordinatorEntityIds:
         mock_entry.data = {CONF_NOTIFY_SERVICE: "notify.data_notify"}
 
         # Should return from options, not data
-        entity_id = coordinator._get_entity_id(CONF_NOTIFY_SERVICE)
+        entity_id = coordinator.get_entity_id(CONF_NOTIFY_SERVICE)
         assert entity_id == "notify.options_notify"
 
     def test_get_entity_id_notify_service_falls_back_to_data(
         self, mock_hass, mock_entry
     ):
-        """Test _get_entity_id for notify_service falls back to data."""
+        """Test get_entity_id for notify_service falls back to data."""
         from custom_components.localshift.const import CONF_NOTIFY_SERVICE
 
         coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
@@ -987,13 +987,13 @@ class TestCoordinatorEntityIds:
         mock_entry.data = {CONF_NOTIFY_SERVICE: "notify.data_notify"}
 
         # Should return from data
-        entity_id = coordinator._get_entity_id(CONF_NOTIFY_SERVICE)
+        entity_id = coordinator.get_entity_id(CONF_NOTIFY_SERVICE)
         assert entity_id == "notify.data_notify"
 
     def test_get_entity_id_notify_service_returns_empty_when_missing(
         self, mock_hass, mock_entry
     ):
-        """Test _get_entity_id for notify_service returns empty string when missing."""
+        """Test get_entity_id for notify_service returns empty string when missing."""
         from custom_components.localshift.const import CONF_NOTIFY_SERVICE
 
         coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
@@ -1003,7 +1003,7 @@ class TestCoordinatorEntityIds:
         mock_entry.data = {}
 
         # Should return empty string for notify_service
-        entity_id = coordinator._get_entity_id(CONF_NOTIFY_SERVICE)
+        entity_id = coordinator.get_entity_id(CONF_NOTIFY_SERVICE)
         assert entity_id == ""
 
 

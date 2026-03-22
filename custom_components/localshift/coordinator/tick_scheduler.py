@@ -240,7 +240,7 @@ class TickScheduler:
                 self._coordinator.data
             )
 
-        self._coordinator._notify_listeners()
+        self._coordinator.notify_listeners()
         _LOGGER.info("Midnight reset: cost accumulators and target flag")
 
     @callback
