@@ -431,25 +431,39 @@ class SlotBuilder:
             return 0.0
 
         elapsed_min = (slot_start - base_slot).total_seconds() / 60.0
-        fixed_idx = min(int(elapsed_min // 15), TOTAL_SLOTS - 1)
+        slot_start_min = elapsed_min
+        slot_end_min = elapsed_min + interval_minutes
 
-        if not (0 <= fixed_idx < len(load_forecast_slots)):
+        start_bin = int(slot_start_min // 15)
+        end_bin = int((slot_end_min - 1e-9) // 15)
+
+        if end_bin < 0 or start_bin >= len(load_forecast_slots):
             return 0.0
 
-        consumption_kw = load_forecast_slots[fixed_idx]
-        consumption_kwh = consumption_kw * interval_minutes / 60.0
+        start_bin = max(0, start_bin)
+        end_bin = min(end_bin, len(load_forecast_slots) - 1)
+
+        consumption_kwh = 0.0
+        for idx in range(start_bin, end_bin + 1):
+            bin_start = idx * 15
+            bin_end = bin_start + 15
+            overlap = max(
+                0.0, min(slot_end_min, bin_end) - max(slot_start_min, bin_start)
+            )
+            if overlap <= 0.0:
+                continue
+            consumption_kwh += load_forecast_slots[idx] * overlap / 60.0
 
         if interval_minutes == 30 and 11 <= slot_start.hour <= 14:
             _LOGGER.info(
-                "ISSUE_500 slot_builder: slot=%d time=%s interval=%d fixed_idx=%d "
-                "slots_len=%d kw_idx_%d=%.3f kwh=%.3f",
+                "ISSUE_500 slot_builder: slot=%d time=%s interval=%d bins=%d-%d "
+                "slots_len=%d kwh=%.3f",
                 slot_index,
                 slot_start.strftime("%H:%M"),
                 interval_minutes,
-                fixed_idx,
+                start_bin,
+                end_bin,
                 len(load_forecast_slots),
-                fixed_idx,
-                consumption_kw,
                 consumption_kwh,
             )
 

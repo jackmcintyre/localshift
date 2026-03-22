@@ -671,6 +671,29 @@ class TestGetConsumptionKwh:
         result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30, 0)
         assert result == 0.5
 
+    def test_aggregates_two_bins_for_30_min_slot(self, builder):
+        """Test 30-minute slots sum two 15-minute bins."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        base_slot = now.replace(minute=0, second=0, microsecond=0)
+        load_slots = [1.0, 2.0] + [0.0] * 94
+
+        result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30, 0)
+        assert result == 0.75
+
+    def test_aggregates_shifted_30_min_window(self, builder):
+        """Test 30-minute slot uses the correct two bins when shifted."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        base_slot = now.replace(minute=0, second=0, microsecond=0)
+        slot_start = base_slot + timedelta(minutes=30)
+        load_slots = [1.0, 2.0, 3.0, 4.0] + [0.0] * 92
+
+        result = builder._get_consumption_kwh(load_slots, slot_start, base_slot, 30, 1)
+        assert result == 1.75
+
     def test_out_of_range_index_returns_zero(self, builder):
         """Test out of range index returns 0.0."""
         from datetime import timezone
@@ -926,7 +949,7 @@ class TestProcessSingleSlot:
         from datetime import timezone
         from zoneinfo import ZoneInfo
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         slot = {
             "start": now,
             "interval_minutes": 30,
@@ -955,6 +978,38 @@ class TestProcessSingleSlot:
         assert ctx.slot_index == 0
         assert ctx.buy_price == 0.10
         assert counts["thirty_min"] == 1
+
+    def test_process_single_slot_aggregates_consumption(self, builder):
+        """Test _process_single_slot aggregates 15-minute bins for 30-minute slot."""
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        slot = {
+            "start": now,
+            "interval_minutes": 30,
+            "price": 0.10,
+            "price_source": "30min",
+        }
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [1.0, 2.0] + [0.0] * 94
+
+        ctx, _, _ = builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert ctx.consumption_kwh == 0.75
 
     def test_process_single_slot_demand_window_entry(self, builder):
         """Test _process_single_slot detects demand window entry."""
