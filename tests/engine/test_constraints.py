@@ -491,6 +491,59 @@ class TestCheckGlobalSolarSufficiency:
         result = check_global_solar_sufficiency(30.0, 0, slots, config)
         assert result is False
 
+    def test_solar_after_deadline_is_ignored(self):
+        """Solar after the deadline should not satisfy the pre-deadline target."""
+        from custom_components.localshift.engine.constraints import (
+            check_global_solar_sufficiency,
+        )
+
+        config = OptimizerConfig(
+            battery_capacity_kwh=10.0,
+            demand_window_target_soc_pct=80.0,
+        )
+        slots = [
+            SlotContext(
+                slot_index=0,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T00:00:00+00:00",
+                buy_price=30.0,
+                sell_price=10.0,
+                solar_kwh=0.0,
+                consumption_kwh=0.2,
+                is_demand_window_slot=False,
+            ),
+            SlotContext(
+                slot_index=1,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T00:30:00+00:00",
+                buy_price=30.0,
+                sell_price=10.0,
+                solar_kwh=0.0,
+                consumption_kwh=0.2,
+                is_demand_window_slot=True,
+                is_demand_window_entry=True,
+            ),
+            SlotContext(
+                slot_index=2,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T01:00:00+00:00",
+                buy_price=30.0,
+                sell_price=10.0,
+                solar_kwh=3.0,
+                consumption_kwh=0.0,
+                is_demand_window_slot=True,
+            ),
+        ]
+
+        result = check_global_solar_sufficiency(
+            soc_pct=60.0,
+            slot_idx=0,
+            slots=slots,
+            config=config,
+            terminal_penalty_idx=1,
+        )
+        assert result is False
+
 
 class TestIsCheapImportWindow:
     """Test _is_cheap_import_window helper."""

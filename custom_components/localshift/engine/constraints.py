@@ -128,7 +128,7 @@ def feasible_actions(
     _global_solar_covers = False
     if config.optimization_mode == "self_consumption" and slots is not None:
         _global_solar_covers = check_global_solar_sufficiency(
-            soc_pct, slot_idx, slots, config
+            soc_pct, slot_idx, slots, config, terminal_penalty_idx
         )
 
     if (
@@ -162,8 +162,9 @@ def check_global_solar_sufficiency(
     slot_idx: int,
     slots: list[SlotContext],
     config: OptimizerConfig,
+    terminal_penalty_idx: int | None = None,
 ) -> bool:
-    """Check if remaining solar in the full horizon covers the SOC deficit to target.
+    """Check if remaining solar before the deadline covers the SOC deficit to target.
 
     Uses realistic simulation that accounts for charge rate limits and efficiency,
     ensuring consistency with solar_can_reach_target sensor.
@@ -176,6 +177,7 @@ def check_global_solar_sufficiency(
         slot_idx: Index of the current slot in the planning horizon.
         slots: Full list of planning slots.
         config: Optimizer configuration.
+        terminal_penalty_idx: Index at which the shortfall penalty is applied.
 
     Returns:
         True if realistic solar simulation can raise SOC from soc_pct to demand_window_target_soc_pct.
@@ -193,8 +195,14 @@ def check_global_solar_sufficiency(
     )
 
     remaining_slots = slots[slot_idx:]
+    relative_terminal_idx: int | None = None
+    if terminal_penalty_idx is not None:
+        if terminal_penalty_idx < slot_idx:
+            return False
+        relative_terminal_idx = terminal_penalty_idx - slot_idx
+
     simulated_terminal_soc = _simulate_solar_only_terminal_soc(
-        soc_pct, remaining_slots, None, config
+        soc_pct, remaining_slots, relative_terminal_idx, config
     )
     return simulated_terminal_soc >= config.demand_window_target_soc_pct
 

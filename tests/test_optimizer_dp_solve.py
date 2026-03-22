@@ -1713,14 +1713,14 @@ def test_global_solar_gate_fires_with_demand_window():
     can fill the battery before DW entry.
     """
     slots_before_dw = [
-        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=1.0, consumption_kwh=0.2)
+        _make_slot(slot_index=i, buy_price=0.08, solar_kwh=1.2, consumption_kwh=0.2)
         for i in range(4)
     ]
     slots_during_dw = [
         _make_slot(
             slot_index=i + 4,
             buy_price=0.08,
-            solar_kwh=1.0,
+            solar_kwh=1.2,
             consumption_kwh=0.2,
             is_demand_window_slot=True,
         )
@@ -1790,6 +1790,73 @@ def test_global_solar_gate_allows_charge_with_dw_when_insufficient():
     assert PlannerAction.HOLD in actions
     assert PlannerAction.CHARGE_GRID_NORMAL in actions, (
         "Gate should allow grid charging when solar insufficient, even with DW"
+    )
+
+
+def test_global_solar_gate_ignores_solar_after_deadline():
+    """Issue #801: Solar after deadline should not suppress pre-deadline charging."""
+    slots = [
+        SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-01-03T08:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.08,
+            sell_price=0.06,
+            solar_kwh=0.0,
+            consumption_kwh=0.2,
+            is_demand_window_slot=False,
+        ),
+        SlotContext(
+            slot_index=1,
+            timestamp_iso="2026-01-03T08:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.08,
+            sell_price=0.06,
+            solar_kwh=0.0,
+            consumption_kwh=0.2,
+            is_demand_window_entry=True,
+            is_demand_window_slot=True,
+        ),
+        SlotContext(
+            slot_index=2,
+            timestamp_iso="2026-01-03T09:00:00",
+            slot_interval_minutes=30,
+            buy_price=0.08,
+            sell_price=0.06,
+            solar_kwh=2.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=True,
+        ),
+        SlotContext(
+            slot_index=3,
+            timestamp_iso="2026-01-03T09:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.08,
+            sell_price=0.06,
+            solar_kwh=2.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=True,
+        ),
+    ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        demand_window_target_soc_pct=80.0,
+        effective_cheap_price=0.10,
+        optimization_mode="self_consumption",
+        soc_bins=20,
+    )
+
+    actions = feasible_actions(
+        soc_pct=60.0,
+        slot=slots[0],
+        config=config,
+        slot_idx=0,
+        slots=slots,
+        terminal_penalty_idx=1,
+    )
+
+    assert PlannerAction.CHARGE_GRID_NORMAL in actions, (
+        "Charging should remain feasible when solar arrives after the deadline"
     )
 
 
