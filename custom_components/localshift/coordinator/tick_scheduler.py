@@ -316,6 +316,8 @@ class TickScheduler:
             self._last_solar_power_kw = current_power
             return
 
+        assert self._last_solar_power_kw is not None  # nosec B101 — type narrowing, not assertion
+
         time_delta_hours = (
             now - self._last_solar_power_timestamp
         ).total_seconds() / 3600.0
