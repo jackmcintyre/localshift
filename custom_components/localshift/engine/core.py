@@ -49,15 +49,9 @@ from custom_components.localshift.engine.types import (
 
 _LOGGER = logging.getLogger(__name__)
 
-
 # -----------------------------------------------------------------------------
-
-
 # Action priority for deterministic tie-breaking (lower index = higher priority)
-
-
 # -----------------------------------------------------------------------------
-
 
 _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.HOLD: 0,
@@ -68,18 +62,13 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
 
 
 class DPPlanner:
-    """
-
-    Deterministic dynamic-programming battery optimizer.
+    """Deterministic dynamic-programming battery optimizer.
 
     State space: (slot_index, soc_bin)
-
     Actions: PlannerAction enum
-
     Objective: minimize total net cost including shortfall penalty
 
     Phase C: Full DP implementation with deterministic tie-breaking.
-
     """
 
     VERSION = "dp_v1"
@@ -700,15 +689,10 @@ class DPPlanner:
                 < _ACTION_PRIORITY.get(best_action, 99)
             ):
                 best_cost = total_cost
-
                 best_action = action
-
                 best_next_bin = next_bin
-
                 best_import = grid_import
-
                 best_export = grid_export
-
                 best_next_soc = next_soc
 
             states_explored += 1
@@ -860,17 +844,13 @@ class DPPlanner:
             decisions.append(decision)
 
             totals["import"] += grid_import
-
             totals["export"] += grid_export
-
             totals["net_cost"] += stage.net_cost
 
             reason_key = reason.value
-
             reason_histogram[reason_key] = reason_histogram.get(reason_key, 0) + 1
 
             current_soc = next_soc
-
             current_bin = _map_soc_to_bin(current_soc, soc_grid)
 
         return decisions, totals, reason_histogram
