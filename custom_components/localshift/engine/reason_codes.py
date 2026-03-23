@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from custom_components.localshift.engine.penalties import (
     get_solar_opportunity_penalty_factor,
+)
+from custom_components.localshift.engine.solar import (
+    projected_solar_soc_gain_pct,
+    projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
@@ -14,6 +20,7 @@ from custom_components.localshift.engine.types import (
     PlannerReasonCode,
     SlotContext,
 )
+from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
 
 
 def classify_reason(
@@ -184,13 +191,6 @@ def _is_target_shortfall_risk(
 
     Incorporates future solar gain from Solcast beyond the horizon (Issue #619).
     """
-    from datetime import datetime, timedelta
-
-    from custom_components.localshift.engine.solar import (
-        projected_solar_soc_gain_pct,
-        projected_solcast_gain_pct,
-    )
-
     if terminal_penalty_idx is None or slot_idx >= terminal_penalty_idx:
         return False
     soc_deficit = config.demand_window_target_soc_pct - soc
@@ -214,12 +214,17 @@ def _is_target_shortfall_risk(
         )
         target_slot = slots[terminal_penalty_idx]
         target_time = datetime.fromisoformat(target_slot.timestamp_iso)
+        confidence_resolver = ConfidenceResolver(
+            getattr(inputs, "solcast_analysis_today", None),
+            getattr(inputs, "solcast_analysis_tomorrow", None),
+        )
 
         future_gain = projected_solcast_gain_pct(
             inputs.all_solcast,
             start_time=last_slot_end,
             end_time=target_time,
             battery_capacity_kwh=config.battery_capacity_kwh,
+            confidence_resolver=confidence_resolver,
         )
         potential_soc_gain_pct += future_gain
 

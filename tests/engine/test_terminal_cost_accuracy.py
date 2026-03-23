@@ -1,10 +1,14 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
 from custom_components.localshift.engine.core import DPPlanner
-from custom_components.localshift.engine.solar import get_forecast_accuracy
+from custom_components.localshift.engine.reason_codes import _is_target_shortfall_risk
+from custom_components.localshift.engine.solar import (
+    get_forecast_accuracy,
+    projected_solcast_gain_pct,
+)
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
@@ -17,12 +21,76 @@ from custom_components.localshift.forecast.solcast_analysis import (
 )
 
 
+def test_target_shortfall_risk_passes_confidence_resolver(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_projected_solcast_gain_pct(*args, confidence_resolver=None, **kwargs):
+        seen["resolver"] = confidence_resolver
+        return 0.0
+
+    monkeypatch.setattr(
+        "custom_components.localshift.engine.reason_codes.projected_solcast_gain_pct",
+        fake_projected_solcast_gain_pct,
+    )
+
+    slots = [
+        SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-03-20T08:00:00+00:00",
+            slot_interval_minutes=30,
+            buy_price=0.10,
+            sell_price=0.05,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=False,
+        ),
+        SlotContext(
+            slot_index=1,
+            timestamp_iso="2026-03-20T08:30:00+00:00",
+            slot_interval_minutes=30,
+            buy_price=0.10,
+            sell_price=0.05,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=True,
+        ),
+    ]
+    config = OptimizerConfig(
+        demand_window_target_soc_pct=80.0,
+        battery_capacity_kwh=13.5,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="resolver-check",
+        initial_soc_pct=70.0,
+        slots=slots,
+        config=config,
+        all_solcast=[
+            {
+                "period_start": "2026-03-20T09:00:00+00:00",
+                "pv_estimate": 4.0,
+            }
+        ],
+        solcast_analysis_today=None,
+        solcast_analysis_tomorrow=None,
+    )
+
+    _is_target_shortfall_risk(
+        slot_idx=0,
+        slots=slots,
+        soc=70.0,
+        config=config,
+        terminal_penalty_idx=1,
+        inputs=inputs,
+    )
+
+    assert seen["resolver"] is not None
+
+
 class TestGetForecastAccuracy:
     """Tests for _get_forecast_accuracy helper method."""
 
     def test_no_tracker_returns_one(self):
         """When no tracker exists, return 1.0 (no discount)."""
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(None)
         assert result == 1.0
 
@@ -30,7 +98,6 @@ class TestGetForecastAccuracy:
         """When accuracy is 100%, return 1.0."""
         tracker = Mock()
         tracker.metrics.accuracy = 100
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
@@ -38,7 +105,6 @@ class TestGetForecastAccuracy:
         """When accuracy is 50%, return 0.5."""
         tracker = Mock()
         tracker.metrics.accuracy = 50
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 0.5
 
@@ -46,7 +112,6 @@ class TestGetForecastAccuracy:
         """When accuracy is 37%, return 0.37."""
         tracker = Mock()
         tracker.metrics.accuracy = 37
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 0.37
 
@@ -54,7 +119,6 @@ class TestGetForecastAccuracy:
         """When tracker returns None, return 1.0."""
         tracker = Mock()
         tracker.metrics.accuracy = None
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
@@ -62,7 +126,6 @@ class TestGetForecastAccuracy:
         """When tracker returns 0, return 1.0 (no data)."""
         tracker = Mock()
         tracker.metrics.accuracy = 0
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
@@ -70,14 +133,12 @@ class TestGetForecastAccuracy:
         """When tracker returns negative (invalid), return 1.0."""
         tracker = Mock()
         tracker.metrics.accuracy = -10
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
     def test_tracker_no_metrics_attribute_returns_one(self):
         """When tracker has no metrics attribute, return 1.0."""
         tracker = Mock(spec=[])  # No attributes at all
-        planner = DPPlanner.__new__(DPPlanner)
         result = get_forecast_accuracy(tracker)
         assert result == 1.0
 
@@ -210,8 +271,8 @@ class TestProjectedSolcastGainWithConfidence:
     """Tests for confidence-aware terminal solar projection."""
 
     def test_low_confidence_reduces_projected_gain(self):
-        start = datetime(2026, 3, 19, 12, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 3, 19, 12, 30, tzinfo=timezone.utc)
+        start = datetime(2026, 3, 19, 12, 0, tzinfo=UTC)
+        end = datetime(2026, 3, 19, 12, 30, tzinfo=UTC)
         solcast = [
             {
                 "period_start": start.isoformat(),
@@ -220,7 +281,7 @@ class TestProjectedSolcastGainWithConfidence:
             }
         ]
 
-        optimistic_gain = DPPlanner._projected_solcast_gain_pct(
+        optimistic_gain = projected_solcast_gain_pct(
             solcast,
             start,
             end,
@@ -244,7 +305,7 @@ class TestProjectedSolcastGainWithConfidence:
         )
         resolver = ConfidenceResolver(analysis, None)
 
-        conservative_gain = DPPlanner._projected_solcast_gain_pct(
+        conservative_gain = projected_solcast_gain_pct(
             solcast,
             start,
             end,
@@ -256,8 +317,8 @@ class TestProjectedSolcastGainWithConfidence:
         assert conservative_gain > 0.0
 
     def test_tomorrow_analysis_is_used_for_cross_day_projection(self):
-        start = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 3, 20, 8, 30, tzinfo=timezone.utc)
+        start = datetime(2026, 3, 20, 8, 0, tzinfo=UTC)
+        end = datetime(2026, 3, 20, 8, 30, tzinfo=UTC)
         solcast = [
             {
                 "period_start": start.isoformat(),
@@ -281,10 +342,8 @@ class TestProjectedSolcastGainWithConfidence:
             ],
         )
 
-        optimistic_gain = DPPlanner._projected_solcast_gain_pct(
-            solcast, start, end, 13.5
-        )
-        conservative_gain = DPPlanner._projected_solcast_gain_pct(
+        optimistic_gain = projected_solcast_gain_pct(solcast, start, end, 13.5)
+        conservative_gain = projected_solcast_gain_pct(
             solcast,
             start,
             end,
@@ -323,7 +382,7 @@ class TestSolveDiagnostics:
 
     def _make_inputs(self, *, accuracy: float | None = 75.0) -> OptimizerInputs:
         """Build minimal OptimizerInputs for a 4-slot horizon with a demand window."""
-        base = datetime(2026, 3, 20, 14, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 3, 20, 14, 0, tzinfo=UTC)
         slots = []
         for i in range(4):
             ts = base + timedelta(minutes=30 * i)
@@ -388,7 +447,7 @@ class TestSolveDiagnostics:
     def test_diagnostic_fields_none_without_demand_window(self):
         """When no demand window, diagnostic fields should remain None."""
         # Build inputs with NO demand window slots
-        base = datetime(2026, 3, 20, 14, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 3, 20, 14, 0, tzinfo=UTC)
         slots = []
         for i in range(4):
             ts = base + timedelta(minutes=30 * i)
@@ -424,7 +483,7 @@ class TestSolveDiagnostics:
         """Future solar beyond the slot horizon uses confidence-aware projection."""
         inputs = self._make_inputs(accuracy=75.0)
         inputs.initial_soc_pct = 20.0
-        future_start = datetime(2026, 3, 20, 16, 0, tzinfo=timezone.utc)
+        future_start = datetime(2026, 3, 20, 16, 0, tzinfo=UTC)
         inputs.all_solcast = [
             {
                 "period_start": future_start.isoformat(),

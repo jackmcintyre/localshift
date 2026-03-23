@@ -1,19 +1,13 @@
 """Tests for DPPlanner core class."""
 
-# Reuse the comprehensive DP solver tests so hook-scoped coverage checks for
-# engine/core.py reflect the full DP behavior exercised elsewhere in the suite.
-from tests.test_optimizer_dp_solve import *  # noqa: F403
-from tests.test_optimizer_scaffold import *  # noqa: F403
-from tests.test_optimizer_self_consumption import *  # noqa: F403
-
 from datetime import UTC, datetime
 
+from custom_components.localshift.engine.constraints import _determine_export_actions
+from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.negative_fit import (
     compute_recoverability_floor_pct,
     derive_negative_fit_avoidance_context,
 )
-from custom_components.localshift.engine.constraints import _determine_export_actions
-from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.penalties import (
     get_solar_opportunity_penalty_factor,
 )
@@ -27,6 +21,55 @@ from custom_components.localshift.engine.types import (
     PlannerReasonCode,
     SlotContext,
 )
+
+# Reuse the comprehensive DP solver tests so hook-scoped coverage checks for
+# engine/core.py reflect the full DP behavior exercised elsewhere in the suite.
+from tests.test_optimizer_dp_solve import *  # noqa: F403
+from tests.test_optimizer_scaffold import *  # noqa: F403
+from tests.test_optimizer_self_consumption import *  # noqa: F403
+
+
+def test_dpplanner_no_longer_exposes_module_backed_solar_helpers():
+    """DPPlanner should not expose module-backed solar helper shims."""
+    assert not hasattr(DPPlanner, "_get_solar_opportunity_penalty_factor")
+    assert not hasattr(DPPlanner, "_get_futile_cycling_penalty_factor")
+    assert not hasattr(DPPlanner, "_projected_solar_soc_gain_pct")
+    assert not hasattr(DPPlanner, "_projected_solcast_gain_pct")
+    assert not hasattr(DPPlanner, "_get_forecast_accuracy")
+
+
+def test_dpplanner_no_longer_exposes_reason_code_helpers():
+    """DPPlanner should not expose reason-code helper shims."""
+    removed = [
+        "_classify_reason",
+        "_classify_hold_reason",
+        "_classify_export_reason",
+        "_classify_charge_reason",
+        "_is_target_shortfall_risk",
+        "_is_cheap_import_window",
+        "_is_blind_to_future_solar",
+    ]
+
+    for name in removed:
+        assert not hasattr(DPPlanner, name), name
+
+
+def test_dpplanner_no_longer_exposes_transition_helpers():
+    """DPPlanner should not expose transition helper shims."""
+    removed = [
+        "transition",
+        "_transition_hold",
+        "_transition_hold_surplus",
+        "_transition_hold_deficit",
+        "_transition_charge_grid",
+        "_charge_grid_with_solar",
+        "_charge_grid_with_deficit",
+        "_clip_charge_to_max_soc",
+        "_transition_export",
+    ]
+
+    for name in removed:
+        assert not hasattr(DPPlanner, name), name
 
 
 class TestDPPlanner:
@@ -179,7 +222,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_no_negative_fit_window_returns_none(self):
         """Returns None when no negative-FIT window in horizon."""
-        planner = DPPlanner()
         slots = [self._make_slot(i, sell_price=0.08) for i in range(10)]
         inputs = OptimizerInputs(
             cycle_id="test",
@@ -192,7 +234,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_no_positive_slots_before_risk_returns_none(self):
         """Returns None when no positive-FIT slots exist before risk window."""
-        planner = DPPlanner()
         slots = [
             self._make_slot(i, sell_price=0.0 if i < 5 else -0.05) for i in range(10)
         ]
@@ -207,7 +248,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_no_recovery_solar_returns_none(self):
         """Returns None when insufficient solar to recover to target."""
-        planner = DPPlanner()
         config = OptimizerConfig(demand_window_target_soc_pct=80.0)
         slots = [
             self._make_slot(i, sell_price=0.08 if i < 5 else -0.05) for i in range(10)
@@ -223,11 +263,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_ha_style_case_with_solar_during_bad_fit_creates_context(self):
         """HA-style: solar arrives DURING bad-FIT window, still creates context."""
-        from custom_components.localshift.engine.types import (
-            NegativeFitAvoidanceContext,
-        )
-
-        planner = DPPlanner()
         config = OptimizerConfig(
             demand_window_target_soc_pct=100.0,
             battery_capacity_kwh=13.5,
@@ -256,11 +291,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_recoverability_floor_allows_below_target(self):
         """Recoverability floor can be below target when recovery is feasible."""
-        from custom_components.localshift.engine.types import (
-            NegativeFitAvoidanceContext,
-        )
-
-        planner = DPPlanner()
         config = OptimizerConfig(
             demand_window_target_soc_pct=100.0,
             min_soc_pct=10.0,
@@ -295,11 +325,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_recoverability_floor_stays_high_with_weak_solar(self):
         """Recoverability floor stays near target when recovery solar is weak."""
-        from custom_components.localshift.engine.types import (
-            NegativeFitAvoidanceContext,
-        )
-
-        planner = DPPlanner()
         config = OptimizerConfig(
             demand_window_target_soc_pct=100.0,
             min_soc_pct=10.0,
@@ -333,7 +358,6 @@ class TestNegativeFitAvoidanceContext:
 
     def test_context_stops_when_headroom_sufficient(self):
         """Context reflects when enough headroom already exists."""
-        planner = DPPlanner()
         config = OptimizerConfig(
             demand_window_target_soc_pct=100.0,
             battery_capacity_kwh=13.5,
@@ -383,7 +407,6 @@ class TestCoreRegressionCoverage:
 
     def test_classify_export_reason_pre_risk_is_negative_fit_avoidance(self):
         """Pre-risk proactive export is tagged as avoidance, not high-price export."""
-        planner = DPPlanner()
         ctx = NegativeFitAvoidanceContext(
             risk_window_start_idx=3,
             risk_window_end_idx=5,
@@ -424,7 +447,6 @@ class TestCoreRegressionCoverage:
 
     def test_solar_opportunity_penalty_includes_beyond_horizon_solcast(self):
         """Penalty factor accounts for Solcast periods beyond DP slot horizon."""
-        planner = DPPlanner()
         slots = [
             self._slot(0, solar=0.0, load=0.4),
             self._slot(1, solar=0.1, load=0.4),
@@ -484,3 +506,91 @@ def test_dpplanner_no_longer_exposes_cost_and_constraints_wrappers():
     assert not hasattr(DPPlanner, "stage_cost")
     assert not hasattr(DPPlanner, "terminal_cost")
     assert not hasattr(DPPlanner, "feasible_actions")
+
+
+def test_dpplanner_no_longer_exposes_constraint_and_solar_duplicates():
+    """DPPlanner no longer exposes duplicate helper methods."""
+    assert not hasattr(DPPlanner, "_can_solar_reach_target")
+    assert not hasattr(DPPlanner, "_check_global_solar_sufficiency")
+    assert not hasattr(DPPlanner, "_determine_export_actions")
+
+
+class TestDPPlannerEdgeCoverage:
+    """Cover defensive edge paths in DPPlanner."""
+
+    @staticmethod
+    def _slot(
+        idx: int,
+        *,
+        ts: str = "2026-01-01T08:00:00+00:00",
+        is_dw_entry: bool = False,
+        is_dw_slot: bool = False,
+    ) -> SlotContext:
+        return SlotContext(
+            slot_index=idx,
+            timestamp_iso=ts,
+            buy_price=30.0,
+            sell_price=10.0,
+            solar_kwh=0.0,
+            consumption_kwh=0.5,
+            slot_interval_minutes=30,
+            is_demand_window_slot=is_dw_slot,
+            is_demand_window_entry=is_dw_entry,
+        )
+
+    def test_plan_catches_solver_exception_and_returns_failure(self, monkeypatch):
+        """plan() wraps _solve exceptions and returns success=False."""
+        planner = DPPlanner()
+
+        def boom(inputs):
+            raise ValueError("simulated internal solver error")
+
+        monkeypatch.setattr(planner, "_solve", boom)
+
+        inputs = OptimizerInputs(
+            cycle_id="test-exception-path",
+            slots=[self._slot(0)],
+            initial_soc_pct=50.0,
+        )
+
+        result = planner.plan(inputs)
+
+        assert result.success is False
+        assert "simulated internal solver error" in (result.error_message or "")
+
+    def test_plan_with_all_solcast_and_demand_window_covers_solar_horizon_path(self):
+        """plan() enters solar-beyond-horizon credit block when all_solcast is set."""
+        # Conditions needed:
+        #   - terminal_penalty_idx set (demand window entry present)
+        #   - solar_capable=False (initial SOC too low, no slot solar)
+        #   - inputs.all_solcast non-empty
+        # This covers the projected_solcast_gain_pct blocks in _initialize_dp_tables
+        # and _get_terminal_diagnostics (issue #619 wiring).
+        planner = DPPlanner()
+
+        slots = [
+            self._slot(0, ts="2026-01-01T08:00:00+00:00"),
+            self._slot(
+                1,
+                ts="2026-01-01T08:30:00+00:00",
+                is_dw_entry=True,
+                is_dw_slot=True,
+            ),
+        ]
+        inputs = OptimizerInputs(
+            cycle_id="test-solar-horizon",
+            slots=slots,
+            initial_soc_pct=5.0,  # Too low to reach 80% target via solar alone
+            all_solcast=[
+                {
+                    "period_start": "2026-01-01T09:00:00+00:00",
+                    "pv_estimate": 1.0,
+                }
+            ],
+            config=OptimizerConfig(demand_window_target_soc_pct=80.0),
+        )
+
+        result = planner.plan(inputs)
+
+        # The planner completes — we just need the code path executed
+        assert result.success is True
