@@ -71,35 +71,15 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
 class DPPlanner:
     """
 
-
-
     Deterministic dynamic-programming battery optimizer.
-
-
-
-
-
-
 
     State space: (slot_index, soc_bin)
 
-
-
     Actions: PlannerAction enum
-
-
 
     Objective: minimize total net cost including shortfall penalty
 
-
-
-
-
-
-
     Phase C: Full DP implementation with deterministic tie-breaking.
-
-
 
     """
 
@@ -118,23 +98,11 @@ class DPPlanner:
     def plan(self, inputs: OptimizerInputs) -> OptimizerResult:
         """
 
-
-
         Run the DP optimizer over the provided inputs.
-
-
-
-
-
-
 
         Returns an OptimizerResult. On success, decisions contains one
 
-
-
         PlannedSlotDecision per slot in inputs.slots.
-
-
 
         """
 
@@ -168,35 +136,17 @@ class DPPlanner:
     def _solve(self, inputs: OptimizerInputs) -> OptimizerResult:
         """
 
-
-
         Full DP solver implementation.
-
-
-
-
-
-
 
         Algorithm:
 
-
-
           1. Build SOC grid from config
-
-
 
           2. Forward pass: compute cost-to-go for all (slot, soc_bin) states
 
-
-
           3. Backward pass: reconstruct optimal action sequence
 
-
-
           4. Build PlannedSlotDecision list with reason codes
-
-
 
         """
 
@@ -335,47 +285,17 @@ class DPPlanner:
     ) -> dict[str, int | None]:
         """Find demand window entry and end indices for the FIRST DW block.
 
-
-
-
-
-
-
         When cross-day scenarios have multiple DW blocks, only the first block
-
-
 
         is considered (Issue #633).
 
-
-
-
-
-
-
         Args:
-
-
 
             slots: List of slot contexts
 
-
-
-
-
-
-
         Returns:
 
-
-
             Dict with 'entry_idx' and 'end_idx' keys
-
-
-
-
-
-
 
         """
 
@@ -413,39 +333,15 @@ class DPPlanner:
     ) -> int | None:
         """Determine where to apply terminal penalty.
 
-
-
-
-
-
-
         Args:
-
-
 
             config: Optimizer config
 
-
-
             demand_bounds: Demand window bounds
-
-
-
-
-
-
 
         Returns:
 
-
-
             Terminal penalty index or None
-
-
-
-
-
-
 
         """
 
@@ -464,31 +360,13 @@ class DPPlanner:
     ) -> list[dict[int, tuple[float, PlannerAction, int, float, float, float]]]:
         """Initialize DP tables with terminal costs.
 
-
-
-
-
-
-
         In self-consumption mode, credits future solar gain (Issue #619) to
-
-
 
         prevent grid charging when solar will cover the shortfall.
 
-
-
-
-
-
-
         Issue #624: In self_consumption mode, treat target as hard constraint by
 
-
-
         using infinite cost for states below target at terminal penalty index.
-
-
 
         """
 
@@ -615,19 +493,9 @@ class DPPlanner:
             decisions: All optimizer decisions with predicted SOC
             terminal_penalty_idx: Index of terminal penalty slot
 
-
-
-
-
-
-
         Returns:
 
-
-
             Dictionary of diagnostic metrics
-
-
 
         """
         peak_soc = max(d.predicted_soc_pct for d in decisions) if decisions else soc_pct
@@ -655,55 +523,23 @@ class DPPlanner:
     ) -> int:
         """Perform backward induction to fill DP tables.
 
-
-
-
-
-
-
         Args:
-
-
 
             dp: DP tables
 
-
-
             slots: Slot contexts
-
-
 
             soc_grid: SOC grid
 
-
-
             config: Optimizer config
-
-
 
             terminal_penalty_idx: Terminal penalty index
 
-
-
             inputs: Optimizer inputs
-
-
-
-
-
-
 
         Returns:
 
-
-
             Number of states explored
-
-
-
-
-
-
 
         """
 
@@ -749,67 +585,29 @@ class DPPlanner:
     ) -> tuple[tuple[float, PlannerAction, int, float, float, float], int]:
         """Compute best action for a state.
 
-
-
-
-
-
-
         Args:
-
-
 
             dp: DP tables
 
-
-
             slot_idx: Slot index
-
-
 
             slot: Slot context
 
-
-
             soc: Current SOC
-
-
 
             soc_grid: SOC grid
 
-
-
             config: Optimizer config
-
-
 
             terminal_penalty_idx: Terminal penalty index
 
-
-
             slots: All slots
-
-
 
             inputs: Optimizer inputs
 
-
-
-
-
-
-
         Returns:
 
-
-
             Tuple of (best result tuple, actions explored count)
-
-
-
-
-
-
 
         """
 
@@ -940,55 +738,23 @@ class DPPlanner:
     ) -> tuple[list[PlannedSlotDecision], dict[str, float], dict[str, int]]:
         """Reconstruct optimal path forward.
 
-
-
-
-
-
-
         Args:
-
-
 
             dp: DP tables
 
-
-
             inputs: Optimizer inputs
-
-
 
             slots: Slot contexts
 
-
-
             soc_grid: SOC grid
-
-
 
             config: Optimizer config
 
-
-
             terminal_penalty_idx: Terminal penalty index
-
-
-
-
-
-
 
         Returns:
 
-
-
             Tuple of (decisions, totals, reason_histogram)
-
-
-
-
-
-
 
         """
 
@@ -1120,55 +886,23 @@ class DPPlanner:
     ) -> float:
         """Compute terminal shortfall.
 
-
-
-
-
-
-
         Args:
-
-
 
             inputs: Optimizer inputs
 
-
-
             decisions: Planned decisions
-
-
 
             config: Optimizer config
 
-
-
             terminal_penalty_idx: Terminal penalty index
-
-
 
             demand_bounds: Demand window bounds (entry_idx, end_idx) for first DW block.
 
-
-
                 Used to scope the solar simulation to the first DW block only (Issue #633).
-
-
-
-
-
-
 
         Returns:
 
-
-
             Terminal shortfall percentage
-
-
-
-
-
-
 
         """
 
