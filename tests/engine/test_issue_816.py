@@ -189,37 +189,6 @@ class TestIssue816DoubleCountingFix:
             f"Pre-DW actions: {[d.action for d in pre_dw_decisions]}"
         )
 
-    def test_effective_soc_at_terminal_not_inflated_by_within_horizon_solar(self):
-        """effective_soc_at_terminal in diagnostics must equal initial_soc + future_solar only.
-
-        Before the fix: effective_soc = soc + future_solar + adjusted_within_horizon_solar
-        After the fix:  effective_soc = soc + future_solar (within-horizon solar is in the DP)
-        """
-        inputs = _make_shortfall_scenario(
-            initial_soc_pct=14.0,
-            solar_kwh_per_slot=0.8,
-            allow_dw_entry_under_target=False,
-        )
-        result = DPPlanner().plan(inputs)
-
-        assert result.success
-
-        # effective_soc_at_terminal should now reflect the actual projected DW entry SOC,
-        # not an inflated estimate. With no future solar (all_solcast=[]), it should be
-        # close to actual initial_soc (+ actual solar captured in DP, but NOT double-counted).
-        # The key invariant: effective_soc_at_terminal must NOT exceed dw_entry_soc_pct
-        # by a large margin (the old bug was ~17pp inflation).
-        if (
-            result.effective_soc_at_terminal is not None
-            and result.dw_entry_soc_pct is not None
-        ):
-            inflation = result.effective_soc_at_terminal - result.dw_entry_soc_pct
-            assert inflation < 5.0, (
-                f"effective_soc_at_terminal={result.effective_soc_at_terminal:.2f}% "
-                f"exceeds dw_entry_soc_pct={result.dw_entry_soc_pct:.2f}% by {inflation:.2f}pp. "
-                f"Double-counting solar inflates effective_soc. Should be close to dw_entry."
-            )
-
 
 class TestIssue816KillSwitchFix:
     """Bug 2: can_solar_reach_target() kill switch must NOT zero out terminal penalty.
@@ -329,12 +298,8 @@ class TestIssue816KillSwitchFix:
 class TestIssue816DiagnosticsAfterFix:
     """After the fix, diagnostic fields must accurately reflect the real trajectory."""
 
-    def test_adjusted_solar_gain_pct_still_reported_for_diagnostics(self):
-        """adjusted_solar_gain_pct must still appear in result diagnostics (informational).
-
-        Even after removing it from effective_soc, we still want it as a diagnostic field
-        so dashboards can show "adjusted solar gain" info.
-        """
+    def test_diagnostic_fields_present(self):
+        """Key diagnostic fields should be present for debugging and display."""
         inputs = _make_shortfall_scenario(
             initial_soc_pct=14.0,
             solar_kwh_per_slot=0.8,
@@ -343,8 +308,10 @@ class TestIssue816DiagnosticsAfterFix:
         result = DPPlanner().plan(inputs)
 
         assert result.success
-        # The diagnostic field should still be populated (used for display, not optimization)
-        assert result.adjusted_solar_gain_pct is not None
+        # Core diagnostics should be present
+        assert result.accuracy_discount_factor is not None
+        assert result.peak_soc_pct is not None
+        assert result.dw_entry_soc_pct is not None
 
     def test_dw_entry_soc_matches_actual_decision_trajectory(self):
         """dw_entry_soc_pct must match the predicted SOC in the decision at DW entry.

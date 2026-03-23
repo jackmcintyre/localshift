@@ -282,19 +282,12 @@ class DPPlanner:
                     confidence_resolver=confidence_resolver,
                 )
 
-            projected_solar_gain_pct = projected_solar_soc_gain_pct(
-                slot_idx=0,
-                slots=inputs.slots,
-                terminal_penalty_idx=terminal_penalty_idx,
-                battery_capacity_kwh=config.battery_capacity_kwh,
-            )
             forecast_accuracy_val = get_forecast_accuracy(inputs.solar_accuracy_tracker)
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy_val))
 
             terminal_diags = self._get_terminal_diagnostics(
                 soc_pct=inputs.initial_soc_pct,
                 target=config.demand_window_target_soc_pct,
-                projected_solar_gain_pct=projected_solar_gain_pct,
                 accuracy_discount=accuracy_discount,
                 future_solar_gain_pct=future_solar_gain_pct,
                 decisions=decisions,
@@ -318,12 +311,9 @@ class DPPlanner:
             can_solar_reach_target=can_solar,
             can_solar_reach_target_in_dw=solar_capable,
             reason_code_histogram=reason_histogram,
-            # Terminal diagnostics (PR #789 wiring fix)
+            # Terminal diagnostics (Issue #816: removed adjusted_solar_gain_pct, effective_soc_at_terminal)
             forecast_accuracy=forecast_accuracy_val,
-            projected_solar_gain_pct=terminal_diags.get("projected_solar_gain_pct"),
             accuracy_discount_factor=terminal_diags.get("accuracy_discount_factor"),
-            adjusted_solar_gain_pct=terminal_diags.get("adjusted_solar_gain_pct"),
-            effective_soc_at_terminal=terminal_diags.get("effective_soc_at_terminal"),
             peak_soc_pct=terminal_diags.get("peak_soc_pct"),
             dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
         )
@@ -568,34 +558,14 @@ class DPPlanner:
 
             hard_constraint_penalty = max_grid_cost * 10  # 10x the max cost
 
-            # Check if solar within the horizon can cover the deficit
-
-            # This prevents unnecessary grid charging when solar is sufficient
-
-            projected_solar_gain_pct = projected_solar_soc_gain_pct(
-                slot_idx=0,
-                slots=inputs.slots,
-                terminal_penalty_idx=terminal_penalty_idx,
-                battery_capacity_kwh=config.battery_capacity_kwh,
-            )
-
-            # Apply accuracy-based discount to projected solar (Issue #785)
-
+            # Apply accuracy-based discount to beyond-horizon solar (Issue #785)
             forecast_accuracy = get_forecast_accuracy(inputs.solar_accuracy_tracker)
-
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy))
 
-            adjusted_solar_gain_pct = projected_solar_gain_pct * accuracy_discount
-
-            # Add debug logging
-
             _LOGGER.debug(
-                "Terminal cost discount: accuracy=%.1f%%, discount=%.2f, "
-                "raw_solar_gain=%.1f%%, adjusted=%.1f%%",
+                "Terminal cost: forecast_accuracy=%.1f%%, discount=%.2f",
                 forecast_accuracy * 100,
                 accuracy_discount,
-                projected_solar_gain_pct,
-                adjusted_solar_gain_pct,
             )
 
             for bin_idx, soc in enumerate(soc_grid):
@@ -630,7 +600,6 @@ class DPPlanner:
         self,
         soc_pct: float,
         target: float,
-        projected_solar_gain_pct: float,
         accuracy_discount: float,
         future_solar_gain_pct: float,
         decisions: list[PlannedSlotDecision],
@@ -638,40 +607,12 @@ class DPPlanner:
     ) -> dict[str, Any]:
         """Extract diagnostic metrics for terminal cost calculation.
 
-
-
-
-
-
-
         Args:
-
-
-
             soc_pct: Current state of charge percentage
-
-
-
             target: Target SOC percentage
-
-
-
-            projected_solar_gain_pct: Raw solar projection
-
-
-
             accuracy_discount: Applied discount factor
-
-
-
             future_solar_gain_pct: Beyond-horizon solar gain
-
-
-
             decisions: All optimizer decisions with predicted SOC
-
-
-
             terminal_penalty_idx: Index of terminal penalty slot
 
 
@@ -689,11 +630,6 @@ class DPPlanner:
 
 
         """
-
-        adjusted_solar_gain = projected_solar_gain_pct * accuracy_discount
-
-        effective_soc = soc_pct + future_solar_gain_pct + adjusted_solar_gain
-
         peak_soc = max(d.predicted_soc_pct for d in decisions) if decisions else soc_pct
 
         dw_entry_soc = None
@@ -702,10 +638,7 @@ class DPPlanner:
             dw_entry_soc = decisions[terminal_penalty_idx].predicted_soc_pct
 
         return {
-            "projected_solar_gain_pct": round(projected_solar_gain_pct, 2),
             "accuracy_discount_factor": round(accuracy_discount, 2),
-            "adjusted_solar_gain_pct": round(adjusted_solar_gain, 2),
-            "effective_soc_at_terminal": round(effective_soc, 2),
             "peak_soc_pct": round(peak_soc, 2),
             "dw_entry_soc_pct": round(dw_entry_soc, 2) if dw_entry_soc else None,
         }

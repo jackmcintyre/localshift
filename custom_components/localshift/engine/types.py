@@ -430,17 +430,8 @@ class OptimizerResult:
     forecast_accuracy: float | None = None
     """Forecast accuracy (0-1.0) used for solar discount. None if no terminal penalty."""
 
-    projected_solar_gain_pct: float | None = None
-    """Raw projected solar SOC gain (%) within horizon."""
-
     accuracy_discount_factor: float | None = None
     """Discount factor applied to solar gain (0.5-1.0)."""
-
-    adjusted_solar_gain_pct: float | None = None
-    """Solar gain after accuracy discount."""
-
-    effective_soc_at_terminal: float | None = None
-    """Effective SOC (%) at terminal considering solar gains."""
 
     peak_soc_pct: float | None = None
     """Peak SOC (%) across all planned slots."""
