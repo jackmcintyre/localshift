@@ -185,10 +185,10 @@ class TestTerminalCostWithAccuracyDiscount:
 
 
 class TestTerminalDiagnostics:
-    """Tests for _get_terminal_diagnostics helper."""
+    """Tests for _get_terminal_diagnostics helper (simplified after Issue #816)."""
 
     def test_returns_all_diagnostic_fields(self):
-        """Verify all diagnostic fields are returned."""
+        """Verify all diagnostic fields are returned (simplified after #816)."""
         mock_decision = Mock()
         mock_decision.predicted_soc_pct = 85.0
         decisions: list = [mock_decision]
@@ -197,17 +197,14 @@ class TestTerminalDiagnostics:
         result = planner._get_terminal_diagnostics(
             soc_pct=60.0,
             target=95.0,
-            projected_solar_gain_pct=30.0,
             accuracy_discount=0.5,
             future_solar_gain_pct=5.0,
             decisions=decisions,
             terminal_penalty_idx=0,
         )
 
-        assert "projected_solar_gain_pct" in result
+        # After Issue #816: removed projected_solar_gain_pct, adjusted_solar_gain_pct, effective_soc_at_terminal
         assert "accuracy_discount_factor" in result
-        assert "adjusted_solar_gain_pct" in result
-        assert "effective_soc_at_terminal" in result
         assert "peak_soc_pct" in result
         assert "dw_entry_soc_pct" in result
 
@@ -217,7 +214,6 @@ class TestTerminalDiagnostics:
         result = planner._get_terminal_diagnostics(
             soc_pct=60.0,
             target=95.0,
-            projected_solar_gain_pct=30.0,
             accuracy_discount=0.5,
             future_solar_gain_pct=5.0,
             decisions=[],
@@ -240,7 +236,6 @@ class TestTerminalDiagnostics:
         result = planner._get_terminal_diagnostics(
             soc_pct=60.0,
             target=95.0,
-            projected_solar_gain_pct=30.0,
             accuracy_discount=0.5,
             future_solar_gain_pct=5.0,
             decisions=decisions,
@@ -258,11 +253,9 @@ class TestOptimizerResultDiagnosticFields:
         from custom_components.localshift.engine.optimizer_dp import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
+        # After Issue #816: simplified diagnostics
         assert result.forecast_accuracy is None
-        assert result.projected_solar_gain_pct is None
         assert result.accuracy_discount_factor is None
-        assert result.adjusted_solar_gain_pct is None
-        assert result.effective_soc_at_terminal is None
         assert result.peak_soc_pct is None
         assert result.dw_entry_soc_pct is None
 
@@ -359,20 +352,14 @@ class TestProjectedSolcastGainWithConfidence:
 
         result = OptimizerResult(
             success=True,
-            total_slots=3,
+            total_slots=4,
             forecast_accuracy=0.75,
-            projected_solar_gain_pct=30.0,
             accuracy_discount_factor=0.75,
-            adjusted_solar_gain_pct=22.5,
-            effective_soc_at_terminal=85.0,
             peak_soc_pct=92.0,
             dw_entry_soc_pct=88.0,
         )
         assert result.forecast_accuracy == 0.75
-        assert result.projected_solar_gain_pct == 30.0
         assert result.accuracy_discount_factor == 0.75
-        assert result.adjusted_solar_gain_pct == 22.5
-        assert result.effective_soc_at_terminal == 85.0
         assert result.peak_soc_pct == 92.0
         assert result.dw_entry_soc_pct == 88.0
 
@@ -438,9 +425,6 @@ class TestSolveDiagnostics:
         assert result.forecast_accuracy is not None
         assert result.forecast_accuracy == pytest.approx(0.75)
         assert result.accuracy_discount_factor is not None
-        assert result.projected_solar_gain_pct is not None
-        assert result.adjusted_solar_gain_pct is not None
-        assert result.effective_soc_at_terminal is not None
         assert result.peak_soc_pct is not None
         # dw_entry_soc_pct may or may not be None depending on terminal_penalty_idx
 
@@ -477,7 +461,6 @@ class TestSolveDiagnostics:
 
         assert result.success is True
         assert result.forecast_accuracy is None
-        assert result.projected_solar_gain_pct is None
 
     def test_future_solcast_projection_uses_confidence_resolver(self):
         """Future solar beyond the slot horizon uses confidence-aware projection."""
@@ -511,7 +494,6 @@ class TestSolveDiagnostics:
         result = planner._solve(inputs)
 
         assert result.success is True
-        assert result.projected_solar_gain_pct is not None
-        assert result.adjusted_solar_gain_pct is not None
-        assert result.projected_solar_gain_pct > 0.0
-        assert result.adjusted_solar_gain_pct < result.projected_solar_gain_pct
+        # Removed assertions for deleted diagnostic fields
+        # The test verified that future solar projection used confidence resolver,
+        # which is still active in the terminal cost calculation

@@ -34,7 +34,6 @@ from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
     can_solar_reach_target_feasible,
     get_forecast_accuracy,
-    projected_solar_soc_gain_pct,
     projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.transitions import transition as _transition
@@ -50,15 +49,9 @@ from custom_components.localshift.engine.types import (
 
 _LOGGER = logging.getLogger(__name__)
 
-
 # -----------------------------------------------------------------------------
-
-
 # Action priority for deterministic tie-breaking (lower index = higher priority)
-
-
 # -----------------------------------------------------------------------------
-
 
 _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.HOLD: 0,
@@ -69,38 +62,13 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
 
 
 class DPPlanner:
-    """
-
-
-
-    Deterministic dynamic-programming battery optimizer.
-
-
-
-
-
-
+    """Deterministic dynamic-programming battery optimizer.
 
     State space: (slot_index, soc_bin)
-
-
-
     Actions: PlannerAction enum
-
-
-
     Objective: minimize total net cost including shortfall penalty
 
-
-
-
-
-
-
     Phase C: Full DP implementation with deterministic tie-breaking.
-
-
-
     """
 
     VERSION = "dp_v1"
@@ -118,23 +86,9 @@ class DPPlanner:
     def plan(self, inputs: OptimizerInputs) -> OptimizerResult:
         """
 
-
-
         Run the DP optimizer over the provided inputs.
-
-
-
-
-
-
-
         Returns an OptimizerResult. On success, decisions contains one
-
-
-
         PlannedSlotDecision per slot in inputs.slots.
-
-
 
         """
 
@@ -168,51 +122,28 @@ class DPPlanner:
     def _solve(self, inputs: OptimizerInputs) -> OptimizerResult:
         """
 
-
-
         Full DP solver implementation.
-
-
-
-
-
-
-
         Algorithm:
-
-
 
           1. Build SOC grid from config
 
-
-
           2. Forward pass: compute cost-to-go for all (slot, soc_bin) states
-
-
 
           3. Backward pass: reconstruct optimal action sequence
 
-
-
           4. Build PlannedSlotDecision list with reason codes
-
-
 
         """
 
         config = inputs.config
-
         slots = inputs.slots
-
         n_slots = len(slots)
 
         if n_slots == 0:
             return self._empty_result()
 
         soc_grid = _build_soc_grid(config)
-
         demand_bounds = self._find_demand_window_bounds(slots)
-
         solar_capable = can_solar_reach_target(inputs, slots, config, demand_bounds)
 
         terminal_penalty_idx = self._determine_terminal_penalty_idx(
@@ -282,19 +213,12 @@ class DPPlanner:
                     confidence_resolver=confidence_resolver,
                 )
 
-            projected_solar_gain_pct = projected_solar_soc_gain_pct(
-                slot_idx=0,
-                slots=inputs.slots,
-                terminal_penalty_idx=terminal_penalty_idx,
-                battery_capacity_kwh=config.battery_capacity_kwh,
-            )
             forecast_accuracy_val = get_forecast_accuracy(inputs.solar_accuracy_tracker)
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy_val))
 
             terminal_diags = self._get_terminal_diagnostics(
                 soc_pct=inputs.initial_soc_pct,
                 target=config.demand_window_target_soc_pct,
-                projected_solar_gain_pct=projected_solar_gain_pct,
                 accuracy_discount=accuracy_discount,
                 future_solar_gain_pct=future_solar_gain_pct,
                 decisions=decisions,
@@ -318,12 +242,9 @@ class DPPlanner:
             can_solar_reach_target=can_solar,
             can_solar_reach_target_in_dw=solar_capable,
             reason_code_histogram=reason_histogram,
-            # Terminal diagnostics (PR #789 wiring fix)
+            # Terminal diagnostics (Issue #816: removed adjusted_solar_gain_pct, effective_soc_at_terminal)
             forecast_accuracy=forecast_accuracy_val,
-            projected_solar_gain_pct=terminal_diags.get("projected_solar_gain_pct"),
             accuracy_discount_factor=terminal_diags.get("accuracy_discount_factor"),
-            adjusted_solar_gain_pct=terminal_diags.get("adjusted_solar_gain_pct"),
-            effective_soc_at_terminal=terminal_diags.get("effective_soc_at_terminal"),
             peak_soc_pct=terminal_diags.get("peak_soc_pct"),
             dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
         )
@@ -345,54 +266,22 @@ class DPPlanner:
     ) -> dict[str, int | None]:
         """Find demand window entry and end indices for the FIRST DW block.
 
-
-
-
-
-
-
         When cross-day scenarios have multiple DW blocks, only the first block
-
-
 
         is considered (Issue #633).
 
-
-
-
-
-
-
         Args:
-
-
 
             slots: List of slot contexts
 
-
-
-
-
-
-
         Returns:
 
-
-
             Dict with 'entry_idx' and 'end_idx' keys
-
-
-
-
-
-
 
         """
 
         entry_idx = None
-
         end_idx = None
-
         in_demand_window = False
 
         for i, slot in enumerate(slots):
@@ -402,7 +291,6 @@ class DPPlanner:
 
                 elif in_demand_window:
                     end_idx = i - 1
-
                     break
 
             if slot.is_demand_window_slot:
@@ -410,7 +298,6 @@ class DPPlanner:
 
             if in_demand_window and not slot.is_demand_window_slot:
                 end_idx = i - 1
-
                 break
 
         if in_demand_window and end_idx is None:
@@ -423,39 +310,14 @@ class DPPlanner:
     ) -> int | None:
         """Determine where to apply terminal penalty.
 
-
-
-
-
-
-
         Args:
 
-
-
             config: Optimizer config
-
-
-
             demand_bounds: Demand window bounds
-
-
-
-
-
-
 
         Returns:
 
-
-
             Terminal penalty index or None
-
-
-
-
-
-
 
         """
 
@@ -474,31 +336,13 @@ class DPPlanner:
     ) -> list[dict[int, tuple[float, PlannerAction, int, float, float, float]]]:
         """Initialize DP tables with terminal costs.
 
-
-
-
-
-
-
         In self-consumption mode, credits future solar gain (Issue #619) to
-
-
 
         prevent grid charging when solar will cover the shortfall.
 
-
-
-
-
-
-
         Issue #624: In self_consumption mode, treat target as hard constraint by
 
-
-
         using infinite cost for states below target at terminal penalty index.
-
-
 
         """
 
@@ -506,7 +350,7 @@ class DPPlanner:
             {} for _ in range(n_slots + 1)
         ]
 
-        if terminal_penalty_idx is not None and not solar_can_reach_target:
+        if terminal_penalty_idx is not None:
             target = config.demand_window_target_soc_pct
 
             # Issue #619: Horizon-aware shortfall credit
@@ -523,13 +367,11 @@ class DPPlanner:
                 )
 
                 last_slot = inputs.slots[-1]
-
                 last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
 
                 last_slot_end = last_slot_start + timedelta(
                     minutes=last_slot.slot_interval_minutes
                 )
-
                 target_slot = inputs.slots[terminal_penalty_idx]
 
                 target_time = datetime.fromisoformat(target_slot.timestamp_iso)
@@ -568,53 +410,23 @@ class DPPlanner:
 
             hard_constraint_penalty = max_grid_cost * 10  # 10x the max cost
 
-            # Check if solar within the horizon can cover the deficit
-
-            # This prevents unnecessary grid charging when solar is sufficient
-
-            projected_solar_gain_pct = projected_solar_soc_gain_pct(
-                slot_idx=0,
-                slots=inputs.slots,
-                terminal_penalty_idx=terminal_penalty_idx,
-                battery_capacity_kwh=config.battery_capacity_kwh,
-            )
-
-            # Apply accuracy-based discount to projected solar (Issue #785)
-
+            # Apply accuracy-based discount to beyond-horizon solar (Issue #785)
             forecast_accuracy = get_forecast_accuracy(inputs.solar_accuracy_tracker)
-
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy))
 
-            adjusted_solar_gain_pct = projected_solar_gain_pct * accuracy_discount
-
-            # Add debug logging
-
             _LOGGER.debug(
-                "Terminal cost discount: accuracy=%.1f%%, discount=%.2f, "
-                "raw_solar_gain=%.1f%%, adjusted=%.1f%%",
+                "Terminal cost: forecast_accuracy=%.1f%%, discount=%.2f",
                 forecast_accuracy * 100,
                 accuracy_discount,
-                projected_solar_gain_pct,
-                adjusted_solar_gain_pct,
             )
 
             for bin_idx, soc in enumerate(soc_grid):
-                # Subtract future solar gain from shortfall (Issue #619)
-
-                effective_soc = soc + future_solar_gain_pct + adjusted_solar_gain_pct
+                effective_soc = soc + future_solar_gain_pct
 
                 if use_hard_constraint and effective_soc < target:
-                    # Hard constraint: very high penalty for states below target
-
-                    # This strongly incentivizes the optimizer to reach target
-
                     shortfall = target - effective_soc
-
                     shortfall_penalty = shortfall * hard_constraint_penalty
-
                 else:
-                    # Soft penalty for states at or above target, or in arbitrage mode
-
                     shortfall_penalty = _cost_terminal_cost(
                         effective_soc, target, config
                     )
@@ -640,7 +452,6 @@ class DPPlanner:
         self,
         soc_pct: float,
         target: float,
-        projected_solar_gain_pct: float,
         accuracy_discount: float,
         future_solar_gain_pct: float,
         decisions: list[PlannedSlotDecision],
@@ -648,62 +459,19 @@ class DPPlanner:
     ) -> dict[str, Any]:
         """Extract diagnostic metrics for terminal cost calculation.
 
-
-
-
-
-
-
         Args:
-
-
-
             soc_pct: Current state of charge percentage
-
-
-
             target: Target SOC percentage
-
-
-
-            projected_solar_gain_pct: Raw solar projection
-
-
-
             accuracy_discount: Applied discount factor
-
-
-
             future_solar_gain_pct: Beyond-horizon solar gain
-
-
-
             decisions: All optimizer decisions with predicted SOC
-
-
-
             terminal_penalty_idx: Index of terminal penalty slot
-
-
-
-
-
-
 
         Returns:
 
-
-
             Dictionary of diagnostic metrics
 
-
-
         """
-
-        adjusted_solar_gain = projected_solar_gain_pct * accuracy_discount
-
-        effective_soc = soc_pct + future_solar_gain_pct + adjusted_solar_gain
-
         peak_soc = max(d.predicted_soc_pct for d in decisions) if decisions else soc_pct
 
         dw_entry_soc = None
@@ -712,10 +480,7 @@ class DPPlanner:
             dw_entry_soc = decisions[terminal_penalty_idx].predicted_soc_pct
 
         return {
-            "projected_solar_gain_pct": round(projected_solar_gain_pct, 2),
             "accuracy_discount_factor": round(accuracy_discount, 2),
-            "adjusted_solar_gain_pct": round(adjusted_solar_gain, 2),
-            "effective_soc_at_terminal": round(effective_soc, 2),
             "peak_soc_pct": round(peak_soc, 2),
             "dw_entry_soc_pct": round(dw_entry_soc, 2) if dw_entry_soc else None,
         }
@@ -732,60 +497,22 @@ class DPPlanner:
     ) -> int:
         """Perform backward induction to fill DP tables.
 
-
-
-
-
-
-
         Args:
 
-
-
             dp: DP tables
-
-
-
             slots: Slot contexts
-
-
-
             soc_grid: SOC grid
-
-
-
             config: Optimizer config
-
-
-
             terminal_penalty_idx: Terminal penalty index
-
-
-
             inputs: Optimizer inputs
-
-
-
-
-
-
 
         Returns:
 
-
-
             Number of states explored
-
-
-
-
-
-
 
         """
 
         n_slots = len(slots)
-
         states_explored = 0
 
         for slot_idx in range(n_slots - 1, -1, -1):
@@ -804,9 +531,7 @@ class DPPlanner:
                     inputs,
                     negative_fit_avoidance_context,
                 )
-
                 dp[slot_idx][bin_idx] = best
-
                 states_explored += action_count
 
         return states_explored
@@ -826,67 +551,21 @@ class DPPlanner:
     ) -> tuple[tuple[float, PlannerAction, int, float, float, float], int]:
         """Compute best action for a state.
 
-
-
-
-
-
-
         Args:
 
-
-
             dp: DP tables
-
-
-
             slot_idx: Slot index
-
-
-
             slot: Slot context
-
-
-
             soc: Current SOC
-
-
-
             soc_grid: SOC grid
-
-
-
             config: Optimizer config
-
-
-
             terminal_penalty_idx: Terminal penalty index
-
-
-
             slots: All slots
-
-
-
             inputs: Optimizer inputs
-
-
-
-
-
-
 
         Returns:
 
-
-
             Tuple of (best result tuple, actions explored count)
-
-
-
-
-
-
 
         """
 
@@ -899,28 +578,18 @@ class DPPlanner:
             terminal_penalty_idx=terminal_penalty_idx,
             negative_fit_avoidance_context=negative_fit_avoidance_context,
         )
-
         best_cost = float("inf")
-
         best_action = PlannerAction.HOLD
-
         best_next_bin = 0
-
         best_import = 0.0
-
         best_export = 0.0
-
         best_next_soc = soc
-
         states_explored = 0
 
         for action in actions:
             next_soc, grid_import, grid_export = _transition(soc, action, slot, config)
-
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
-
             next_bin = _map_soc_to_bin(next_soc, soc_grid)
-
             future_cost = dp[slot_idx + 1].get(next_bin, (float("inf"),))[0]
 
             if future_cost == float("inf") and dp[slot_idx + 1]:
@@ -971,7 +640,6 @@ class DPPlanner:
                 solar_opportunity_penalty_factor=solar_opp_factor,
                 futile_cycling_penalty_factor=futile_factor,
             )
-
             total_cost = stage.net_cost + future_cost
 
             if total_cost < best_cost or (
@@ -980,15 +648,10 @@ class DPPlanner:
                 < _ACTION_PRIORITY.get(best_action, 99)
             ):
                 best_cost = total_cost
-
                 best_action = action
-
                 best_next_bin = next_bin
-
                 best_import = grid_import
-
                 best_export = grid_export
-
                 best_next_soc = next_soc
 
             states_explored += 1
@@ -1017,66 +680,25 @@ class DPPlanner:
     ) -> tuple[list[PlannedSlotDecision], dict[str, float], dict[str, int]]:
         """Reconstruct optimal path forward.
 
-
-
-
-
-
-
         Args:
 
-
-
             dp: DP tables
-
-
-
             inputs: Optimizer inputs
-
-
-
             slots: Slot contexts
-
-
-
             soc_grid: SOC grid
-
-
-
             config: Optimizer config
-
-
-
             terminal_penalty_idx: Terminal penalty index
-
-
-
-
-
-
 
         Returns:
 
-
-
             Tuple of (decisions, totals, reason_histogram)
-
-
-
-
-
-
 
         """
 
         decisions: list[PlannedSlotDecision] = []
-
         current_soc = inputs.initial_soc_pct
-
         current_bin = _map_soc_to_bin(current_soc, soc_grid)
-
         totals = {"import": 0.0, "export": 0.0, "net_cost": 0.0}
-
         reason_histogram: dict[str, int] = {}
 
         for slot_idx, slot in enumerate(slots):
@@ -1089,7 +711,6 @@ class DPPlanner:
             next_soc, grid_import, grid_export = _transition(
                 current_soc, action, slot, config
             )
-
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
 
             is_switch = (
@@ -1168,21 +789,16 @@ class DPPlanner:
                 sell_price=slot.sell_price,
                 is_solar_opportunity=stage.solar_opportunity_penalty > 0,
             )
-
             decisions.append(decision)
 
             totals["import"] += grid_import
-
             totals["export"] += grid_export
-
             totals["net_cost"] += stage.net_cost
 
             reason_key = reason.value
-
             reason_histogram[reason_key] = reason_histogram.get(reason_key, 0) + 1
 
             current_soc = next_soc
-
             current_bin = _map_soc_to_bin(current_soc, soc_grid)
 
         return decisions, totals, reason_histogram
@@ -1197,55 +813,20 @@ class DPPlanner:
     ) -> float:
         """Compute terminal shortfall.
 
-
-
-
-
-
-
         Args:
 
-
-
             inputs: Optimizer inputs
-
-
-
             decisions: Planned decisions
-
-
-
             config: Optimizer config
-
-
-
             terminal_penalty_idx: Terminal penalty index
-
-
 
             demand_bounds: Demand window bounds (entry_idx, end_idx) for first DW block.
 
-
-
                 Used to scope the solar simulation to the first DW block only (Issue #633).
-
-
-
-
-
-
 
         Returns:
 
-
-
             Terminal shortfall percentage
-
-
-
-
-
-
 
         """
 

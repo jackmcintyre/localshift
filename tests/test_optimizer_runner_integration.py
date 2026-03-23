@@ -453,20 +453,14 @@ class TestBuildSummary:
             success=True,
             total_slots=3,
             forecast_accuracy=0.75,
-            projected_solar_gain_pct=30.0,
             accuracy_discount_factor=0.75,
-            adjusted_solar_gain_pct=22.5,
-            effective_soc_at_terminal=85.0,
             peak_soc_pct=92.0,
             dw_entry_soc_pct=88.0,
         )
         summary = _build_summary(result, "cycle123", "2025-01-15T06:00:00Z")
 
         assert summary["forecast_accuracy"] == 0.75
-        assert summary["projected_solar_gain_pct"] == 30.0
         assert summary["accuracy_discount_factor"] == 0.75
-        assert summary["adjusted_solar_gain_pct"] == 22.5
-        assert summary["effective_soc_at_terminal"] == 85.0
         assert summary["peak_soc_pct"] == 92.0
         assert summary["dw_entry_soc_pct"] == 88.0
 
