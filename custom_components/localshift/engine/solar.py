@@ -73,23 +73,29 @@ def can_solar_reach_target_feasible(
 
 
 def projected_solar_soc_gain_pct(
+    *,
     slot_idx: int,
     slots: list[SlotContext],
     terminal_penalty_idx: int,
     battery_capacity_kwh: float,
+    initial_soc_pct: float,
+    config: OptimizerConfig,
 ) -> float:
-    """
-    Estimate the net SOC gain (%) achievable from solar between slot_idx
-    (inclusive) and terminal_penalty_idx (exclusive), after subtracting
-    household consumption.
-
-    A positive return value means solar surplus exceeds consumption over the
-    window; negative means consumption exceeds solar (net grid draw expected).
-    """
-    projected_net_kwh = sum(
-        s.solar_kwh - s.consumption_kwh for s in slots[slot_idx:terminal_penalty_idx]
+    """Estimate realistic SOC gain (%) from solar before the terminal deadline."""
+    from custom_components.localshift.engine.dp_math import (
+        _simulate_solar_only_terminal_soc,
     )
-    return (projected_net_kwh / battery_capacity_kwh) * 100.0
+
+    if terminal_penalty_idx <= slot_idx:
+        return 0.0
+
+    terminal_soc = _simulate_solar_only_terminal_soc(
+        initial_soc_pct=initial_soc_pct,
+        slots=slots[slot_idx:terminal_penalty_idx],
+        terminal_penalty_idx=terminal_penalty_idx - slot_idx,
+        config=config,
+    )
+    return max(0.0, terminal_soc - initial_soc_pct)
 
 
 def projected_solcast_gain_pct(

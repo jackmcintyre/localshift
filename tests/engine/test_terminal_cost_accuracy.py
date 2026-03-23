@@ -21,18 +21,12 @@ from custom_components.localshift.forecast.solcast_analysis import (
 )
 
 
-def test_target_shortfall_risk_passes_confidence_resolver(monkeypatch):
-    seen: dict[str, object] = {}
+def test_target_shortfall_risk_uses_forecast_accuracy_discount(monkeypatch):
+    """_is_target_shortfall_risk applies forecast accuracy as a discount multiplier.
 
-    def fake_projected_solcast_gain_pct(*args, confidence_resolver=None, **kwargs):
-        seen["resolver"] = confidence_resolver
-        return 0.0
-
-    monkeypatch.setattr(
-        "custom_components.localshift.engine.reason_codes.projected_solcast_gain_pct",
-        fake_projected_solcast_gain_pct,
-    )
-
+    With low accuracy, the projected solar gain is discounted, making shortfall
+    risk more likely even if solar projection is nominally sufficient.
+    """
     slots = [
         SlotContext(
             slot_index=0,
@@ -40,8 +34,8 @@ def test_target_shortfall_risk_passes_confidence_resolver(monkeypatch):
             slot_interval_minutes=30,
             buy_price=0.10,
             sell_price=0.05,
-            solar_kwh=0.0,
-            consumption_kwh=0.0,
+            solar_kwh=2.0,
+            consumption_kwh=0.1,
             is_demand_window_slot=False,
         ),
         SlotContext(
@@ -50,40 +44,62 @@ def test_target_shortfall_risk_passes_confidence_resolver(monkeypatch):
             slot_interval_minutes=30,
             buy_price=0.10,
             sell_price=0.05,
-            solar_kwh=0.0,
-            consumption_kwh=0.0,
+            solar_kwh=2.0,
+            consumption_kwh=0.1,
             is_demand_window_slot=True,
         ),
     ]
     config = OptimizerConfig(
         demand_window_target_soc_pct=80.0,
         battery_capacity_kwh=13.5,
+        charge_rate_kw=5.0,
+        solar_charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+        charge_efficiency=0.9,
+        min_soc_pct=5.0,
     )
-    inputs = OptimizerInputs(
-        cycle_id="resolver-check",
+
+    tracker_high = Mock()
+    tracker_high.metrics.accuracy = 100
+    inputs_high = OptimizerInputs(
+        cycle_id="accuracy-high",
         initial_soc_pct=70.0,
         slots=slots,
         config=config,
-        all_solcast=[
-            {
-                "period_start": "2026-03-20T09:00:00+00:00",
-                "pv_estimate": 4.0,
-            }
-        ],
-        solcast_analysis_today=None,
-        solcast_analysis_tomorrow=None,
+        all_solcast=[],
+        solar_accuracy_tracker=tracker_high,
     )
 
-    _is_target_shortfall_risk(
+    tracker_low = Mock()
+    tracker_low.metrics.accuracy = 30
+    inputs_low = OptimizerInputs(
+        cycle_id="accuracy-low",
+        initial_soc_pct=70.0,
+        slots=slots,
+        config=config,
+        all_solcast=[],
+        solar_accuracy_tracker=tracker_low,
+    )
+
+    result_high = _is_target_shortfall_risk(
         slot_idx=0,
         slots=slots,
         soc=70.0,
         config=config,
         terminal_penalty_idx=1,
-        inputs=inputs,
+        inputs=inputs_high,
+    )
+    result_low = _is_target_shortfall_risk(
+        slot_idx=0,
+        slots=slots,
+        soc=70.0,
+        config=config,
+        terminal_penalty_idx=1,
+        inputs=inputs_low,
     )
 
-    assert seen["resolver"] is not None
+    assert result_high is False
+    assert result_low is True
 
 
 class TestGetForecastAccuracy:

@@ -16,26 +16,8 @@ from custom_components.localshift.engine.constraints import (
     feasible_actions,
 )
 from custom_components.localshift.engine.cost import stage_cost
-from custom_components.localshift.engine.penalties import (
-    get_futile_cycling_penalty_factor,
-)
-from custom_components.localshift.engine.reason_codes import (
-    _is_cheap_import_window,
-    _is_target_shortfall_risk,
-    classify_charge_reason,
-    classify_export_reason,
-    classify_reason,
-)
-from custom_components.localshift.engine.solar import (
-    projected_solar_soc_gain_pct,
-    projected_solcast_gain_pct,
-)
 from custom_components.localshift.engine.negative_fit import (
     derive_negative_fit_avoidance_context,
-)
-from custom_components.localshift.engine.transitions import (
-    transition,
-    _transition_hold_deficit,
 )
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
@@ -50,6 +32,24 @@ from custom_components.localshift.engine.optimizer_dp import (
     _build_soc_grid,
     _map_soc_to_bin,
     _simulate_max_soc_in_demand_window,
+)
+from custom_components.localshift.engine.penalties import (
+    get_futile_cycling_penalty_factor,
+)
+from custom_components.localshift.engine.reason_codes import (
+    _is_cheap_import_window,
+    _is_target_shortfall_risk,
+    classify_charge_reason,
+    classify_export_reason,
+    classify_reason,
+)
+from custom_components.localshift.engine.solar import (
+    projected_solar_soc_gain_pct,
+    projected_solcast_gain_pct,
+)
+from custom_components.localshift.engine.transitions import (
+    _transition_hold_deficit,
+    transition,
 )
 
 # ---------------------------------------------------------------------------
@@ -1163,52 +1163,96 @@ def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
 
 
 def test_projected_solar_soc_gain_pct_positive_surplus():
-    """_projected_solar_soc_gain_pct returns positive when solar > consumption."""
+    """projected_solar_soc_gain_pct returns positive gain when solar > consumption.
+
+    Simulation caps gain at solar_charge_rate * slot_hours, so actual gain is
+    less than the naive sum would suggest.
+    """
     slots = [
         _make_slot(slot_index=i, solar_kwh=1.0, consumption_kwh=0.3) for i in range(4)
     ]
-    # 4 slots * (1.0 - 0.3) = 2.8 kWh net; 2.8/13.5 * 100 = ~20.7%
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        charge_rate_kw=5.0,
+        solar_charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+        charge_efficiency=0.9,
+        discharge_efficiency=0.95,
+        min_soc_pct=5.0,
+    )
+    # net=0.7 kWh/slot, solar_charge allows 2.5 kWh/slot, so 0.7 is the cap
+    # 4 slots * 0.7 kWh * 0.9 eff / 13.5 * 100 = ~18.67%
     result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=0,
         slots=slots,
         terminal_penalty_idx=4,
         battery_capacity_kwh=13.5,
+        initial_soc_pct=50.0,
+        config=config,
     )
-    assert result == pytest.approx((4 * 0.7 / 13.5) * 100.0, rel=1e-6)
+    assert result == pytest.approx(18.67, rel=0.01)
 
 
-def test_projected_solar_soc_gain_pct_negative_when_consumption_dominates():
-    """_projected_solar_soc_gain_pct returns negative when consumption > solar."""
+def test_projected_solar_soc_gain_pct_zero_when_consumption_dominates():
+    """When consumption dominates, projected solar gain is zero (not negative).
+
+    The function returns max(0, terminal_soc - initial_soc), so any net
+    consumption shortfall results in 0 gain, not negative.
+    """
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.1, consumption_kwh=0.5) for i in range(4)
     ]
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        charge_rate_kw=5.0,
+        solar_charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+        charge_efficiency=0.9,
+        discharge_efficiency=0.95,
+        min_soc_pct=5.0,
+    )
     result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=0,
         slots=slots,
         terminal_penalty_idx=4,
         battery_capacity_kwh=13.5,
+        initial_soc_pct=50.0,
+        config=config,
     )
-    assert result < 0.0
+    assert result == 0.0
 
 
 def test_projected_solar_soc_gain_pct_respects_slot_range():
-    """Only slots in [slot_idx, terminal_penalty_idx) are counted."""
+    """Only slots in [slot_idx, terminal_penalty_idx) are counted.
+
+    Slot 0 (large surplus) is excluded by slot_idx=1. Slots 1-2 have net
+    deficit, so terminal SOC ends below initial → gain is 0.
+    """
     slots = [
         _make_slot(slot_index=0, solar_kwh=3.0, consumption_kwh=0.1),  # large surplus
         _make_slot(slot_index=1, solar_kwh=0.0, consumption_kwh=0.5),  # deficit
         _make_slot(slot_index=2, solar_kwh=0.0, consumption_kwh=0.5),  # deficit
         _make_slot(slot_index=3, solar_kwh=3.0, consumption_kwh=0.1),  # ignored
     ]
-    # Only slots 1–2 (slot_idx=1, terminal=3); both are net deficit
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        charge_rate_kw=5.0,
+        solar_charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+        charge_efficiency=0.9,
+        discharge_efficiency=0.95,
+        min_soc_pct=5.0,
+    )
+    # slot_idx=1, terminal=3 → slots 1 and 2 (net deficit)
     result = projected_solar_soc_gain_pct(  # noqa: SLF001
         slot_idx=1,
         slots=slots,
         terminal_penalty_idx=3,
         battery_capacity_kwh=13.5,
+        initial_soc_pct=50.0,
+        config=config,
     )
-    # 2 slots * (0.0 - 0.5) = -1.0 kWh; -1.0/13.5*100 = -7.4%
-    assert result < 0.0
-    assert result == pytest.approx((2 * -0.5 / 13.5) * 100.0, rel=1e-6)
+    assert result == 0.0
 
 
 def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar():
@@ -2608,7 +2652,7 @@ def test_simulate_max_soc_with_demand_bounds():
 
 def test_projected_solcast_gain_pct():
     """Lines 1672-1689: _projected_solcast_gain_pct with valid solcast data."""
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     all_solcast = [
         {"period_start": "2026-01-03T10:00:00", "pv_estimate": 4.0},

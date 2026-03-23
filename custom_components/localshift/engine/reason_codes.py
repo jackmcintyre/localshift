@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
 from custom_components.localshift.engine.penalties import (
     get_solar_opportunity_penalty_factor,
 )
 from custom_components.localshift.engine.solar import (
+    get_forecast_accuracy,
     projected_solar_soc_gain_pct,
-    projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
@@ -20,7 +18,6 @@ from custom_components.localshift.engine.types import (
     PlannerReasonCode,
     SlotContext,
 )
-from custom_components.localshift.forecast.analysis_resolver import ConfidenceResolver
 
 
 def classify_reason(
@@ -187,46 +184,27 @@ def _is_target_shortfall_risk(
     terminal_penalty_idx: int | None,
     inputs: OptimizerInputs | None = None,
 ) -> bool:
-    """Check if grid charge is needed for demand window target.
-
-    Incorporates future solar gain from Solcast beyond the horizon (Issue #619).
-    """
+    """Check if grid charge is needed for demand window target."""
     if terminal_penalty_idx is None or slot_idx >= terminal_penalty_idx:
         return False
     soc_deficit = config.demand_window_target_soc_pct - soc
     if soc_deficit <= 0:
         return False
 
-    # 1. Gain from solar within slots
     potential_soc_gain_pct = projected_solar_soc_gain_pct(
         slot_idx=slot_idx,
         slots=slots,
         terminal_penalty_idx=terminal_penalty_idx,
         battery_capacity_kwh=config.battery_capacity_kwh,
+        initial_soc_pct=soc,
+        config=config,
     )
 
-    # 2. Gain from solar beyond horizon (Issue #619)
-    if inputs and inputs.all_solcast:
-        last_slot = slots[-1]
-        last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
-        last_slot_end = last_slot_start + timedelta(
-            minutes=last_slot.slot_interval_minutes
-        )
-        target_slot = slots[terminal_penalty_idx]
-        target_time = datetime.fromisoformat(target_slot.timestamp_iso)
-        confidence_resolver = ConfidenceResolver(
-            getattr(inputs, "solcast_analysis_today", None),
-            getattr(inputs, "solcast_analysis_tomorrow", None),
-        )
-
-        future_gain = projected_solcast_gain_pct(
-            inputs.all_solcast,
-            start_time=last_slot_end,
-            end_time=target_time,
-            battery_capacity_kwh=config.battery_capacity_kwh,
-            confidence_resolver=confidence_resolver,
-        )
-        potential_soc_gain_pct += future_gain
+    forecast_accuracy = (
+        get_forecast_accuracy(inputs.solar_accuracy_tracker) if inputs else 1.0
+    )
+    accuracy_discount = max(0.0, min(1.0, forecast_accuracy))
+    potential_soc_gain_pct *= accuracy_discount
 
     return potential_soc_gain_pct < soc_deficit
 

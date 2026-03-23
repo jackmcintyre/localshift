@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
+
 import custom_components.localshift.engine.reason_codes as _rc_module
 from custom_components.localshift.engine.reason_codes import (
     _is_blind_to_future_solar,
+    _is_target_shortfall_risk,
     classify_export_reason,
     classify_hold_reason,
     classify_reason,
@@ -234,3 +238,132 @@ class TestIsBlindToFutureSolar:
             inputs=None,
         )
         assert result is True
+
+
+class TestIsTargetShortfallRisk:
+    """Tests for _is_target_shortfall_risk with accuracy discount."""
+
+    def test_shortfall_risk_scales_with_accuracy_discount(self):
+        base = datetime(2026, 3, 20, 10, 0, tzinfo=UTC)
+        slots = [
+            SlotContext(
+                slot_index=i,
+                timestamp_iso=(base + timedelta(minutes=30 * i)).isoformat(),
+                slot_interval_minutes=30,
+                buy_price=0.30,
+                sell_price=0.05,
+                solar_kwh=2.0,
+                consumption_kwh=0.1,
+                is_demand_window_entry=i == 3,
+                is_demand_window_slot=i >= 3,
+            )
+            for i in range(4)
+        ]
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            solar_charge_rate_kw=5.0,
+            discharge_rate_kw=5.0,
+            demand_window_target_soc_pct=80.0,
+            optimization_mode="self_consumption",
+            allow_dw_entry_under_target=False,
+            switching_penalty=0.02,
+            cycle_penalty_per_kwh=0.08,
+            target_shortfall_penalty_per_pct=0.015,
+        )
+
+        tracker_high = Mock()
+        tracker_high.metrics.accuracy = 100
+        inputs_high = OptimizerInputs(
+            cycle_id="test_accuracy_high",
+            initial_soc_pct=60.0,
+            slots=slots,
+            config=config,
+            solar_accuracy_tracker=tracker_high,
+            all_solcast=[],
+        )
+
+        tracker_low = Mock()
+        tracker_low.metrics.accuracy = 10
+        inputs_low = OptimizerInputs(
+            cycle_id="test_accuracy_low",
+            initial_soc_pct=60.0,
+            slots=slots,
+            config=config,
+            solar_accuracy_tracker=tracker_low,
+            all_solcast=[],
+        )
+
+        assert (
+            _is_target_shortfall_risk(
+                slot_idx=0,
+                slots=slots,
+                soc=inputs_high.initial_soc_pct,
+                config=config,
+                terminal_penalty_idx=3,
+                inputs=inputs_high,
+            )
+            is False
+        )
+        assert (
+            _is_target_shortfall_risk(
+                slot_idx=0,
+                slots=slots,
+                soc=inputs_low.initial_soc_pct,
+                config=config,
+                terminal_penalty_idx=3,
+                inputs=inputs_low,
+            )
+            is True
+        )
+
+    def test_shortfall_risk_ignores_beyond_horizon_solcast(self):
+        base = datetime(2026, 3, 20, 10, 0, tzinfo=UTC)
+        slots = [
+            SlotContext(
+                slot_index=i,
+                timestamp_iso=(base + timedelta(minutes=30 * i)).isoformat(),
+                slot_interval_minutes=30,
+                buy_price=0.30,
+                sell_price=0.05,
+                solar_kwh=0.2,
+                consumption_kwh=0.6,
+                is_demand_window_entry=i == 3,
+                is_demand_window_slot=i >= 3,
+            )
+            for i in range(4)
+        ]
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            solar_charge_rate_kw=5.0,
+            discharge_rate_kw=5.0,
+            demand_window_target_soc_pct=80.0,
+            optimization_mode="self_consumption",
+            allow_dw_entry_under_target=False,
+            switching_penalty=0.02,
+            cycle_penalty_per_kwh=0.08,
+            target_shortfall_penalty_per_pct=0.015,
+        )
+
+        tracker = Mock()
+        tracker.metrics.accuracy = 100
+        inputs = OptimizerInputs(
+            cycle_id="test_no_solcast",
+            initial_soc_pct=60.0,
+            slots=slots,
+            config=config,
+            solar_accuracy_tracker=tracker,
+            all_solcast=[],
+        )
+
+        result = _is_target_shortfall_risk(
+            slot_idx=0,
+            slots=slots,
+            soc=inputs.initial_soc_pct,
+            config=config,
+            terminal_penalty_idx=3,
+            inputs=inputs,
+        )
+
+        assert isinstance(result, bool)
