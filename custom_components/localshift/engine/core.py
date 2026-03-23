@@ -87,9 +87,7 @@ class DPPlanner:
         """
 
         Run the DP optimizer over the provided inputs.
-
         Returns an OptimizerResult. On success, decisions contains one
-
         PlannedSlotDecision per slot in inputs.slots.
 
         """
@@ -125,7 +123,6 @@ class DPPlanner:
         """
 
         Full DP solver implementation.
-
         Algorithm:
 
           1. Build SOC grid from config
@@ -139,18 +136,14 @@ class DPPlanner:
         """
 
         config = inputs.config
-
         slots = inputs.slots
-
         n_slots = len(slots)
 
         if n_slots == 0:
             return self._empty_result()
 
         soc_grid = _build_soc_grid(config)
-
         demand_bounds = self._find_demand_window_bounds(slots)
-
         solar_capable = can_solar_reach_target(inputs, slots, config, demand_bounds)
 
         terminal_penalty_idx = self._determine_terminal_penalty_idx(
@@ -288,9 +281,7 @@ class DPPlanner:
         """
 
         entry_idx = None
-
         end_idx = None
-
         in_demand_window = False
 
         for i, slot in enumerate(slots):
@@ -300,7 +291,6 @@ class DPPlanner:
 
                 elif in_demand_window:
                     end_idx = i - 1
-
                     break
 
             if slot.is_demand_window_slot:
@@ -308,7 +298,6 @@ class DPPlanner:
 
             if in_demand_window and not slot.is_demand_window_slot:
                 end_idx = i - 1
-
                 break
 
         if in_demand_window and end_idx is None:
@@ -324,7 +313,6 @@ class DPPlanner:
         Args:
 
             config: Optimizer config
-
             demand_bounds: Demand window bounds
 
         Returns:
@@ -377,15 +365,12 @@ class DPPlanner:
                 from custom_components.localshift.forecast.analysis_resolver import (
                     ConfidenceResolver,
                 )
-
                 last_slot = inputs.slots[-1]
-
                 last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
 
                 last_slot_end = last_slot_start + timedelta(
                     minutes=last_slot.slot_interval_minutes
                 )
-
                 target_slot = inputs.slots[terminal_penalty_idx]
 
                 target_time = datetime.fromisoformat(target_slot.timestamp_iso)
@@ -514,15 +499,10 @@ class DPPlanner:
         Args:
 
             dp: DP tables
-
             slots: Slot contexts
-
             soc_grid: SOC grid
-
             config: Optimizer config
-
             terminal_penalty_idx: Terminal penalty index
-
             inputs: Optimizer inputs
 
         Returns:
@@ -532,7 +512,6 @@ class DPPlanner:
         """
 
         n_slots = len(slots)
-
         states_explored = 0
 
         for slot_idx in range(n_slots - 1, -1, -1):
@@ -551,9 +530,7 @@ class DPPlanner:
                     inputs,
                     negative_fit_avoidance_context,
                 )
-
                 dp[slot_idx][bin_idx] = best
-
                 states_explored += action_count
 
         return states_explored
@@ -576,21 +553,13 @@ class DPPlanner:
         Args:
 
             dp: DP tables
-
             slot_idx: Slot index
-
             slot: Slot context
-
             soc: Current SOC
-
             soc_grid: SOC grid
-
             config: Optimizer config
-
             terminal_penalty_idx: Terminal penalty index
-
             slots: All slots
-
             inputs: Optimizer inputs
 
         Returns:
@@ -608,28 +577,18 @@ class DPPlanner:
             terminal_penalty_idx=terminal_penalty_idx,
             negative_fit_avoidance_context=negative_fit_avoidance_context,
         )
-
         best_cost = float("inf")
-
         best_action = PlannerAction.HOLD
-
         best_next_bin = 0
-
         best_import = 0.0
-
         best_export = 0.0
-
         best_next_soc = soc
-
         states_explored = 0
 
         for action in actions:
             next_soc, grid_import, grid_export = _transition(soc, action, slot, config)
-
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
-
             next_bin = _map_soc_to_bin(next_soc, soc_grid)
-
             future_cost = dp[slot_idx + 1].get(next_bin, (float("inf"),))[0]
 
             if future_cost == float("inf") and dp[slot_idx + 1]:
@@ -680,7 +639,6 @@ class DPPlanner:
                 solar_opportunity_penalty_factor=solar_opp_factor,
                 futile_cycling_penalty_factor=futile_factor,
             )
-
             total_cost = stage.net_cost + future_cost
 
             if total_cost < best_cost or (
@@ -724,15 +682,10 @@ class DPPlanner:
         Args:
 
             dp: DP tables
-
             inputs: Optimizer inputs
-
             slots: Slot contexts
-
             soc_grid: SOC grid
-
             config: Optimizer config
-
             terminal_penalty_idx: Terminal penalty index
 
         Returns:
@@ -742,13 +695,9 @@ class DPPlanner:
         """
 
         decisions: list[PlannedSlotDecision] = []
-
         current_soc = inputs.initial_soc_pct
-
         current_bin = _map_soc_to_bin(current_soc, soc_grid)
-
         totals = {"import": 0.0, "export": 0.0, "net_cost": 0.0}
-
         reason_histogram: dict[str, int] = {}
 
         for slot_idx, slot in enumerate(slots):
@@ -761,7 +710,6 @@ class DPPlanner:
             next_soc, grid_import, grid_export = _transition(
                 current_soc, action, slot, config
             )
-
             next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
 
             is_switch = (
@@ -840,7 +788,6 @@ class DPPlanner:
                 sell_price=slot.sell_price,
                 is_solar_opportunity=stage.solar_opportunity_penalty > 0,
             )
-
             decisions.append(decision)
 
             totals["import"] += grid_import
@@ -868,11 +815,8 @@ class DPPlanner:
         Args:
 
             inputs: Optimizer inputs
-
             decisions: Planned decisions
-
             config: Optimizer config
-
             terminal_penalty_idx: Terminal penalty index
 
             demand_bounds: Demand window bounds (entry_idx, end_idx) for first DW block.
