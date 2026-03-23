@@ -1,10 +1,12 @@
 """Tests for solar.py functions."""
 
-import pytest
+
+from datetime import UTC
 
 from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
     can_solar_reach_target_feasible,
+    projected_solar_soc_gain_pct,
 )
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
@@ -390,3 +392,54 @@ class TestCanSolarReachTargetFeasible:
         # Both should return True since can_solar_reach_target_feasible is not affected by the gate
         assert result_with_gate is True
         assert result_without_gate is True
+
+
+class TestProjectedSolarSocGainPct:
+    """Tests for projected_solar_soc_gain_pct with simulation-based calculation."""
+
+    def test_projected_solar_gain_respects_charge_rate_and_efficiency(self):
+        """Simulation caps gain at solar_charge_rate, not at full solar_kwh.
+
+        Even with 6.0 kWh solar in one slot, the gain is capped by
+        solar_charge_rate_kw * slot_hours * efficiency.
+        """
+        from datetime import datetime
+
+        base = datetime(2026, 3, 20, 10, 0, tzinfo=UTC)
+        slots = [
+            SlotContext(
+                slot_index=0,
+                timestamp_iso=base.isoformat(),
+                slot_interval_minutes=30,
+                buy_price=0.30,
+                sell_price=0.05,
+                solar_kwh=6.0,
+                consumption_kwh=0.1,
+                is_demand_window_entry=True,
+                is_demand_window_slot=True,
+            )
+        ]
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=5.0,
+            solar_charge_rate_kw=1.0,
+            discharge_rate_kw=5.0,
+            charge_efficiency=0.9,
+            demand_window_target_soc_pct=95.0,
+            optimization_mode="self_consumption",
+            allow_dw_entry_under_target=False,
+            switching_penalty=0.02,
+            cycle_penalty_per_kwh=0.08,
+            target_shortfall_penalty_per_pct=0.015,
+        )
+
+        gain_pct = projected_solar_soc_gain_pct(
+            slot_idx=0,
+            slots=slots,
+            terminal_penalty_idx=1,
+            battery_capacity_kwh=config.battery_capacity_kwh,
+            initial_soc_pct=60.0,
+            config=config,
+        )
+
+        assert gain_pct < 10.0
