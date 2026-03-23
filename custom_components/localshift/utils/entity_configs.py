@@ -366,11 +366,6 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": float,
         "staleness_minutes": 15,
     },
-    "sensor.localshift_cost_reconciliation": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": str,
-        "staleness_minutes": 1440,
-    },
     "sensor.localshift_learning_status": {
         "category": EntityCategory.OPTIONAL,
         "expected_type": str,

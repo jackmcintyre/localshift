@@ -56,3 +56,18 @@ snapshots/
 # Worktrees (local development only)
 worktrees/
 
+# ── GSD baseline (auto-generated) ──
+.gsd
+*.code-workspace
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+*.pyc
+target/
+vendor/
+coverage/
+.cache/
+tmp/
+
