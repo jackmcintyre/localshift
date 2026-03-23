@@ -506,7 +506,7 @@ class DPPlanner:
             {} for _ in range(n_slots + 1)
         ]
 
-        if terminal_penalty_idx is not None and not solar_can_reach_target:
+        if terminal_penalty_idx is not None:
             target = config.demand_window_target_soc_pct
 
             # Issue #619: Horizon-aware shortfall credit
@@ -599,22 +599,12 @@ class DPPlanner:
             )
 
             for bin_idx, soc in enumerate(soc_grid):
-                # Subtract future solar gain from shortfall (Issue #619)
-
-                effective_soc = soc + future_solar_gain_pct + adjusted_solar_gain_pct
+                effective_soc = soc + future_solar_gain_pct
 
                 if use_hard_constraint and effective_soc < target:
-                    # Hard constraint: very high penalty for states below target
-
-                    # This strongly incentivizes the optimizer to reach target
-
                     shortfall = target - effective_soc
-
                     shortfall_penalty = shortfall * hard_constraint_penalty
-
                 else:
-                    # Soft penalty for states at or above target, or in arbitrage mode
-
                     shortfall_penalty = _cost_terminal_cost(
                         effective_soc, target, config
                     )
