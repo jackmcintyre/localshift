@@ -34,7 +34,6 @@ from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
     can_solar_reach_target_feasible,
     get_forecast_accuracy,
-    projected_solar_soc_gain_pct,
     projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.transitions import transition as _transition
