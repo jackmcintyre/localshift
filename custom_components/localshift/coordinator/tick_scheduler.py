@@ -37,13 +37,18 @@ class TickScheduler:
         """
         self._coordinator = coordinator
 
+        # Solar energy tracking for backfill (Issue #513)
+        # Moved from coordinator — only TickScheduler reads/writes these
+        self._last_solar_power_kw: float | None = None
+        self._last_solar_power_timestamp: datetime | None = None
+
     @callback
     def handle_state_change(self, _event: Event) -> None:
         """Handle a state change from a monitored entity."""
-        if self._coordinator._evaluation_dispatcher is None:
+        if self._coordinator.evaluation_dispatcher is None:
             return
 
-        self._coordinator._evaluation_dispatcher.on_state_change(_event)
+        self._coordinator.evaluation_dispatcher.on_state_change(_event)
 
     @callback
     def handle_periodic_tick(self, now: datetime) -> None:
@@ -66,8 +71,8 @@ class TickScheduler:
         price changes (Issue #622 - legacy price gate removed).
         """
         # Read raw entity values now — needed for cost accumulation
-        if self._coordinator._entity_monitor is not None:
-            self._coordinator._entity_monitor.read_all_external_state()
+        if self._coordinator.entity_monitor is not None:
+            self._coordinator.entity_monitor.read_all_external_state()
 
         # Cost accumulation uses the raw state we just read (sync, no lock needed)
         self._accumulate_costs()
@@ -81,8 +86,8 @@ class TickScheduler:
 
         # Issue #478: Check if automation just became ready during startup
         # Triggers immediate evaluation when transitioning from not-ready to ready
-        if self._coordinator._evaluation_dispatcher is not None:
-            self._coordinator._evaluation_dispatcher.maybe_trigger_on_startup_ready(
+        if self._coordinator.evaluation_dispatcher is not None:
+            self._coordinator.evaluation_dispatcher.maybe_trigger_on_startup_ready(
                 lambda: (
                     self._coordinator.data.automation_ready
                     if self._coordinator.data
@@ -93,8 +98,8 @@ class TickScheduler:
         # Issue #622: Always dispatch to StateMachine
         # StateMachine gates mode transitions based on price fingerprint
         # This ensures optimizer runs every minute for plan updates
-        if self._coordinator._evaluation_dispatcher is not None:
-            self._coordinator._evaluation_dispatcher.on_fast_tick(now)
+        if self._coordinator.evaluation_dispatcher is not None:
+            self._coordinator.evaluation_dispatcher.on_fast_tick(now)
 
     @callback
     def handle_medium_tick(self, now: datetime) -> None:
@@ -108,8 +113,8 @@ class TickScheduler:
         - Baseline calculation
         """
         # Read raw entity values
-        if self._coordinator._entity_monitor is not None:
-            self._coordinator._entity_monitor.read_all_external_state()
+        if self._coordinator.entity_monitor is not None:
+            self._coordinator.entity_monitor.read_all_external_state()
 
         # Skip expensive operations during startup grace period
         if self._is_in_startup_grace():
@@ -117,31 +122,29 @@ class TickScheduler:
             return
 
         # Check entity health
-        if self._coordinator._entity_monitor is not None:
-            self._coordinator._entity_monitor.check_entity_health()
+        if self._coordinator.entity_monitor is not None:
+            self._coordinator.entity_monitor.check_entity_health()
 
         # Refresh load data (historical and recent)
-        if self._coordinator._computation_engine is not None:
+        if self._coordinator.computation_engine is not None:
             from ..const import CONF_TESLEMETRY_LOAD_POWER
 
-            load_entity_id = self._coordinator._get_entity_id(
-                CONF_TESLEMETRY_LOAD_POWER
-            )
+            load_entity_id = self._coordinator.get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
             self._coordinator.hass.async_create_task(
-                self._coordinator._computation_engine.async_get_recent_load_1hr(
+                self._coordinator.computation_engine.async_get_recent_load_1hr(
                     load_entity_id
                 ),
                 "localshift_fetch_recent_load",
             )
             self._coordinator.hass.async_create_task(
-                self._coordinator._computation_engine.async_get_historical_hourly_averages(
+                self._coordinator.computation_engine.async_get_historical_hourly_averages(
                     load_entity_id
                 ),
                 "localshift_fetch_historical_load",
             )
 
-        if self._coordinator._learning_orchestrator is not None:
-            self._coordinator._learning_orchestrator.update_medium_tick(
+        if self._coordinator.learning_orchestrator is not None:
+            self._coordinator.learning_orchestrator.update_medium_tick(
                 self._coordinator.data
             )
 
@@ -165,9 +168,9 @@ class TickScheduler:
             )
 
         # Learn from current temperature/load for weather correlation
-        if self._coordinator._computation_engine is not None:
+        if self._coordinator.computation_engine is not None:
             self._coordinator.hass.async_create_task(
-                self._coordinator._computation_engine.async_learn_weather_sample(
+                self._coordinator.computation_engine.async_learn_weather_sample(
                     self._coordinator.data
                 ),
                 "localshift_weather_learning",
@@ -185,30 +188,30 @@ class TickScheduler:
         - Forecast history save
         """
         # Refresh temperature forecast from weather entity (Issue #135)
-        if self._coordinator._entity_monitor is not None:
+        if self._coordinator.entity_monitor is not None:
             self._coordinator.hass.async_create_task(
-                self._coordinator._entity_monitor.refresh_weather_forecast(),
+                self._coordinator.entity_monitor.refresh_weather_forecast(),
                 "localshift_weather_forecast",
             )
 
         # Refresh weather forecast
-        if self._coordinator._computation_engine is not None:
+        if self._coordinator.computation_engine is not None:
             self._coordinator.hass.async_create_task(
-                self._coordinator._computation_engine.async_compute_forecast_accuracy(
+                self._coordinator.computation_engine.async_compute_forecast_accuracy(
                     self._coordinator.data
                 ),
                 "localshift_forecast_accuracy",
             )
             # Save forecast history periodically (Issue #131)
             self._coordinator.hass.async_create_task(
-                self._coordinator._computation_engine.async_save_forecast_history(
+                self._coordinator.computation_engine.async_save_forecast_history(
                     self._coordinator.data
                 ),
                 "localshift_save_forecast_history",
             )
             # Save accuracy metrics periodically (Issue #706)
             self._coordinator.hass.async_create_task(
-                self._coordinator._computation_engine.async_save_accuracy_metrics(
+                self._coordinator.computation_engine.async_save_accuracy_metrics(
                     self._coordinator.data
                 ),
                 "localshift_save_accuracy_metrics",
@@ -235,12 +238,12 @@ class TickScheduler:
         self._coordinator.data.battery_charge_cost = 0.0
         self._coordinator.data.target_reached_today = False
 
-        if self._coordinator._learning_orchestrator is not None:
-            self._coordinator._learning_orchestrator.handle_midnight_reset(
+        if self._coordinator.learning_orchestrator is not None:
+            self._coordinator.learning_orchestrator.handle_midnight_reset(
                 self._coordinator.data
             )
 
-        self._coordinator._notify_listeners()
+        self._coordinator.notify_listeners()
         _LOGGER.info("Midnight reset: cost accumulators and target flag")
 
     @callback
@@ -264,10 +267,10 @@ class TickScheduler:
 
         Called by handle_daily_summary to send end-of-day notification.
         """
-        if self._coordinator._notification_service is None:
+        if self._coordinator.notification_service is None:
             return
 
-        await self._coordinator._notification_service.send_daily_summary(
+        await self._coordinator.notification_service.send_daily_summary(
             self._coordinator.data
         )
 
@@ -278,14 +281,14 @@ class TickScheduler:
         False otherwise. Used to skip expensive operations during initialization
         when entities may not be populated yet (Issue #551).
         """
-        if self._coordinator._state_machine is None:
+        if self._coordinator.state_machine is None:
             return True
-        return self._coordinator._state_machine._startup_grace_until is not None
+        return self._coordinator.state_machine.startup_grace_until is not None
 
     def _accumulate_costs(self) -> None:
         """Accumulate per-minute energy costs from current power and price."""
-        if self._coordinator._cost_tracker is not None:
-            self._coordinator._cost_tracker.accumulate_costs(self._coordinator.data)
+        if self._coordinator.cost_tracker is not None:
+            self._coordinator.cost_tracker.accumulate_costs(self._coordinator.data)
 
     def _backfill_solar_actual(self) -> None:
         """Backfill actual solar energy for completed 30-min periods.
@@ -308,18 +311,20 @@ class TickScheduler:
         now = dt_util.now()
         current_power = self._coordinator.data.solar_power_kw
 
-        if self._coordinator._last_solar_power_timestamp is None:
-            self._coordinator._last_solar_power_timestamp = now
-            self._coordinator._last_solar_power_kw = current_power
+        if self._last_solar_power_timestamp is None:
+            self._last_solar_power_timestamp = now
+            self._last_solar_power_kw = current_power
             return
 
+        assert self._last_solar_power_kw is not None  # nosec B101 — type narrowing, not assertion
+
         time_delta_hours = (
-            now - self._coordinator._last_solar_power_timestamp
+            now - self._last_solar_power_timestamp
         ).total_seconds() / 3600.0
         if time_delta_hours < 0.01:
             return
 
-        avg_power_kw = (self._coordinator._last_solar_power_kw + current_power) / 2.0
+        avg_power_kw = (self._last_solar_power_kw + current_power) / 2.0
         energy_kwh = avg_power_kw * time_delta_hours
 
         if energy_kwh > 0.001 and current_power > 0.01:
@@ -329,5 +334,5 @@ class TickScheduler:
             )
             tracker.backfill_actual(period_start, energy_kwh)
 
-        self._coordinator._last_solar_power_timestamp = now
-        self._coordinator._last_solar_power_kw = current_power
+        self._last_solar_power_timestamp = now
+        self._last_solar_power_kw = current_power

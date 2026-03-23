@@ -120,10 +120,6 @@ class LocalShiftCoordinator:
         self._subscription_manager: SubscriptionManager | None = None
         self._tick_scheduler: TickScheduler | None = None
 
-        # Solar energy tracking for backfill (Issue #513)
-        self._last_solar_power_kw: float = 0.0
-        self._last_solar_power_timestamp: datetime | None = None
-
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
@@ -133,7 +129,7 @@ class LocalShiftCoordinator:
         """Return the configured external entity IDs."""
         return self.entry.data
 
-    def _get_entity_id(self, key: str) -> str:
+    def get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
 
         For notify_service, checks options first (new location) then data
@@ -166,7 +162,46 @@ class LocalShiftCoordinator:
         """
         if self._state_machine is None:
             return True
-        return self._state_machine._startup_grace_until is not None
+        return self._state_machine.startup_grace_until is not None
+
+    # ------------------------------------------------------------------
+    # Sub-object accessors (public API for TickScheduler)
+    # ------------------------------------------------------------------
+
+    @property
+    def evaluation_dispatcher(self) -> EvaluationDispatcher | None:
+        """Return the evaluation dispatcher, if initialized."""
+        return self._evaluation_dispatcher
+
+    @property
+    def entity_monitor(self) -> EntityMonitor | None:
+        """Return the entity monitor, if initialized."""
+        return self._entity_monitor
+
+    @property
+    def computation_engine(self) -> ComputationEngine | None:
+        """Return the computation engine, if initialized."""
+        return self._computation_engine
+
+    @property
+    def learning_orchestrator(self) -> LearningOrchestrator | None:
+        """Return the learning orchestrator, if initialized."""
+        return self._learning_orchestrator
+
+    @property
+    def state_machine(self) -> StateMachine | None:
+        """Return the state machine, if initialized."""
+        return self._state_machine
+
+    @property
+    def cost_tracker(self) -> CostTracker | None:
+        """Return the cost tracker, if initialized."""
+        return self._cost_tracker
+
+    @property
+    def notification_service(self) -> NotificationService | None:
+        """Return the notification service, if initialized."""
+        return self._notification_service
 
     # ------------------------------------------------------------------
     # Options helpers (read from config entry options)
@@ -203,7 +238,7 @@ class LocalShiftCoordinator:
         from ..utils.costs import CostTracker
         from ..utils.validation import EntityValidator
 
-        self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
+        self._entity_validator = EntityValidator(self.hass, self.get_entity_id)
 
         # Import EntityMonitor
         from .entity_monitor import EntityMonitor
@@ -228,12 +263,12 @@ class LocalShiftCoordinator:
             self.hass, self.entry, self._entity_validator, _pricing_provider
         )
         self._cost_tracker = CostTracker(self.hass)
-        self._battery_controller = BatteryController(self.hass, self._get_entity_id)
+        self._battery_controller = BatteryController(self.hass, self.get_entity_id)
         self._notification_service = NotificationService(
-            self.hass, self.entry, self._get_entity_id, self.get_switch_state
+            self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )
         self._computation_engine = ComputationEngine(
-            self.hass, self.entry, self._get_entity_id, self.get_switch_state
+            self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )
         self._state_machine = StateMachine(
             self._battery_controller,
@@ -299,23 +334,23 @@ class LocalShiftCoordinator:
         # - OPERATION_MODE/BACKUP_RESERVE: outputs, health-checked in 1-min tick
         monitored_entities = [
             # Price entities - trigger mode decisions on price changes
-            self._get_entity_id(CONF_PRICING_GENERAL_PRICE),
-            self._get_entity_id(CONF_PRICING_FEED_IN_PRICE),
-            self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
-            self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
-            self._get_entity_id(CONF_PRICING_PRICE_SPIKE),
+            self.get_entity_id(CONF_PRICING_GENERAL_PRICE),
+            self.get_entity_id(CONF_PRICING_FEED_IN_PRICE),
+            self.get_entity_id(CONF_PRICING_GENERAL_FORECAST),
+            self.get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
+            self.get_entity_id(CONF_PRICING_PRICE_SPIKE),
             # Solcast entities - trigger forecast recomputation
-            self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
-            self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
+            self.get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
+            self.get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
             # SOC - trigger target stop when battery reaches target
-            # self._get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
+            # self.get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
         ]
 
         self._evaluation_dispatcher = EvaluationDispatcher(
             self.hass,
-            self._get_entity_id,
+            self.get_entity_id,
             self._read_all_external_state,
-            self._notify_listeners,
+            self.notify_listeners,
             self._evaluate_state_machine,
             self._state_machine,
             STALE_PRICE_THRESHOLD,
@@ -358,7 +393,7 @@ class LocalShiftCoordinator:
             )
 
         # Fetch historical load data in background (runs in thread pool, won't block)
-        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        load_entity_id = self.get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
         await self._computation_engine.async_get_historical_hourly_averages(
             load_entity_id
         )
@@ -380,10 +415,10 @@ class LocalShiftCoordinator:
         self._forecast_bootstrapper = ForecastBootstrapper(
             self.hass,
             self.data,
-            self._get_entity_id,
+            self.get_entity_id,
             self._read_all_external_state,
             self._compute_derived_values,
-            self._notify_listeners,
+            self.notify_listeners,
             self._evaluate_state_machine,
             SOLCAST_STARTUP_RETRY_DELAY,
             SOLCAST_MAX_STARTUP_RETRIES,
@@ -471,7 +506,7 @@ class LocalShiftCoordinator:
         return remove_listener
 
     @callback
-    def _notify_listeners(self) -> None:
+    def notify_listeners(self) -> None:
         """Notify all registered entity listeners of new data."""
         for cb in self._update_callbacks:
             cb()
@@ -542,7 +577,7 @@ class LocalShiftCoordinator:
 
         # Refresh load data (historical and recent)
         if self._computation_engine is not None:
-            load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+            load_entity_id = self.get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
             self.hass.async_create_task(
                 self._computation_engine.async_get_recent_load_1hr(load_entity_id),
                 "localshift_fetch_recent_load",
@@ -692,7 +727,7 @@ class LocalShiftCoordinator:
         Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
         """
         self._compute_derived_values()
-        self._notify_listeners()
+        self.notify_listeners()
         await self.async_evaluate_state_machine()
 
     def reset_entity_tracking_on_options_change(self) -> None:
@@ -722,7 +757,7 @@ class LocalShiftCoordinator:
                 self.data,
                 self._computation_engine,
                 read_state_func=self._read_all_external_state,
-                notify_func=self._notify_listeners,
+                notify_func=self.notify_listeners,
                 check_automation_ready_func=self._state_reader.check_automation_ready
                 if self._state_reader is not None
                 else None,

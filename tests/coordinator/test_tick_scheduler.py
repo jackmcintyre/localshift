@@ -74,7 +74,7 @@ async def test_handle_fast_tick(coordinator):
     coordinator._evaluation_dispatcher.maybe_trigger_on_startup_ready = MagicMock()
     coordinator._evaluation_dispatcher.on_fast_tick = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = None
+    coordinator._state_machine.startup_grace_until = None
     coordinator.data = MagicMock()
     coordinator.data.automation_ready = True
 
@@ -99,7 +99,7 @@ async def test_handle_fast_tick_startup_grace(coordinator):
     coordinator._evaluation_dispatcher = MagicMock()
     coordinator._evaluation_dispatcher.on_fast_tick = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = (
+    coordinator._state_machine.startup_grace_until = (
         datetime.now()
     )  # Active grace period
     coordinator.data = MagicMock()
@@ -123,7 +123,7 @@ async def test_handle_medium_tick(coordinator):
     coordinator._entity_monitor.read_all_external_state = MagicMock()
     coordinator._entity_monitor.check_entity_health = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = None  # No grace period
+    coordinator._state_machine.startup_grace_until = None  # No grace period
     coordinator._learning_orchestrator = MagicMock()
     coordinator._learning_orchestrator.update_medium_tick = MagicMock()
     coordinator.data = MagicMock()
@@ -150,7 +150,7 @@ async def test_handle_medium_tick_startup_grace(coordinator):
     coordinator._entity_monitor.read_all_external_state = MagicMock()
     coordinator._entity_monitor.check_entity_health = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = (
+    coordinator._state_machine.startup_grace_until = (
         datetime.now()
     )  # Active grace period
 
@@ -172,9 +172,9 @@ async def test_handle_slow_tick(coordinator):
     coordinator._entity_monitor.refresh_weather_forecast = AsyncMock()
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
 
     # Mock backfill method
@@ -203,7 +203,7 @@ async def test_handle_midnight_reset(coordinator):
     coordinator.data.target_reached_today = True
     coordinator._learning_orchestrator = MagicMock()
     coordinator._learning_orchestrator.handle_midnight_reset = MagicMock()
-    coordinator._notify_listeners = MagicMock()
+    coordinator.notify_listeners = MagicMock()
 
     scheduler.handle_midnight_reset(now)
 
@@ -215,7 +215,7 @@ async def test_handle_midnight_reset(coordinator):
     coordinator._learning_orchestrator.handle_midnight_reset.assert_called_once_with(
         coordinator.data
     )
-    coordinator._notify_listeners.assert_called_once()
+    coordinator.notify_listeners.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -227,9 +227,9 @@ async def test_handle_daily_summary(coordinator):
     # Mock dependencies
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
     coordinator.get_switch_state = MagicMock(return_value=True)
 
@@ -265,12 +265,12 @@ async def test_is_in_startup_grace(coordinator):
 
     # Test when state machine has active grace period
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = datetime.now()
+    coordinator._state_machine.startup_grace_until = datetime.now()
 
     assert scheduler._is_in_startup_grace() is True
 
     # Test when state machine grace period expired
-    coordinator._state_machine._startup_grace_until = None
+    coordinator._state_machine.startup_grace_until = None
 
     assert scheduler._is_in_startup_grace() is False
 
@@ -315,17 +315,17 @@ async def test_handle_medium_tick_with_computation_engine(coordinator):
     coordinator._entity_monitor = MagicMock()
     coordinator._entity_monitor.read_all_external_state = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = None  # No grace period
+    coordinator._state_machine.startup_grace_until = None  # No grace period
     coordinator._computation_engine = MagicMock()
     coordinator._computation_engine.async_get_recent_load_1hr = AsyncMock()
     coordinator._computation_engine.async_get_historical_hourly_averages = AsyncMock()
     coordinator._computation_engine.async_learn_weather_sample = AsyncMock()
-    coordinator._get_entity_id = MagicMock(return_value="sensor.load")
+    coordinator.get_entity_id = MagicMock(return_value="sensor.load")
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
     coordinator.data = MagicMock()
 
@@ -350,9 +350,9 @@ async def test_handle_slow_tick_with_computation_engine(coordinator):
     coordinator._computation_engine.async_save_accuracy_metrics = AsyncMock()
     coordinator.hass = MagicMock()
     coordinator.hass.async_create_task = MagicMock(
-        side_effect=lambda coro, name=None: coro.close()
-        if hasattr(coro, "close")
-        else None
+        side_effect=lambda coro, name=None: (
+            coro.close() if hasattr(coro, "close") else None
+        )
     )
     coordinator.data = MagicMock()
 
@@ -423,16 +423,16 @@ async def test_backfill_solar_actual_first_call(coordinator):
     # Mock tracker
     coordinator.solar_accuracy_tracker = MagicMock()
     coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
-    coordinator._last_solar_power_timestamp = None
-    coordinator._last_solar_power_kw = None
+    scheduler._last_solar_power_timestamp = None
+    scheduler._last_solar_power_kw = None
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 5.0
 
     scheduler._backfill_solar_actual()
 
     # Should initialize timestamp and power, but NOT call backfill_actual
-    assert coordinator._last_solar_power_timestamp is not None
-    assert coordinator._last_solar_power_kw == 5.0
+    assert scheduler._last_solar_power_timestamp is not None
+    assert scheduler._last_solar_power_kw == 5.0
     coordinator.solar_accuracy_tracker.backfill_actual.assert_not_called()
 
 
@@ -449,8 +449,8 @@ async def test_backfill_solar_actual_small_time_delta(coordinator):
 
     # Set very recent timestamp (less than 0.01 hours ago)
     now = dt_util.now()
-    coordinator._last_solar_power_timestamp = now - timedelta(seconds=1)
-    coordinator._last_solar_power_kw = 5.0
+    scheduler._last_solar_power_timestamp = now - timedelta(seconds=1)
+    scheduler._last_solar_power_kw = 5.0
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 5.1
 
@@ -473,8 +473,8 @@ async def test_backfill_solar_actual_zero_energy(coordinator):
 
     # Set timestamp 1 hour ago with zero power
     now = dt_util.now()
-    coordinator._last_solar_power_timestamp = now - timedelta(hours=1)
-    coordinator._last_solar_power_kw = 0.0
+    scheduler._last_solar_power_timestamp = now - timedelta(hours=1)
+    scheduler._last_solar_power_kw = 0.0
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 0.0
 
@@ -497,8 +497,8 @@ async def test_backfill_solar_actual_success(coordinator):
 
     # Set timestamp 30 minutes ago with solar power
     now = dt_util.now()
-    coordinator._last_solar_power_timestamp = now - timedelta(minutes=30)
-    coordinator._last_solar_power_kw = 4.0
+    scheduler._last_solar_power_timestamp = now - timedelta(minutes=30)
+    scheduler._last_solar_power_kw = 4.0
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 6.0
 
@@ -511,7 +511,7 @@ async def test_backfill_solar_actual_success(coordinator):
     assert args[1] > 2.0  # Energy should be around 2.5 kWh
 
     # Verify timestamp updated
-    assert coordinator._last_solar_power_kw == 6.0
+    assert scheduler._last_solar_power_kw == 6.0
 
 
 @pytest.mark.asyncio
@@ -525,8 +525,8 @@ async def test_backfill_solar_actual_skips_during_boost(coordinator):
     coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
 
     now = dt_util.now()
-    coordinator._last_solar_power_timestamp = now - timedelta(minutes=30)
-    coordinator._last_solar_power_kw = 4.0
+    scheduler._last_solar_power_timestamp = now - timedelta(minutes=30)
+    scheduler._last_solar_power_kw = 4.0
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 6.0
     coordinator.data.boost_charge_active = True
@@ -546,7 +546,7 @@ async def test_handle_medium_tick_with_solar_tracker(coordinator):
     coordinator._entity_monitor = MagicMock()
     coordinator._entity_monitor.read_all_external_state = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = None  # No grace period
+    coordinator._state_machine.startup_grace_until = None  # No grace period
 
     # Mock solar accuracy tracker
     coordinator.solar_accuracy_tracker = MagicMock()
@@ -598,7 +598,7 @@ async def test_handle_midnight_reset_no_learning_orchestrator(coordinator):
     coordinator.data.battery_charge_cost = 10.0
     coordinator.data.target_reached_today = True
     coordinator._learning_orchestrator = None
-    coordinator._notify_listeners = MagicMock()
+    coordinator.notify_listeners = MagicMock()
 
     scheduler.handle_midnight_reset(now)
 
@@ -608,7 +608,7 @@ async def test_handle_midnight_reset_no_learning_orchestrator(coordinator):
     assert coordinator.data.battery_savings == 0.0
     assert coordinator.data.battery_charge_cost == 0.0
     assert coordinator.data.target_reached_today is False
-    coordinator._notify_listeners.assert_called_once()
+    coordinator.notify_listeners.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -625,7 +625,7 @@ async def test_handle_fast_tick_no_entity_monitor(coordinator):
     coordinator._evaluation_dispatcher.maybe_trigger_on_startup_ready = MagicMock()
     coordinator._evaluation_dispatcher.on_fast_tick = MagicMock()
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = None  # No grace period
+    coordinator._state_machine.startup_grace_until = None  # No grace period
     coordinator.data = MagicMock()
     coordinator.data.automation_ready = True
 
@@ -646,7 +646,7 @@ async def test_handle_medium_tick_no_entity_monitor(coordinator):
     # Mock dependencies
     coordinator._entity_monitor = None
     coordinator._state_machine = MagicMock()
-    coordinator._state_machine._startup_grace_until = None  # No grace period
+    coordinator._state_machine.startup_grace_until = None  # No grace period
     coordinator._learning_orchestrator = None
     coordinator.data = MagicMock()
 
