@@ -365,6 +365,7 @@ class DPPlanner:
                 from custom_components.localshift.forecast.analysis_resolver import (
                     ConfidenceResolver,
                 )
+
                 last_slot = inputs.slots[-1]
                 last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
 
