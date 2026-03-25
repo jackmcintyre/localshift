@@ -48,8 +48,6 @@ def stage_cost(
     """
     import_cost = grid_import_kwh * slot.buy_price
     export_revenue = grid_export_kwh * slot.sell_price
-    cycle_kwh = grid_import_kwh + grid_export_kwh
-    cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
 
     # Switching penalty (Issue #524)
     # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
@@ -78,8 +76,6 @@ def stage_cost(
     # Calculate self-consumption value (Issue #406)
     # Battery energy used to cover household load has value because it avoids
     # buying from grid at retail price.
-    # However, we subtract cycle_penalty_per_kwh to avoid subsidizing marginal cycling.
-    # The battery must "earn" the cycle penalty back through the spread.
     self_consumption_value = 0.0
     if config.optimization_mode == "self_consumption":
         net_load = slot.consumption_kwh - slot.solar_kwh
@@ -101,10 +97,7 @@ def stage_cost(
                 )
                 battery_for_load = min(battery_for_load, max_load_kwh)
 
-            # Credit the battery at (buy_price - cycle_penalty), not full buy_price
-            # This prevents the credit from subsidizing marginal cycling
-            sc_multiplier = max(0.0, slot.buy_price - config.cycle_penalty_per_kwh)
-            self_consumption_value = battery_for_load * sc_multiplier
+            self_consumption_value = battery_for_load * slot.buy_price
 
     # Issue #638: futile cycling penalty.
     # Penalizes grid charging when the charged energy will drain through house load
@@ -133,7 +126,6 @@ def stage_cost(
     return ObjectiveTerms(
         import_cost=import_cost,
         export_revenue=export_revenue,
-        cycle_penalty=cycle_penalty,
         self_consumption_value=self_consumption_value,
         uncertainty_penalty=uncertainty_penalty,
         switching_penalty=switching_penalty,

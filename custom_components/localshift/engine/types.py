@@ -189,21 +189,6 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
-    cycle_penalty_per_kwh: float = 0.08
-    """Penalty per kWh cycled to reflect true battery cycling cost.
-
-    True cost components:
-    - Efficiency loss (13% round-trip × avg price): ~$0.02/kWh
-    - Battery degradation: ~$0.03-0.05/kWh
-    - Total: $0.05-0.07/kWh
-
-    Using upper-mid range ($0.08) ensures cheap-import arbitrage is only
-    attractive for spreads > 8¢/kWh, eliminating marginal trades that waste
-    cycle life for minimal savings.
-
-    Fixes #516.
-    """
-
     # --- SOC discretization ---
     soc_bins: int = 50
     """Number of SOC bins for DP state space (higher = more precise, slower)."""
@@ -258,9 +243,6 @@ class ObjectiveTerms:
     export_revenue: float = 0.0
     """Revenue from grid export in this slot (positive = revenue)."""
 
-    cycle_penalty: float = 0.0
-    """Penalty for battery cycling."""
-
     shortfall_penalty: float = 0.0
     """Terminal penalty applied at demand window boundary (only for terminal slots)."""
 
@@ -287,7 +269,6 @@ class ObjectiveTerms:
             self.import_cost
             - self.export_revenue
             - self.self_consumption_value
-            + self.cycle_penalty
             + self.shortfall_penalty
             + self.uncertainty_penalty
             + self.switching_penalty
@@ -300,7 +281,6 @@ class ObjectiveTerms:
         return {
             "import_cost": self.import_cost,
             "export_revenue": self.export_revenue,
-            "cycle_penalty": self.cycle_penalty,
             "shortfall_penalty": self.shortfall_penalty,
             "self_consumption_value": self.self_consumption_value,
             "uncertainty_penalty": self.uncertainty_penalty,

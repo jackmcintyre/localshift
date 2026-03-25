@@ -19,7 +19,6 @@ from ..const import (
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_COMPARISON_MODE,
-    CONF_CYCLE_PENALTY,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_FORECAST_LOOKAHEAD_HOURS,
@@ -51,7 +50,6 @@ from ..const import (
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_COMPARISON_MODE,
-    DEFAULT_CYCLE_PENALTY,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -694,9 +692,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MINIMUM_TARGET_SOC: current.get(
                     CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
                 ),
-                CONF_CYCLE_PENALTY: current.get(
-                    CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY
-                ),
                 CONF_TARGET_PENALTY: current.get(
                     CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY
                 ),
@@ -765,19 +760,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     max=30,
                     step=1,
                     unit_of_measurement="%",
-                    mode=selector.NumberSelectorMode.SLIDER,
-                )
-            ),
-            vol.Required(
-                CONF_CYCLE_PENALTY,
-                default=values.get(CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY),
-                description="Penalty per kWh cycled (battery wear + efficiency loss)",
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.00,
-                    max=0.20,
-                    step=0.01,
-                    unit_of_measurement="$/kWh",
                     mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),

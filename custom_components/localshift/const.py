@@ -191,7 +191,6 @@ CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
-CONF_CYCLE_PENALTY = "cycle_penalty"
 CONF_TARGET_PENALTY = "target_penalty"
 
 # Optimization mode options
@@ -231,7 +230,6 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
-DEFAULT_CYCLE_PENALTY = 0.08  # $/kWh battery wear cost
 DEFAULT_TARGET_PENALTY = 0.015  # $/%-point demand window urgency
 
 # Threshold min/max/step (for NumberEntity and options validation)
@@ -319,13 +317,6 @@ THRESHOLD_RANGES = {
         "step": 0.01,
         "unit": "$/switch",
         "icon": "mdi:swap-vertical-variant",
-    },
-    CONF_CYCLE_PENALTY: {
-        "min": 0.00,
-        "max": 0.20,
-        "step": 0.01,
-        "unit": "$/kWh",
-        "icon": "mdi:battery-sync",
     },
     CONF_TARGET_PENALTY: {
         "min": 0.000,
