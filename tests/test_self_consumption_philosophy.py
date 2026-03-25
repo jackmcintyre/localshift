@@ -57,7 +57,6 @@ def _make_config(
     min_soc_pct: float = 10.0,
     demand_window_target_soc_pct: float = 80.0,
     effective_cheap_price: float = 0.13,
-    cycle_penalty_per_kwh: float = 0.08,
 ) -> OptimizerConfig:
     """Create a minimal OptimizerConfig for testing."""
     return OptimizerConfig(
@@ -67,7 +66,6 @@ def _make_config(
         demand_window_target_soc_pct=demand_window_target_soc_pct,
         optimization_mode=optimization_mode,
         effective_cheap_price=effective_cheap_price,
-        cycle_penalty_per_kwh=cycle_penalty_per_kwh,
         charge_rate_kw=5.0,
         discharge_rate_kw=5.0,
         charge_efficiency=0.936,
@@ -220,7 +218,6 @@ def test_stage_cost_applies_anti_cycling_penalties():
     config = _make_config(
         optimization_mode="self_consumption",
         effective_cheap_price=0.13,
-        cycle_penalty_per_kwh=0.08,
     )
 
     slot = _make_slot(
@@ -241,10 +238,8 @@ def test_stage_cost_applies_anti_cycling_penalties():
 
     # The charge should have a meaningful cost that includes:
     # - import cost (1.0 * 0.12 = 0.12)
-    # - cycle penalty (1.0 * 0.08 = 0.08)
     # - futile cycling penalty (approx 0.426 * 0.12 * 1.0 = 0.051)
     assert terms.import_cost > 0, "Import cost should be positive"
-    assert terms.cycle_penalty > 0, "Cycle penalty should be positive"
     assert terms.futile_cycling_penalty > 0, "Futile cycling penalty should be positive"
 
     # Net cost should be positive (meaning the charge action is expensive)
@@ -274,16 +269,7 @@ def test_penalties_are_not_recently_reduced():
     encourage more charging, this test will catch it.
     """
     from custom_components.localshift.const import (
-        DEFAULT_CYCLE_PENALTY,
         DEFAULT_TARGET_PENALTY,
-    )
-
-    # These thresholds reflect the intended anti-cycling stance.
-    # Do not lower them without explicit approval of the policy shift.
-    assert DEFAULT_CYCLE_PENALTY >= 0.08, (
-        f"Default cycle penalty reduced to {DEFAULT_CYCLE_PENALTY} — "
-        "this may enable unwanted overnight charging. "
-        "See docs/PLANNING_MODEL.md 'Control Philosophy'"
     )
 
     # Target penalty should stay low — real behavior comes from terminal

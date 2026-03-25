@@ -109,7 +109,6 @@ def _make_shortfall_scenario(
         allow_dw_entry_under_target=allow_dw_entry_under_target,
         effective_cheap_price=0.12,
         switching_penalty=0.02,
-        cycle_penalty_per_kwh=0.08,
         target_shortfall_penalty_per_pct=0.030,
         soc_bins=40,
     )

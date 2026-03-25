@@ -755,10 +755,9 @@ def test_objective_terms_net_cost():
     terms = ObjectiveTerms(
         import_cost=1.50,
         export_revenue=0.80,
-        cycle_penalty=0.05,
         shortfall_penalty=0.0,
     )
-    assert terms.net_cost == pytest.approx(1.50 - 0.80 + 0.05)
+    assert terms.net_cost == pytest.approx(1.50 - 0.80)
 
 
 def test_objective_terms_to_dict():
@@ -2436,7 +2435,6 @@ def test_classify_charge_reason_solar_opportunity_wait():
         import_cost=0.05,
         export_revenue=0.0,
         self_consumption_value=0.0,
-        cycle_penalty=0.0,
         shortfall_penalty=0.0,
         uncertainty_penalty=0.0,
         switching_penalty=0.0,

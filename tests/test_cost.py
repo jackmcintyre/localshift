@@ -39,7 +39,7 @@ def test_stage_cost_positive_fit_positive_revenue():
         timestamp_iso="2026-01-03T10:00:00",
         slot_interval_minutes=30,
         buy_price=0.10,
-        sell_price=0.12,  # Must exceed cycle_penalty ($0.08) to be profitable
+        sell_price=0.12,  # Must be positive to be profitable
         solar_kwh=0.0,
         consumption_kwh=0.0,
     )
@@ -80,7 +80,6 @@ def test_stage_cost_charge_includes_uncertainty_and_futile_penalties():
     )
 
     assert terms.import_cost == 0.20
-    assert terms.cycle_penalty == config.cycle_penalty_per_kwh
     assert terms.uncertainty_penalty > 0.0
     assert terms.futile_cycling_penalty > 0.0
 
@@ -140,8 +139,8 @@ def test_stage_cost_self_consumption_value_is_soc_capped():
     )
 
     assert terms.self_consumption_value > 0.0
-    # credit must be bounded; not full net-load credit (3.0 * (0.30-0.08)=0.66)
-    assert terms.self_consumption_value < 0.66
+    # credit must be bounded; not full net-load credit (3.0 * 0.30 = 0.90)
+    assert terms.self_consumption_value < 0.90
 
 
 def test_stage_cost_self_consumption_value_zero_when_no_net_load():

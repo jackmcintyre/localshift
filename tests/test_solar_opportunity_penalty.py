@@ -527,7 +527,7 @@ class TestSelfConsumptionCreditFix:
             interval_minutes=30,
         )
         # battery_for_load = 1.0 kWh (HOLD, battery covers full load)
-        # With slot.buy_price - cycle_penalty: credit = 1.0 * (0.14 - 0.08) = 0.06
+        # Credit = battery_for_load * slot.buy_price = 1.0 * 0.14 = 0.14
         terms = stage_cost(
             action=PlannerAction.HOLD,
             grid_import_kwh=0.0,
@@ -536,19 +536,18 @@ class TestSelfConsumptionCreditFix:
             config=default_config,
             soc_pct=80.0,  # plenty of charge so battery covers load
         )
-        # Credit should equal (slot.buy_price - cycle_penalty) * battery_for_load
+        # Credit should equal slot.buy_price * battery_for_load
         # battery_for_load ≈ 1.0 (load - import - export = 1.0 - 0 - 0 = 1.0)
-        # New formula: (buy_price - cycle_penalty) = $0.14 - $0.08 = $0.06
-        expected_credit = 0.14 - 0.08  # $0.06
+        expected_credit = 1.0 * 0.14  # $0.14
         assert terms.self_consumption_value == pytest.approx(
             expected_credit, rel=0.05
         ), (
-            f"Expected credit ~${expected_credit} (slot price - cycle_penalty), got ${terms.self_consumption_value:.4f}. "
-            f"self_consumption_value must use (slot.buy_price - cycle_penalty)"
+            f"Expected credit ~${expected_credit} (slot buy_price), got ${terms.self_consumption_value:.4f}. "
+            f"self_consumption_value must use slot.buy_price"
         )
 
     def test_stage_cost_credit_scales_with_buy_price(self, default_config):
-        """At $0.30/kWh the credit should be ~(0.30 - 0.08) = $0.22, not full price."""
+        """At $0.30/kWh the credit should be ~0.30 * load (full buy price)."""
         slot = make_slot(
             0,
             7,
@@ -567,13 +566,12 @@ class TestSelfConsumptionCreditFix:
             config=default_config,
             soc_pct=80.0,
         )
-        # At $0.30 peak, credit must be ~(buy_price - cycle_penalty) * load
-        # New formula: (0.30 - 0.08) * 1.0 = $0.22
-        expected_credit = 0.30 - 0.08  # $0.22
+        # At $0.30 peak, credit must be ~buy_price * load
+        expected_credit = 1.0 * 0.30  # $0.30
         assert terms.self_consumption_value == pytest.approx(
             expected_credit, rel=0.05
         ), (
-            f"At $0.30 buy price with $0.08 cycle_penalty, credit should be ~${expected_credit}, got ${terms.self_consumption_value:.4f}"
+            f"At $0.30 buy price, credit should be ~${expected_credit}, got ${terms.self_consumption_value:.4f}"
         )
 
     def test_flat_rate_overnight_no_charge_with_solar_forecast(self, default_config):
@@ -809,7 +807,7 @@ def test_short_horizon_still_charges_if_future_solar_insufficient():
     """
     Test that it still charges if even the future solar isn't enough. (Issue #619)
 
-    Note: With the reduced self_consumption_value (now subtracts cycle_penalty),
+    Note: With the self_consumption_value based on slot buy_price,
     the optimizer may choose to hold instead of charge when the economics are marginal.
     """
     config = OptimizerConfig(
@@ -853,5 +851,5 @@ def test_short_horizon_still_charges_if_future_solar_insufficient():
         d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL
     ]
     # Either behavior is acceptable - the important thing is the plan runs successfully
-    # (Old behavior: charge. New behavior with cycle_penalty credit: may hold)
+    # (Old behavior: charge. New behavior with slot buy_price credit: may hold)
     assert len(charge_slots) >= 0  # Plan executed successfully
