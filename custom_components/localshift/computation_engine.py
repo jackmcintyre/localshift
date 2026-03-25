@@ -331,6 +331,12 @@ class ComputationEngine:
 
         # ---- Step 7: effective_cheap_price (final update) ----
         # Update effective_cheap_price with actual solar_can_reach_target from forecast
+        # IMPORTANT: Save the optimizer's threshold BEFORE Step 7 overwrites it.
+        # The optimizer ran with the preliminary threshold from Step 7a. Step 7 recomputes
+        # effective_cheap_price using the optimizer's solar_can_reach_target result.
+        # If the recomputed value differs from the preliminary, we track which was used
+        # so the plan and UI are consistent (Planner Threshold Reconciliation, Fix #xxx).
+        data.planner_threshold_used = data.effective_cheap_price
         self._price_signals.compute_effective_cheap_price(
             data=data,
             now_dt=now_dt,

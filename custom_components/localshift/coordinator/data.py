@@ -235,6 +235,7 @@ class CoordinatorData:
     # Computed sensors
     effective_cheap_price: float = 0.0
     cheap_charge_stop_price: float = 0.0
+    planner_threshold_used: float | None = None  # Threshold the optimizer actually used
     solar_weighted_avg_fit: float = 0.0
     solar_remaining_kwh: float = 0.0
     active_mode: BatteryMode = BatteryMode.SELF_CONSUMPTION

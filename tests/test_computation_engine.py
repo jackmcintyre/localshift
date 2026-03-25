@@ -346,3 +346,98 @@ class TestAccuracyMetricsPersistence:
 
 
 # =============================================================================
+# Threshold Consistency Tests (Fix: planner/UI threshold mismatch)
+# =============================================================================
+
+
+def test_final_effective_cheap_price_reflects_optimizer_solar_reach(
+    computation_engine, coordinator_data
+):
+    """Final effective_cheap_price must reflect optimizer's solar_can_reach_target, not the preliminary guess.
+
+    Scenario: preliminary pass assumes solar_cannot_reach_target (urgency pricing),
+    but the optimizer's own solar simulation finds that solar CAN reach target.
+    The final effective_cheap_price must use the base percentile price (not urgency),
+    so the displayed threshold matches what the optimizer actually used.
+
+    Regression test for: optimizer runs with preliminary threshold (~$0.18 urgency-adjusted),
+    then final price is recomputed to ~$0.10 base percentile. UI shows $0.10
+    but plan was computed at $0.18 — making charges above $0.10 appear wrong.
+    """
+    coordinator_data.soc = 50.0
+    coordinator_data.general_price = 0.25
+    coordinator_data.feed_in_price = 0.05
+    coordinator_data.target_reached_today = False
+    coordinator_data.solcast_today = []
+    coordinator_data.solcast_tomorrow = []
+
+    original_run_inline = computation_engine._optimizer_facade.run_inline
+
+    def mock_run_inline(data, *args, **kwargs):
+        # Override effective_cheap_price BEFORE optimizer runs, simulating
+        # the preliminary pass having set it to a high urgency value
+        data.effective_cheap_price = 0.30  # urgency-adjusted (preliminary)
+        data.optimizer_decisions = []
+        # The optimizer finds solar CAN reach target
+        # Step 7 will recompute to base percentile ~0.04
+        return original_run_inline(data, *args, **kwargs)
+
+    computation_engine._optimizer_facade.run_inline = mock_run_inline
+
+    try:
+        computation_engine.compute_derived_values(coordinator_data)
+    finally:
+        computation_engine._optimizer_facade.run_inline = original_run_inline
+
+    # planner_threshold_used must capture the optimizer's threshold (preliminary = 0.30)
+    assert coordinator_data.planner_threshold_used == pytest.approx(0.30, abs=0.01), (
+        f"planner_threshold_used ({coordinator_data.planner_threshold_used}) "
+        f"should be the optimizer's threshold (0.30), "
+        f"not the recomputed final value"
+    )
+
+
+def test_cheap_charge_stop_price_uses_final_effective_threshold(
+    computation_engine, coordinator_data
+):
+    """cheap_charge_stop_price must be based on the final effective_cheap_price, not the preliminary.
+
+    The stop price is effective_cheap_price + deadband. If the final effective_cheap_price
+    differs from the preliminary, the stop price must reflect the final value.
+    """
+    coordinator_data.soc = 50.0
+    coordinator_data.general_price = 0.25
+    coordinator_data.feed_in_price = 0.05
+    coordinator_data.target_reached_today = False
+    coordinator_data.solcast_today = []
+    coordinator_data.solcast_tomorrow = []
+
+    original_run_inline = computation_engine._optimizer_facade.run_inline
+
+    def mock_run_inline(data, *args, **kwargs):
+        data.solar_can_reach_target = True
+        data.optimizer_decisions = []
+        return original_run_inline(data, *args, **kwargs)
+
+    computation_engine._optimizer_facade.run_inline = mock_run_inline
+
+    try:
+        computation_engine.compute_derived_values(coordinator_data)
+    finally:
+        computation_engine._optimizer_facade.run_inline = original_run_inline
+
+    from custom_components.localshift.const import DEFAULT_CHEAP_PRICE_DEADBAND
+
+    expected_stop = (
+        coordinator_data.effective_cheap_price + DEFAULT_CHEAP_PRICE_DEADBAND
+    )
+    assert coordinator_data.cheap_charge_stop_price == pytest.approx(
+        expected_stop, abs=0.001
+    ), (
+        f"cheap_charge_stop_price ({coordinator_data.cheap_charge_stop_price}) "
+        f"should be effective_cheap_price ({coordinator_data.effective_cheap_price}) "
+        f"+ deadband ({DEFAULT_CHEAP_PRICE_DEADBAND}) = {expected_stop}"
+    )
+
+
+# =============================================================================

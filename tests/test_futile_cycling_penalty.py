@@ -679,3 +679,165 @@ class TestEndToEndOvernightBehavior:
                 f"Slot {d.slot_index}: grid charge decision has zero futile "
                 "penalty but all energy drains before any useful period"
             )
+
+
+# ---------------------------------------------------------------------------
+# Later-Cheaper-Window Regression Tests
+# ---------------------------------------------------------------------------
+
+
+class TestLaterCheaperWindow:
+    """Regression tests: optimizer should prefer waiting when a cheaper charge window exists.
+
+    Issue: overnight charges at $0.16 when $0.10 is available at 05:00.
+    The futile-cycling penalty should recognise a future cheaper charge window
+    as a "useful period" — charging now is futile if the energy drains
+    through house load before the cheaper window arrives AND the cheaper window
+    is reachable (SOC stays above min_soc).
+    """
+
+    def _make_cheap_window_config(self) -> OptimizerConfig:
+        """Config for cheap window scenario."""
+        return OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            demand_window_target_soc_pct=80.0,
+            min_soc_pct=10.0,
+            effective_cheap_price=0.14,  # $0.14 is the "cheap" threshold
+            charge_efficiency=0.92,
+            discharge_efficiency=0.95,
+        )
+
+    def test_factor_lower_when_cheaper_window_is_useful_period(self):
+        """Factor LOWER when a cheaper feasible window is reachable — drain stops there.
+
+        Scenario: Charge 2.7 kWh at 22:00 ($0.16). House drains 0.45 kWh/slot.
+        SOC = 30% → min_soc fires at slot 5 (5 × 0.45 = 2.25 kWh > available at slot 5).
+
+        With cheap window at slot 5: fix fires BEFORE drain in slot 5 → break → no drain at slot 5
+        → 4 full slots × 0.45 = 1.80 kWh drained → factor = 0.667
+
+        Without cheap window: min_soc check fires after drain in slot 5 → 5 slots drained = 2.25 kWh
+        → but wait, battery_used=0.324 (all available) < 0.45, soc drops to 10%, min_soc breaks
+        → factor = 2.25/2.70 = 0.833
+
+        Let me recalculate step by step for consumption=0.45 kWh/slot, charge=2.7 kWh, soc=30%:
+        - 2.7 kWh available. Each slot drains 0.45.
+        - After slot 1: soc = 30 - (0.45/0.95/13.5)*100 = 26.48%, available = 2.25 kWh
+        - After slot 2: soc = 22.96%, available = 1.80 kWh
+        - After slot 3: soc = 19.44%, available = 1.35 kWh
+        - After slot 4: soc = 15.93%, available = 0.90 kWh
+        - At slot 5: net_load=0.45, available=0.90*0.95=0.855 > 0.45 → battery_used=0.45
+          → drain 0.45, soc = 15.93 - (0.45/0.95/13.5)*100 = 12.41%, available = 0.324 kWh
+          → soc <= min_soc? 12.41 > 10 → NO break here
+        - At slot 6: net_load=0.45, available=0.324*0.95=0.308 < 0.45 → battery_used=0.308
+          → soc = 12.41 - (0.308/0.95/13.5)*100 = 10.0%, available = 0
+          → soc <= min_soc? 10.0 <= 10 → YES break
+
+        So min_soc fires at slot 6 (trying to drain, after slot 5 SOC=12.41%).
+        With cheap window at slot 5:
+        - Slot 5: cheap check fires BEFORE drain → break → no drain in slot 5
+        - Total drain = 4 slots × 0.45 = 1.80 kWh → factor = 0.667
+
+        Without cheap window at slot 5:
+        - Slots 1-5 drain: 4 full + partial in slot 5 = 1.80 + 0.324 = 2.124 kWh
+        - Slot 6: min_soc fires (battery_used < net_load)
+        - Total drain = 2.124 kWh → factor = 0.787
+
+        Hmm, different but not dramatically. Let me recalculate.
+
+        Actually wait, in slot 5 with cheap window at slot 5:
+        - The cheap window check fires for slot 5 BEFORE the drain calculation
+        - So slot 5 is NOT drained at all! Break fires immediately.
+        - Total drain = 4 slots × 0.45 = 1.80 kWh → factor = 0.667
+
+        Without cheap window:
+        - Slots 1-5 drain (5 slots): 4 full (1.80) + slot 5 (0.45) = 2.25 kWh
+        - Slot 6: min_soc fires
+        - factor = 2.25/2.70 = 0.833
+
+        YES! This gives the right comparison.
+        """
+        config = self._make_cheap_window_config()
+        # 6 high-price slots (0-5 at $0.16, 0.45 kWh/slot) + cheap window at slot 5
+        # charge=2.7 kWh → min_soc fires at slot 6 (not slot 5)
+        # Cheap window at slot 5: fix fires BEFORE drain in slot 5
+        slots = [
+            make_slot(0, 22, 0, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45),
+            make_slot(1, 22, 30, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45),
+            make_slot(2, 23, 0, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45),
+            make_slot(3, 23, 30, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45),
+            make_slot(4, 0, 0, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45),
+            make_slot(5, 0, 30, buy_price=0.10, solar_kwh=0.0, consumption_kwh=0.45),
+            make_slot(6, 1, 0, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45),
+        ]
+
+        # With cheap window: fix fires at slot 5 (before drain) → break → 1.80 kWh → factor=0.667
+        factor_with_cheaper = get_futile_cycling_penalty_factor(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots,
+            config=config,
+            soc_after_charge_pct=30.0,
+            charge_kwh=2.7,
+        )
+
+        # Without cheap window: min_soc fires at slot 6 (after draining 5 slots) → 2.25 kWh → factor=0.833
+        slots_no_cheap = slots[:6]
+        slots_no_cheap[5] = make_slot(
+            5, 0, 30, buy_price=0.16, solar_kwh=0.0, consumption_kwh=0.45
+        )
+        factor_without_cheap = get_futile_cycling_penalty_factor(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots_no_cheap,
+            config=config,
+            soc_after_charge_pct=30.0,
+            charge_kwh=2.7,
+        )
+
+        # With fix: cheap window at slot 5 fires BEFORE drain → break → 1.80 kWh → factor=0.667
+        # Buggy: drain through slot 5, min_soc fires at slot 6 → 2.25 kWh → factor=0.833
+        assert factor_with_cheaper < factor_without_cheap, (
+            f"Factor WITH cheaper window ({factor_with_cheaper:.3f}) should be LOWER "
+            f"than WITHOUT ({factor_without_cheap:.3f}) — with the fix, drain stops at the "
+            "cheaper window before min_soc fires (less drain), buggy code drains to min_soc "
+            f"(more drain: 1.80 kWh vs 2.25 kWh)"
+        )
+
+    def test_factor_high_when_cheaper_window_beyond_min_soc(self):
+        """Factor is high when energy drains to min_soc before reaching cheaper window.
+
+        Scenario: Charge 3 kWh at 22:00 ($0.16). House drains 0.5 kWh/slot.
+        6 slots until 01:00. Battery hits min_soc (10%) at slot 4.
+        Slot 5 ($0.10 cheaper) is unreachable → high futile factor.
+        """
+        config = self._make_cheap_window_config()
+        slots = [
+            make_slot(
+                i,
+                22 + i // 2,
+                (i % 2) * 30,
+                buy_price=0.16,
+                solar_kwh=0.0,
+                consumption_kwh=0.50,
+            )
+            for i in range(6)
+        ]
+        slots.append(
+            make_slot(6, 1, 0, buy_price=0.10, solar_kwh=0.0, consumption_kwh=0.50)
+        )
+
+        factor = get_futile_cycling_penalty_factor(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots,
+            config=config,
+            soc_after_charge_pct=32.0,  # 3 kWh above floor
+            charge_kwh=3.0,
+        )
+
+        # Battery hits floor before cheaper window → high futile factor
+        assert factor > 0.7, (
+            f"Expected high futile factor (>0.7) when battery drains to min_soc "
+            f"before cheaper window, got {factor:.3f}"
+        )
