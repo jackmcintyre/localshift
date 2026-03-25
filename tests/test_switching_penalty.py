@@ -32,7 +32,6 @@ def test_dp_planner_applies_switching_penalty():
     """Test that DPPlanner adds switching_penalty when action differs from current."""
     config = OptimizerConfig(
         switching_penalty=0.50,  # High penalty to make it obvious
-        cycle_penalty_per_kwh=0.0,
         soc_bins=10,
     )
 

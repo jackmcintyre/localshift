@@ -4,14 +4,14 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **60 entities** grouped under a single "LocalShift" device:
+The integration creates **63 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 32 | `sensor` |
+| Sensors | 35 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
-| Numbers | 6 | `number` |
+| Numbers | 5 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
 
@@ -1314,29 +1314,7 @@ State: 10.0
 
 ---
 
-### 5. number.localshift_cycle_penalty
-
-**Purpose:** Cost penalty per kWh of battery cycling (wear + efficiency loss).
-
-| Property | Value |
-|----------|-------|
-| Range | $0.00-$0.20/kWh |
-| Default | $0.08/kWh |
-| Unit | $/kWh |
-
-**Tuning Guide:**
-- **Increase** to reduce cycling frequency (more conservative, less arbitrage)
-- **Decrease** to enable more arbitrage opportunities
-- **$0.00** disables cycle penalty (pure cost minimization, ignores battery wear)
-
-**Example Data:**
-```
-State: 0.08
-```
-
----
-
-### 6. number.localshift_target_shortfall_penalty
+### 5. number.localshift_target_shortfall_penalty
 
 **Purpose:** Penalty per percentage-point below demand window target SOC.
 
@@ -1512,7 +1490,6 @@ slots:
     objective_terms:
       import_cost: 0.0
       export_revenue: 0.0
-      cycle_penalty: 0.0
       shortfall_penalty: 0.0
 total_slots: 96
 forecast_horizon_hours: 24.0

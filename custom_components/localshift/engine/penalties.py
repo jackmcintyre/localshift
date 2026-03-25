@@ -119,11 +119,18 @@ def get_futile_cycling_penalty_factor(
     discharge_eff = config.discharge_efficiency
 
     for future_slot in slots[slot_idx + 1 :]:
-        # A "useful period" is where solar surplus or demand window makes the
-        # charged energy valuable — stop draining here.
+        # A "useful period" is where solar surplus, demand window, or a cheaper
+        # feasible charge window makes the charged energy valuable — stop draining here.
         if future_slot.solar_kwh > future_slot.consumption_kwh:
             break
         if future_slot.is_demand_window_slot:
+            break
+        # A cheaper feasible charge window: charging is allowed (price <= cheap threshold)
+        # and meaningfully cheaper than now — energy can be stored for the later cheap charge.
+        if (
+            future_slot.buy_price <= config.effective_cheap_price
+            and future_slot.buy_price < slots[slot_idx].buy_price - 0.02
+        ):
             break
 
         # Simulate HOLD deficit: battery covers house load up to available capacity

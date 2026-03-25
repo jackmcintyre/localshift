@@ -268,7 +268,6 @@ class TestIsTargetShortfallRisk:
             optimization_mode="self_consumption",
             allow_dw_entry_under_target=False,
             switching_penalty=0.02,
-            cycle_penalty_per_kwh=0.08,
             target_shortfall_penalty_per_pct=0.015,
         )
 
@@ -342,7 +341,6 @@ class TestIsTargetShortfallRisk:
             optimization_mode="self_consumption",
             allow_dw_entry_under_target=False,
             switching_penalty=0.02,
-            cycle_penalty_per_kwh=0.08,
             target_shortfall_penalty_per_pct=0.015,
         )
 

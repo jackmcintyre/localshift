@@ -74,22 +74,6 @@ class TestStageCost:
         terms = stage_cost(PlannerAction.EXPORT_PROACTIVE, 0.0, 1.0, slot, config)
         assert terms.export_revenue == 10.0
 
-    def test_cycle_penalty_applied(self):
-        """Cycle penalty applied for grid import/export."""
-        config = OptimizerConfig(cycle_penalty_per_kwh=0.5)
-        slot = SlotContext(
-            slot_index=0,
-            timestamp_iso=datetime.now(UTC).isoformat(),
-            buy_price=30.0,
-            sell_price=10.0,
-            solar_kwh=0.0,
-            consumption_kwh=2.0,
-            is_demand_window_slot=False,
-            slot_interval_minutes=5,
-        )
-        terms = stage_cost(PlannerAction.CHARGE_GRID_NORMAL, 1.0, 0.0, slot, config)
-        assert terms.cycle_penalty == 0.5  # 1 kWh * 0.5 c/kWh
-
     def test_switching_penalty_for_mode_switch(self):
         """Switching penalty applied when action changes."""
         config = OptimizerConfig(switching_penalty=100.0)
@@ -150,7 +134,6 @@ class TestStageCost:
         # Check all expected fields exist
         assert hasattr(terms, "import_cost")
         assert hasattr(terms, "export_revenue")
-        assert hasattr(terms, "cycle_penalty")
         assert hasattr(terms, "shortfall_penalty")
         assert hasattr(terms, "switching_penalty")
 
@@ -300,12 +283,11 @@ class TestObjectiveTerms:
         terms = ObjectiveTerms(
             import_cost=100.0,
             export_revenue=50.0,  # Revenue is subtracted (negative cost)
-            cycle_penalty=10.0,
             shortfall_penalty=5.0,
             switching_penalty=3.0,
         )
 
-        expected = 100.0 - 50.0 + 10.0 + 5.0 + 3.0
+        expected = 100.0 - 50.0 + 5.0 + 3.0
         assert terms.net_cost == expected
 
     def test_net_cost_handles_zero_values(self):
@@ -313,7 +295,6 @@ class TestObjectiveTerms:
         terms = ObjectiveTerms(
             import_cost=0.0,
             export_revenue=0.0,
-            cycle_penalty=0.0,
             shortfall_penalty=0.0,
             switching_penalty=0.0,
         )
@@ -324,7 +305,6 @@ class TestObjectiveTerms:
         terms = ObjectiveTerms(
             import_cost=50.0,
             export_revenue=-20.0,  # Export cost money (e.g., grid charges)
-            cycle_penalty=0.0,
             shortfall_penalty=0.0,
             switching_penalty=0.0,
         )

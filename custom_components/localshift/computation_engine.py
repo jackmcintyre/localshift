@@ -15,7 +15,6 @@ from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
     CONF_COMPARISON_MODE,
-    CONF_CYCLE_PENALTY,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
@@ -28,7 +27,6 @@ from .const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_COMPARISON_MODE,
-    DEFAULT_CYCLE_PENALTY,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
@@ -333,6 +331,12 @@ class ComputationEngine:
 
         # ---- Step 7: effective_cheap_price (final update) ----
         # Update effective_cheap_price with actual solar_can_reach_target from forecast
+        # IMPORTANT: Save the optimizer's threshold BEFORE Step 7 overwrites it.
+        # The optimizer ran with the preliminary threshold from Step 7a. Step 7 recomputes
+        # effective_cheap_price using the optimizer's solar_can_reach_target result.
+        # If the recomputed value differs from the preliminary, we track which was used
+        # so the plan and UI are consistent (Planner Threshold Reconciliation, Fix #xxx).
+        data.planner_threshold_used = data.effective_cheap_price
         self._price_signals.compute_effective_cheap_price(
             data=data,
             now_dt=now_dt,
@@ -551,9 +555,6 @@ class ComputationEngine:
             ),
             CONF_SWITCHING_PENALTY: self.entry.options.get(
                 CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY
-            ),
-            CONF_CYCLE_PENALTY: self.entry.options.get(
-                CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY
             ),
             CONF_TARGET_PENALTY: self.entry.options.get(
                 CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY

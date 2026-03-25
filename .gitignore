@@ -47,6 +47,9 @@ uv-*.lock
 # Cline planning files
 *_plan.md
 
+# Superpowers plans, specs, and working docs (local only)
+docs/superpowers/
+
 # Snapshots
 charging_plan_snapshot_*.md
 snapshots/

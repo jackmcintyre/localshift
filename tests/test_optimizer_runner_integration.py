@@ -197,7 +197,6 @@ class TestBuildOptimizerConfig:
         # Values come from config_options or fall back to defaults
         assert config.target_shortfall_penalty_per_pct != 1.0
         assert 0.000 <= config.target_shortfall_penalty_per_pct <= 0.100
-        assert config.cycle_penalty_per_kwh == 0.08
 
     def test_config_penalty_from_options(self, mock_coordinator_data, config_options):
         """target_shortfall_penalty_per_pct is read from config options."""
@@ -212,22 +211,6 @@ class TestBuildOptimizerConfig:
         config = _build_optimizer_config(mock_coordinator_data, {})
         # Default is 0.015 (DEFAULT_TARGET_PENALTY)
         assert config.target_shortfall_penalty_per_pct == 0.015
-
-    def test_config_cycle_penalty_from_options(
-        self, mock_coordinator_data, config_options
-    ):
-        """cycle_penalty_per_kwh is read from config options."""
-        custom_options = {**config_options, "cycle_penalty": 0.12}
-        config = _build_optimizer_config(mock_coordinator_data, custom_options)
-        assert config.cycle_penalty_per_kwh == 0.12
-
-    def test_config_cycle_penalty_uses_default_when_not_in_options(
-        self, mock_coordinator_data
-    ):
-        """cycle_penalty_per_kwh defaults when not in options."""
-        config = _build_optimizer_config(mock_coordinator_data, {})
-        # Default is 0.08 (DEFAULT_CYCLE_PENALTY)
-        assert config.cycle_penalty_per_kwh == 0.08
 
     def test_config_uses_default_allow_dw_entry_under_target(
         self, mock_coordinator_data

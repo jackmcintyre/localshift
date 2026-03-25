@@ -72,17 +72,16 @@ def feasible_actions(...) -> list[PlannerAction]:
 |---------|---------|---------|
 | `import_cost` | `grid_import × buy_price` | Direct cost |
 | `export_revenue` | `grid_export × sell_price` | Revenue |
-| `cycle_penalty` | `(import + export) × $0.05/kWh` | Anti-wear |
 | `switching_penalty` | `$0.02` if action ≠ current | Stability |
 | `uncertainty_penalty` | Scales with horizon gap | Risk aversion |
-| `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportuniy cost |
+| `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportunity cost |
+| `solar_opportunity_penalty` | `full_economic_benefit × factor` (factor in [0,1]) | Discourages grid charging when solar is forecast (#610) |
 
 **Net cost formula:**
 ```python
 net_cost = (
     import_cost 
     - export_revenue 
-    + cycle_penalty 
     + switching_penalty 
     + uncertainty_penalty 
     - self_consumption_value

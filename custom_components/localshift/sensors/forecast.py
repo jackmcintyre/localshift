@@ -202,6 +202,9 @@ class ForecastPricesSensor(LocalShiftSensorBase):
             "sell_prices": sell_prices,
             "effective_cheap_price": round(d.effective_cheap_price, 4),
             "cheap_charge_stop_price": round(d.cheap_charge_stop_price, 4),
+            "planner_threshold_used": round(d.planner_threshold_used, 4)
+            if d.planner_threshold_used is not None
+            else None,
             "forecast_import_cost": round(d.forecast_import_cost or 0.0, 2),
             "forecast_export_revenue": round(d.forecast_export_revenue or 0.0, 2),
             "forecast_net_cost": round(d.forecast_net_cost or 0.0, 2),

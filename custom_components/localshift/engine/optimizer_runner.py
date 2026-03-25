@@ -246,7 +246,6 @@ def _build_optimizer_config(
         CHARGE_RATE_SOLAR_KW,
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
-        CONF_CYCLE_PENALTY,
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
@@ -254,7 +253,6 @@ def _build_optimizer_config(
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
-        DEFAULT_CYCLE_PENALTY,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
@@ -293,8 +291,6 @@ def _build_optimizer_config(
     switching_penalty = float(
         config_options.get(CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY)
     )
-
-    cycle_penalty = float(config_options.get(CONF_CYCLE_PENALTY, DEFAULT_CYCLE_PENALTY))
 
     target_penalty = float(
         config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
@@ -343,7 +339,6 @@ def _build_optimizer_config(
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
-        cycle_penalty_per_kwh=cycle_penalty,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---
