@@ -114,7 +114,7 @@ net_cost = (
 
 Note: `self_consumption_value` is subtracted because it's a credit (value provided).
 
-**Anti-cycling:** Protection against futile cycling is handled solely by the `switching_penalty` term, which fires on every mode change, and the `uncertainty_penalty`, which discourages marginal actions when the forecast is short. There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
+**Anti-cycling:** Protection against wasteful cycling is handled by the `futile_cycling_penalty` term, which penalises grid charging when forward simulation shows the charged energy will drain through household load before reaching a useful period (solar surplus or demand window). The `switching_penalty` provides additional stability by discouraging frequent mode changes. There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
 
 ### When to Add Soft Penalties
 
