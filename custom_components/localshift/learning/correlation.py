@@ -720,6 +720,8 @@ class WeatherCorrelation:
         """Return today's date key in ISO format."""
         if now is None:
             now = dt_util.now()
+        if now is None:
+            now = datetime.now()
         return now.date().isoformat()
 
     def _get_or_create_daily_snapshot(self, hour: int, date_key: str) -> DailySnapshot:
@@ -736,6 +738,8 @@ class WeatherCorrelation:
         """Prune snapshots older than the 30-day sliding window."""
         if now is None:
             now = dt_util.now()
+        if now is None:
+            now = datetime.now()
         cutoff_date = (now.date() - timedelta(days=SLIDING_WINDOW_DAYS - 1)).isoformat()
         for hour, snapshots in list(self._data.daily_regression_stats.items()):
             kept = [
