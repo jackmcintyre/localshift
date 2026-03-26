@@ -78,6 +78,27 @@ sleep $sleep_seconds
 
 ## Step 5: Validate Business Logic
 
+**Important:** HomeAssistant MCP (ha-mcp) may not be available in all environments. Use direct API calls with environment passthrough if MCP fails.
+
+```bash
+# If ha-mcp unavailable, use this pattern:
+export HA_URL && export HA_LONG_LIVED_TOKEN && python3 - <<'EOF'
+import os, json, urllib.request
+
+HA_URL = os.environ.get('HA_URL')
+HA_TOKEN = os.environ.get('HA_LONG_LIVED_TOKEN')
+headers = {'Authorization': f'Bearer {HA_TOKEN}', 'Content-Type': 'application/json'}
+
+def get_state(entity_id):
+    url = f"{HA_URL}api/states/{entity_id}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read().decode())
+
+# Run validation checks...
+EOF
+```
+
 Query these entities and verify:
 
 ### Check 1: Optimizer Succeeded
