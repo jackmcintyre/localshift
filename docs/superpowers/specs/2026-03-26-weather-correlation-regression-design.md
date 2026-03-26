@@ -158,6 +158,7 @@ class HourlyRegressionResult:
 3. Compute OLS slope:
    ```
    denom = n × sum_xx - sum_x²
+   if denom ≤ 0: return (slope=0.0, r_squared=0.0)   # degenerate: all deltas identical
    slope = (n × sum_xy - sum_x × sum_y) / denom
    ```
 4. **Clamp slope ≥ 0** — physically, more temperature deviation can only increase load
@@ -167,9 +168,28 @@ class HourlyRegressionResult:
    ss_xy = n × sum_xy - sum_x × sum_y
    ss_xx = n × sum_xx - sum_x²
    ss_yy = n × sum_yy - sum_y²
-   r² = ss_xy² / (ss_xx × ss_yy)
+   if ss_xx ≤ 0 or ss_yy ≤ 0: r² = 0.0   # degenerate: no variance in x or y
+   else: r² = ss_xy² / (ss_xx × ss_yy)
    ```
 7. Return `(slope, r_squared)`
+
+### Coefficient Lookup: get_coefficients_for_hour(hour)
+
+Returns `HourlyRegressionResult` for a given hour, or `None` if no data exists.
+
+1. If no daily snapshots exist for this hour: return `None`
+2. Aggregate `ZoneStats` across all daily snapshots for this hour (sum the sums for each zone)
+3. Run `fit_slope()` on the aggregated heating zone → `(heating_slope, heating_r²)`
+4. Run `fit_slope()` on the aggregated cooling zone → `(cooling_slope, cooling_r²)`
+5. Compute `base_load_kw` from mild zone: `sum_y / n` if `n > 0`, else `0.0`
+6. Compute total `sample_count` across all three zones
+7. Determine confidence:
+   - `"high"` if any zone has `n ≥ MIN_SAMPLES` AND `r² ≥ 0.30`
+   - `"medium"` if any zone has `n ≥ MIN_SAMPLES` AND `r² ≥ MIN_R_SQUARED` (0.10)
+   - `"low"` otherwise
+8. Return `HourlyRegressionResult(heating_slope, cooling_slope, base_load_kw, heating_r², cooling_r², sample_count, confidence)`
+
+**Note:** The caller (LoadForecaster) checks confidence from this method *before* calling `predict_load()`. `predict_load()` also has its own internal confidence gate. This double-gate is intentional — belt and suspenders.
 
 ### Prediction: predict_load(hour, temperature, base_load_kw)
 
@@ -179,7 +199,7 @@ class HourlyRegressionResult:
 4. **Confidence gate**: require `n ≥ MIN_SAMPLES` AND `r² ≥ MIN_R_SQUARED` (0.10)
 5. If gate fails: return `(base_load_kw, "low_confidence")`
 6. Compute: `predicted = base_load_kw + slope × delta`
-7. **Safety cap**: `predicted = min(predicted, base_load_kw × MAX_LOAD_MULTIPLIER)` (3.0×)
+7. **Safety cap**: `predicted = min(predicted, max(base_load_kw, 0.1) × MAX_LOAD_MULTIPLIER)` (3.0×; floor of 0.1 kW prevents zero-base zeroing out the adjustment)
 8. Return `(max(0.0, predicted), f"weather_{zone}")`
 
 ## Sliding Window
@@ -301,3 +321,8 @@ The original bug had three root causes. This design eliminates all three:
 | No output cap | `predict_load` returns raw math | `MAX_LOAD_MULTIPLIER` caps at 3× historical base |
 | Base load replacement | Learned base overrides historical | Additive only: historical base is never replaced |
 | Confidence without quality | Sample count alone | Sample count + R² dual gate |
+
+## Breaking Changes
+
+- **Sensor attribute renames**: `weather_cooling_coefficient` → `weather_avg_cooling_slope`, `weather_heating_coefficient` → `weather_avg_heating_slope`. Any dashboard cards or automations referencing the old attribute names will need updating.
+- **Storage format v2**: Existing learned coefficients are discarded on migration (intentional — the EMA data is corrupted). Learning restarts from zero. Temperature history is preserved.
