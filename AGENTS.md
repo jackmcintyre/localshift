@@ -14,7 +14,7 @@
 - **Domain**: Home Assistant integration for Tesla Powerwall
 - **Code**: `custom_components/localshift/`
 - **Tests**: `tests/`
-- **Deploy**: `./deploy.sh --reserve && ./deploy.sh` (ask user to run)
+- **Deploy**: Use skill `deploy-and-validate` when work is complete to deploy and validate
 - **Python**: 3.13+, type hints required
 
 ## Optimizer Changes (CRITICAL)
