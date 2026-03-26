@@ -26,33 +26,38 @@ Provide lightweight, low-context access to Home Assistant via `hass-cli`. Use th
 
 ## Prerequisites
 
-The CLI uses the same environment variables as MCP:
-- `HASS_SERVER` - Home Assistant URL
+The CLI requires these environment variables:
+- `HASS_SERVER` - Home Assistant URL (no trailing slash)
 - `HASS_TOKEN` - Long-lived access token
+
+**Note:** This project uses `HA_URL` and `HA_LONG_LIVED_TOKEN`. Wrap commands like:
+```bash
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN uvx --from homeassistant-cli hass-cli ...
+```
 
 ## Common Commands
 
 ### Entity Queries
 
 ```bash
-# List all entities
+# List all entities (table format)
 uvx --from homeassistant-cli hass-cli entity list
 
-# Get specific entity state
-uvx --from homeassistant-cli hass-cli state get sensor.localshift_battery_percent
+# Get specific entity state (JSON format)
+uvx --from homeassistant-cli hass-cli --output json state get sensor.battery_level
 
-# Search entities (outputs JSON)
-uvx --from homeassistant-cli hass-cli entity list | jq '.[] | select(.entity_id | contains("battery"))'
+# Search entities (filter with grep)
+uvx --from homeassistant-cli hass-cli entity list | grep -i battery
 ```
 
 ### History & Statistics
 
 ```bash
-# Get entity history (last 24h)
-uvx --from homeassistant-cli hass-cli raw GET "api/history/period?filter_entity_id=sensor.localshift_battery_percent"
+# Get entity history (last 24h, JSON)
+uvx --from homeassistant-cli hass-cli --output json raw GET "api/history/period?filter_entity_id=sensor.battery_level"
 
 # Get statistics
-uvx --from homeassistant-cli hass-cli raw GET "api/statistics_during_period?entity_ids=sensor.localshift_battery_percent&period=day"
+uvx --from homeassistant-cli hass-cli --output json raw GET "api/statistics_during_period?entity_ids=sensor.battery_level&period=day"
 ```
 
 ### Service Discovery
@@ -76,24 +81,29 @@ Quick reference for common LocalShift entities:
 
 ## Tips
 
-1. **Use `jq` for filtering** - CLI outputs JSON, pipe through `jq` for clean results
-2. **Raw API access** - `hass-cli raw GET` gives direct API access for any endpoint
-3. **Check state first** - Before using MCP, check current state via CLI to understand context
+1. **Use `--output json`** - Add this flag for machine-parseable output, then pipe to `jq`
+2. **Strip trailing slash** - `${HA_URL%/}` removes trailing slash to avoid double-slash errors
+3. **Raw API access** - `hass-cli raw GET` gives direct API access for any endpoint
 4. **Low context overhead** - CLI commands don't load 95+ tools into context
 
 ## Examples
 
+All examples assume env vars are set inline. In practice, export them first or use the wrapper pattern.
+
 ### Quick battery check
 ```bash
-uvx --from homeassistant-cli hass-cli state get sensor.localshift_battery_percent | jq '.state'
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json state get sensor.battery_level | jq '.[0].state'
 ```
 
-### Find all LocalShift entities
+### Find all battery entities
 ```bash
-uvx --from homeassistant-cli hass-cli entity list | jq '.[] | select(.entity_id | contains("localshift")) | .entity_id'
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli entity list | grep -i battery
 ```
 
 ### Get recent history for debugging
 ```bash
-uvx --from homeassistant-cli hass-cli raw GET "api/history/period?filter_entity_id=sensor.localshift_decision_log&minimal_response"
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli raw GET "api/history/period?filter_entity_id=sensor.my_entity&minimal_response"
 ```
