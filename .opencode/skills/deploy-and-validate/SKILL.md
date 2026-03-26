@@ -32,14 +32,33 @@ Ensure environment variables are set:
 - `HA_LONG_LIVED_TOKEN` - HA API token for restart/reload
 - `HA_URL` - HA URL (default: `http://homeassistant:8123`)
 
+Recommended pattern (avoid relying on interactive shell inheritance):
+
+```bash
+# Store once (outside repo/worktree)
+mkdir -p ~/.config/localshift
+cat > ~/.config/localshift/ha.env <<'EOF'
+export HA_URL='https://your-ha-host:8123'
+export HA_CONFIG='/homeassistant'
+export HA_LONG_LIVED_TOKEN='YOUR_TOKEN'
+EOF
+chmod 600 ~/.config/localshift/ha.env
+
+# Prefix every deploy/validation command
+source ~/.config/localshift/ha.env && ./deploy.sh --status
+```
+
 ## Step 1: Check Prerequisites
 
 ```bash
 # Verify HA connection
-curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $HA_LONG_LIVED_TOKEN" "$HA_URL/api/config"
+source ~/.config/localshift/ha.env && \
+  curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer $HA_LONG_LIVED_TOKEN" \
+  "${HA_URL%/}/api/config"
 
 # Check existing reservations
-./deploy.sh --status
+source ~/.config/localshift/ha.env && ./deploy.sh --status
 ```
 
 If another agent has reservation, either wait or use `--force` (emergency only).
@@ -47,7 +66,7 @@ If another agent has reservation, either wait or use `--force` (emergency only).
 ## Step 2: Reserve HA Instance
 
 ```bash
-./deploy.sh --reserve
+source ~/.config/localshift/ha.env && ./deploy.sh --reserve
 ```
 
 This creates reservation file preventing other agents from overwriting your deployment.
@@ -55,7 +74,7 @@ This creates reservation file preventing other agents from overwriting your depl
 ## Step 3: Deploy with Restart
 
 ```bash
-./deploy.sh --restart
+source ~/.config/localshift/ha.env && printf 'y\n' | ./deploy.sh --restart
 ```
 
 **Important:** Use `--restart` not plain deploy. The integration requires restart to load new code properly.
@@ -134,16 +153,16 @@ Query: ha_get_state(entity_id="binary_sensor.localshift_solar_can_reach_target")
 Pass: state reflects actual solar conditions (on=can reach, off=cannot)
 Fail: contradictory to forecast data
 
-### Check 4: Plan Has 96 Slots
+### Check 4: Plan Slot Count Matches Hybrid Horizon
 
 ```
 Entity: sensor.localshift_optimizer_plan
-Expected: state is "96" (or close)
+Expected: rolling hybrid slot count (typically ~54-60, not fixed 96)
 Query: ha_get_state(entity_id="sensor.localshift_optimizer_plan")
 ```
 
-Pass: state shows 96 slots
-Fail: incorrect slot count
+Pass: state is an integer in expected hybrid range for current horizon (usually 50-60)
+Fail: non-numeric, zero, or clearly out-of-range for hybrid planning
 
 ### Check 5: Terminal Shortfall Reasonable
 
@@ -156,17 +175,17 @@ Query: ha_get_state with attributes
 Pass: matches expectation (0% for sunny, >0% for cloudy)
 Fail: contradictory to solar conditions
 
-### Check 6: No Grid Charge at Expensive Prices
+### Check 6: No Grid Charge in Top Price Quartile (Unless Shortfall Risk)
 
 ```
 Entity: sensor.localshift_optimizer_plan_detailed
 Attribute: decisions array
-Expected: no charge_grid_* actions at above-median buy_price
+Expected: no charge_grid_* actions at buy_price > P75 unless `reason_code == TARGET_SHORTFALL_RISK`
 Query: ha_get_state with attributes, analyze decisions array
 ```
 
-Pass: charging only at <= median prices
-Fail: charging at expensive peak prices
+Pass: expensive charging occurs only when justified by terminal shortfall risk
+Fail: expensive charging without shortfall-risk justification
 
 ### Check 7: No Export at Negative FIT
 
@@ -224,9 +243,9 @@ echo "- Deployment ready for PR"
 | 1 | sensor.localshift_optimizer_summary | state == "success" |
 | 2 | sensor.localshift_integration_status | state != "error" |
 | 3 | binary_sensor.localshift_solar_can_reach_target | matches forecast |
-| 4 | sensor.localshift_optimizer_plan | 96 slots |
+| 4 | sensor.localshift_optimizer_plan | hybrid rolling count (typically 50-60) |
 | 5 | sensor.localshift_optimizer_summary.terminal_shortfall_pct | reasonable |
-| 6 | decisions array | no charge at peak prices |
+| 6 | decisions array | no unjustified charge in top quartile |
 | 7 | decisions array | no export at negative FIT |
 | 8 | /homeassistant/home-assistant.log | no errors |
 
@@ -245,8 +264,8 @@ echo "- Deployment ready for PR"
 
 ### Plan has fewer than 96 slots
 
-- Forecast may not be fully populated
-- Wait for next coordinator cycle
+- This is expected for hybrid planning (5-min near-term + 30-min extended)
+- Validate structure/range, not fixed 96
 
 ### Terminal shortfall incorrect
 

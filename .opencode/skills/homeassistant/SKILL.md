@@ -113,18 +113,38 @@ This project uses `HA_URL` and `HA_LONG_LIVED_TOKEN`. Wrap commands:
 HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN uvx --from homeassistant-cli hass-cli ...
 ```
 
+### Environment Bootstrapping (Critical)
+
+Do not assume interactive shell exports are available to subprocesses. Source env explicitly.
+
+```bash
+# Recommended location (outside repo/worktree)
+source ~/.config/localshift/ha.env
+
+# Quick connectivity check before CLI reads
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer $HA_LONG_LIVED_TOKEN" \
+  "${HA_URL%/}/api/config"
+```
+
+If the check returns `000` or DNS errors, `HA_URL` is not reachable from current runtime.
+Use a resolvable URL (for example, your LAN or public HA URL), then retry CLI commands.
+
 ### Entity Queries
 
 ```bash
 # Get specific entity state (JSON)
+source ~/.config/localshift/ha.env && \
 HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
   uvx --from homeassistant-cli hass-cli --output json state get sensor.battery_level
 
 # List all entities
+source ~/.config/localshift/ha.env && \
 HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
   uvx --from homeassistant-cli hass-cli entity list
 
 # Search entities
+source ~/.config/localshift/ha.env && \
 HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
   uvx --from homeassistant-cli hass-cli entity list | grep -i battery
 ```
@@ -133,10 +153,12 @@ HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
 
 ```bash
 # Get entity history (last 24h, JSON)
+source ~/.config/localshift/ha.env && \
 HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
   uvx --from homeassistant-cli hass-cli --output json raw GET "api/history/period?filter_entity_id=sensor.battery_level"
 
 # Get statistics
+source ~/.config/localshift/ha.env && \
 HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
   uvx --from homeassistant-cli hass-cli --output json raw GET "api/statistics_during_period?entity_ids=sensor.battery_level&period=day"
 ```

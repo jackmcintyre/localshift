@@ -1,7 +1,7 @@
 """Tests for EvaluationDispatcher."""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.util import dt as dt_util
 
@@ -21,8 +21,12 @@ class StubCoordinator:
         return None
 
 
-def test_state_change_dispatches_evaluation():
-    """State change triggers read, notify, and evaluation scheduling."""
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_state_change_dispatches_evaluation(mock_call_later):
+    """State change triggers read, notify, and deferred evaluation scheduling."""
+    mock_unsub = MagicMock()
+    mock_call_later.return_value = mock_unsub
+
     hass = MagicMock()
     hass.async_create_task = MagicMock()
 
@@ -47,10 +51,147 @@ def test_state_change_dispatches_evaluation():
 
     read_state.assert_called_once()
     notify_listeners.assert_called_once()
+    hass.async_create_task.assert_not_called()
+    mock_call_later.assert_called_once()
+
+    timer_callback = mock_call_later.call_args[0][2]
+    timer_callback(MagicMock())
+
     hass.async_create_task.assert_called_once()
-    assert (
-        hass.async_create_task.call_args.args[1] == "localshift_evaluate_state_change"
+    assert hass.async_create_task.call_args.args[1] == "localshift_evaluate_coalesced"
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_multiple_state_changes_coalesce_into_single_evaluation(mock_call_later):
+    """Multiple entity changes within the window trigger one evaluation."""
+    timer_unsubs = [MagicMock(), MagicMock(), MagicMock()]
+    mock_call_later.side_effect = timer_unsubs
+
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    state_machine = MagicMock()
+    state_machine.in_mode_transition = False
+
+    read_state = MagicMock()
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        read_state,
+        MagicMock(),
+        AsyncMock(),
+        state_machine,
+        timedelta(minutes=10),
     )
+
+    dispatcher.on_state_change(MagicMock())
+    dispatcher.on_state_change(MagicMock())
+    dispatcher.on_state_change(MagicMock())
+
+    assert read_state.call_count == 3
+    assert mock_call_later.call_count == 3
+    timer_unsubs[0].assert_called_once()
+    timer_unsubs[1].assert_called_once()
+    timer_unsubs[2].assert_not_called()
+    hass.async_create_task.assert_not_called()
+
+    timer_callback = mock_call_later.call_args[0][2]
+    timer_callback(MagicMock())
+
+    hass.async_create_task.assert_called_once()
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_cancel_pending_coalesce(mock_call_later):
+    """Pending coalesced evaluation can be cancelled."""
+    mock_unsub = MagicMock()
+    mock_call_later.return_value = mock_unsub
+
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    state_machine = MagicMock()
+    state_machine.in_mode_transition = False
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        MagicMock(),
+        MagicMock(),
+        AsyncMock(),
+        state_machine,
+        timedelta(minutes=10),
+    )
+
+    dispatcher.on_state_change(MagicMock())
+
+    dispatcher.cancel_pending_coalesce()
+    mock_unsub.assert_called_once()
+    assert dispatcher._coalesce_unsub is None
+    assert dispatcher._coalesce_count == 0
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_coalesce_timer_skips_if_transition_started(mock_call_later):
+    """Timer callback skips evaluation if transition starts before expiry."""
+    mock_unsub = MagicMock()
+    mock_call_later.return_value = mock_unsub
+
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    state_machine = MagicMock()
+    state_machine.in_mode_transition = False
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        MagicMock(),
+        MagicMock(),
+        AsyncMock(),
+        state_machine,
+        timedelta(minutes=10),
+    )
+
+    dispatcher.on_state_change(MagicMock())
+    state_machine.in_mode_transition = True
+
+    timer_callback = mock_call_later.call_args[0][2]
+    timer_callback(MagicMock())
+
+    hass.async_create_task.assert_not_called()
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_coalesce_timer_skips_if_state_machine_removed(mock_call_later):
+    """Timer callback skips evaluation if state machine is missing."""
+    mock_unsub = MagicMock()
+    mock_call_later.return_value = mock_unsub
+
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    state_machine = MagicMock()
+    state_machine.in_mode_transition = False
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        MagicMock(),
+        MagicMock(),
+        AsyncMock(),
+        state_machine,
+        timedelta(minutes=10),
+    )
+
+    dispatcher.on_state_change(MagicMock())
+    dispatcher._state_machine = None
+
+    timer_callback = mock_call_later.call_args[0][2]
+    timer_callback(MagicMock())
+
+    hass.async_create_task.assert_not_called()
 
 
 def test_state_change_skips_during_transition():
