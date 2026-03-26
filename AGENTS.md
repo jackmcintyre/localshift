@@ -54,12 +54,11 @@ Use the right tool for the task:
 - Use when: exploring how/why code works, finding patterns, conceptual queries
 - Start if not running: `~/.local/bin/ov-start`
 
-**hass-cli** - Lightweight HA queries:
-- `hass-cli state get <entity>` - get entity state
-- `hass-cli entity list` - list all entities
-- `hass-cli raw GET "api/..."` - direct API access
-- Use when: quick read-only HA queries without MCP overhead
-- Skill: `homeassistant-cli`
+**@homeassistant subagent** - HA gateway (CLI for reads, MCP for writes):
+- Automatically uses hass-cli for entity state, history, lists
+- Automatically uses MCP for turn on/off, set values, call services
+- Use: `@homeassistant check battery state` or `@homeassistant turn on automation`
+- Skill: `homeassistant` (merged CLI+MCP)
 
 **Quick decision guide:**
 
@@ -70,8 +69,7 @@ Use the right tool for the task:
 | See file structure | SymDex |
 | Find code related to "grid charging" | OpenViking |
 | Navigate to line N | SymDex |
-| Quick HA entity state | hass-cli |
-| Control HA device | MCP (`@homeassistant`) |
+| Any HA operation | `@homeassistant` subagent |
 
 ## Additional Tools
 
