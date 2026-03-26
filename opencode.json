@@ -29,8 +29,14 @@
   },
   "agent": {
     "homeassistant": {
-      "description": "Agent with HomeAssistant MCP enabled for debugging",
+      "description": "HA gateway - uses CLI for reads, MCP for writes",
       "mode": "subagent",
+      "model": "opencode/big-pickle",
+      "skills": ["homeassistant"],
+      "tools": {
+        "bash": true,
+        "homeassistant_*": true
+      },
       "mcp": {
         "homeassistant": {
           "type": "local",
@@ -41,9 +47,6 @@
           },
           "enabled": true
         }
-      },
-      "tools": {
-        "homeassistant_*": true
       }
     }
   }

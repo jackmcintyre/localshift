@@ -1,6 +1,6 @@
 ---
 name: homeassistant
-description: Gatekeeper for Home Assistant MCP - exclusive access point to HA
+description: Home Assistant gateway - CLI for reads, MCP for writes
 license: MIT
 compatibility: opencode
 metadata:
@@ -8,180 +8,228 @@ metadata:
   workflow: debugging
 ---
 
-## What I Do
+## Tool Access - READ THIS FIRST
 
-I am the **gateway to Home Assistant** for complex operations. I have exclusive access to Home Assistant MCP tools via ha-mcp. The main agent must delegate any HA operation to me using `@homeassistant`.
+**You HAVE full access to:**
+- `bash` tool - for hass-cli commands (read operations)
+- All `homeassistant_*` MCP tools - for write operations
 
-## CLI vs MCP: When to Use Which
+This is not conditional. Call tools directly when needed.
 
-**Use `hass-cli` (homeassistant-cli skill) for:**
-- Read-only entity state queries
-- Listing/searching entities
-- History and statistics lookups
-- Quick data checks
+## Decision Matrix: CLI vs MCP
 
-**Use MCP (this skill) for:**
-- Device control (turn on/off)
-- Service calls
-- Configuration changes
-- Automation/script management
-- Any write operation
+| Operation | Use | Command/Tool |
+|-----------|-----|--------------|
+| Get entity state | CLI | `hass-cli state get <entity>` |
+| List/search entities | CLI | `hass-cli entity list` |
+| Get history | CLI | `hass-cli raw GET api/history/...` |
+| Get statistics | CLI | `hass-cli raw GET api/statistics/...` |
+| Turn on/off device | MCP | `homeassistant_HassTurnOn/Off(name=...)` |
+| Set temperature | MCP | `homeassistant_HassClimateSetTemperature(...)` |
+| Set light brightness | MCP | `homeassistant_HassLightSet(name=..., brightness=%)` |
+| Set volume | MCP | `homeassistant_HassSetVolume(name=..., volume_level=%)` |
+| Call service | MCP | `homeassistant_HassTurnOn(name=...)` for most services |
 
-**Rule:** If you just need to read data, use CLI. If you need to change anything, use MCP.
+**Rule:** CLI for reads (fast, low overhead). MCP for writes (state changes).
 
-## When to Use Me
+---
 
-Any time you need to **interact with or modify** Home Assistant:
-- "What's the current battery state?"
-- "Turn on the kitchen lights"
-- "Check HA logs for errors"
-- "Debug why my sensor is unavailable"
+## CLI Commands (Preferred for Read Operations)
 
-## Gatekeeper Policy
+### Prerequisites
 
-- **Exclusive access**: Only I can use HA tools. Other agents cannot call them.
-- **Confirmation**: I will ask for explicit user confirmation before performing any state-changing operation (turn on/off, set temperature, adjust volume, etc.).
-- **Read-only safe**: Live context queries and log inspection do not require confirmation.
-- **Least privilege**: I will only perform the exact action requested, no extra changes.
+The CLI requires environment variables:
+- `HASS_SERVER` - Home Assistant URL (no trailing slash)
+- `HASS_TOKEN` - Long-lived access token
 
-## Available Tools (ha-mcp)
+This project uses `HA_URL` and `HA_LONG_LIVED_TOKEN`. Wrap commands:
+```bash
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN uvx --from homeassistant-cli hass-cli ...
+```
 
-These tools are only available within this subagent. ha-mcp provides 95+ tools.
+### Entity Queries
+
+```bash
+# Get specific entity state (JSON)
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json state get sensor.battery_level
+
+# List all entities
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli entity list
+
+# Search entities
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli entity list | grep -i battery
+```
+
+### History & Statistics
+
+```bash
+# Get entity history (last 24h, JSON)
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json raw GET "api/history/period?filter_entity_id=sensor.battery_level"
+
+# Get statistics
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json raw GET "api/statistics_during_period?entity_ids=sensor.battery_level&period=day"
+```
+
+---
+
+## MCP Tools (For Write Operations Only)
 
 ### State & Discovery
 
 | Tool | Purpose |
 |------|---------|
-| `ha_get_state(entity_id=...)` | Get state of a specific entity |
-| `ha_get_overview(detail_level=...)` | System overview (minimal/standard/full) |
-| `ha_search_entities(query=..., domain_filter=...)` | Fuzzy search for entities |
-| `ha_deep_search(query=...)` | Deep search across configs |
-| `ha_list_services()` | List all available services |
+| `homeassistant_GetLiveContext()` | Returns all entity states and attributes |
+| `homeassistant_GetDateTime()` | Returns current date/time from HA system |
 
 ### Device Control
 
 | Tool | Purpose |
 |------|---------|
-| `ha_call_service(domain=..., service=..., target=..., data=...)` | Call any HA service |
-| `ha_bulk_control(entities=..., action=...)` | Control multiple devices |
+| `homeassistant_HassTurnOn(name=...)` | Turn a device/entity on |
+| `homeassistant_HassTurnOff(name=...)` | Turn a device/entity off |
+| `homeassistant_HassLightSet(name=..., brightness=%)` | Set light brightness (0-100%) |
+| `homeassistant_HassClimateSetTemperature(name=..., temperature=...)` | Set target temperature |
+| `homeassistant_HassSetVolume(name=..., volume_level=%)` | Set absolute volume (0-100%) |
 
-### Configuration Management
+### Examples
 
-| Tool | Purpose |
-|------|---------|
-| `ha_config_get_automation(automation_id=...)` | Get automation config |
-| `ha_config_set_automation(automation_id=..., config=...)` | Create/update automation |
-| `ha_config_get_script(script_id=...)` | Get script config |
-| `ha_config_set_script(script_id=..., config=...)` | Create/update script |
-| `ha_config_list_helpers()` | List helper entities |
-| `ha_config_set_helper(helper_id=..., config=...)` | Create/update helper |
-| `ha_config_get_dashboard(dashboard_id=...)` | Get dashboard config |
-| `ha_config_set_dashboard(dashboard_id=..., config=...)` | Create/update dashboard |
+```python
+# Turn on a switch
+homeassistant_HassTurnOn(name="switch.localshift_automation_enabled")
 
-### Monitoring & History
+# Turn off a switch
+homeassistant_HassTurnOff(name="switch.localshift_dry_run")
 
-| Tool | Purpose |
-|------|---------|
-| `ha_get_history(entity_ids=..., start_time=...)` | Entity state history |
-| `ha_get_statistics(entity_ids=..., start_time=..., period=...)` | Long-term statistics |
-| `ha_get_automation_traces(automation_id=...)` | Automation execution traces |
-| `ha_get_logbook(hours_back=..., limit=...)` | Recent logbook entries |
+# Set light brightness
+homeassistant_HassLightSet(name="light.kitchen", brightness=50)
+```
 
-### System
+---
 
-| Tool | Purpose |
-|------|---------|
-| `ha_get_system_health()` | System health check |
-| `ha_get_system_info()` | System information |
-| `ha_get_updates()` | Check for updates |
-| `ha_check_config()` | Validate configuration |
-| `ha_restart()` | Restart Home Assistant |
+## Direct Log Access
 
-### Direct Log Access
+Home Assistant logs: `/homeassistant/home-assistant.log`
 
-Home Assistant logs are at: `/homeassistant/home-assistant.log`
-
-Common log commands:
 ```bash
 tail -100 /homeassistant/home-assistant.log | grep -i localshift
 tail -f /homeassistant/home-assistant.log | grep -i localshift
 grep -i "error\|exception\|failed" /homeassistant/home-assistant.log | tail -50
 ```
 
-## Common Workflows
+---
 
-### 1. Check Entity State
+## LocalShift Entity Quick Reference
 
-```python
-# Get specific entity
-state = ha_get_state(entity_id="sensor.localshift_battery_percent")
+### Critical Control Entities
 
-# Get system overview
-overview = ha_get_overview(detail_level="standard")
+| Entity | Type | Purpose |
+|--------|------|---------|
+| `switch.localshift_automation_enabled` | switch | Master automation toggle |
+| `switch.localshift_dry_run` | switch | Dry run mode (off = live) |
+| `switch.localshift_spike_discharge_enabled` | switch | Enable spike discharge |
+| `switch.localshift_enable_learning` | switch | Learning system toggle |
+| `select.localshift_battery_mode` | select | Manual mode control |
+| `select.localshift_optimization_mode` | select | Optimizer strategy |
 
-# Search for entities
-results = ha_search_entities(query="battery", domain_filter="sensor")
-```
-
-### 2. Control a Device
-
-```python
-# Always confirm with user before state changes
-await user_confirmation("Turn on kitchen lights?")
-ha_call_service(
-    domain="light",
-    service="turn_on",
-    target={"entity_id": "light.kitchen_downlights"}
-)
-```
-
-### 3. Debug LocalShift Integration
-
-```python
-# Get key sensor states
-battery = ha_get_state(entity_id="sensor.localshift_battery_percent")
-mode = ha_get_state(entity_id="sensor.localshift_current_mode")
-
-# Check automation traces for debugging
-traces = ha_get_automation_traces(automation_id="automation.localshift_battery_control")
-```
-
-### 4. Debug Automation Issues
-
-```python
-# Get automation config
-config = ha_config_get_automation(automation_id="automation.my_automation")
-
-# Check recent execution traces
-traces = ha_get_automation_traces(automation_id="automation.my_automation")
-
-# Get trace for specific run
-trace = ha_get_automation_traces(automation_id="automation.my_automation", run_id="1234567890.123")
-```
-
-## LocalShift-Specific Entities
-
-When debugging LocalShift, pay special attention to these entities:
+### Key Sensors
 
 | Entity | Purpose |
 |--------|---------|
-| `switch.localshift_automation_enabled` | Master toggle |
-| `switch.localshift_dry_run` | Dry run mode (off = live) |
-| `switch.localshift_spike_discharge_enabled` | Spike discharge |
-| `switch.localshift_enable_learning` | Learning system |
-| `switch.localshift_notifications_enabled` | Notifications |
-| `sensor.localshift_battery_percent` | Battery SOC |
-| `sensor.localshift_current_mode` | Current mode |
-| `sensor.localshift_grid_price` | Grid price |
-| `sensor.localshift_decision_log` | Decision history |
-| `binary_sensor.localshift_price_spike_coming` | Spike forecast |
-| `binary_sensor.localshift_demand_window` | In demand window |
+| `sensor.localshift_battery_percent` | Battery SOC (%) |
+| `sensor.localshift_current_mode` | Current operating mode |
+| `sensor.localshift_grid_price` | Current grid price ($/kWh) |
+| `sensor.localshift_decision_log` | Recent mode changes with reasons |
+| `sensor.localshift_forecast_battery` | Predicted SOC at demand window |
+| `sensor.localshift_cost_electricity_net` | Daily net cost |
+| `sensor.localshift_optimizer_plan` | 24-hour optimizer plan |
+| `sensor.localshift_optimizer_summary` | Optimizer run summary |
+| `sensor.localshift_integration_status` | Integration health (ok/degraded/error) |
+| `sensor.localshift_automation_ready` | Automation readiness |
+| `sensor.localshift_load_shift_signal` | Load shift signal (INCREASE/MAINTAIN/REDUCE_LOAD) |
+
+### Binary Sensors
+
+| Entity | Purpose |
+|--------|---------|
+| `binary_sensor.localshift_demand_window` | In demand window (peak hours) |
+| `binary_sensor.localshift_price_spike_coming` | Price spike forecast |
+| `binary_sensor.localshift_solar_can_reach_target` | Solar can fill battery |
+| `binary_sensor.localshift_charge_boost_needed` | 5kW boost needed |
+| `binary_sensor.localshift_excess_solar_available` | Excess solar available |
+| `binary_sensor.localshift_tesla_override_active` | Tesla has control |
+
+### Configuration Numbers
+
+| Entity | Purpose | Range |
+|--------|---------|-------|
+| `number.localshift_battery_target` | Target SOC for demand window | 50-100% |
+| `number.localshift_cheap_price_percentile` | Base cheap price threshold | 5-50% |
+| `number.localshift_minimum_target_soc` | Min SOC during discharge | 5-30% |
+| `number.localshift_max_pre_charge_price` | Max price for grid charging | $0.00-$0.50/kWh |
+
+**For complete entity reference with all attributes:**
+`/config/home/localshift/docs/ENTITY_REFERENCE.md`
+
+---
+
+## Common Workflows
+
+### 1. Check if automation is enabled
+
+```bash
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json state get switch.localshift_automation_enabled
+```
+
+### 2. Get battery state
+
+```bash
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_battery_percent
+```
+
+### 3. Toggle automation (MCP - requires confirmation)
+
+Ask user first, then:
+```python
+homeassistant_HassTurnOn(name="switch.localshift_automation_enabled")
+# or
+homeassistant_HassTurnOff(name="switch.localshift_automation_enabled")
+```
+
+### 4. Check integration health
+
+```bash
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_integration_status
+```
+
+### 5. Get recent decisions
+
+```bash
+HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_decision_log
+```
+
+---
+
+## Gatekeeper Policy
+
+- **Read operations:** Execute immediately via CLI
+- **Write operations:** Ask for user confirmation before executing via MCP
+- **Least privilege:** Only perform the exact action requested
+
+---
 
 ## Best Practices
 
-1. **Start with ha_get_overview** - gives you a quick system snapshot.
-2. **Use ha_search_entities** - fuzzy search finds entities even with partial names.
-3. **Check automation traces** - for automation issues, traces show exactly what happened.
-4. **Check logs for errors** - use tail/grep on HA log for deep context.
-5. **Ask before changing state** - always confirm with user.
-6. **Be precise** - use exact entity names; if uncertain, search first.
+1. **CLI first for reads** - Lower overhead, faster response
+2. **MCP only for writes** - State changes need confirmation
+3. **Use exact entity names** - If uncertain, search first with `hass-cli entity list | grep`
+4. **Check logs for errors** - `/homeassistant/home-assistant.log`
+5. **Use `--output json`** - Machine-parseable, pipe to `jq` if needed
