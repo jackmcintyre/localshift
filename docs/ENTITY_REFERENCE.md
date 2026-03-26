@@ -310,7 +310,9 @@ Attributes:
   weather_condition: rainy
   weather_correlation_confidence: medium
   weather_learning_enabled: true
-  weather_cooling_coefficient: 0.3022
+  weather_avg_cooling_slope: 0.3022
+  weather_avg_heating_slope: 0.1845
+  weather_avg_r_squared: 0.42
   weather_sample_count: 5723
 ```
 

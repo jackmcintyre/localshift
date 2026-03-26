@@ -15,7 +15,6 @@ Each hour of the day has its own coefficients to capture daily patterns.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -33,93 +32,173 @@ from ..const import (
     DEFAULT_HEATING_THRESHOLD,
     DOMAIN,
 )
+from .anomaly import (
+    WEATHER_ANOMALY_ANOMALOUS_WEIGHT,
+    WEATHER_ANOMALY_MIN_HISTORY_DAYS,
+    WEATHER_ANOMALY_NORMAL_WEIGHT,
+    WEATHER_ANOMALY_SIGMA_THRESHOLD,
+    WEATHER_TEMPERATURE_HISTORY_DAYS,
+    WeatherAnomalyDetector,
+    WeatherAnomalyResult,
+)
+from .temperature import TemperatureForecast, TemperatureForecastProvider
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = [
+    "TemperatureForecast",
+    "WeatherAnomalyResult",
+    "WEATHER_ANOMALY_ANOMALOUS_WEIGHT",
+    "WEATHER_ANOMALY_MIN_HISTORY_DAYS",
+    "WEATHER_ANOMALY_NORMAL_WEIGHT",
+    "WEATHER_ANOMALY_SIGMA_THRESHOLD",
+    "WEATHER_TEMPERATURE_HISTORY_DAYS",
+]
+
 # Storage version for migrations
-STORAGE_VERSION = 1
+STORAGE_VERSION = 2
 STORAGE_KEY = "weather_correlation"
 
-# Confidence thresholds based on sample count
+# Confidence thresholds based on sample count (legacy, retained for compatibility)
 CONFIDENCE_LOW_THRESHOLD = 7  # Less than 7 samples = low confidence
 CONFIDENCE_MEDIUM_THRESHOLD = 30  # 7-30 samples = medium, 30+ = high
 
-# Forecast cache settings
-FORECAST_CACHE_TTL = timedelta(minutes=30)
-
-# Issue #681: Weather anomaly detection constants
-WEATHER_TEMPERATURE_HISTORY_DAYS = 14  # Days of temperature history to keep
-WEATHER_ANOMALY_MIN_HISTORY_DAYS = 7  # Minimum days needed for anomaly detection
-WEATHER_ANOMALY_SIGMA_THRESHOLD = 2.0  # Standard deviations for anomaly
-WEATHER_ANOMALY_NORMAL_WEIGHT = 1.0  # Weight for normal days
-WEATHER_ANOMALY_ANOMALOUS_WEIGHT = 0.3  # Weight for anomalous days (30%)
+# Regression configuration
+MIN_TEMP_DELTA = 1.0
+MIN_SAMPLES_PER_ZONE = 20
+MIN_R_SQUARED = 0.10
+MAX_SLOPE_KW_PER_DEGREE = 2.0
+MAX_LOAD_MULTIPLIER = 3.0
+SLIDING_WINDOW_DAYS = 30
 
 
-@dataclass
-class WeatherAnomalyResult:
-    """Result of weather anomaly detection (Issue #681).
+@dataclass(slots=True)
+class ZoneStats:
+    """Sufficient statistics for regression fitting."""
 
-    Attributes:
-        is_anomalous: Whether the temperature is anomalous (±2σ from mean)
-        weight: Weight to apply in rollback evaluation (0.3 or 1.0)
-        temperature: The temperature that was evaluated
-        deviation_sigma: How many standard deviations from mean (negative = below)
-        mean_temperature: Mean of historical temperatures
-        std_temperature: Standard deviation of historical temperatures
-
-    """
-
-    is_anomalous: bool
-    weight: float
-    temperature: float
-    deviation_sigma: float
-    mean_temperature: float
-    std_temperature: float
-
-
-@dataclass
-class HourlyTemperatureCoefficients:
-    """Temperature sensitivity coefficients for a single hour.
-
-    Attributes:
-        base_load_kw: Minimum load at mild temperatures (18-24°C band)
-        cooling_coefficient: Additional kW per degree above cooling threshold
-        heating_coefficient: Additional kW per degree below heating threshold
-        sample_count: Number of data points used for learning
-        last_updated: When coefficients were last recalculated
-        confidence: low/medium/high based on sample count
-
-    """
-
-    base_load_kw: float = 0.0
-    cooling_coefficient: float = 0.0  # kW per °C above cooling threshold
-    heating_coefficient: float = 0.0  # kW per °C below heating threshold
-    sample_count: int = 0
-    last_updated: str = ""  # ISO format datetime
-    confidence: str = "low"
+    n: int = 0
+    sum_x: float = 0.0
+    sum_y: float = 0.0
+    sum_xx: float = 0.0
+    sum_xy: float = 0.0
+    sum_yy: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
-            "base_load_kw": self.base_load_kw,
-            "cooling_coefficient": self.cooling_coefficient,
-            "heating_coefficient": self.heating_coefficient,
-            "sample_count": self.sample_count,
-            "last_updated": self.last_updated,
-            "confidence": self.confidence,
+            "n": self.n,
+            "sum_x": self.sum_x,
+            "sum_y": self.sum_y,
+            "sum_xx": self.sum_xx,
+            "sum_xy": self.sum_xy,
+            "sum_yy": self.sum_yy,
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> HourlyTemperatureCoefficients:
+    def from_dict(cls, data: dict[str, Any]) -> ZoneStats:
         """Create from dictionary."""
         return cls(
-            base_load_kw=data.get("base_load_kw", 0.0),
-            cooling_coefficient=data.get("cooling_coefficient", 0.0),
-            heating_coefficient=data.get("heating_coefficient", 0.0),
-            sample_count=data.get("sample_count", 0),
-            last_updated=data.get("last_updated", ""),
-            confidence=data.get("confidence", "low"),
+            n=data.get("n", 0),
+            sum_x=data.get("sum_x", 0.0),
+            sum_y=data.get("sum_y", 0.0),
+            sum_xx=data.get("sum_xx", 0.0),
+            sum_xy=data.get("sum_xy", 0.0),
+            sum_yy=data.get("sum_yy", 0.0),
         )
+
+
+@dataclass(slots=True)
+class HourlyRegressionData:
+    """Per-hour regression data for daily snapshots."""
+
+    mild: ZoneStats = field(default_factory=ZoneStats)
+    heating: ZoneStats = field(default_factory=ZoneStats)
+    cooling: ZoneStats = field(default_factory=ZoneStats)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for storage."""
+        return {
+            "mild": self.mild.to_dict(),
+            "heating": self.heating.to_dict(),
+            "cooling": self.cooling.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> HourlyRegressionData:
+        """Create from dictionary."""
+        return cls(
+            mild=ZoneStats.from_dict(data.get("mild", {})),
+            heating=ZoneStats.from_dict(data.get("heating", {})),
+            cooling=ZoneStats.from_dict(data.get("cooling", {})),
+        )
+
+
+@dataclass(slots=True)
+class DailySnapshot:
+    """Regression snapshot for a single day."""
+
+    date_key: str
+    data: HourlyRegressionData = field(default_factory=HourlyRegressionData)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for storage."""
+        return {"date_key": self.date_key, "data": self.data.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DailySnapshot:
+        """Create from dictionary."""
+        return cls(
+            date_key=data.get("date_key", ""),
+            data=HourlyRegressionData.from_dict(data.get("data", {})),
+        )
+
+
+@dataclass(slots=True)
+class HourlyRegressionResult:
+    """Computed regression results for a single hour."""
+
+    base_load_kw: float = 0.0
+    heating_slope: float = 0.0
+    cooling_slope: float = 0.0
+    r_squared: float = 0.0
+    sample_count: int = 0
+    confidence: str = "low"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for diagnostics."""
+        return {
+            "base_load_kw": self.base_load_kw,
+            "heating_slope": self.heating_slope,
+            "cooling_slope": self.cooling_slope,
+            "r_squared": self.r_squared,
+            "sample_count": self.sample_count,
+            "confidence": self.confidence,
+        }
+
+
+def _fit_zone_regression(
+    stats: ZoneStats, base_load_kw: float = 0.0
+) -> tuple[float, float]:
+    """Fit a zero-intercept regression for a zone.
+
+    Uses sufficient statistics to compute slope and R^2. The base load is
+    treated as a fixed intercept and removed from the dependent variable.
+    """
+    if stats.n < 2 or stats.sum_xx <= 0:
+        return 0.0, 0.0
+
+    adjusted_sum_xy = stats.sum_xy - base_load_kw * stats.sum_x
+    adjusted_sum_yy = (
+        stats.sum_yy - 2 * base_load_kw * stats.sum_y + stats.n * base_load_kw**2
+    )
+
+    slope = adjusted_sum_xy / stats.sum_xx
+
+    if adjusted_sum_yy <= 0:
+        return slope, 0.0
+
+    r_squared = (adjusted_sum_xy * adjusted_sum_xy) / (stats.sum_xx * adjusted_sum_yy)
+    return slope, r_squared
 
 
 @dataclass
@@ -131,18 +210,15 @@ class WeatherCorrelationData:
         weather_entity_id: Configured weather entity
         cooling_threshold: Temperature above which cooling load increases
         heating_threshold: Temperature below which heating load increases
-        hourly_coefficients: Dict mapping hour (0-23) to coefficients
         learning_stats: Aggregated statistics for diagnostics
 
     """
 
-    version: int = 1
+    version: int = STORAGE_VERSION
     weather_entity_id: str = ""
     cooling_threshold: float = 24.0  # °C
     heating_threshold: float = 18.0  # °C
-    hourly_coefficients: dict[int, HourlyTemperatureCoefficients] = field(
-        default_factory=dict
-    )
+    daily_regression_stats: dict[int, list[DailySnapshot]] = field(default_factory=dict)
     learning_stats: dict[str, Any] = field(default_factory=dict)
     temperature_history: dict[str, float] = field(
         default_factory=dict
@@ -155,9 +231,9 @@ class WeatherCorrelationData:
             "weather_entity_id": self.weather_entity_id,
             "cooling_threshold": self.cooling_threshold,
             "heating_threshold": self.heating_threshold,
-            "hourly_coefficients": {
-                str(hour): coef.to_dict()
-                for hour, coef in self.hourly_coefficients.items()
+            "daily_regression_stats": {
+                str(hour): [snapshot.to_dict() for snapshot in snapshots]
+                for hour, snapshots in self.daily_regression_stats.items()
             },
             "learning_stats": self.learning_stats,
             "temperature_history": self.temperature_history,  # Issue #681
@@ -166,38 +242,38 @@ class WeatherCorrelationData:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WeatherCorrelationData:
         """Create from dictionary."""
-        hourly_coefficients = {}
-        for hour_str, coef_data in data.get("hourly_coefficients", {}).items():
-            hour = int(hour_str)
-            hourly_coefficients[hour] = HourlyTemperatureCoefficients.from_dict(
-                coef_data
+        version = data.get("version", 1)
+        if version == 1:
+            _LOGGER.info(
+                "Migrating weather correlation storage from v1 to v2; "
+                "discarding hourly coefficients"
+            )
+            return cls(
+                version=STORAGE_VERSION,
+                weather_entity_id=data.get("weather_entity_id", ""),
+                cooling_threshold=data.get("cooling_threshold", 24.0),
+                heating_threshold=data.get("heating_threshold", 18.0),
+                daily_regression_stats={},
+                learning_stats=data.get("learning_stats", {}),
+                temperature_history=data.get("temperature_history", {}),
             )
 
+        daily_regression_stats: dict[int, list[DailySnapshot]] = {}
+        for hour_str, snapshots in data.get("daily_regression_stats", {}).items():
+            hour = int(hour_str)
+            daily_regression_stats[hour] = [
+                DailySnapshot.from_dict(snapshot) for snapshot in snapshots
+            ]
+
         return cls(
-            version=data.get("version", 1),
+            version=data.get("version", STORAGE_VERSION),
             weather_entity_id=data.get("weather_entity_id", ""),
             cooling_threshold=data.get("cooling_threshold", 24.0),
             heating_threshold=data.get("heating_threshold", 18.0),
-            hourly_coefficients=hourly_coefficients,
+            daily_regression_stats=daily_regression_stats,
             learning_stats=data.get("learning_stats", {}),
             temperature_history=data.get("temperature_history", {}),  # Issue #681
         )
-
-
-@dataclass
-class TemperatureForecast:
-    """Temperature forecast for a time slot.
-
-    Attributes:
-        slot_time: The datetime this forecast applies to
-        temperature: Forecasted temperature in °C
-        condition: Weather condition (sunny, cloudy, etc.)
-
-    """
-
-    slot_time: datetime
-    temperature: float | None = None
-    condition: str = "unknown"
 
 
 class WeatherCorrelation:
@@ -234,9 +310,10 @@ class WeatherCorrelation:
             tuple[int, float, float]
         ] = []  # (hour, temp, load)
 
-        # Cached temperature forecast (updated periodically)
-        self._cached_forecasts: list[TemperatureForecast] = []
-        self._forecast_cache_time: datetime | None = None
+        self._temperature_provider = TemperatureForecastProvider(
+            hass, entry, self._data.weather_entity_id
+        )
+        self._anomaly_detector = WeatherAnomalyDetector(self._data.temperature_history)
 
     async def async_initialize(self) -> None:
         """Load persisted data from storage."""
@@ -246,10 +323,18 @@ class WeatherCorrelation:
         stored_data = await self._store.async_load()
         if stored_data is not None:
             self._data = WeatherCorrelationData.from_dict(stored_data)
+            total_samples = 0
+            for snapshots in self._data.daily_regression_stats.values():
+                for snapshot in snapshots:
+                    total_samples += (
+                        snapshot.data.mild.n
+                        + snapshot.data.heating.n
+                        + snapshot.data.cooling.n
+                    )
             _LOGGER.info(
-                "Loaded weather correlation data: %d hourly coefficients, %d total samples",
-                len(self._data.hourly_coefficients),
-                sum(c.sample_count for c in self._data.hourly_coefficients.values()),
+                "Loaded weather correlation data: %d hours, %d total samples",
+                len(self._data.daily_regression_stats),
+                total_samples,
             )
         else:
             # Initialize with config values
@@ -266,12 +351,20 @@ class WeatherCorrelation:
             )
             _LOGGER.info("Initialized new weather correlation data")
 
+        self._temperature_provider.set_weather_entity_id(self._data.weather_entity_id)
+        self._anomaly_detector.set_temperature_history(self._data.temperature_history)
+
         self._initialized = True
 
     async def async_save(self) -> None:
         """Persist coefficients to storage."""
         await self._store.async_save(self._data.to_dict())
         _LOGGER.debug("Saved weather correlation data to storage")
+
+    async def async_reset(self) -> None:
+        """Clear regression stats without touching temperature history."""
+        self._data.daily_regression_stats.clear()
+        await self.async_save()
 
     def get_temperature_forecast(self) -> list[TemperatureForecast]:
         """Fetch forecasted temperatures from weather entity.
@@ -280,80 +373,7 @@ class WeatherCorrelation:
             List of TemperatureForecast objects for upcoming hours.
 
         """
-        weather_entity = self._data.weather_entity_id
-        if not weather_entity:
-            _LOGGER.debug("No weather entity configured")
-            return []
-
-        state = self.hass.states.get(weather_entity)
-        if state is None:
-            _LOGGER.warning("Weather entity %s not found", weather_entity)
-            return []
-
-        forecasts: list[TemperatureForecast] = []
-
-        # Get forecast from weather entity attributes
-        # Most weather integrations provide forecast in attributes
-        forecast_data = state.attributes.get("forecast", [])
-        now = dt_util.now()
-
-        _LOGGER.debug(
-            "Forecast data for %s: %d entries, now=%s",
-            weather_entity,
-            len(forecast_data) if forecast_data else 0,
-            now.isoformat(),
-        )
-
-        for forecast_entry in forecast_data:
-            # Parse forecast datetime
-            forecast_time_str = forecast_entry.get("datetime")
-            if not forecast_time_str:
-                continue
-
-            try:
-                forecast_time = dt_util.parse_datetime(forecast_time_str)
-                if forecast_time is None:
-                    continue
-            except (ValueError, TypeError):
-                continue
-
-            # Only include forecasts for the next 24 hours
-            hours_ahead = (forecast_time - now).total_seconds() / 3600
-            if hours_ahead < 0 or hours_ahead > 24:
-                continue
-
-            temperature = forecast_entry.get("temperature")
-            condition = forecast_entry.get("condition", "unknown")
-
-            forecasts.append(
-                TemperatureForecast(
-                    slot_time=forecast_time,
-                    temperature=temperature,
-                    condition=condition,
-                )
-            )
-
-        _LOGGER.debug(
-            "Got %d temperature forecasts from %s (legacy attribute)",
-            len(forecasts),
-            weather_entity,
-        )
-
-        return forecasts
-
-    def _refresh_weather_entity_from_config(self) -> str:
-        """Get the current weather entity from config entry.
-
-        Always reads fresh from config to pick up user changes without
-        requiring a restart. Checks options first (Configure UI), then data.
-
-        Returns:
-            Current weather entity ID from config, or empty string.
-
-        """
-        return self.entry.options.get(CONF_WEATHER_ENTITY, "") or self.entry.data.get(
-            CONF_WEATHER_ENTITY, ""
-        )
+        return self._temperature_provider.get_temperature_forecast()
 
     async def async_get_temperature_forecast(
         self, force_refresh: bool = False
@@ -370,299 +390,11 @@ class WeatherCorrelation:
             List of TemperatureForecast objects for upcoming hours.
 
         """
-        # Always get fresh entity ID from config to pick up user changes
-        weather_entity = self._refresh_weather_entity_from_config()
-        if not weather_entity:
-            _LOGGER.debug("No weather entity configured")
-            return []
-
-        # Update cached entity ID if changed
-        if weather_entity != self._data.weather_entity_id:
-            _LOGGER.info(
-                "Weather entity changed from %s to %s, clearing forecast cache",
-                self._data.weather_entity_id,
-                weather_entity,
-            )
-            self._data.weather_entity_id = weather_entity
-            # Clear cache to force fresh fetch with new entity
-            self._cached_forecasts = []
-            self._forecast_cache_time = None
-
-        now = dt_util.now()
-
-        # Return cached forecasts if still valid
-        if (
-            not force_refresh
-            and self._forecast_cache_time is not None
-            and self._cached_forecasts
-            and (now - self._forecast_cache_time) < FORECAST_CACHE_TTL
-        ):
-            _LOGGER.debug(
-                "Returning %d cached temperature forecasts (age: %s)",
-                len(self._cached_forecasts),
-                now - self._forecast_cache_time,
-            )
-            return self._cached_forecasts
-
-        forecasts: list[TemperatureForecast] = []
-
-        try:
-            response = await self.hass.services.async_call(
-                "weather",
-                "get_forecasts",
-                {"entity_id": weather_entity, "type": "hourly"},
-                blocking=True,
-                return_response=True,
-            )
-
-            _LOGGER.info(
-                "weather.get_forecasts response for %s: %s",
-                weather_entity,
-                "found" if response else "None",
-            )
-
-            if response and weather_entity in response:
-                forecast_data = self._extract_forecast_list(response, weather_entity)
-                if forecast_data:
-                    forecasts = self._parse_forecast_entries(forecast_data, now)
-            else:
-                _LOGGER.debug(
-                    "No response from weather.get_forecasts for entity %s, "
-                    "trying legacy attribute",
-                    weather_entity,
-                )
-
-        except Exception as e:
-            _LOGGER.debug(
-                "Failed to fetch forecasts via weather.get_forecasts service: %s, "
-                "falling back to legacy attribute",
-                e,
-            )
-
-        if not forecasts:
-            forecasts = self.get_temperature_forecast()
-
-        self._cached_forecasts = forecasts
-        self._forecast_cache_time = now
-
+        forecasts = await self._temperature_provider.async_get_temperature_forecast(
+            force_refresh=force_refresh
+        )
+        self._data.weather_entity_id = self._temperature_provider.weather_entity_id
         return forecasts
-
-    def _extract_forecast_list(
-        self, response: dict, weather_entity: str
-    ) -> list | None:
-        """Extract forecast list from API response.
-
-        Args:
-            response: Service call response dictionary
-            weather_entity: Weather entity ID
-
-        Returns:
-            List of forecast entries or None
-
-        """
-        forecast_data = response.get(weather_entity)
-        if forecast_data is None:
-            return None
-
-        _LOGGER.info(
-            "forecast_data type=%s, len=%s, keys=%s",
-            type(forecast_data).__name__,
-            len(forecast_data) if isinstance(forecast_data, list) else "N/A",
-            list(forecast_data.keys()) if isinstance(forecast_data, dict) else "N/A",
-        )
-
-        if isinstance(forecast_data, dict):
-            _LOGGER.info("forecast_data is dict, checking for forecast/hourly keys")
-            if "forecast" in forecast_data:
-                forecast_data = forecast_data["forecast"]
-                _LOGGER.info(
-                    "Found 'forecast' key with %d entries",
-                    len(forecast_data) if isinstance(forecast_data, list) else 0,
-                )
-            elif "hourly" in forecast_data:
-                forecast_data = forecast_data["hourly"]
-                _LOGGER.info(
-                    "Found 'hourly' key with %d entries",
-                    len(forecast_data) if isinstance(forecast_data, list) else 0,
-                )
-
-        if isinstance(forecast_data, list):
-            return forecast_data
-
-        _LOGGER.debug(
-            "Unexpected forecast_data format: %s",
-            type(forecast_data).__name__,
-        )
-        return None
-
-    def _parse_forecast_entries(
-        self, forecast_data: list, now: datetime
-    ) -> list[TemperatureForecast]:
-        """Parse forecast entries into TemperatureForecast objects.
-
-        Args:
-            forecast_data: List of forecast entry dictionaries
-            now: Current datetime for filtering
-
-        Returns:
-            List of TemperatureForecast objects
-
-        """
-        forecasts: list[TemperatureForecast] = []
-        parse_failed_count = 0
-        skipped_no_datetime = 0
-        filtered_count = 0
-
-        _LOGGER.info(
-            "Processing %d forecast entries, first entry keys: %s",
-            len(forecast_data),
-            list(forecast_data[0].keys())
-            if forecast_data and isinstance(forecast_data[0], dict)
-            else "empty",
-        )
-
-        for i, forecast_entry in enumerate(forecast_data):
-            result = self._parse_single_forecast_entry(
-                forecast_entry,
-                now,
-                i,
-                parse_failed_count,
-                skipped_no_datetime,
-                filtered_count,
-            )
-            if result is None:
-                continue
-            forecast, parse_failed_count, skipped_no_datetime, filtered_count = result
-            if forecast:
-                forecasts.append(forecast)
-
-        _LOGGER.info(
-            "Fetched %d temperature forecasts via weather.get_forecasts service",
-            len(forecasts),
-        )
-        return forecasts
-
-    def _parse_single_forecast_entry(
-        self,
-        entry: dict,
-        now: datetime,
-        index: int,
-        parse_failed_count: int,
-        skipped_no_datetime: int,
-        filtered_count: int,
-    ) -> tuple[TemperatureForecast | None, int, int, int] | None:
-        """Parse a single forecast entry.
-
-        Args:
-            entry: Forecast entry dictionary
-            now: Current datetime for filtering
-            index: Entry index for logging
-            parse_failed_count: Running count of parse failures
-            skipped_no_datetime: Running count of entries skipped for missing datetime
-            filtered_count: Running count of filtered entries
-
-        Returns:
-            Tuple of (forecast or None, updated counts) or None if entry invalid
-
-        """
-        if not isinstance(entry, dict):
-            return None
-
-        forecast_time_str = entry.get("datetime")
-        if not forecast_time_str:
-            skipped_no_datetime += 1
-            if skipped_no_datetime <= 2:
-                _LOGGER.info(
-                    "Entry missing 'datetime', keys: %s",
-                    list(entry.keys()),
-                )
-            return (None, parse_failed_count, skipped_no_datetime, filtered_count)
-
-        forecast_time = self._parse_forecast_datetime(
-            forecast_time_str, index, parse_failed_count
-        )
-        if forecast_time is None:
-            parse_failed_count += 1
-            return (None, parse_failed_count, skipped_no_datetime, filtered_count)
-
-        hours_ahead = (forecast_time - now).total_seconds() / 3600
-        if hours_ahead < 0 or hours_ahead > 24:
-            filtered_count += 1
-            if filtered_count <= 3:
-                _LOGGER.info(
-                    "Filtering out forecast: time=%s, now=%s, hours_ahead=%.1f",
-                    forecast_time.isoformat(),
-                    now.isoformat(),
-                    hours_ahead,
-                )
-            return (None, parse_failed_count, skipped_no_datetime, filtered_count)
-
-        temperature = entry.get("temperature")
-        condition = entry.get("condition", "unknown")
-
-        forecast = TemperatureForecast(
-            slot_time=forecast_time,
-            temperature=temperature,
-            condition=condition,
-        )
-        return (forecast, parse_failed_count, skipped_no_datetime, filtered_count)
-
-    def _parse_forecast_datetime(
-        self, time_str: str, index: int, parse_failed_count: int
-    ) -> datetime | None:
-        """Parse forecast datetime string.
-
-        Args:
-            time_str: Datetime string to parse
-            index: Entry index for logging
-            parse_failed_count: Current parse failure count
-
-        Returns:
-            Parsed datetime or None if parsing failed
-
-        """
-        try:
-            from datetime import datetime as dt
-
-            forecast_time = dt_util.parse_datetime(time_str)
-            if forecast_time is None:
-                try:
-                    naive_dt = dt.fromisoformat(time_str)
-                    forecast_time = dt_util.as_local(naive_dt)
-                    if index == 0:
-                        _LOGGER.info(
-                            "First entry: datetime='%s' parsed as naive=%s, localized=%s",
-                            time_str,
-                            naive_dt,
-                            forecast_time,
-                        )
-                except (ValueError, TypeError) as e:
-                    if parse_failed_count < 3:
-                        _LOGGER.info(
-                            "Failed to parse datetime '%s': %s",
-                            time_str,
-                            e,
-                        )
-                    return None
-            else:
-                if forecast_time.tzinfo is None:
-                    forecast_time = dt_util.as_local(forecast_time)
-                if index == 0:
-                    _LOGGER.info(
-                        "First entry: datetime='%s' parsed as %s (tzinfo=%s)",
-                        time_str,
-                        forecast_time,
-                        forecast_time.tzinfo,
-                    )
-            return forecast_time
-        except (ValueError, TypeError) as e:
-            if parse_failed_count < 3:
-                _LOGGER.info(
-                    "Exception parsing datetime '%s': %s",
-                    time_str,
-                    e,
-                )
-            return None
 
     def get_current_temperature(self) -> float | None:
         """Get current temperature from weather entity.
@@ -671,26 +403,14 @@ class WeatherCorrelation:
             Current temperature in °C, or None if unavailable.
 
         """
-        weather_entity = self._data.weather_entity_id
-        if not weather_entity:
-            return None
-
-        state = self.hass.states.get(weather_entity)
-        if state is None:
-            return None
-
-        try:
-            return float(state.attributes.get("temperature", 0))
-        except (ValueError, TypeError):
-            return None
+        return self._temperature_provider.get_current_temperature()
 
     def learn_from_sample(
         self, hour: int, temperature: float, actual_load_kw: float
     ) -> None:
         """Update coefficients based on observed temperature/load pair.
 
-        This implements an incremental learning algorithm that updates
-        coefficients using a simple moving average approach.
+        This implements a sliding-window regression based on sufficient statistics.
 
         Args:
             hour: Hour of day (0-23)
@@ -702,95 +422,34 @@ class WeatherCorrelation:
             _LOGGER.warning("Invalid hour %d, must be 0-23", hour)
             return
 
-        if hour not in self._data.hourly_coefficients:
-            self._data.hourly_coefficients[hour] = HourlyTemperatureCoefficients()
-
-        coef = self._data.hourly_coefficients[hour]
+        date_key = self._today_key()
+        snapshot = self._get_or_create_daily_snapshot(hour, date_key)
         cooling_threshold = self._data.cooling_threshold
         heating_threshold = self._data.heating_threshold
 
         if temperature > cooling_threshold:
-            self._update_cooling_coefficient(
-                coef, temperature, actual_load_kw, cooling_threshold
-            )
+            temp_delta = temperature - cooling_threshold
+            if temp_delta >= MIN_TEMP_DELTA:
+                self._update_zone_stats(
+                    snapshot.data.cooling, temp_delta, actual_load_kw
+                )
         elif temperature < heating_threshold:
-            self._update_heating_coefficient(
-                coef, temperature, actual_load_kw, heating_threshold
-            )
+            temp_delta = heating_threshold - temperature
+            if temp_delta >= MIN_TEMP_DELTA:
+                self._update_zone_stats(
+                    snapshot.data.heating, temp_delta, actual_load_kw
+                )
         else:
-            self._update_mild_temperature_base_load(coef, actual_load_kw)
+            self._update_zone_stats(snapshot.data.mild, 0.0, actual_load_kw)
 
-        coef.sample_count += 1
-        coef.last_updated = dt_util.now().isoformat()
-        coef.confidence = self._calculate_confidence(coef.sample_count)
+        self._prune_daily_snapshots()
 
         _LOGGER.debug(
-            "Learned sample for hour %d: temp=%.1f°C, load=%.2fkW, "
-            "base=%.2f, cooling=%.3f, heating=%.3f, samples=%d, confidence=%s",
+            "Learned sample for hour %d: temp=%.1f°C, load=%.2fkW",
             hour,
             temperature,
             actual_load_kw,
-            coef.base_load_kw,
-            coef.cooling_coefficient,
-            coef.heating_coefficient,
-            coef.sample_count,
-            coef.confidence,
         )
-
-    def _update_cooling_coefficient(
-        self,
-        coef: HourlyTemperatureCoefficients,
-        temperature: float,
-        actual_load_kw: float,
-        cooling_threshold: float,
-    ) -> None:
-        """Update cooling coefficient for above-threshold temperatures."""
-        temp_delta = temperature - cooling_threshold
-        if temp_delta <= 0:
-            return
-        if coef.base_load_kw > 0:
-            implied = (actual_load_kw - coef.base_load_kw) / temp_delta
-            if coef.cooling_coefficient == 0:
-                coef.cooling_coefficient = implied
-            else:
-                coef.cooling_coefficient = (
-                    0.1 * implied + 0.9 * coef.cooling_coefficient
-                )
-        else:
-            coef.base_load_kw = actual_load_kw * 0.8
-
-    def _update_heating_coefficient(
-        self,
-        coef: HourlyTemperatureCoefficients,
-        temperature: float,
-        actual_load_kw: float,
-        heating_threshold: float,
-    ) -> None:
-        """Update heating coefficient for below-threshold temperatures."""
-        temp_delta = heating_threshold - temperature
-        if temp_delta <= 0:
-            return
-        if coef.base_load_kw > 0:
-            implied = (actual_load_kw - coef.base_load_kw) / temp_delta
-            if coef.heating_coefficient == 0:
-                coef.heating_coefficient = implied
-            else:
-                coef.heating_coefficient = (
-                    0.1 * implied + 0.9 * coef.heating_coefficient
-                )
-        else:
-            coef.base_load_kw = actual_load_kw * 0.8
-
-    def _update_mild_temperature_base_load(
-        self,
-        coef: HourlyTemperatureCoefficients,
-        actual_load_kw: float,
-    ) -> None:
-        """Update base load estimate for mild temperatures."""
-        if coef.base_load_kw == 0:
-            coef.base_load_kw = actual_load_kw
-        else:
-            coef.base_load_kw = 0.1 * actual_load_kw + 0.9 * coef.base_load_kw
 
     def predict_load(
         self, hour: int, temperature: float, base_load_kw: float
@@ -809,53 +468,48 @@ class WeatherCorrelation:
         if not (0 <= hour <= 23):
             return base_load_kw, "invalid_hour"
 
-        if hour not in self._data.hourly_coefficients:
-            # No learned data for this hour
+        aggregated = self._aggregate_hourly_stats(hour)
+        if aggregated is None:
             return base_load_kw, "no_coefficients"
 
-        coef = self._data.hourly_coefficients[hour]
-
-        # Only apply adjustment if we have sufficient confidence
-        if coef.confidence == "low":
-            return base_load_kw, "low_confidence"
+        base_load = self._average_mild_load(aggregated.mild)
+        if base_load <= 0:
+            base_load = base_load_kw
 
         cooling_threshold = self._data.cooling_threshold
         heating_threshold = self._data.heating_threshold
 
-        # Start with the learned base load or fall back to provided base
-        predicted_load = coef.base_load_kw if coef.base_load_kw > 0 else base_load_kw
-
-        adjustment = 0.0
-        adjustment_type = "none"
-
-        if temperature > cooling_threshold and coef.cooling_coefficient > 0:
-            # Apply cooling adjustment
+        if temperature > cooling_threshold:
             temp_delta = temperature - cooling_threshold
-            adjustment = coef.cooling_coefficient * temp_delta
-            adjustment_type = "cooling"
+            if temp_delta < MIN_TEMP_DELTA:
+                return base_load_kw, "weather_none"
+            slope, r_squared = _fit_zone_regression(aggregated.cooling, base_load)
+            slope = min(max(slope, 0.0), MAX_SLOPE_KW_PER_DEGREE)
+            if aggregated.cooling.n < MIN_SAMPLES_PER_ZONE or r_squared < MIN_R_SQUARED:
+                return base_load_kw, "low_confidence"
+            predicted_load = base_load_kw + slope * temp_delta
+            cap = max(base_load_kw, 0.1) * MAX_LOAD_MULTIPLIER
+            predicted_load = min(predicted_load, cap)
+            return max(0.0, predicted_load), "weather_cooling"
 
-        elif temperature < heating_threshold and coef.heating_coefficient > 0:
-            # Apply heating adjustment
+        if temperature < heating_threshold:
             temp_delta = heating_threshold - temperature
-            adjustment = coef.heating_coefficient * temp_delta
-            adjustment_type = "heating"
+            if temp_delta < MIN_TEMP_DELTA:
+                return base_load_kw, "weather_none"
+            slope, r_squared = _fit_zone_regression(aggregated.heating, base_load)
+            slope = min(max(slope, 0.0), MAX_SLOPE_KW_PER_DEGREE)
+            if aggregated.heating.n < MIN_SAMPLES_PER_ZONE or r_squared < MIN_R_SQUARED:
+                return base_load_kw, "low_confidence"
+            predicted_load = base_load_kw + slope * temp_delta
+            cap = max(base_load_kw, 0.1) * MAX_LOAD_MULTIPLIER
+            predicted_load = min(predicted_load, cap)
+            return max(0.0, predicted_load), "weather_heating"
 
-        predicted_load += adjustment
+        return base_load_kw, "weather_none"
 
-        _LOGGER.debug(
-            "Predicted load for hour %d: temp=%.1f°C, base=%.2fkW, "
-            "adjustment=%.2fkW (%s), total=%.2fkW",
-            hour,
-            temperature,
-            base_load_kw,
-            adjustment,
-            adjustment_type,
-            predicted_load,
-        )
-
-        return round(predicted_load, 3), f"weather_{adjustment_type}"
-
-    def _calculate_confidence(self, sample_count: int) -> str:
+    def _calculate_confidence(
+        self, sample_count: int, r_squared: float | None = None
+    ) -> str:
         """Calculate confidence level based on sample count.
 
         Args:
@@ -865,12 +519,91 @@ class WeatherCorrelation:
             Confidence level: "low", "medium", or "high"
 
         """
-        if sample_count < CONFIDENCE_LOW_THRESHOLD:
+        if sample_count < MIN_SAMPLES_PER_ZONE:
             return "low"
-        elif sample_count < CONFIDENCE_MEDIUM_THRESHOLD:
+        if r_squared is not None and r_squared < MIN_R_SQUARED:
+            return "low"
+        if sample_count < CONFIDENCE_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "high"
+
+    @staticmethod
+    def _update_zone_stats(stats: ZoneStats, x_value: float, y_value: float) -> None:
+        stats.n += 1
+        stats.sum_x += x_value
+        stats.sum_y += y_value
+        stats.sum_xx += x_value * x_value
+        stats.sum_xy += x_value * y_value
+        stats.sum_yy += y_value * y_value
+
+    @staticmethod
+    def _merge_zone_stats(target: ZoneStats, source: ZoneStats) -> None:
+        target.n += source.n
+        target.sum_x += source.sum_x
+        target.sum_y += source.sum_y
+        target.sum_xx += source.sum_xx
+        target.sum_xy += source.sum_xy
+        target.sum_yy += source.sum_yy
+
+    def _aggregate_hourly_stats(self, hour: int) -> HourlyRegressionData | None:
+        snapshots = self._data.daily_regression_stats.get(hour)
+        if not snapshots:
+            return None
+        aggregated = HourlyRegressionData()
+        for snapshot in snapshots:
+            self._merge_zone_stats(aggregated.mild, snapshot.data.mild)
+            self._merge_zone_stats(aggregated.heating, snapshot.data.heating)
+            self._merge_zone_stats(aggregated.cooling, snapshot.data.cooling)
+        return aggregated
+
+    @staticmethod
+    def _average_mild_load(stats: ZoneStats) -> float:
+        if stats.n <= 0:
+            return 0.0
+        return stats.sum_y / stats.n
+
+    def _build_hourly_result(
+        self, aggregated: HourlyRegressionData
+    ) -> HourlyRegressionResult:
+        base_load = self._average_mild_load(aggregated.mild)
+        heating_slope, heating_r2 = _fit_zone_regression(aggregated.heating, base_load)
+        cooling_slope, cooling_r2 = _fit_zone_regression(aggregated.cooling, base_load)
+
+        heating_slope = min(max(heating_slope, 0.0), MAX_SLOPE_KW_PER_DEGREE)
+        cooling_slope = min(max(cooling_slope, 0.0), MAX_SLOPE_KW_PER_DEGREE)
+
+        heating_conf = self._calculate_confidence(aggregated.heating.n, heating_r2)
+        cooling_conf = self._calculate_confidence(aggregated.cooling.n, cooling_r2)
+
+        confidence = "low"
+        if "high" in (heating_conf, cooling_conf):
+            confidence = "high"
+        elif "medium" in (heating_conf, cooling_conf):
+            confidence = "medium"
+
+        r_squared_values = [
+            value
+            for value, count in (
+                (heating_r2, aggregated.heating.n),
+                (cooling_r2, aggregated.cooling.n),
+            )
+            if count >= MIN_SAMPLES_PER_ZONE
+        ]
+        r_squared = 0.0
+        if r_squared_values:
+            r_squared = sum(r_squared_values) / len(r_squared_values)
+
+        sample_count = aggregated.mild.n + aggregated.heating.n + aggregated.cooling.n
+
+        return HourlyRegressionResult(
+            base_load_kw=base_load,
+            heating_slope=heating_slope,
+            cooling_slope=cooling_slope,
+            r_squared=r_squared,
+            sample_count=sample_count,
+            confidence=confidence,
+        )
 
     def get_diagnostics(self) -> dict[str, Any]:
         """Return learning statistics for diagnostics.
@@ -879,64 +612,78 @@ class WeatherCorrelation:
             Dictionary with learning stats and coefficient summaries.
 
         """
-        total_samples = sum(
-            c.sample_count for c in self._data.hourly_coefficients.values()
-        )
-
-        # Calculate average coefficients
+        total_samples = 0
         avg_cooling = 0.0
         avg_heating = 0.0
-        avg_base = 0.0
+        avg_r_squared = 0.0
         cooling_count = 0
         heating_count = 0
+        r_squared_count = 0
 
-        for coef in self._data.hourly_coefficients.values():
-            if coef.cooling_coefficient > 0:
-                avg_cooling += coef.cooling_coefficient
+        hourly_results: dict[int, HourlyRegressionResult] = {}
+        for hour in sorted(self._data.daily_regression_stats.keys()):
+            aggregated = self._aggregate_hourly_stats(hour)
+            if aggregated is None:
+                continue
+            result = self._build_hourly_result(aggregated)
+            hourly_results[hour] = result
+            total_samples += result.sample_count
+
+            if result.cooling_slope > 0:
+                avg_cooling += result.cooling_slope
                 cooling_count += 1
-            if coef.heating_coefficient > 0:
-                avg_heating += coef.heating_coefficient
+            if result.heating_slope > 0:
+                avg_heating += result.heating_slope
                 heating_count += 1
-            avg_base += coef.base_load_kw
+            if result.r_squared > 0:
+                avg_r_squared += result.r_squared
+                r_squared_count += 1
 
-        num_hours = len(self._data.hourly_coefficients)
-        if num_hours > 0:
-            avg_base /= num_hours
         if cooling_count > 0:
             avg_cooling /= cooling_count
         if heating_count > 0:
             avg_heating /= heating_count
+        if r_squared_count > 0:
+            avg_r_squared /= r_squared_count
+
+        avg_base = 0.0
+        if hourly_results:
+            avg_base = sum(result.base_load_kw for result in hourly_results.values())
+            avg_base /= len(hourly_results)
 
         return {
             "weather_entity_id": self._data.weather_entity_id,
             "cooling_threshold": self._data.cooling_threshold,
             "heating_threshold": self._data.heating_threshold,
             "total_samples": total_samples,
-            "hours_with_data": num_hours,
+            "hours_with_data": len(hourly_results),
             "average_base_load_kw": round(avg_base, 3),
-            "average_cooling_coefficient": round(avg_cooling, 4),
-            "average_heating_coefficient": round(avg_heating, 4),
+            "average_cooling_slope": round(avg_cooling, 4),
+            "average_heating_slope": round(avg_heating, 4),
+            "average_r_squared": round(avg_r_squared, 4),
             "cooling_hours": cooling_count,
             "heating_hours": heating_count,
-            "hourly_coefficients": {
-                hour: coef.to_dict()
-                for hour, coef in sorted(self._data.hourly_coefficients.items())
+            "hourly_regression": {
+                hour: result.to_dict() for hour, result in hourly_results.items()
             },
         }
 
-    def get_coefficients_for_hour(
-        self, hour: int
-    ) -> HourlyTemperatureCoefficients | None:
+    def get_coefficients_for_hour(self, hour: int) -> HourlyRegressionResult | None:
         """Get coefficients for a specific hour.
 
         Args:
             hour: Hour of day (0-23)
 
         Returns:
-            HourlyTemperatureCoefficients or None if not available
+            HourlyRegressionResult or None if not available
 
         """
-        return self._data.hourly_coefficients.get(hour)
+        if not (0 <= hour <= 23):
+            return None
+        aggregated = self._aggregate_hourly_stats(hour)
+        if aggregated is None:
+            return None
+        return self._build_hourly_result(aggregated)
 
     def record_daily_temperature(
         self, temperature: float, date_key: str | None = None
@@ -951,24 +698,7 @@ class WeatherCorrelation:
             date_key: ISO date string (YYYY-MM-DD), defaults to today
 
         """
-        resolved_date_key: str
-        if date_key is None:
-            now = dt_util.now()
-            if now is None:
-                return
-            resolved_date_key = now.strftime("%Y-%m-%d")
-        else:
-            resolved_date_key = date_key
-
-        self._data.temperature_history[resolved_date_key] = temperature
-
-        # Prune to keep only recent days
-        if len(self._data.temperature_history) > WEATHER_TEMPERATURE_HISTORY_DAYS:
-            sorted_dates = sorted(self._data.temperature_history.keys())
-            for old_date in sorted_dates[
-                : len(self._data.temperature_history) - WEATHER_TEMPERATURE_HISTORY_DAYS
-            ]:
-                del self._data.temperature_history[old_date]
+        self._anomaly_detector.record_daily_temperature(temperature, date_key)
 
     def detect_weather_anomaly(self, current_temp: float) -> WeatherAnomalyResult:
         """Detect if current temperature is anomalous (Issue #681).
@@ -983,50 +713,39 @@ class WeatherCorrelation:
             WeatherAnomalyResult with weight for rollback evaluation
 
         """
-        history = self._data.temperature_history
-        history_count = len(history)
+        return self._anomaly_detector.detect_weather_anomaly(current_temp)
 
-        # Not enough history for reliable anomaly detection
-        if history_count < WEATHER_ANOMALY_MIN_HISTORY_DAYS:
-            return WeatherAnomalyResult(
-                is_anomalous=False,
-                weight=WEATHER_ANOMALY_NORMAL_WEIGHT,
-                temperature=current_temp,
-                deviation_sigma=0.0,
-                mean_temperature=0.0,
-                std_temperature=0.0,
-            )
+    @staticmethod
+    def _today_key(now: datetime | None = None) -> str:
+        """Return today's date key in ISO format."""
+        if now is None:
+            now = dt_util.now()
+        if now is None:
+            now = datetime.now()
+        return now.date().isoformat()
 
-        temps = list(history.values())
-        mean_temp = sum(temps) / len(temps)
+    def _get_or_create_daily_snapshot(self, hour: int, date_key: str) -> DailySnapshot:
+        """Return a daily snapshot for the given hour and date."""
+        snapshots = self._data.daily_regression_stats.setdefault(hour, [])
+        for snapshot in snapshots:
+            if snapshot.date_key == date_key:
+                return snapshot
+        snapshot = DailySnapshot(date_key=date_key)
+        snapshots.append(snapshot)
+        return snapshot
 
-        # Calculate standard deviation
-        variance = sum((t - mean_temp) ** 2 for t in temps) / len(temps)
-        std_temp = math.sqrt(variance)
-
-        # Handle zero variance (all temperatures identical)
-        if std_temp < 0.01:
-            return WeatherAnomalyResult(
-                is_anomalous=False,
-                weight=WEATHER_ANOMALY_NORMAL_WEIGHT,
-                temperature=current_temp,
-                deviation_sigma=0.0,
-                mean_temperature=mean_temp,
-                std_temperature=std_temp,
-            )
-
-        deviation = (current_temp - mean_temp) / std_temp
-        is_anomalous = abs(deviation) >= WEATHER_ANOMALY_SIGMA_THRESHOLD
-
-        return WeatherAnomalyResult(
-            is_anomalous=is_anomalous,
-            weight=(
-                WEATHER_ANOMALY_ANOMALOUS_WEIGHT
-                if is_anomalous
-                else WEATHER_ANOMALY_NORMAL_WEIGHT
-            ),
-            temperature=current_temp,
-            deviation_sigma=deviation,
-            mean_temperature=mean_temp,
-            std_temperature=std_temp,
-        )
+    def _prune_daily_snapshots(self, now: datetime | None = None) -> None:
+        """Prune snapshots older than the 30-day sliding window."""
+        if now is None:
+            now = dt_util.now()
+        if now is None:
+            now = datetime.now()
+        cutoff_date = (now.date() - timedelta(days=SLIDING_WINDOW_DAYS - 1)).isoformat()
+        for hour, snapshots in list(self._data.daily_regression_stats.items()):
+            kept = [
+                snapshot for snapshot in snapshots if snapshot.date_key >= cutoff_date
+            ]
+            if kept:
+                self._data.daily_regression_stats[hour] = kept
+            else:
+                self._data.daily_regression_stats.pop(hour, None)

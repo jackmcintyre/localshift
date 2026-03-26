@@ -1,18 +1,8 @@
-"""Tests for learning/correlation.py - weather correlation module.
-
-Tests are structured to achieve 70%+ coverage of WeatherCorrelation and
-related dataclasses, covering:
-- Learning algorithm (learn_from_sample, coefficient updates)
-- Prediction logic (predict_load)
-- Weather integration (get_temperature_forecast, async_get_temperature_forecast)
-- Storage persistence (async_initialize, async_save)
-- Diagnostics (get_diagnostics)
-- Edge cases (missing weather, invalid inputs, low confidence)
-"""
+"""Tests for learning/correlation.py - weather correlation regression."""
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,312 +11,163 @@ from custom_components.localshift.const import (
     CONF_COOLING_THRESHOLD,
     CONF_HEATING_THRESHOLD,
     CONF_WEATHER_ENTITY,
-    DEFAULT_COOLING_THRESHOLD,
-    DEFAULT_HEATING_THRESHOLD,
 )
+import custom_components.localshift.learning.correlation as correlation_module
 from custom_components.localshift.learning.correlation import (
-    CONFIDENCE_LOW_THRESHOLD,
-    CONFIDENCE_MEDIUM_THRESHOLD,
-    HourlyTemperatureCoefficients,
-    TemperatureForecast,
-    WEATHER_ANOMALY_ANOMALOUS_WEIGHT,
-    WEATHER_ANOMALY_NORMAL_WEIGHT,
-    WEATHER_TEMPERATURE_HISTORY_DAYS,
-    WeatherAnomalyResult,
+    DailySnapshot,
+    HourlyRegressionData,
+    HourlyRegressionResult,
     WeatherCorrelation,
     WeatherCorrelationData,
+    ZoneStats,
 )
 
-# =============================================================================
-# FIXTURES
-# =============================================================================
+
+def _linear_stats(n: int, slope: float) -> ZoneStats:
+    sum_x = n * (n + 1) / 2
+    sum_xx = n * (n + 1) * (2 * n + 1) / 6
+    sum_y = slope * sum_x
+    sum_xy = slope * sum_xx
+    sum_yy = slope * slope * sum_xx
+    return ZoneStats(
+        n=n,
+        sum_x=float(sum_x),
+        sum_y=float(sum_y),
+        sum_xx=float(sum_xx),
+        sum_xy=float(sum_xy),
+        sum_yy=float(sum_yy),
+    )
 
 
-@pytest.fixture
-def mock_hass():
-    """Create a minimal mock HomeAssistant instance."""
-    hass = MagicMock()
-    hass.states = MagicMock()
-    hass.states.get = MagicMock(return_value=None)
-    hass.services = MagicMock()
-    hass.services.async_call = AsyncMock(return_value=None)
-    return hass
+class TestZoneStats:
+    def test_roundtrip(self):
+        stats = ZoneStats(n=2, sum_x=3.0, sum_y=4.0, sum_xx=5.0, sum_xy=6.0, sum_yy=7.0)
+        restored = ZoneStats.from_dict(stats.to_dict())
+        assert restored == stats
 
 
-@pytest.fixture
-def mock_entry():
-    """Create a mock ConfigEntry with weather correlation settings."""
-    entry = MagicMock()
-    entry.options = {
-        CONF_WEATHER_ENTITY: "weather.home",
-        CONF_COOLING_THRESHOLD: DEFAULT_COOLING_THRESHOLD,
-        CONF_HEATING_THRESHOLD: DEFAULT_HEATING_THRESHOLD,
-    }
-    entry.data = {
-        CONF_WEATHER_ENTITY: "weather.home",
-    }
-    return entry
+class TestHourlyRegressionData:
+    def test_roundtrip(self):
+        data = HourlyRegressionData(
+            mild=ZoneStats(n=1, sum_y=2.0),
+            heating=ZoneStats(n=2, sum_x=3.0, sum_y=4.0),
+            cooling=ZoneStats(n=3, sum_x=4.0, sum_y=5.0),
+        )
+        restored = HourlyRegressionData.from_dict(data.to_dict())
+        assert restored.mild.n == 1
+        assert restored.heating.sum_x == 3.0
+        assert restored.cooling.sum_y == 5.0
 
 
-@pytest.fixture
-def mock_entry_no_weather():
-    """Create a mock ConfigEntry with no weather entity configured."""
-    entry = MagicMock()
-    entry.options = {}
-    entry.data = {}
-    return entry
+class TestDailySnapshot:
+    def test_roundtrip(self):
+        snapshot = DailySnapshot(
+            date_key="2026-03-26",
+            data=HourlyRegressionData(mild=ZoneStats(n=1, sum_y=2.0)),
+        )
+        restored = DailySnapshot.from_dict(snapshot.to_dict())
+        assert restored.date_key == "2026-03-26"
+        assert restored.data.mild.sum_y == 2.0
 
 
-@pytest.fixture
-def correlation(mock_hass, mock_entry):
-    """Create a WeatherCorrelation instance with mocked store."""
-    with patch(
-        "custom_components.localshift.learning.correlation.Store"
-    ) as mock_store_cls:
-        mock_store = AsyncMock()
-        mock_store.async_load = AsyncMock(return_value=None)
-        mock_store.async_save = AsyncMock(return_value=None)
-        mock_store_cls.return_value = mock_store
-
-        instance = WeatherCorrelation(mock_hass, mock_entry)
-        instance._store = mock_store
-        return instance
-
-
-@pytest.fixture
-def correlation_no_weather(mock_hass, mock_entry_no_weather):
-    """Create a WeatherCorrelation with no weather entity."""
-    with patch(
-        "custom_components.localshift.learning.correlation.Store"
-    ) as mock_store_cls:
-        mock_store = AsyncMock()
-        mock_store.async_load = AsyncMock(return_value=None)
-        mock_store.async_save = AsyncMock(return_value=None)
-        mock_store_cls.return_value = mock_store
-
-        instance = WeatherCorrelation(mock_hass, mock_entry_no_weather)
-        instance._store = mock_store
-        return instance
-
-
-def make_weather_state(temperature: float = 22.0, forecast_list: list | None = None):
-    """Create a mock weather entity state."""
-    state = MagicMock()
-    state.attributes = {
-        "temperature": temperature,
-        "forecast": forecast_list or [],
-    }
-    return state
-
-
-def make_forecast_entry(
-    hours_ahead: float = 1.0,
-    temperature: float = 22.0,
-    condition: str = "sunny",
-    now: datetime | None = None,
-) -> dict:
-    """Create a single forecast entry dict."""
-    if now is None:
-        now = datetime.now(UTC)
-    forecast_time = now + timedelta(hours=hours_ahead)
-    return {
-        "datetime": forecast_time.isoformat(),
-        "temperature": temperature,
-        "condition": condition,
-    }
-
-
-# =============================================================================
-# HourlyTemperatureCoefficients
-# =============================================================================
-
-
-class TestHourlyTemperatureCoefficients:
-    """Tests for the HourlyTemperatureCoefficients dataclass."""
-
-    def test_default_values(self):
-        """Default instance should have zero coefficients."""
-        coef = HourlyTemperatureCoefficients()
-        assert coef.base_load_kw == 0.0
-        assert coef.cooling_coefficient == 0.0
-        assert coef.heating_coefficient == 0.0
-        assert coef.sample_count == 0
-        assert coef.last_updated == ""
-        assert coef.confidence == "low"
-
+class TestHourlyRegressionResult:
     def test_to_dict(self):
-        """to_dict should serialise all fields."""
-        coef = HourlyTemperatureCoefficients(
-            base_load_kw=1.5,
-            cooling_coefficient=0.2,
-            heating_coefficient=0.3,
-            sample_count=10,
-            last_updated="2024-01-01T12:00:00",
+        result = HourlyRegressionResult(
+            base_load_kw=1.2,
+            heating_slope=0.4,
+            cooling_slope=0.3,
+            r_squared=0.5,
+            sample_count=40,
             confidence="medium",
         )
-        d = coef.to_dict()
-        assert d["base_load_kw"] == 1.5
-        assert d["cooling_coefficient"] == 0.2
-        assert d["heating_coefficient"] == 0.3
-        assert d["sample_count"] == 10
-        assert d["last_updated"] == "2024-01-01T12:00:00"
+        d = result.to_dict()
+        assert d["base_load_kw"] == 1.2
+        assert d["r_squared"] == 0.5
         assert d["confidence"] == "medium"
 
-    def test_from_dict_full(self):
-        """from_dict should restore all fields."""
-        data = {
-            "base_load_kw": 2.0,
-            "cooling_coefficient": 0.15,
-            "heating_coefficient": 0.25,
-            "sample_count": 35,
-            "last_updated": "2024-06-01T08:00:00",
-            "confidence": "high",
-        }
-        coef = HourlyTemperatureCoefficients.from_dict(data)
-        assert coef.base_load_kw == 2.0
-        assert coef.cooling_coefficient == 0.15
-        assert coef.heating_coefficient == 0.25
-        assert coef.sample_count == 35
-        assert coef.last_updated == "2024-06-01T08:00:00"
-        assert coef.confidence == "high"
 
-    def test_from_dict_defaults(self):
-        """from_dict with empty dict should return defaults."""
-        coef = HourlyTemperatureCoefficients.from_dict({})
-        assert coef.base_load_kw == 0.0
-        assert coef.cooling_coefficient == 0.0
-        assert coef.heating_coefficient == 0.0
-        assert coef.sample_count == 0
-        assert coef.confidence == "low"
-
-    def test_roundtrip(self):
-        """to_dict → from_dict should be lossless."""
-        original = HourlyTemperatureCoefficients(
-            base_load_kw=3.5,
-            cooling_coefficient=0.1,
-            heating_coefficient=0.4,
-            sample_count=50,
-            last_updated="2024-01-15T10:00:00",
-            confidence="high",
+class TestRegressionMath:
+    def test_fit_zone_regression_returns_expected_slope_and_r_squared(self):
+        stats = ZoneStats(
+            n=3,
+            sum_x=6.0,
+            sum_y=12.0,
+            sum_xx=14.0,
+            sum_xy=28.0,
+            sum_yy=56.0,
         )
-        restored = HourlyTemperatureCoefficients.from_dict(original.to_dict())
-        assert restored.base_load_kw == original.base_load_kw
-        assert restored.cooling_coefficient == original.cooling_coefficient
-        assert restored.confidence == original.confidence
+        fit_fn = getattr(correlation_module, "_fit_zone_regression", None)
+        assert callable(fit_fn)
+        slope, r_squared = fit_fn(stats)
+        assert slope == pytest.approx(2.0)
+        assert r_squared == pytest.approx(1.0)
 
+    def test_fit_zone_regression_handles_insufficient_stats(self):
+        fit_fn = getattr(correlation_module, "_fit_zone_regression", None)
+        assert callable(fit_fn)
+        slope, r_squared = fit_fn(ZoneStats(n=1, sum_xx=0.0))
+        assert slope == 0.0
+        assert r_squared == 0.0
 
-# =============================================================================
-# WeatherCorrelationData
-# =============================================================================
+    def test_fit_zone_regression_handles_zero_variance(self):
+        fit_fn = getattr(correlation_module, "_fit_zone_regression", None)
+        assert callable(fit_fn)
+        stats = ZoneStats(n=2, sum_x=2.0, sum_y=2.0, sum_xx=2.0, sum_xy=2.0, sum_yy=0.0)
+        slope, r_squared = fit_fn(stats)
+        assert slope == pytest.approx(1.0)
+        assert r_squared == 0.0
 
 
 class TestWeatherCorrelationData:
-    """Tests for the WeatherCorrelationData dataclass."""
-
-    def test_default_values(self):
-        """Default instance should have expected values."""
-        data = WeatherCorrelationData()
-        assert data.version == 1
-        assert data.weather_entity_id == ""
-        assert data.cooling_threshold == 24.0
-        assert data.heating_threshold == 18.0
-        assert data.hourly_coefficients == {}
-        assert data.learning_stats == {}
-
-    def test_to_dict(self):
-        """to_dict should serialise all fields including nested coefficients."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0, sample_count=5)
-        data = WeatherCorrelationData(
-            weather_entity_id="weather.test",
-            cooling_threshold=25.0,
-            heating_threshold=17.0,
-            hourly_coefficients={14: coef},
-            learning_stats={"note": "test"},
-        )
-        d = data.to_dict()
-        assert d["weather_entity_id"] == "weather.test"
-        assert d["cooling_threshold"] == 25.0
-        assert d["heating_threshold"] == 17.0
-        assert "14" in d["hourly_coefficients"]
-        assert d["hourly_coefficients"]["14"]["base_load_kw"] == 2.0
-        assert d["learning_stats"] == {"note": "test"}
-
-    def test_from_dict_full(self):
-        """from_dict should restore all fields including nested coefficients."""
-        raw = {
-            "version": 2,
-            "weather_entity_id": "weather.bureau",
-            "cooling_threshold": 26.0,
-            "heating_threshold": 16.0,
-            "hourly_coefficients": {
-                "8": {
-                    "base_load_kw": 1.2,
-                    "cooling_coefficient": 0.05,
-                    "heating_coefficient": 0.1,
-                    "sample_count": 20,
-                    "last_updated": "2024-03-01",
-                    "confidence": "medium",
-                }
-            },
-            "learning_stats": {},
-        }
-        data = WeatherCorrelationData.from_dict(raw)
-        assert data.version == 2
-        assert data.weather_entity_id == "weather.bureau"
-        assert data.cooling_threshold == 26.0
-        assert 8 in data.hourly_coefficients
-        assert data.hourly_coefficients[8].base_load_kw == 1.2
-        assert data.hourly_coefficients[8].sample_count == 20
-
-    def test_from_dict_defaults(self):
-        """from_dict with empty dict should return safe defaults."""
-        data = WeatherCorrelationData.from_dict({})
-        assert data.version == 1
-        assert data.hourly_coefficients == {}
-
     def test_roundtrip(self):
-        """to_dict → from_dict should be lossless for nested structures."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=5.0, sample_count=100)
+        snapshot = DailySnapshot(
+            date_key="2026-03-26",
+            data=HourlyRegressionData(mild=ZoneStats(n=2, sum_y=5.0)),
+        )
         original = WeatherCorrelationData(
             weather_entity_id="weather.home",
-            hourly_coefficients={12: coef},
+            daily_regression_stats={12: [snapshot]},
         )
         restored = WeatherCorrelationData.from_dict(original.to_dict())
         assert restored.weather_entity_id == "weather.home"
-        assert 12 in restored.hourly_coefficients
-        assert restored.hourly_coefficients[12].base_load_kw == 5.0
+        assert 12 in restored.daily_regression_stats
+        assert restored.daily_regression_stats[12][0].data.mild.sum_y == 5.0
 
+    def test_temperature_history_roundtrip(self):
+        data = WeatherCorrelationData()
+        data.temperature_history["2024-01-01"] = 22.0
+        restored = WeatherCorrelationData.from_dict(data.to_dict())
+        assert restored.temperature_history == {"2024-01-01": 22.0}
 
-# =============================================================================
-# WeatherCorrelation.async_initialize
-# =============================================================================
+    def test_no_hourly_coefficients_field(self):
+        data = WeatherCorrelationData()
+        assert not hasattr(data, "hourly_coefficients")
 
 
 class TestAsyncInitialize:
-    """Tests for WeatherCorrelation.async_initialize."""
-
     @pytest.mark.asyncio
     async def test_initialize_from_storage(self, correlation):
-        """Should load existing data from storage."""
         stored = WeatherCorrelationData(
             weather_entity_id="weather.stored",
             cooling_threshold=25.0,
             heating_threshold=17.0,
         )
-        stored.hourly_coefficients[10] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0, sample_count=15
-        )
+        stored.daily_regression_stats[10] = [
+            DailySnapshot(
+                date_key="2026-03-26",
+                data=HourlyRegressionData(mild=ZoneStats(n=1, sum_y=2.0)),
+            )
+        ]
         correlation._store.async_load.return_value = stored.to_dict()
 
         await correlation.async_initialize()
 
         assert correlation._initialized is True
         assert correlation._data.weather_entity_id == "weather.stored"
-        assert 10 in correlation._data.hourly_coefficients
+        assert 10 in correlation._data.daily_regression_stats
 
     @pytest.mark.asyncio
     async def test_initialize_fresh(self, correlation, mock_entry):
-        """With no stored data, should init from config entry."""
         correlation._store.async_load.return_value = None
         mock_entry.options = {
             CONF_WEATHER_ENTITY: "weather.new",
@@ -344,17 +185,13 @@ class TestAsyncInitialize:
 
     @pytest.mark.asyncio
     async def test_initialize_idempotent(self, correlation):
-        """Calling async_initialize twice should not re-load storage."""
         correlation._store.async_load.return_value = None
         await correlation.async_initialize()
         await correlation.async_initialize()
-
-        # async_load called only once
         assert correlation._store.async_load.call_count == 1
 
     @pytest.mark.asyncio
     async def test_initialize_falls_back_to_data(self, correlation, mock_entry):
-        """Weather entity should come from entry.data when options is empty."""
         correlation._store.async_load.return_value = None
         mock_entry.options = {}
         mock_entry.data = {CONF_WEATHER_ENTITY: "weather.fallback"}
@@ -364,17 +201,9 @@ class TestAsyncInitialize:
         assert correlation._data.weather_entity_id == "weather.fallback"
 
 
-# =============================================================================
-# WeatherCorrelation.async_save
-# =============================================================================
-
-
 class TestAsyncSave:
-    """Tests for WeatherCorrelation.async_save."""
-
     @pytest.mark.asyncio
     async def test_save_calls_store(self, correlation):
-        """async_save should persist current data to the store."""
         correlation._data.weather_entity_id = "weather.test"
         await correlation.async_save()
 
@@ -383,1240 +212,369 @@ class TestAsyncSave:
         assert saved["weather_entity_id"] == "weather.test"
 
 
-# =============================================================================
-# WeatherCorrelation.get_temperature_forecast (legacy)
-# =============================================================================
+class TestLearningAndPrediction:
+    def test_learn_ignores_invalid_hour(self, correlation):
+        correlation.learn_from_sample(-1, 25.0, 2.0)
+        assert correlation._data.daily_regression_stats == {}
 
-
-class TestGetTemperatureForecast:
-    """Tests for the legacy get_temperature_forecast method."""
-
-    def test_no_weather_entity(self, correlation):
-        """Returns empty list when no entity is configured."""
-        correlation._data.weather_entity_id = ""
-        result = correlation.get_temperature_forecast()
-        assert result == []
-
-    def test_entity_not_found(self, correlation):
-        """Returns empty list when entity state is None."""
-        correlation._data.weather_entity_id = "weather.missing"
-        correlation.hass.states.get.return_value = None
-
-        result = correlation.get_temperature_forecast()
-        assert result == []
-
-    def test_empty_forecast(self, correlation):
-        """Returns empty list when weather entity has no forecast attribute."""
-        correlation._data.weather_entity_id = "weather.home"
-        state = MagicMock()
-        state.attributes = {"forecast": []}
-        correlation.hass.states.get.return_value = state
-
-        result = correlation.get_temperature_forecast()
-        assert result == []
-
-    def test_valid_forecast_entries(self, correlation):
-        """Should parse valid forecast entries within 24h window."""
+    def test_learn_records_mild_zone_stats(self, correlation):
         now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-
-        entries = [
-            make_forecast_entry(hours_ahead=2, temperature=28.0, now=now),
-            make_forecast_entry(hours_ahead=8, temperature=32.0, now=now),
-        ]
-        state = make_weather_state(forecast_list=entries)
-        correlation.hass.states.get.return_value = state
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = correlation.get_temperature_forecast()
-
-        assert len(result) == 2
-        assert isinstance(result[0], TemperatureForecast)
-        assert result[0].temperature == 28.0
-
-    def test_forecast_outside_24h_filtered(self, correlation):
-        """Forecasts more than 24h ahead or in the past should be excluded."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-
-        entries = [
-            make_forecast_entry(hours_ahead=25, temperature=20.0, now=now),  # too far
-            make_forecast_entry(hours_ahead=-1, temperature=20.0, now=now),  # past
-            make_forecast_entry(hours_ahead=12, temperature=22.0, now=now),  # valid
-        ]
-        state = make_weather_state(forecast_list=entries)
-        correlation.hass.states.get.return_value = state
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = correlation.get_temperature_forecast()
-
-        assert len(result) == 1
-        assert result[0].temperature == 22.0
-
-    def test_forecast_entry_missing_datetime(self, correlation):
-        """Entries without 'datetime' key should be skipped."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-
-        entries = [
-            {"temperature": 25.0, "condition": "sunny"},  # no datetime
-            make_forecast_entry(hours_ahead=3, temperature=27.0, now=now),
-        ]
-        state = make_weather_state(forecast_list=entries)
-        correlation.hass.states.get.return_value = state
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = correlation.get_temperature_forecast()
-
-        assert len(result) == 1
-        assert result[0].temperature == 27.0
-
-    def test_forecast_entry_invalid_datetime(self, correlation):
-        """Entries with unparseable datetime should be skipped."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-
-        entries = [
-            {"datetime": "not-a-date", "temperature": 25.0},
-            make_forecast_entry(hours_ahead=4, temperature=29.0, now=now),
-        ]
-        state = make_weather_state(forecast_list=entries)
-        correlation.hass.states.get.return_value = state
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            with patch(
-                "custom_components.localshift.learning.correlation.dt_util.parse_datetime",
-                return_value=None,
-            ):
-                result = correlation.get_temperature_forecast()
-
-        # Only the valid one (even though parse_datetime returns None for all,
-        # the invalid "not-a-date" will fail; the valid entry will also fail
-        # in this mock but that is the expected tested behaviour)
-        assert isinstance(result, list)
-
-
-# =============================================================================
-# WeatherCorrelation.async_get_temperature_forecast
-# =============================================================================
-
-
-class TestAsyncGetTemperatureForecast:
-    """Tests for async_get_temperature_forecast."""
-
-    @pytest.mark.asyncio
-    async def test_no_weather_entity(self, correlation_no_weather):
-        """Returns empty list when no weather entity configured."""
-        result = await correlation_no_weather.async_get_temperature_forecast()
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_returns_cached_within_ttl(self, correlation):
-        """Returns cached forecasts when cache is still fresh."""
-        now = datetime.now(UTC)
-        cached = [TemperatureForecast(slot_time=now, temperature=22.0)]
-        correlation._cached_forecasts = cached
-        correlation._forecast_cache_time = now - timedelta(minutes=5)  # fresh
-        correlation._data.weather_entity_id = "weather.home"
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast()
-
-        assert result is cached
-
-    @pytest.mark.asyncio
-    async def test_force_refresh_bypasses_cache(self, correlation):
-        """force_refresh=True should bypass the cache."""
-        now = datetime.now(UTC)
-        cached = [TemperatureForecast(slot_time=now, temperature=22.0)]
-        correlation._cached_forecasts = cached
-        correlation._forecast_cache_time = now - timedelta(minutes=1)  # very fresh
-        correlation._data.weather_entity_id = "weather.home"
-
-        # Service returns empty response so it falls back to legacy (also empty)
-        correlation.hass.services.async_call = AsyncMock(return_value=None)
-        correlation.hass.states.get.return_value = make_weather_state(forecast_list=[])
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast(
-                force_refresh=True
-            )
-
-        # Cache was bypassed; result is the fresh (empty) forecast
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_service_call_success_list_response(self, correlation):
-        """Should parse forecasts when service returns a list directly."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-        correlation._cached_forecasts = []
-        correlation._forecast_cache_time = None
-
-        entry = make_forecast_entry(hours_ahead=3, temperature=30.0, now=now)
-        response = {"weather.home": [entry]}
-        correlation.hass.services.async_call = AsyncMock(return_value=response)
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast()
-
-        assert len(result) == 1
-        assert result[0].temperature == 30.0
-
-    @pytest.mark.asyncio
-    async def test_service_call_success_dict_response_forecast_key(self, correlation):
-        """Should parse forecasts when service response has 'forecast' key."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-        correlation._cached_forecasts = []
-        correlation._forecast_cache_time = None
-
-        entry = make_forecast_entry(hours_ahead=5, temperature=18.0, now=now)
-        response = {"weather.home": {"forecast": [entry]}}
-        correlation.hass.services.async_call = AsyncMock(return_value=response)
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast()
-
-        assert len(result) == 1
-        assert result[0].temperature == 18.0
-
-    @pytest.mark.asyncio
-    async def test_service_call_no_entity_in_response(self, correlation):
-        """Falls back to legacy when entity is missing from response."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-        correlation._cached_forecasts = []
-        correlation._forecast_cache_time = None
-
-        # Response doesn't contain our entity
-        response = {"weather.other": []}
-        correlation.hass.services.async_call = AsyncMock(return_value=response)
-        # Legacy forecast also empty
-        correlation.hass.states.get.return_value = make_weather_state(forecast_list=[])
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast()
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_service_call_exception_falls_back_to_legacy(self, correlation):
-        """Falls back to legacy attribute when service call raises exception."""
-        now = datetime.now(UTC)
-        correlation._data.weather_entity_id = "weather.home"
-        correlation._cached_forecasts = []
-        correlation._forecast_cache_time = None
-
-        correlation.hass.services.async_call = AsyncMock(
-            side_effect=Exception("service unavailable")
-        )
-        entry = make_forecast_entry(hours_ahead=2, temperature=20.0, now=now)
-        correlation.hass.states.get.return_value = make_weather_state(
-            forecast_list=[entry]
-        )
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast()
-
-        assert len(result) == 1
-        assert result[0].temperature == 20.0
-
-    @pytest.mark.asyncio
-    async def test_weather_entity_change_clears_cache(self, correlation, mock_entry):
-        """Changing weather entity should clear the forecast cache."""
-        now = datetime.now(UTC)
-        # Start with a cached entry from old entity
-        correlation._data.weather_entity_id = "weather.old"
-        old_forecast = [TemperatureForecast(slot_time=now, temperature=22.0)]
-        correlation._cached_forecasts = old_forecast
-        correlation._forecast_cache_time = now - timedelta(minutes=1)
-
-        # Config now points to new entity
-        mock_entry.options = {CONF_WEATHER_ENTITY: "weather.new"}
-        mock_entry.data = {}
-
-        correlation.hass.services.async_call = AsyncMock(return_value=None)
-        correlation.hass.states.get.return_value = make_weather_state(forecast_list=[])
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = await correlation.async_get_temperature_forecast()
-
-        # Cache should have been cleared for new entity
-        assert correlation._data.weather_entity_id == "weather.new"
-        assert result == []
-
-
-# =============================================================================
-# WeatherCorrelation._extract_forecast_list
-# =============================================================================
-
-
-class TestExtractForecastList:
-    """Tests for the _extract_forecast_list helper."""
-
-    def test_list_response(self, correlation):
-        """Direct list response should be returned as-is."""
-        data = [{"datetime": "2024-01-01T12:00:00"}]
-        result = correlation._extract_forecast_list(
-            {"weather.home": data}, "weather.home"
-        )
-        assert result == data
-
-    def test_dict_with_forecast_key(self, correlation):
-        """Dict response with 'forecast' key should extract nested list."""
-        inner = [{"datetime": "2024-01-01T12:00:00"}]
-        response = {"weather.home": {"forecast": inner}}
-        result = correlation._extract_forecast_list(response, "weather.home")
-        assert result == inner
-
-    def test_dict_with_hourly_key(self, correlation):
-        """Dict response with 'hourly' key should extract nested list."""
-        inner = [{"datetime": "2024-01-01T12:00:00"}]
-        response = {"weather.home": {"hourly": inner}}
-        result = correlation._extract_forecast_list(response, "weather.home")
-        assert result == inner
-
-    def test_entity_not_in_response(self, correlation):
-        """Missing entity key should return None."""
-        result = correlation._extract_forecast_list({}, "weather.home")
-        assert result is None
-
-    def test_unexpected_format(self, correlation):
-        """Unexpected data type should return None."""
-        response = {"weather.home": "unexpected_string"}
-        result = correlation._extract_forecast_list(response, "weather.home")
-        assert result is None
-
-    def test_dict_without_known_keys(self, correlation):
-        """Dict without forecast/hourly keys should return None."""
-        response = {"weather.home": {"other_key": []}}
-        result = correlation._extract_forecast_list(response, "weather.home")
-        assert result is None
-
-
-# =============================================================================
-# WeatherCorrelation._parse_forecast_entries
-# =============================================================================
-
-
-class TestParseForecastEntries:
-    """Tests for _parse_forecast_entries."""
-
-    def test_empty_list(self, correlation):
-        """Empty list should return empty list."""
-        now = datetime.now(UTC)
-        result = correlation._parse_forecast_entries([], now)
-        assert result == []
-
-    def test_valid_entries(self, correlation):
-        """Valid entries within 24h should be returned."""
-        now = datetime.now(UTC)
-        entries = [
-            make_forecast_entry(hours_ahead=1, temperature=20.0, now=now),
-            make_forecast_entry(hours_ahead=6, temperature=25.0, now=now),
-            make_forecast_entry(hours_ahead=12, temperature=30.0, now=now),
-        ]
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            result = correlation._parse_forecast_entries(entries, now)
-
-        assert len(result) == 3
-
-    def test_non_dict_entries_skipped(self, correlation):
-        """Non-dict entries should be silently skipped."""
-        now = datetime.now(UTC)
-        entries = [
-            "not_a_dict",
-            None,
-            make_forecast_entry(hours_ahead=2, temperature=22.0, now=now),
-        ]
-
-        result = correlation._parse_forecast_entries(entries, now)
-
-        # Only the valid dict entry should be in result
-        valid = [r for r in result if r is not None]
-        assert len(valid) <= 1
-
-
-# =============================================================================
-# WeatherCorrelation._parse_single_forecast_entry
-# =============================================================================
-
-
-class TestParseSingleForecastEntry:
-    """Tests for _parse_single_forecast_entry."""
-
-    def test_non_dict_returns_none(self, correlation):
-        """Non-dict entry should return None."""
-        now = datetime.now(UTC)
-        result = correlation._parse_single_forecast_entry("not_a_dict", now, 0, 0, 0, 0)
-        assert result is None
-
-    def test_missing_datetime(self, correlation):
-        """Entry without 'datetime' key should return (None, updated_counts)."""
-        now = datetime.now(UTC)
-        entry = {"temperature": 25.0}
-        result = correlation._parse_single_forecast_entry(entry, now, 0, 0, 0, 0)
-        # Returns tuple with None as first element
-        assert result is not None
-        forecast, _, skipped, _ = result
-        assert forecast is None
-        assert skipped == 1
-
-    def test_invalid_datetime(self, correlation):
-        """Entry with unparseable datetime should return (None, updated_counts)."""
-        now = datetime.now(UTC)
-        entry = {"datetime": "bad-datetime", "temperature": 25.0}
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.parse_datetime",
-            return_value=None,
-        ):
-            result = correlation._parse_single_forecast_entry(entry, now, 0, 0, 0, 0)
-
-        assert result is not None
-        forecast, parse_failed, _, _ = result
-        assert forecast is None
-        assert parse_failed == 1
-
-    def test_forecast_outside_window(self, correlation):
-        """Forecast too far in the future should return (None, updated_counts)."""
-        now = datetime.now(UTC)
-        future = now + timedelta(hours=30)
-        entry = {
-            "datetime": future.isoformat(),
-            "temperature": 25.0,
-        }
-        result = correlation._parse_single_forecast_entry(entry, now, 0, 0, 0, 0)
-        assert result is not None
-        forecast, _, _, filtered = result
-        assert forecast is None
-        assert filtered == 1
-
-    def test_valid_entry(self, correlation):
-        """Valid entry within window should return TemperatureForecast."""
-        now = datetime.now(UTC)
-        future = now + timedelta(hours=5)
-        entry = {
-            "datetime": future.isoformat(),
-            "temperature": 22.0,
-            "condition": "cloudy",
-        }
-        result = correlation._parse_single_forecast_entry(entry, now, 0, 0, 0, 0)
-        assert result is not None
-        forecast, _, _, _ = result
-        assert forecast is not None
-        assert isinstance(forecast, TemperatureForecast)
-        assert forecast.temperature == 22.0
-        assert forecast.condition == "cloudy"
-
-
-# =============================================================================
-# WeatherCorrelation._parse_forecast_datetime
-# =============================================================================
-
-
-class TestParseForecastDatetime:
-    """Tests for _parse_forecast_datetime."""
-
-    def test_valid_iso_with_timezone(self, correlation):
-        """Valid ISO datetime with timezone should parse correctly."""
-        now = datetime.now(UTC)
-        time_str = now.isoformat()
-        result = correlation._parse_forecast_datetime(time_str, 0, 0)
-        assert result is not None
-
-    def test_naive_iso_localized(self, correlation):
-        """Naive ISO datetime should be localized."""
-        naive_str = "2024-06-15T14:30:00"
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.parse_datetime",
-            return_value=None,
-        ):
-            with patch(
-                "custom_components.localshift.learning.correlation.dt_util.as_local"
-            ) as mock_local:
-                mock_local.return_value = datetime(2024, 6, 15, 14, 30, 0, tzinfo=UTC)
-                result = correlation._parse_forecast_datetime(naive_str, 0, 0)
-
-        assert result is not None
-
-    def test_completely_invalid_string(self, correlation):
-        """Completely invalid string should return None."""
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.parse_datetime",
-            return_value=None,
-        ):
-            result = correlation._parse_forecast_datetime("not-a-date", 0, 0)
-
-        assert result is None
-
-    def test_first_entry_logged(self, correlation):
-        """First entry (index=0) should log debug info."""
-        now = datetime.now(UTC)
-        time_str = now.isoformat()
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.parse_datetime",
-            return_value=now,
-        ):
-            result = correlation._parse_forecast_datetime(time_str, 0, 0)
-
-        assert result is not None
-
-    def test_none_after_parse(self, correlation):
-        """When parse_datetime returns valid result with no tzinfo, should localize."""
-        naive_dt = datetime(2024, 1, 1, 12, 0, 0)  # no timezone
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.parse_datetime",
-            return_value=naive_dt,
-        ):
-            with patch(
-                "custom_components.localshift.learning.correlation.dt_util.as_local",
-                return_value=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
-            ):
-                result = correlation._parse_forecast_datetime(
-                    "2024-01-01T12:00:00", 0, 0
-                )
-
-        assert result is not None
-
-
-# =============================================================================
-# WeatherCorrelation.get_current_temperature
-# =============================================================================
-
-
-class TestGetCurrentTemperature:
-    """Tests for get_current_temperature."""
-
-    def test_no_weather_entity(self, correlation):
-        """Returns None when no entity configured."""
-        correlation._data.weather_entity_id = ""
-        assert correlation.get_current_temperature() is None
-
-    def test_entity_not_found(self, correlation):
-        """Returns None when entity state is None."""
-        correlation._data.weather_entity_id = "weather.home"
-        correlation.hass.states.get.return_value = None
-        assert correlation.get_current_temperature() is None
-
-    def test_valid_temperature(self, correlation):
-        """Returns the current temperature from entity attributes."""
-        correlation._data.weather_entity_id = "weather.home"
-        state = make_weather_state(temperature=23.5)
-        correlation.hass.states.get.return_value = state
-
-        result = correlation.get_current_temperature()
-
-        assert result == 23.5
-
-    def test_invalid_temperature_returns_none(self, correlation):
-        """Returns None (as 0.0 float conversion) for missing temperature."""
-        correlation._data.weather_entity_id = "weather.home"
-        state = MagicMock()
-        state.attributes = {"temperature": "not_a_number"}
-        correlation.hass.states.get.return_value = state
-
-        # "not_a_number" raises ValueError in float(), returns None
-        result = correlation.get_current_temperature()
-        assert result is None
-
-    def test_temperature_zero_degrees(self, correlation):
-        """Temperature of 0 should be returned as 0.0."""
-        correlation._data.weather_entity_id = "weather.home"
-        state = make_weather_state(temperature=0.0)
-        correlation.hass.states.get.return_value = state
-
-        result = correlation.get_current_temperature()
-        # attributes.get("temperature", 0) returns 0.0, float(0.0) = 0.0
-        assert result == 0.0
-
-
-# =============================================================================
-# WeatherCorrelation.learn_from_sample
-# =============================================================================
-
-
-class TestLearnFromSample:
-    """Tests for the learn_from_sample method."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_hour_negative(self, correlation):
-        """Negative hour should log warning and return without updating."""
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=datetime.now(UTC),
-        ):
-            correlation.learn_from_sample(-1, 22.0, 3.0)
-
-        assert -1 not in correlation._data.hourly_coefficients
-
-    @pytest.mark.asyncio
-    async def test_invalid_hour_too_large(self, correlation):
-        """Hour > 23 should log warning and return without updating."""
-        correlation.learn_from_sample(24, 22.0, 3.0)
-        assert 24 not in correlation._data.hourly_coefficients
-
-    def test_mild_temperature_updates_base_load(self, correlation):
-        """Mild temperature should update base load."""
-        now = datetime.now(UTC)
-        # Default thresholds: heating=18, cooling=24 → mild is 18-24°C
         with patch(
             "custom_components.localshift.learning.correlation.dt_util.now",
             return_value=now,
         ):
             correlation.learn_from_sample(12, 21.0, 3.0)
 
-        coef = correlation._data.hourly_coefficients[12]
-        assert coef.base_load_kw == 3.0  # first sample: set directly
-        assert coef.sample_count == 1
-        assert coef.confidence in ("low", "medium", "high")
+        snapshot = correlation._data.daily_regression_stats[12][0]
+        assert snapshot.data.mild.n == 1
+        assert snapshot.data.mild.sum_y == 3.0
 
-    def test_cooling_temperature_updates_coefficient(self, correlation):
-        """Above-threshold temperature should update cooling coefficient."""
+    def test_learn_skips_small_temp_delta(self, correlation):
         now = datetime.now(UTC)
-        # Pre-seed base load so cooling coefficient can be calculated
-        correlation._data.hourly_coefficients[14] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0
-        )
-
         with patch(
             "custom_components.localshift.learning.correlation.dt_util.now",
             return_value=now,
         ):
-            correlation.learn_from_sample(14, 30.0, 5.0)  # 30°C > 24°C threshold
+            correlation.learn_from_sample(8, 24.5, 4.0)
 
-        coef = correlation._data.hourly_coefficients[14]
-        assert coef.cooling_coefficient > 0
+        snapshot = correlation._data.daily_regression_stats[8][0]
+        assert snapshot.data.cooling.n == 0
 
-    def test_heating_temperature_updates_coefficient(self, correlation):
-        """Below-threshold temperature should update heating coefficient."""
+    def test_learn_records_cooling_zone_stats(self, correlation):
         now = datetime.now(UTC)
-        # Pre-seed base load
-        correlation._data.hourly_coefficients[6] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0
-        )
-
         with patch(
             "custom_components.localshift.learning.correlation.dt_util.now",
             return_value=now,
         ):
-            correlation.learn_from_sample(6, 10.0, 4.5)  # 10°C < 18°C threshold
+            correlation.learn_from_sample(8, 26.0, 4.0)
 
-        coef = correlation._data.hourly_coefficients[6]
-        assert coef.heating_coefficient > 0
+        snapshot = correlation._data.daily_regression_stats[8][0]
+        assert snapshot.data.cooling.n == 1
 
-    def test_new_hour_initializes_coefficients(self, correlation):
-        """Learning for a previously unseen hour should create the entry."""
+    def test_predict_load_returns_weather_none_for_mild_zone(self, correlation):
         now = datetime.now(UTC)
-        assert 20 not in correlation._data.hourly_coefficients
-
         with patch(
             "custom_components.localshift.learning.correlation.dt_util.now",
             return_value=now,
         ):
-            correlation.learn_from_sample(20, 20.0, 2.5)
+            min_samples = getattr(correlation_module, "MIN_SAMPLES_PER_ZONE", None)
+            assert min_samples is not None
+            for _ in range(min_samples):
+                correlation.learn_from_sample(10, 21.0, 0.72)
 
-        assert 20 in correlation._data.hourly_coefficients
+        predicted, reason = correlation.predict_load(10, 21.0, 0.72)
+        assert predicted == pytest.approx(0.72)
+        assert reason == "weather_none"
 
-    def test_confidence_progression(self, correlation):
-        """Confidence should progress from low → medium → high as samples grow."""
+    def test_predict_load_caps_output(self, correlation):
         now = datetime.now(UTC)
-
         with patch(
             "custom_components.localshift.learning.correlation.dt_util.now",
             return_value=now,
         ):
-            for _ in range(3):
-                correlation.learn_from_sample(10, 20.0, 2.0)
+            min_samples = getattr(correlation_module, "MIN_SAMPLES_PER_ZONE", None)
+            assert min_samples is not None
+            for _ in range(min_samples):
+                correlation.learn_from_sample(8, 10.0, 5.0)
+                correlation.learn_from_sample(8, 0.0, 10.0)
 
-        assert correlation._data.hourly_coefficients[10].confidence == "low"
+        predicted, reason = correlation.predict_load(8, 0.0, 0.5)
+        assert reason == "weather_heating"
+        max_multiplier = getattr(correlation_module, "MAX_LOAD_MULTIPLIER", None)
+        assert max_multiplier is not None
+        cap = max(0.5, 0.1) * max_multiplier
+        assert predicted <= cap + 1e-6
 
+    def test_regression_replay_caps_original_bug(self, correlation):
+        now = datetime.now(UTC)
         with patch(
             "custom_components.localshift.learning.correlation.dt_util.now",
             return_value=now,
         ):
-            for _ in range(10):
-                correlation.learn_from_sample(10, 20.0, 2.0)
+            min_samples = getattr(correlation_module, "MIN_SAMPLES_PER_ZONE", None)
+            assert min_samples is not None
+            for _ in range(min_samples):
+                correlation.learn_from_sample(8, 15.0, 2.0)
+                correlation.learn_from_sample(8, 5.0, 6.0)
 
-        assert correlation._data.hourly_coefficients[10].confidence == "medium"
+        predicted, reason = correlation.predict_load(8, 5.0, 0.72)
+        assert reason == "weather_heating"
+        max_multiplier = getattr(correlation_module, "MAX_LOAD_MULTIPLIER", None)
+        assert max_multiplier is not None
+        cap = max(0.72, 0.1) * max_multiplier
+        assert predicted <= cap + 1e-6
 
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            for _ in range(25):
-                correlation.learn_from_sample(10, 20.0, 2.0)
+    def test_predict_load_returns_invalid_hour(self, correlation):
+        predicted, reason = correlation.predict_load(-1, 20.0, 1.0)
+        assert predicted == 1.0
+        assert reason == "invalid_hour"
 
-        assert correlation._data.hourly_coefficients[10].confidence == "high"
+    def test_predict_load_returns_no_coefficients(self, correlation):
+        predicted, reason = correlation.predict_load(8, 20.0, 1.0)
+        assert predicted == 1.0
+        assert reason == "no_coefficients"
 
-
-# =============================================================================
-# WeatherCorrelation._update_cooling_coefficient
-# =============================================================================
-
-
-class TestUpdateCoolingCoefficient:
-    """Tests for _update_cooling_coefficient."""
-
-    def test_zero_temp_delta_is_noop(self, correlation):
-        """Temperature exactly at threshold (delta=0) should not update."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0)
-        cooling_threshold = 24.0
-        # temperature == threshold → delta = 0
-        correlation._update_cooling_coefficient(coef, 24.0, 4.0, cooling_threshold)
-        assert coef.cooling_coefficient == 0.0
-
-    def test_first_cooling_sample_no_base_load(self, correlation):
-        """Without base load, should set base_load to 80% of actual."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=0.0)
-        correlation._update_cooling_coefficient(coef, 28.0, 5.0, 24.0)
-        assert coef.base_load_kw == pytest.approx(4.0)  # 5.0 * 0.8
-        assert coef.cooling_coefficient == 0.0  # not updated without base
-
-    def test_first_cooling_sample_with_base_load(self, correlation):
-        """With existing base_load and no cooling_coef, should set directly."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0, cooling_coefficient=0.0)
-        correlation._update_cooling_coefficient(coef, 28.0, 6.0, 24.0)
-        # implied = (6.0 - 2.0) / (28 - 24) = 1.0
-        assert coef.cooling_coefficient == pytest.approx(1.0)
-
-    def test_subsequent_cooling_uses_moving_average(self, correlation):
-        """Subsequent samples should apply 10% weight EMA."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0, cooling_coefficient=0.5)
-        # implied = (6.0 - 2.0) / 4.0 = 1.0
-        # new = 0.1 * 1.0 + 0.9 * 0.5 = 0.55
-        correlation._update_cooling_coefficient(coef, 28.0, 6.0, 24.0)
-        assert coef.cooling_coefficient == pytest.approx(0.55)
-
-
-# =============================================================================
-# WeatherCorrelation._update_heating_coefficient
-# =============================================================================
-
-
-class TestUpdateHeatingCoefficient:
-    """Tests for _update_heating_coefficient."""
-
-    def test_zero_temp_delta_is_noop(self, correlation):
-        """Temperature exactly at threshold (delta=0) should not update."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0)
-        correlation._update_heating_coefficient(coef, 18.0, 4.0, 18.0)
-        assert coef.heating_coefficient == 0.0
-
-    def test_first_heating_sample_no_base_load(self, correlation):
-        """Without base load, should set base_load to 80% of actual."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=0.0)
-        correlation._update_heating_coefficient(coef, 10.0, 5.0, 18.0)
-        assert coef.base_load_kw == pytest.approx(4.0)  # 5.0 * 0.8
-
-    def test_first_heating_sample_with_base_load(self, correlation):
-        """With existing base_load and no heating_coef, should set directly."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0, heating_coefficient=0.0)
-        # implied = (5.0 - 2.0) / (18.0 - 10.0) = 0.375
-        correlation._update_heating_coefficient(coef, 10.0, 5.0, 18.0)
-        assert coef.heating_coefficient == pytest.approx(0.375)
-
-    def test_subsequent_heating_uses_moving_average(self, correlation):
-        """Subsequent samples should apply 10% weight EMA."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=2.0, heating_coefficient=0.5)
-        # implied = (5.0 - 2.0) / 8.0 = 0.375
-        # new = 0.1 * 0.375 + 0.9 * 0.5 = 0.4875
-        correlation._update_heating_coefficient(coef, 10.0, 5.0, 18.0)
-        assert coef.heating_coefficient == pytest.approx(0.4875)
-
-
-# =============================================================================
-# WeatherCorrelation._update_mild_temperature_base_load
-# =============================================================================
-
-
-class TestUpdateMildTemperatureBaseLoad:
-    """Tests for _update_mild_temperature_base_load."""
-
-    def test_first_sample_sets_base_load_directly(self, correlation):
-        """First mild sample should set base_load directly."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=0.0)
-        correlation._update_mild_temperature_base_load(coef, 3.5)
-        assert coef.base_load_kw == 3.5
-
-    def test_subsequent_sample_uses_moving_average(self, correlation):
-        """Subsequent samples should use 10% EMA."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=4.0)
-        # new = 0.1 * 2.0 + 0.9 * 4.0 = 3.8
-        correlation._update_mild_temperature_base_load(coef, 2.0)
-        assert coef.base_load_kw == pytest.approx(3.8)
-
-
-# =============================================================================
-# WeatherCorrelation.predict_load
-# =============================================================================
-
-
-class TestPredictLoad:
-    """Tests for predict_load."""
-
-    def test_invalid_hour(self, correlation):
-        """Invalid hour returns base_load unchanged."""
-        result_load, source = correlation.predict_load(25, 20.0, 3.0)
-        assert result_load == 3.0
-        assert source == "invalid_hour"
-
-    def test_no_coefficients_for_hour(self, correlation):
-        """Hour with no learned data returns base_load."""
-        # Ensure hour 5 has no coefficients
-        correlation._data.hourly_coefficients.pop(5, None)
-        result_load, source = correlation.predict_load(5, 20.0, 3.0)
-        assert result_load == 3.0
-        assert source == "no_coefficients"
-
-    def test_low_confidence_returns_base(self, correlation):
-        """Low-confidence data should not modify base_load."""
-        correlation._data.hourly_coefficients[8] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0, cooling_coefficient=0.5, confidence="low"
-        )
-        result_load, source = correlation.predict_load(8, 30.0, 3.0)
-        assert result_load == 3.0
-        assert source == "low_confidence"
-
-    def test_cooling_adjustment(self, correlation):
-        """Above cooling threshold should increase load."""
-        correlation._data.hourly_coefficients[14] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0, cooling_coefficient=0.5, confidence="medium"
-        )
-        # 28°C - 24°C = 4°C delta × 0.5 = 2.0 adjustment
-        result_load, source = correlation.predict_load(14, 28.0, 2.0)
-        assert result_load == pytest.approx(4.0)
-        assert source == "weather_cooling"
-
-    def test_heating_adjustment(self, correlation):
-        """Below heating threshold should increase load."""
-        correlation._data.hourly_coefficients[6] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0, heating_coefficient=0.4, confidence="high"
-        )
-        # 18°C - 10°C = 8°C delta × 0.4 = 3.2 adjustment
-        result_load, source = correlation.predict_load(6, 10.0, 2.0)
-        assert result_load == pytest.approx(5.2)
-        assert source == "weather_heating"
-
-    def test_mild_temperature_no_adjustment(self, correlation):
-        """Mild temperature should return base load with no adjustment."""
-        correlation._data.hourly_coefficients[12] = HourlyTemperatureCoefficients(
-            base_load_kw=3.0,
-            cooling_coefficient=0.5,
-            heating_coefficient=0.3,
-            confidence="medium",
-        )
-        result_load, source = correlation.predict_load(12, 21.0, 3.0)
-        assert result_load == pytest.approx(3.0)
-        assert source == "weather_none"
-
-    def test_cooling_coefficient_zero(self, correlation):
-        """Zero cooling coefficient should not apply adjustment."""
-        correlation._data.hourly_coefficients[14] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0, cooling_coefficient=0.0, confidence="medium"
-        )
-        result_load, source = correlation.predict_load(14, 30.0, 2.0)
-        assert result_load == pytest.approx(2.0)
-        assert source == "weather_none"
-
-    def test_uses_learned_base_load_over_provided(self, correlation):
-        """When base_load_kw > 0, prediction uses learned value."""
-        correlation._data.hourly_coefficients[10] = HourlyTemperatureCoefficients(
-            base_load_kw=5.0, confidence="high"
-        )
-        result_load, source = correlation.predict_load(10, 21.0, 2.0)
-        # Mild temp, no adjustment → uses learned base_load=5.0
-        assert result_load == pytest.approx(5.0)
-
-    def test_falls_back_to_provided_base_when_no_learned_base(self, correlation):
-        """When base_load_kw == 0, uses provided base_load_kw."""
-        correlation._data.hourly_coefficients[10] = HourlyTemperatureCoefficients(
-            base_load_kw=0.0, confidence="high"
-        )
-        result_load, source = correlation.predict_load(10, 21.0, 3.5)
-        assert result_load == pytest.approx(3.5)
-
-    def test_result_is_rounded(self, correlation):
-        """predict_load should return result rounded to 3 decimal places."""
-        correlation._data.hourly_coefficients[10] = HourlyTemperatureCoefficients(
-            base_load_kw=2.0, cooling_coefficient=0.333, confidence="medium"
-        )
-        # 28 - 24 = 4 × 0.333 = 1.332 → 2.0 + 1.332 = 3.332
-        result_load, _ = correlation.predict_load(10, 28.0, 2.0)
-        assert result_load == round(result_load, 3)
-
-
-# =============================================================================
-# WeatherCorrelation._calculate_confidence
-# =============================================================================
-
-
-class TestCalculateConfidence:
-    """Tests for _calculate_confidence."""
-
-    def test_low_confidence(self, correlation):
-        """Fewer than CONFIDENCE_LOW_THRESHOLD samples → low."""
-        for count in range(CONFIDENCE_LOW_THRESHOLD):
-            assert correlation._calculate_confidence(count) == "low"
-
-    def test_medium_confidence(self, correlation):
-        """Between LOW and MEDIUM thresholds → medium."""
-        for count in range(CONFIDENCE_LOW_THRESHOLD, CONFIDENCE_MEDIUM_THRESHOLD):
-            assert correlation._calculate_confidence(count) == "medium"
-
-    def test_high_confidence(self, correlation):
-        """At or above CONFIDENCE_MEDIUM_THRESHOLD → high."""
-        for count in [CONFIDENCE_MEDIUM_THRESHOLD, 50, 100]:
-            assert correlation._calculate_confidence(count) == "high"
-
-    def test_boundary_values(self, correlation):
-        """Boundary values should have correct confidence."""
-        assert correlation._calculate_confidence(CONFIDENCE_LOW_THRESHOLD - 1) == "low"
-        assert correlation._calculate_confidence(CONFIDENCE_LOW_THRESHOLD) == "medium"
-        assert (
-            correlation._calculate_confidence(CONFIDENCE_MEDIUM_THRESHOLD - 1)
-            == "medium"
-        )
-        assert correlation._calculate_confidence(CONFIDENCE_MEDIUM_THRESHOLD) == "high"
-
-
-# =============================================================================
-# WeatherCorrelation.get_diagnostics
-# =============================================================================
-
-
-class TestGetDiagnostics:
-    """Tests for get_diagnostics."""
-
-    def test_empty_coefficients(self, correlation):
-        """Diagnostics with no learned data should have zeros."""
-        correlation._data.hourly_coefficients = {}
-        diag = correlation.get_diagnostics()
-
-        assert diag["total_samples"] == 0
-        assert diag["hours_with_data"] == 0
-        assert diag["average_base_load_kw"] == 0.0
-        assert diag["average_cooling_coefficient"] == 0.0
-        assert diag["average_heating_coefficient"] == 0.0
-        assert diag["cooling_hours"] == 0
-        assert diag["heating_hours"] == 0
-        assert diag["hourly_coefficients"] == {}
-
-    def test_with_coefficients(self, correlation):
-        """Diagnostics should aggregate across all hours correctly."""
-        correlation._data.weather_entity_id = "weather.test"
-        correlation._data.cooling_threshold = 24.0
-        correlation._data.heating_threshold = 18.0
-        correlation._data.hourly_coefficients = {
-            10: HourlyTemperatureCoefficients(
-                base_load_kw=2.0,
-                cooling_coefficient=0.4,
-                heating_coefficient=0.3,
-                sample_count=20,
-            ),
-            15: HourlyTemperatureCoefficients(
-                base_load_kw=4.0,
-                cooling_coefficient=0.6,
-                sample_count=35,
-            ),
+    def test_predict_load_applies_cooling_adjustment(self, correlation):
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=ZoneStats(),
+                        cooling=_linear_stats(20, 1.0),
+                    ),
+                )
+            ]
         }
 
-        diag = correlation.get_diagnostics()
+        predicted, reason = correlation.predict_load(8, 26.0, 1.0)
 
-        assert diag["total_samples"] == 55
-        assert diag["hours_with_data"] == 2
-        assert diag["average_base_load_kw"] == pytest.approx(3.0)
-        assert diag["average_cooling_coefficient"] == pytest.approx(0.5)
-        assert diag["average_heating_coefficient"] == pytest.approx(0.3)
-        assert diag["cooling_hours"] == 2
-        assert diag["heating_hours"] == 1
-        assert 10 in diag["hourly_coefficients"]
-        assert 15 in diag["hourly_coefficients"]
+        assert reason == "weather_cooling"
+        assert predicted > 1.0
 
-    def test_diagnostics_includes_entity_config(self, correlation):
-        """Diagnostics should include weather entity and threshold settings."""
-        correlation._data.weather_entity_id = "weather.home"
-        diag = correlation.get_diagnostics()
+    def test_predict_load_returns_weather_none_for_small_delta(self, correlation):
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=_linear_stats(20, 1.0),
+                        cooling=_linear_stats(20, 1.0),
+                    ),
+                )
+            ]
+        }
 
-        assert diag["weather_entity_id"] == "weather.home"
-        assert "cooling_threshold" in diag
-        assert "heating_threshold" in diag
+        predicted, reason = correlation.predict_load(8, 24.4, 1.0)
 
+        assert predicted == 1.0
+        assert reason == "weather_none"
 
-# =============================================================================
-# WeatherCorrelation.get_coefficients_for_hour
-# =============================================================================
+    def test_predict_load_returns_low_confidence_for_poor_fit(self, correlation):
+        low_fit_stats = ZoneStats(
+            n=20,
+            sum_x=210.0,
+            sum_y=1.0,
+            sum_xx=2870.0,
+            sum_xy=1.0,
+            sum_yy=1000.0,
+        )
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=ZoneStats(),
+                        cooling=low_fit_stats,
+                    ),
+                )
+            ]
+        }
 
+        predicted, reason = correlation.predict_load(8, 26.0, 1.0)
 
-class TestGetCoefficientsForHour:
-    """Tests for get_coefficients_for_hour."""
-
-    def test_hour_exists(self, correlation):
-        """Returns coefficients when they exist for the hour."""
-        coef = HourlyTemperatureCoefficients(base_load_kw=3.0, sample_count=10)
-        correlation._data.hourly_coefficients[14] = coef
-
-        result = correlation.get_coefficients_for_hour(14)
-
-        assert result is coef
-        assert result.base_load_kw == 3.0
-
-    def test_hour_not_found(self, correlation):
-        """Returns None when no coefficients exist for the hour."""
-        correlation._data.hourly_coefficients.pop(5, None)
-        result = correlation.get_coefficients_for_hour(5)
-        assert result is None
-
-    def test_all_24_hours(self, correlation):
-        """Can retrieve coefficients for any hour 0-23."""
-        for hour in range(24):
-            coef = HourlyTemperatureCoefficients(base_load_kw=float(hour))
-            correlation._data.hourly_coefficients[hour] = coef
-
-        for hour in range(24):
-            result = correlation.get_coefficients_for_hour(hour)
-            assert result is not None
-            assert result.base_load_kw == float(hour)
+        assert predicted == 1.0
+        assert reason == "low_confidence"
 
 
-# =============================================================================
-# Integration-style tests
-# =============================================================================
+class TestMigrationAndReset:
+    @pytest.mark.asyncio
+    async def test_async_initialize_migrates_v1_storage_and_discards_hourly_coefficients(
+        self, correlation, mock_weather_store
+    ):
+        mock_weather_store.async_load.return_value = {
+            "version": 1,
+            "weather_entity_id": "weather.home",
+            "hourly_coefficients": {"8": {"cooling_coefficient": 12.761}},
+            "learning_stats": {"note": "keep"},
+            "temperature_history": {"2026-03-25": 22.5},
+        }
+
+        await correlation.async_initialize()
+
+        assert correlation._data.daily_regression_stats == {}
+        assert correlation._data.temperature_history == {"2026-03-25": 22.5}
+        assert correlation._data.learning_stats == {"note": "keep"}
+
+    @pytest.mark.asyncio
+    async def test_async_reset_clears_regression_stats_but_keeps_temperature_history(
+        self, correlation
+    ):
+        correlation._data.daily_regression_stats = {
+            8: [DailySnapshot(date_key="2026-03-26", data=HourlyRegressionData())]
+        }
+        correlation._data.temperature_history = {"2026-03-25": 22.5}
+
+        await correlation.async_reset()
+
+        assert correlation._data.daily_regression_stats == {}
+        assert correlation._data.temperature_history == {"2026-03-25": 22.5}
+
+    def test_prune_daily_snapshots_removes_entries_older_than_window(self, correlation):
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(date_key="2026-02-23", data=HourlyRegressionData()),
+                DailySnapshot(date_key="2026-02-24", data=HourlyRegressionData()),
+                DailySnapshot(date_key="2026-03-25", data=HourlyRegressionData()),
+            ]
+        }
+
+        correlation._prune_daily_snapshots(datetime(2026, 3, 26, tzinfo=UTC))
+
+        remaining = [
+            snap.date_key for snap in correlation._data.daily_regression_stats[8]
+        ]
+        assert "2026-02-23" not in remaining
+        assert "2026-02-24" not in remaining
+        assert "2026-03-25" in remaining
+
+    def test_prune_daily_snapshots_removes_empty_hours(self, correlation):
+        correlation._data.daily_regression_stats = {
+            8: [DailySnapshot(date_key="2026-02-01", data=HourlyRegressionData())]
+        }
+
+        correlation._prune_daily_snapshots(datetime(2026, 3, 26, tzinfo=UTC))
+
+        assert 8 not in correlation._data.daily_regression_stats
 
 
-class TestLearnAndPredict:
-    """Integration tests for the learn → predict cycle."""
+class TestDelegationsAndDiagnostics:
+    def test_get_temperature_forecast_delegates(self, correlation):
+        forecast = correlation_module.TemperatureForecast(
+            slot_time=datetime(2026, 3, 26, 8, tzinfo=UTC),
+            temperature=18.0,
+            condition="cloudy",
+        )
+        provider = MagicMock()
+        provider.get_temperature_forecast.return_value = [forecast]
+        correlation._temperature_provider = provider
 
-    def test_learn_multiple_samples_then_predict(self, correlation):
-        """Learning multiple samples should improve prediction accuracy."""
-        now = datetime.now(UTC)
-        hour = 14
+        assert correlation.get_temperature_forecast() == [forecast]
+        provider.get_temperature_forecast.assert_called_once()
 
-        # Simulate learning: at 30°C, load is 5kW; at 20°C (mild), load is 2kW
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            # Learn mild base load first
-            for _ in range(5):
-                correlation.learn_from_sample(hour, 21.0, 2.0)
+    @pytest.mark.asyncio
+    async def test_async_get_temperature_forecast_updates_weather_entity_id(
+        self, correlation
+    ):
+        forecast = correlation_module.TemperatureForecast(
+            slot_time=datetime(2026, 3, 26, 9, tzinfo=UTC),
+            temperature=19.0,
+            condition="sunny",
+        )
+        provider = MagicMock()
+        provider.weather_entity_id = "weather.updated"
+        provider.async_get_temperature_forecast = AsyncMock(return_value=[forecast])
+        correlation._temperature_provider = provider
 
-            # Learn cooling load
-            for _ in range(30):
-                correlation.learn_from_sample(hour, 30.0, 5.0)
+        result = await correlation.async_get_temperature_forecast(force_refresh=True)
 
-        coef = correlation.get_coefficients_for_hour(hour)
-        assert coef is not None
-        assert coef.base_load_kw > 0
-        assert coef.confidence == "high"
-
-        # Predict should now apply cooling adjustment
-        predicted, source = correlation.predict_load(hour, 30.0, coef.base_load_kw)
-        assert source in ("weather_cooling", "weather_none")
-        assert predicted >= coef.base_load_kw
-
-    def test_storage_roundtrip_preserves_learning(self, correlation):
-        """Learned data should survive a to_dict/from_dict roundtrip."""
-        now = datetime.now(UTC)
-
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util.now",
-            return_value=now,
-        ):
-            for _ in range(10):
-                correlation.learn_from_sample(12, 20.0, 3.0)
-
-        # Serialise and restore
-        serialised = correlation._data.to_dict()
-        restored = WeatherCorrelationData.from_dict(serialised)
-
-        assert 12 in restored.hourly_coefficients
-        assert restored.hourly_coefficients[12].sample_count == 10
-
-
-# =============================================================================
-# WEATHER ANOMALY DETECTION TESTS
-# =============================================================================
-
-
-def _populate_anomaly_history(
-    correlation: WeatherCorrelation,
-    temps: list[float],
-    base_date: date | None = None,
-) -> None:
-    """Populate temperature history for anomaly detection tests."""
-    if base_date is None:
-        base_date = date(2024, 1, 1)
-    for i, temp in enumerate(temps):
-        d = base_date + timedelta(days=i)
-        correlation.record_daily_temperature(temp, date_key=d.isoformat())
-
-
-class TestWeatherAnomalyDetection:
-    """Tests for weather anomaly detection features."""
-
-    @pytest.fixture
-    def correlation(self, mock_hass, mock_entry):
-        """Create a WeatherCorrelation instance for anomaly tests."""
-        with patch("custom_components.localshift.learning.correlation.Store"):
-            return WeatherCorrelation(mock_hass, mock_entry)
-
-    def test_record_daily_temperature_stores_value(self, correlation):
-        """Test that record_daily_temperature stores temperature values."""
-        correlation.record_daily_temperature(22.5, date_key="2024-01-01")
-        assert correlation._data.temperature_history["2024-01-01"] == 22.5
-
-    def test_record_daily_temperature_is_idempotent_per_day(self, correlation):
-        """Test that recording same day overwrites previous value."""
-        correlation.record_daily_temperature(20.0, date_key="2024-01-01")
-        correlation.record_daily_temperature(25.0, date_key="2024-01-01")
-        assert correlation._data.temperature_history["2024-01-01"] == 25.0
-
-    def test_record_daily_temperature_prunes_to_14_days(self, correlation):
-        """Test that history is pruned to WEATHER_TEMPERATURE_HISTORY_DAYS."""
-        for i in range(20):
-            d = date(2024, 1, 1) + timedelta(days=i)
-            correlation.record_daily_temperature(20.0, date_key=d.isoformat())
-        assert (
-            len(correlation._data.temperature_history)
-            == WEATHER_TEMPERATURE_HISTORY_DAYS
+        assert result == [forecast]
+        assert correlation._data.weather_entity_id == "weather.updated"
+        provider.async_get_temperature_forecast.assert_awaited_once_with(
+            force_refresh=True
         )
 
-    def test_record_daily_temperature_keeps_newest_dates(self, correlation):
-        """Test that pruning keeps the most recent dates."""
-        for i in range(20):
-            d = date(2024, 1, 1) + timedelta(days=i)
-            correlation.record_daily_temperature(float(i), date_key=d.isoformat())
-        oldest_retained = min(correlation._data.temperature_history.keys())
-        assert oldest_retained == "2024-01-07"
+    def test_get_current_temperature_delegates(self, correlation):
+        provider = MagicMock()
+        provider.get_current_temperature.return_value = 21.5
+        correlation._temperature_provider = provider
 
-    def test_record_daily_temperature_uses_today_by_default(self, correlation):
-        """Test that record_daily_temperature uses today's date when not specified."""
-        with patch(
-            "custom_components.localshift.learning.correlation.dt_util"
-        ) as mock_dt:
-            mock_dt.now.return_value.strftime.return_value = "2024-06-15"
-            correlation.record_daily_temperature(22.0)
-        assert "2024-06-15" in correlation._data.temperature_history
+        assert correlation.get_current_temperature() == 21.5
+        provider.get_current_temperature.assert_called_once()
 
-    def test_insufficient_history_returns_normal_weight(self, correlation):
-        """Test that insufficient history (<7 days) returns normal weight."""
-        _populate_anomaly_history(correlation, [20.0, 21.0, 22.0, 20.0, 21.0])
-        result = correlation.detect_weather_anomaly(35.0)
-        assert result.is_anomalous is False
-        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
-        assert result.deviation_sigma == 0.0
-        assert result.mean_temperature == 0.0
-        assert result.std_temperature == 0.0
+    def test_record_daily_temperature_delegates(self, correlation):
+        detector = MagicMock()
+        correlation._anomaly_detector = detector
 
-    def test_exactly_7_days_history_is_enough(self, correlation):
-        """Test that exactly 7 days of history is sufficient."""
-        _populate_anomaly_history(correlation, [20.0] * 7)
-        result = correlation.detect_weather_anomaly(20.0)
-        assert result.mean_temperature is not None
+        correlation.record_daily_temperature(18.0, "2026-03-26")
 
-    def test_normal_temperature_not_flagged(self, correlation):
-        """Test that normal temperature is not flagged as anomalous."""
-        temps = [20.0, 21.0, 19.0, 20.5, 21.5, 20.0, 21.0, 20.0, 19.5, 21.0]
-        _populate_anomaly_history(correlation, temps)
-        result = correlation.detect_weather_anomaly(21.0)
-        assert result.is_anomalous is False
-        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
+        detector.record_daily_temperature.assert_called_once_with(18.0, "2026-03-26")
 
-    def test_extreme_high_temperature_is_anomalous(self, correlation):
-        """Test that extreme high temperature is flagged as anomalous."""
-        temps = [20.0] * 8 + [21.0, 19.0]
-        _populate_anomaly_history(correlation, temps)
-        result = correlation.detect_weather_anomaly(40.0)
-        assert result.is_anomalous is True
-        assert result.weight == WEATHER_ANOMALY_ANOMALOUS_WEIGHT
-        assert result.deviation_sigma is not None
-        assert result.deviation_sigma > 2.0
+    def test_detect_weather_anomaly_delegates(self, correlation):
+        detector = MagicMock()
+        result = correlation_module.WeatherAnomalyResult(
+            is_anomalous=False,
+            weight=1.0,
+            temperature=20.0,
+            deviation_sigma=0.0,
+            mean_temperature=20.0,
+            std_temperature=1.0,
+        )
+        detector.detect_weather_anomaly.return_value = result
+        correlation._anomaly_detector = detector
 
-    def test_extreme_low_temperature_is_anomalous(self, correlation):
-        """Test that extreme low temperature is flagged as anomalous."""
-        temps = [20.0] * 8 + [21.0, 19.0]
-        _populate_anomaly_history(correlation, temps)
-        result = correlation.detect_weather_anomaly(0.0)
-        assert result.is_anomalous is True
-        assert result.weight == WEATHER_ANOMALY_ANOMALOUS_WEIGHT
+        assert correlation.detect_weather_anomaly(20.0) == result
+        detector.detect_weather_anomaly.assert_called_once_with(20.0)
 
-    def test_anomaly_result_temperature_field(self, correlation):
-        """Test that WeatherAnomalyResult includes the input temperature."""
-        _populate_anomaly_history(correlation, [20.0] * 10)
-        result = correlation.detect_weather_anomaly(35.0)
-        assert result.temperature == 35.0
+    def test_get_diagnostics_reports_averages(self, correlation):
+        heating_stats = _linear_stats(20, 2.0)
+        cooling_stats = _linear_stats(20, 1.0)
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=heating_stats,
+                        cooling=cooling_stats,
+                    ),
+                )
+            ]
+        }
 
-    def test_anomaly_result_mean_and_std_fields(self, correlation):
-        """Test that WeatherAnomalyResult includes mean and std."""
-        temps = [20.0] * 10
-        _populate_anomaly_history(correlation, temps)
-        result = correlation.detect_weather_anomaly(20.0)
-        assert result.mean_temperature == pytest.approx(20.0)
-        assert result.std_temperature == pytest.approx(0.0)
+        diagnostics = correlation.get_diagnostics()
 
-    def test_zero_std_does_not_raise(self, correlation):
-        """Test that zero standard deviation is handled gracefully."""
-        temps = [20.0] * 10
-        _populate_anomaly_history(correlation, temps)
-        result = correlation.detect_weather_anomaly(20.0)
-        assert result.is_anomalous is False
-        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
+        assert diagnostics["average_heating_slope"] == pytest.approx(2.0, rel=1e-3)
+        assert diagnostics["average_cooling_slope"] == pytest.approx(1.0, rel=1e-3)
+        assert diagnostics["average_r_squared"] == pytest.approx(1.0, rel=1e-3)
+        assert diagnostics["total_samples"] == 40
+        assert diagnostics["hourly_regression"][8]["confidence"] == "medium"
 
-    def test_temperature_history_included_in_to_dict(self, correlation):
-        """Test that temperature_history is included in to_dict output."""
-        correlation.record_daily_temperature(22.0, date_key="2024-01-01")
-        d = correlation._data.to_dict()
-        assert "temperature_history" in d
-        assert d["temperature_history"]["2024-01-01"] == 22.0
+    def test_get_diagnostics_handles_empty_hours(self, correlation):
+        correlation._data.daily_regression_stats = {8: []}
+        diagnostics = correlation.get_diagnostics()
+        assert diagnostics["hours_with_data"] == 0
 
-    def test_temperature_history_loaded_from_dict(self):
-        """Test that temperature_history is loaded from dict."""
-        data_dict = {"temperature_history": {"2024-01-01": 22.0, "2024-01-02": 25.0}}
-        data = WeatherCorrelationData.from_dict(data_dict)
-        assert data.temperature_history == {"2024-01-01": 22.0, "2024-01-02": 25.0}
+    def test_get_diagnostics_sets_high_confidence(self, correlation):
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=_linear_stats(30, 2.0),
+                        cooling=_linear_stats(30, 1.0),
+                    ),
+                )
+            ]
+        }
+        diagnostics = correlation.get_diagnostics()
+        assert diagnostics["hourly_regression"][8]["confidence"] == "high"
 
-    def test_from_dict_without_history_defaults_to_empty(self):
-        """Test that missing temperature_history defaults to empty dict."""
-        data = WeatherCorrelationData.from_dict({})
-        assert data.temperature_history == {}
+    def test_get_coefficients_for_hour_invalid_hour_returns_none(self, correlation):
+        assert correlation.get_coefficients_for_hour(-1) is None
+        assert correlation.get_coefficients_for_hour(24) is None
+
+    def test_get_coefficients_for_hour_with_no_data_returns_none(self, correlation):
+        correlation._data.daily_regression_stats = {8: []}
+        assert correlation.get_coefficients_for_hour(8) is None
+
+
+class TestConfidence:
+    def test_calculate_confidence_thresholds(self, correlation):
+        assert correlation._calculate_confidence(1) == "low"
+        assert correlation._calculate_confidence(25, 0.05) == "low"
+        assert correlation._calculate_confidence(40, 0.5) == "high"
+
+
+class TestConstants:
+    def test_regression_constants(self):
+        assert getattr(correlation_module, "MIN_TEMP_DELTA", None) == 1.0
+        assert getattr(correlation_module, "MIN_SAMPLES_PER_ZONE", None) == 20
+        assert getattr(correlation_module, "MIN_R_SQUARED", None) == 0.10
+        assert getattr(correlation_module, "MAX_SLOPE_KW_PER_DEGREE", None) == 2.0
+        assert getattr(correlation_module, "MAX_LOAD_MULTIPLIER", None) == 3.0
+        assert getattr(correlation_module, "SLIDING_WINDOW_DAYS", None) == 30

@@ -362,6 +362,7 @@ class LoadForecaster:
             "no_coefficients",
             "low_confidence",
             "invalid_hour",
+            "weather_none",
         ):
             self._weather_adjustment_applied = True
             return weather_adjusted, adjustment_source

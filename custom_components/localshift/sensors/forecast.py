@@ -326,11 +326,14 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
             "weather_correlation_confidence": self.coordinator.data.weather_correlation_confidence,
             "weather_adjustment_applied": self.coordinator.data.weather_adjustment_applied,
             "weather_learning_enabled": self.coordinator.data.weather_learning_enabled,
-            "weather_cooling_coefficient": round(
-                self.coordinator.data.weather_cooling_coefficient, 4
+            "weather_avg_cooling_slope": round(
+                self.coordinator.data.weather_avg_cooling_slope, 4
             ),
-            "weather_heating_coefficient": round(
-                self.coordinator.data.weather_heating_coefficient, 4
+            "weather_avg_heating_slope": round(
+                self.coordinator.data.weather_avg_heating_slope, 4
+            ),
+            "weather_avg_r_squared": round(
+                self.coordinator.data.weather_avg_r_squared, 4
             ),
             "weather_sample_count": self.coordinator.data.weather_sample_count,
             "load_forecast_slots_sample": {

@@ -201,9 +201,9 @@ When disabled, the system still tracks decisions but uses default (zero-offset) 
 
 **Entity:** `button.localshift_reset_learning`
 
-Clears all learning data and starts fresh.
+Clears decision tracking data and weather regression statistics, then restarts the learning phase.
 
-**Warning:** This erases all learned parameters and decision history. The system will return to the "observing" phase.
+**Warning:** This resets decision history and weather regression stats. Parameter optimizer and pattern analysis data are not reset by this button yet.
 
 ## FAQ
 
@@ -242,11 +242,11 @@ Yes. Use the **Enable Learning** switch to disable parameter optimization. When 
 
 ### What happens when I reset learning data?
 
-1. All decision records are cleared
-2. All learned parameters are reset to defaults
+1. Decision records are cleared
+2. Weather regression statistics are cleared (temperature history retained)
 3. The system returns to "observing" phase
-4. Parameter optimization history is erased
-5. Pattern analysis data is cleared
+4. Recent decision log and performance metrics are reset
+5. Parameter optimizer and pattern analysis data remain unchanged for now
 
 ### Is my learning data persisted?
 

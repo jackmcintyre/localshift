@@ -126,11 +126,12 @@ class Fixtures:
         data.weather_temperature_current = 25.0
         data.weather_temperature_forecast = {14: 28, 15: 30}
         data.weather_condition = "sunny"
-        data.weather_correlation_confidence = 0.8
+        data.weather_correlation_confidence = "medium"
         data.weather_adjustment_applied = True
         data.weather_learning_enabled = True
-        data.weather_cooling_coefficient = 0.1
-        data.weather_heating_coefficient = 0.05
+        data.weather_avg_cooling_slope = 0.1
+        data.weather_avg_heating_slope = 0.05
+        data.weather_avg_r_squared = 0.4
         data.weather_sample_count = 100
         data.load_forecast_slots = [1.0, 1.2, 1.5, 1.3, 1.1, 1.0, 0.9, 0.8, 0.7]
         data.load_deviation_diagnostics = {

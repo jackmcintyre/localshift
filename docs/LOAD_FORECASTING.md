@@ -47,15 +47,16 @@ The system also grabs your **average load over the last 1 hour** from 5-minute s
 
 The system has a **weather correlation module** that learns how temperature affects your energy use. It works like this:
 
-- It uses a **degree-day model** — a well-known energy industry approach. It learns:
+- It uses a **degree-day model** with **bounded OLS regression** over a 30-day sliding window. It learns:
   - Your **base load** per hour (electricity use at comfortable temperatures)
-  - A **cooling coefficient** (how much extra power you use when it's hot — air conditioning)
-  - A **heating coefficient** (how much extra power you use when it's cold — heating)
+  - A **cooling slope** (kW per °C above the cooling threshold)
+  - A **heating slope** (kW per °C below the heating threshold)
 - It defines **temperature thresholds** for cooling and heating (e.g., above 25°C you start cooling, below 18°C you start heating).
-- It **learns incrementally** over time using a moving-average approach — every hour, it observes the actual temperature and actual load, and slightly adjusts its model. The more data it sees, the more confident it becomes.
-- It can pull **temperature forecasts** from your weather entity and predict load adjustments for future hours.
-- Each hour of the day gets its own coefficients (because your 2 PM cooling behaviour is different from your 8 PM behaviour).
-- It tracks a **confidence score** per hour, and predictions are only applied when confidence is sufficient.
+- It only learns from meaningful temperature changes (`min delta = 1.0°C`) and uses per-hour sufficient statistics to fit slopes.
+- Slopes are **bounded** (max 2.0 kW/°C), and predicted adjustments are **capped** at `max(base_load, 0.1) × 3.0`.
+- It can pull **temperature forecasts** from your weather entity and predict additive load adjustments for future hours.
+- Each hour of the day gets its own regression results (because your 2 PM cooling behaviour is different from your 8 PM behaviour).
+- It tracks **confidence** per hour based on sample count and R², and predictions are only applied when confidence is sufficient.
 
 **Example:** The system has learned that at 3 PM on a 38°C day, your house uses an extra 1.5 kW for cooling compared to a 22°C day. Tomorrow's weather forecast says 36°C at 3 PM, so it bumps up the predicted load accordingly.
 
@@ -93,7 +94,7 @@ The system exposes several diagnostic attributes so you can see what it's doing:
 - **Sample counts per hour** — how much historical data backs each hour's estimate
 - **Recent 1-hour load** — the real-time average it's blending in
 - **Weighting** — the configured balance between recent and historical data
-- **Weather correlation diagnostics** — the learned coefficients, confidence, and current temperature adjustments
+- **Weather correlation diagnostics** — average heating/cooling slopes, average R², confidence, and current temperature adjustments
 
 ---
 

@@ -37,8 +37,9 @@ class WeatherDiagnosticsEngine:
         if not weather_learning_enabled or weather_correlation is None:
             data.weather_correlation_confidence = "low"
             data.weather_adjustment_applied = False
-            data.weather_cooling_coefficient = 0.0
-            data.weather_heating_coefficient = 0.0
+            data.weather_avg_cooling_slope = 0.0
+            data.weather_avg_heating_slope = 0.0
+            data.weather_avg_r_squared = 0.0
             data.weather_sample_count = 0
             data.weather_anomaly_weight = 1.0
             return
@@ -47,19 +48,20 @@ class WeatherDiagnosticsEngine:
 
         data.weather_correlation_confidence = "low"
         data.weather_sample_count = diagnostics.get("total_samples", 0)
-        data.weather_cooling_coefficient = diagnostics.get(
-            "average_cooling_coefficient", 0.0
-        )
-        data.weather_heating_coefficient = diagnostics.get(
-            "average_heating_coefficient", 0.0
-        )
+        data.weather_avg_cooling_slope = diagnostics.get("average_cooling_slope", 0.0)
+        data.weather_avg_heating_slope = diagnostics.get("average_heating_slope", 0.0)
+        data.weather_avg_r_squared = diagnostics.get("average_r_squared", 0.0)
 
-        hourly_coefs = diagnostics.get("hourly_coefficients", {})
-        has_medium_confidence = any(
-            coef.get("confidence") in ("medium", "high")
-            for coef in hourly_coefs.values()
+        hourly_results = diagnostics.get("hourly_regression", {})
+        has_high_confidence = any(
+            coef.get("confidence") == "high" for coef in hourly_results.values()
         )
-        if has_medium_confidence:
+        has_medium_confidence = any(
+            coef.get("confidence") == "medium" for coef in hourly_results.values()
+        )
+        if has_high_confidence:
+            data.weather_correlation_confidence = "high"
+        elif has_medium_confidence:
             data.weather_correlation_confidence = "medium"
 
         # Issue #681: Weather anomaly detection for rollback protection
@@ -72,9 +74,10 @@ class WeatherDiagnosticsEngine:
             data.weather_anomaly_weight = 1.0
 
         _LOGGER.debug(
-            "Weather diagnostics: samples=%d, cooling=%.4f, heating=%.4f, confidence=%s",
+            "Weather diagnostics: samples=%d, cooling=%.4f, heating=%.4f, r2=%.3f, confidence=%s",
             data.weather_sample_count,
-            data.weather_cooling_coefficient,
-            data.weather_heating_coefficient,
+            data.weather_avg_cooling_slope,
+            data.weather_avg_heating_slope,
+            data.weather_avg_r_squared,
             data.weather_correlation_confidence,
         )
