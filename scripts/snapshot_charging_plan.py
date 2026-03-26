@@ -585,10 +585,13 @@ class SnapshotGenerator:
             "sensor.localshift_forecast_diagnostics", "weather_sample_count", 0
         )
         cooling = self.attr(
-            "sensor.localshift_forecast_diagnostics", "weather_cooling_coefficient", 0
+            "sensor.localshift_forecast_diagnostics", "weather_avg_cooling_slope", 0
         )
         heating = self.attr(
-            "sensor.localshift_forecast_diagnostics", "weather_heating_coefficient", 0
+            "sensor.localshift_forecast_diagnostics", "weather_avg_heating_slope", 0
+        )
+        r_squared = self.attr(
+            "sensor.localshift_forecast_diagnostics", "weather_avg_r_squared", 0
         )
         adjustment = self.attr(
             "sensor.localshift_forecast_diagnostics",
@@ -607,8 +610,9 @@ class SnapshotGenerator:
 | **Learning Enabled** | {learning} |
 | **Confidence** | {confidence} |
 | **Total Samples** | {samples} |
-| **Cooling Coefficient** | {cooling} kW/°C |
-| **Heating Coefficient** | {heating} kW/°C |
+| **Cooling Slope** | {cooling} kW/°C |
+| **Heating Slope** | {heating} kW/°C |
+| **Average R²** | {r_squared} |
 | **Adjustment Applied** | {adjustment} |"""
 
     def _system_info(self) -> str:

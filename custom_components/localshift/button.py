@@ -122,6 +122,15 @@ class ResetLearningDataButton(LocalShiftButtonBase):
             tracker._completed_decisions.clear()
             await tracker.async_save()
 
+        computation_engine = getattr(self.coordinator, "_computation_engine", None)
+        weather_correlation = None
+        if computation_engine is not None:
+            engine_dict = getattr(computation_engine, "__dict__", {})
+            if "_weather_correlation" in engine_dict:
+                weather_correlation = engine_dict["_weather_correlation"]
+        if weather_correlation is not None:
+            await weather_correlation.async_reset()
+
         # Reset learning status
         self.coordinator.data.learning_status = "observing"
 

@@ -549,8 +549,9 @@ class TestForecastDiagnosticsSensor:
             weather_correlation_confidence="high",
             weather_adjustment_applied=True,
             weather_learning_enabled=True,
-            weather_cooling_coefficient=0.05,
-            weather_heating_coefficient=0.03,
+            weather_avg_cooling_slope=0.05,
+            weather_avg_heating_slope=0.03,
+            weather_avg_r_squared=0.42,
             weather_sample_count=100,
             load_forecast_slots=[0.5] * 96,
             adaptive_params=AdaptiveParameters(values={"cheap_price_percentile": 0.25}),
@@ -564,6 +565,9 @@ class TestForecastDiagnosticsSensor:
         assert attrs["consumption_statistic_id"] == "sensor.energy"
         assert attrs["consumption_profile_hours"] == 168
         assert attrs["allow_export"] == "yes"
+        assert attrs["weather_avg_cooling_slope"] == 0.05
+        assert attrs["weather_avg_heating_slope"] == 0.03
+        assert attrs["weather_avg_r_squared"] == 0.42
 
     def test_extra_state_attributes_none_adaptive_params(self):
         """Test extra_state_attributes handles None adaptive_params."""

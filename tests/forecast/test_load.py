@@ -258,16 +258,12 @@ class TestLoadForecasterExponentialDecay:
         assert "NO_LOAD_DATA" in caplog.text
 
     def test_weather_correlation_applied(self, mock_weather_correlation):
-        """Test weather correlation adjustment when confidence is high.
-
-        When temperature is provided and weather correlation has high confidence,
-        should apply temperature-based adjustment.
-        """
+        """Test weather correlation adjustment when confidence is high."""
         mock_entry = _create_mock_entry()
         mock_weather_correlation.get_coefficients_for_hour.return_value = MagicMock(
             confidence="high"
         )
-        mock_weather_correlation.predict_load.return_value = (0.75, "weather_adjusted")
+        mock_weather_correlation.predict_load.return_value = (0.75, "weather_heating")
 
         forecaster = LoadForecaster(
             mock_entry, weather_correlation=mock_weather_correlation
@@ -283,7 +279,7 @@ class TestLoadForecasterExponentialDecay:
             temperature=25.0,
         )
 
-        assert source == "weather_adjusted"
+        assert source == "weather_heating"
         assert kw == 0.75
 
     def test_weather_correlation_skipped_low_confidence(self, mock_weather_correlation):
@@ -525,6 +521,26 @@ class TestLoadForecasterExponentialDecay:
         assert abs(kw - round(expected, 3)) < 0.001
         assert source == "blended_live"
 
+    def test_weather_correlation_weather_none_keeps_base_load(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="high")
+        weather.predict_load.return_value = (0.6, "weather_none")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 0.5},
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=0.45,
+            recent_load_kw=0.5,
+            temperature=22.0,
+        )
+
+        expected = 0.3 * 0.45 + 0.7 * 0.5
+        assert abs(kw - round(expected, 3)) < 0.001
+        assert source == "blended_live"
+
 
 @pytest.fixture
 def mock_weather_correlation():
@@ -558,7 +574,7 @@ class TestWeatherAdjustmentTracking:
         mock_entry = _create_mock_entry()
         weather = MagicMock()
         weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
-        weather.predict_load.return_value = (1.5, "weather_adjusted")
+        weather.predict_load.return_value = (1.5, "weather_heating")
 
         forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
         forecaster.reset_weather_adjustment_applied()
@@ -629,6 +645,26 @@ class TestWeatherAdjustmentTracking:
             current_load_kw=0.5,
             recent_load_kw=0.6,
             temperature=30.0,
+        )
+
+        assert forecaster.get_weather_adjustment_applied() is False
+
+    def test_weather_adjustment_flag_not_set_for_weather_none(self):
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
+        weather.predict_load.return_value = (0.99, "weather_none")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        forecaster.reset_weather_adjustment_applied()
+
+        forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={11: 1.0},
+            slot_hour=11,
+            current_hour=10,
+            current_load_kw=0.5,
+            recent_load_kw=0.6,
+            temperature=21.0,
         )
 
         assert forecaster.get_weather_adjustment_applied() is False

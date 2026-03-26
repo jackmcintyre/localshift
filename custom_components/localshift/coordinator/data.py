@@ -357,12 +357,9 @@ class CoordinatorData:
     weather_correlation_confidence: str = "low"  # low/medium/high
     weather_adjustment_applied: bool = False  # Whether weather adjustment was used
     weather_learning_enabled: bool = True  # Whether learning is enabled
-    weather_cooling_coefficient: float = (
-        0.0  # Learned kW per °C above cooling threshold
-    )
-    weather_heating_coefficient: float = (
-        0.0  # Learned kW per °C below heating threshold
-    )
+    weather_avg_cooling_slope: float = 0.0  # Average kW per °C above cooling threshold
+    weather_avg_heating_slope: float = 0.0  # Average kW per °C below heating threshold
+    weather_avg_r_squared: float = 0.0  # Average regression fit quality
     weather_sample_count: int = 0  # Number of samples used for learning
     weather_anomaly_weight: float = 1.0  # Issue #681: Weight for rollback evaluation
 

@@ -858,9 +858,11 @@ views:
 
               Total Samples: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_sample_count') | default(0) }}
 
-              Cooling Coefficient: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_cooling_coefficient') | default(0) }} kW/°C
+              Cooling Slope: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_avg_cooling_slope') | default(0) }} kW/°C
 
-              Heating Coefficient: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_heating_coefficient') | default(0) }} kW/°C
+              Heating Slope: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_avg_heating_slope') | default(0) }} kW/°C
+
+              Average R²: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_avg_r_squared') | default(0) }}
 
               Adjustment Applied: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_adjustment_applied') | default(false) }}
 

@@ -41,9 +41,10 @@ class TestWeatherDiagnosticsAnomalyPopulation:
         corr = MagicMock()
         corr.get_diagnostics.return_value = {
             "total_samples": 0,
-            "average_cooling_coefficient": 0.0,
-            "average_heating_coefficient": 0.0,
-            "hourly_coefficients": {},
+            "average_cooling_slope": 0.0,
+            "average_heating_slope": 0.0,
+            "average_r_squared": 0.0,
+            "hourly_regression": {},
         }
         return corr
 
@@ -131,3 +132,22 @@ class TestWeatherDiagnosticsAnomalyPopulation:
         data = CoordinatorData()
         engine.populate_weather_diagnostics(data, mock_weather_correlation)
         mock_weather_correlation.detect_weather_anomaly.assert_called_once_with(18.0)
+
+    def test_populates_average_slopes_and_r_squared(
+        self, mock_entry_enabled, mock_weather_correlation
+    ):
+        mock_weather_correlation.get_diagnostics.return_value = {
+            "total_samples": 42,
+            "average_cooling_slope": 0.18,
+            "average_heating_slope": 0.25,
+            "average_r_squared": 0.35,
+            "hourly_regression": {},
+        }
+        engine = WeatherDiagnosticsEngine(mock_entry_enabled)
+        data = CoordinatorData()
+
+        engine.populate_weather_diagnostics(data, mock_weather_correlation)
+
+        assert data.weather_avg_cooling_slope == pytest.approx(0.18)
+        assert data.weather_avg_heating_slope == pytest.approx(0.25)
+        assert data.weather_avg_r_squared == pytest.approx(0.35)

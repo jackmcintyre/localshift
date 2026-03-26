@@ -198,7 +198,9 @@ custom_components/localshift/
 │
 ├── learning/                 # Adaptive learning system
 │   ├── orchestrator.py       # Learning system coordinator
-│   └── correlation.py        # Weather correlation engine
+│   ├── correlation.py        # Weather correlation regression + storage facade
+│   ├── temperature.py        # Weather forecast fetching/parsing/caching
+│   └── anomaly.py            # Weather anomaly detection
 │
 ├── services/                 # Core services
 │   ├── evaluation_dispatcher.py # Decides when to trigger re-evaluation
