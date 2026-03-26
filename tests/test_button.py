@@ -219,6 +219,30 @@ class TestResetLearningDataButton:
 
         weather_correlation.async_reset.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_async_press_calls_weather_correlation_reset_via_property(
+        self, mock_coordinator, mock_entry
+    ):
+        """Test reset uses computation engine property access when available."""
+
+        class _EngineWithProperty:
+            def __init__(self, corr):
+                self._corr = corr
+
+            @property
+            def weather_correlation(self):
+                return self._corr
+
+        mock_coordinator.decision_tracker = None
+        weather_correlation = MagicMock()
+        weather_correlation.async_reset = AsyncMock()
+        mock_coordinator._computation_engine = _EngineWithProperty(weather_correlation)
+
+        button = ResetLearningDataButton(mock_coordinator, mock_entry)
+        await button.async_press()
+
+        weather_correlation.async_reset.assert_awaited_once()
+
 
 class TestAsyncSetupEntry:
     """Tests for async_setup_entry."""

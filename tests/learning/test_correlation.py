@@ -15,7 +15,6 @@ from custom_components.localshift.const import (
 import custom_components.localshift.learning.correlation as correlation_module
 from custom_components.localshift.learning.correlation import (
     DailySnapshot,
-    HourlyTemperatureCoefficients,
     HourlyRegressionData,
     HourlyRegressionResult,
     WeatherCorrelation,
@@ -38,20 +37,6 @@ def _linear_stats(n: int, slope: float) -> ZoneStats:
         sum_xy=float(sum_xy),
         sum_yy=float(sum_yy),
     )
-
-
-class TestHourlyTemperatureCoefficients:
-    def test_roundtrip(self):
-        coef = HourlyTemperatureCoefficients(
-            base_load_kw=1.1,
-            cooling_coefficient=0.2,
-            heating_coefficient=0.3,
-            sample_count=4,
-            last_updated="2026-03-26T10:00:00",
-            confidence="medium",
-        )
-        restored = HourlyTemperatureCoefficients.from_dict(coef.to_dict())
-        assert restored == coef
 
 
 class TestZoneStats:
@@ -153,6 +138,10 @@ class TestWeatherCorrelationData:
         data.temperature_history["2024-01-01"] = 22.0
         restored = WeatherCorrelationData.from_dict(data.to_dict())
         assert restored.temperature_history == {"2024-01-01": 22.0}
+
+    def test_no_hourly_coefficients_field(self):
+        data = WeatherCorrelationData()
+        assert not hasattr(data, "hourly_coefficients")
 
 
 class TestAsyncInitialize:
@@ -439,7 +428,7 @@ class TestMigrationAndReset:
             snap.date_key for snap in correlation._data.daily_regression_stats[8]
         ]
         assert "2026-02-23" not in remaining
-        assert "2026-02-24" in remaining
+        assert "2026-02-24" not in remaining
         assert "2026-03-25" in remaining
 
     def test_prune_daily_snapshots_removes_empty_hours(self, correlation):

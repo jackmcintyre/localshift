@@ -72,51 +72,6 @@ MAX_LOAD_MULTIPLIER = 3.0
 SLIDING_WINDOW_DAYS = 30
 
 
-@dataclass
-class HourlyTemperatureCoefficients:
-    """Temperature sensitivity coefficients for a single hour.
-
-    Attributes:
-        base_load_kw: Minimum load at mild temperatures (18-24°C band)
-        cooling_coefficient: Additional kW per degree above cooling threshold
-        heating_coefficient: Additional kW per degree below heating threshold
-        sample_count: Number of data points used for learning
-        last_updated: When coefficients were last recalculated
-        confidence: low/medium/high based on sample count
-
-    """
-
-    base_load_kw: float = 0.0
-    cooling_coefficient: float = 0.0  # kW per °C above cooling threshold
-    heating_coefficient: float = 0.0  # kW per °C below heating threshold
-    sample_count: int = 0
-    last_updated: str = ""  # ISO format datetime
-    confidence: str = "low"
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for storage."""
-        return {
-            "base_load_kw": self.base_load_kw,
-            "cooling_coefficient": self.cooling_coefficient,
-            "heating_coefficient": self.heating_coefficient,
-            "sample_count": self.sample_count,
-            "last_updated": self.last_updated,
-            "confidence": self.confidence,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> HourlyTemperatureCoefficients:
-        """Create from dictionary."""
-        return cls(
-            base_load_kw=data.get("base_load_kw", 0.0),
-            cooling_coefficient=data.get("cooling_coefficient", 0.0),
-            heating_coefficient=data.get("heating_coefficient", 0.0),
-            sample_count=data.get("sample_count", 0),
-            last_updated=data.get("last_updated", ""),
-            confidence=data.get("confidence", "low"),
-        )
-
-
 @dataclass(slots=True)
 class ZoneStats:
     """Sufficient statistics for regression fitting."""
@@ -255,7 +210,6 @@ class WeatherCorrelationData:
         weather_entity_id: Configured weather entity
         cooling_threshold: Temperature above which cooling load increases
         heating_threshold: Temperature below which heating load increases
-        hourly_coefficients: Dict mapping hour (0-23) to coefficients
         learning_stats: Aggregated statistics for diagnostics
 
     """
@@ -264,9 +218,6 @@ class WeatherCorrelationData:
     weather_entity_id: str = ""
     cooling_threshold: float = 24.0  # °C
     heating_threshold: float = 18.0  # °C
-    hourly_coefficients: dict[int, HourlyTemperatureCoefficients] = field(
-        default_factory=dict
-    )
     daily_regression_stats: dict[int, list[DailySnapshot]] = field(default_factory=dict)
     learning_stats: dict[str, Any] = field(default_factory=dict)
     temperature_history: dict[str, float] = field(
@@ -302,7 +253,6 @@ class WeatherCorrelationData:
                 weather_entity_id=data.get("weather_entity_id", ""),
                 cooling_threshold=data.get("cooling_threshold", 24.0),
                 heating_threshold=data.get("heating_threshold", 18.0),
-                hourly_coefficients={},
                 daily_regression_stats={},
                 learning_stats=data.get("learning_stats", {}),
                 temperature_history=data.get("temperature_history", {}),
@@ -320,7 +270,6 @@ class WeatherCorrelationData:
             weather_entity_id=data.get("weather_entity_id", ""),
             cooling_threshold=data.get("cooling_threshold", 24.0),
             heating_threshold=data.get("heating_threshold", 18.0),
-            hourly_coefficients={},
             daily_regression_stats=daily_regression_stats,
             learning_stats=data.get("learning_stats", {}),
             temperature_history=data.get("temperature_history", {}),  # Issue #681
@@ -726,7 +675,7 @@ class WeatherCorrelation:
             hour: Hour of day (0-23)
 
         Returns:
-            HourlyTemperatureCoefficients or None if not available
+            HourlyRegressionResult or None if not available
 
         """
         if not (0 <= hour <= 23):
@@ -787,7 +736,7 @@ class WeatherCorrelation:
         """Prune snapshots older than the 30-day sliding window."""
         if now is None:
             now = dt_util.now()
-        cutoff_date = (now.date() - timedelta(days=SLIDING_WINDOW_DAYS)).isoformat()
+        cutoff_date = (now.date() - timedelta(days=SLIDING_WINDOW_DAYS - 1)).isoformat()
         for hour, snapshots in list(self._data.daily_regression_stats.items()):
             kept = [
                 snapshot for snapshot in snapshots if snapshot.date_key >= cutoff_date

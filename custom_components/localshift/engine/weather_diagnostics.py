@@ -53,11 +53,15 @@ class WeatherDiagnosticsEngine:
         data.weather_avg_r_squared = diagnostics.get("average_r_squared", 0.0)
 
         hourly_results = diagnostics.get("hourly_regression", {})
-        has_medium_confidence = any(
-            coef.get("confidence") in ("medium", "high")
-            for coef in hourly_results.values()
+        has_high_confidence = any(
+            coef.get("confidence") == "high" for coef in hourly_results.values()
         )
-        if has_medium_confidence:
+        has_medium_confidence = any(
+            coef.get("confidence") == "medium" for coef in hourly_results.values()
+        )
+        if has_high_confidence:
+            data.weather_correlation_confidence = "high"
+        elif has_medium_confidence:
             data.weather_correlation_confidence = "medium"
 
         # Issue #681: Weather anomaly detection for rollback protection
