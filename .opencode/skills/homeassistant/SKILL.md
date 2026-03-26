@@ -10,11 +10,28 @@ metadata:
 
 ## What I Do
 
-I am the **sole gateway** to Home Assistant. I have exclusive access to Home Assistant MCP tools via ha-mcp. The main agent must delegate any HA operation to me using `@homeassistant`.
+I am the **gateway to Home Assistant** for complex operations. I have exclusive access to Home Assistant MCP tools via ha-mcp. The main agent must delegate any HA operation to me using `@homeassistant`.
+
+## CLI vs MCP: When to Use Which
+
+**Use `hass-cli` (homeassistant-cli skill) for:**
+- Read-only entity state queries
+- Listing/searching entities
+- History and statistics lookups
+- Quick data checks
+
+**Use MCP (this skill) for:**
+- Device control (turn on/off)
+- Service calls
+- Configuration changes
+- Automation/script management
+- Any write operation
+
+**Rule:** If you just need to read data, use CLI. If you need to change anything, use MCP.
 
 ## When to Use Me
 
-Any time you need to interact with Home Assistant:
+Any time you need to **interact with or modify** Home Assistant:
 - "What's the current battery state?"
 - "Turn on the kitchen lights"
 - "Check HA logs for errors"
