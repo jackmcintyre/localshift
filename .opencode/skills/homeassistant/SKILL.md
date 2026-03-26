@@ -34,6 +34,38 @@ This is not conditional. Call tools directly when needed.
 
 ---
 
+## Fallback Protocol (CRITICAL)
+
+**For read operations, follow this exact sequence:**
+
+1. **Try CLI first** - Use `hass-cli` commands
+2. **If CLI fails** - Immediately try MCP: `homeassistant_GetLiveContext()` and extract the entity from the response
+3. **If both fail** - STOP. Do not try anything else. Report failure to user with the error details.
+
+```
+# Example fallback for getting entity state
+# Step 1: CLI
+result = bash("HASS_SERVER=... hass-cli state get sensor.battery")
+
+# Step 2: If CLI failed, try MCP
+if CLI_failed:
+    context = homeassistant_GetLiveContext()
+    # Extract entity from context.states
+    
+# Step 3: If MCP also failed, STOP and report
+if MCP_failed:
+    report("Failed to get entity state. CLI error: [X], MCP error: [Y]")
+    DO NOT try any other approach
+```
+
+**DO NOT:**
+- Try more than 2 approaches
+- Guess or assume entity states
+- Continue with stale/cached data
+- Silently ignore failures
+
+---
+
 ## CLI Commands (Preferred for Read Operations)
 
 ### Prerequisites
