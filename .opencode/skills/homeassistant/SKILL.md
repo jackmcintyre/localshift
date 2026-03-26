@@ -10,11 +10,13 @@ metadata:
 
 ## Tool Access - READ THIS FIRST
 
-**You HAVE full access to:**
-- `bash` tool - for hass-cli commands (read operations)
-- All `homeassistant_*` MCP tools - for write operations
+**You have access to:**
+- `bash` tool - for hass-cli commands (read operations) - always available
 
-This is not conditional. Call tools directly when needed.
+**You MAY have access to (check your tool list):**
+- `homeassistant_*` MCP tools - for write operations
+
+**Before any write operation:** Look at the tools available to you. If `homeassistant_HassTurnOn` is NOT in that list, you CANNOT perform writes. Report this immediately - do NOT attempt the call.
 
 ## Decision Matrix: CLI vs MCP
 
@@ -36,7 +38,7 @@ This is not conditional. Call tools directly when needed.
 
 ## Fallback Protocol (CRITICAL)
 
-**For read operations, follow this exact sequence:**
+### Read Operations
 
 1. **Try CLI first** - Use `hass-cli` commands
 2. **If CLI fails** - Immediately try MCP: `homeassistant_GetLiveContext()` and extract the entity from the response
@@ -58,11 +60,43 @@ if MCP_failed:
     DO NOT try any other approach
 ```
 
+### Write Operations
+
+**CRITICAL: MCP tools may not be available in your session. Check FIRST.**
+
+1. **LOOK at your available tools** - Do you see `homeassistant_HassTurnOn` in the tool list provided to you?
+2. **If NO** → STOP immediately. Output exactly:
+   ```
+   ❌ MCP tools not available. Enable Home Assistant MCP integration.
+   
+   Cannot perform write operation. Awaiting user guidance.
+   ```
+   Do NOT attempt to invoke any homeassistant_* tool - it will fail silently.
+3. **If YES** → Proceed with MCP call
+4. **Wait for actual result** - Do NOT report success until you see a success response
+5. **DO NOT** attempt CLI workarounds for writes
+
+```
+# CORRECT workflow:
+# 1. Check your tool list - is homeassistant_HassTurnOn there?
+# 2. If missing: STOP, report error, wait for user
+# 3. If present: Call the tool
+# 4. Wait for response (not just <invoke> XML)
+# 5. Report result based on actual response
+
+# WRONG: Seeing <invoke> XML and reporting success
+# That XML shows what you TRIED, not what HAPPENED
+```
+
 **DO NOT:**
-- Try more than 2 approaches
+- Try more than 2 approaches for reads
+- Try any alternative for writes if MCP fails
 - Guess or assume entity states
 - Continue with stale/cached data
 - Silently ignore failures
+- Abort without reporting the specific error to the user
+- Report success without seeing an actual success result
+- Assume a tool invocation = success (wait for the response)
 
 ---
 
