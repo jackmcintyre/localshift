@@ -14,6 +14,7 @@ The optimizer assumes fixed grid and boost charge rates (3.3 kW / 5.0 kW). In pr
 - Integrate learned rates into the optimizer at its slot cadence so planning reflects real charge slowdowns.
 - Keep defaults as fallback when learning is disabled or data is insufficient.
 - Replace the blunt 80% boost cap with learned tapering behavior.
+- Allow configurable telemetry entity IDs and power sign override (no new entities).
 
 ## Non-Goals
 
@@ -57,6 +58,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - For each slot, compute the effective charge rate from the SOC-dependent curve (cap at 10 kW).
 - Planner behavior remains unchanged except it now uses realistic charging rates and naturally stops planning boost “too late.”
 - If learning is disabled or insufficient data, fall back to defaults (3.3/5.0 kW) and preserve current behavior.
+- Keep existing float fields as defaults; curve fields are optional and only used when valid.
 - Do not add a hard SOC cap for boost; rely on learned tapering and physical rate limits only.
 
 ## PLANNING_MODEL Alignment
@@ -64,7 +66,6 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 | Feature | Classification | Implementation |
 |---------|----------------|----------------|
 | SOC-dependent charge rate | Physical model | SOC transition / charge simulator |
-| Remove 80% boost cap | Hard constraint removal | `feasible_actions()` gate removal |
 | Charge timing preference | Soft preference | Unchanged; still in `stage_cost()` if present |
 
 ## Robustness and Learning Status
@@ -77,7 +78,13 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 
 - Introduce a dedicated charge-rate learner component in the existing learning pipeline (e.g., `ChargeRateLearner` alongside `PatternAnalyzer`).
 - Store learned curves and diagnostics in the learning storage under a new key, e.g. `localshift.charge_rate_curves.{entry_id}` (separate from adaptive scalar parameters).
+- Integrate into `LearningOrchestrator` lifecycle (load, update on medium tick, persist on save).
 - Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows. Slots without a charge action are ignored.
+- Labeling rules:
+  - If decision action is `CHARGE_GRID_BOOST`, classify as boost.
+  - If decision action is `CHARGE_GRID_NORMAL`, classify as normal.
+  - Otherwise skip the slot.
+- If a decision record is missing for a slot, skip it (do not infer from telemetry alone).
 - Minimum samples per regime (normal/boost) before activating learned curves (e.g., 50+ per regime).
 - Surface diagnostics via existing learning sensors (sample count, last update, confidence, active/disabled).
 
@@ -91,7 +98,8 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Use HA history helpers (recorder/statistics) rather than raw HTTP; fail gracefully on missing history.
 - Update cadence: recompute curves once per day (or on existing medium tick) to avoid heavy recomputation per cycle.
 - If history is unavailable or incomplete, skip update and keep the last good curve (or defaults if none).
- - If either power or SOC history is missing, skip update and log diagnostics.
+- If either power or SOC history is missing, skip update and log diagnostics.
+- If configured entity IDs change, invalidate curves and re-learn from history.
 
 ## Power Sign Convention
 
@@ -104,7 +112,23 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Use SOC bins (e.g., 0-100% in 5% steps) and piecewise linear interpolation between bins.
 - Clamp outputs to 0-10 kW, and interpolate only within covered SOC; extrapolate to nearest bin at edges.
 - Track per-bin sample counts to compute confidence and detect sparse regions.
- - Optionally apply monotonic smoothing (non-increasing with SOC) to avoid noisy spikes at high SOC.
+- Optionally apply monotonic smoothing (non-increasing with SOC) to avoid noisy spikes at high SOC.
+
+ChargeRateCurve interface (example):
+
+```python
+class ChargeRateCurve:
+    def rate_at_soc(self, soc_pct: float) -> float: ...
+    @property
+    def sample_count(self) -> int: ...
+    @property
+    def confidence(self) -> float: ...
+```
+
+Confidence definition (example):
+
+- `confidence = min(1.0, sample_count / min_samples) * (1.0 - normalized_mad)`
+- `normalized_mad` is median absolute deviation of residuals, scaled to 0-1
 
 ## Multi-Battery Considerations
 
@@ -134,6 +158,7 @@ Update the Home Assistant access guidance to:
 12. HA history failure test: skip update and preserve last good curve.
 13. Learning disabled toggle test: curves persist but are not applied while disabled.
 14. Partial history test: power present but SOC missing (and vice versa) -> no update.
+15. Config change test: entity ID change invalidates curves and re-learns.
 
 ## Risks and Mitigations
 
