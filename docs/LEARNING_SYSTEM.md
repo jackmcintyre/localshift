@@ -13,6 +13,7 @@ The learning system operates in the background, observing your battery's behavio
 - **Parameter Optimization**: Adjusts decision thresholds based on outcomes
 - **Pattern Recognition**: Identifies systematic issues (e.g., over-charging on cloudy days)
 - **Multi-Objective Balance**: Balances cost minimization, export avoidance, and target achievement
+- **Charge-Rate Learning**: Models SOC-dependent grid charge rates from historical telemetry
 
 ## How It Works
 
@@ -205,6 +206,28 @@ Clears decision tracking data and weather regression statistics, then restarts t
 
 **Warning:** This resets decision history and weather regression stats. Parameter optimizer and pattern analysis data are not reset by this button yet.
 
+## Charge-Rate Learning
+
+The learning system also models **SOC-dependent grid charge rates** to better reflect real
+charging taper at higher SOC.
+
+Key behaviors:
+
+- **Telemetry source**: Home Assistant recorder history for battery power (kW) and SOC (%).
+- **Curves**: Builds SOC→kW curves for **normal** and **boost** grid charging.
+- **Confidence**: Uses sample count and dispersion (normalized MAD) to compute a confidence score.
+- **Fallbacks**: If learning is disabled or samples are insufficient, defaults to 3.3kW/5kW.
+- **Power sign calibration**: Auto-detects charge sign using SOC deltas; override via option.
+- **Diagnostics**: Tracks labeled sample ratio, missing history, mismatches, and staleness.
+
+### Config Options
+
+Charge-rate learning uses these configurable inputs (options flow):
+
+- Battery power entity ID
+- Battery SOC entity ID
+- Power sign override (`auto`, `positive`, `negative`)
+
 ## FAQ
 
 ### How long before the system starts optimizing?
@@ -285,6 +308,7 @@ Learning data is stored under these keys (scoped to entry ID):
 | `localshift.param_optimizer.{entry_id}` | Optimizer state |
 | `localshift.pattern_analysis.{entry_id}` | Pattern data |
 | `localshift.opt_controller.{entry_id}` | Controller weights |
+| `localshift.charge_rate_curves.{entry_id}` | SOC-dependent charge-rate curves |
 
 ### Optimization Safety Rails
 

@@ -379,6 +379,7 @@ The adaptive learning system adjusts optimizer parameters:
 - **Outcomes**: Tracks decisions and backfills results
 - **Pattern Analysis**: Detects weekly systematic biases
 - **Safety Rails**: Warm-up period, step limits, bounds, rollback
+- **Charge-Rate Learning**: Builds SOC-dependent grid-charge curves from HA history
 
 See [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) for details.
 

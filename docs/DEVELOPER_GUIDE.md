@@ -201,6 +201,14 @@ Config flow is in `config_flow/__init__.py`:
 - Initial setup: 3 steps (user, entity mapping, settings)
 - Options flow: 2 steps (entity_mappings, settings)
 
+Charge-rate learning options are configured in the entity-mappings step:
+- Battery power entity ID
+- Battery SOC entity ID
+- Power sign override (`auto`, `positive`, `negative`)
+
+When these options change, invalidate stored charge-rate curves through the
+coordinator so updated entities/options are used on the next learning run.
+
 ## Key Sensors
 
 Important sensors for debugging:
