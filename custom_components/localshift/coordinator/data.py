@@ -402,6 +402,9 @@ class CoordinatorData:
     )  # last 24h of decisions for sensor
     learning_status: str = "observing"  # "observing", "tuning", "optimizing"
     battery_target_soc: float = 80.0  # Configured battery target for decision scoring
+    learning_enabled: bool = False  # Switch-controlled learning state
+    charge_rate_curves: dict[str, Any] = field(default_factory=dict)
+    charge_rate_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     # --- Adaptive parameters (Issue #170 Phase 2) ---
     adaptive_params: AdaptiveParameters = field(default_factory=AdaptiveParameters)

@@ -447,8 +447,8 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 # Move to settings step
                 return await self.async_step_settings()
 
-        # Get current entity mappings from data
-        current = self.config_entry.data
+        # Get current entity mappings from data (or preserve user input on errors)
+        current = user_input if user_input is not None else self.config_entry.data
 
         # Fetch available services for schema building
         notify_services = await get_notify_services(self.hass)

@@ -1117,3 +1117,30 @@ def test_entity_mappings_schema_prefers_localshift_defaults(
 
     assert defaults[CONF_TESLEMETRY_BATTERY_POWER] == "sensor.localshift_battery_power"
     assert defaults[CONF_TESLEMETRY_SOC] == "sensor.localshift_battery_percent"
+
+
+@pytest.mark.asyncio
+async def test_entity_mappings_schema_preserves_user_input_on_error(
+    mock_hass, mock_config_entry
+):
+    """Keep override values when entity validation fails."""
+    flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+    flow.hass = mock_hass
+
+    mock_hass.states.get.return_value = None
+    user_input = {
+        CONF_TESLEMETRY_BATTERY_POWER: "sensor.missing",
+        CONF_TESLEMETRY_SOC: "sensor.missing_soc",
+        CONF_POWER_SIGN_OVERRIDE: "positive",
+    }
+
+    result = await flow.async_step_entity_mappings(user_input)
+
+    schema = result["data_schema"]
+    defaults = {
+        key.schema: (key.default() if callable(key.default) else key.default)
+        for key in schema.schema.keys()
+        if hasattr(key, "schema")
+    }
+
+    assert defaults[CONF_POWER_SIGN_OVERRIDE] == "positive"

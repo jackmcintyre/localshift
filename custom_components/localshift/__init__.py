@@ -57,6 +57,6 @@ async def _async_options_updated(
     # Reset entity tracking for any changed entities (e.g., weather_entity)
     # This clears broken status and allows recovery without restart
     coordinator.reset_entity_tracking_on_options_change()
-    coordinator.invalidate_charge_rate_curves()
+    await coordinator.async_invalidate_charge_rate_curves()
     await coordinator.async_recompute_and_evaluate()
     _LOGGER.info("LocalShift options updated, re-evaluating")

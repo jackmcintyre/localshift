@@ -213,14 +213,18 @@ class LocalShiftCoordinator:
 
     def invalidate_charge_rate_curves(self) -> None:
         """Clear learned charge rate curves after config changes."""
+        self.hass.async_create_task(
+            self.async_invalidate_charge_rate_curves(),
+            "localshift_invalidate_charge_rate_curves",
+        )
+
+    async def async_invalidate_charge_rate_curves(self) -> None:
+        """Clear learned charge rate curves and await persistence."""
         if self._learning_orchestrator is None:
             return
         self.data.charge_rate_curves = {}
         self.data.charge_rate_diagnostics = {}
-        self.hass.async_create_task(
-            self._learning_orchestrator.async_invalidate_charge_rate_curves(),
-            "localshift_invalidate_charge_rate_curves",
-        )
+        await self._learning_orchestrator.async_invalidate_charge_rate_curves()
 
     # ------------------------------------------------------------------
     # Switch state bridge
