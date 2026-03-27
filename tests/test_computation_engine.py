@@ -1,11 +1,12 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.localshift.computation_engine import BatteryMode
+from custom_components.localshift.const import CONF_WEATHER_LEARNING_ENABLED
 
 
 @pytest.mark.parametrize(
@@ -343,6 +344,546 @@ class TestAccuracyMetricsPersistence:
         await computation_engine.async_save_accuracy_metrics(coordinator_data)
 
         store_mock.async_save.assert_awaited_once_with(coordinator_data)
+
+
+class TestComputationEngineDelegations:
+    def test_forecast_profile_selected_weekend(
+        self, computation_engine, coordinator_data
+    ):
+        """Weekday/weekend profile should select weekend on Saturday."""
+        computation_engine._history_fetcher.get_weekday_profile = MagicMock(
+            return_value=({}, {})
+        )
+        computation_engine._history_fetcher.get_weekend_profile = MagicMock(
+            return_value=({}, {})
+        )
+        computation_engine._history_fetcher.get_profile_source = MagicMock(
+            return_value="weekday_weekend"
+        )
+        computation_engine._history_fetcher._historical_load_cache = {}
+        computation_engine._history_fetcher._historical_load_sample_counts = {}
+        computation_engine._history_fetcher._historical_load_source = "weekday_weekend"
+        computation_engine._history_fetcher._recent_load_1hr_kw = 0.0
+        computation_engine._history_fetcher._recent_load_1hr_statistic_id = "stat"
+        computation_engine._history_fetcher._recent_load_1hr_samples = 0
+        computation_engine._history_fetcher._recent_load_1hr_last_error = ""
+        computation_engine._forecast_pipeline.compute_load_forecast_slots = MagicMock()
+        computation_engine._forecast_pipeline.compute_solar_battery_forecast = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_solar_weighted_avg_fit = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_excess_solar_signals = MagicMock()
+        computation_engine._price_signals.compute_effective_cheap_price = MagicMock()
+        computation_engine._price_signals.scan_forecast_for_spike = MagicMock(
+            return_value=False
+        )
+        computation_engine._price_signals.max_forecast_price = MagicMock(
+            return_value=0.0
+        )
+        computation_engine._price_signals.analyze_spike = MagicMock()
+        computation_engine._optimizer_facade.run_inline = MagicMock(
+            side_effect=lambda data, **kwargs: setattr(data, "optimizer_decisions", [])
+        )
+        coordinator_data.consumption_profile_type = "weekday_weekend"
+        coordinator_data.effective_cheap_price = 0.1
+        coordinator_data.general_forecast = []
+        coordinator_data.feed_in_forecast = []
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.soc = 50.0
+
+        saturday = datetime(2026, 2, 14, 10, 0, 0)
+        with patch("homeassistant.util.dt.now", return_value=saturday):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.forecast_profile_selected == "weekend"
+
+    def test_forecast_profile_selected_combined(
+        self, computation_engine, coordinator_data
+    ):
+        """Non weekday/weekend profile should pass through."""
+        computation_engine._history_fetcher.get_weekday_profile = MagicMock(
+            return_value=({}, {})
+        )
+        computation_engine._history_fetcher.get_weekend_profile = MagicMock(
+            return_value=({}, {})
+        )
+        computation_engine._history_fetcher.get_profile_source = MagicMock(
+            return_value="combined"
+        )
+        computation_engine._history_fetcher._historical_load_cache = {}
+        computation_engine._history_fetcher._historical_load_sample_counts = {}
+        computation_engine._history_fetcher._historical_load_source = "combined"
+        computation_engine._history_fetcher._recent_load_1hr_kw = 0.0
+        computation_engine._history_fetcher._recent_load_1hr_statistic_id = "stat"
+        computation_engine._history_fetcher._recent_load_1hr_samples = 0
+        computation_engine._history_fetcher._recent_load_1hr_last_error = ""
+        computation_engine._forecast_pipeline.compute_load_forecast_slots = MagicMock()
+        computation_engine._forecast_pipeline.compute_solar_battery_forecast = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_solar_weighted_avg_fit = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_excess_solar_signals = MagicMock()
+        computation_engine._price_signals.compute_effective_cheap_price = MagicMock()
+        computation_engine._price_signals.scan_forecast_for_spike = MagicMock(
+            return_value=False
+        )
+        computation_engine._price_signals.max_forecast_price = MagicMock(
+            return_value=0.0
+        )
+        computation_engine._price_signals.analyze_spike = MagicMock()
+        computation_engine._optimizer_facade.run_inline = MagicMock(
+            side_effect=lambda data, **kwargs: setattr(data, "optimizer_decisions", [])
+        )
+        coordinator_data.consumption_profile_type = "combined"
+        coordinator_data.effective_cheap_price = 0.1
+        coordinator_data.general_forecast = []
+        coordinator_data.feed_in_forecast = []
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.soc = 50.0
+
+        with patch(
+            "homeassistant.util.dt.now", return_value=datetime(2026, 2, 12, 10, 0, 0)
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.forecast_profile_selected == "combined"
+
+    def test_decision_log_skips_when_unpopulated(
+        self, computation_engine, coordinator_data
+    ):
+        """Decision log should skip when sensor data is still zeroed."""
+        computation_engine._forecast_pipeline.compute_load_forecast_slots = MagicMock()
+        computation_engine._forecast_pipeline.compute_solar_battery_forecast = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_solar_weighted_avg_fit = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_excess_solar_signals = MagicMock()
+        computation_engine._price_signals.compute_effective_cheap_price = MagicMock()
+        computation_engine._price_signals.scan_forecast_for_spike = MagicMock(
+            return_value=False
+        )
+        computation_engine._price_signals.max_forecast_price = MagicMock(
+            return_value=0.0
+        )
+        computation_engine._price_signals.analyze_spike = MagicMock()
+        computation_engine._optimizer_facade.run_inline = MagicMock(
+            side_effect=lambda data, **kwargs: setattr(data, "optimizer_decisions", [])
+        )
+        coordinator_data.general_price = 0.0
+        coordinator_data.feed_in_price = 0.0
+        coordinator_data.soc = 0.0
+        coordinator_data.decision_log = []
+
+        with patch(
+            "homeassistant.util.dt.now", return_value=datetime(2026, 2, 12, 10, 0, 0)
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.decision_log == []
+
+    def test_decision_log_periodic_update(self, computation_engine, coordinator_data):
+        """Decision log should append on periodic update."""
+        computation_engine._forecast_pipeline.compute_load_forecast_slots = MagicMock()
+        computation_engine._forecast_pipeline.compute_solar_battery_forecast = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_solar_weighted_avg_fit = (
+            MagicMock()
+        )
+        computation_engine._forecast_pipeline.compute_excess_solar_signals = MagicMock()
+        computation_engine._price_signals.compute_effective_cheap_price = MagicMock()
+        computation_engine._price_signals.scan_forecast_for_spike = MagicMock(
+            return_value=False
+        )
+        computation_engine._price_signals.max_forecast_price = MagicMock(
+            return_value=0.0
+        )
+        computation_engine._price_signals.analyze_spike = MagicMock()
+        computation_engine._optimizer_facade.run_inline = MagicMock(
+            side_effect=lambda data, **kwargs: setattr(data, "optimizer_decisions", [])
+        )
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.soc = 50.0
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.decision_log = []
+        computation_engine._previous_active_mode = BatteryMode.SELF_CONSUMPTION
+        computation_engine._last_decision_log_time = datetime(2026, 2, 12, 9, 50, 0)
+
+        with patch(
+            "homeassistant.util.dt.now", return_value=datetime(2026, 2, 12, 10, 0, 0)
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert len(coordinator_data.decision_log) == 1
+
+    def test_add_to_decision_log_trims(self, computation_engine, coordinator_data):
+        """Decision log should retain the most recent 50 entries."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.soc = 50.0
+        coordinator_data.decision_log = [{"timestamp": str(i)} for i in range(55)]
+
+        computation_engine._add_to_decision_log(
+            coordinator_data, datetime(2026, 2, 12, 10, 0, 0), mode_change=False
+        )
+
+        assert len(coordinator_data.decision_log) == 50
+
+    def test_parse_time_option_invalid_falls_back(self, computation_engine):
+        """Invalid time strings should fall back to defaults."""
+        computation_engine.entry.options["invalid_time"] = "bad"
+
+        parsed = computation_engine._parse_time_option("invalid_time", "18:00:00")
+
+        assert parsed == time(18, 0, 0)
+
+    def test_compute_solar_battery_forecast_delegates(
+        self, computation_engine, coordinator_data
+    ):
+        """Solar battery forecast wrapper should pass target_pct to pipeline."""
+        computation_engine.entry.options["battery_target"] = 77.0
+        computation_engine._forecast_pipeline.compute_solar_battery_forecast = (
+            MagicMock()
+        )
+
+        computation_engine._compute_solar_battery_forecast(
+            coordinator_data,
+            datetime(2026, 2, 12, 10, 0, 0),
+            target_hour=18,
+            before_dw=True,
+            after_dw=False,
+        )
+
+        computation_engine._forecast_pipeline.compute_solar_battery_forecast.assert_called_once()
+        _, kwargs = (
+            computation_engine._forecast_pipeline.compute_solar_battery_forecast.call_args
+        )
+        assert kwargs["target_pct"] == 77.0
+
+    def test_compute_load_forecast_slots_delegates(
+        self, computation_engine, coordinator_data
+    ):
+        """Load forecast slots wrapper should call pipeline."""
+        computation_engine._forecast_pipeline.compute_load_forecast_slots = MagicMock()
+
+        computation_engine._compute_load_forecast_slots(
+            coordinator_data,
+            datetime(2026, 2, 12, 10, 0, 0),
+            historical_avg_kw={10: 0.5},
+            recent_load_kw=0.6,
+        )
+
+        computation_engine._forecast_pipeline.compute_load_forecast_slots.assert_called_once()
+
+    def test_compute_effective_cheap_price_wrappers(
+        self, computation_engine, coordinator_data
+    ):
+        """Effective cheap price wrappers should call price signals."""
+        computation_engine._price_signals.compute_effective_cheap_price_preliminary = (
+            MagicMock()
+        )
+        computation_engine._price_signals.compute_effective_cheap_price = MagicMock()
+
+        computation_engine._compute_effective_cheap_price_preliminary(
+            coordinator_data,
+            datetime(2026, 2, 12, 10, 0, 0),
+            before_dw=True,
+            target_hour=18,
+            target_pct=80.0,
+        )
+        computation_engine._compute_effective_cheap_price(
+            coordinator_data,
+            datetime(2026, 2, 12, 10, 0, 0),
+            before_dw=True,
+            target_hour=18,
+        )
+
+        computation_engine._price_signals.compute_effective_cheap_price_preliminary.assert_called_once()
+        computation_engine._price_signals.compute_effective_cheap_price.assert_called_once()
+
+    def test_history_fetcher_properties(self, computation_engine):
+        """History fetcher properties should expose cached values."""
+        computation_engine._history_fetcher._historical_load_cache = {1: 0.2}
+        computation_engine._history_fetcher._historical_load_sample_counts = {1: 3}
+        computation_engine._history_fetcher._historical_load_source = "weekday"
+        computation_engine._history_fetcher._recent_load_1hr_kw = 0.4
+        computation_engine._history_fetcher._recent_load_1hr_statistic_id = "stat_id"
+        computation_engine._history_fetcher._recent_load_1hr_samples = 7
+        computation_engine._history_fetcher._recent_load_1hr_last_error = ""
+
+        assert computation_engine._historical_load_cache == {1: 0.2}
+        assert computation_engine._historical_load_sample_counts == {1: 3}
+        assert computation_engine._historical_load_source == "weekday"
+        assert computation_engine._recent_load_1hr_kw == 0.4
+        assert computation_engine._recent_load_1hr_statistic_id == "stat_id"
+        assert computation_engine._recent_load_1hr_samples == 7
+        assert computation_engine._recent_load_1hr_last_error == ""
+
+    def test_get_profile_for_day_delegates(self, computation_engine):
+        """Profile selection should delegate to history fetcher."""
+        computation_engine._history_fetcher.get_profile_for_day = MagicMock(
+            return_value=({1: 0.2}, {1: 3}, "weekday")
+        )
+        result = computation_engine._get_profile_for_day(datetime(2026, 2, 12))
+        assert result == ({1: 0.2}, {1: 3}, "weekday")
+
+    def test_helper_wrappers(self, computation_engine):
+        """Utility wrappers should return delegated values."""
+        with patch(
+            "custom_components.localshift.computation_engine.parse_forecast_dt",
+            return_value=datetime(2026, 2, 12, 10, 0, 0),
+        ) as mock_parse:
+            assert computation_engine._parse_forecast_dt("2026-02-12T10:00:00")
+            mock_parse.assert_called_once()
+
+        with patch(
+            "custom_components.localshift.computation_engine.sum_solar_before_target",
+            return_value=3.5,
+        ) as mock_sum:
+            assert (
+                computation_engine._sum_solar_before_target(
+                    [], datetime(2026, 2, 12), 18
+                )
+                == 3.5
+            )
+            mock_sum.assert_called_once()
+
+        with patch(
+            "custom_components.localshift.computation_engine.scan_forecast_for_spike",
+            return_value=True,
+        ) as mock_scan:
+            assert computation_engine._scan_forecast_for_spike(
+                [], datetime(2026, 2, 12), datetime(2026, 2, 12, 12, 0, 0)
+            )
+            mock_scan.assert_called_once()
+
+        with patch(
+            "custom_components.localshift.computation_engine.max_forecast_price",
+            return_value=0.42,
+        ) as mock_max:
+            assert (
+                computation_engine._max_forecast_price(
+                    [], datetime(2026, 2, 12), datetime(2026, 2, 12, 12, 0, 0)
+                )
+                == 0.42
+            )
+            mock_max.assert_called_once()
+
+        with patch(
+            "custom_components.localshift.computation_engine.percentile",
+            return_value=0.25,
+        ) as mock_percentile:
+            assert computation_engine._percentile([0.1, 0.2, 0.3], 50) == 0.25
+            mock_percentile.assert_called_once()
+
+    def test_clear_historical_cache_delegates(self, computation_engine):
+        """Historical cache clear should delegate to history fetcher."""
+        computation_engine._history_fetcher.clear_historical_cache = MagicMock()
+
+        computation_engine.clear_historical_cache()
+
+        computation_engine._history_fetcher.clear_historical_cache.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forecast_history_storage_delegates(
+        self, computation_engine, coordinator_data
+    ):
+        """Forecast history storage should delegate to store methods."""
+        store_mock = AsyncMock()
+        computation_engine._forecast_history_store = store_mock
+
+        await computation_engine.async_initialize_forecast_history_storage()
+        await computation_engine.async_load_forecast_history(coordinator_data)
+        await computation_engine.async_save_forecast_history(coordinator_data)
+
+        store_mock.async_initialize.assert_awaited_once()
+        store_mock.async_load.assert_awaited_once_with(coordinator_data)
+        store_mock.async_save.assert_awaited_once_with(coordinator_data)
+
+    @pytest.mark.asyncio
+    async def test_async_compute_forecast_accuracy(
+        self, computation_engine, coordinator_data
+    ):
+        """Forecast accuracy compute should delegate to engine."""
+        accuracy_mock = AsyncMock()
+        computation_engine._forecast_accuracy = accuracy_mock
+
+        await computation_engine.async_compute_forecast_accuracy(coordinator_data)
+
+        accuracy_mock.compute_forecast_accuracy.assert_awaited_once_with(
+            coordinator_data
+        )
+
+    def test_analyze_spike_delegates(self, computation_engine, coordinator_data):
+        """Spike analysis should delegate to price signals."""
+        computation_engine._price_signals.analyze_spike = MagicMock()
+
+        computation_engine._analyze_spike(
+            coordinator_data, datetime(2026, 2, 12, 10, 0, 0)
+        )
+
+        computation_engine._price_signals.analyze_spike.assert_called_once()
+
+    def test_compute_excess_solar_signals_delegates(
+        self, computation_engine, coordinator_data
+    ):
+        """Excess solar signal computation should delegate to forecast pipeline."""
+        computation_engine._forecast_pipeline.compute_excess_solar_signals = MagicMock()
+
+        computation_engine._compute_excess_solar_signals(
+            coordinator_data, datetime(2026, 2, 12, 10, 0, 0)
+        )
+
+        computation_engine._forecast_pipeline.compute_excess_solar_signals.assert_called_once()
+
+    def test_populate_weather_diagnostics_delegates(
+        self, computation_engine, coordinator_data
+    ):
+        """Weather diagnostics should delegate to diagnostics engine."""
+        computation_engine._weather_diagnostics.populate_weather_diagnostics = (
+            MagicMock()
+        )
+
+        computation_engine._populate_weather_diagnostics(coordinator_data)
+
+        computation_engine._weather_diagnostics.populate_weather_diagnostics.assert_called_once()
+
+
+class TestWeatherCorrelation:
+    @pytest.mark.asyncio
+    async def test_weather_correlation_init_disabled(self, computation_engine):
+        """Initialization should skip when learning disabled."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = False
+
+        with patch(
+            "custom_components.localshift.computation_engine.WeatherCorrelation"
+        ) as mock_wc:
+            await computation_engine.async_initialize_weather_correlation()
+
+        mock_wc.assert_not_called()
+        assert computation_engine.weather_correlation is None
+
+    @pytest.mark.asyncio
+    async def test_weather_correlation_init_success(self, computation_engine):
+        """Initialization should wire weather correlation on success."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_initialize = AsyncMock()
+        computation_engine._load_forecaster.set_weather_correlation = MagicMock()
+
+        with patch(
+            "custom_components.localshift.computation_engine.WeatherCorrelation",
+            return_value=wc_instance,
+        ):
+            await computation_engine.async_initialize_weather_correlation()
+
+        wc_instance.async_initialize.assert_awaited_once()
+        computation_engine._load_forecaster.set_weather_correlation.assert_called_once_with(
+            wc_instance
+        )
+        assert computation_engine.weather_correlation == wc_instance
+
+    @pytest.mark.asyncio
+    async def test_weather_correlation_init_failure(self, computation_engine):
+        """Initialization failures should reset correlation to None."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        computation_engine._load_forecaster.set_weather_correlation = MagicMock()
+
+        with patch(
+            "custom_components.localshift.computation_engine.WeatherCorrelation",
+            side_effect=Exception("boom"),
+        ):
+            await computation_engine.async_initialize_weather_correlation()
+
+        computation_engine._load_forecaster.set_weather_correlation.assert_called_once_with(
+            None
+        )
+        assert computation_engine.weather_correlation is None
+
+    @pytest.mark.asyncio
+    async def test_learn_weather_sample_skips_when_disabled(
+        self, computation_engine, coordinator_data
+    ):
+        """Learning should skip when disabled or correlation missing."""
+        computation_engine._weather_correlation = None
+        await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        computation_engine._weather_correlation = MagicMock()
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = False
+        await computation_engine.async_learn_weather_sample(coordinator_data)
+
+    @pytest.mark.asyncio
+    async def test_learn_weather_sample_skips_invalid_values(
+        self, computation_engine, coordinator_data
+    ):
+        """Learning should skip invalid temperature or load."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        computation_engine._weather_correlation = MagicMock()
+        coordinator_data.weather_temperature_current = 0.0
+        coordinator_data.load_power_kw = 1.0
+
+        await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        coordinator_data.weather_temperature_current = 10.0
+        coordinator_data.load_power_kw = 0.0
+
+        await computation_engine.async_learn_weather_sample(coordinator_data)
+
+    @pytest.mark.asyncio
+    async def test_learn_weather_sample_saves_hourly(
+        self, computation_engine, coordinator_data
+    ):
+        """Learning should record samples and save once per hour."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_save = AsyncMock()
+        computation_engine._weather_correlation = wc_instance
+        coordinator_data.weather_temperature_current = 22.0
+        coordinator_data.load_power_kw = 1.5
+        computation_engine._last_weather_save_hour = 9
+
+        with patch(
+            "homeassistant.util.dt.now", return_value=datetime(2026, 2, 12, 10, 0, 0)
+        ):
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_called_once()
+        wc_instance.async_save.assert_awaited_once()
+        assert computation_engine._last_weather_save_hour == 10
+
+    @pytest.mark.asyncio
+    async def test_refresh_weather_forecast_branches(self, computation_engine):
+        """Forecast refresh should handle None, disabled, success, and errors."""
+        computation_engine._weather_correlation = None
+        assert await computation_engine.async_refresh_weather_forecast() is None
+
+        computation_engine._weather_correlation = MagicMock()
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = False
+        assert await computation_engine.async_refresh_weather_forecast() is None
+
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_get_temperature_forecast = AsyncMock(return_value=["f"])
+        computation_engine._weather_correlation = wc_instance
+
+        assert await computation_engine.async_refresh_weather_forecast() == ["f"]
+
+        wc_instance.async_get_temperature_forecast = AsyncMock(
+            side_effect=Exception("boom")
+        )
+        assert await computation_engine.async_refresh_weather_forecast() is None
 
 
 # =============================================================================
