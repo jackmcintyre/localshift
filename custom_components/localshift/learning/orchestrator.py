@@ -58,6 +58,7 @@ class LearningOrchestrator:
             key=f"localshift.forecast_corrections.{self._entry_id}",
         )
         self._counterfactual_evaluator: CounterfactualEvaluator | None = None
+        self._last_charge_rate_attempt: datetime | None = None
         self.charge_rate_learner: ChargeRateLearner | None = None
 
     async def async_initialize(self) -> None:
@@ -299,6 +300,10 @@ class LearningOrchestrator:
         if self._last_charge_rate_update is not None:
             if now - self._last_charge_rate_update < timedelta(days=1):
                 return
+        if self._last_charge_rate_attempt is not None:
+            if now - self._last_charge_rate_attempt < timedelta(hours=1):
+                return
+        self._last_charge_rate_attempt = now
         self.hass.async_create_task(
             self._async_update_charge_rate(data),
             "localshift_charge_rate_update",

@@ -17,31 +17,14 @@ from custom_components.localshift.learning.charge_rate import (
 )
 
 
-def _build_slot_history(
-    start: datetime,
-    slot_minutes: int,
-    power_values: list[float],
-    soc_start: float = 20.0,
-    soc_step: float = 0.2,
-) -> tuple[list[tuple[datetime, float]], list[tuple[datetime, float]]]:
-    power_history: list[tuple[datetime, float]] = []
-    soc_history: list[tuple[datetime, float]] = []
-    slot_delta = timedelta(minutes=slot_minutes)
-    for index, power in enumerate(power_values):
-        slot_start = start + index * slot_delta
-        power_time = slot_start + slot_delta / 2
-        soc_time = slot_start + slot_delta
-        power_history.append((power_time, float(power)))
-        soc_history.append((soc_time, soc_start + soc_step * (index + 1)))
-    return power_history, soc_history
-
-
 @pytest.mark.asyncio
-async def test_charge_rate_learner_persists_curves(storage, history, decisions):
+async def test_charge_rate_learner_persists_curves(
+    storage, history, decisions, monkeypatch
+):
     from custom_components.localshift.learning import charge_rate as charge_rate_module
 
     hass = MagicMock()
-    charge_rate_module.Store = MagicMock(return_value=storage)
+    monkeypatch.setattr(charge_rate_module, "Store", MagicMock(return_value=storage))
     learner = ChargeRateLearner(hass, entry_id="entry-1")
 
     learner.update_from_history(
@@ -86,7 +69,7 @@ def test_charge_rate_learner_skips_missing_decisions(history):
 
 
 @pytest.mark.asyncio
-async def test_charge_rate_learner_async_load_save(storage):
+async def test_charge_rate_learner_async_load_save(storage, monkeypatch):
     from custom_components.localshift.learning import charge_rate as charge_rate_module
 
     storage.async_load.return_value = {
@@ -104,7 +87,7 @@ async def test_charge_rate_learner_async_load_save(storage):
     }
 
     hass = MagicMock()
-    charge_rate_module.Store = MagicMock(return_value=storage)
+    monkeypatch.setattr(charge_rate_module, "Store", MagicMock(return_value=storage))
     learner = ChargeRateLearner(hass, entry_id="entry-4")
 
     await learner.async_load()
@@ -210,27 +193,24 @@ def test_charge_rate_learner_applies_monotonic_smoothing(history, decisions):
     )
 
 
-def test_charge_rate_learner_update_from_history_with_state_objects():
+def test_charge_rate_learner_update_from_history_with_state_objects(history):
     class State:
         def __init__(self, last_updated: datetime, state: float) -> None:
             self.last_updated = last_updated
             self.state = state
 
-    start = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
-    power_values = [3.0 for _ in range(60)]
-    power_history, soc_history = _build_slot_history(
-        start, 15, power_values, soc_start=30.0, soc_step=0.2
-    )
-
-    power_states = [State(ts, value) for ts, value in power_history]
-    soc_states = [State(ts, value) for ts, value in soc_history]
-    decisions = [
-        SimpleNamespace(
-            timestamp=start + timedelta(minutes=15 * i + 1),
-            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+    power_states = [State(ts, value) for ts, value in history["power_history"]]
+    soc_states = [State(ts, value) for ts, value in history["soc_history"]]
+    slot_minutes = history["slot_minutes"]
+    decisions = []
+    for index in range(len(power_states)):
+        decisions.append(
+            SimpleNamespace(
+                timestamp=history["start"]
+                + timedelta(minutes=slot_minutes * index + 1),
+                mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            )
         )
-        for i in range(len(power_states))
-    ]
 
     learner = ChargeRateLearner(MagicMock(), entry_id="entry-12")
     learner.update_from_history(power_states, soc_states, decisions)
