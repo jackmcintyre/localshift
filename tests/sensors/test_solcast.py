@@ -6,7 +6,7 @@ analysis attribute data.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -20,6 +20,20 @@ from custom_components.localshift.sensors.solcast import (
     SolcastConfidenceTodaySensor,
     SolcastConfidenceTomorrowSensor,
 )
+
+
+def _next_hour(ts: datetime) -> datetime:
+    """Return timestamp one hour after input, including day rollover."""
+    return ts + timedelta(hours=1)
+
+
+def test_next_hour_handles_midnight_rollover():
+    """One-hour increment should roll over date at midnight."""
+    ts = datetime(2026, 3, 27, 23, 30, 0)
+
+    result = _next_hour(ts)
+
+    assert result == datetime(2026, 3, 28, 0, 30, 0)
 
 
 @pytest.fixture
@@ -45,7 +59,7 @@ def coordinator_with_analysis():
                 confidence=0.8,
             ),
             ConfidenceInterval(
-                period_start=now.replace(hour=now.hour + 1),
+                period_start=_next_hour(now),
                 spread_kwh=0.6,
                 confidence=0.7,
             ),

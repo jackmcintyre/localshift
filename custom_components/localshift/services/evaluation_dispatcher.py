@@ -7,9 +7,10 @@ from collections.abc import Callable, Coroutine
 from datetime import datetime
 from typing import Any
 
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 
-from ..const import CONF_PRICING_GENERAL_PRICE
+from ..const import CONF_PRICING_GENERAL_PRICE, STATE_CHANGE_COALESCE_SECONDS
 from ..forecast.load_deviation import LoadDeviationDetector
 from ..forecast.solar_events import SolarEventDetector
 
@@ -38,6 +39,8 @@ class EvaluationDispatcher:
         self._stale_price_threshold = stale_price_threshold
         self._load_deviation_detector = LoadDeviationDetector()
         self._solar_event_detector = SolarEventDetector()
+        self._coalesce_unsub: CALLBACK_TYPE | None = None
+        self._coalesce_count = 0
 
     @callback
     def on_state_change(self, _event: Event) -> None:
@@ -51,11 +54,56 @@ class EvaluationDispatcher:
 
         self._read_state()
         self._notify_listeners()
+        self._schedule_coalesced_evaluation()
 
+    @callback
+    def _schedule_coalesced_evaluation(self) -> None:
+        """Schedule or reschedule coalesced evaluation."""
+        if self._coalesce_unsub is not None:
+            self._coalesce_unsub()
+
+        self._coalesce_count += 1
+        self._coalesce_unsub = async_call_later(
+            self.hass,
+            STATE_CHANGE_COALESCE_SECONDS,
+            self._on_coalesce_timer_expired,
+        )
+
+    @callback
+    def _on_coalesce_timer_expired(self, _now: datetime) -> None:
+        """Run evaluation after the coalesce window has settled."""
+        coalesced_changes = self._coalesce_count
+        self._coalesce_count = 0
+        self._coalesce_unsub = None
+
+        if self._state_machine is None:
+            return
+
+        if self._state_machine.in_mode_transition:
+            _LOGGER.debug(
+                "Skipping coalesced re-evaluation during mode transition (%d coalesced changes)",
+                coalesced_changes,
+            )
+            return
+
+        _LOGGER.debug(
+            "Dispatching coalesced state-change evaluation (%d coalesced changes)",
+            coalesced_changes,
+        )
         self.hass.async_create_task(
             self._evaluate_state_machine(),
-            "localshift_evaluate_state_change",
+            "localshift_evaluate_coalesced",
         )
+
+    @callback
+    def cancel_pending_coalesce(self) -> None:
+        """Cancel any pending coalesced evaluation timer."""
+        if self._coalesce_unsub is None:
+            return
+
+        self._coalesce_unsub()
+        self._coalesce_unsub = None
+        self._coalesce_count = 0
 
     @callback
     def on_fast_tick(self, _now: datetime) -> bool:

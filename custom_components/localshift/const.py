@@ -532,6 +532,9 @@ STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
 # Prevents false positives when Tesla API is still propagating state changes.
 STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
 
+# Coalesce entity state changes before running expensive reevaluation.
+STATE_CHANGE_COALESCE_SECONDS = 15
+
 # -----------------------------------------------------------------------------
 # Proactive Export Constants
 # -----------------------------------------------------------------------------
