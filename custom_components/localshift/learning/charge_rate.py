@@ -50,10 +50,14 @@ class ChargeRateCurve:
                 sorted_bins, sorted_bins[1:], strict=False
             ):
                 if lower_soc <= clamped_soc <= upper_soc:
-                    fraction = (clamped_soc - lower_soc) / (upper_soc - lower_soc)
-                    rate = float(lower_rate) + fraction * (
-                        float(upper_rate) - float(lower_rate)
-                    )
+                    span = upper_soc - lower_soc
+                    if span == 0:
+                        rate = float(lower_rate)
+                    else:
+                        fraction = (clamped_soc - lower_soc) / span
+                        rate = float(lower_rate) + fraction * (
+                            float(upper_rate) - float(lower_rate)
+                        )
                     break
 
         return max(0.0, min(rate, CHARGE_RATE_MAX_KW))
@@ -65,4 +69,5 @@ class ChargeRateCurve:
             base = 1.0
         else:
             base = min(1.0, self.sample_count / self.min_samples)
-        return base * max(0.0, 1.0 - self.normalized_mad)
+        confidence = base * max(0.0, 1.0 - self.normalized_mad)
+        return max(0.0, min(1.0, confidence))
