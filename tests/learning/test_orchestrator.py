@@ -168,6 +168,22 @@ class TestOrchestratorChargeRateLearning:
 
         orchestrator.hass.async_create_task.assert_not_called()
 
+    def test_schedule_charge_rate_update_allows_after_backoff(self, monkeypatch):
+        orchestrator = _make_orchestrator()
+        orchestrator.decision_tracker = MagicMock()
+        orchestrator.charge_rate_learner = MagicMock()
+        now = datetime(2024, 1, 1)
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: now,
+        )
+        orchestrator._last_charge_rate_attempt = now - timedelta(minutes=10)
+
+        data = CoordinatorData()
+        orchestrator._schedule_charge_rate_update(data)
+
+        orchestrator.hass.async_create_task.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_orchestrator_updates_charge_rate_curves(self):
         from custom_components.localshift.learning.orchestrator import (
@@ -178,8 +194,9 @@ class TestOrchestratorChargeRateLearning:
         scheduled: list = []
 
         def _capture_task(coro, _name=None):
-            scheduled.append(coro)
-            return MagicMock()
+            task = asyncio.create_task(coro)
+            scheduled.append(task)
+            return task
 
         hass.async_create_task = _capture_task
 
@@ -219,11 +236,7 @@ class TestOrchestratorChargeRateLearning:
         orchestrator.update_medium_tick(data)
 
         assert scheduled
-        await scheduled[0]
-
-        for task in scheduled[1:]:
-            if asyncio.iscoroutine(task):
-                await task
+        await asyncio.gather(*scheduled)
 
         assert data.learning_enabled is True
         assert data.charge_rate_curves["normal"] is curve_normal
@@ -245,11 +258,13 @@ class TestOrchestratorChargeRateLearning:
         learner = MagicMock()
         learner.async_fetch_history = AsyncMock(return_value=([], []))
         orchestrator.charge_rate_learner = learner
+        orchestrator._last_charge_rate_attempt = datetime(2024, 1, 1)
 
         data = CoordinatorData()
         await orchestrator._async_update_charge_rate(data)
 
         assert orchestrator._last_charge_rate_update is None
+        assert orchestrator._last_charge_rate_attempt is not None
 
     @pytest.mark.asyncio
     async def test_async_update_charge_rate_skips_when_no_curves(self):
