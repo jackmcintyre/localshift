@@ -299,7 +299,6 @@ class LearningOrchestrator:
         if self._last_charge_rate_update is not None:
             if now - self._last_charge_rate_update < timedelta(days=1):
                 return
-        self._last_charge_rate_update = now
         self.hass.async_create_task(
             self._async_update_charge_rate(data),
             "localshift_charge_rate_update",
@@ -325,12 +324,19 @@ class LearningOrchestrator:
         if not updated:
             return
 
+        curve_normal = self.charge_rate_learner.get_curve("normal")
+        curve_boost = self.charge_rate_learner.get_curve("boost")
+        if curve_normal is None and curve_boost is None:
+            return
+
         data.charge_rate_curves = {
-            "normal": self.charge_rate_learner.get_curve("normal"),
-            "boost": self.charge_rate_learner.get_curve("boost"),
+            "normal": curve_normal,
+            "boost": curve_boost,
         }
         data.charge_rate_diagnostics = self.charge_rate_learner.diagnostics
         data.learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
+
+        self._last_charge_rate_update = dt_util.now() or datetime.now()
 
         self.hass.async_create_task(
             self.charge_rate_learner.async_save(),

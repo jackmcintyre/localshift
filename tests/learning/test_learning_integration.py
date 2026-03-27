@@ -260,6 +260,10 @@ class TestLearningOrchestratorForecastCorrections:
                 "custom_components.localshift.engine.optimization_controller.OptimizationController",
                 MagicMock(return_value=self._component()),
             )
+            monkeypatch.setattr(
+                "custom_components.localshift.learning.orchestrator.ChargeRateLearner",
+                MagicMock(return_value=self._component()),
+            )
 
             orchestrator = LearningOrchestrator(
                 mock_hass,
@@ -304,6 +308,10 @@ class TestLearningOrchestratorForecastCorrections:
             )
             monkeypatch.setattr(
                 "custom_components.localshift.engine.optimization_controller.OptimizationController",
+                MagicMock(return_value=self._component()),
+            )
+            monkeypatch.setattr(
+                "custom_components.localshift.learning.orchestrator.ChargeRateLearner",
                 MagicMock(return_value=self._component()),
             )
 
@@ -576,3 +584,26 @@ class TestLearningOrchestratorForecastCorrections:
         await orchestrator._run_pattern_analysis(data)
 
         assert data.learning_status == "observing"
+
+    @pytest.mark.asyncio
+    async def test_run_pattern_analysis_sets_tuning_for_mid_sample_report(
+        self, mock_hass, mock_entry
+    ):
+        orchestrator = LearningOrchestrator(mock_hass, mock_entry, lambda _key: False)
+
+        report = MagicMock()
+        report.get_summary.return_value = {"summary": 3}
+        report.biases_detected = []
+        report.data_points_analyzed = 60
+
+        orchestrator.decision_tracker = MagicMock(
+            get_recent_decisions=MagicMock(return_value=[1] * 60)
+        )
+        orchestrator.pattern_analyzer = MagicMock(
+            analyze=MagicMock(return_value=report)
+        )
+
+        data = CoordinatorData()
+        await orchestrator._run_pattern_analysis(data)
+
+        assert data.learning_status == "tuning"
