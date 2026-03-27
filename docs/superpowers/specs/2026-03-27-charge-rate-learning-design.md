@@ -73,6 +73,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Minimum sample threshold before activating learned curves; otherwise use defaults.
 - Record diagnostics: sample count, last update, fit error/confidence.
 - Expose learning status so it is clear if updates are “stuck” or disabled.
+- Mark curves stale if no updates for 7+ days; surface warning in diagnostics.
 
 ## Learning System Integration
 
@@ -104,7 +105,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 ## Power Sign Convention
 
 - Battery power sign can vary by system. Derive charging direction by comparing power sign with SOC delta over a short calibration window.
-- If power sign and SOC delta disagree consistently, invert the sign for learning.
+- If power sign and SOC delta disagree for >3 consecutive slots, invert the sign for learning.
 - Allow an explicit override in config options if automatic detection fails.
 
 ## Curve Representation
@@ -113,6 +114,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Clamp outputs to 0-10 kW, and interpolate only within covered SOC; extrapolate to nearest bin at edges.
 - Track per-bin sample counts to compute confidence and detect sparse regions.
 - Optionally apply monotonic smoothing (non-increasing with SOC) to avoid noisy spikes at high SOC.
+- The curve represents grid power draw (kW). Transition code continues to apply `charge_efficiency` to convert grid power into stored energy.
 
 ChargeRateCurve interface (example):
 
@@ -129,6 +131,12 @@ Confidence definition (example):
 
 - `confidence = min(1.0, sample_count / min_samples) * (1.0 - normalized_mad)`
 - `normalized_mad` is median absolute deviation of residuals, scaled to 0-1
+
+## Lifecycle and Persistence
+
+- On startup, load curves from `localshift.charge_rate_curves.{entry_id}`; if missing or invalid, fall back to defaults.
+- Persist curves and diagnostics after recomputation, include a schema version for migration.
+- On config entry option changes (entity IDs or power sign override), invalidate curves and re-learn.
 
 ## Multi-Battery Considerations
 
@@ -159,6 +167,11 @@ Update the Home Assistant access guidance to:
 13. Learning disabled toggle test: curves persist but are not applied while disabled.
 14. Partial history test: power present but SOC missing (and vice versa) -> no update.
 15. Config change test: entity ID change invalidates curves and re-learns.
+16. charge_efficiency test: ensure curve represents grid power and efficiency is applied once.
+17. Power sign calibration failure test: auto-detect fails after N attempts and requires override.
+18. Dual-history failure test: power and SOC history both unavailable -> no update.
+19. Monotonic smoothing test: curve enforces non-increasing rate at higher SOC.
+20. Config entry recreation test: curves invalidated and defaults applied.
 
 ## Risks and Mitigations
 
