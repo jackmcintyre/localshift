@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..const import CHARGE_RATE_MAX_KW, CHARGE_RATE_MIN_SAMPLES
 
@@ -13,6 +13,10 @@ class ChargeRateCurve:
     sample_count: int
     normalized_mad: float
     min_samples: int
+    _sorted_bins: tuple[tuple[int, float], ...] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._sorted_bins = tuple(sorted(self.bins.items()))
 
     @classmethod
     def from_bins(
@@ -32,11 +36,11 @@ class ChargeRateCurve:
 
     def rate_at_soc(self, soc_pct: float) -> float:
         """Return interpolated charge rate at SOC percentage."""
-        if not self.bins:
+        if not self._sorted_bins:
             return 0.0
 
         clamped_soc = max(0.0, min(100.0, soc_pct))
-        sorted_bins = sorted(self.bins.items())
+        sorted_bins = self._sorted_bins
         min_soc, min_rate = sorted_bins[0]
         max_soc, max_rate = sorted_bins[-1]
 
