@@ -161,7 +161,7 @@ class TestOrchestratorChargeRateLearning:
             "custom_components.localshift.learning.orchestrator.dt_util.now",
             lambda: now,
         )
-        orchestrator._last_charge_rate_attempt = now - timedelta(minutes=30)
+        orchestrator._last_charge_rate_attempt = now - timedelta(minutes=5)
 
         data = CoordinatorData()
         orchestrator._schedule_charge_rate_update(data)

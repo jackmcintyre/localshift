@@ -301,7 +301,7 @@ class LearningOrchestrator:
             if now - self._last_charge_rate_update < timedelta(days=1):
                 return
         if self._last_charge_rate_attempt is not None:
-            if now - self._last_charge_rate_attempt < timedelta(hours=1):
+            if now - self._last_charge_rate_attempt < timedelta(minutes=10):
                 return
         self._last_charge_rate_attempt = now
         self.hass.async_create_task(
@@ -319,7 +319,6 @@ class LearningOrchestrator:
             soc_history,
         ) = await self.charge_rate_learner.async_fetch_history()
         if not power_history or not soc_history:
-            self._last_charge_rate_attempt = None
             return
 
         updated = self.charge_rate_learner.update_from_history(
@@ -328,13 +327,11 @@ class LearningOrchestrator:
             decisions,
         )
         if not updated:
-            self._last_charge_rate_attempt = None
             return
 
         curve_normal = self.charge_rate_learner.get_curve("normal")
         curve_boost = self.charge_rate_learner.get_curve("boost")
         if curve_normal is None and curve_boost is None:
-            self._last_charge_rate_attempt = None
             return
 
         data.charge_rate_curves = {
