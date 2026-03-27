@@ -1083,3 +1083,37 @@ def test_entity_mappings_schema_includes_charge_rate_options(
     assert CONF_TESLEMETRY_BATTERY_POWER in field_keys
     assert CONF_TESLEMETRY_SOC in field_keys
     assert CONF_POWER_SIGN_OVERRIDE in field_keys
+
+
+def test_entity_mappings_schema_prefers_localshift_defaults(
+    mock_hass, mock_config_entry
+):
+    """Prefer LocalShift battery sensors when available."""
+    mock_hass.states.get = MagicMock(
+        side_effect=lambda entity_id: (
+            create_mock_state(
+                entity_id,
+                "1",
+                "sensor",
+            )
+            if entity_id
+            in (
+                "sensor.localshift_battery_power",
+                "sensor.localshift_battery_percent",
+            )
+            else None
+        )
+    )
+    flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+    flow.hass = mock_hass
+
+    schema = flow._build_entity_mappings_schema({}, [], [])
+    defaults = {}
+    for key in schema.schema.keys():
+        if not hasattr(key, "schema"):
+            continue
+        value = key.default
+        defaults[key.schema] = value() if callable(value) else value
+
+    assert defaults[CONF_TESLEMETRY_BATTERY_POWER] == "sensor.localshift_battery_power"
+    assert defaults[CONF_TESLEMETRY_SOC] == "sensor.localshift_battery_percent"
