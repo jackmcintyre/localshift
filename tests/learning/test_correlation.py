@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import custom_components.localshift.learning.correlation as correlation_module
 from custom_components.localshift.const import (
     CONF_COOLING_THRESHOLD,
     CONF_HEATING_THRESHOLD,
     CONF_WEATHER_ENTITY,
 )
-import custom_components.localshift.learning.correlation as correlation_module
 from custom_components.localshift.learning.correlation import (
     DailySnapshot,
     HourlyRegressionData,
@@ -381,6 +381,44 @@ class TestLearningAndPrediction:
 
 
 class TestMigrationAndReset:
+    @pytest.mark.asyncio
+    async def test_store_migration_callback_is_configured(self, mock_hass, mock_entry):
+        with patch(
+            "custom_components.localshift.learning.correlation.Store",
+        ):
+            correlation = WeatherCorrelation(mock_hass, mock_entry)
+
+        assert (
+            correlation._store._async_migrate_func
+            == correlation._async_migrate_store_data
+        )
+
+        migrated = await correlation._async_migrate_store_data(
+            1,
+            1,
+            {
+                "version": 1,
+                "weather_entity_id": "weather.home",
+                "hourly_coefficients": {"8": {"cooling_coefficient": 12.761}},
+                "learning_stats": {"note": "keep"},
+                "temperature_history": {"2026-03-25": 22.5},
+            },
+        )
+
+        assert migrated["version"] == correlation_module.STORAGE_VERSION
+        assert migrated["weather_entity_id"] == "weather.home"
+        assert migrated["daily_regression_stats"] == {}
+        assert migrated["learning_stats"] == {"note": "keep"}
+        assert migrated["temperature_history"] == {"2026-03-25": 22.5}
+
+    @pytest.mark.asyncio
+    async def test_store_migration_rejects_unknown_major_version(self, correlation):
+        with pytest.raises(
+            NotImplementedError,
+            match="Unsupported weather correlation storage version",
+        ):
+            await correlation._async_migrate_store_data(7, 1, {"version": 7})
+
     @pytest.mark.asyncio
     async def test_async_initialize_migrates_v1_storage_and_discards_hourly_coefficients(
         self, correlation, mock_weather_store
