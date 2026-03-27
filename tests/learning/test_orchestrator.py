@@ -11,6 +11,12 @@ from custom_components.localshift.coordinator.data import (
     CoordinatorData,
     PerformanceMetrics,
 )
+from custom_components.localshift.const import (
+    CONF_POWER_SIGN_OVERRIDE,
+    CONF_TESLEMETRY_BATTERY_POWER,
+    CONF_TESLEMETRY_SOC,
+    POWER_SIGN_POSITIVE,
+)
 
 
 def _make_orchestrator():
@@ -133,6 +139,120 @@ def test_attach_state_machine_sets_decision_tracker():
     orchestrator.attach_state_machine(state_machine)
 
     assert state_machine._decision_tracker is orchestrator.decision_tracker
+
+
+def test_attach_state_machine_skips_without_tracker():
+    orchestrator = _make_orchestrator()
+    orchestrator.decision_tracker = None
+    state_machine = MagicMock()
+    state_machine._decision_tracker = "sentinel"
+
+    orchestrator.attach_state_machine(state_machine)
+
+    assert state_machine._decision_tracker == "sentinel"
+
+
+@pytest.mark.asyncio
+async def test_async_save_forecast_corrections_skips_when_none():
+    orchestrator = _make_orchestrator()
+    orchestrator._forecast_corrections = None
+    orchestrator._forecast_corrections_store = AsyncMock()
+
+    await orchestrator._async_save_forecast_corrections()
+
+    orchestrator._forecast_corrections_store.async_save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_charge_rate_curves_no_learner():
+    orchestrator = _make_orchestrator()
+    orchestrator.charge_rate_learner = None
+
+    await orchestrator.async_invalidate_charge_rate_curves()
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_charge_rate_curves_configures_and_resets():
+    orchestrator = _make_orchestrator()
+    orchestrator.entry.data = {
+        CONF_TESLEMETRY_BATTERY_POWER: "sensor.battery_power",
+        CONF_TESLEMETRY_SOC: "sensor.soc",
+        CONF_POWER_SIGN_OVERRIDE: POWER_SIGN_POSITIVE,
+    }
+    learner = MagicMock()
+    learner.configure = MagicMock()
+    learner.async_invalidate = AsyncMock()
+    orchestrator.charge_rate_learner = learner
+    orchestrator._last_charge_rate_update = datetime.now(UTC)
+    orchestrator._last_charge_rate_attempt = datetime.now(UTC)
+
+    await orchestrator.async_invalidate_charge_rate_curves()
+
+    learner.configure.assert_called_once_with(
+        power_entity_id="sensor.battery_power",
+        soc_entity_id="sensor.soc",
+        power_sign_override=POWER_SIGN_POSITIVE,
+    )
+    learner.async_invalidate.assert_awaited_once()
+    assert orchestrator._last_charge_rate_update is None
+    assert orchestrator._last_charge_rate_attempt is None
+
+
+def test_handle_midnight_reset_schedules_pattern_analysis():
+    orchestrator = _make_orchestrator()
+    orchestrator.decision_tracker = MagicMock()
+    orchestrator.decision_tracker.async_save = AsyncMock()
+    orchestrator.param_optimizer = MagicMock()
+    orchestrator.param_optimizer.async_save = AsyncMock()
+    orchestrator.pattern_analyzer = MagicMock()
+    orchestrator.pattern_analyzer.async_save = AsyncMock()
+    orchestrator._days_since_pattern_analysis = 6
+
+    def _consume(coro, _name=None):
+        if hasattr(coro, "close"):
+            coro.close()
+        return MagicMock()
+
+    orchestrator.hass.async_create_task = MagicMock(side_effect=_consume)
+
+    data = CoordinatorData()
+    data.learning_status = "observing"
+
+    orchestrator.handle_midnight_reset(data)
+
+    assert orchestrator._days_since_pattern_analysis == 0
+    assert orchestrator.hass.async_create_task.call_count >= 3
+
+
+def test_get_pattern_analysis_interval_default():
+    orchestrator = _make_orchestrator()
+
+    assert orchestrator._get_pattern_analysis_interval("unknown") == 7
+
+
+@pytest.mark.asyncio
+async def test_run_pattern_analysis_skips_without_analyzer():
+    orchestrator = _make_orchestrator()
+    orchestrator.pattern_analyzer = None
+    orchestrator.decision_tracker = MagicMock()
+    orchestrator.decision_tracker.get_recent_decisions = MagicMock()
+
+    await orchestrator._run_pattern_analysis(CoordinatorData())
+
+    orchestrator.decision_tracker.get_recent_decisions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_pattern_analysis_skips_when_insufficient_decisions():
+    orchestrator = _make_orchestrator()
+    orchestrator.pattern_analyzer = MagicMock()
+    orchestrator.pattern_analyzer.analyze = MagicMock()
+    orchestrator.decision_tracker = MagicMock()
+    orchestrator.decision_tracker.get_recent_decisions = MagicMock(return_value=[1])
+
+    await orchestrator._run_pattern_analysis(CoordinatorData())
+
+    orchestrator.pattern_analyzer.analyze.assert_not_called()
 
 
 class TestOrchestratorChargeRateLearning:

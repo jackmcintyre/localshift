@@ -12,8 +12,10 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    CONF_POWER_SIGN_OVERRIDE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_SOC,
+    DEFAULT_POWER_SIGN_OVERRIDE,
     SWITCH_ENABLE_LEARNING,
 )
 from ..engine.counterfactual import CounterfactualEvaluator
@@ -61,6 +63,18 @@ class LearningOrchestrator:
         self._last_charge_rate_attempt: datetime | None = None
         self.charge_rate_learner: ChargeRateLearner | None = None
 
+    def _resolve_charge_rate_config(self) -> tuple[str, str, str]:
+        power_entity_id = self.entry.options.get(
+            CONF_TESLEMETRY_BATTERY_POWER, ""
+        ) or self.entry.data.get(CONF_TESLEMETRY_BATTERY_POWER, "")
+        soc_entity_id = self.entry.options.get(
+            CONF_TESLEMETRY_SOC, ""
+        ) or self.entry.data.get(CONF_TESLEMETRY_SOC, "")
+        power_sign_override = self.entry.options.get(
+            CONF_POWER_SIGN_OVERRIDE, ""
+        ) or self.entry.data.get(CONF_POWER_SIGN_OVERRIDE, DEFAULT_POWER_SIGN_OVERRIDE)
+        return power_entity_id, soc_entity_id, power_sign_override
+
     async def async_initialize(self) -> None:
         """Initialize learning components and load persisted state."""
         from ..engine.optimization_controller import (
@@ -76,17 +90,15 @@ class LearningOrchestrator:
         await decision_tracker.async_load()
         self.decision_tracker = decision_tracker
 
-        power_entity_id = self.entry.options.get(
-            CONF_TESLEMETRY_BATTERY_POWER, ""
-        ) or self.entry.data.get(CONF_TESLEMETRY_BATTERY_POWER, "")
-        soc_entity_id = self.entry.options.get(
-            CONF_TESLEMETRY_SOC, ""
-        ) or self.entry.data.get(CONF_TESLEMETRY_SOC, "")
+        power_entity_id, soc_entity_id, power_sign_override = (
+            self._resolve_charge_rate_config()
+        )
         charge_rate_learner = ChargeRateLearner(
             self.hass,
             self.entry.entry_id,
             power_entity_id=power_entity_id,
             soc_entity_id=soc_entity_id,
+            power_sign_override=power_sign_override,
         )
         await charge_rate_learner.async_load()
         self.charge_rate_learner = charge_rate_learner
@@ -239,6 +251,22 @@ class LearningOrchestrator:
                 self.pattern_analyzer.async_save(),
                 "localshift_save_pattern_analyzer",
             )
+
+    async def async_invalidate_charge_rate_curves(self) -> None:
+        """Clear persisted charge rate curves and refresh configuration."""
+        if self.charge_rate_learner is None:
+            return
+        power_entity_id, soc_entity_id, power_sign_override = (
+            self._resolve_charge_rate_config()
+        )
+        self.charge_rate_learner.configure(
+            power_entity_id=power_entity_id,
+            soc_entity_id=soc_entity_id,
+            power_sign_override=power_sign_override,
+        )
+        await self.charge_rate_learner.async_invalidate()
+        self._last_charge_rate_update = None
+        self._last_charge_rate_attempt = None
 
     def _get_pattern_analysis_interval(self, learning_status: str) -> int:
         return self._PATTERN_ANALYSIS_INTERVALS.get(learning_status, 7)

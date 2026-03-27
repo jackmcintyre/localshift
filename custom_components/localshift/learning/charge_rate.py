@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -15,6 +15,9 @@ from ..const import (
     CHARGE_RATE_MIN_SAMPLES,
     CHARGE_RATE_POWER_THRESHOLD_KW,
     CHARGE_RATE_SOC_BIN_STEP,
+    POWER_SIGN_AUTO,
+    POWER_SIGN_NEGATIVE,
+    POWER_SIGN_POSITIVE,
 )
 from ..engine.optimizer_dp import PlannerAction
 
@@ -29,6 +32,11 @@ class ChargeRateCurve:
     sample_count: int
     normalized_mad: float
     min_samples: int
+    _sorted_bins: tuple[tuple[int, float], ...] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     @classmethod
     def from_bins(
@@ -48,7 +56,9 @@ class ChargeRateCurve:
 
     def rate_at_soc(self, soc_pct: float) -> float:
         """Return interpolated charge rate at SOC percentage."""
-        sorted_bins = tuple(sorted(self.bins.items()))
+        if self._sorted_bins is None:
+            self._sorted_bins = tuple(sorted(self.bins.items()))
+        sorted_bins = self._sorted_bins
         if not sorted_bins:
             return 0.0
 
@@ -145,6 +155,7 @@ class ChargeRateLearner:
         entry_id: str,
         power_entity_id: str | None = None,
         soc_entity_id: str | None = None,
+        power_sign_override: str = POWER_SIGN_AUTO,
         slot_minutes: int = 15,
         monotonic_smoothing: bool = True,
     ) -> None:
@@ -157,12 +168,32 @@ class ChargeRateLearner:
         )
         self._power_entity_id = power_entity_id or ""
         self._soc_entity_id = soc_entity_id or ""
+        self._power_sign_override = power_sign_override
         self._slot_minutes = slot_minutes
         self._monotonic_smoothing = monotonic_smoothing
 
         self._curves: dict[str, ChargeRateCurve] = {}
         self._diagnostics: dict[str, Any] = {}
         self._updated_at: datetime | None = None
+
+    def configure(
+        self,
+        power_entity_id: str | None,
+        soc_entity_id: str | None,
+        power_sign_override: str | None = None,
+    ) -> None:
+        if power_entity_id is not None:
+            self._power_entity_id = power_entity_id or ""
+        if soc_entity_id is not None:
+            self._soc_entity_id = soc_entity_id or ""
+        if power_sign_override is not None:
+            self._power_sign_override = power_sign_override
+
+    async def async_invalidate(self) -> None:
+        self._curves = {}
+        self._diagnostics = {}
+        self._updated_at = None
+        await self.async_save()
 
     @property
     def diagnostics(self) -> dict[str, Any]:
@@ -344,6 +375,7 @@ class ChargeRateLearner:
                 "decision_mismatch": 0,
                 "missing_decisions": 0,
                 "power_sign_inverted": False,
+                "power_sign_override": self._power_sign_override,
             }
             return False
 
@@ -407,7 +439,12 @@ class ChargeRateLearner:
                 decisions_sorted.append((timestamp, mode))
         decisions_sorted.sort(key=lambda item: item[0])
 
-        power_sign_inverted = self._calibrate_power_sign(slot_samples)
+        if self._power_sign_override == POWER_SIGN_POSITIVE:
+            power_sign_inverted = False
+        elif self._power_sign_override == POWER_SIGN_NEGATIVE:
+            power_sign_inverted = True
+        else:
+            power_sign_inverted = self._calibrate_power_sign(slot_samples)
         if power_sign_inverted:
             for sample in slot_samples:
                 if sample.power_kw is not None:
@@ -474,6 +511,7 @@ class ChargeRateLearner:
             "missing_decisions": missing_decisions,
             "decision_mismatch": decision_mismatch,
             "power_sign_inverted": power_sign_inverted,
+            "power_sign_override": self._power_sign_override,
             "regimes": regime_diagnostics,
         }
         self._updated_at = dt_util.now() or datetime.now()

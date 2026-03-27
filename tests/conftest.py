@@ -732,6 +732,10 @@ def mock_storage():
             "custom_components.localshift.learning.orchestrator.Store",
             return_value=mock_store,
         ),
+        patch(
+            "custom_components.localshift.learning.charge_rate.Store",
+            return_value=mock_store,
+        ),
     ):
         yield mock_store
 

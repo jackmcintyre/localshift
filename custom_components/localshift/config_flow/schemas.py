@@ -16,6 +16,7 @@ from ..const import (
     COMPARISON_MODE_ENABLED,
     CONF_COMPARISON_MODE,
     CONF_NOTIFY_SERVICE,
+    CONF_POWER_SIGN_OVERRIDE,
     CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
@@ -34,8 +35,12 @@ from ..const import (
     CONF_WEATHER_ENTITY,
     DEFAULT_COMPARISON_MODE,
     DEFAULT_ENTITY_IDS,
+    DEFAULT_POWER_SIGN_OVERRIDE,
     DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_WEATHER_ENTITY,
+    POWER_SIGN_AUTO,
+    POWER_SIGN_NEGATIVE,
+    POWER_SIGN_POSITIVE,
 )
 from ..pricing import PRICING_SOURCE_AMBER, PRICING_SOURCE_AMBER_EXPRESS
 
@@ -97,6 +102,32 @@ def build_user_schema(
             default=defaults.get(CONF_TESLEMETRY_LOAD_POWER, ""),
             description="Home load power",
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_POWER_SIGN_OVERRIDE,
+            default=defaults.get(
+                CONF_POWER_SIGN_OVERRIDE,
+                DEFAULT_POWER_SIGN_OVERRIDE,
+            ),
+            description="Override battery power sign detection",
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    {
+                        "label": "Auto (detect from SOC)",
+                        "value": POWER_SIGN_AUTO,
+                    },
+                    {
+                        "label": "Positive (charge is +)",
+                        "value": POWER_SIGN_POSITIVE,
+                    },
+                    {
+                        "label": "Negative (charge is -)",
+                        "value": POWER_SIGN_NEGATIVE,
+                    },
+                ],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
     })
 
 

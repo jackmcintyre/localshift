@@ -27,6 +27,7 @@ from ..const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
+    CONF_POWER_SIGN_OVERRIDE,
     CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
@@ -52,6 +53,7 @@ from ..const import (
     DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
+    DEFAULT_ENTITY_IDS,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
@@ -369,6 +371,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_WEATHER_ENTITY,
                 CONF_PRICING_DATA_SOURCE,
                 CONF_COMPARISON_MODE,
+                CONF_POWER_SIGN_OVERRIDE,
             ):
                 continue
             if not entity_id:
@@ -539,7 +542,32 @@ class LocalShiftOptionsFlow(OptionsFlow):
         """Build schema for entity mappings step."""
         import voluptuous as vol
 
-        user_schema = build_user_schema(values)
+        defaults = dict(values)
+
+        def _prefer_localshift_entity(entity_id: str, fallback_key: str) -> str:
+            state_registry = getattr(self.hass, "states", None)
+            state = state_registry.get(entity_id) if state_registry else None
+            state_value = getattr(state, "state", None)
+            if state is not None and state_value not in (
+                None,
+                "unknown",
+                "unavailable",
+            ):
+                return entity_id
+            return DEFAULT_ENTITY_IDS.get(fallback_key, "")
+
+        if not defaults.get(CONF_TESLEMETRY_BATTERY_POWER):
+            defaults[CONF_TESLEMETRY_BATTERY_POWER] = _prefer_localshift_entity(
+                "sensor.localshift_battery_power",
+                CONF_TESLEMETRY_BATTERY_POWER,
+            )
+        if not defaults.get(CONF_TESLEMETRY_SOC):
+            defaults[CONF_TESLEMETRY_SOC] = _prefer_localshift_entity(
+                "sensor.localshift_battery_percent",
+                CONF_TESLEMETRY_SOC,
+            )
+
+        user_schema = build_user_schema(defaults)
         pricing_source = values.get(
             CONF_PRICING_DATA_SOURCE,
             DEFAULT_PRICING_DATA_SOURCE,

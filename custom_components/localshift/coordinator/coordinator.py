@@ -211,6 +211,17 @@ class LocalShiftCoordinator:
         """Get a user-configurable option value."""
         return self.entry.options.get(key, default)
 
+    def invalidate_charge_rate_curves(self) -> None:
+        """Clear learned charge rate curves after config changes."""
+        if self._learning_orchestrator is None:
+            return
+        self.data.charge_rate_curves = {}
+        self.data.charge_rate_diagnostics = {}
+        self.hass.async_create_task(
+            self._learning_orchestrator.async_invalidate_charge_rate_curves(),
+            "localshift_invalidate_charge_rate_curves",
+        )
+
     # ------------------------------------------------------------------
     # Switch state bridge
     # ------------------------------------------------------------------

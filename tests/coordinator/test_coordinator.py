@@ -1,6 +1,6 @@
 """Unit tests for coordinator."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1382,3 +1382,131 @@ class TestCoordinatorDailySummary:
         await coordinator._tick_scheduler._send_daily_summary()
 
         # Verify it completes without error (no assertion needed, just check no exception)
+
+
+# =============================================================================
+# HELPER METHOD COVERAGE TESTS
+# =============================================================================
+
+
+class TestCoordinatorHelpers:
+    """Tests for coordinator helper methods."""
+
+    def test_is_in_startup_grace_with_missing_state_machine(self, coordinator):
+        coordinator._state_machine = None
+
+        assert coordinator._is_in_startup_grace() is True
+
+    def test_is_in_startup_grace_with_grace_cleared(self, coordinator):
+        coordinator._state_machine = MagicMock()
+        coordinator._state_machine.startup_grace_until = None
+
+        assert coordinator._is_in_startup_grace() is False
+
+    def test_invalidate_charge_rate_curves_schedules_invalidation(self, coordinator):
+        coordinator._learning_orchestrator = MagicMock()
+        coordinator._learning_orchestrator.async_invalidate_charge_rate_curves = (
+            AsyncMock()
+        )
+
+        coordinator.invalidate_charge_rate_curves()
+
+        assert coordinator.data.charge_rate_curves == {}
+        assert coordinator.data.charge_rate_diagnostics == {}
+        coordinator.hass.async_create_task.assert_called_once()
+
+    def test_handle_fast_tick_delegates_to_scheduler(self, coordinator):
+        coordinator._tick_scheduler = MagicMock()
+
+        coordinator._handle_fast_tick(datetime.now(UTC))
+
+        coordinator._tick_scheduler.handle_fast_tick.assert_called_once()
+
+    def test_handle_daily_summary_delegates_to_scheduler(self, coordinator):
+        coordinator._tick_scheduler = MagicMock()
+
+        coordinator._handle_daily_summary(datetime.now(UTC))
+
+        coordinator._tick_scheduler.handle_daily_summary.assert_called_once()
+
+    def test_update_hybrid_accuracy_uses_localshift_when_no_solcast(self, coordinator):
+        coordinator.data.solar_forecast_accuracy = 92.0
+        coordinator.data.solcast_mape = None
+
+        coordinator._update_hybrid_accuracy()
+
+        assert coordinator.data.hybrid_solar_accuracy == 92.0
+
+    def test_update_hybrid_accuracy_weights_solcast_on_low_samples(self, coordinator):
+        coordinator.data.solar_forecast_accuracy = 90.0
+        coordinator.data.solcast_mape = 20.0
+        coordinator.solar_accuracy_tracker = MagicMock()
+        coordinator.solar_accuracy_tracker.metrics.sample_count = 5
+
+        coordinator._update_hybrid_accuracy()
+
+        assert coordinator.data.hybrid_solar_accuracy == 83.0
+
+    def test_update_hybrid_accuracy_handles_high_divergence(self, coordinator):
+        coordinator.data.solar_forecast_accuracy = 90.0
+        coordinator.data.solcast_mape = 40.0
+        coordinator.solar_accuracy_tracker = MagicMock()
+        coordinator.solar_accuracy_tracker.metrics.sample_count = 40
+
+        coordinator._update_hybrid_accuracy()
+
+        assert coordinator.data.hybrid_solar_accuracy == 72.0
+
+    def test_update_hybrid_accuracy_handles_medium_divergence(self, coordinator):
+        coordinator.data.solar_forecast_accuracy = 90.0
+        coordinator.data.solcast_mape = 20.0
+        coordinator.solar_accuracy_tracker = MagicMock()
+        coordinator.solar_accuracy_tracker.metrics.sample_count = 40
+
+        coordinator._update_hybrid_accuracy()
+
+        assert coordinator.data.hybrid_solar_accuracy == 86.0
+
+    def test_update_hybrid_accuracy_handles_low_divergence(self, coordinator):
+        coordinator.data.solar_forecast_accuracy = 90.0
+        coordinator.data.solcast_mape = 5.0
+        coordinator.solar_accuracy_tracker = MagicMock()
+        coordinator.solar_accuracy_tracker.metrics.sample_count = 40
+
+        coordinator._update_hybrid_accuracy()
+
+        assert coordinator.data.hybrid_solar_accuracy == 92.0
+
+    @pytest.mark.asyncio
+    async def test_async_recompute_and_evaluate_triggers_flow(self, coordinator):
+        coordinator._compute_derived_values = MagicMock()
+        coordinator.notify_listeners = MagicMock()
+        coordinator.async_evaluate_state_machine = AsyncMock()
+
+        await coordinator.async_recompute_and_evaluate()
+
+        coordinator._compute_derived_values.assert_called_once()
+        coordinator.notify_listeners.assert_called_once()
+        coordinator.async_evaluate_state_machine.assert_awaited_once()
+
+    def test_reset_entity_tracking_on_options_change(self, coordinator):
+        coordinator._entity_monitor = MagicMock()
+
+        coordinator.reset_entity_tracking_on_options_change()
+
+        coordinator._entity_monitor.reset_entity_tracking_on_options_change.assert_called_once()
+
+    def test_parse_time_option_fallback(self, coordinator):
+        coordinator._entity_monitor = None
+
+        parsed = coordinator._parse_time_option("test", "06:30:00")
+
+        assert parsed == time(6, 30, 0)
+
+    @pytest.mark.asyncio
+    async def test_async_clear_historical_cache_calls_engine(self, coordinator):
+        coordinator._computation_engine = MagicMock()
+
+        await coordinator.async_clear_historical_cache()
+
+        coordinator._computation_engine.clear_historical_cache.assert_called_once()

@@ -15,6 +15,7 @@ from custom_components.localshift.const import (
     CONF_DEMAND_WINDOW_START,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_NOTIFY_SERVICE,
+    CONF_POWER_SIGN_OVERRIDE,
     CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
@@ -1067,3 +1068,18 @@ class TestErrorMessages:
         assert "mode_select" in result
         # Error message should mention expected vs actual domain
         assert "select" in result["mode_select"].lower()
+
+
+def test_entity_mappings_schema_includes_charge_rate_options(
+    mock_hass, mock_config_entry
+):
+    """Entity mapping schema includes charge-rate learning fields."""
+    flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+    flow.hass = mock_hass
+
+    schema = flow._build_entity_mappings_schema({}, [], [])
+    field_keys = [key.schema for key in schema.schema.keys()]
+
+    assert CONF_TESLEMETRY_BATTERY_POWER in field_keys
+    assert CONF_TESLEMETRY_SOC in field_keys
+    assert CONF_POWER_SIGN_OVERRIDE in field_keys

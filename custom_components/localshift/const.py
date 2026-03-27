@@ -101,6 +101,18 @@ CONF_TESLEMETRY_LOAD_POWER = "teslemetry_load_power"
 CONF_TESLEMETRY_ALLOW_EXPORT = "teslemetry_allow_export"
 CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID = "teslemetry_allow_charging_from_grid"
 
+# Charge-rate learning overrides
+CONF_POWER_SIGN_OVERRIDE = "power_sign_override"
+POWER_SIGN_AUTO = "auto"
+POWER_SIGN_POSITIVE = "positive"
+POWER_SIGN_NEGATIVE = "negative"
+POWER_SIGN_OPTIONS = [
+    POWER_SIGN_AUTO,
+    POWER_SIGN_POSITIVE,
+    POWER_SIGN_NEGATIVE,
+]
+DEFAULT_POWER_SIGN_OVERRIDE = POWER_SIGN_AUTO
+
 CONF_TESLEMETRY_SOLAR_ENERGY = "teslemetry_solar_energy"
 
 # Pricing entities
