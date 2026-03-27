@@ -71,6 +71,13 @@ class TestChargeRateCurve:
         )
         assert curve.confidence == 0.2
 
+    def test_confidence_scales_with_samples_below_minimum_at_low_count(self):
+        """Scales confidence for very low sample counts."""
+        curve = ChargeRateCurve.from_bins(
+            {0: 5.0}, sample_count=1, normalized_mad=0.0, min_samples=10
+        )
+        assert curve.confidence == 0.1
+
     def test_confidence_clamped_to_zero(self):
         """Ensures confidence never drops below zero."""
         curve = ChargeRateCurve.from_bins({0: 5.0}, sample_count=10, normalized_mad=2.0)
