@@ -687,63 +687,6 @@ class TestStartupGracePeriod:
 
 
 # =============================================================================
-# POST-COMPUTE CALLBACK TESTS
-# =============================================================================
-
-
-@pytest.mark.skip(
-    reason="Phase 3 removed post_compute_func from evaluate_state_machine"
-)
-class TestPostComputeCallback:
-    """Tests for the optional post-compute callback hook."""
-
-    def test_post_compute_callback_is_invoked(self, state_machine, coordinator_data):
-        """State machine should invoke post_compute_func after recompute."""
-        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
-        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
-
-        mock_engine = MagicMock()
-        mock_engine.compute_derived_values = MagicMock()
-        post_compute = MagicMock()
-
-        asyncio.run(
-            state_machine.evaluate_state_machine(
-                coordinator_data,
-                mock_engine,
-                post_compute_func=post_compute,
-            )
-        )
-
-        post_compute.assert_called_once()
-
-    def test_post_compute_callback_failure_is_non_blocking(
-        self, state_machine, coordinator_data
-    ):
-        """Exceptions from post_compute_func should not abort evaluation."""
-        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
-        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
-
-        mock_engine = MagicMock()
-        mock_engine.compute_derived_values = MagicMock()
-        notify_func = MagicMock()
-
-        def failing_post_compute() -> None:
-            raise RuntimeError("shadow callback failure")
-
-        asyncio.run(
-            state_machine.evaluate_state_machine(
-                coordinator_data,
-                mock_engine,
-                notify_func=notify_func,
-                post_compute_func=failing_post_compute,
-            )
-        )
-
-        # Evaluation continued and still notified listeners.
-        notify_func.assert_called_once()
-
-
-# =============================================================================
 # MODE TRANSITION TESTS
 # =============================================================================
 
