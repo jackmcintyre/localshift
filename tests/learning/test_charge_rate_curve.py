@@ -30,8 +30,8 @@ class TestChargeRateCurve:
         curve = ChargeRateCurve.from_bins({})
         assert curve.rate_at_soc(50.0) == 0.0
 
-    def test_curve_rate_at_soc_uses_cached_bins(self):
-        """Avoids re-sorting bins on repeated calls."""
+    def test_curve_rate_at_soc_resorts_after_bin_mutation(self):
+        """Re-sorts bins so mutations are reflected."""
 
         class TrackingBins(dict[int, float]):
             def __init__(self, *args, **kwargs):
@@ -45,10 +45,21 @@ class TestChargeRateCurve:
         bins = TrackingBins({0: 5.0, 100: 1.0})
         curve = ChargeRateCurve.from_bins(bins)
 
-        curve.rate_at_soc(10.0)
-        curve.rate_at_soc(20.0)
+        assert curve.rate_at_soc(10.0) == 4.6
+        bins[50] = 0.0
 
-        assert bins.items_calls == 1
+        assert curve.rate_at_soc(10.0) == 4.0
+        assert bins.items_calls == 2
+
+    def test_curve_rate_at_soc_handles_zero_span(self):
+        """Handles duplicate SOC bins without crashing."""
+
+        class DuplicateBins(dict[int, float]):
+            def items(self):  # type: ignore[override]
+                return [(50, 5.0), (50, 2.0)]
+
+        curve = ChargeRateCurve.from_bins(DuplicateBins({50: 5.0}))
+        assert curve.rate_at_soc(50.0) == 2.0
 
     def test_confidence_min_samples_zero_defaults_to_one(self):
         """Defaults confidence base to one when min_samples is zero."""

@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
-from ..const import SWITCH_ENABLE_LEARNING
+from ..const import (
+    CONF_TESLEMETRY_BATTERY_POWER,
+    CONF_TESLEMETRY_SOC,
+    SWITCH_ENABLE_LEARNING,
+)
 from ..engine.counterfactual import CounterfactualEvaluator
 from ..forecast.corrections import ForecastCorrectionProvider
+from .charge_rate import ChargeRateLearner
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +50,7 @@ class LearningOrchestrator:
 
         self._last_pattern_analysis: datetime | None = None
         self._days_since_pattern_analysis = 0
+        self._last_charge_rate_update: datetime | None = None
         self._forecast_corrections: ForecastCorrectionProvider | None = None
         self._forecast_corrections_store = Store(
             hass,
@@ -51,6 +58,7 @@ class LearningOrchestrator:
             key=f"localshift.forecast_corrections.{self._entry_id}",
         )
         self._counterfactual_evaluator: CounterfactualEvaluator | None = None
+        self.charge_rate_learner: ChargeRateLearner | None = None
 
     async def async_initialize(self) -> None:
         """Initialize learning components and load persisted state."""
@@ -66,6 +74,21 @@ class LearningOrchestrator:
         decision_tracker = DecisionOutcomeTracker(self.hass, self.entry.entry_id)
         await decision_tracker.async_load()
         self.decision_tracker = decision_tracker
+
+        power_entity_id = self.entry.options.get(
+            CONF_TESLEMETRY_BATTERY_POWER, ""
+        ) or self.entry.data.get(CONF_TESLEMETRY_BATTERY_POWER, "")
+        soc_entity_id = self.entry.options.get(
+            CONF_TESLEMETRY_SOC, ""
+        ) or self.entry.data.get(CONF_TESLEMETRY_SOC, "")
+        charge_rate_learner = ChargeRateLearner(
+            self.hass,
+            self.entry.entry_id,
+            power_entity_id=power_entity_id,
+            soc_entity_id=soc_entity_id,
+        )
+        await charge_rate_learner.async_load()
+        self.charge_rate_learner = charge_rate_learner
 
         param_optimizer = ParameterOptimizer(self.hass, self.entry.entry_id)
         await param_optimizer.async_load()
@@ -266,6 +289,53 @@ class LearningOrchestrator:
                     "Contextual overrides applied: %d adjustments active",
                     len(active_adjustments),
                 )
+
+        self._schedule_charge_rate_update(data)
+
+    def _schedule_charge_rate_update(self, data) -> None:
+        if self.charge_rate_learner is None or self.decision_tracker is None:
+            return
+        now = dt_util.now() or datetime.now()
+        if self._last_charge_rate_update is not None:
+            if now - self._last_charge_rate_update < timedelta(days=1):
+                return
+        self._last_charge_rate_update = now
+        self.hass.async_create_task(
+            self._async_update_charge_rate(data),
+            "localshift_charge_rate_update",
+        )
+
+    async def _async_update_charge_rate(self, data) -> None:
+        if self.charge_rate_learner is None or self.decision_tracker is None:
+            return
+
+        decisions = self.decision_tracker.get_recent_decisions(hours=24 * 30)
+        (
+            power_history,
+            soc_history,
+        ) = await self.charge_rate_learner.async_fetch_history()
+        if not power_history or not soc_history:
+            return
+
+        updated = self.charge_rate_learner.update_from_history(
+            power_history,
+            soc_history,
+            decisions,
+        )
+        if not updated:
+            return
+
+        data.charge_rate_curves = {
+            "normal": self.charge_rate_learner.get_curve("normal"),
+            "boost": self.charge_rate_learner.get_curve("boost"),
+        }
+        data.charge_rate_diagnostics = self.charge_rate_learner.diagnostics
+        data.learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
+
+        self.hass.async_create_task(
+            self.charge_rate_learner.async_save(),
+            "localshift_save_charge_rate_curves",
+        )
 
     async def _run_pattern_analysis(self, data) -> None:
         """Run weekly pattern analysis to generate bias corrections."""
