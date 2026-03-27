@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BatteryMode,
     CHARGE_RATE_CALIBRATION_SLOTS,
     CHARGE_RATE_MAX_KW,
     CHARGE_RATE_MIN_SAMPLES,
     CHARGE_RATE_POWER_THRESHOLD_KW,
     CHARGE_RATE_SOC_BIN_STEP,
+    MODE_RATE_SOC_BIN_STEP,
     POWER_SIGN_AUTO,
     POWER_SIGN_NEGATIVE,
     POWER_SIGN_POSITIVE,
@@ -146,6 +149,53 @@ def _normalize_history(
     return normalized
 
 
+def _normalize_mode_history(
+    history: Iterable[Any] | None,
+) -> list[tuple[datetime, str]]:
+    if not history:
+        return []
+    normalized: list[tuple[datetime, str]] = []
+    for entry in history:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            timestamp, value = entry
+        else:
+            timestamp = getattr(entry, "last_updated", None) or getattr(
+                entry, "last_changed", None
+            )
+            value = getattr(entry, "state", None)
+        if timestamp is None or value in (None, "unknown", "unavailable"):
+            continue
+        normalized.append((timestamp, str(value)))
+    normalized.sort(key=lambda item: item[0])
+    return normalized
+
+
+def _required_mode_keys() -> tuple[str, ...]:
+    return tuple(mode.value for mode in BatteryMode)
+
+
+def _is_valid_mode_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    method = payload.get("method")
+    window = payload.get("window")
+    bins = payload.get("soc_bins_1pct_by_mode")
+    generated_at = payload.get("generated_at")
+    if not isinstance(generated_at, str):
+        return False
+    if not isinstance(method, dict) or not isinstance(window, dict):
+        return False
+    if method.get("soc_bin_pct") != MODE_RATE_SOC_BIN_STEP:
+        return False
+    if method.get("resample") != "1m":
+        return False
+    if window.get("history_window_days") != 14:
+        return False
+    if not isinstance(bins, dict):
+        return False
+    return all(key in bins for key in _required_mode_keys())
+
+
 class ChargeRateLearner:
     """Learn charge-rate curves from historical power/SOC data."""
 
@@ -174,6 +224,7 @@ class ChargeRateLearner:
 
         self._curves: dict[str, ChargeRateCurve] = {}
         self._diagnostics: dict[str, Any] = {}
+        self._mode_analysis_payload: dict[str, Any] = {}
         self._updated_at: datetime | None = None
 
     def configure(
@@ -192,6 +243,7 @@ class ChargeRateLearner:
     async def async_invalidate(self) -> None:
         self._curves = {}
         self._diagnostics = {}
+        self._mode_analysis_payload = {}
         self._updated_at = None
         await self.async_save()
 
@@ -214,6 +266,9 @@ class ChargeRateLearner:
         if curve.sample_count < curve.min_samples:
             return None
         return curve
+
+    def get_mode_analysis_payload(self) -> dict[str, Any]:
+        return dict(self._mode_analysis_payload)
 
     async def async_load(self) -> None:
         stored = await self._store.async_load()
@@ -254,12 +309,20 @@ class ChargeRateLearner:
         if isinstance(diagnostics, dict):
             self._diagnostics = diagnostics
 
+        mode_payload_version = stored.get("mode_payload_version")
+        mode_payload = stored.get("mode_analysis_payload")
+        if mode_payload_version == 1 and _is_valid_mode_payload(mode_payload):
+            self._mode_analysis_payload = dict(mode_payload)
+        else:
+            self._mode_analysis_payload = {}
+
         if loaded_curves:
             self._curves = loaded_curves
 
     async def async_save(self) -> None:
         payload = {
             "version": 1,
+            "mode_payload_version": 1,
             "updated_at": (self._updated_at.isoformat() if self._updated_at else None),
             "curves": {
                 regime: {
@@ -271,8 +334,123 @@ class ChargeRateLearner:
                 for regime, curve in self._curves.items()
             },
             "diagnostics": self._diagnostics,
+            "mode_analysis_payload": self._mode_analysis_payload,
         }
         await self._store.async_save(payload)
+
+    def update_mode_analysis_from_history(
+        self,
+        power_history: Iterable[Any] | None,
+        soc_history: Iterable[Any] | None,
+        mode_history: Iterable[Any] | None,
+    ) -> bool:
+        power_points = _normalize_history(power_history)
+        soc_points = _normalize_history(soc_history)
+        mode_points = _normalize_mode_history(mode_history)
+        if not power_points or not soc_points or not mode_points:
+            self._mode_analysis_payload = {}
+            return False
+
+        if self._power_sign_override == POWER_SIGN_POSITIVE:
+            power_sign = 1.0
+        elif self._power_sign_override == POWER_SIGN_NEGATIVE:
+            power_sign = -1.0
+        else:
+            power_sign = 1.0
+
+        all_mode_bins: dict[str, dict[int, dict[str, list[float] | int]]] = {
+            mode: {} for mode in _required_mode_keys()
+        }
+        start = max(
+            _floor_time(power_points[0][0], 1),
+            _floor_time(soc_points[0][0], 1),
+            _floor_time(mode_points[0][0], 1),
+        )
+        end = min(power_points[-1][0], soc_points[-1][0], mode_points[-1][0])
+        if start > end:
+            self._mode_analysis_payload = {}
+            return False
+
+        power_index = 0
+        soc_index = 0
+        mode_index = 0
+        current_power: float | None = None
+        current_soc: float | None = None
+        current_mode: str | None = None
+
+        current = start
+        while current <= end:
+            while (
+                power_index < len(power_points)
+                and power_points[power_index][0] <= current
+            ):
+                current_power = power_points[power_index][1] * power_sign
+                power_index += 1
+            while soc_index < len(soc_points) and soc_points[soc_index][0] <= current:
+                current_soc = soc_points[soc_index][1]
+                soc_index += 1
+            while (
+                mode_index < len(mode_points) and mode_points[mode_index][0] <= current
+            ):
+                current_mode = mode_points[mode_index][1]
+                mode_index += 1
+
+            if (
+                current_power is not None
+                and current_soc is not None
+                and current_mode in all_mode_bins
+                and math.isfinite(current_power)
+                and math.isfinite(current_soc)
+            ):
+                abs_power = abs(current_power)
+                if abs_power >= CHARGE_RATE_POWER_THRESHOLD_KW:
+                    soc_bin = int(
+                        max(0.0, min(100.0, current_soc)) // MODE_RATE_SOC_BIN_STEP
+                    )
+                    bucket = all_mode_bins[current_mode].setdefault(
+                        soc_bin,
+                        {"charge": [], "discharge": [], "n": 0},
+                    )
+                    if current_power >= 0:
+                        cast(list[float], bucket["charge"]).append(abs_power)
+                    else:
+                        cast(list[float], bucket["discharge"]).append(abs_power)
+                    bucket["n"] = int(bucket["n"]) + 1
+            current += timedelta(minutes=1)
+
+        payload_bins: dict[str, list[dict[str, Any]]] = {}
+        for mode in _required_mode_keys():
+            rows: list[dict[str, Any]] = []
+            for soc_bin in sorted(all_mode_bins[mode].keys()):
+                raw = all_mode_bins[mode][soc_bin]
+                n = int(raw["n"])
+                if n <= 0:
+                    continue
+                charge = cast(list[float], raw["charge"])
+                discharge = cast(list[float], raw["discharge"])
+                rows.append({
+                    "soc": soc_bin,
+                    "n": n,
+                    "charge_kw": (sum(charge) / len(charge) if charge else 0.0),
+                    "discharge_kw": (
+                        sum(discharge) / len(discharge) if discharge else 0.0
+                    ),
+                })
+            payload_bins[mode] = rows
+
+        generated_at = dt_util.now() or datetime.now()
+        self._mode_analysis_payload = {
+            "generated_at": generated_at.isoformat(),
+            "method": {
+                "soc_bin_pct": MODE_RATE_SOC_BIN_STEP,
+                "resample": "1m",
+            },
+            "window": {
+                "history_window_days": 14,
+            },
+            "soc_bins_1pct_by_mode": payload_bins,
+        }
+        return True
 
     async def async_fetch_history(
         self,

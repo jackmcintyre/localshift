@@ -11,6 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.localshift.engine.optimizer_dp import PlannerAction
+from custom_components.localshift.const import (
+    CHARGE_RATE_SOC_BIN_STEP,
+    MODE_RATE_SOC_BIN_STEP,
+)
 from custom_components.localshift.learning.charge_rate import (
     ChargeRateCurve,
     ChargeRateLearner,
@@ -39,6 +43,119 @@ async def test_charge_rate_learner_persists_curves(
     assert saved["version"] == 1
     assert "curves" in saved
     assert "diagnostics" in saved
+
+
+def _build_mode_history(history: dict[str, object]) -> list[tuple[datetime, str]]:
+    mode_history: list[tuple[datetime, str]] = []
+    slot_minutes = int(history["slot_minutes"])
+    slot_delta = timedelta(minutes=slot_minutes)
+    for index in range(len(history["power_history"])):
+        slot_start = history["start"] + index * slot_delta
+        if index % 3 == 0:
+            mode = "boost_charging"
+        else:
+            mode = "self_consumption"
+        mode_history.append((slot_start, mode))
+    return mode_history
+
+
+def test_charge_rate_learner_builds_mode_bins_1pct_payload(history):
+    learner = ChargeRateLearner(MagicMock(), entry_id="entry-mode-1")
+
+    updated = learner.update_mode_analysis_from_history(
+        history["power_history"],
+        history["soc_history"],
+        _build_mode_history(history),
+    )
+
+    payload = learner.get_mode_analysis_payload()
+    assert updated is True
+    assert "soc_bins_1pct_by_mode" in payload
+    assert payload["method"]["soc_bin_pct"] == 1
+    assert payload["method"]["resample"] == "1m"
+    assert payload["window"]["history_window_days"] == 14
+    assert "generated_at" in payload
+    assert "boost_charging" in payload["soc_bins_1pct_by_mode"]
+    assert "spike_discharge" in payload["soc_bins_1pct_by_mode"]
+
+
+def test_charge_rate_learner_mode_payload_is_sparse_bins_only(history):
+    learner = ChargeRateLearner(MagicMock(), entry_id="entry-mode-2")
+
+    learner.update_mode_analysis_from_history(
+        history["power_history"],
+        history["soc_history"],
+        _build_mode_history(history),
+    )
+
+    payload = learner.get_mode_analysis_payload()
+    for rows in payload["soc_bins_1pct_by_mode"].values():
+        assert all(row["n"] > 0 for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_charge_rate_learner_persists_mode_payload_with_version(
+    storage, monkeypatch
+):
+    from custom_components.localshift.learning import charge_rate as charge_rate_module
+
+    hass = MagicMock()
+    monkeypatch.setattr(charge_rate_module, "Store", MagicMock(return_value=storage))
+    learner = ChargeRateLearner(hass, entry_id="entry-mode-3")
+
+    mode_payload = {
+        "generated_at": "2026-03-28T00:00:00+00:00",
+        "method": {"soc_bin_pct": 1, "resample": "1m"},
+        "window": {"history_window_days": 14},
+        "soc_bins_1pct_by_mode": {
+            "self_consumption": [{"soc": 42, "charge_kw": 3.2, "n": 3}],
+            "grid_charging": [],
+            "boost_charging": [],
+            "spike_discharge": [],
+            "proactive_export": [],
+            "demand_block": [],
+            "hold": [],
+            "manual": [],
+        },
+    }
+    learner._mode_analysis_payload = mode_payload
+    await learner.async_save()
+
+    saved = storage.async_save.call_args.args[0]
+    assert saved["version"] == 1
+    assert saved["mode_payload_version"] == 1
+    assert saved["mode_analysis_payload"]["generated_at"]
+    assert saved["mode_analysis_payload"]["method"]["resample"] == "1m"
+    assert saved["mode_analysis_payload"]["window"]["history_window_days"] == 14
+
+    storage.async_load.return_value = saved
+    reloaded = ChargeRateLearner(hass, entry_id="entry-mode-3")
+    monkeypatch.setattr(charge_rate_module, "Store", MagicMock(return_value=storage))
+    await reloaded.async_load()
+    assert reloaded.get_mode_analysis_payload()["method"]["soc_bin_pct"] == 1
+
+
+def test_charge_rate_learner_preserves_existing_curve_learning_behavior(
+    history, decisions
+):
+    learner = ChargeRateLearner(MagicMock(), entry_id="entry-mode-4")
+
+    learner.update_from_history(
+        history["power_history"],
+        history["soc_history"],
+        decisions,
+    )
+
+    curve = learner.get_curve("normal")
+    assert curve is not None
+    assert curve.sample_count >= 50
+    assert curve.rate_at_soc(60.0) > 0.0
+    assert CHARGE_RATE_SOC_BIN_STEP == 5
+
+
+def test_charge_rate_learner_mode_analysis_uses_separate_bin_step_constant():
+    assert CHARGE_RATE_SOC_BIN_STEP == 5
+    assert MODE_RATE_SOC_BIN_STEP == 1
 
 
 def test_charge_rate_learner_regime_separation(decisions, history):
