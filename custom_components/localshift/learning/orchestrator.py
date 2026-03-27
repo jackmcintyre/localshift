@@ -319,6 +319,7 @@ class LearningOrchestrator:
             soc_history,
         ) = await self.charge_rate_learner.async_fetch_history()
         if not power_history or not soc_history:
+            self._last_charge_rate_attempt = None
             return
 
         updated = self.charge_rate_learner.update_from_history(
@@ -327,11 +328,13 @@ class LearningOrchestrator:
             decisions,
         )
         if not updated:
+            self._last_charge_rate_attempt = None
             return
 
         curve_normal = self.charge_rate_learner.get_curve("normal")
         curve_boost = self.charge_rate_learner.get_curve("boost")
         if curve_normal is None and curve_boost is None:
+            self._last_charge_rate_attempt = None
             return
 
         data.charge_rate_curves = {

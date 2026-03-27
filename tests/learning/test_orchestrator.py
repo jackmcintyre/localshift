@@ -90,11 +90,25 @@ async def test_async_initialize_loads_components(monkeypatch):
     params_module = types.SimpleNamespace(ParameterOptimizer=DummyOptimizer)
     pattern_module = types.SimpleNamespace(PatternAnalyzer=DummyAnalyzer)
     opt_module = types.SimpleNamespace(OptimizationController=DummyController)
-    sys.modules["custom_components.localshift.engine.outcomes"] = outcomes_module
-    sys.modules["custom_components.localshift.engine.parameters"] = params_module
-    sys.modules["custom_components.localshift.engine.pattern_analyzer"] = pattern_module
-    sys.modules["custom_components.localshift.engine.optimization_controller"] = (
-        opt_module
+    monkeypatch.setitem(
+        sys.modules,
+        "custom_components.localshift.engine.outcomes",
+        outcomes_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "custom_components.localshift.engine.parameters",
+        params_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "custom_components.localshift.engine.pattern_analyzer",
+        pattern_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "custom_components.localshift.engine.optimization_controller",
+        opt_module,
     )
     monkeypatch.setattr(module, "ForecastCorrectionProvider", DummyForecast)
     monkeypatch.setattr(module, "ChargeRateLearner", DummyLearner)
