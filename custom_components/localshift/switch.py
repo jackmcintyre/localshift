@@ -124,7 +124,9 @@ class LocalShiftSwitch(SwitchEntity):
         if self._key == SWITCH_ENABLE_LEARNING:
             if self.coordinator.optimization_controller is not None:
                 self.coordinator.optimization_controller.set_learning_enabled(True)
-                _LOGGER.info("Learning system active optimization enabled")
+            if hasattr(self.coordinator, "data"):
+                self.coordinator.data.learning_enabled = True
+            _LOGGER.info("Learning system active optimization enabled")
 
         # Re-evaluate derived values and trigger state machine
         await self.coordinator.async_recompute_and_evaluate()

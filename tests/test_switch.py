@@ -218,6 +218,7 @@ class TestLocalShiftSwitch:
         mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(
             True
         )
+        assert mock_coordinator.data.learning_enabled is True
 
     @pytest.mark.asyncio
     async def test_turn_off_learning_disabled(self, mock_coordinator, mock_entry):
