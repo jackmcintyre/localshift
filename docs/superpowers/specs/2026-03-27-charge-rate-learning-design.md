@@ -37,6 +37,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 | 80% boost cap | Remove hard cap | Learned curve should taper at higher SOC |
 | Fallback | Defaults (3.3/5.0 kW) | Stable behavior when learning is off/insufficient |
 | Optimizer integration | SOC-dependent charge rate in transitions/simulator | Physical modeling belongs in the state transition, not stage_cost |
+| Curve representation | Piecewise linear SOC bins | Predictable, easy to test, avoids overfitting |
 
 ## Data Pipeline
 
@@ -50,12 +51,21 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 
 ## Optimizer Integration
 
-- Add a SOC-dependent charge-rate model to `OptimizerConfig` (curve or lookup table).
-- Use the model inside the SOC transition/charge simulator so charge effects reflect SOC-dependent rates. This keeps the optimizer pure (deterministic given inputs) and aligns with DP constraints: physical modeling lives in transitions, not `stage_cost()`.
+- Add SOC-dependent charge-rate models to `OptimizerConfig` (one for normal, one for boost), e.g. `ChargeRateCurve` with `rate_at_soc(soc: float) -> float`.
+- Update `_transition_charge_grid()` (and any SOC simulator helpers) to use `charge_rate_curve.rate_at_soc(current_soc)` instead of a fixed `charge_rate_kw`.
+- This keeps the optimizer pure (deterministic given inputs) and aligns with DP constraints: physical modeling lives in transitions, not `stage_cost()`.
 - For each slot, compute the effective charge rate from the SOC-dependent curve (cap at 10 kW).
 - Planner behavior remains unchanged except it now uses realistic charging rates and naturally stops planning boost “too late.”
 - If learning is disabled or insufficient data, fall back to defaults (3.3/5.0 kW) and preserve current behavior.
 - Remove the hard 80% boost cap from planning logic (existing `BOOST_CHARGE_MAX_SOC`) so tapering is learned rather than forced.
+
+## PLANNING_MODEL Alignment
+
+| Feature | Classification | Implementation |
+|---------|----------------|----------------|
+| SOC-dependent charge rate | Physical model | SOC transition / charge simulator |
+| Remove 80% boost cap | Hard constraint removal | `feasible_actions()` gate removal |
+| Charge timing preference | Soft preference | Unchanged; still in `stage_cost()` if present |
 
 ## Robustness and Learning Status
 
@@ -66,7 +76,9 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 ## Learning System Integration
 
 - Introduce a dedicated charge-rate learner component in the existing learning pipeline (e.g., `ChargeRateLearner` alongside `PatternAnalyzer`).
-- Store learned curves and diagnostics in the learning storage under a new key (separate from adaptive scalar parameters) to avoid conflating Thompson sampling with curve fitting.
+- Store learned curves and diagnostics in the learning storage under a new key, e.g. `localshift.charge_rate_curves.{entry_id}` (separate from adaptive scalar parameters).
+- Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows.
+- Minimum samples per regime (normal/boost) before activating learned curves (e.g., 50+ per regime).
 - Surface diagnostics via existing learning sensors (sample count, last update, confidence, active/disabled).
 
 ## Telemetry Access and Cadence
@@ -75,8 +87,15 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
   - `sensor.my_home_battery_power`
   - `sensor.my_home_percentage_charged`
 - Resample to optimizer slot size and compute deltas.
+- Use HA history helpers (recorder/statistics) rather than raw HTTP; fail gracefully on missing history.
 - Update cadence: recompute curves once per day (or on existing medium tick) to avoid heavy recomputation per cycle.
 - If history is unavailable or incomplete, skip update and keep the last good curve (or defaults if none).
+
+## Curve Representation
+
+- Use SOC bins (e.g., 0-100% in 5% steps) and piecewise linear interpolation between bins.
+- Clamp outputs to 0-10 kW, and interpolate only within covered SOC; extrapolate to nearest bin at edges.
+- Track per-bin sample counts to compute confidence and detect sparse regions.
 
 ## HA Access Rule Update
 
@@ -94,8 +113,11 @@ Update the Home Assistant access guidance to:
 5. Unit tests for noisy telemetry handling (outlier trimming).
 6. Integration test: learned taper at high SOC reduces late boost scheduling vs fixed rate.
 7. Integration test: end-to-end planner comparison (learned vs fixed).
-8. Learning diagnostics test: sample threshold and last-updated metadata.
-9. HA history failure test: skip update and preserve last good curve.
+8. Integration test: regime separation (normal vs boost labeling).
+9. Learning diagnostics test: sample threshold and last-updated metadata.
+10. Edge SOC tests: interpolation/extrapolation at 0% and 100%.
+11. Staleness test: no new samples for N days triggers stale warning.
+12. HA history failure test: skip update and preserve last good curve.
 
 ## Risks and Mitigations
 
