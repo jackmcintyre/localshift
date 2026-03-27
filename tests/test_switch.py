@@ -34,6 +34,8 @@ def mock_coordinator():
     coordinator.async_recompute_and_evaluate = AsyncMock()
     coordinator.optimization_controller = MagicMock()
     coordinator.optimization_controller.set_learning_enabled = MagicMock()
+    coordinator.data = MagicMock()
+    coordinator.data.learning_enabled = False
     coordinator._notification_service = None
     coordinator.set_switch_state = MagicMock()
     return coordinator
@@ -54,7 +56,9 @@ class TestLocalShiftSwitch:
 
     def test_switch_initialization(self, mock_coordinator, mock_entry):
         """Test switch entity initializes with correct attributes."""
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
 
         assert switch._key == SWITCH_AUTOMATION_ENABLED
         assert switch._entry == mock_entry
@@ -63,7 +67,9 @@ class TestLocalShiftSwitch:
 
     def test_switch_loads_default_state(self, mock_coordinator, mock_entry):
         """Test switch loads default state when not in options."""
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
 
         expected_default = SWITCH_DEFAULTS[SWITCH_AUTOMATION_ENABLED]
         assert switch._is_on == expected_default
@@ -74,13 +80,17 @@ class TestLocalShiftSwitch:
         option_key = f"{SWITCH_STATE_PREFIX}{SWITCH_AUTOMATION_ENABLED}"
         mock_entry.options = {option_key: False}
 
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
 
         assert switch._is_on is False
 
     def test_switch_attributes(self, mock_coordinator, mock_entry):
         """Test switch has correct unique_id, name, and icon."""
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
 
         assert switch._attr_unique_id == "localshift_automation_enabled"
         assert switch._attr_name == SWITCH_NAMES[SWITCH_AUTOMATION_ENABLED]
@@ -88,15 +98,21 @@ class TestLocalShiftSwitch:
 
     def test_switch_device_info(self, mock_coordinator, mock_entry):
         """Test device info is correctly generated."""
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
         device_info = switch.device_info
 
         assert device_info["identifiers"] == {(DOMAIN, "test_entry_123")}
         assert device_info["name"] == "LocalShift"
 
-    def test_switch_syncs_initial_state_to_coordinator(self, mock_coordinator, mock_entry):
+    def test_switch_syncs_initial_state_to_coordinator(
+        self, mock_coordinator, mock_entry
+    ):
         """Test switch syncs initial state to coordinator."""
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
 
         expected_default = SWITCH_DEFAULTS[SWITCH_AUTOMATION_ENABLED]
         mock_coordinator.set_switch_state.assert_called_once_with(
@@ -110,7 +126,9 @@ class TestLocalShiftSwitch:
         mock_hass.config_entries = MagicMock()
         mock_hass.config_entries.async_update_entry = MagicMock()
 
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
         switch._is_on = False
@@ -119,7 +137,9 @@ class TestLocalShiftSwitch:
             await switch.async_turn_on()
 
         assert switch._is_on is True
-        mock_coordinator.set_switch_state.assert_called_with(SWITCH_AUTOMATION_ENABLED, True)
+        mock_coordinator.set_switch_state.assert_called_with(
+            SWITCH_AUTOMATION_ENABLED, True
+        )
 
     @pytest.mark.asyncio
     async def test_async_turn_on_persists_state(self, mock_coordinator, mock_entry):
@@ -128,7 +148,9 @@ class TestLocalShiftSwitch:
         mock_hass.config_entries = MagicMock()
         mock_hass.config_entries.async_update_entry = MagicMock()
 
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
 
@@ -147,7 +169,9 @@ class TestLocalShiftSwitch:
         mock_hass.config_entries = MagicMock()
         mock_hass.config_entries.async_update_entry = MagicMock()
 
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
         switch._is_on = True
@@ -166,7 +190,9 @@ class TestLocalShiftSwitch:
         mock_hass.config_entries = MagicMock()
         mock_hass.config_entries.async_update_entry = MagicMock()
 
-        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch = LocalShiftSwitch(
+            mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED
+        )
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
 
@@ -189,7 +215,29 @@ class TestLocalShiftSwitch:
         with patch.object(switch, "async_write_ha_state"):
             await switch.async_turn_on()
 
-        mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(True)
+        mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(
+            True
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_learning_disabled(self, mock_coordinator, mock_entry):
+        """Test turning off learning switch disables learning."""
+        mock_hass = MagicMock()
+        mock_hass.config_entries = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock()
+
+        mock_coordinator.data.learning_enabled = True
+        switch = LocalShiftSwitch(mock_coordinator, mock_entry, "enable_learning")
+        switch.hass = mock_hass
+        switch._attr_entity_id = "switch.localshift_enable_learning"
+
+        with patch.object(switch, "async_write_ha_state"):
+            await switch.async_turn_off()
+
+        mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(
+            False
+        )
+        assert mock_coordinator.data.learning_enabled is False
 
 
 class TestSwitchKeys:
@@ -220,7 +268,9 @@ class TestAsyncSetupEntry:
     """Tests for async_setup_entry."""
 
     @pytest.mark.asyncio
-    async def test_async_setup_entry_creates_all_switches(self, mock_coordinator, mock_entry):
+    async def test_async_setup_entry_creates_all_switches(
+        self, mock_coordinator, mock_entry
+    ):
         """Test that async_setup_entry creates all switch entities."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
@@ -249,7 +299,9 @@ class TestAsyncSetupEntry:
             assert isinstance(entity, LocalShiftSwitch)
 
     @pytest.mark.asyncio
-    async def test_switches_receive_coordinator_and_entry(self, mock_coordinator, mock_entry):
+    async def test_switches_receive_coordinator_and_entry(
+        self, mock_coordinator, mock_entry
+    ):
         """Test that switches receive coordinator and entry."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
@@ -264,7 +316,9 @@ class TestAsyncSetupEntry:
             assert entity._entry == mock_entry
 
     @pytest.mark.asyncio
-    async def test_automation_enabled_switch_created(self, mock_coordinator, mock_entry):
+    async def test_automation_enabled_switch_created(
+        self, mock_coordinator, mock_entry
+    ):
         """Test that automation enabled switch is created."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
