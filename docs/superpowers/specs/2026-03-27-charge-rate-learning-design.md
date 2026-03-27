@@ -59,6 +59,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Planner behavior remains unchanged except it now uses realistic charging rates and naturally stops planning boost “too late.”
 - If learning is disabled or insufficient data, fall back to defaults (3.3/5.0 kW) and preserve current behavior.
 - Keep existing float fields as defaults; curve fields are optional and only used when valid.
+- `_transition_charge_grid()` continues to apply `charge_efficiency` to convert grid power draw to stored energy.
 - Do not add a hard SOC cap for boost; rely on learned tapering and physical rate limits only.
 
 ## PLANNING_MODEL Alignment
@@ -81,6 +82,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Store learned curves and diagnostics in the learning storage under a new key, e.g. `localshift.charge_rate_curves.{entry_id}` (separate from adaptive scalar parameters).
 - Integrate into `LearningOrchestrator` lifecycle (load, update on medium tick, persist on save).
 - Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows. Slots without a charge action are ignored.
+- Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows. Slots without a charge action are ignored.
 - Labeling rules:
   - If decision action is `CHARGE_GRID_BOOST`, classify as boost.
   - If decision action is `CHARGE_GRID_NORMAL`, classify as normal.
@@ -88,6 +90,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - If a decision record is missing for a slot, skip it (do not infer from telemetry alone).
 - Minimum samples per regime (normal/boost) before activating learned curves (e.g., 50+ per regime).
 - Surface diagnostics via existing learning sensors (sample count, last update, confidence, active/disabled).
+- Add a labeled-sample quality diagnostic (labeled slots / total slots) to detect regime labeling gaps.
 
 ## Telemetry Access and Cadence
 
@@ -97,6 +100,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Entity IDs are resolved from config entry options with defaults to the LocalShift battery sensors when available.
 - Resample to optimizer slot size and compute deltas.
 - Use HA history helpers (recorder/statistics) rather than raw HTTP; fail gracefully on missing history.
+- Use HA history helpers (recorder/statistics) rather than raw HTTP; handle `HomeAssistantError` and timeouts with a skip-and-log path.
 - Update cadence: recompute curves once per day (or on existing medium tick) to avoid heavy recomputation per cycle.
 - If history is unavailable or incomplete, skip update and keep the last good curve (or defaults if none).
 - If either power or SOC history is missing, skip update and log diagnostics.
@@ -105,7 +109,11 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 ## Power Sign Convention
 
 - Battery power sign can vary by system. Derive charging direction by comparing power sign with SOC delta over a short calibration window.
-- If power sign and SOC delta disagree for >3 consecutive slots, invert the sign for learning.
+- Calibration settings:
+  - `calibration_slots = 6`
+  - `power_threshold_kw = 0.1` (ignore near-zero power)
+  - If power sign and SOC delta disagree for >3 consecutive slots, invert the sign for learning.
+- During calibration, use default sign convention and suppress curve updates until calibration completes.
 - Allow an explicit override in config options if automatic detection fails.
 
 ## Curve Representation
@@ -137,6 +145,12 @@ Confidence definition (example):
 - On startup, load curves from `localshift.charge_rate_curves.{entry_id}`; if missing or invalid, fall back to defaults.
 - Persist curves and diagnostics after recomputation, include a schema version for migration.
 - On config entry option changes (entity IDs or power sign override), invalidate curves and re-learn.
+
+## Optimizer Integration Flow
+
+1. `ChargeRateLearner` computes curves and persists them.
+2. `OptimizerRunner` loads curves (if valid) and builds `OptimizerConfig` with curve references.
+3. `transition()` uses `rate_at_soc()` for per-slot grid/boost charging and applies `charge_efficiency`.
 
 ## Multi-Battery Considerations
 
@@ -172,6 +186,10 @@ Update the Home Assistant access guidance to:
 18. Dual-history failure test: power and SOC history both unavailable -> no update.
 19. Monotonic smoothing test: curve enforces non-increasing rate at higher SOC.
 20. Config entry recreation test: curves invalidated and defaults applied.
+21. Window boundary test: 30-day rollover preserves curve stability.
+22. Sparse bin handling test: bins with few/no samples interpolate from neighbors.
+23. Decision gap test: missing decision records reduce labeled-sample ratio and skip learning.
+24. Regime switch test: decision changes mid-slot handled deterministically.
 
 ## Risks and Mitigations
 
