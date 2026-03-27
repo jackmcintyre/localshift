@@ -409,7 +409,7 @@ class TestOrchestratorChargeRateLearning:
         await orchestrator._async_update_charge_rate(data)
 
         assert orchestrator._last_charge_rate_update is None
-        assert getattr(data, "charge_rate_curves", None) is None
+        assert getattr(data, "charge_rate_curves", None) == {}
 
     @pytest.mark.asyncio
     async def test_async_update_charge_rate_skips_when_not_updated(self):
