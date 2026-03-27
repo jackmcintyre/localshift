@@ -179,6 +179,12 @@ class TestOrchestratorChargeRateLearning:
         )
         orchestrator._last_charge_rate_attempt = now - timedelta(minutes=10)
 
+        def _consume(coro, _name=None):
+            coro.close()
+            return MagicMock()
+
+        orchestrator.hass.async_create_task = MagicMock(side_effect=_consume)
+
         data = CoordinatorData()
         orchestrator._schedule_charge_rate_update(data)
 
