@@ -1,7 +1,7 @@
 """Tests for the DecisionOutcomeTracker learning system (Issue #170 Phase 1)."""
 
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,7 @@ from custom_components.localshift.engine.optimizer_dp import (
 from custom_components.localshift.engine.outcomes import (
     DecisionOutcomeTracker,
     DecisionRecord,
+    MAX_DECISION_DURATION,
 )
 
 
@@ -163,6 +164,31 @@ class TestDecisionRecord:
         assert record.previous_mode == PlannerAction.HOLD
         assert record.soc_at_decision == 75.0
         assert record.outcome_score == 0.85
+
+    def test_decision_record_from_dict_unknown_action_defaults_hold(self):
+        """Unknown action strings should default to HOLD."""
+        now = datetime.now()
+        data = {
+            "timestamp": now.isoformat(),
+            "mode_chosen": "mystery_mode",
+            "previous_mode": "mystery_prev",
+            "soc_at_decision": 40.0,
+            "general_price_at_decision": 0.25,
+            "feed_in_price_at_decision": 0.05,
+            "forecast_solar_remaining_kwh": 5.0,
+            "forecast_consumption_remaining_kwh": 8.0,
+            "cheap_price_threshold": 0.10,
+            "battery_target_soc": 80.0,
+            "weather_condition": "sunny",
+            "day_of_week": 2,
+            "hour_of_day": 18,
+            "is_demand_window": False,
+        }
+
+        record = DecisionRecord.from_dict(data)
+
+        assert record.mode_chosen == PlannerAction.HOLD
+        assert record.previous_mode == PlannerAction.HOLD
 
 
 class TestPerformanceMetrics:
@@ -344,6 +370,166 @@ class TestDecisionOutcomeTracker:
 
             # Verify we have completed decisions
             assert tracker.completed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_load_no_data(self, mock_hass):
+        """Loading with no stored data should be a no-op."""
+        mock_store = MagicMock()
+        mock_store.async_load = AsyncMock(return_value=None)
+
+        with patch(
+            "custom_components.localshift.engine.outcomes.Store",
+            return_value=mock_store,
+        ):
+            tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+            await tracker.async_load()
+
+            assert tracker.pending_count == 0
+            assert tracker.completed_count == 0
+
+    @pytest.mark.asyncio
+    async def test_async_load_moves_timed_out_pending_to_completed(self, mock_hass):
+        """Timed-out pending decisions should move to completed with neutral score."""
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        old_timestamp = now - timedelta(minutes=31)
+        pending_record = DecisionRecord(
+            timestamp=old_timestamp,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.10,
+            battery_target_soc=80.0,
+            weather_condition="sunny",
+            day_of_week=2,
+            hour_of_day=12,
+            is_demand_window=False,
+        )
+
+        mock_store = MagicMock()
+        mock_store.async_load = AsyncMock(
+            return_value={"pending_decisions": [pending_record.to_dict()]}
+        )
+
+        with (
+            patch(
+                "custom_components.localshift.engine.outcomes.Store",
+                return_value=mock_store,
+            ),
+            patch(
+                "custom_components.localshift.engine.outcomes.dt_util.now"
+            ) as mock_now,
+        ):
+            mock_now.return_value = now
+            tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+            await tracker.async_load()
+
+            assert tracker.pending_count == 0
+            assert tracker.completed_count == 1
+            completed = tracker._completed_decisions[0]
+            assert completed.duration_minutes == (
+                MAX_DECISION_DURATION.total_seconds() / 60.0
+            )
+            assert completed.outcome_score == 0.5
+
+    def test_backfill_outcomes_times_out_pending(self, mock_hass, coordinator_data):
+        """Timed-out pending decisions should backfill with capped duration."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 10, 0, 0)
+        end = start + timedelta(minutes=31)
+
+        with patch(
+            "custom_components.localshift.engine.outcomes.dt_util.now"
+        ) as mock_now:
+            mock_now.side_effect = [start, end]
+            tracker.record_decision(
+                coordinator_data,
+                BatteryMode.GRID_CHARGING,
+                BatteryMode.SELF_CONSUMPTION,
+            )
+            coordinator_data.soc = 60.0
+            tracker.backfill_outcomes(coordinator_data)
+
+        assert tracker.pending_count == 0
+        assert tracker.completed_count == 1
+        completed = tracker._completed_decisions[0]
+        assert completed.duration_minutes == (
+            MAX_DECISION_DURATION.total_seconds() / 60.0
+        )
+        assert completed.next_mode is None
+        assert completed.actual_cost_during_period is not None
+
+    def test_backfill_pending_decision_no_pending(self, mock_hass, coordinator_data):
+        """Backfilling with no pending decisions should be a no-op."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        now = datetime(2026, 1, 1, 10, 0, 0)
+
+        tracker._backfill_pending_decision(
+            coordinator_data,
+            PlannerAction.HOLD,
+            now,
+        )
+
+        assert tracker.pending_count == 0
+        assert tracker.completed_count == 0
+
+    def test_backfill_pending_decision_discharge_cost_zero(
+        self, mock_hass, coordinator_data
+    ):
+        """Discharging backfill should record zero cost and import-only energy."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 10, 0, 0)
+        end = start + timedelta(minutes=5)
+
+        with patch(
+            "custom_components.localshift.engine.outcomes.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = start
+            tracker.record_decision(
+                coordinator_data,
+                BatteryMode.SELF_CONSUMPTION,
+                BatteryMode.GRID_CHARGING,
+            )
+
+        coordinator_data.soc = 45.0
+        tracker._backfill_pending_decision(
+            coordinator_data,
+            PlannerAction.HOLD,
+            end,
+        )
+
+        assert tracker.pending_count == 0
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_cost_during_period == 0.0
+        assert completed.actual_import_kwh > 0.0
+        assert completed.actual_export_kwh == 0.0
+
+    def test_save_pending_flag_clears(self, mock_hass, coordinator_data):
+        """save_pending should flip to False after clear_save_pending."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        now = datetime(2026, 1, 1, 10, 0, 0)
+        later = now + timedelta(minutes=31)
+
+        with patch(
+            "custom_components.localshift.engine.outcomes.dt_util.now"
+        ) as mock_now:
+            mock_now.side_effect = [now, later]
+            tracker.record_decision(
+                coordinator_data,
+                BatteryMode.GRID_CHARGING,
+                BatteryMode.SELF_CONSUMPTION,
+            )
+            coordinator_data.soc = 60.0
+            tracker.backfill_outcomes(coordinator_data)
+
+        assert tracker.save_pending is True
+        tracker.clear_save_pending()
+        assert tracker.save_pending is False
 
 
 class TestDecisionOutcomeScoring:
@@ -543,6 +729,143 @@ class TestDecisionOutcomeScoring:
         score_long = tracker.compute_outcome_score(record_long)
 
         assert score_short < score_long
+
+
+class TestOutcomeScoringBranches:
+    """Targeted branch coverage for scoring helpers."""
+
+    def test_export_penalty_grid_imported(self, mock_hass):
+        """Grid charging with export and grid import should be penalized."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        record = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=0.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.10,
+            battery_target_soc=80.0,
+            weather_condition="sunny",
+            day_of_week=2,
+            hour_of_day=12,
+            is_demand_window=False,
+            actual_export_kwh=1.0,
+            actual_import_kwh=1.0,
+        )
+
+        assert tracker._compute_export_penalty(record) == -0.15
+
+    def test_export_penalty_export_proactive_bonus(self, mock_hass):
+        """Proactive export with export energy should get bonus."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        record = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.EXPORT_PROACTIVE,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=0.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.10,
+            battery_target_soc=80.0,
+            weather_condition="sunny",
+            day_of_week=2,
+            hour_of_day=12,
+            is_demand_window=False,
+            actual_export_kwh=1.0,
+            actual_import_kwh=0.0,
+        )
+
+        assert tracker._compute_export_penalty(record) == 0.05
+
+    def test_cost_trend_improving_and_degrading(self, mock_hass):
+        """Cost trend should detect improving and degrading patterns."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+        improving = tracker._compute_cost_trend([0.4, 0.4, 0.4, 0.4, 0.6, 0.6, 0.6])
+        degrading = tracker._compute_cost_trend([0.6, 0.6, 0.6, 0.6, 0.4, 0.4, 0.4])
+
+        assert improving == "improving"
+        assert degrading == "degrading"
+
+    def test_aggregate_mode_metrics_skips_zero_cost(self, mock_hass):
+        """Zero cost values should not be added to cost attribution."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        now = datetime.now()
+        decisions = [
+            DecisionRecord(
+                timestamp=now,
+                mode_chosen=PlannerAction.HOLD,
+                previous_mode=PlannerAction.HOLD,
+                soc_at_decision=50.0,
+                general_price_at_decision=0.25,
+                feed_in_price_at_decision=0.05,
+                forecast_solar_remaining_kwh=0.0,
+                forecast_consumption_remaining_kwh=8.0,
+                cheap_price_threshold=0.10,
+                battery_target_soc=80.0,
+                weather_condition="sunny",
+                day_of_week=2,
+                hour_of_day=12,
+                is_demand_window=False,
+                duration_minutes=10.0,
+                actual_cost_during_period=0.0,
+            )
+        ]
+
+        durations, costs = tracker._aggregate_mode_metrics(decisions)
+
+        assert durations[PlannerAction.HOLD.value] == 10.0
+        assert costs == {}
+
+
+class TestOutcomeScoringEdgeCases:
+    """Additional coverage for scoring edge cases."""
+
+    def test_target_score_zero_target_returns_zero(self, mock_hass):
+        """Target score should be neutral when target SOC is zero."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        record = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=PlannerAction.HOLD,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.10,
+            battery_target_soc=0.0,
+            weather_condition="sunny",
+            day_of_week=2,
+            hour_of_day=12,
+            is_demand_window=False,
+            actual_soc_change=0.0,
+        )
+
+        assert tracker._compute_target_score(record) == 0.0
+
+    def test_cost_trend_stable(self, mock_hass):
+        """Stable trend should be returned when averages are within threshold."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        week_scores = [0.50, 0.49, 0.51, 0.50, 0.50, 0.49, 0.50]
+
+        assert tracker._compute_cost_trend(week_scores) == "stable"
+
+    def test_get_daily_summary_with_no_decisions(self, mock_hass):
+        """Daily summary should handle no decisions gracefully."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+        summary = tracker.get_daily_summary()
+
+        assert summary.total_decisions_today == 0
+        assert summary.avg_decision_score_today == 0.0
+        assert summary.mode_durations_today == {}
+        assert summary.mode_cost_attribution == {}
 
 
 class TestTargetScoreGradient:
