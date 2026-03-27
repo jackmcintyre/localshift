@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from custom_components.localshift.learning.charge_rate import ChargeRateCurve
     from custom_components.localshift.forecast.solar_accuracy import (
         SolarAccuracyTracker,
     )
@@ -142,8 +143,14 @@ class OptimizerConfig:
     charge_rate_kw: float = 3.3
     """Maximum battery charge rate from grid in kW (matches CHARGE_RATE_GRID_KW)."""
 
+    charge_rate_curve: ChargeRateCurve | None = None
+    """Optional SOC-indexed charge rate curve for normal grid charging."""
+
     boost_charge_rate_kw: float = 5.0
     """Maximum battery charge rate in boost mode in kW."""
+
+    boost_charge_rate_curve: ChargeRateCurve | None = None
+    """Optional SOC-indexed charge rate curve for boost grid charging."""
 
     solar_charge_rate_kw: float = 5.0
     """Maximum solar-to-battery charge rate in kW (Powerwall 3 inverter limit)."""

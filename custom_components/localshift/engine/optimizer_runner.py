@@ -320,11 +320,21 @@ def _build_optimizer_config(
     )
     export_price_margin = max(0.0, export_price_margin + export_threshold_adj / 100)
 
+    charge_rate_curve = None
+    boost_charge_rate_curve = None
+    if getattr(data, "learning_enabled", False):
+        curves = getattr(data, "charge_rate_curves", None)
+        if isinstance(curves, dict):
+            charge_rate_curve = curves.get("normal")
+            boost_charge_rate_curve = curves.get("boost")
+
     return OptimizerConfig(
         # --- Battery hardware constraints ---
         battery_capacity_kwh=BATTERY_CAPACITY_KWH,
         charge_rate_kw=CHARGE_RATE_GRID_KW,  # 3.3 kW normal grid charge
+        charge_rate_curve=charge_rate_curve,
         boost_charge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW boost charge
+        boost_charge_rate_curve=boost_charge_rate_curve,
         solar_charge_rate_kw=CHARGE_RATE_SOLAR_KW,  # 5.0 kW solar->battery cap
         discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
         # --- Efficiency defaults (Powerwall typical) ---

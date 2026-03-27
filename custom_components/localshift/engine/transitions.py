@@ -26,11 +26,19 @@ def transition(
     if action == PlannerAction.HOLD:
         return _transition_hold(soc_pct, slot, config)
     if action == PlannerAction.CHARGE_GRID_NORMAL:
-        return _transition_charge_grid(soc_pct, slot, config, config.charge_rate_kw)
-    if action == PlannerAction.CHARGE_GRID_BOOST:
-        return _transition_charge_grid(
-            soc_pct, slot, config, config.boost_charge_rate_kw
+        charge_rate_kw = (
+            config.charge_rate_curve.rate_at_soc(soc_pct)
+            if config.charge_rate_curve is not None
+            else config.charge_rate_kw
         )
+        return _transition_charge_grid(soc_pct, slot, config, charge_rate_kw)
+    if action == PlannerAction.CHARGE_GRID_BOOST:
+        boost_rate_kw = (
+            config.boost_charge_rate_curve.rate_at_soc(soc_pct)
+            if config.boost_charge_rate_curve is not None
+            else config.boost_charge_rate_kw
+        )
+        return _transition_charge_grid(soc_pct, slot, config, boost_rate_kw)
     if action == PlannerAction.EXPORT_PROACTIVE:
         return _transition_export(soc_pct, slot, config)
     return soc_pct, 0.0, 0.0
