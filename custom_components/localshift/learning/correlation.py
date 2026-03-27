@@ -302,6 +302,7 @@ class WeatherCorrelation:
         self._store = Store[dict[str, Any]](
             hass, STORAGE_VERSION, f"{DOMAIN}_{STORAGE_KEY}"
         )
+        self._store._async_migrate_func = self._async_migrate_store_data
         self._data: WeatherCorrelationData = WeatherCorrelationData()
         self._initialized = False
 
@@ -314,6 +315,24 @@ class WeatherCorrelation:
             hass, entry, self._data.weather_entity_id
         )
         self._anomaly_detector = WeatherAnomalyDetector(self._data.temperature_history)
+
+    async def _async_migrate_store_data(
+        self,
+        old_major_version: int,
+        old_minor_version: int,
+        old_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Migrate persisted weather-correlation payload to current schema."""
+        if old_major_version == STORAGE_VERSION:
+            return old_data
+
+        if old_major_version == 1:
+            return WeatherCorrelationData.from_dict(old_data).to_dict()
+
+        raise NotImplementedError(
+            "Unsupported weather correlation storage version: "
+            f"{old_major_version}.{old_minor_version}"
+        )
 
     async def async_initialize(self) -> None:
         """Load persisted data from storage."""
