@@ -21,6 +21,7 @@ The optimizer assumes fixed grid and boost charge rates (3.3 kW / 5.0 kW). In pr
 - Changing discharge modeling or load forecasting.
 - Introducing new UI entities in this phase.
 - Rewriting the optimizer or planning model structure.
+- Learning solar charge rate (solar remains fixed at current limit in this phase).
 
 ## Solution
 
@@ -82,12 +83,12 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Store learned curves and diagnostics in the learning storage under a new key, e.g. `localshift.charge_rate_curves.{entry_id}` (separate from adaptive scalar parameters).
 - Integrate into `LearningOrchestrator` lifecycle (load, update on medium tick, persist on save).
 - Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows. Slots without a charge action are ignored.
-- Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows. Slots without a charge action are ignored.
 - Labeling rules:
   - If decision action is `CHARGE_GRID_BOOST`, classify as boost.
   - If decision action is `CHARGE_GRID_NORMAL`, classify as normal.
   - Otherwise skip the slot.
 - If a decision record is missing for a slot, skip it (do not infer from telemetry alone).
+- If a decision indicates charging but measured power is near-zero or contradicts the sign, skip the slot and log a mismatch diagnostic.
 - Minimum samples per regime (normal/boost) before activating learned curves (e.g., 50+ per regime).
 - Surface diagnostics via existing learning sensors (sample count, last update, confidence, active/disabled).
 - Add a labeled-sample quality diagnostic (labeled slots / total slots) to detect regime labeling gaps.
@@ -105,6 +106,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - If history is unavailable or incomplete, skip update and keep the last good curve (or defaults if none).
 - If either power or SOC history is missing, skip update and log diagnostics.
 - If configured entity IDs change, invalidate curves and re-learn from history.
+- If HA history has gaps, skip missing intervals and lower confidence via sample_count.
 
 ## Power Sign Convention
 
@@ -152,6 +154,11 @@ Confidence definition (example):
 2. `OptimizerRunner` loads curves (if valid) and builds `OptimizerConfig` with curve references.
 3. `transition()` uses `rate_at_soc()` for per-slot grid/boost charging and applies `charge_efficiency`.
 
+## Documentation Updates
+
+- `docs/LEARNING_SYSTEM.md`: add `localshift.charge_rate_curves.{entry_id}` storage key and `ChargeRateLearner` entry.
+- `docs/ARCHITECTURE.md`: update learning system overview.
+
 ## Multi-Battery Considerations
 
 - If multiple Powerwalls are present, use aggregated power and SOC entities (home-level).
@@ -189,7 +196,10 @@ Update the Home Assistant access guidance to:
 21. Window boundary test: 30-day rollover preserves curve stability.
 22. Sparse bin handling test: bins with few/no samples interpolate from neighbors.
 23. Decision gap test: missing decision records reduce labeled-sample ratio and skip learning.
-24. Regime switch test: decision changes mid-slot handled deterministically.
+24. Regime switch test: decision changes mid-slot handled deterministically (later decision wins).
+25. Decision gap partial-cycle test: charging decision but no observed charging -> skip and log.
+26. History gap test: HA recorder missing intervals handled without failure.
+27. Multi-entry isolation test: curves scoped by entry_id.
 
 ## Risks and Mitigations
 
