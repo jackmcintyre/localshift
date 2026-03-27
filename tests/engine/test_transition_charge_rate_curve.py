@@ -127,3 +127,25 @@ def test_optimizer_runner_ignores_curves_when_learning_disabled() -> None:
 
     assert config.charge_rate_curve is None
     assert config.boost_charge_rate_curve is None
+
+
+def test_optimizer_runner_applies_curves_when_learning_enabled() -> None:
+    curve_normal = ChargeRateCurve.from_bins({0: 4.0})
+    curve_boost = ChargeRateCurve.from_bins({0: 6.0})
+
+    class DummyData:
+        def __init__(self) -> None:
+            self.effective_cheap_price = 0.1
+            self.general_price = 0.2
+            self.adaptive_params = None
+            self.forecast_horizon_hours = 24.0
+            self.charge_rate_curves = {
+                "normal": curve_normal,
+                "boost": curve_boost,
+            }
+            self.learning_enabled = True
+
+    config = _build_optimizer_config(DummyData(), {})
+
+    assert config.charge_rate_curve is curve_normal
+    assert config.boost_charge_rate_curve is curve_boost
