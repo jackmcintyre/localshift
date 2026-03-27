@@ -704,43 +704,6 @@ class TestAsyncStop:
 
 
 # =============================================================================
-# SHADOW OPTIMIZER CONFIG PLUMBING TESTS
-# =============================================================================
-
-
-@pytest.mark.skip(reason="Phase 3 removed _run_shadow_optimizer from coordinator")
-class TestShadowOptimizerConfigPlumbing:
-    """Tests that _run_shadow_optimizer passes required config keys.
-
-    Issue #409: The coordinator was not passing CONF_ALLOW_DW_ENTRY_UNDER_TARGET
-    in config_options, so the DP optimizer always received allow_dw_entry_under_target=False
-    regardless of the switch state.
-    """
-
-    def test_config_options_includes_allow_dw_entry_under_target(
-        self, coordinator, coordinator_data
-    ):
-        """CONF_ALLOW_DW_ENTRY_UNDER_TARGET must be in config_options passed to runner.
-
-        Captures the config_options dict by mocking run_shadow_optimizer and
-        asserting the key is present with the value derived from get_option.
-        """
-        from custom_components.localshift.const import CONF_ALLOW_DW_ENTRY_UNDER_TARGET
-
-        assert CONF_ALLOW_DW_ENTRY_UNDER_TARGET is not None
-
-    def test_config_options_allow_dw_entry_under_target_reflects_option(
-        self, mock_hass_with_services, mock_entry
-    ):
-        """Switch value in options must be forwarded to config_options."""
-        from custom_components.localshift.const import (
-            CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
-        )
-
-        assert CONF_ALLOW_DW_ENTRY_UNDER_TARGET is not None
-
-
-# =============================================================================
 # MEDIUM TICK OPTIMIZATION CONTROLLER WIRING TESTS (Issue #449 Phase 7)
 # =============================================================================
 
