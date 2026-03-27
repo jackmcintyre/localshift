@@ -52,6 +52,11 @@ TESLEMETRY_EXPORT_BATTERY_OK = "battery_ok"
 CHARGE_RATE_GRID_KW = 3.3  # Grid charging rate (backup mode)
 CHARGE_RATE_BOOST_KW = 5.0  # Boost charge rate (autonomous mode)
 CHARGE_RATE_SOLAR_KW = 5.0  # Max solar-to-battery charge rate (inverter limit)
+CHARGE_RATE_MAX_KW = 10.0
+CHARGE_RATE_MIN_SAMPLES = 50
+CHARGE_RATE_SOC_BIN_STEP = 5
+CHARGE_RATE_CALIBRATION_SLOTS = 6
+CHARGE_RATE_POWER_THRESHOLD_KW = 0.1
 
 # Tesla firmware (July 2025) silently resets backup reserve values 81-99% to 80%.
 # Valid backup reserve values: 0-80% or 100%
