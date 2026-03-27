@@ -83,6 +83,9 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
 - Store learned curves and diagnostics in the learning storage under a new key, e.g. `localshift.charge_rate_curves.{entry_id}` (separate from adaptive scalar parameters).
 - Integrate into `LearningOrchestrator` lifecycle (load, update on medium tick, persist on save).
 - Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows. Slots without a charge action are ignored.
+- Use decision outcomes to label samples as normal vs boost by aligning decision timestamps with telemetry windows.
+- Decision storage source: `localshift.decision_outcomes.{entry_id}`. Match decision timestamps to slot windows in local time.
+- Slots without a charge action are ignored.
 - Labeling rules:
   - If decision action is `CHARGE_GRID_BOOST`, classify as boost.
   - If decision action is `CHARGE_GRID_NORMAL`, classify as normal.
@@ -100,6 +103,8 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
   - Configured battery SOC entity
 - Entity IDs are resolved from config entry options with defaults to the LocalShift battery sensors when available.
 - Resample to optimizer slot size and compute deltas.
+- Resample to optimizer slot size and compute deltas using per-slot mean of power values; SOC uses last observation carried forward within the slot.
+- If a slot has no data, skip it and lower confidence via sample_count.
 - Use HA history helpers (recorder/statistics) rather than raw HTTP; fail gracefully on missing history.
 - Use HA history helpers (recorder/statistics) rather than raw HTTP; handle `HomeAssistantError` and timeouts with a skip-and-log path.
 - Update cadence: recompute curves once per day (or on existing medium tick) to avoid heavy recomputation per cycle.
@@ -117,6 +122,7 @@ Build a learning pipeline that derives SOC-dependent effective charge rates for 
   - If power sign and SOC delta disagree for >3 consecutive slots, invert the sign for learning.
 - During calibration, use default sign convention and suppress curve updates until calibration completes.
 - Allow an explicit override in config options if automatic detection fails.
+- Allow an explicit override in config options (config flow options) if automatic detection fails.
 
 ## Curve Representation
 
@@ -139,7 +145,7 @@ class ChargeRateCurve:
 
 Confidence definition (example):
 
-- `confidence = min(1.0, sample_count / min_samples) * (1.0 - normalized_mad)`
+- `confidence = min(1.0, sample_count / min_samples) * max(0.0, 1.0 - normalized_mad)`
 - `normalized_mad` is median absolute deviation of residuals, scaled to 0-1
 
 ## Lifecycle and Persistence
@@ -166,10 +172,7 @@ Confidence definition (example):
 
 ## HA Access Rule Update
 
-Update the Home Assistant access guidance to:
-
-- Always source `~/.config/localshift/ha.env` before any HA CLI access.
-- Explicitly block workaround methods that bypass the env file.
+Move HA access guidance updates to developer docs (`docs/DEVELOPER_GUIDE.md`) to avoid mixing process rules into design specs.
 
 ## Testing Strategy
 
@@ -200,6 +203,8 @@ Update the Home Assistant access guidance to:
 25. Decision gap partial-cycle test: charging decision but no observed charging -> skip and log.
 26. History gap test: HA recorder missing intervals handled without failure.
 27. Multi-entry isolation test: curves scoped by entry_id.
+28. Curve wiring test: OptimizerConfig passes curve to transition function.
+29. Corrupt curve data test: startup falls back to defaults without crashing.
 
 ## Risks and Mitigations
 
