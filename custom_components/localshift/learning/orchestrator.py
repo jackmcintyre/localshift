@@ -15,9 +15,9 @@ from ..const import (
     CONF_POWER_SIGN_OVERRIDE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_SOC,
-    BatteryMode,
     DEFAULT_POWER_SIGN_OVERRIDE,
     SWITCH_ENABLE_LEARNING,
+    BatteryMode,
 )
 from ..engine.counterfactual import CounterfactualEvaluator
 from ..engine.optimizer_dp import PlannerAction
@@ -403,18 +403,15 @@ class LearningOrchestrator:
             soc_history,
             decisions,
         )
-        if not updated:
-            return
 
-        curve_normal = self.charge_rate_learner.get_curve("normal")
-        curve_boost = self.charge_rate_learner.get_curve("boost")
-        if curve_normal is None and curve_boost is None:
-            return
-
-        data.charge_rate_curves = {
-            "normal": curve_normal,
-            "boost": curve_boost,
-        }
+        if updated:
+            curve_normal = self.charge_rate_learner.get_curve("normal")
+            curve_boost = self.charge_rate_learner.get_curve("boost")
+            if curve_normal is not None or curve_boost is not None:
+                data.charge_rate_curves = {
+                    "normal": curve_normal,
+                    "boost": curve_boost,
+                }
         data.charge_rate_diagnostics = self.charge_rate_learner.diagnostics
         data.learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
 
@@ -425,7 +422,11 @@ class LearningOrchestrator:
             data,
         )
 
-        self._last_charge_rate_update = dt_util.now() or datetime.now()
+        if not updated and mode_analysis_date_to_persist is None:
+            return
+
+        if updated:
+            self._last_charge_rate_update = dt_util.now() or datetime.now()
 
         await self.charge_rate_learner.async_save()
         if mode_analysis_date_to_persist is not None:

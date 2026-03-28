@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import sys
 import types
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.engine.optimizer_dp import PlannerAction
 from custom_components.localshift.const import (
     CHARGE_RATE_SOC_BIN_STEP,
     MODE_RATE_SOC_BIN_STEP,
 )
+from custom_components.localshift.engine.optimizer_dp import PlannerAction
 from custom_components.localshift.learning.charge_rate import (
     ChargeRateCurve,
     ChargeRateLearner,
@@ -357,21 +357,23 @@ async def test_charge_rate_learner_async_fetch_history_missing_entities():
 @pytest.mark.asyncio
 async def test_charge_rate_learner_async_fetch_history_parses_recorder(monkeypatch):
     hass = MagicMock()
-    hass.async_add_executor_job = AsyncMock(
-        return_value={
-            "sensor.power": [
-                {"start": datetime(2024, 1, 1, 0, 0, tzinfo=UTC), "mean": 2.5}
-            ]
-        }
-    )
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
 
     state = SimpleNamespace(
         last_updated=datetime(2024, 1, 1, 0, 15, tzinfo=UTC), state="45"
     )
     history_module = types.SimpleNamespace(
-        get_significant_states=AsyncMock(return_value={"sensor.soc": [state]})
+        get_significant_states=MagicMock(return_value={"sensor.soc": [state]})
     )
-    statistics_module = types.SimpleNamespace(statistics_during_period=MagicMock())
+    statistics_module = types.SimpleNamespace(
+        statistics_during_period=MagicMock(
+            return_value={
+                "sensor.power": [
+                    {"start": datetime(2024, 1, 1, 0, 0, tzinfo=UTC), "mean": 2.5}
+                ]
+            }
+        )
+    )
     recorder_module = types.SimpleNamespace(
         history=history_module, statistics=statistics_module
     )
@@ -385,6 +387,113 @@ async def test_charge_rate_learner_async_fetch_history_parses_recorder(monkeypat
         power_entity_id="sensor.power",
         soc_entity_id="sensor.soc",
     )
+    power_history, soc_history = await learner.async_fetch_history()
+
+    assert power_history == [(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 2.5)]
+    assert soc_history == [(datetime(2024, 1, 1, 0, 15, tzinfo=UTC), 45.0)]
+
+
+@pytest.mark.asyncio
+async def test_charge_rate_learner_async_fetch_history_normalizes_unix_timestamps(
+    monkeypatch,
+):
+    hass = MagicMock()
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
+
+    state = SimpleNamespace(
+        last_updated=datetime(2024, 1, 1, 0, 15, tzinfo=UTC), state="45"
+    )
+    unix_start = 1704067200.0
+    history_module = types.SimpleNamespace(
+        get_significant_states=MagicMock(return_value={"sensor.soc": [state]})
+    )
+    statistics_module = types.SimpleNamespace(
+        statistics_during_period=MagicMock(
+            return_value={"sensor.power": [{"start": unix_start, "mean": 2.5}]}
+        )
+    )
+    recorder_module = types.SimpleNamespace(
+        history=history_module, statistics=statistics_module
+    )
+    monkeypatch.setitem(
+        sys.modules, "homeassistant.components.recorder", recorder_module
+    )
+
+    learner = ChargeRateLearner(
+        hass,
+        entry_id="entry-15b",
+        power_entity_id="sensor.power",
+        soc_entity_id="sensor.soc",
+    )
+    power_history, soc_history = await learner.async_fetch_history()
+
+    assert power_history == [(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 2.5)]
+    assert soc_history == [(datetime(2024, 1, 1, 0, 15, tzinfo=UTC), 45.0)]
+
+
+@pytest.mark.asyncio
+async def test_charge_rate_learner_async_fetch_history_uses_keyword_stats_call(
+    monkeypatch,
+):
+    hass = MagicMock()
+
+    def strict_statistics_during_period(
+        hass_obj,
+        start,
+        end,
+        statistic_ids,
+        *,
+        period,
+        types,
+        units,
+    ):
+        assert period == "5minute"
+        assert types == {"mean"}
+        assert units is None
+        return {
+            "sensor.power": [
+                {"start": datetime(2024, 1, 1, 0, 0, tzinfo=UTC), "mean": 2.5}
+            ]
+        }
+
+    async def run_executor_job(func, *args):
+        return func(*args)
+
+    hass.async_add_executor_job = run_executor_job
+
+    def strict_get_significant_states(
+        hass_obj,
+        *,
+        start_time,
+        end_time,
+        entity_ids,
+    ):
+        assert entity_ids == ["sensor.soc"]
+        return {"sensor.soc": [state]}
+
+    state = SimpleNamespace(
+        last_updated=datetime(2024, 1, 1, 0, 15, tzinfo=UTC), state="45"
+    )
+    history_module = types.SimpleNamespace(
+        get_significant_states=strict_get_significant_states
+    )
+    statistics_module = types.SimpleNamespace(
+        statistics_during_period=strict_statistics_during_period
+    )
+    recorder_module = types.SimpleNamespace(
+        history=history_module, statistics=statistics_module
+    )
+    monkeypatch.setitem(
+        sys.modules, "homeassistant.components.recorder", recorder_module
+    )
+
+    learner = ChargeRateLearner(
+        hass,
+        entry_id="entry-strict",
+        power_entity_id="sensor.power",
+        soc_entity_id="sensor.soc",
+    )
+
     power_history, soc_history = await learner.async_fetch_history()
 
     assert power_history == [(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 2.5)]
@@ -563,12 +672,17 @@ async def test_charge_rate_learner_async_fetch_history_now_none(monkeypatch):
 async def test_charge_rate_learner_async_fetch_history_handles_soc_error(monkeypatch):
     hass = MagicMock()
     hass.async_add_executor_job = AsyncMock(
-        return_value={
-            "sensor.power": [{"start": datetime(2024, 1, 1, tzinfo=UTC), "mean": 2.0}]
-        }
+        side_effect=[
+            {
+                "sensor.power": [
+                    {"start": datetime(2024, 1, 1, tzinfo=UTC), "mean": 2.0}
+                ]
+            },
+            Exception("boom"),
+        ]
     )
     history_module = types.SimpleNamespace(
-        get_significant_states=AsyncMock(side_effect=Exception("boom"))
+        get_significant_states=MagicMock(side_effect=Exception("boom"))
     )
     statistics_module = types.SimpleNamespace(statistics_during_period=MagicMock())
     recorder_module = types.SimpleNamespace(

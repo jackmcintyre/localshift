@@ -2,21 +2,21 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
 import types
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.coordinator.data import (
-    CoordinatorData,
-    PerformanceMetrics,
-)
 from custom_components.localshift.const import (
     CONF_POWER_SIGN_OVERRIDE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_SOC,
     POWER_SIGN_POSITIVE,
+)
+from custom_components.localshift.coordinator.data import (
+    CoordinatorData,
+    PerformanceMetrics,
 )
 from custom_components.localshift.engine.optimizer_dp import PlannerAction
 
@@ -34,9 +34,10 @@ def _make_orchestrator():
 
 @pytest.mark.asyncio
 async def test_async_initialize_loads_components(monkeypatch):
-    from custom_components.localshift.learning import orchestrator as module
     import sys
     import types
+
+    from custom_components.localshift.learning import orchestrator as module
 
     class DummyTracker:
         def __init__(self, *args, **_kwargs) -> None:
@@ -726,6 +727,7 @@ class TestOrchestratorChargeRateLearning:
     async def test_async_update_charge_rate_skips_when_no_curves(self):
         orchestrator = _make_orchestrator()
         orchestrator.decision_tracker = MagicMock()
+        orchestrator.decision_tracker.get_recent_decisions.return_value = []
         learner = MagicMock()
         history_point = (datetime.now(), 1.0)
         learner.async_fetch_history = AsyncMock(
@@ -733,30 +735,64 @@ class TestOrchestratorChargeRateLearning:
         )
         learner.update_from_history.return_value = True
         learner.get_curve.return_value = None
+        learner.update_mode_analysis_from_history.return_value = True
+        learner.get_mode_analysis_payload.return_value = {
+            "generated_at": "2026-03-28T00:00:00+00:00",
+            "method": {"soc_bin_pct": 1, "resample": "1m"},
+            "window": {"history_window_days": 14},
+            "soc_bins_1pct_by_mode": {},
+        }
+        learner.async_save = AsyncMock()
         orchestrator.charge_rate_learner = learner
+        mode_state_store = MagicMock()
+        mode_state_store.async_save = AsyncMock()
+        orchestrator._mode_analysis_state_store = mode_state_store
 
         data = CoordinatorData()
         await orchestrator._async_update_charge_rate(data)
 
-        assert orchestrator._last_charge_rate_update is None
+        learner.update_mode_analysis_from_history.assert_called_once()
+        assert (
+            data.charge_rate_mode_analysis
+            == learner.get_mode_analysis_payload.return_value
+        )
+        assert orchestrator._last_charge_rate_update is not None
         assert getattr(data, "charge_rate_curves", None) == {}
 
     @pytest.mark.asyncio
-    async def test_async_update_charge_rate_skips_when_not_updated(self):
+    async def test_async_update_charge_rate_runs_mode_analysis_when_not_updated(self):
         orchestrator = _make_orchestrator()
         orchestrator.decision_tracker = MagicMock()
+        orchestrator.decision_tracker.get_recent_decisions.return_value = []
         learner = MagicMock()
         history_point = (datetime.now(), 1.0)
         learner.async_fetch_history = AsyncMock(
             return_value=([history_point], [history_point])
         )
         learner.update_from_history.return_value = False
+        learner.update_mode_analysis_from_history.return_value = True
+        learner.get_mode_analysis_payload.return_value = {
+            "generated_at": "2026-03-28T00:00:00+00:00",
+            "method": {"soc_bin_pct": 1, "resample": "1m"},
+            "window": {"history_window_days": 14},
+            "soc_bins_1pct_by_mode": {},
+        }
+        learner.async_save = AsyncMock()
         orchestrator.charge_rate_learner = learner
+        mode_state_store = MagicMock()
+        mode_state_store.async_save = AsyncMock()
+        orchestrator._mode_analysis_state_store = mode_state_store
 
         data = CoordinatorData()
         await orchestrator._async_update_charge_rate(data)
 
+        learner.update_mode_analysis_from_history.assert_called_once()
+        assert (
+            data.charge_rate_mode_analysis
+            == learner.get_mode_analysis_payload.return_value
+        )
         assert orchestrator._last_charge_rate_update is None
+        learner.async_save.assert_awaited_once()
 
 
 class TestOrchestratorLifecycle:

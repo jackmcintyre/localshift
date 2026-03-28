@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Iterable, cast
+from functools import partial
+from typing import Any, cast
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import (
-    BatteryMode,
     CHARGE_RATE_CALIBRATION_SLOTS,
     CHARGE_RATE_MAX_KW,
     CHARGE_RATE_MIN_SAMPLES,
@@ -21,6 +22,7 @@ from ..const import (
     POWER_SIGN_AUTO,
     POWER_SIGN_NEGATIVE,
     POWER_SIGN_POSITIVE,
+    BatteryMode,
 )
 from ..engine.optimizer_dp import PlannerAction
 
@@ -550,26 +552,33 @@ class ChargeRateLearner:
             return [], []
 
         try:
-            power_history = await self.hass.async_add_executor_job(
+            fetch_power_stats = partial(
                 recorder_statistics.statistics_during_period,
                 self.hass,
                 start,
                 now,
                 [self._power_entity_id],
-                "5minute",
-                {"mean"},
-                None,
+                period="5minute",
+                types={"mean"},
+                units=None,
+            )
+            power_history = await self.hass.async_add_executor_job(
+                fetch_power_stats,
             )
         except Exception as err:
             _LOGGER.warning("Charge rate power history fetch failed: %s", err)
             return [], []
 
         try:
-            soc_history = await recorder_history.get_significant_states(
+            fetch_soc_history = partial(
+                recorder_history.get_significant_states,
                 self.hass,
                 start_time=start,
                 end_time=now,
                 entity_ids=[self._soc_entity_id],
+            )
+            soc_history = await self.hass.async_add_executor_job(
+                fetch_soc_history,
             )
         except Exception as err:
             _LOGGER.warning("Charge rate SOC history fetch failed: %s", err)
@@ -590,8 +599,20 @@ class ChargeRateLearner:
                         "unavailable",
                     ):
                         continue
+
+                    parsed_start_time: datetime | None = None
+                    if isinstance(start_time, datetime):
+                        parsed_start_time = start_time
+                    elif isinstance(start_time, int | float):
+                        parsed_start_time = dt_util.utc_from_timestamp(start_time)
+                    elif isinstance(start_time, str):
+                        parsed_start_time = dt_util.parse_datetime(start_time)
+
+                    if parsed_start_time is None:
+                        continue
+
                     try:
-                        power_points.append((start_time, float(mean_val)))
+                        power_points.append((parsed_start_time, float(mean_val)))
                     except (TypeError, ValueError):
                         continue
 
