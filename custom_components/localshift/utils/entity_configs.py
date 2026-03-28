@@ -386,6 +386,11 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": int,
         "staleness_minutes": 60,
     },
+    "sensor.localshift_charge_rate_mode_analysis": {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": str,
+        "staleness_minutes": 1440,
+    },
     "sensor.localshift_decision_log": {
         "category": EntityCategory.OPTIONAL,
         "expected_type": str,

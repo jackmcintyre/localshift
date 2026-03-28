@@ -1,13 +1,73 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from datetime import timedelta
+from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.util import dt as dt_util
 
 from .base import LocalShiftSensorBase
 
-if TYPE_CHECKING:
-    pass
+MODE_RATE_MAX_ROWS_PER_MODE = 48
+MODE_RATE_STALE_MINUTES = 1440
+MODE_RATE_REQUIRED_KEYS = (
+    "self_consumption",
+    "grid_charging",
+    "boost_charging",
+    "spike_discharge",
+    "proactive_export",
+    "demand_block",
+    "hold",
+    "manual",
+)
+
+
+def _is_mode_analysis_stale(payload: dict[str, Any]) -> bool:
+    generated_at_raw = payload.get("generated_at")
+    if not isinstance(generated_at_raw, str) or not generated_at_raw:
+        return True
+
+    generated_at = dt_util.parse_datetime(generated_at_raw)
+    now = dt_util.now()
+    if generated_at is None or now is None:
+        return True
+
+    return (dt_util.as_utc(now) - dt_util.as_utc(generated_at)) > timedelta(
+        minutes=MODE_RATE_STALE_MINUTES
+    )
+
+
+def _sanitize_mode_rows(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+
+    sanitized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        soc = row.get("soc")
+        n = row.get("n")
+        charge_kw = row.get("charge_kw")
+        discharge_kw = row.get("discharge_kw")
+        if not isinstance(soc, (int, float)):
+            continue
+        if not isinstance(n, (int, float)) or n <= 0:
+            continue
+        if not isinstance(charge_kw, (int, float)):
+            continue
+        if not isinstance(discharge_kw, (int, float)):
+            continue
+
+        sanitized.append({
+            "soc": int(soc),
+            "n": int(n),
+            "charge_kw": float(charge_kw),
+            "discharge_kw": float(discharge_kw),
+        })
+
+    sanitized.sort(key=lambda row: row["soc"])
+    return sanitized[:MODE_RATE_MAX_ROWS_PER_MODE]
 
 
 class LearningStatusSensor(LocalShiftSensorBase):
@@ -115,4 +175,42 @@ class OptimizerAdvantageSensor(LocalShiftSensorBase):
             "tou_cost": round(metrics.counterfactual_tou_cost, 2),
             "actual_cost": round(metrics.counterfactual_actual_cost, 2),
             "degrading": metrics.counterfactual_degrading,
+        }
+
+
+class ChargeRateModeAnalysisSensor(LocalShiftSensorBase):
+    _attr_unique_id = "localshift_charge_rate_mode_analysis"
+    _attr_name = "Charge Rate Mode Analysis"
+    _attr_icon = "mdi:chart-timeline-variant"
+
+    def _update_from_coordinator(self) -> None:
+        payload = self.coordinator.data.charge_rate_mode_analysis
+        if (
+            isinstance(payload, dict)
+            and payload
+            and not _is_mode_analysis_stale(payload)
+        ):
+            self._attr_native_value = "ready"
+        else:
+            self._attr_native_value = "stale"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        payload = self.coordinator.data.charge_rate_mode_analysis
+        payload_dict = payload if isinstance(payload, dict) else {}
+        raw_bins = payload_dict.get("soc_bins_1pct_by_mode")
+        bins_by_mode = raw_bins if isinstance(raw_bins, dict) else {}
+        sparse_bins = {
+            mode: _sanitize_mode_rows(bins_by_mode.get(mode))
+            for mode in MODE_RATE_REQUIRED_KEYS
+        }
+        return {
+            "generated_at": payload_dict.get("generated_at"),
+            "method": payload_dict.get("method")
+            if isinstance(payload_dict.get("method"), dict)
+            else {},
+            "window": payload_dict.get("window")
+            if isinstance(payload_dict.get("window"), dict)
+            else {},
+            "soc_bins_1pct_by_mode": sparse_bins,
         }

@@ -87,6 +87,13 @@ class TestLocalshiftEntityConfig:
         assert "sensor.localshift_excess_solar" in LOCALSHIFT_ENTITY_CONFIG
         assert "sensor.localshift_excess_solar_kwh" not in LOCALSHIFT_ENTITY_CONFIG
 
+    def test_charge_rate_mode_analysis_staleness_is_daily(self):
+        """Charge-rate mode analysis diagnostics should be treated as daily data."""
+        config = LOCALSHIFT_ENTITY_CONFIG["sensor.localshift_charge_rate_mode_analysis"]
+        assert config["category"] == EntityCategory.OPTIONAL
+        assert config["expected_type"] is str
+        assert config["staleness_minutes"] == 1440
+
     def test_all_entries_have_category(self):
         """All entries should have a category."""
         for entity_id, config in LOCALSHIFT_ENTITY_CONFIG.items():

@@ -14,6 +14,7 @@ from .forecast import (
     SolarBatteryForecastSensor,
 )
 from .learning import (
+    ChargeRateModeAnalysisSensor,
     DecisionQualitySensor,
     LearningDecisionHistorySensor,
     LearningStatusSensor,
@@ -81,6 +82,7 @@ __all__ = [
     "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
     "OptimizerAdvantageSensor",
+    "ChargeRateModeAnalysisSensor",
     # Status
     "IntegrationStatusSensor",
     "EntityHealthSensor",

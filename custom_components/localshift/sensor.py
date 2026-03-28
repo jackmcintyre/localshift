@@ -3,6 +3,7 @@
 from .sensors import (
     AutomationReadySensor,
     CheapChargeStopPriceSensor,
+    ChargeRateModeAnalysisSensor,
     CloudEventSensor,
     ComparisonResultSensor,
     DecisionLagSensor,
@@ -65,6 +66,7 @@ __all__ = [
     "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
     "OptimizerAdvantageSensor",
+    "ChargeRateModeAnalysisSensor",
     "DecisionLagSensor",
     "ExtendedForecastAccuracySensor",
     "ForecastStatusSensor",
@@ -88,6 +90,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     from .sensors import (
         AutomationReadySensor,
         CheapChargeStopPriceSensor,
+        ChargeRateModeAnalysisSensor,
         CloudEventSensor,
         ComparisonResultSensor,
         DecisionLagSensor,
@@ -156,6 +159,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         LearningDecisionHistorySensor(coordinator, entry),
         # Counterfactual optimizer advantage sensor (Issue #683)
         OptimizerAdvantageSensor(coordinator, entry),
+        # Mode-aware charge-rate diagnostics sensor (Task 4)
+        ChargeRateModeAnalysisSensor(coordinator, entry),
         # Decision-to-implementation lag sensor (Issue #501)
         DecisionLagSensor(coordinator, entry),
         # Extended forecast accuracy sensor (Issue #270)

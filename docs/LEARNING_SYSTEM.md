@@ -228,6 +228,20 @@ Charge-rate learning uses these configurable inputs (options flow):
 - Battery SOC entity ID
 - Power sign override (`auto`, `positive`, `negative`)
 
+### Mode Analysis Diagnostic Sensor
+
+**Entity:** `sensor.localshift_charge_rate_mode_analysis`
+
+This sensor exposes mode-aware SOC-bin diagnostics for charge/discharge rates while
+keeping the entity state compact:
+
+- **State:** `ready` when mode-analysis data is fresh, `stale` when missing/old.
+- **Attributes:** `generated_at`, `method`, `window`, and `soc_bins_1pct_by_mode`.
+- **Sparse + capped rows:** Each mode only includes rows with `n > 0`, capped to
+  `MODE_RATE_MAX_ROWS_PER_MODE` rows per mode.
+- **Required mode keys:** Includes all mode keys, including `spike_discharge`, even
+  when a mode currently has no rows.
+
 ## FAQ
 
 ### How long before the system starts optimizing?

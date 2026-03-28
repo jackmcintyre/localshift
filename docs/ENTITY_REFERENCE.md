@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **63 entities** grouped under a single "LocalShift" device:
+The integration creates **64 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 35 | `sensor` |
+| Sensors | 36 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 5 | `number` |
@@ -541,6 +541,45 @@ State: 20
 Attributes:
   decisions: [...last 20 decisions...]
 ```
+
+---
+
+### sensor.localshift_charge_rate_mode_analysis
+
+**Purpose:** Mode-aware SOC-bin diagnostics for learned charge/discharge rates.
+
+Added in Task 4 to expose detailed charge-rate learning diagnostics without placing
+large JSON payloads in sensor state.
+
+**State:** `ready` (fresh payload) or `stale` (missing or old payload)
+
+**Example Data:**
+```
+State: ready
+Attributes:
+  generated_at: 2026-03-28T00:00:00+00:00
+  method:
+    soc_bin_pct: 1
+    resample: 1m
+  window:
+    history_window_days: 14
+  soc_bins_1pct_by_mode:
+    grid_charging:
+      - soc: 45
+        n: 3
+        charge_kw: 3.2
+        discharge_kw: 0.0
+    spike_discharge: []
+```
+
+**Key Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `generated_at` | string \| null | ISO timestamp when the payload was generated |
+| `method` | dict | Payload generation method metadata |
+| `window` | dict | Payload history window metadata |
+| `soc_bins_1pct_by_mode` | dict | Sparse, capped per-mode SOC-bin rows (includes `spike_discharge`) |
 
 ---
 

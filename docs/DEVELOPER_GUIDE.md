@@ -78,7 +78,7 @@ custom_components/localshift/
 │   ├── pricing.py           # Price-related sensors (3 sensors)
 │   ├── forecast.py          # Forecast/optimizer sensors (9 sensors)
 │   ├── status.py            # Status/health sensors (7 sensors)
-│   ├── learning.py          # Learning-related sensors (4 sensors)
+│   ├── learning.py          # Learning-related sensors (5 sensors)
 │   ├── optimizer.py         # Optimizer-specific sensors (3 sensors)
 │   ├── misc.py              # Miscellaneous sensors (2 sensors)
 │   ├── load_deviation.py    # Load deviation sensor (1 sensor)
@@ -95,7 +95,7 @@ custom_components/localshift/
 │   └── validators.py        # Config validators
 │
 ├── *.py (HA entity platforms - root level per HA convention)
-│   ├── sensor.py            # 30 sensor entities (delegates to sensors/ package)
+│   ├── sensor.py            # 31 sensor entities (delegates to sensors/ package)
 │   ├── binary_sensor.py     # 10 binary sensor entities
 │   ├── switch.py            # 8 switch entities
 │   ├── number.py            # 4 number entities
@@ -136,11 +136,11 @@ Mode selection is driven by the DP optimizer with safety gates. See [PLANNING_MO
 
 ### Entity Architecture
 
-The integration creates 56 entities:
+The integration creates 57 entities:
 
 | Platform | Count | Notes |
 |----------|-------|-------|
-| Sensors | 30 | Implementation in `sensors/` package |
+| Sensors | 31 | Implementation in `sensors/` package |
 | Binary Sensors | 10 | In `binary_sensor.py` |
 | Switches | 8 | In `switch.py` |
 | Numbers | 4 | In `number.py` |
@@ -222,6 +222,7 @@ Important sensors for debugging:
 | `sensor.localshift_cost_electricity_net` | Net electricity cost |
 | `sensor.localshift_decision_log` | Recent optimizer decisions |
 | `sensor.localshift_learning_status` | Learning system status |
+| `sensor.localshift_charge_rate_mode_analysis` | Mode-aware rate diagnostics (`ready`/`stale` + sparse bins) |
 | `sensor.localshift_automation_ready` | System ready for automation |
 
 ## Code Style

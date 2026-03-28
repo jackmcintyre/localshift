@@ -30,7 +30,7 @@ class TestSensorAsyncSetup:
 
         mock_async_add_entities.assert_called_once()
         entities = mock_async_add_entities.call_args[0][0]
-        assert len(entities) == 35  # 32 + 3 new Solcast sensors (Issue #778)
+        assert len(entities) == 36  # 35 + charge rate mode analysis sensor
         assert any(
             type(entity).__name__ == "LoadDeviationSensor" for entity in entities
         )
@@ -49,6 +49,7 @@ class TestSensorAsyncSetup:
         assert "OptimizerPlanSensor" in entity_class_names
         assert "IntegrationStatusSensor" in entity_class_names
         assert "OptimizerAdvantageSensor" in entity_class_names
+        assert "ChargeRateModeAnalysisSensor" in entity_class_names
 
 
 class TestSensorImports:
