@@ -271,7 +271,12 @@ def _transition_charge_grid(
         )
     else:
         next_soc, grid_import = _charge_grid_with_deficit(
-            soc_pct, net_kwh, max_charge_kwh, effective_charge_kwh, capacity_kwh
+            soc_pct,
+            net_kwh,
+            max_charge_kwh,
+            effective_charge_kwh,
+            capacity_kwh,
+            config.charge_efficiency,
         )
 
     if next_soc > config.max_soc_pct:
@@ -315,8 +320,12 @@ def _charge_grid_with_deficit(
     max_charge_kwh: float,
     effective_charge_kwh: float,
     capacity_kwh: float,
+    charge_efficiency: float,
 ) -> tuple[float, float]:
     """Calculate grid charge with consumption deficit."""
+    if charge_efficiency <= 0:
+        return soc_pct, -net_kwh
+
     grid_charge_stored_kwh = effective_charge_kwh
     grid_import_kwh = max_charge_kwh + (-net_kwh)
     delta_soc = (grid_charge_stored_kwh / capacity_kwh) * 100.0
@@ -381,9 +390,7 @@ def _transition_export(
 
     next_soc = soc_pct + delta_soc
 
-    if net_kwh > 0:
-        grid_export_kwh = net_kwh + battery_discharge_kwh
-        return next_soc, 0.0, grid_export_kwh
-
-    grid_export_kwh = max(0.0, battery_discharge_kwh + net_kwh)
-    return next_soc, 0.0, grid_export_kwh
+    net_after_battery = net_kwh + battery_discharge_kwh
+    grid_import_kwh = max(0.0, -net_after_battery)
+    grid_export_kwh = max(0.0, net_after_battery)
+    return next_soc, grid_import_kwh, grid_export_kwh

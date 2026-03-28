@@ -199,8 +199,28 @@ def test_transition_export_with_deficit_zero_efficiency() -> None:
     )
 
     assert next_soc == pytest.approx(50.0)
-    assert grid_import_kwh == 0.0
+    assert grid_import_kwh == pytest.approx(1.0)
     assert grid_export_kwh == 0.0
+
+
+def test_transition_export_with_deficit_imports_remaining_load() -> None:
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        discharge_rate_kw=2.0,
+        discharge_efficiency=1.0,
+        min_soc_pct=10.0,
+    )
+
+    next_soc, grid_import_kwh, grid_export_kwh = transition(
+        50.0,
+        PlannerAction.EXPORT_PROACTIVE,
+        _slot(solar_kwh=0.0, consumption_kwh=2.0),
+        config,
+    )
+
+    assert next_soc == pytest.approx(40.0)
+    assert grid_import_kwh == pytest.approx(1.0)
+    assert grid_export_kwh == pytest.approx(0.0)
 
 
 class _DummyCurve:
@@ -256,6 +276,25 @@ def test_transition_charge_grid_with_zero_efficiency_and_surplus() -> None:
 
     assert next_soc == pytest.approx(50.0)
     assert grid_import_kwh == pytest.approx(0.0)
+    assert grid_export_kwh == pytest.approx(0.0)
+
+
+def test_transition_charge_grid_with_zero_efficiency_and_deficit() -> None:
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        charge_rate_kw=5.0,
+        charge_efficiency=0.0,
+    )
+
+    next_soc, grid_import_kwh, grid_export_kwh = transition(
+        50.0,
+        PlannerAction.CHARGE_GRID_NORMAL,
+        _slot(solar_kwh=0.0, consumption_kwh=2.0),
+        config,
+    )
+
+    assert next_soc == pytest.approx(50.0)
+    assert grid_import_kwh == pytest.approx(2.0)
     assert grid_export_kwh == pytest.approx(0.0)
 
 
