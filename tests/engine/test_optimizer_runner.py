@@ -135,12 +135,9 @@ def test_parse_mode_rate_row_valid_and_invalid() -> None:
         _parse_mode_rate_row({"soc": 42, "charge_kw": True, "n": 7}, "charge_kw")
         is None
     )
-    assert _parse_mode_rate_row(
-        {"soc": 42, "charge_kw": 3.4, "n": True}, "charge_kw"
-    ) == (
-        42,
-        3.4,
-        1,
+    assert (
+        _parse_mode_rate_row({"soc": 42, "charge_kw": 3.4, "n": True}, "charge_kw")
+        is None
     )
 
 

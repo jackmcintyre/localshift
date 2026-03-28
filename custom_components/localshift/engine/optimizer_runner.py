@@ -452,12 +452,10 @@ def _parse_mode_rate_row(
         return None
 
     raw_samples = row.get("n")
+    if isinstance(raw_samples, bool):
+        return None
     samples = 1
-    if (
-        isinstance(raw_samples, int)
-        and not isinstance(raw_samples, bool)
-        and raw_samples > 0
-    ):
+    if isinstance(raw_samples, int) and raw_samples > 0:
         samples = raw_samples
 
     return soc, rate, samples
