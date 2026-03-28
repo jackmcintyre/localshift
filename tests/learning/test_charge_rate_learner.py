@@ -108,7 +108,9 @@ async def test_charge_rate_learner_persists_mode_payload_with_version(
         "method": {"soc_bin_pct": 1, "resample": "1m"},
         "window": {"history_window_days": 14},
         "soc_bins_1pct_by_mode": {
-            "self_consumption": [{"soc": 42, "charge_kw": 3.2, "n": 3}],
+            "self_consumption": [
+                {"soc": 42, "charge_kw": 3.2, "discharge_kw": 0.0, "n": 3}
+            ],
             "grid_charging": [],
             "boost_charging": [],
             "spike_discharge": [],

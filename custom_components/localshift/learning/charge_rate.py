@@ -193,7 +193,68 @@ def _is_valid_mode_payload(payload: Any) -> bool:
         return False
     if not isinstance(bins, dict):
         return False
-    return all(key in bins for key in _required_mode_keys())
+    for key in _required_mode_keys():
+        if key not in bins:
+            return False
+        rows = bins[key]
+        if not isinstance(rows, list):
+            return False
+        for row in rows:
+            if not isinstance(row, dict):
+                return False
+            if not isinstance(row.get("soc"), int):
+                return False
+            if not isinstance(row.get("n"), int):
+                return False
+            if not isinstance(row.get("charge_kw"), (int, float)):
+                return False
+            if not isinstance(row.get("discharge_kw"), (int, float)):
+                return False
+    return True
+
+
+def _infer_mode_analysis_power_sign(
+    power_points: list[tuple[datetime, float]], soc_points: list[tuple[datetime, float]]
+) -> float:
+    if len(soc_points) < 2 or not power_points:
+        return 1.0
+
+    power_index = 0
+    last_power: float | None = None
+    negative_charge_votes = 0
+    positive_charge_votes = 0
+
+    for idx in range(1, len(soc_points)):
+        timestamp, soc = soc_points[idx]
+        prev_soc = soc_points[idx - 1][1]
+        delta = soc - prev_soc
+        if abs(delta) < 0.001:
+            continue
+
+        while (
+            power_index < len(power_points)
+            and power_points[power_index][0] <= timestamp
+        ):
+            last_power = power_points[power_index][1]
+            power_index += 1
+
+        if last_power is None or abs(last_power) < CHARGE_RATE_POWER_THRESHOLD_KW:
+            continue
+
+        if delta > 0:
+            if last_power < 0:
+                negative_charge_votes += 1
+            else:
+                positive_charge_votes += 1
+        else:
+            if last_power > 0:
+                negative_charge_votes += 1
+            else:
+                positive_charge_votes += 1
+
+    if negative_charge_votes > positive_charge_votes:
+        return -1.0
+    return 1.0
 
 
 class ChargeRateLearner:
@@ -356,7 +417,7 @@ class ChargeRateLearner:
         elif self._power_sign_override == POWER_SIGN_NEGATIVE:
             power_sign = -1.0
         else:
-            power_sign = 1.0
+            power_sign = _infer_mode_analysis_power_sign(power_points, soc_points)
 
         all_mode_bins: dict[str, dict[int, dict[str, list[float] | int]]] = {
             mode: {} for mode in _required_mode_keys()
