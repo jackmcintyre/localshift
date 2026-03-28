@@ -184,6 +184,9 @@ async def test_async_invalidate_charge_rate_curves_configures_and_resets():
     learner.configure = MagicMock()
     learner.async_invalidate = AsyncMock()
     orchestrator.charge_rate_learner = learner
+    mode_state_store = MagicMock()
+    mode_state_store.async_save = AsyncMock()
+    orchestrator._mode_analysis_state_store = mode_state_store
     orchestrator._last_charge_rate_update = datetime.now(UTC)
     orchestrator._last_charge_rate_attempt = datetime.now(UTC)
 
@@ -197,6 +200,25 @@ async def test_async_invalidate_charge_rate_curves_configures_and_resets():
     learner.async_invalidate.assert_awaited_once()
     assert orchestrator._last_charge_rate_update is None
     assert orchestrator._last_charge_rate_attempt is None
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_charge_rate_curves_resets_mode_analysis_gate():
+    orchestrator = _make_orchestrator()
+    learner = MagicMock()
+    learner.configure = MagicMock()
+    learner.async_invalidate = AsyncMock()
+    orchestrator.charge_rate_learner = learner
+    orchestrator._last_mode_analysis_utc_date = datetime(2026, 3, 28, tzinfo=UTC).date()
+
+    mode_state_store = MagicMock()
+    mode_state_store.async_save = AsyncMock()
+    orchestrator._mode_analysis_state_store = mode_state_store
+
+    await orchestrator.async_invalidate_charge_rate_curves()
+
+    assert orchestrator._last_mode_analysis_utc_date is None
+    mode_state_store.async_save.assert_awaited_once_with({})
 
 
 def test_handle_midnight_reset_schedules_pattern_analysis():
@@ -259,7 +281,7 @@ async def test_run_pattern_analysis_skips_when_insufficient_decisions():
 class TestOrchestratorChargeRateLearning:
     @staticmethod
     def _prepare_charge_rate_learning(
-        orchestrator, *, mode_updated: bool = True
+        orchestrator, *, mode_updated: bool = True, mock_mode_state_store: bool = True
     ) -> None:
         def _consume(coro, _name=None):
             if hasattr(coro, "close"):
@@ -301,6 +323,11 @@ class TestOrchestratorChargeRateLearning:
         learner.diagnostics = {"labeled_sample_ratio": 1.0}
         learner.async_save = AsyncMock()
         orchestrator.charge_rate_learner = learner
+
+        if mock_mode_state_store:
+            mode_state_store = MagicMock()
+            mode_state_store.async_save = AsyncMock()
+            orchestrator._mode_analysis_state_store = mode_state_store
 
     @pytest.mark.asyncio
     async def test_daily_mode_analysis_updates_once_per_day(self, monkeypatch):
@@ -371,13 +398,13 @@ class TestOrchestratorChargeRateLearning:
         )
 
         orchestrator = _make_orchestrator()
-        self._prepare_charge_rate_learning(orchestrator)
+        self._prepare_charge_rate_learning(orchestrator, mock_mode_state_store=False)
         data = CoordinatorData()
         await orchestrator._async_update_charge_rate(data)
         await orchestrator._async_save_mode_analysis_state()
 
         restarted = _make_orchestrator()
-        self._prepare_charge_rate_learning(restarted)
+        self._prepare_charge_rate_learning(restarted, mock_mode_state_store=False)
         await restarted._async_load_mode_analysis_state()
         await restarted._async_update_charge_rate(CoordinatorData())
 
@@ -385,6 +412,66 @@ class TestOrchestratorChargeRateLearning:
             restarted.charge_rate_learner.update_mode_analysis_from_history.call_count
             == 0
         )
+
+    @pytest.mark.asyncio
+    async def test_daily_mode_analysis_recomputes_same_day_after_invalidation(
+        self, monkeypatch
+    ):
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+        data = CoordinatorData()
+
+        now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: now,
+        )
+
+        mode_state_store = MagicMock()
+        mode_state_store.async_save = AsyncMock()
+        orchestrator._mode_analysis_state_store = mode_state_store
+        orchestrator.charge_rate_learner.async_invalidate = AsyncMock()
+
+        await orchestrator._async_update_charge_rate(data)
+        await orchestrator.async_invalidate_charge_rate_curves()
+        await orchestrator._async_update_charge_rate(CoordinatorData())
+
+        assert (
+            orchestrator.charge_rate_learner.update_mode_analysis_from_history.call_count
+            == 2
+        )
+
+    @pytest.mark.asyncio
+    async def test_mode_analysis_state_save_waits_for_payload_save(self, monkeypatch):
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+        data = CoordinatorData()
+
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: datetime(2026, 3, 28, 12, 0, tzinfo=UTC),
+        )
+
+        save_order: list[str] = []
+
+        async def _save_payload() -> None:
+            save_order.append("payload")
+
+        async def _save_mode_state() -> None:
+            save_order.append("mode_state")
+
+        orchestrator.charge_rate_learner.async_save = AsyncMock(
+            side_effect=_save_payload
+        )
+        orchestrator._async_save_mode_analysis_state = AsyncMock(
+            side_effect=_save_mode_state
+        )
+
+        await orchestrator._async_update_charge_rate(data)
+
+        orchestrator.charge_rate_learner.async_save.assert_awaited_once()
+        orchestrator._async_save_mode_analysis_state.assert_awaited_once()
+        assert save_order == ["payload", "mode_state"]
 
     @pytest.mark.asyncio
     async def test_sets_mode_analysis_payload_on_data(self, monkeypatch):
@@ -503,6 +590,9 @@ class TestOrchestratorChargeRateLearning:
         charge_rate_learner.diagnostics = {"labeled_sample_ratio": 1.0}
         charge_rate_learner.async_save = AsyncMock()
         orchestrator.charge_rate_learner = charge_rate_learner
+        mode_state_store = MagicMock()
+        mode_state_store.async_save = AsyncMock()
+        orchestrator._mode_analysis_state_store = mode_state_store
 
         data = CoordinatorData()
         data.performance_metrics = PerformanceMetrics()

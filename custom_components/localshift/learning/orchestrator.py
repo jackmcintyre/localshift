@@ -242,13 +242,12 @@ class LearningOrchestrator:
             self._last_mode_analysis_utc_date = None
 
     async def _async_save_mode_analysis_state(self) -> None:
-        await self._mode_analysis_state_store.async_save({
-            "last_mode_analysis_utc_date": (
+        payload: dict[str, str] = {}
+        if self._last_mode_analysis_utc_date is not None:
+            payload["last_mode_analysis_utc_date"] = (
                 self._last_mode_analysis_utc_date.isoformat()
-                if self._last_mode_analysis_utc_date is not None
-                else None
             )
-        })
+        await self._mode_analysis_state_store.async_save(payload)
 
     def handle_periodic_save(self) -> None:
         """Schedule a periodic save of learning data."""
@@ -307,6 +306,8 @@ class LearningOrchestrator:
         await self.charge_rate_learner.async_invalidate()
         self._last_charge_rate_update = None
         self._last_charge_rate_attempt = None
+        self._last_mode_analysis_utc_date = None
+        await self._async_save_mode_analysis_state()
 
     def _get_pattern_analysis_interval(self, learning_status: str) -> int:
         return self._PATTERN_ANALYSIS_INTERVALS.get(learning_status, 7)
@@ -409,7 +410,7 @@ class LearningOrchestrator:
         data.charge_rate_diagnostics = self.charge_rate_learner.diagnostics
         data.learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
 
-        self._update_mode_analysis_once_per_day(
+        mode_analysis_date_to_persist = await self._update_mode_analysis_once_per_day(
             power_history,
             soc_history,
             decisions,
@@ -418,27 +419,27 @@ class LearningOrchestrator:
 
         self._last_charge_rate_update = dt_util.now() or datetime.now()
 
-        self.hass.async_create_task(
-            self.charge_rate_learner.async_save(),
-            "localshift_save_charge_rate_curves",
-        )
+        await self.charge_rate_learner.async_save()
+        if mode_analysis_date_to_persist is not None:
+            self._last_mode_analysis_utc_date = mode_analysis_date_to_persist
+            await self._async_save_mode_analysis_state()
 
-    def _update_mode_analysis_once_per_day(
+    async def _update_mode_analysis_once_per_day(
         self,
         power_history,
         soc_history,
         decisions,
         data,
-    ) -> None:
+    ) -> date | None:
         if self.charge_rate_learner is None:
-            return
+            return None
 
         today_utc = self._current_utc_date()
         if self._last_mode_analysis_utc_date == today_utc:
             data.charge_rate_mode_analysis = (
                 self.charge_rate_learner.get_mode_analysis_payload()
             )
-            return
+            return None
 
         mode_history = self._build_mode_history(decisions)
         updated = self.charge_rate_learner.update_mode_analysis_from_history(
@@ -447,16 +448,12 @@ class LearningOrchestrator:
             mode_history,
         )
         if not updated:
-            return
+            return None
 
         data.charge_rate_mode_analysis = (
             self.charge_rate_learner.get_mode_analysis_payload()
         )
-        self._last_mode_analysis_utc_date = today_utc
-        self.hass.async_create_task(
-            self._async_save_mode_analysis_state(),
-            "localshift_save_mode_analysis_state",
-        )
+        return today_utc
 
     def _build_mode_history(self, decisions) -> list[tuple[datetime, str]]:
         if not decisions:
