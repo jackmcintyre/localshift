@@ -45,9 +45,9 @@ def _sanitize_mode_rows(rows: Any) -> list[dict[str, Any]]:
         n = row.get("n")
         charge_kw = row.get("charge_kw")
         discharge_kw = row.get("discharge_kw")
-        if not isinstance(soc, (int, float)):
+        if isinstance(soc, bool) or not isinstance(soc, (int, float)):
             continue
-        if not isinstance(n, (int, float)):
+        if isinstance(n, bool) or not isinstance(n, (int, float)):
             continue
         if not isinstance(charge_kw, (int, float)):
             continue

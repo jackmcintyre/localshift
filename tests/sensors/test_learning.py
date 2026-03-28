@@ -290,6 +290,8 @@ class TestChargeRateModeAnalysisSensor:
                 "grid_charging": [
                     {"soc": -1, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
                     {"soc": 101, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
+                    {"soc": True, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
+                    {"soc": 12, "n": True, "charge_kw": 2.5, "discharge_kw": 0.0},
                     {
                         "soc": float("nan"),
                         "n": 2,
