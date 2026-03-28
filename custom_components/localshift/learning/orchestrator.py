@@ -303,8 +303,16 @@ class LearningOrchestrator:
             soc_entity_id=soc_entity_id,
             power_sign_override=power_sign_override,
         )
+        previous_mode_analysis_date = self._last_mode_analysis_utc_date
         self._last_mode_analysis_utc_date = None
-        await self._async_save_mode_analysis_state()
+        try:
+            await self._async_save_mode_analysis_state()
+        except Exception as err:
+            self._last_mode_analysis_utc_date = previous_mode_analysis_date
+            _LOGGER.warning(
+                "Failed to persist cleared mode-analysis state; restored in-memory gate: %s",
+                err,
+            )
         await self.charge_rate_learner.async_invalidate()
         self._last_charge_rate_update = None
         self._last_charge_rate_attempt = None

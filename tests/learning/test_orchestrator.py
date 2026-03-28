@@ -1,6 +1,7 @@
 """Tests for LearningOrchestrator."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 import types
 from unittest.mock import AsyncMock, MagicMock
@@ -239,6 +240,30 @@ async def test_async_invalidate_charge_rate_curves_persists_cleared_mode_analysi
 
     assert orchestrator._last_mode_analysis_utc_date is None
     mode_state_store.async_save.assert_awaited_once_with({})
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_charge_rate_curves_restores_mode_analysis_date_on_save_failure(
+    caplog: pytest.LogCaptureFixture,
+):
+    orchestrator = _make_orchestrator()
+    learner = MagicMock()
+    learner.configure = MagicMock()
+    learner.async_invalidate = AsyncMock()
+    orchestrator.charge_rate_learner = learner
+    previous_date = datetime(2026, 3, 28, tzinfo=UTC).date()
+    orchestrator._last_mode_analysis_utc_date = previous_date
+
+    mode_state_store = MagicMock()
+    mode_state_store.async_save = AsyncMock(side_effect=RuntimeError("save failed"))
+    orchestrator._mode_analysis_state_store = mode_state_store
+
+    with caplog.at_level(logging.WARNING):
+        await orchestrator.async_invalidate_charge_rate_curves()
+
+    assert orchestrator._last_mode_analysis_utc_date == previous_date
+    learner.async_invalidate.assert_awaited_once()
+    assert "mode-analysis state" in caplog.text
 
 
 def test_handle_midnight_reset_schedules_pattern_analysis():
