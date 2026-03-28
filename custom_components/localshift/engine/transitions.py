@@ -288,6 +288,9 @@ def _charge_grid_with_solar(
     config: OptimizerConfig,
 ) -> tuple[float, float]:
     """Calculate grid charge with solar surplus."""
+    if config.charge_efficiency <= 0:
+        return soc_pct, 0.0
+
     solar_to_battery = net_kwh * config.charge_efficiency
     soc_from_solar = (solar_to_battery / capacity_kwh) * 100.0
     remaining_headroom = config.max_soc_pct - soc_pct - soc_from_solar
@@ -334,9 +337,12 @@ def _clip_charge_to_max_soc(
     if net_kwh > 0:
         solar_soc_contrib = (net_kwh * config.charge_efficiency / capacity_kwh) * 100.0
     grid_soc_needed = max(0.0, total_soc_needed - solar_soc_contrib)
-    grid_import_for_charging = (
-        grid_soc_needed / 100.0 * capacity_kwh
-    ) / config.charge_efficiency
+    if config.charge_efficiency <= 0:
+        grid_import_for_charging = 0.0
+    else:
+        grid_import_for_charging = (
+            grid_soc_needed / 100.0 * capacity_kwh
+        ) / config.charge_efficiency
     grid_import_total = grid_import_for_charging
     if net_kwh < 0:
         grid_import_total += -net_kwh

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from custom_components.localshift.engine.transitions import (
@@ -228,14 +230,33 @@ def test_transition_charge_grid_boost_uses_boost_rate() -> None:
 def test_transition_unknown_action_returns_noop() -> None:
     next_soc, grid_import_kwh, grid_export_kwh = transition(
         44.0,
-        "unknown" if False else PlannerAction("hold"),
+        cast(PlannerAction, "unknown_action"),
         _slot(),
         OptimizerConfig(),
     )
-    # use explicit branch helper for unknown static fallback instead
+
     assert next_soc == pytest.approx(44.0)
     assert grid_import_kwh == 0.0
     assert grid_export_kwh == 0.0
+
+
+def test_transition_charge_grid_with_zero_efficiency_and_surplus() -> None:
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        charge_rate_kw=5.0,
+        charge_efficiency=0.0,
+    )
+
+    next_soc, grid_import_kwh, grid_export_kwh = transition(
+        50.0,
+        PlannerAction.CHARGE_GRID_NORMAL,
+        _slot(solar_kwh=1.0, consumption_kwh=0.0),
+        config,
+    )
+
+    assert next_soc == pytest.approx(50.0)
+    assert grid_import_kwh == pytest.approx(0.0)
+    assert grid_export_kwh == pytest.approx(0.0)
 
 
 def test_select_mode_soc_bin_rate_exact_neighbor_nearest_and_average() -> None:
