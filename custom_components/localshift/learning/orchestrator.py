@@ -303,11 +303,11 @@ class LearningOrchestrator:
             soc_entity_id=soc_entity_id,
             power_sign_override=power_sign_override,
         )
+        self._last_mode_analysis_utc_date = None
+        await self._async_save_mode_analysis_state()
         await self.charge_rate_learner.async_invalidate()
         self._last_charge_rate_update = None
         self._last_charge_rate_attempt = None
-        self._last_mode_analysis_utc_date = None
-        await self._async_save_mode_analysis_state()
 
     def _get_pattern_analysis_interval(self, learning_status: str) -> int:
         return self._PATTERN_ANALYSIS_INTERVALS.get(learning_status, 7)

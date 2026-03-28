@@ -221,6 +221,26 @@ async def test_async_invalidate_charge_rate_curves_resets_mode_analysis_gate():
     mode_state_store.async_save.assert_awaited_once_with({})
 
 
+@pytest.mark.asyncio
+async def test_async_invalidate_charge_rate_curves_persists_cleared_mode_analysis_on_learner_failure():
+    orchestrator = _make_orchestrator()
+    learner = MagicMock()
+    learner.configure = MagicMock()
+    learner.async_invalidate = AsyncMock(side_effect=RuntimeError("boom"))
+    orchestrator.charge_rate_learner = learner
+    orchestrator._last_mode_analysis_utc_date = datetime(2026, 3, 28, tzinfo=UTC).date()
+
+    mode_state_store = MagicMock()
+    mode_state_store.async_save = AsyncMock()
+    orchestrator._mode_analysis_state_store = mode_state_store
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await orchestrator.async_invalidate_charge_rate_curves()
+
+    assert orchestrator._last_mode_analysis_utc_date is None
+    mode_state_store.async_save.assert_awaited_once_with({})
+
+
 def test_handle_midnight_reset_schedules_pattern_analysis():
     orchestrator = _make_orchestrator()
     orchestrator.decision_tracker = MagicMock()
@@ -439,6 +459,53 @@ class TestOrchestratorChargeRateLearning:
         assert (
             orchestrator.charge_rate_learner.update_mode_analysis_from_history.call_count
             == 2
+        )
+
+    @pytest.mark.asyncio
+    async def test_daily_mode_analysis_runs_same_day_when_gate_is_cleared(
+        self, monkeypatch
+    ):
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+
+        now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: now,
+        )
+
+        today_utc = now.date()
+        orchestrator._last_mode_analysis_utc_date = today_utc
+
+        history_point = (now, 1.0)
+        power_history = [history_point]
+        soc_history = [history_point]
+        decisions = orchestrator.decision_tracker.get_recent_decisions.return_value
+
+        first_result = await orchestrator._update_mode_analysis_once_per_day(
+            power_history,
+            soc_history,
+            decisions,
+            CoordinatorData(),
+        )
+        assert first_result is None
+        assert (
+            orchestrator.charge_rate_learner.update_mode_analysis_from_history.call_count
+            == 0
+        )
+
+        orchestrator._last_mode_analysis_utc_date = None
+
+        second_result = await orchestrator._update_mode_analysis_once_per_day(
+            power_history,
+            soc_history,
+            decisions,
+            CoordinatorData(),
+        )
+        assert second_result == today_utc
+        assert (
+            orchestrator.charge_rate_learner.update_mode_analysis_from_history.call_count
+            == 1
         )
 
     @pytest.mark.asyncio
