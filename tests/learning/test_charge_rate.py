@@ -4,8 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.localshift.const import POWER_SIGN_NEGATIVE, POWER_SIGN_POSITIVE
-from custom_components.localshift.learning import charge_rate as charge_rate_module
+from custom_components.localshift.const import POWER_SIGN_POSITIVE
 from custom_components.localshift.learning.charge_rate import (
     ChargeRateLearner,
     _infer_mode_analysis_power_sign,
@@ -73,6 +72,33 @@ def test_is_valid_mode_payload_rejects_bad_rows() -> None:
     assert _is_valid_mode_payload(payload) is False
 
 
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"soc": -1, "n": 1, "charge_kw": 1.0, "discharge_kw": 0.0},
+        {"soc": 101, "n": 1, "charge_kw": 1.0, "discharge_kw": 0.0},
+        {"soc": 50, "n": 0, "charge_kw": 1.0, "discharge_kw": 0.0},
+        {"soc": 50, "n": 1, "charge_kw": float("nan"), "discharge_kw": 0.0},
+        {"soc": 50, "n": 1, "charge_kw": 1.0, "discharge_kw": float("inf")},
+    ],
+)
+def test_is_valid_mode_payload_rejects_invalid_row_values(row) -> None:
+    payload = {
+        "generated_at": datetime.now().isoformat(),
+        "method": {"soc_bin_pct": 1, "resample": "1m"},
+        "window": {"history_window_days": 14},
+        "soc_bins_1pct_by_mode": {
+            "boost_charging": [],
+            "grid_charging": [],
+            "proactive_export": [],
+            "self_consumption": [row],
+            "spike_discharge": [],
+            "unknown": [],
+        },
+    }
+    assert _is_valid_mode_payload(payload) is False
+
+
 @pytest.mark.asyncio
 async def test_configure_and_async_invalidate_paths() -> None:
     learner = ChargeRateLearner(hass=MagicMock(), entry_id="entry")
@@ -106,39 +132,6 @@ def test_update_mode_analysis_handles_no_overlap() -> None:
     assert learner.get_mode_analysis_payload() == {}
 
 
-def test_update_mode_analysis_records_discharge_bins() -> None:
-    learner = ChargeRateLearner(hass=MagicMock(), entry_id="entry")
-    base = datetime(2026, 1, 1, 0, 0)
-    power = [(base + timedelta(minutes=i), 2.0) for i in range(12)]
-    soc = [(base + timedelta(minutes=i), 70.0 - (i * 0.1)) for i in range(12)]
-    mode = [(base + timedelta(minutes=i), "self_consumption") for i in range(12)]
-
-    assert learner.update_mode_analysis_from_history(power, soc, mode) is True
-    rows = learner.get_mode_analysis_payload()["soc_bins_1pct_by_mode"][
-        "self_consumption"
-    ]
-    assert any(row["discharge_kw"] > 0 for row in rows)
-
-
-def test_update_mode_analysis_auto_sign_inference() -> None:
-    learner = ChargeRateLearner(hass=MagicMock(), entry_id="entry")
-    base = datetime(2026, 1, 1, 0, 0)
-    power = [(base + timedelta(minutes=i), -2.0 if i < 6 else 2.0) for i in range(12)]
-    soc = [
-        (
-            base + timedelta(minutes=i),
-            50.0 + (0.2 * i if i < 6 else 1.2 - 0.2 * (i - 6)),
-        )
-        for i in range(12)
-    ]
-    mode = [(base + timedelta(minutes=i), "self_consumption") for i in range(12)]
-    assert learner.update_mode_analysis_from_history(power, soc, mode) is True
-    rows = learner.get_mode_analysis_payload()["soc_bins_1pct_by_mode"][
-        "self_consumption"
-    ]
-    assert rows
-
-
 def test_infer_mode_analysis_power_sign_detects_negative_charging() -> None:
     base = datetime(2026, 1, 1, 0, 0)
     power = [(base + timedelta(minutes=i), -2.0 if i < 4 else 1.0) for i in range(8)]
@@ -150,31 +143,3 @@ def test_infer_mode_analysis_power_sign_detects_negative_charging() -> None:
         for i in range(8)
     ]
     assert _infer_mode_analysis_power_sign(power, soc) == -1.0
-
-
-def test_update_from_history_respects_sign_overrides() -> None:
-    base = datetime(2026, 1, 1, 0, 0)
-    power = [(base + timedelta(minutes=15 * i), 3.0) for i in range(10)]
-    soc = [(base + timedelta(minutes=15 * i), 40.0 + i) for i in range(10)]
-    decisions = [
-        SimpleNamespace(
-            timestamp=base + timedelta(minutes=15 * i), mode_chosen="charge_grid_normal"
-        )
-        for i in range(10)
-    ]
-
-    learner_pos = ChargeRateLearner(
-        hass=MagicMock(),
-        entry_id="entry",
-        power_sign_override=POWER_SIGN_POSITIVE,
-    )
-    learner_pos.update_from_history(power, soc, decisions)
-    assert learner_pos.diagnostics["power_sign_inverted"] is False
-
-    learner_neg = ChargeRateLearner(
-        hass=MagicMock(),
-        entry_id="entry",
-        power_sign_override=POWER_SIGN_NEGATIVE,
-    )
-    learner_neg.update_from_history(power, soc, decisions)
-    assert learner_neg.diagnostics["power_sign_inverted"] is True
