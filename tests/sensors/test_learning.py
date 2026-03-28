@@ -291,6 +291,42 @@ class TestChargeRateModeAnalysisSensor:
                     {"soc": -1, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
                     {"soc": 101, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
                     {
+                        "soc": float("nan"),
+                        "n": 2,
+                        "charge_kw": 2.5,
+                        "discharge_kw": 0.0,
+                    },
+                    {
+                        "soc": float("inf"),
+                        "n": 2,
+                        "charge_kw": 2.5,
+                        "discharge_kw": 0.0,
+                    },
+                    {
+                        "soc": 12.5,
+                        "n": 2,
+                        "charge_kw": 2.5,
+                        "discharge_kw": 0.0,
+                    },
+                    {
+                        "soc": 13,
+                        "n": float("nan"),
+                        "charge_kw": 2.5,
+                        "discharge_kw": 0.0,
+                    },
+                    {
+                        "soc": 14,
+                        "n": float("inf"),
+                        "charge_kw": 2.5,
+                        "discharge_kw": 0.0,
+                    },
+                    {
+                        "soc": 15,
+                        "n": 2.3,
+                        "charge_kw": 2.5,
+                        "discharge_kw": 0.0,
+                    },
+                    {
                         "soc": 10,
                         "n": 2,
                         "charge_kw": float("nan"),

@@ -47,14 +47,26 @@ def _sanitize_mode_rows(rows: Any) -> list[dict[str, Any]]:
         discharge_kw = row.get("discharge_kw")
         if not isinstance(soc, (int, float)):
             continue
-        if not isinstance(n, (int, float)) or n <= 0:
+        if not isinstance(n, (int, float)):
             continue
         if not isinstance(charge_kw, (int, float)):
             continue
         if not isinstance(discharge_kw, (int, float)):
             continue
 
-        if not (0 <= int(soc) <= 100):
+        soc_value = float(soc)
+        n_value = float(n)
+        if not math.isfinite(soc_value) or not math.isfinite(n_value):
+            continue
+        if not soc_value.is_integer() or not n_value.is_integer():
+            continue
+
+        soc_int = int(soc_value)
+        n_int = int(n_value)
+
+        if not (0 <= soc_int <= 100):
+            continue
+        if n_int <= 0:
             continue
         if not math.isfinite(float(charge_kw)) or not math.isfinite(
             float(discharge_kw)
@@ -62,8 +74,8 @@ def _sanitize_mode_rows(rows: Any) -> list[dict[str, Any]]:
             continue
 
         sanitized.append({
-            "soc": int(soc),
-            "n": int(n),
+            "soc": soc_int,
+            "n": n_int,
             "charge_kw": float(charge_kw),
             "discharge_kw": float(discharge_kw),
         })
