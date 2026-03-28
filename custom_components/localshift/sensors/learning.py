@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import math
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.util import dt as dt_util
 
+from custom_components.localshift.const import BatteryMode
+
 from .base import LocalShiftSensorBase
 
 MODE_RATE_MAX_ROWS_PER_MODE = 48
+MODE_RATE_MAX_TOTAL_ROWS = 120
 MODE_RATE_STALE_MINUTES = 1440
-MODE_RATE_REQUIRED_KEYS = (
-    "self_consumption",
-    "grid_charging",
-    "boost_charging",
-    "spike_discharge",
-    "proactive_export",
-    "demand_block",
-    "hold",
-    "manual",
-)
+MODE_RATE_REQUIRED_KEYS = tuple(mode.value for mode in BatteryMode)
 
 
 def _is_mode_analysis_stale(payload: dict[str, Any]) -> bool:
@@ -59,6 +54,13 @@ def _sanitize_mode_rows(rows: Any) -> list[dict[str, Any]]:
         if not isinstance(discharge_kw, (int, float)):
             continue
 
+        if not (0 <= int(soc) <= 100):
+            continue
+        if not math.isfinite(float(charge_kw)) or not math.isfinite(
+            float(discharge_kw)
+        ):
+            continue
+
         sanitized.append({
             "soc": int(soc),
             "n": int(n),
@@ -68,6 +70,25 @@ def _sanitize_mode_rows(rows: Any) -> list[dict[str, Any]]:
 
     sanitized.sort(key=lambda row: row["soc"])
     return sanitized[:MODE_RATE_MAX_ROWS_PER_MODE]
+
+
+def _sanitize_bins_by_mode(
+    bins_by_mode: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    sparse_bins: dict[str, list[dict[str, Any]]] = {}
+    remaining_rows = MODE_RATE_MAX_TOTAL_ROWS
+
+    for mode in MODE_RATE_REQUIRED_KEYS:
+        if remaining_rows <= 0:
+            sparse_bins[mode] = []
+            continue
+
+        rows = _sanitize_mode_rows(bins_by_mode.get(mode))
+        limited_rows = rows[:remaining_rows]
+        sparse_bins[mode] = limited_rows
+        remaining_rows -= len(limited_rows)
+
+    return sparse_bins
 
 
 class LearningStatusSensor(LocalShiftSensorBase):
@@ -200,10 +221,7 @@ class ChargeRateModeAnalysisSensor(LocalShiftSensorBase):
         payload_dict = payload if isinstance(payload, dict) else {}
         raw_bins = payload_dict.get("soc_bins_1pct_by_mode")
         bins_by_mode = raw_bins if isinstance(raw_bins, dict) else {}
-        sparse_bins = {
-            mode: _sanitize_mode_rows(bins_by_mode.get(mode))
-            for mode in MODE_RATE_REQUIRED_KEYS
-        }
+        sparse_bins = _sanitize_bins_by_mode(bins_by_mode)
         return {
             "generated_at": payload_dict.get("generated_at"),
             "method": payload_dict.get("method")

@@ -7,6 +7,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.sensors.learning import (
     MODE_RATE_MAX_ROWS_PER_MODE,
+    MODE_RATE_MAX_TOTAL_ROWS,
     ChargeRateModeAnalysisSensor,
     DecisionQualitySensor,
     LearningDecisionHistorySensor,
@@ -281,3 +282,60 @@ class TestChargeRateModeAnalysisSensor:
         mode_rows = attrs["soc_bins_1pct_by_mode"]["grid_charging"]
 
         assert mode_rows == [{"soc": 12, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0}]
+
+    def test_extra_state_attributes_drop_out_of_range_and_non_finite_rows(self):
+        payload = {
+            "generated_at": "2026-03-28T00:00:00+00:00",
+            "soc_bins_1pct_by_mode": {
+                "grid_charging": [
+                    {"soc": -1, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
+                    {"soc": 101, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
+                    {
+                        "soc": 10,
+                        "n": 2,
+                        "charge_kw": float("nan"),
+                        "discharge_kw": 0.0,
+                    },
+                    {
+                        "soc": 11,
+                        "n": 2,
+                        "charge_kw": 2.5,
+                        "discharge_kw": float("inf"),
+                    },
+                    {"soc": 12, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0},
+                ]
+            },
+        }
+        sensor = _make_sensor(
+            ChargeRateModeAnalysisSensor,
+            overrides={"charge_rate_mode_analysis": payload},
+        )
+
+        attrs = sensor.extra_state_attributes
+        mode_rows = attrs["soc_bins_1pct_by_mode"]["grid_charging"]
+
+        assert mode_rows == [{"soc": 12, "n": 2, "charge_kw": 2.5, "discharge_kw": 0.0}]
+
+    def test_extra_state_attributes_apply_total_row_cap(self):
+        long_rows = [
+            {"soc": index % 100, "n": 1, "charge_kw": 3.0, "discharge_kw": 0.0}
+            for index in range(MODE_RATE_MAX_ROWS_PER_MODE + 20)
+        ]
+        payload = {
+            "generated_at": "2026-03-28T00:00:00+00:00",
+            "soc_bins_1pct_by_mode": {
+                "self_consumption": long_rows,
+                "grid_charging": long_rows,
+                "boost_charging": long_rows,
+            },
+        }
+        sensor = _make_sensor(
+            ChargeRateModeAnalysisSensor,
+            overrides={"charge_rate_mode_analysis": payload},
+        )
+
+        attrs = sensor.extra_state_attributes
+        bins_by_mode = attrs["soc_bins_1pct_by_mode"]
+        total_rows = sum(len(rows) for rows in bins_by_mode.values())
+
+        assert total_rows == MODE_RATE_MAX_TOTAL_ROWS
