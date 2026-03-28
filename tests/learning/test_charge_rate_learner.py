@@ -685,3 +685,45 @@ async def test_charge_rate_learner_ignores_corrupt_storage(storage):
     assert learner.get_curve("normal") is None
     assert learner.get_curve("boost") is None
     assert learner.diagnostics.get("load_error") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        {"soc": True, "charge_kw": 3.0, "discharge_kw": 0.0, "n": 5},
+        {"soc": 50, "charge_kw": True, "discharge_kw": 0.0, "n": 5},
+        {"soc": 50, "charge_kw": 3.0, "discharge_kw": True, "n": 5},
+        {"soc": 50, "charge_kw": 3.0, "discharge_kw": 0.0, "n": True},
+    ],
+)
+async def test_charge_rate_learner_rejects_boolean_mode_payload_values(
+    storage, bad_row
+):
+    from custom_components.localshift.learning import charge_rate as charge_rate_module
+
+    storage.async_load.return_value = {
+        "version": 1,
+        "mode_payload_version": 1,
+        "mode_analysis_payload": {
+            "generated_at": "2026-03-28T00:00:00+00:00",
+            "method": {"soc_bin_pct": 1, "resample": "1m"},
+            "window": {"history_window_days": 14},
+            "soc_bins_1pct_by_mode": {
+                "self_consumption": [bad_row],
+                "grid_charging": [],
+                "boost_charging": [],
+                "spike_discharge": [],
+                "proactive_export": [],
+                "demand_block": [],
+                "hold": [],
+                "manual": [],
+            },
+        },
+    }
+    charge_rate_module.Store = MagicMock(return_value=storage)
+
+    learner = ChargeRateLearner(MagicMock(), entry_id="entry-bool")
+    await learner.async_load()
+
+    assert learner.get_mode_analysis_payload() == {}

@@ -127,6 +127,21 @@ def test_parse_mode_rate_row_valid_and_invalid() -> None:
     )
     assert _parse_mode_rate_row("not_a_dict", "charge_kw") is None
     assert _parse_mode_rate_row({"soc": 42, "charge_kw": "bad"}, "charge_kw") is None
+    assert (
+        _parse_mode_rate_row({"soc": True, "charge_kw": 3.4, "n": 7}, "charge_kw")
+        is None
+    )
+    assert (
+        _parse_mode_rate_row({"soc": 42, "charge_kw": True, "n": 7}, "charge_kw")
+        is None
+    )
+    assert _parse_mode_rate_row(
+        {"soc": 42, "charge_kw": 3.4, "n": True}, "charge_kw"
+    ) == (
+        42,
+        3.4,
+        1,
+    )
 
 
 def test_extract_mode_rates_from_rows_weighted_average() -> None:
@@ -174,6 +189,7 @@ def test_build_mode_action_rate_lookup_invalid_payload() -> None:
     ("raw_soc", "expected_error"),
     [
         ("bad", "non_numeric"),
+        (True, "non_numeric"),
         (float("inf"), "non_finite"),
         (0.0, "non_positive"),
         (-2.0, "non_positive"),

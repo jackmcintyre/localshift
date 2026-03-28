@@ -207,19 +207,21 @@ def _is_valid_mode_payload(payload: Any) -> bool:
             charge_kw = row.get("charge_kw")
             discharge_kw = row.get("discharge_kw")
 
-            if not isinstance(soc, int):
+            if isinstance(soc, bool) or not isinstance(soc, int):
                 return False
             if soc < 0 or soc > 100:
                 return False
-            if not isinstance(n, int):
+            if isinstance(n, bool) or not isinstance(n, int):
                 return False
             if n <= 0:
                 return False
-            if not isinstance(charge_kw, (int, float)):
+            if isinstance(charge_kw, bool) or not isinstance(charge_kw, (int, float)):
                 return False
             if not math.isfinite(float(charge_kw)):
                 return False
-            if not isinstance(discharge_kw, (int, float)):
+            if isinstance(discharge_kw, bool) or not isinstance(
+                discharge_kw, (int, float)
+            ):
                 return False
             if not math.isfinite(float(discharge_kw)):
                 return False

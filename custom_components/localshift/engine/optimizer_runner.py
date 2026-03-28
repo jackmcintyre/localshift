@@ -437,10 +437,12 @@ def _parse_mode_rate_row(
         return None
 
     soc = row.get("soc")
-    if not isinstance(soc, int) or soc < 0 or soc > 100:
+    if isinstance(soc, bool) or not isinstance(soc, int) or soc < 0 or soc > 100:
         return None
 
     raw_rate = row.get(value_key)
+    if isinstance(raw_rate, bool):
+        return None
     try:
         rate = float(raw_rate)
     except (TypeError, ValueError):
@@ -451,7 +453,11 @@ def _parse_mode_rate_row(
 
     raw_samples = row.get("n")
     samples = 1
-    if isinstance(raw_samples, int) and raw_samples > 0:
+    if (
+        isinstance(raw_samples, int)
+        and not isinstance(raw_samples, bool)
+        and raw_samples > 0
+    ):
         samples = raw_samples
 
     return soc, rate, samples
@@ -478,6 +484,8 @@ def _normalize_initial_soc(
     }
 
     try:
+        if isinstance(raw_soc, bool):
+            raise TypeError
         soc = float(raw_soc)
     except (TypeError, ValueError):
         info["error"] = "non_numeric"
