@@ -328,6 +328,8 @@ class TestChargeRateModeAnalysisSensor:
                         "charge_kw": 2.5,
                         "discharge_kw": 0.0,
                     },
+                    {"soc": 16, "n": 2, "charge_kw": True, "discharge_kw": 0.0},
+                    {"soc": 17, "n": 2, "charge_kw": 2.5, "discharge_kw": False},
                     {
                         "soc": 10,
                         "n": 2,
