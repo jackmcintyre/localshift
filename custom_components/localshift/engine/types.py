@@ -10,10 +10,10 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from custom_components.localshift.learning.charge_rate import ChargeRateCurve
     from custom_components.localshift.forecast.solar_accuracy import (
         SolarAccuracyTracker,
     )
+    from custom_components.localshift.learning.charge_rate import ChargeRateCurve
 
 # -----------------------------------------------------------------------------
 # Action vocabulary
@@ -157,6 +157,14 @@ class OptimizerConfig:
 
     discharge_rate_kw: float = 5.0
     """Maximum battery discharge rate in kW."""
+
+    mode_action_soc_bin_rates: dict[PlannerAction, dict[int, float]] = field(
+        default_factory=dict
+    )
+    """Optional per-action SOC-bin rates (kW) from mode analysis payload."""
+
+    mode_action_average_rates: dict[PlannerAction, float] = field(default_factory=dict)
+    """Optional per-action fallback average rates (kW) from mode analysis payload."""
 
     charge_efficiency: float = 0.92
     """Charging efficiency (energy lost going into battery)."""

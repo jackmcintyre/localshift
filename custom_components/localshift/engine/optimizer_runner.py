@@ -322,6 +322,9 @@ def _build_optimizer_config(
 
     charge_rate_curve = None
     boost_charge_rate_curve = None
+    mode_action_soc_bin_rates, mode_action_average_rates = (
+        _build_mode_action_rate_lookup(getattr(data, "charge_rate_mode_analysis", None))
+    )
     if getattr(data, "learning_enabled", False):
         curves = getattr(data, "charge_rate_curves", None)
         if isinstance(curves, dict):
@@ -337,6 +340,8 @@ def _build_optimizer_config(
         boost_charge_rate_curve=boost_charge_rate_curve,
         solar_charge_rate_kw=CHARGE_RATE_SOLAR_KW,  # 5.0 kW solar->battery cap
         discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
+        mode_action_soc_bin_rates=mode_action_soc_bin_rates,
+        mode_action_average_rates=mode_action_average_rates,
         # --- Efficiency defaults (Powerwall typical) ---
         charge_efficiency=0.92,
         discharge_efficiency=0.95,
@@ -359,6 +364,97 @@ def _build_optimizer_config(
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )
+
+
+def _build_mode_action_rate_lookup(
+    payload: Any,
+) -> tuple[dict[PlannerAction, dict[int, float]], dict[PlannerAction, float]]:
+    """Build per-action SOC-bin rate lookup from mode analysis payload."""
+    if not isinstance(payload, dict):
+        return {}, {}
+
+    raw_bins = payload.get("soc_bins_1pct_by_mode")
+    if not isinstance(raw_bins, dict):
+        return {}, {}
+
+    mode_mappings: tuple[tuple[PlannerAction, str, str], ...] = (
+        (PlannerAction.CHARGE_GRID_NORMAL, "grid_charging", "charge_kw"),
+        (PlannerAction.CHARGE_GRID_BOOST, "boost_charging", "charge_kw"),
+        (PlannerAction.EXPORT_PROACTIVE, "proactive_export", "discharge_kw"),
+    )
+
+    action_soc_bins: dict[PlannerAction, dict[int, float]] = {}
+    action_averages: dict[PlannerAction, float] = {}
+
+    for action, mode_key, value_key in mode_mappings:
+        mode_rows = raw_bins.get(mode_key)
+        if not isinstance(mode_rows, list):
+            continue
+
+        bins_for_action, average_rate = _extract_mode_rates_from_rows(
+            rows=mode_rows,
+            value_key=value_key,
+        )
+
+        if bins_for_action:
+            action_soc_bins[action] = dict(sorted(bins_for_action.items()))
+
+        if average_rate is not None:
+            action_averages[action] = average_rate
+
+    return action_soc_bins, action_averages
+
+
+def _extract_mode_rates_from_rows(
+    rows: list[Any],
+    value_key: str,
+) -> tuple[dict[int, float], float | None]:
+    """Extract SOC-bin rates and weighted average from mode-analysis rows."""
+    bins_for_action: dict[int, float] = {}
+    weighted_total = 0.0
+    sample_total = 0
+
+    for row in rows:
+        parsed = _parse_mode_rate_row(row=row, value_key=value_key)
+        if parsed is None:
+            continue
+        soc, rate, samples = parsed
+        bins_for_action[soc] = rate
+        weighted_total += rate * samples
+        sample_total += samples
+
+    if sample_total <= 0:
+        return bins_for_action, None
+    return bins_for_action, weighted_total / float(sample_total)
+
+
+def _parse_mode_rate_row(
+    row: Any,
+    value_key: str,
+) -> tuple[int, float, int] | None:
+    """Parse one mode-analysis row into (soc_bin, rate_kw, sample_count)."""
+    if not isinstance(row, dict):
+        return None
+
+    soc = row.get("soc")
+    if not isinstance(soc, int) or soc < 0 or soc > 100:
+        return None
+
+    raw_rate = row.get(value_key)
+    try:
+        rate = float(raw_rate)
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(rate) or rate < 0.0:
+        return None
+
+    raw_samples = row.get("n")
+    samples = 1
+    if isinstance(raw_samples, int) and raw_samples > 0:
+        samples = raw_samples
+
+    return soc, rate, samples
 
 
 def _normalize_initial_soc(

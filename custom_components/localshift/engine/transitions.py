@@ -26,22 +26,142 @@ def transition(
     if action == PlannerAction.HOLD:
         return _transition_hold(soc_pct, slot, config)
     if action == PlannerAction.CHARGE_GRID_NORMAL:
-        charge_rate_kw = (
-            config.charge_rate_curve.rate_at_soc(soc_pct)
-            if config.charge_rate_curve is not None
-            else config.charge_rate_kw
+        charge_rate_kw = _select_transition_rate_kw(
+            soc_pct=soc_pct,
+            action=action,
+            config=config,
         )
         return _transition_charge_grid(soc_pct, slot, config, charge_rate_kw)
     if action == PlannerAction.CHARGE_GRID_BOOST:
-        boost_rate_kw = (
-            config.boost_charge_rate_curve.rate_at_soc(soc_pct)
-            if config.boost_charge_rate_curve is not None
-            else config.boost_charge_rate_kw
+        boost_rate_kw = _select_transition_rate_kw(
+            soc_pct=soc_pct,
+            action=action,
+            config=config,
         )
         return _transition_charge_grid(soc_pct, slot, config, boost_rate_kw)
     if action == PlannerAction.EXPORT_PROACTIVE:
-        return _transition_export(soc_pct, slot, config)
+        discharge_rate_kw = _select_transition_rate_kw(
+            soc_pct=soc_pct,
+            action=action,
+            config=config,
+        )
+        return _transition_export(soc_pct, slot, config, discharge_rate_kw)
     return soc_pct, 0.0, 0.0
+
+
+def _select_transition_rate_kw(
+    soc_pct: float,
+    action: PlannerAction,
+    config: OptimizerConfig,
+) -> float:
+    """Select deterministic transition rate with mode-aware fallback chain."""
+    mode_rate = _select_mode_soc_bin_rate(
+        soc_pct=soc_pct,
+        action=action,
+        config=config,
+    )
+    if mode_rate is not None:
+        return mode_rate
+
+    legacy_curve_rate = _select_legacy_curve_rate(
+        soc_pct=soc_pct, action=action, config=config
+    )
+    if legacy_curve_rate is not None:
+        return legacy_curve_rate
+
+    return _select_static_default_rate(action=action, config=config)
+
+
+def _select_mode_soc_bin_rate(
+    soc_pct: float,
+    action: PlannerAction,
+    config: OptimizerConfig,
+) -> float | None:
+    """Select rate from mode-action SOC bins and averages.
+
+    Fallback chain inside mode payload:
+    exact bin -> interpolated neighbor bins -> nearest bin -> mode average.
+    """
+    mode_bins = config.mode_action_soc_bin_rates.get(action)
+    soc_floor = int(max(0, min(100, soc_pct // 1)))
+
+    if mode_bins:
+        if soc_floor in mode_bins:
+            return mode_bins[soc_floor]
+
+        lower_neighbor = mode_bins.get(soc_floor - 1)
+        upper_neighbor = mode_bins.get(soc_floor + 1)
+        if lower_neighbor is not None and upper_neighbor is not None:
+            return lower_neighbor + (upper_neighbor - lower_neighbor) * 0.5
+
+        sorted_bins = sorted(mode_bins.items())
+        nearest_bin = _nearest_soc_bin(sorted_bins=sorted_bins, target_soc=soc_floor)
+        if nearest_bin is not None:
+            _, nearest_rate = nearest_bin
+            return nearest_rate
+
+    average_rate = config.mode_action_average_rates.get(action)
+    if average_rate is not None:
+        return average_rate
+
+    return None
+
+
+def _nearest_soc_bin(
+    sorted_bins: list[tuple[int, float]], target_soc: int
+) -> tuple[int, float] | None:
+    """Return nearest SOC bin. Equal-distance ties resolve to lower SOC bin."""
+    nearest: tuple[int, float] | None = None
+    nearest_distance: int | None = None
+
+    for soc_bin, rate in sorted_bins:
+        distance = abs(soc_bin - target_soc)
+        if nearest is None or nearest_distance is None:
+            nearest = (soc_bin, rate)
+            nearest_distance = distance
+            continue
+
+        if distance < nearest_distance:
+            nearest = (soc_bin, rate)
+            nearest_distance = distance
+            continue
+
+        if distance == nearest_distance and soc_bin < nearest[0]:
+            nearest = (soc_bin, rate)
+
+    return nearest
+
+
+def _select_legacy_curve_rate(
+    soc_pct: float,
+    action: PlannerAction,
+    config: OptimizerConfig,
+) -> float | None:
+    """Select legacy curve-based rate when applicable."""
+    if action == PlannerAction.CHARGE_GRID_NORMAL:
+        if config.charge_rate_curve is None:
+            return None
+        return config.charge_rate_curve.rate_at_soc(soc_pct)
+
+    if action == PlannerAction.CHARGE_GRID_BOOST:
+        if config.boost_charge_rate_curve is None:
+            return None
+        return config.boost_charge_rate_curve.rate_at_soc(soc_pct)
+
+    return None
+
+
+def _select_static_default_rate(
+    action: PlannerAction, config: OptimizerConfig
+) -> float:
+    """Select static configured default rate by action."""
+    if action == PlannerAction.CHARGE_GRID_NORMAL:
+        return config.charge_rate_kw
+    if action == PlannerAction.CHARGE_GRID_BOOST:
+        return config.boost_charge_rate_kw
+    if action == PlannerAction.EXPORT_PROACTIVE:
+        return config.discharge_rate_kw
+    return config.charge_rate_kw
 
 
 def _transition_hold(
@@ -224,7 +344,10 @@ def _clip_charge_to_max_soc(
 
 
 def _transition_export(
-    soc_pct: float, slot: SlotContext, config: OptimizerConfig
+    soc_pct: float,
+    slot: SlotContext,
+    config: OptimizerConfig,
+    discharge_rate_kw: float,
 ) -> tuple[float, float, float]:
     """Compute transition for EXPORT action.
 
@@ -236,7 +359,7 @@ def _transition_export(
     net_kwh = slot.solar_kwh - slot.consumption_kwh
     capacity_kwh = config.battery_capacity_kwh
 
-    max_discharge_kwh = config.discharge_rate_kw * slot_hours
+    max_discharge_kwh = discharge_rate_kw * slot_hours
     available_kwh = max(0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh)
     battery_discharge_kwh = min(
         max_discharge_kwh, available_kwh * config.discharge_efficiency

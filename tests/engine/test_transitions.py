@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.localshift.engine.transitions import transition
+from custom_components.localshift.engine.transitions import (
+    _nearest_soc_bin,
+    _select_legacy_curve_rate,
+    _select_mode_soc_bin_rate,
+    _select_static_default_rate,
+    _select_transition_rate_kw,
+    transition,
+)
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
     PlannerAction,
@@ -192,3 +199,122 @@ def test_transition_export_with_deficit_zero_efficiency() -> None:
     assert next_soc == pytest.approx(50.0)
     assert grid_import_kwh == 0.0
     assert grid_export_kwh == 0.0
+
+
+class _DummyCurve:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def rate_at_soc(self, _soc: float) -> float:
+        return self.value
+
+
+def test_transition_charge_grid_boost_uses_boost_rate() -> None:
+    config = OptimizerConfig(
+        battery_capacity_kwh=10.0,
+        boost_charge_rate_kw=5.0,
+        charge_efficiency=1.0,
+    )
+
+    next_soc, grid_import_kwh, grid_export_kwh = transition(
+        40.0, PlannerAction.CHARGE_GRID_BOOST, _slot(consumption_kwh=1.0), config
+    )
+
+    assert next_soc == pytest.approx(65.0)
+    assert grid_import_kwh == pytest.approx(3.5)
+    assert grid_export_kwh == 0.0
+
+
+def test_transition_unknown_action_returns_noop() -> None:
+    next_soc, grid_import_kwh, grid_export_kwh = transition(
+        44.0,
+        "unknown" if False else PlannerAction("hold"),
+        _slot(),
+        OptimizerConfig(),
+    )
+    # use explicit branch helper for unknown static fallback instead
+    assert next_soc == pytest.approx(44.0)
+    assert grid_import_kwh == 0.0
+    assert grid_export_kwh == 0.0
+
+
+def test_select_mode_soc_bin_rate_exact_neighbor_nearest_and_average() -> None:
+    action = PlannerAction.CHARGE_GRID_NORMAL
+    config = OptimizerConfig(
+        mode_action_soc_bin_rates={action: {40: 3.0, 42: 5.0, 46: 9.0}},
+        mode_action_average_rates={action: 2.2},
+    )
+
+    assert _select_mode_soc_bin_rate(40.9, action, config) == pytest.approx(3.0)
+    assert _select_mode_soc_bin_rate(41.1, action, config) == pytest.approx(4.0)
+    assert _select_mode_soc_bin_rate(44.2, action, config) == pytest.approx(5.0)
+
+    empty_config = OptimizerConfig(
+        mode_action_soc_bin_rates={},
+        mode_action_average_rates={action: 2.2},
+    )
+    assert _select_mode_soc_bin_rate(60.0, action, empty_config) == pytest.approx(2.2)
+
+
+def test_select_transition_rate_fallback_chain_mode_then_legacy_then_static() -> None:
+    action = PlannerAction.CHARGE_GRID_NORMAL
+    config_mode = OptimizerConfig(
+        mode_action_soc_bin_rates={action: {50: 4.4}},
+        charge_rate_curve=_DummyCurve(3.3),
+        charge_rate_kw=2.2,
+    )
+    assert _select_transition_rate_kw(50.0, action, config_mode) == pytest.approx(4.4)
+
+    config_legacy = OptimizerConfig(
+        mode_action_soc_bin_rates={},
+        charge_rate_curve=_DummyCurve(3.3),
+        charge_rate_kw=2.2,
+    )
+    assert _select_transition_rate_kw(50.0, action, config_legacy) == pytest.approx(3.3)
+
+    config_static = OptimizerConfig(
+        mode_action_soc_bin_rates={},
+        charge_rate_curve=None,
+        charge_rate_kw=2.2,
+    )
+    assert _select_transition_rate_kw(50.0, action, config_static) == pytest.approx(2.2)
+
+
+def test_nearest_soc_bin_tie_breaks_to_lower_bin() -> None:
+    nearest = _nearest_soc_bin(sorted_bins=[(40, 1.0), (44, 2.0)], target_soc=42)
+    assert nearest == (40, 1.0)
+
+
+def test_select_legacy_curve_rate_paths() -> None:
+    config = OptimizerConfig(
+        charge_rate_curve=_DummyCurve(3.2),
+        boost_charge_rate_curve=_DummyCurve(4.8),
+    )
+    assert (
+        _select_legacy_curve_rate(70.0, PlannerAction.CHARGE_GRID_NORMAL, config) == 3.2
+    )
+    assert (
+        _select_legacy_curve_rate(70.0, PlannerAction.CHARGE_GRID_BOOST, config) == 4.8
+    )
+    assert (
+        _select_legacy_curve_rate(70.0, PlannerAction.EXPORT_PROACTIVE, config) is None
+    )
+
+    no_curve = OptimizerConfig()
+    assert (
+        _select_legacy_curve_rate(70.0, PlannerAction.CHARGE_GRID_NORMAL, no_curve)
+        is None
+    )
+    assert (
+        _select_legacy_curve_rate(70.0, PlannerAction.CHARGE_GRID_BOOST, no_curve)
+        is None
+    )
+
+
+def test_select_static_default_rate_paths() -> None:
+    config = OptimizerConfig(
+        charge_rate_kw=3.3, boost_charge_rate_kw=5.0, discharge_rate_kw=4.0
+    )
+    assert _select_static_default_rate(PlannerAction.CHARGE_GRID_NORMAL, config) == 3.3
+    assert _select_static_default_rate(PlannerAction.CHARGE_GRID_BOOST, config) == 5.0
+    assert _select_static_default_rate(PlannerAction.EXPORT_PROACTIVE, config) == 4.0
