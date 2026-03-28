@@ -405,6 +405,7 @@ class CoordinatorData:
     learning_enabled: bool = False  # Switch-controlled learning state
     charge_rate_curves: dict[str, Any] = field(default_factory=dict)
     charge_rate_diagnostics: dict[str, Any] = field(default_factory=dict)
+    charge_rate_mode_analysis: dict[str, Any] = field(default_factory=dict)
 
     # --- Adaptive parameters (Issue #170 Phase 2) ---
     adaptive_params: AdaptiveParameters = field(default_factory=AdaptiveParameters)

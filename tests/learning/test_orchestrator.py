@@ -17,6 +17,7 @@ from custom_components.localshift.const import (
     CONF_TESLEMETRY_SOC,
     POWER_SIGN_POSITIVE,
 )
+from custom_components.localshift.engine.optimizer_dp import PlannerAction
 
 
 def _make_orchestrator():
@@ -256,6 +257,153 @@ async def test_run_pattern_analysis_skips_when_insufficient_decisions():
 
 
 class TestOrchestratorChargeRateLearning:
+    @staticmethod
+    def _prepare_charge_rate_learning(
+        orchestrator, *, mode_updated: bool = True
+    ) -> None:
+        def _consume(coro, _name=None):
+            if hasattr(coro, "close"):
+                coro.close()
+            return MagicMock()
+
+        orchestrator.hass.async_create_task = MagicMock(side_effect=_consume)
+
+        tracker = MagicMock()
+        tracker.save_pending = False
+        tracker._completed_decisions = []
+        tracker.backfill_outcomes = MagicMock()
+        tracker.get_daily_summary.return_value = PerformanceMetrics()
+        tracker.get_decision_log.return_value = []
+        tracker.get_recent_decisions.return_value = [
+            types.SimpleNamespace(
+                timestamp=datetime(2026, 3, 28, 12, 0, tzinfo=UTC),
+                mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            )
+        ]
+        orchestrator.decision_tracker = tracker
+
+        learner = MagicMock()
+        history_point = (datetime(2026, 3, 28, 12, 0, tzinfo=UTC), 1.0)
+        learner.async_fetch_history = AsyncMock(
+            return_value=([history_point], [history_point])
+        )
+        learner.update_from_history.return_value = True
+        learner.update_mode_analysis_from_history.return_value = mode_updated
+        learner.get_mode_analysis_payload.return_value = {
+            "generated_at": "2026-03-28T12:00:00+00:00",
+            "method": {"soc_bin_pct": 1, "resample": "1m"},
+            "window": {"history_window_days": 14},
+            "soc_bins_1pct_by_mode": {},
+        }
+        learner.get_curve.side_effect = lambda regime: (
+            MagicMock() if regime in {"normal", "boost"} else None
+        )
+        learner.diagnostics = {"labeled_sample_ratio": 1.0}
+        learner.async_save = AsyncMock()
+        orchestrator.charge_rate_learner = learner
+
+    @pytest.mark.asyncio
+    async def test_daily_mode_analysis_updates_once_per_day(self, monkeypatch):
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+        data = CoordinatorData()
+
+        now = datetime(2026, 3, 28, 23, 59, tzinfo=UTC)
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: now,
+        )
+
+        await orchestrator._async_update_charge_rate(data)
+        await orchestrator._async_update_charge_rate(data)
+
+        assert (
+            orchestrator.charge_rate_learner.update_mode_analysis_from_history.call_count
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_daily_mode_analysis_runs_again_on_next_day(self, monkeypatch):
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+        data = CoordinatorData()
+
+        current_now = datetime(2026, 3, 28, 23, 59, tzinfo=UTC)
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: current_now,
+        )
+
+        await orchestrator._async_update_charge_rate(data)
+        current_now = datetime(2026, 3, 29, 0, 1, tzinfo=UTC)
+        await orchestrator._async_update_charge_rate(data)
+
+        assert (
+            orchestrator.charge_rate_learner.update_mode_analysis_from_history.call_count
+            == 2
+        )
+
+    @pytest.mark.asyncio
+    async def test_daily_cadence_survives_restart_same_utc_day(self, monkeypatch):
+        from custom_components.localshift.learning import (
+            orchestrator as orchestrator_module,
+        )
+
+        persisted: dict[str, dict] = {}
+
+        class FakeStore:
+            def __init__(self, _hass, version, key) -> None:
+                self.version = version
+                self.key = key
+
+            async def async_load(self):
+                return persisted.get(self.key)
+
+            async def async_save(self, data):
+                persisted[self.key] = data
+
+        monkeypatch.setattr(orchestrator_module, "Store", FakeStore)
+
+        now = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: now,
+        )
+
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+        data = CoordinatorData()
+        await orchestrator._async_update_charge_rate(data)
+        await orchestrator._async_save_mode_analysis_state()
+
+        restarted = _make_orchestrator()
+        self._prepare_charge_rate_learning(restarted)
+        await restarted._async_load_mode_analysis_state()
+        await restarted._async_update_charge_rate(CoordinatorData())
+
+        assert (
+            restarted.charge_rate_learner.update_mode_analysis_from_history.call_count
+            == 0
+        )
+
+    @pytest.mark.asyncio
+    async def test_sets_mode_analysis_payload_on_data(self, monkeypatch):
+        orchestrator = _make_orchestrator()
+        self._prepare_charge_rate_learning(orchestrator)
+        data = CoordinatorData()
+
+        monkeypatch.setattr(
+            "custom_components.localshift.learning.orchestrator.dt_util.now",
+            lambda: datetime(2026, 3, 28, 12, 0, tzinfo=UTC),
+        )
+
+        await orchestrator._async_update_charge_rate(data)
+
+        assert isinstance(data.charge_rate_mode_analysis, dict)
+        assert data.charge_rate_mode_analysis == (
+            orchestrator.charge_rate_learner.get_mode_analysis_payload.return_value
+        )
+
     def test_schedule_charge_rate_update_skips_recent(self, monkeypatch):
         orchestrator = _make_orchestrator()
         orchestrator.decision_tracker = MagicMock()

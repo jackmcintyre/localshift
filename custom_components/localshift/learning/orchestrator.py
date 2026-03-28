@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -15,10 +15,12 @@ from ..const import (
     CONF_POWER_SIGN_OVERRIDE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_SOC,
+    BatteryMode,
     DEFAULT_POWER_SIGN_OVERRIDE,
     SWITCH_ENABLE_LEARNING,
 )
 from ..engine.counterfactual import CounterfactualEvaluator
+from ..engine.optimizer_dp import PlannerAction
 from ..forecast.corrections import ForecastCorrectionProvider
 from .charge_rate import ChargeRateLearner
 
@@ -61,7 +63,13 @@ class LearningOrchestrator:
         )
         self._counterfactual_evaluator: CounterfactualEvaluator | None = None
         self._last_charge_rate_attempt: datetime | None = None
+        self._last_mode_analysis_utc_date: date | None = None
         self.charge_rate_learner: ChargeRateLearner | None = None
+        self._mode_analysis_state_store = Store(
+            hass,
+            version=1,
+            key=f"localshift.mode_analysis_state.{self._entry_id}",
+        )
 
     def _resolve_charge_rate_config(self) -> tuple[str, str, str]:
         power_entity_id = self.entry.options.get(
@@ -130,6 +138,7 @@ class LearningOrchestrator:
             self._forecast_corrections = ForecastCorrectionProvider.from_dict(
                 stored_corrections
             )
+        await self._async_load_mode_analysis_state()
 
         self._counterfactual_evaluator = CounterfactualEvaluator()
 
@@ -179,6 +188,12 @@ class LearningOrchestrator:
                 "Failed to save forecast corrections",
                 True,
             ))
+        operations.append((
+            self._async_save_mode_analysis_state,
+            "mode_analysis_state",
+            "Failed to save mode-analysis state",
+            False,
+        ))
 
         for saver, label, error_message, use_exception in operations:
             if await self._save_component(saver, error_message, use_exception):
@@ -209,6 +224,31 @@ class LearningOrchestrator:
         await self._forecast_corrections_store.async_save(
             self._forecast_corrections.to_dict()
         )
+
+    async def _async_load_mode_analysis_state(self) -> None:
+        stored = await self._mode_analysis_state_store.async_load()
+        if not isinstance(stored, dict):
+            self._last_mode_analysis_utc_date = None
+            return
+
+        raw_date = stored.get("last_mode_analysis_utc_date")
+        if not isinstance(raw_date, str):
+            self._last_mode_analysis_utc_date = None
+            return
+
+        try:
+            self._last_mode_analysis_utc_date = date.fromisoformat(raw_date)
+        except ValueError:
+            self._last_mode_analysis_utc_date = None
+
+    async def _async_save_mode_analysis_state(self) -> None:
+        await self._mode_analysis_state_store.async_save({
+            "last_mode_analysis_utc_date": (
+                self._last_mode_analysis_utc_date.isoformat()
+                if self._last_mode_analysis_utc_date is not None
+                else None
+            )
+        })
 
     def handle_periodic_save(self) -> None:
         """Schedule a periodic save of learning data."""
@@ -369,12 +409,98 @@ class LearningOrchestrator:
         data.charge_rate_diagnostics = self.charge_rate_learner.diagnostics
         data.learning_enabled = self._get_switch_state(SWITCH_ENABLE_LEARNING)
 
+        self._update_mode_analysis_once_per_day(
+            power_history,
+            soc_history,
+            decisions,
+            data,
+        )
+
         self._last_charge_rate_update = dt_util.now() or datetime.now()
 
         self.hass.async_create_task(
             self.charge_rate_learner.async_save(),
             "localshift_save_charge_rate_curves",
         )
+
+    def _update_mode_analysis_once_per_day(
+        self,
+        power_history,
+        soc_history,
+        decisions,
+        data,
+    ) -> None:
+        if self.charge_rate_learner is None:
+            return
+
+        today_utc = self._current_utc_date()
+        if self._last_mode_analysis_utc_date == today_utc:
+            data.charge_rate_mode_analysis = (
+                self.charge_rate_learner.get_mode_analysis_payload()
+            )
+            return
+
+        mode_history = self._build_mode_history(decisions)
+        updated = self.charge_rate_learner.update_mode_analysis_from_history(
+            power_history,
+            soc_history,
+            mode_history,
+        )
+        if not updated:
+            return
+
+        data.charge_rate_mode_analysis = (
+            self.charge_rate_learner.get_mode_analysis_payload()
+        )
+        self._last_mode_analysis_utc_date = today_utc
+        self.hass.async_create_task(
+            self._async_save_mode_analysis_state(),
+            "localshift_save_mode_analysis_state",
+        )
+
+    def _build_mode_history(self, decisions) -> list[tuple[datetime, str]]:
+        if not decisions:
+            return []
+
+        action_to_mode = {
+            PlannerAction.HOLD: BatteryMode.SELF_CONSUMPTION.value,
+            PlannerAction.CHARGE_GRID_NORMAL: BatteryMode.GRID_CHARGING.value,
+            PlannerAction.CHARGE_GRID_BOOST: BatteryMode.BOOST_CHARGING.value,
+            PlannerAction.EXPORT_PROACTIVE: BatteryMode.PROACTIVE_EXPORT.value,
+        }
+
+        mode_history: list[tuple[datetime, str]] = []
+        for decision in decisions:
+            timestamp = getattr(decision, "timestamp", None)
+            mode_value = getattr(decision, "mode_chosen", None)
+            if timestamp is None or mode_value is None:
+                continue
+
+            if isinstance(mode_value, BatteryMode):
+                mode = mode_value.value
+            else:
+                try:
+                    action = (
+                        mode_value
+                        if isinstance(mode_value, PlannerAction)
+                        else PlannerAction(str(mode_value))
+                    )
+                except ValueError:
+                    continue
+                mode = action_to_mode.get(action)
+
+            if mode is None:
+                continue
+            mode_history.append((timestamp, mode))
+
+        mode_history.sort(key=lambda item: item[0])
+        return mode_history
+
+    def _current_utc_date(self) -> date:
+        now = dt_util.now() or datetime.now(tz=UTC)
+        if now.tzinfo is None:
+            return now.date()
+        return now.astimezone(UTC).date()
 
     async def _run_pattern_analysis(self, data) -> None:
         """Run weekly pattern analysis to generate bias corrections."""
