@@ -193,6 +193,8 @@ CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
 CONF_CYCLE_PENALTY = "cycle_penalty"
 CONF_TARGET_PENALTY = "target_penalty"
+CONF_DEMAND_WINDOW_IMPORT_PENALTY = "demand_window_import_penalty"
+CONF_DEMAND_ACTIVE_MONTHS = "demand_active_months"
 
 # Optimization mode options
 OPTIMIZATION_MODE_SELF_CONSUMPTION = "self_consumption"
@@ -233,6 +235,13 @@ DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
 DEFAULT_CYCLE_PENALTY = 0.08  # $/kWh battery wear cost
 DEFAULT_TARGET_PENALTY = 0.015  # $/%-point demand window urgency
+# Demand-charge awareness (P1a): elevated $/kWh cost on grid import during the
+# demand window, modelling the network $/kW monthly peak charge that is invisible
+# to the Amber spot price. 0.0 disables (no change for flat/ToU tariffs).
+DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY = 0.0  # $/kWh
+# Months (1-12) when the demand charge applies. Empty list = active every month.
+# Ausgrid residential: Jun-Aug & Nov-Mar -> [1, 2, 3, 6, 7, 8].
+DEFAULT_DEMAND_ACTIVE_MONTHS: list[int] = []
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -291,6 +300,13 @@ THRESHOLD_RANGES = {
         "step": 1,
         "unit": "%",
         "icon": "mdi:battery-lock",
+    },
+    CONF_DEMAND_WINDOW_IMPORT_PENALTY: {
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.5,
+        "unit": "$/kWh",
+        "icon": "mdi:transmission-tower",
     },
     CONF_COOLING_THRESHOLD: {
         "min": 18.0,

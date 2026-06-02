@@ -228,6 +228,27 @@ class OptimizerConfig:
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
 
+    # --- Demand-charge tariff (P1a) ---
+    demand_window_import_penalty_per_kwh: float = 0.0
+    """Elevated cost ($/kWh) applied to grid import during the demand window.
+
+    Models the network demand charge (a $/kW monthly peak on the highest 30-min
+    grid import in the 3pm-9pm window) which is NOT in the Amber spot price. Set
+    high enough (e.g. $2-5/kWh) to drive DW grid import toward zero — this mirrors
+    Amber SmartShift's "treat DW grid usage as elevated cost" constraint.
+
+    Default 0.0 disables the feature (no behaviour change for flat/ToU tariffs).
+
+    NOTE (Control Philosophy): the pre-charging this induces before the DW is
+    justified by a REAL economic deadline (the demand charge), not by a desire to
+    hold reserve. See docs/PLANNING_MODEL.md "Control Philosophy".
+    """
+
+    demand_charge_active: bool = True
+    """Whether the demand-charge season is currently active (e.g. Ausgrid: Jun-Aug
+    & Nov-Mar). Derived HA-side from the current month and passed in to keep the
+    engine pure/deterministic. Only relevant when the penalty rate is > 0."""
+
     forecast_horizon_hours: float = 24.0
     """Actual hours of forecast available (Issue #431)."""
 
@@ -280,6 +301,12 @@ class ObjectiveTerms:
     """Penalty for grid charging when energy will drain through house load before reaching
     a useful period (solar surplus or demand window). Issue #638."""
 
+    demand_charge_penalty: float = 0.0
+    """Elevated cost on grid import during the demand window (P1a — demand-charge
+    awareness). Models the Australian network demand charge ($/kW peak), which is
+    invisible to the spot price. Applied to grid import in DW slots regardless of
+    action (the HOLD/self-consumption path)."""
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue - self_consumption_value + penalties."""
@@ -293,6 +320,7 @@ class ObjectiveTerms:
             + self.switching_penalty
             + self.solar_opportunity_penalty
             + self.futile_cycling_penalty
+            + self.demand_charge_penalty
         )
 
     def to_dict(self) -> dict:
@@ -307,6 +335,7 @@ class ObjectiveTerms:
             "switching_penalty": self.switching_penalty,
             "solar_opportunity_penalty": self.solar_opportunity_penalty,
             "futile_cycling_penalty": self.futile_cycling_penalty,
+            "demand_charge_penalty": self.demand_charge_penalty,
             "net_cost": self.net_cost,
         }
 

@@ -10,10 +10,12 @@ import pytest
 from custom_components.localshift.const import (
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
+    CONF_DEMAND_WINDOW_IMPORT_PENALTY,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
+    DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MINIMUM_TARGET_SOC,
     DOMAIN,
@@ -108,6 +110,27 @@ class TestLocalShiftNumber:
         assert number._attr_native_min_value == spec["min"]
         assert number._attr_native_max_value == spec["max"]
 
+    def test_number_initialization_demand_window_import_penalty(
+        self, mock_coordinator, mock_entry
+    ):
+        """Test number entity initialization for the demand-window import penalty."""
+        number = LocalShiftNumber(
+            mock_coordinator,
+            mock_entry,
+            CONF_DEMAND_WINDOW_IMPORT_PENALTY,
+            "Demand Window Import Penalty",
+            DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY,
+        )
+
+        assert number._attr_unique_id == "localshift_demand_window_import_penalty"
+        assert number._attr_name == "Demand Window Import Penalty"
+        assert number._conf_key == CONF_DEMAND_WINDOW_IMPORT_PENALTY
+
+        spec = THRESHOLD_RANGES[CONF_DEMAND_WINDOW_IMPORT_PENALTY]
+        assert number._attr_native_min_value == spec["min"]
+        assert number._attr_native_max_value == spec["max"]
+        assert number._attr_native_unit_of_measurement == spec["unit"]
+
     def test_number_initialization_minimum_target_soc(
         self, mock_coordinator, mock_entry
     ):
@@ -198,8 +221,13 @@ class TestNumberDefinitions:
     """Tests for NUMBER_DEFINITIONS constant."""
 
     def test_number_definitions_count(self):
-        """Test that there are 6 number definitions (4 basic + 2 penalty)."""
-        assert len(NUMBER_DEFINITIONS) == 6
+        """Test that there are 7 number definitions (4 basic + 2 penalty + demand)."""
+        assert len(NUMBER_DEFINITIONS) == 7
+
+    def test_number_definitions_contains_demand_window_import_penalty(self):
+        """Test definitions contain the demand-window import penalty (P1a)."""
+        keys = [d[0] for d in NUMBER_DEFINITIONS]
+        assert CONF_DEMAND_WINDOW_IMPORT_PENALTY in keys
 
     def test_number_definitions_contains_cheap_price_percentile(self):
         """Test definitions contain cheap price percentile."""
@@ -229,7 +257,7 @@ class TestAsyncSetupEntry:
     async def test_async_setup_entry_creates_all_numbers(
         self, mock_coordinator, mock_entry
     ):
-        """Test that async_setup_entry creates all 6 number entities."""
+        """Test that async_setup_entry creates all 7 number entities."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
 
@@ -238,7 +266,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 6
+        assert len(added_entities) == 7
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_localshift_number_instances(

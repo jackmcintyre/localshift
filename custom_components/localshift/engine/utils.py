@@ -7,6 +7,7 @@ instance state or modification of CoordinatorData.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,6 +17,18 @@ from homeassistant.util import dt as dt_util
 from custom_components.localshift.pricing.types import ForecastSlot
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def demand_season_active(month: int, active_months: Sequence[int] | None) -> bool:
+    """Return True if the demand charge applies in the given month (P1a).
+
+    An empty or None ``active_months`` means the charge applies year-round.
+    Pure helper (no clock) so the engine stays deterministic; the HA-side caller
+    supplies the current month from ``dt_util.now()``.
+    """
+    if not active_months:
+        return True
+    return month in active_months
 
 
 def parse_forecast_dt(dt_str: str | None) -> datetime | None:

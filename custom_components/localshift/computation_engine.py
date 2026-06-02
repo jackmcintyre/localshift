@@ -16,7 +16,9 @@ from .const import (
     CONF_BATTERY_TARGET,
     CONF_COMPARISON_MODE,
     CONF_CYCLE_PENALTY,
+    CONF_DEMAND_ACTIVE_MONTHS,
     CONF_DEMAND_WINDOW_END,
+    CONF_DEMAND_WINDOW_IMPORT_PENALTY,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MINIMUM_TARGET_SOC,
@@ -29,7 +31,9 @@ from .const import (
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_COMPARISON_MODE,
     DEFAULT_CYCLE_PENALTY,
+    DEFAULT_DEMAND_ACTIVE_MONTHS,
     DEFAULT_DEMAND_WINDOW_END,
+    DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY,
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
@@ -60,6 +64,7 @@ from .engine.optimizer_runner import _find_current_slot_index
 from .engine.price_signal_engine import PriceSignalEngine
 from .engine.slot_schedule import TOTAL_SLOTS
 from .engine.soc_simulator import SocSimulator
+from .engine.utils import demand_season_active
 from .forecast import (
     AccuracyMetricsStore,
     ForecastAccuracyEngine,
@@ -557,6 +562,18 @@ class ComputationEngine:
             ),
             CONF_TARGET_PENALTY: self.entry.options.get(
                 CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY
+            ),
+            # P1a: demand-charge awareness. Pass the rate plus a season-active flag
+            # derived from the current month (engine stays clock-free).
+            CONF_DEMAND_WINDOW_IMPORT_PENALTY: self.entry.options.get(
+                CONF_DEMAND_WINDOW_IMPORT_PENALTY,
+                DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY,
+            ),
+            "demand_charge_active": demand_season_active(
+                dt_util.now().month,
+                self.entry.options.get(
+                    CONF_DEMAND_ACTIVE_MONTHS, DEFAULT_DEMAND_ACTIVE_MONTHS
+                ),
             ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE

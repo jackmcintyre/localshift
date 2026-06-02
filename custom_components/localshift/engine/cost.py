@@ -130,6 +130,27 @@ def stage_cost(
             * futile_cycling_penalty_factor
         )
 
+    # P1a: demand-charge penalty.
+    # Grid import during the demand window sets an expensive monthly $/kW network
+    # peak that is invisible to the spot price. We price it as an elevated cost on
+    # DW grid import REGARDLESS of action: charge actions are already forbidden in
+    # the DW by feasible_actions(), so the import we are pricing here is the
+    # HOLD/self-consumption draw when a depleted battery cannot cover load. This
+    # propagates backward through the DP to pre-charge enough before the DW to
+    # avoid the draw entirely. The induced pre-charge is justified by a real
+    # economic deadline (the demand charge), consistent with the Control Philosophy
+    # in docs/PLANNING_MODEL.md. Mirrors Amber SmartShift's elevated-DW-cost rule.
+    demand_charge_penalty = 0.0
+    if (
+        slot.is_demand_window_slot
+        and config.demand_charge_active
+        and config.demand_window_import_penalty_per_kwh > 0.0
+        and grid_import_kwh > 0.0
+    ):
+        demand_charge_penalty = (
+            grid_import_kwh * config.demand_window_import_penalty_per_kwh
+        )
+
     return ObjectiveTerms(
         import_cost=import_cost,
         export_revenue=export_revenue,
@@ -139,6 +160,7 @@ def stage_cost(
         switching_penalty=switching_penalty,
         solar_opportunity_penalty=solar_opportunity_penalty,
         futile_cycling_penalty=futile_cycling_penalty,
+        demand_charge_penalty=demand_charge_penalty,
     )
 
 

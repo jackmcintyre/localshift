@@ -1,7 +1,8 @@
 """Tests for cost functions (stage_cost, terminal_cost, penalty factors)."""
 
-import pytest
 from datetime import UTC, datetime
+
+import pytest
 
 from custom_components.localshift.engine.cost import (
     stage_cost,
@@ -332,3 +333,111 @@ class TestObjectiveTerms:
         # -(-20.0) = +20.0
         expected = 50.0 - (-20.0)
         assert terms.net_cost == expected
+
+    def test_net_cost_includes_demand_charge_penalty(self):
+        """net_cost property includes the demand_charge_penalty term."""
+        terms = ObjectiveTerms(
+            import_cost=10.0,
+            demand_charge_penalty=7.0,
+        )
+        assert terms.net_cost == 17.0
+
+    def test_to_dict_includes_demand_charge_penalty(self):
+        """to_dict serializes the demand_charge_penalty term."""
+        terms = ObjectiveTerms(demand_charge_penalty=4.0)
+        d = terms.to_dict()
+        assert d["demand_charge_penalty"] == 4.0
+
+
+class TestDemandChargePenalty:
+    """Test the demand-window grid-import penalty (P1a — demand-charge awareness).
+
+    The penalty models the Australian network demand charge: grid import during the
+    demand window sets an expensive monthly $/kW peak that is invisible to the spot
+    price. It is applied to grid import in DW slots REGARDLESS of action (the HOLD/
+    self-consumption path where a depleted battery forces a grid draw) — charge
+    actions are already forbidden in the DW by feasible_actions().
+    """
+
+    @staticmethod
+    def _dw_slot(*, in_dw: bool) -> SlotContext:
+        return SlotContext(
+            slot_index=0,
+            timestamp_iso=datetime.now(UTC).isoformat(),
+            buy_price=0.15,
+            sell_price=0.05,
+            solar_kwh=0.0,
+            consumption_kwh=1.0,
+            is_demand_window_slot=in_dw,
+            slot_interval_minutes=30,
+        )
+
+    def test_penalty_applied_on_dw_import(self):
+        """Grid import inside the DW incurs the elevated demand penalty."""
+        config = OptimizerConfig(
+            demand_window_import_penalty_per_kwh=2.0,
+            demand_charge_active=True,
+        )
+        slot = self._dw_slot(in_dw=True)
+
+        terms = stage_cost(PlannerAction.HOLD, 0.5, 0.0, slot, config)
+
+        assert terms.demand_charge_penalty == pytest.approx(1.0)  # 0.5 kWh * 2.0
+        assert terms.net_cost == pytest.approx(terms.net_cost)
+        assert terms.demand_charge_penalty in (
+            terms.to_dict()["demand_charge_penalty"],
+        )
+
+    def test_penalty_applies_regardless_of_action(self):
+        """The penalty keys off DW grid import, not the action (HOLD path matters)."""
+        config = OptimizerConfig(
+            demand_window_import_penalty_per_kwh=3.0,
+            demand_charge_active=True,
+        )
+        slot = self._dw_slot(in_dw=True)
+
+        hold_terms = stage_cost(PlannerAction.HOLD, 0.4, 0.0, slot, config)
+        assert hold_terms.demand_charge_penalty == pytest.approx(1.2)  # 0.4 * 3.0
+
+    def test_no_penalty_without_import(self):
+        """No grid import in the DW → no demand penalty."""
+        config = OptimizerConfig(
+            demand_window_import_penalty_per_kwh=2.0,
+            demand_charge_active=True,
+        )
+        slot = self._dw_slot(in_dw=True)
+
+        terms = stage_cost(PlannerAction.HOLD, 0.0, 0.0, slot, config)
+        assert terms.demand_charge_penalty == 0.0
+
+    def test_no_penalty_outside_dw(self):
+        """Grid import outside the DW is not subject to the demand penalty."""
+        config = OptimizerConfig(
+            demand_window_import_penalty_per_kwh=2.0,
+            demand_charge_active=True,
+        )
+        slot = self._dw_slot(in_dw=False)
+
+        terms = stage_cost(PlannerAction.CHARGE_GRID_NORMAL, 1.0, 0.0, slot, config)
+        assert terms.demand_charge_penalty == 0.0
+
+    def test_disabled_by_default(self):
+        """Default config (rate 0.0) applies no demand penalty even inside the DW."""
+        config = (
+            OptimizerConfig()
+        )  # demand_window_import_penalty_per_kwh defaults to 0.0
+        slot = self._dw_slot(in_dw=True)
+
+        terms = stage_cost(PlannerAction.HOLD, 1.0, 0.0, slot, config)
+        assert terms.demand_charge_penalty == 0.0
+
+    def test_inactive_season_suppresses_penalty(self):
+        """When the demand season is inactive, no penalty applies even with a rate."""
+        config = OptimizerConfig(
+            demand_window_import_penalty_per_kwh=2.0,
+            demand_charge_active=False,
+        )
+        slot = self._dw_slot(in_dw=True)
+
+        terms = stage_cost(PlannerAction.HOLD, 1.0, 0.0, slot, config)
+        assert terms.demand_charge_penalty == 0.0

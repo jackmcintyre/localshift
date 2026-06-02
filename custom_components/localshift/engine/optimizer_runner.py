@@ -247,6 +247,7 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
         CONF_CYCLE_PENALTY,
+        CONF_DEMAND_WINDOW_IMPORT_PENALTY,
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
@@ -255,6 +256,7 @@ def _build_optimizer_config(
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_CYCLE_PENALTY,
+        DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
@@ -299,6 +301,15 @@ def _build_optimizer_config(
     target_penalty = float(
         config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
     )
+
+    # P1a: demand-charge awareness. Rate ($/kWh elevated cost on DW grid import);
+    # the season-active flag is derived HA-side (keeps the engine clock-free).
+    demand_window_import_penalty = float(
+        config_options.get(
+            CONF_DEMAND_WINDOW_IMPORT_PENALTY, DEFAULT_DEMAND_WINDOW_IMPORT_PENALTY
+        )
+    )
+    demand_charge_active = bool(config_options.get("demand_charge_active", True))
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
     adaptive = getattr(data, "adaptive_params", None)
@@ -353,6 +364,9 @@ def _build_optimizer_config(
         switching_penalty=switching_penalty,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
+        # --- Demand-charge awareness (P1a) ---
+        demand_window_import_penalty_per_kwh=demand_window_import_penalty,
+        demand_charge_active=demand_charge_active,
     )
 
 
