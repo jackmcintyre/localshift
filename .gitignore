@@ -56,3 +56,8 @@ snapshots/
 # Worktrees (local development only)
 worktrees/
 
+# Agent frameworks / local tooling (not project code)
+_bmad/
+_bmad-output/
+.claude/
+
