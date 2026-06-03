@@ -1132,9 +1132,17 @@ def test_feasible_actions_gate_disabled_in_arbitrage_mode():
     assert PlannerAction.CHARGE_GRID_BOOST in actions
 
 
-def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
-    """When SOC >= target (no deficit), gate should not suppress grid charging."""
-    # SOC=85 >= target=80 → deficit=0 → gate does not fire
+def test_feasible_actions_grid_charge_capped_at_target():
+    """At/above the demand-window target, grid charging is capped (not offered).
+
+    Previously, with SOC >= target the solar-sufficiency gate did not fire and a
+    cheap price would still offer grid charge — producing marginal above-target
+    top-ups (e.g. grid-charging at 98% just before the demand window). Grid
+    charging is now capped at ``demand_window_target_soc_pct`` in self-consumption
+    mode, so only HOLD remains. (The solar gate still does not fire here; the
+    target cap is the operative brake. Solar may still fill above target for free.)
+    """
+    # SOC=85 >= target=80 → above the grid-charge ceiling
     slots = [
         _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.0, consumption_kwh=0.3)
         for i in range(4)
@@ -1156,9 +1164,9 @@ def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
         terminal_penalty_idx=4,
     )
 
-    # No deficit → gate does not fire → price-gated grid charge offered
+    # Above target → grid charge capped even though price is cheap and gate is idle
     assert PlannerAction.HOLD in actions
-    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
 
 
 def test_projected_solar_soc_gain_pct_positive_surplus():
@@ -1255,7 +1263,13 @@ def test_projected_solar_soc_gain_pct_respects_slot_range():
 
 
 def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar():
-    """Integration: on a sunny day with enough solar, no grid charging before demand window."""
+    """Integration: on a sunny day with enough solar, no grid charging before demand window.
+
+    Issue #811/#816: in strict mode the target is enforced at DW *entry*, not held to the
+    end of the DW. The battery is expected to discharge during the demand window to cover
+    its load (that is the point of pre-charging), so end-of-DW SOC may fall below target —
+    that is correct, not a shortfall.
+    """
     # 8 pre-DW slots (09:00–13:00) with strong solar; DW entry at slot 8
     # SOC deficit: 80% - 70% = 10% (1.35 kWh)
     # Solar surplus: 8 slots * (0.6 kWh solar - 0.2 kWh consumption) = 3.2 kWh net
@@ -1314,11 +1328,18 @@ def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar(
         f"Expected SOC ≥80% at DW entry (slot 8), got {soc_at_dw_entry:.1f}%"
     )
 
-    # Terminal shortfall should be zero (target is met)
-    final_decision = result.decisions[-1]
-    terminal_shortfall = max(0.0, 80.0 - final_decision.predicted_soc_pct)
-    assert terminal_shortfall == 0.0, (
-        f"Expected zero terminal shortfall, got {terminal_shortfall:.1f}%"
+    # Issue #811/#816: the target is enforced at DW entry, not held to the end of the DW.
+    # The battery should discharge during the demand window (slots 8-11, $0.30, no solar)
+    # to cover its load rather than hoard charge to a horizon-end target — so no grid
+    # import at the peak, and end-of-DW SOC is allowed to fall below target.
+    dw_decisions = result.decisions[8:]
+    dw_grid_import = sum(d.grid_import_kwh for d in dw_decisions)
+    assert dw_grid_import == 0.0, (
+        f"battery should cover DW load from storage, not import at the peak; "
+        f"got {dw_grid_import:.2f} kWh of DW grid import"
+    )
+    assert result.decisions[-1].predicted_soc_pct < soc_at_dw_entry, (
+        "battery should discharge through the demand window (it was pre-charged to be used)"
     )
 
     # Any grid charging in the pre-DW solar window (slots 0-7) should be economically
@@ -2525,7 +2546,7 @@ def test_is_cheap_import_window_expensive_price():
         soc_bins=20,
     )
 
-    result = _is_cheap_import_window(slot, config, None, [slot])
+    result = _is_cheap_import_window(slot, 0, config, None, [slot])
     assert result is False
 
 

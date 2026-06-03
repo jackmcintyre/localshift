@@ -207,6 +207,31 @@ class OptimizerConfig:
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
 
+    urgency_window_start_idx: int | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): index of the first slot within the
+    urgency window (~4h) before the demand-window entry (Issue #800 follow-up).
+
+    The urgency-inflated ``effective_cheap_price`` is a "now" value that is only legitimate
+    for slots close to the upcoming demand window (its urgency ramp is ~4h). When the plan
+    recomputes after the day's demand window has begun, the first DW-entry in the rolling
+    horizon is *tomorrow* evening, so tonight's overnight slots are technically "pre-DW" —
+    but they are far outside the urgency window, so gating them on the inflated price
+    re-introduces the overnight sawtooth. ``cheap_threshold_for_slot`` therefore applies the
+    inflated price only to slots in ``[urgency_window_start_idx, terminal_penalty_idx)`` and
+    gates everything else on the un-inflated base. None ⇒ legacy (base only post-DW)."""
+
+    base_cheap_price: float | None = None
+    """Un-inflated "genuinely cheap" threshold (percentile-derived), $/kWh.
+
+    ``effective_cheap_price`` is computed for *now* and may be inflated by today's
+    low-solar urgency (``_calculate_urgency_adjusted_price``) so the optimizer will
+    pay more to reach *today's* demand-window target. That urgency rationale does not
+    hold for slots at/after the demand window (i.e. tomorrow), so applying the inflated
+    threshold there wrongly classifies tomorrow-night slots as "cheap" and produces
+    net-negative overnight sawtooth charging. Past the demand-window entry, grid
+    charging is gated on this un-inflated base instead. Falls back to
+    ``effective_cheap_price`` when ``None`` (backward compatibility)."""
+
     switching_penalty: float = 0.02
     """Penalty applied when switching away from the currently commanded action ($/switch)."""
 

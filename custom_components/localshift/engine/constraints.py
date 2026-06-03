@@ -120,7 +120,22 @@ def feasible_actions(
 
     actions = []
 
-    can_charge = soc_pct < config.max_soc_pct
+    # Grid charging is capped at the demand-window target in self-consumption
+    # mode, not at the physical 100% ceiling. The target (battery_target plus any
+    # learned drain/headroom margin) is the SOC the planner is trying to reach for
+    # demand-window readiness; grid should fill the battery up to it and no further.
+    # Without this cap, any cheap slot below 100% invites a marginal above-target
+    # top-up (e.g. grid-charging at 98% just before the demand window) that the
+    # full-retail self-consumption credit makes look profitable but which only
+    # cycles the battery for negligible gain. Solar can still fill above the target
+    # for free (export actions are handled separately), and arbitrage mode keeps the
+    # physical ceiling so it can still chase price spreads.
+    charge_ceiling = (
+        config.demand_window_target_soc_pct
+        if config.optimization_mode == "self_consumption"
+        else config.max_soc_pct
+    )
+    can_charge = soc_pct < charge_ceiling
 
     actions.append(PlannerAction.HOLD)
 
@@ -137,8 +152,11 @@ def feasible_actions(
         and not (_solar_covers_deficit or _global_solar_covers)
     ):
         if config.optimization_mode == "self_consumption":
-            price_is_cheap = slot.buy_price <= config.effective_cheap_price
-            price_is_very_cheap = slot.buy_price <= config.effective_cheap_price * 0.8
+            cheap_threshold = cheap_threshold_for_slot(
+                config, slot_idx, terminal_penalty_idx
+            )
+            price_is_cheap = slot.buy_price <= cheap_threshold
+            price_is_very_cheap = slot.buy_price <= cheap_threshold * 0.8
 
             if price_is_cheap:
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
@@ -155,6 +173,46 @@ def feasible_actions(
     )
 
     return actions
+
+
+def cheap_threshold_for_slot(
+    config: OptimizerConfig,
+    slot_idx: int,
+    terminal_penalty_idx: int | None,
+) -> float:
+    """Return the cheap-price threshold to apply to a slot's grid-charge gate.
+
+    Shared by the feasibility gate (``feasible_actions``), the futile-cycling penalty
+    (``penalties``), and the reason-code labels (``reason_codes``) so all three agree on
+    what counts as "cheap" for a given slot.
+
+    Issue #800 (overnight SOC floor bounce / sawtooth).
+    ``effective_cheap_price`` is a "now" value that today's low-solar urgency may have
+    inflated above the genuinely-cheap base (to fund pre-charge before the demand window).
+    That urgency only legitimately applies to slots close to the upcoming demand window, so
+    the inflated value is used only inside the urgency window
+    ``[urgency_window_start_idx, terminal_penalty_idx)``; every other slot (post-DW, and any
+    slot more than ~4h before the DW — e.g. tonight's overnight when the next horizon DW is
+    tomorrow evening) is gated on the un-inflated ``base_cheap_price``. Using the inflated
+    value outside that window classifies overnight slots as "cheap" and drives net-negative
+    sawtooth charging.
+
+    Backward compatible: when ``urgency_window_start_idx`` is None (e.g. direct unit calls),
+    the inflated price applies to all pre-DW slots (legacy: base only at/after the DW entry).
+    """
+    threshold = config.effective_cheap_price
+    if config.base_cheap_price is None or terminal_penalty_idx is None:
+        return threshold
+
+    uw_start = config.urgency_window_start_idx
+    if uw_start is None:
+        in_urgency_window = slot_idx < terminal_penalty_idx  # legacy
+    else:
+        in_urgency_window = uw_start <= slot_idx < terminal_penalty_idx
+
+    if not in_urgency_window:
+        threshold = min(threshold, config.base_cheap_price)
+    return threshold
 
 
 def check_global_solar_sufficiency(

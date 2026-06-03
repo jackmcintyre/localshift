@@ -84,6 +84,7 @@ def get_futile_cycling_penalty_factor(
     config: OptimizerConfig,
     soc_after_charge_pct: float,
     charge_kwh: float,
+    terminal_penalty_idx: int | None = None,
 ) -> float:
     """Compute penalty factor for grid charging that will be drained before a useful period.
 
@@ -118,18 +119,29 @@ def get_futile_cycling_penalty_factor(
     min_soc = config.min_soc_pct
     discharge_eff = config.discharge_efficiency
 
-    for future_slot in slots[slot_idx + 1 :]:
+    from custom_components.localshift.engine.constraints import (
+        cheap_threshold_for_slot,
+    )
+
+    charge_slot_price = slots[slot_idx].buy_price
+    for future_idx in range(slot_idx + 1, len(slots)):
+        future_slot = slots[future_idx]
         # A "useful period" is where solar surplus, demand window, or a cheaper
         # feasible charge window makes the charged energy valuable — stop draining here.
         if future_slot.solar_kwh > future_slot.consumption_kwh:
             break
         if future_slot.is_demand_window_slot:
             break
-        # A cheaper feasible charge window: charging is allowed (price <= cheap threshold)
-        # and meaningfully cheaper than now — energy can be stored for the later cheap charge.
+        # A cheaper feasible charge window: charging is allowed (price <= the gate's
+        # per-slot cheap threshold — Issue #800, so post-demand-window slots use the
+        # un-inflated base) and meaningfully cheaper than now — energy can be stored
+        # for the later cheap charge.
+        future_threshold = cheap_threshold_for_slot(
+            config, future_idx, terminal_penalty_idx
+        )
         if (
-            future_slot.buy_price <= config.effective_cheap_price
-            and future_slot.buy_price < slots[slot_idx].buy_price - 0.02
+            future_slot.buy_price <= future_threshold
+            and future_slot.buy_price < charge_slot_price - 0.02
         ):
             break
 

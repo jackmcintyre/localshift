@@ -177,6 +177,49 @@ class TestOptimizerRunnerHelpers:
         assert updated.export_price_margin == pytest.approx(0.11)
         assert updated.self_consumption_value_per_kwh == pytest.approx(0.10)
 
+    def test_build_optimizer_config_base_cheap_price_passthrough(self):
+        """Issue #800: base_cheap_price flows through as the objective percentile floor.
+
+        It must be independent of cheap_price_bias (the bias only tunes the urgency-aware
+        effective_cheap_price; it tightens the post-DW gate via min(), never loosens it),
+        and must tolerate <= 0 values (negative-wholesale markets) without being floored
+        to 0.0 (which would block ALL post-DW charging).
+        """
+
+        class MockData:
+            effective_cheap_price = 0.10
+            general_price = 0.20
+            base_cheap_price = 0.08
+            adaptive_params = {"cheap_price_bias": -3.0}  # negative bias
+
+        updated = _build_optimizer_config(MockData(), {})
+        # Bias applies to effective (0.10 - 0.03) but NOT to the objective base floor.
+        assert updated.effective_cheap_price == pytest.approx(0.07)
+        assert updated.base_cheap_price == pytest.approx(0.08)
+
+    def test_build_optimizer_config_base_cheap_price_negative_market(self):
+        """A genuinely-negative percentile base passes through (not coerced to None/0)."""
+
+        class MockData:
+            effective_cheap_price = 0.05
+            general_price = 0.20
+            base_cheap_price = -0.02
+            adaptive_params = None
+
+        updated = _build_optimizer_config(MockData(), {})
+        assert updated.base_cheap_price == pytest.approx(-0.02)
+
+    def test_build_optimizer_config_base_cheap_price_absent_is_none(self):
+        """When the coordinator has not computed a base yet, gating is disabled (None)."""
+
+        class MockData:
+            effective_cheap_price = 0.10
+            general_price = 0.20
+            adaptive_params = None
+
+        updated = _build_optimizer_config(MockData(), {})
+        assert updated.base_cheap_price is None
+
     def test_compute_legacy_energy_totals(self):
         """Legacy totals should ignore invalid numeric inputs."""
         totals = _compute_legacy_energy_totals([

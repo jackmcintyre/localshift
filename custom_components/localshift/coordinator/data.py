@@ -234,6 +234,10 @@ class CoordinatorData:
 
     # Computed sensors
     effective_cheap_price: float = 0.0
+    # Un-inflated percentile cheap threshold (Issue #800). None = not yet computed.
+    # May legitimately be <= 0 in negative-wholesale markets, so a None sentinel (not 0.0)
+    # is used to distinguish "absent" from "genuinely cheap/negative".
+    base_cheap_price: float | None = None
     cheap_charge_stop_price: float = 0.0
     planner_threshold_used: float | None = None  # Threshold the optimizer actually used
     solar_weighted_avg_fit: float = 0.0

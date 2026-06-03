@@ -1,0 +1,550 @@
+"""Gate test for the overnight cheap-window sawtooth (Issue #800).
+
+Background
+----------
+``effective_cheap_price`` is computed for *now* and may be inflated above the
+genuinely-cheap percentile base by today's low-solar urgency (so the optimizer will pay
+more to pre-charge before *today's* demand window). The DP applies that single scalar to
+every slot in the (multi-day) horizon, so *tomorrow night's* slots — priced just under the
+inflated threshold but above the real base — get classed as "CHEAP IMPORT WINDOW". A
+marginal grid charge then fires and immediately drains through house load before any useful
+period: a net-negative "sawtooth" SOC (Issue #800 "overnight SOC floor bounce").
+
+Because the optimizer re-plans every cycle, today's urgency price is only ever legitimately
+needed for the *near* (pre-demand-window) slots; far slots are re-evaluated with their own
+urgency when they become "now". The fix gates slots at/after the demand-window entry on the
+un-inflated ``base_cheap_price`` instead.
+
+These tests reproduce the sawtooth deterministically and assert the fix removes it without
+suppressing genuinely-cheap (<= base) overnight charging.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from custom_components.localshift.engine.constraints import (
+    cheap_threshold_for_slot,
+    feasible_actions,
+)
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
+    OptimizerConfig,
+    OptimizerInputs,
+    PlannerAction,
+    SlotContext,
+)
+
+INTERVAL = 30
+_START = datetime(2026, 6, 3, 12, 0)  # day-1 noon
+
+# Price bands ($/kWh)
+_BASE_CHEAP = 0.08  # genuinely-cheap percentile base
+_INFLATED_CHEAP = 0.12  # today's urgency-inflated "now" value
+_OVERNIGHT = 0.119  # just under the inflated threshold, well above the real base
+_MORNING_PEAK = 0.16
+_DW_PEAK = 0.30
+
+_CHARGE_ACTIONS = (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+
+
+def _price_for(t: datetime) -> float:
+    h = t.hour + t.minute / 60.0
+    if t.day == 3 and 15.0 <= h < 21.0:
+        return _DW_PEAK  # day-1 evening demand window
+    if t.day == 3 and 12.0 <= h < 15.0:
+        return 0.16  # day-1 pre-DW shoulder (above both thresholds: no pre-charge here)
+    if t.day == 3 and h >= 21.0:
+        return 0.13  # day-1 late evening
+    if t.day == 4 and 0.0 <= h < 6.0:
+        return _OVERNIGHT  # day-2 overnight: "cheap" only by the inflated threshold
+    if t.day == 4 and 6.0 <= h < 8.0:
+        return _MORNING_PEAK  # day-2 morning peak (the drain target)
+    return 0.14
+
+
+def _solar_for(t: datetime) -> float:
+    h = t.hour + t.minute / 60.0
+    if t.day == 3 and 9.0 <= h < 15.0:
+        return 0.5
+    # Strong day-2 morning solar refills to target by horizon end, so the
+    # end-of-horizon target does NOT motivate the overnight charge — isolating the
+    # pure cheap-window arbitrage sawtooth.
+    if t.day == 4 and 9.0 <= h < 15.0:
+        return 3.0
+    return 0.0
+
+
+def _build_slots(n: int) -> list[SlotContext]:
+    slots: list[SlotContext] = []
+    for i in range(n):
+        t = _START + timedelta(minutes=INTERVAL * i)
+        h = t.hour + t.minute / 60.0
+        is_dw = t.day == 3 and 15.0 <= h < 21.0
+        is_dw_entry = t.day == 3 and abs(h - 15.0) < 1e-9
+        slots.append(
+            SlotContext(
+                slot_index=i,
+                timestamp_iso=t.isoformat(),
+                slot_interval_minutes=INTERVAL,
+                buy_price=_price_for(t),
+                sell_price=0.05,
+                solar_kwh=_solar_for(t),
+                consumption_kwh=0.3,
+                is_demand_window_entry=is_dw_entry,
+                is_demand_window_slot=is_dw,
+            )
+        )
+    return slots
+
+
+def _plan(base_cheap_price: float | None):
+    slots = _build_slots(56)  # 12:00 day-1 -> 16:00 day-2 (28h)
+    config = OptimizerConfig(
+        min_soc_pct=10.0,
+        max_soc_pct=100.0,
+        demand_window_target_soc_pct=95.0,
+        optimization_mode="self_consumption",
+        effective_cheap_price=_INFLATED_CHEAP,
+        base_cheap_price=base_cheap_price,
+        target_shortfall_penalty_per_pct=0.03,
+        soc_bins=100,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="sawtooth-gate",
+        initial_soc_pct=50.0,
+        slots=slots,
+        config=config,
+        all_solcast=[],
+    )
+    return DPPlanner(config).plan(inputs)
+
+
+def _dw_entry_idx(decisions) -> int:
+    for d in decisions:
+        t = datetime.fromisoformat(d.timestamp_iso)
+        if t.day == 3 and t.hour == 15 and t.minute == 0:
+            return d.slot_index
+    raise AssertionError("demand-window entry slot not found in scenario")
+
+
+def _post_dw_overnight_charges(result):
+    """Grid charges in post-DW slots priced above the real base (the sawtooth)."""
+    entry = _dw_entry_idx(result.decisions)
+    return [
+        d
+        for d in result.decisions
+        if d.slot_index >= entry
+        and d.action in _CHARGE_ACTIONS
+        and d.buy_price > _BASE_CHEAP
+    ]
+
+
+class TestSawtoothGate:
+    """End-to-end DP behaviour for the overnight sawtooth."""
+
+    def test_inflated_threshold_reproduces_sawtooth_when_unguarded(self):
+        """Without base gating (base_cheap_price=None) the inflated threshold leaks.
+
+        Documents the bug: post-DW overnight slots (price > base, <= inflated) get
+        charged then drained — the sawtooth.
+        """
+        result = _plan(base_cheap_price=None)
+        charges = _post_dw_overnight_charges(result)
+        assert charges, (
+            "expected the unguarded inflated threshold to produce net-negative "
+            "post-DW overnight grid charging (the sawtooth)"
+        )
+        # All such charges are classed CHEAP_IMPORT_WINDOW, matching the field report.
+        assert any(c.reason_code.value == "CHEAP_IMPORT_WINDOW" for c in charges)
+
+    def test_base_gating_eliminates_sawtooth(self):
+        """With base gating, no post-DW overnight charge above the real base occurs."""
+        result = _plan(base_cheap_price=_BASE_CHEAP)
+        charges = _post_dw_overnight_charges(result)
+        assert charges == [], (
+            "post-DW slots priced above the genuinely-cheap base must not grid charge; "
+            f"got charges at slots {[c.slot_index for c in charges]}"
+        )
+
+    def test_base_gating_preserves_morning_solar_refill(self):
+        """Target is still reached by horizon end via solar (no functional loss)."""
+        result = _plan(base_cheap_price=_BASE_CHEAP)
+        assert result.success
+        # End-of-horizon SOC reaches the target from free morning solar alone.
+        assert result.decisions[-1].predicted_soc_pct >= 94.0
+
+    def test_genuinely_cheap_overnight_still_charges(self):
+        """A post-DW overnight slot priced <= base is still a feasible charge window.
+
+        The fix must only remove urgency-inflation leakage, not block real cheap charging.
+        """
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            max_soc_pct=100.0,
+        )
+        cheap_slot = SlotContext(
+            slot_index=30,
+            timestamp_iso="2026-06-04T03:00:00",
+            slot_interval_minutes=INTERVAL,
+            buy_price=0.07,  # <= base
+            sell_price=0.05,
+            solar_kwh=0.0,
+            consumption_kwh=0.3,
+        )
+        actions = feasible_actions(
+            50.0, cheap_slot, config, slot_idx=30, terminal_penalty_idx=6
+        )
+        assert PlannerAction.CHARGE_GRID_NORMAL in actions
+
+    def test_negative_base_gates_post_dw_to_sub_zero_only(self):
+        """Negative-market base: post-DW charging only when price is at/below it.
+
+        Guards the negative-wholesale regression (a non-positive base must remain an
+        active, meaningful threshold rather than disabling the gate or blocking all).
+        """
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=-0.02,
+            max_soc_pct=100.0,
+        )
+
+        def _slot(price: float) -> SlotContext:
+            return SlotContext(
+                slot_index=30,
+                timestamp_iso="2026-06-04T03:00:00",
+                slot_interval_minutes=INTERVAL,
+                buy_price=price,
+                sell_price=0.05,
+                solar_kwh=0.0,
+                consumption_kwh=0.3,
+            )
+
+        # A normal positive overnight price is NOT cheap under a negative base.
+        actions = feasible_actions(
+            50.0, _slot(0.05), config, slot_idx=30, terminal_penalty_idx=6
+        )
+        assert PlannerAction.CHARGE_GRID_NORMAL not in actions
+        # A price at/below the negative base IS a feasible charge window.
+        actions = feasible_actions(
+            50.0, _slot(-0.03), config, slot_idx=30, terminal_penalty_idx=6
+        )
+        assert PlannerAction.CHARGE_GRID_NORMAL in actions
+
+
+class TestCheapThresholdForSlot:
+    """Unit tests for the per-slot cheap-threshold selector."""
+
+    def _config(self, base):
+        return OptimizerConfig(
+            effective_cheap_price=_INFLATED_CHEAP, base_cheap_price=base
+        )
+
+    def test_pre_dw_slot_uses_effective_cheap_price(self):
+        """Slots before the demand window keep the urgency-aware threshold."""
+        config = self._config(_BASE_CHEAP)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=2, terminal_penalty_idx=6)
+            == _INFLATED_CHEAP
+        )
+
+    def test_post_dw_slot_uses_base_cheap_price(self):
+        """Slots at/after the demand window gate on the un-inflated base."""
+        config = self._config(_BASE_CHEAP)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
+            == _BASE_CHEAP
+        )
+        # The DW entry slot itself counts as "at/after".
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=6, terminal_penalty_idx=6)
+            == _BASE_CHEAP
+        )
+
+    def test_none_base_falls_back_to_effective(self):
+        """Backward compat: unset base => effective threshold everywhere."""
+        config = self._config(None)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
+            == _INFLATED_CHEAP
+        )
+
+    def test_no_terminal_penalty_uses_effective(self):
+        """With no demand window there is no urgency leak to correct."""
+        config = self._config(_BASE_CHEAP)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=None)
+            == _INFLATED_CHEAP
+        )
+
+    def test_base_above_effective_never_raises_threshold(self):
+        """min() guard: a base above effective must not loosen the post-DW gate."""
+        config = OptimizerConfig(
+            effective_cheap_price=_BASE_CHEAP, base_cheap_price=_INFLATED_CHEAP
+        )
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
+            == _BASE_CHEAP
+        )
+
+
+class TestUrgencyWindowGate:
+    """Issue #800 follow-up: the inflated price applies only inside the urgency window.
+
+    When the plan recomputes after the day's DW has begun, the first DW-entry in the rolling
+    horizon is tomorrow evening — so tonight's overnight is technically "pre-DW" but far
+    outside the urgency window. Without bounding the urgency window, those overnight slots
+    are gated on the inflated price and the sawtooth recurs.
+    """
+
+    def _config(self, uw_start):
+        return OptimizerConfig(
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            urgency_window_start_idx=uw_start,
+        )
+
+    def test_far_pre_dw_slot_uses_base(self):
+        """A pre-DW slot earlier than the urgency window gates on the base price."""
+        config = self._config(uw_start=34)
+        # slot 10 is pre-DW but well before the urgency window [34, 40) -> base.
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=10, terminal_penalty_idx=40)
+            == _BASE_CHEAP
+        )
+
+    def test_in_urgency_window_uses_effective(self):
+        """A pre-DW slot inside the urgency window keeps the urgency-aware price."""
+        config = self._config(uw_start=34)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=36, terminal_penalty_idx=40)
+            == _INFLATED_CHEAP
+        )
+
+    def test_post_dw_still_uses_base(self):
+        """Post-DW slots remain base-gated regardless of the urgency window."""
+        config = self._config(uw_start=34)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=42, terminal_penalty_idx=40)
+            == _BASE_CHEAP
+        )
+
+    def test_none_window_is_legacy_all_pre_dw_effective(self):
+        """Backward compat: no urgency window => inflated price for every pre-DW slot."""
+        config = self._config(uw_start=None)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=10, terminal_penalty_idx=40)
+            == _INFLATED_CHEAP
+        )
+
+    def test_end_to_end_no_overnight_sawtooth_when_dw_is_tomorrow(self):
+        """Plan computed after today's DW: tonight's overnight must not sawtooth-charge.
+
+        Mirrors the live finding — the only DW in the horizon is tomorrow evening, the
+        overnight is priced just under the inflated threshold but above base, and there is a
+        morning peak to arbitrage against. With the urgency window bounded, the overnight is
+        base-gated and does not charge. (RED without the fix: ~3.9 kWh of overnight charge.)
+        """
+        start = datetime(2026, 6, 3, 18, 0)  # now: after today's DW
+
+        def price(t):
+            h = t.hour + t.minute / 60.0
+            if t.day == 4 and 15.0 <= h < 21.0:
+                return _DW_PEAK
+            if t.day == 4 and 0.0 <= h < 6.0:
+                return _OVERNIGHT  # cheap only by the inflated threshold
+            if t.day == 4 and 6.0 <= h < 8.0:
+                return _MORNING_PEAK
+            if t.day == 3:
+                return 0.13
+            return 0.12
+
+        def solar(t):
+            h = t.hour + t.minute / 60.0
+            return 0.5 if (t.day == 4 and 9.0 <= h < 15.0) else 0.0
+
+        n = int((datetime(2026, 6, 4, 16, 0) - start).total_seconds() / 60 / INTERVAL)
+        slots = []
+        for i in range(n):
+            t = start + timedelta(minutes=INTERVAL * i)
+            h = t.hour + t.minute / 60.0
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=t.isoformat(),
+                    slot_interval_minutes=INTERVAL,
+                    buy_price=price(t),
+                    sell_price=0.05,
+                    solar_kwh=solar(t),
+                    consumption_kwh=0.3,
+                    is_demand_window_entry=(t.day == 4 and abs(h - 15.0) < 1e-9),
+                    is_demand_window_slot=(t.day == 4 and 15.0 <= h < 21.0),
+                )
+            )
+        config = OptimizerConfig(
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=95.0,
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            target_shortfall_penalty_per_pct=0.03,
+            soc_bins=100,
+        )
+        result = DPPlanner(config).plan(
+            OptimizerInputs(
+                cycle_id="overnight-gap",
+                initial_soc_pct=60.0,
+                slots=slots,
+                config=config,
+                all_solcast=[],
+            )
+        )
+        overnight_charges = [
+            d
+            for d in result.decisions
+            if d.action in _CHARGE_ACTIONS
+            and datetime.fromisoformat(d.timestamp_iso).day == 4
+            and datetime.fromisoformat(d.timestamp_iso).hour < 6
+            and d.buy_price > _BASE_CHEAP
+        ]
+        assert overnight_charges == [], (
+            "overnight slots before tomorrow's DW must gate on base, not the inflated "
+            f"price; got charges at {[c.timestamp_iso for c in overnight_charges]}"
+        )
+
+
+class TestPostDwConsistency:
+    """Issue #800 follow-up: penalty + reason-code labels agree with the gate.
+
+    The futile-cycling penalty and the reason-code classifiers must treat post-DW
+    cheapness with the same per-slot threshold the feasibility gate uses, so an
+    inflated effective price cannot leak back in through those paths.
+    """
+
+    def _slot(self, idx, price, *, solar=0.0, load=0.3, dw=False):
+        return SlotContext(
+            slot_index=idx,
+            timestamp_iso=f"2026-06-04T{(idx % 24):02d}:00:00",
+            slot_interval_minutes=INTERVAL,
+            buy_price=price,
+            sell_price=0.05,
+            solar_kwh=solar,
+            consumption_kwh=load,
+            is_demand_window_slot=dw,
+        )
+
+    def test_futile_penalty_ignores_inflated_cheaper_window_post_dw(self):
+        """A post-DW slot above base must not count as a 'cheaper charge window' break.
+
+        The drain loop should keep draining through a post-DW slot priced in
+        (base, effective], so the futile factor is higher (more futile) than if that
+        slot were wrongly treated as a re-charge opportunity.
+        """
+        from custom_components.localshift.engine.penalties import (
+            get_futile_cycling_penalty_factor,
+        )
+
+        # slot 0 = the (hypothetical) charge slot at a higher price; slots 1.. drain.
+        # slot 2 is priced between base and effective and is >0.02 cheaper than slot 0.
+        slots = [
+            self._slot(0, 0.16),
+            self._slot(1, 0.15),
+            self._slot(2, 0.119),  # in (base 0.08, effective 0.12]; 0.041 < 0.16-0.02
+            self._slot(3, 0.15),
+            self._slot(4, 0.15),
+        ]
+        base_cfg = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+        )
+        no_base_cfg = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=None,
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+        )
+        kwargs = dict(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots,
+            soc_after_charge_pct=80.0,
+            charge_kwh=2.0,
+            terminal_penalty_idx=0,  # all of slots 1.. are post-DW
+        )
+        gated = get_futile_cycling_penalty_factor(config=base_cfg, **kwargs)
+        unguarded = get_futile_cycling_penalty_factor(config=no_base_cfg, **kwargs)
+        # Unguarded breaks at slot 2 (treated as cheaper window) -> less drain.
+        # Gated keeps draining past slot 2 -> at least as much drain (higher factor).
+        assert gated >= unguarded
+        assert gated > 0.0
+
+    def test_charge_label_uses_per_slot_threshold(self):
+        """A post-DW charge above base is not labelled CHEAP_IMPORT_WINDOW."""
+        from custom_components.localshift.engine.reason_codes import (
+            classify_charge_reason,
+        )
+        from custom_components.localshift.engine.types import (
+            OptimizerInputs,
+            PlannerReasonCode,
+        )
+
+        slots = [self._slot(i, 0.119) for i in range(10)]
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+        )
+        inputs = OptimizerInputs(
+            cycle_id="c", initial_soc_pct=50.0, slots=slots, all_solcast=[]
+        )
+        # slot_idx 5 is post-DW (terminal_penalty_idx=2); price 0.119 > base 0.08.
+        reason = classify_charge_reason(
+            slots[5], 5, slots, 50.0, config, 2, inputs=inputs
+        )
+        assert reason != PlannerReasonCode.CHEAP_IMPORT_WINDOW
+
+    def test_hold_label_uses_per_slot_threshold(self):
+        """A post-DW HOLD above base is not labelled SOLAR_OPPORTUNITY_WAIT."""
+        from custom_components.localshift.engine.reason_codes import (
+            classify_hold_reason,
+        )
+        from custom_components.localshift.engine.types import (
+            OptimizerInputs,
+            PlannerReasonCode,
+        )
+
+        # solar later so the opportunity factor would be > 0 if the slot were "cheap".
+        slots = [self._slot(i, 0.119) for i in range(6)] + [
+            self._slot(6, 0.119, solar=5.0, load=0.0)
+        ]
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+        )
+        inputs = OptimizerInputs(
+            cycle_id="c",
+            initial_soc_pct=50.0,
+            slots=slots,
+            all_solcast=[{"period_start": "2026-06-04T05:00:00", "pv_estimate": 5.0}],
+        )
+        reason = classify_hold_reason(
+            50.0,
+            slots[3],
+            49.0,
+            config,
+            None,
+            slot_idx=3,
+            slots=slots,
+            terminal_penalty_idx=2,  # slot 3 is post-DW; 0.119 > base 0.08
+            inputs=inputs,
+        )
+        assert reason != PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT

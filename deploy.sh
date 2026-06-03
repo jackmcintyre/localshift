@@ -147,25 +147,34 @@ is_reservation_valid() {
     local res_agent=""
     local res_branch=""
     local res_timestamp=""
+    local res_epoch=""
     local res_pid=""
-    
+
     while IFS='=' read -r key value; do
         case $key in
             AGENT) res_agent="$value" ;;
             BRANCH) res_branch="$value" ;;
             TIMESTAMP) res_timestamp="$value" ;;
+            EPOCH) res_epoch="$value" ;;
             PID) res_pid="$value" ;;
         esac
     done < "$reserve_file"
-    
-    # Check expiration (30 minutes of inactivity)
+
+    # Check expiration (30 minutes of inactivity).
+    # Prefer the stored epoch (portable); fall back to parsing the ISO timestamp
+    # with GNU date. NOTE: BSD/macOS `date -d` cannot parse ISO timestamps, so
+    # without the EPOCH field a reservation would always read as expired here
+    # (which silently defeats the multi-agent guard on macOS).
     local now=$(date +%s)
-    local reserve_time=$(date -d "$res_timestamp" +%s 2>/dev/null || echo "0")
-    
+    local reserve_time="$res_epoch"
+    if [ -z "$reserve_time" ]; then
+        reserve_time=$(date -d "$res_timestamp" +%s 2>/dev/null || echo "0")
+    fi
+
     if [ $((now - reserve_time)) -gt $RESERVE_TIMEOUT ]; then
         return 1
     fi
-    
+
     return 0
 }
 
@@ -192,15 +201,17 @@ create_reservation() {
     local agent_id=$(get_agent_id)
     local branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     local timestamp=$(date -Iseconds)
+    local epoch=$(date +%s)
     local pid=$$
-    
+
     # Ensure directory exists
     mkdir -p "$(dirname "$RESERVE_FILE")"
-    
+
     cat > "$RESERVE_FILE" << EOF
 AGENT=$agent_id
 BRANCH=$branch
 TIMESTAMP=$timestamp
+EPOCH=$epoch
 PID=$pid
 EOF
     
@@ -501,21 +512,14 @@ if [ -d "$DEST_DIR" ]; then
     BACKUP_DIR="$BACKUP_BASE/${COMPONENT_NAME}.backup.$(date +%Y%m%d_%H%M%S)"
     log_info "Backing up existing installation to: $BACKUP_DIR"
     mv "$DEST_DIR" "$BACKUP_DIR"
-    
-    # Cleanup backups older than 7 days
-    log_info "Cleaning up backups older than 7 days..."
-    OLD_BACKUPS=$(find "$BACKUP_BASE" -name "${COMPONENT_NAME}.backup.*" -type d -mtime +7 2>/dev/null || true)
-    if [ -n "$OLD_BACKUPS" ]; then
-        echo "$OLD_BACKUPS" | while read -r old_backup; do
-            log_info "Removing old backup: $old_backup"
-            rm -rf "$old_backup"
-        done
-    else
-        log_info "No old backups to remove"
-    fi
 fi
 
 # Copy current worktree state to HA
+# IMPORTANT: this must run immediately after the backup mv. The backup step has
+# already moved the live integration out of DEST_DIR, so if anything between the
+# mv and this copy fails under `set -e`, HA is left with no integration on disk
+# (a reload/restart would then fail to load it). Keep this copy adjacent to the
+# mv, and push all best-effort/janitorial work (backup cleanup) to AFTER it.
 log_info "Copying files from worktree to HA config..."
 mkdir -p "$HA_CONFIG/custom_components"
 cp -r "$SOURCE_DIR" "$HA_CONFIG/custom_components/"
@@ -524,6 +528,16 @@ log_success "Files copied successfully"
 # Set appropriate permissions
 log_info "Setting permissions..."
 chmod -R 755 "$DEST_DIR" 2>/dev/null || log_warning "Could not set permissions"
+
+# Cleanup backups older than 7 days (best-effort; never abort the deploy).
+# Backups can contain root-owned *.pyc written by the HA container, so rm may hit
+# permission errors. This runs AFTER the copy and is fully non-fatal so a cleanup
+# failure can never strand the integration (see the IMPORTANT note above).
+if [ -d "$HA_CONFIG/backups" ]; then
+    log_info "Cleaning up backups older than 7 days..."
+    find "$HA_CONFIG/backups" -maxdepth 1 -name "${COMPONENT_NAME}.backup.*" \
+        -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+fi
 
 # Reload integration via HA API (skip if restart mode - full restart handles it)
 if [ "$RESTART_MODE" = true ]; then
