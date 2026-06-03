@@ -137,7 +137,7 @@ def feasible_actions(
         and not (_solar_covers_deficit or _global_solar_covers)
     ):
         if config.optimization_mode == "self_consumption":
-            cheap_threshold = _cheap_threshold_for_slot(
+            cheap_threshold = cheap_threshold_for_slot(
                 config, slot_idx, terminal_penalty_idx
             )
             price_is_cheap = slot.buy_price <= cheap_threshold
@@ -160,12 +160,16 @@ def feasible_actions(
     return actions
 
 
-def _cheap_threshold_for_slot(
+def cheap_threshold_for_slot(
     config: OptimizerConfig,
     slot_idx: int,
     terminal_penalty_idx: int | None,
 ) -> float:
     """Return the cheap-price threshold to apply to a slot's grid-charge gate.
+
+    Shared by the feasibility gate (``feasible_actions``), the futile-cycling penalty
+    (``penalties``), and the reason-code labels (``reason_codes``) so all three agree on
+    what counts as "cheap" for a given slot.
 
     Issue #800 (overnight SOC floor bounce / sawtooth).
     ``effective_cheap_price`` is a "now" value that today's low-solar urgency may have
