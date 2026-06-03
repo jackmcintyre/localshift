@@ -101,9 +101,23 @@ def stage_cost(
                 )
                 battery_for_load = min(battery_for_load, max_load_kwh)
 
-            # Credit the battery at (buy_price - cycle_penalty), not full buy_price
-            # This prevents the credit from subsidizing marginal cycling
-            sc_multiplier = max(0.0, slot.buy_price - config.cycle_penalty_per_kwh)
+            # Credit the battery at (buy_price - cycle_penalty), not full buy_price.
+            # This prevents the credit from subsidizing marginal cycling — the battery
+            # must "earn" the cycle penalty back through the spread.
+            #
+            # EXCEPTION (demand window): covering DW load is a deadline-driven
+            # obligation that avoids an expensive demand-charge peak, not marginal
+            # arbitrage. Subtracting the cycle penalty here wrongly zeroes the credit
+            # whenever cycle_penalty >= DW buy_price, removing all incentive to
+            # pre-charge for the DW (the root cause of under-target DW-entry SOC).
+            # Credit DW coverage at full retail. The cycle penalty is still charged on
+            # the grid import itself, and the futile-cycling / solar-opportunity
+            # penalties still guard against wasteful charging. Consistent with the
+            # demand-charge deadline rationale in docs/PLANNING_MODEL.md.
+            if slot.is_demand_window_slot and config.demand_charge_active:
+                sc_multiplier = max(0.0, slot.buy_price)
+            else:
+                sc_multiplier = max(0.0, slot.buy_price - config.cycle_penalty_per_kwh)
             self_consumption_value = battery_for_load * sc_multiplier
 
     # Issue #638: futile cycling penalty.

@@ -138,11 +138,20 @@ def build_adverse_inputs(**config_kwargs) -> OptimizerInputs:
 
 
 def dw_entry_soc(result) -> float:
-    """Predicted SOC at the first demand-window slot (15:00)."""
+    """SOC at the instant of *entering* the demand window — the predicted SOC at the
+    END of the last pre-DW slot (the boundary the optimizer must hit by 15:00).
+
+    NOT the 15:00 slot's own predicted_soc_pct, which is measured AFTER the first DW
+    hour's discharge and so understates true entry SOC by a full slot of DW load.
+    """
+    prev = None
     for d in result.decisions:
-        if int(d.timestamp_iso[11:13]) == 15:
-            return d.predicted_soc_pct
-    raise AssertionError("no 15:00 (DW-entry) slot found in plan")
+        if int(d.timestamp_iso[11:13]) >= 15:
+            if prev is None:
+                raise AssertionError("plan starts inside the DW; no pre-DW entry slot")
+            return prev.predicted_soc_pct
+        prev = d
+    raise AssertionError("no demand-window slot found in plan")
 
 
 def measure_dw_entry_soc(**config_kwargs) -> float:

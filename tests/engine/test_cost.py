@@ -257,6 +257,48 @@ class TestStageCost:
         # Self-consumption value should be capped by available battery
         assert terms.self_consumption_value >= 0
 
+    def test_self_consumption_full_credit_in_demand_window(self):
+        """DW coverage is deadline-driven, not arbitrage: credit at full buy price
+        even when cycle_penalty >= buy_price, else the pre-charge incentive vanishes."""
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            cycle_penalty_per_kwh=0.15,
+            demand_charge_active=True,
+        )
+        slot = SlotContext(
+            slot_index=0,
+            timestamp_iso=datetime.now(UTC).isoformat(),
+            buy_price=0.13,  # below cycle_penalty -> old code zeroed the credit
+            sell_price=0.10,
+            solar_kwh=0.0,
+            consumption_kwh=0.5,
+            is_demand_window_slot=True,
+            slot_interval_minutes=60,
+        )
+        terms = stage_cost(PlannerAction.HOLD, 0.0, 0.0, slot, config, soc_pct=90.0)
+        # Full retail credit: 0.5 kWh * 0.13, NOT max(0, 0.13 - 0.15) == 0.
+        assert terms.self_consumption_value == pytest.approx(0.5 * 0.13, rel=1e-6)
+
+    def test_self_consumption_subtracts_cycle_outside_demand_window(self):
+        """Outside the DW the cycle penalty is still subtracted (anti-arbitrage)."""
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            cycle_penalty_per_kwh=0.05,
+            demand_charge_active=True,
+        )
+        slot = SlotContext(
+            slot_index=0,
+            timestamp_iso=datetime.now(UTC).isoformat(),
+            buy_price=0.13,
+            sell_price=0.10,
+            solar_kwh=0.0,
+            consumption_kwh=0.5,
+            is_demand_window_slot=False,
+            slot_interval_minutes=60,
+        )
+        terms = stage_cost(PlannerAction.HOLD, 0.0, 0.0, slot, config, soc_pct=90.0)
+        assert terms.self_consumption_value == pytest.approx(0.5 * (0.13 - 0.05), rel=1e-6)
+
 
 class TestTerminalCost:
     """Test terminal_cost computation."""

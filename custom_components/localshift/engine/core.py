@@ -420,6 +420,18 @@ class DPPlanner:
                 accuracy_discount,
             )
 
+            # The shortfall penalty is applied at TWO points (additive):
+            #   1. end-of-horizon (dp[n_slots]) — the existing boundary; when the plan
+            #      horizon ends at/near the DW it drives full DW coverage.
+            #   2. demand-window ENTRY (terminal_penalty_idx, applied in backward
+            #      induction) — the missing piece. When the horizon extends past the DW
+            #      into the overnight drain, the end-of-horizon term becomes a flat,
+            #      unavoidable constant with no gradient to pre-charge; the DW-entry
+            #      term restores that gradient so the optimizer reaches target by DW
+            #      entry. Double-counting is harmless: the end-of-horizon term is an
+            #      additive constant in the long-horizon case and reinforces coverage
+            #      in the short-horizon case.
+            terminal_penalty_by_bin = []
             for bin_idx, soc in enumerate(soc_grid):
                 effective_soc = soc + future_solar_gain_pct
 
@@ -431,6 +443,7 @@ class DPPlanner:
                         effective_soc, target, config
                     )
 
+                terminal_penalty_by_bin.append(shortfall_penalty)
                 dp[n_slots][bin_idx] = (
                     shortfall_penalty,
                     PlannerAction.HOLD,
@@ -440,7 +453,10 @@ class DPPlanner:
                     0.0,
                 )
 
+            self._terminal_penalty_by_bin = terminal_penalty_by_bin
+
         else:
+            self._terminal_penalty_by_bin = None
             n_bins = len(soc_grid)
 
             for bin_idx in range(n_bins):
@@ -533,6 +549,16 @@ class DPPlanner:
                 )
                 dp[slot_idx][bin_idx] = best
                 states_explored += action_count
+
+            # Apply the DW-entry shortfall penalty to states AT the demand-window
+            # entry slot, so it propagates backward (this slot is computed before the
+            # pre-DW slots in this high->low pass) and incentivizes pre-charging.
+            penalties = getattr(self, "_terminal_penalty_by_bin", None)
+            if slot_idx == terminal_penalty_idx and penalties is not None:
+                for bin_idx in range(len(soc_grid)):
+                    if bin_idx in dp[slot_idx]:
+                        cost, *rest = dp[slot_idx][bin_idx]
+                        dp[slot_idx][bin_idx] = (cost + penalties[bin_idx], *rest)
 
         return states_explored
 
