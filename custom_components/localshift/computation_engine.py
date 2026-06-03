@@ -195,18 +195,23 @@ class ComputationEngine:
         conservative = self._get_switch_state(SWITCH_STALE_SOLAR_CONSERVATIVE)
         ceiling = float(
             self.entry.options.get(
-                CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
+                CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+                DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
             )
         )
 
         # Accuracy ceiling from tracker (dormant today: returns 1.0 when < 20 samples)
         tracker = getattr(self._optimizer_facade, "_solar_accuracy_tracker", None)
         accuracy_ceiling = (
-            tracker.accuracy_confidence_ceiling(low=ceiling) if tracker is not None else 1.0
+            tracker.accuracy_confidence_ceiling(low=ceiling)
+            if tracker is not None
+            else 1.0
         )
 
         # Set absent confidence on data (used by all ConfidenceResolver sites)
-        data.solar_absent_confidence = DEFAULT_ABSENT_SOLAR_CONFIDENCE if conservative else 1.0
+        data.solar_absent_confidence = (
+            DEFAULT_ABSENT_SOLAR_CONFIDENCE if conservative else 1.0
+        )
 
         # Stamp ceiling on each analysis object
         for analysis in (data.solcast_analysis_today, data.solcast_analysis_tomorrow):
@@ -596,7 +601,8 @@ class ComputationEngine:
                 SWITCH_STALE_SOLAR_CONSERVATIVE
             ),
             CONF_STALE_SOLAR_CONFIDENCE_CEILING: self.entry.options.get(
-                CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
+                CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+                DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
             ),
             CONF_OPTIMIZATION_MODE: self.entry.options.get(
                 CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE
