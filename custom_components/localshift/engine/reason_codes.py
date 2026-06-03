@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from custom_components.localshift.engine.constraints import (
+    cheap_threshold_for_slot,
+)
 from custom_components.localshift.engine.penalties import (
     get_solar_opportunity_penalty_factor,
 )
@@ -99,9 +102,12 @@ def classify_hold_reason(
 
     # Check if we are waiting for solar (Issue #619)
     # If price is cheap but we aren't charging, and solar is coming, label it.
+    # Issue #800: use the per-slot cheap threshold so a post-demand-window HOLD priced
+    # above the un-inflated base is not mislabeled as a suppressed cheap-charge window.
     if (
         config.optimization_mode == "self_consumption"
-        and slot.buy_price <= config.effective_cheap_price
+        and slot.buy_price
+        <= cheap_threshold_for_slot(config, slot_idx, terminal_penalty_idx)
         and slots is not None
         and inputs is not None
         and inputs.all_solcast
@@ -165,6 +171,7 @@ def classify_charge_reason(
         return PlannerReasonCode.TARGET_SHORTFALL_RISK
     if _is_cheap_import_window(
         slot,
+        slot_idx,
         config,
         terminal_penalty_idx,
         slots,
@@ -211,17 +218,23 @@ def _is_target_shortfall_risk(
 
 def _is_cheap_import_window(
     slot: SlotContext,
+    slot_idx: int,
     config: OptimizerConfig,
     terminal_penalty_idx: int | None,
     slots: list[SlotContext],
     *,
     inputs: OptimizerInputs | None = None,
 ) -> bool:
-    """Check if this is a cheap import window opportunity."""
-    if slot.buy_price > config.effective_cheap_price:
+    """Check if this is a cheap import window opportunity.
+
+    Issue #800: uses the per-slot cheap threshold (post-demand-window slots gate on the
+    un-inflated base) so the label matches the feasibility gate.
+    """
+    threshold = cheap_threshold_for_slot(config, slot_idx, terminal_penalty_idx)
+    if slot.buy_price > threshold:
         return False
     is_blind = _is_blind_to_future_solar(terminal_penalty_idx, slots, inputs=inputs)
-    return not is_blind or slot.buy_price <= (config.effective_cheap_price * 0.8)
+    return not is_blind or slot.buy_price <= (threshold * 0.8)
 
 
 def _is_blind_to_future_solar(

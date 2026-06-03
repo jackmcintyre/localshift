@@ -627,6 +627,7 @@ class DPPlanner:
                 config=config,
                 soc_after_charge_pct=next_soc,
                 charge_kwh=charge_kwh,
+                terminal_penalty_idx=terminal_penalty_idx,
             )
 
             stage = _cost_stage_cost(
@@ -745,6 +746,7 @@ class DPPlanner:
                 config=config,
                 soc_after_charge_pct=next_soc,
                 charge_kwh=recon_charge_kwh,
+                terminal_penalty_idx=terminal_penalty_idx,
             )
 
             stage = _cost_stage_cost(

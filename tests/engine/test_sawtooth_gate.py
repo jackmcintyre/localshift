@@ -24,7 +24,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from custom_components.localshift.engine.constraints import (
-    _cheap_threshold_for_slot,
+    cheap_threshold_for_slot,
     feasible_actions,
 )
 from custom_components.localshift.engine.core import DPPlanner
@@ -247,7 +247,7 @@ class TestCheapThresholdForSlot:
         """Slots before the demand window keep the urgency-aware threshold."""
         config = self._config(_BASE_CHEAP)
         assert (
-            _cheap_threshold_for_slot(config, slot_idx=2, terminal_penalty_idx=6)
+            cheap_threshold_for_slot(config, slot_idx=2, terminal_penalty_idx=6)
             == _INFLATED_CHEAP
         )
 
@@ -255,12 +255,12 @@ class TestCheapThresholdForSlot:
         """Slots at/after the demand window gate on the un-inflated base."""
         config = self._config(_BASE_CHEAP)
         assert (
-            _cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
             == _BASE_CHEAP
         )
         # The DW entry slot itself counts as "at/after".
         assert (
-            _cheap_threshold_for_slot(config, slot_idx=6, terminal_penalty_idx=6)
+            cheap_threshold_for_slot(config, slot_idx=6, terminal_penalty_idx=6)
             == _BASE_CHEAP
         )
 
@@ -268,7 +268,7 @@ class TestCheapThresholdForSlot:
         """Backward compat: unset base => effective threshold everywhere."""
         config = self._config(None)
         assert (
-            _cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
             == _INFLATED_CHEAP
         )
 
@@ -276,7 +276,7 @@ class TestCheapThresholdForSlot:
         """With no demand window there is no urgency leak to correct."""
         config = self._config(_BASE_CHEAP)
         assert (
-            _cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=None)
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=None)
             == _INFLATED_CHEAP
         )
 
@@ -286,6 +286,139 @@ class TestCheapThresholdForSlot:
             effective_cheap_price=_BASE_CHEAP, base_cheap_price=_INFLATED_CHEAP
         )
         assert (
-            _cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
+            cheap_threshold_for_slot(config, slot_idx=30, terminal_penalty_idx=6)
             == _BASE_CHEAP
         )
+
+
+class TestPostDwConsistency:
+    """Issue #800 follow-up: penalty + reason-code labels agree with the gate.
+
+    The futile-cycling penalty and the reason-code classifiers must treat post-DW
+    cheapness with the same per-slot threshold the feasibility gate uses, so an
+    inflated effective price cannot leak back in through those paths.
+    """
+
+    def _slot(self, idx, price, *, solar=0.0, load=0.3, dw=False):
+        return SlotContext(
+            slot_index=idx,
+            timestamp_iso=f"2026-06-04T{(idx % 24):02d}:00:00",
+            slot_interval_minutes=INTERVAL,
+            buy_price=price,
+            sell_price=0.05,
+            solar_kwh=solar,
+            consumption_kwh=load,
+            is_demand_window_slot=dw,
+        )
+
+    def test_futile_penalty_ignores_inflated_cheaper_window_post_dw(self):
+        """A post-DW slot above base must not count as a 'cheaper charge window' break.
+
+        The drain loop should keep draining through a post-DW slot priced in
+        (base, effective], so the futile factor is higher (more futile) than if that
+        slot were wrongly treated as a re-charge opportunity.
+        """
+        from custom_components.localshift.engine.penalties import (
+            get_futile_cycling_penalty_factor,
+        )
+
+        # slot 0 = the (hypothetical) charge slot at a higher price; slots 1.. drain.
+        # slot 2 is priced between base and effective and is >0.02 cheaper than slot 0.
+        slots = [
+            self._slot(0, 0.16),
+            self._slot(1, 0.15),
+            self._slot(2, 0.119),  # in (base 0.08, effective 0.12]; 0.041 < 0.16-0.02
+            self._slot(3, 0.15),
+            self._slot(4, 0.15),
+        ]
+        base_cfg = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+        )
+        no_base_cfg = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=None,
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+        )
+        kwargs = dict(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots,
+            soc_after_charge_pct=80.0,
+            charge_kwh=2.0,
+            terminal_penalty_idx=0,  # all of slots 1.. are post-DW
+        )
+        gated = get_futile_cycling_penalty_factor(config=base_cfg, **kwargs)
+        unguarded = get_futile_cycling_penalty_factor(config=no_base_cfg, **kwargs)
+        # Unguarded breaks at slot 2 (treated as cheaper window) -> less drain.
+        # Gated keeps draining past slot 2 -> at least as much drain (higher factor).
+        assert gated >= unguarded
+        assert gated > 0.0
+
+    def test_charge_label_uses_per_slot_threshold(self):
+        """A post-DW charge above base is not labelled CHEAP_IMPORT_WINDOW."""
+        from custom_components.localshift.engine.reason_codes import (
+            classify_charge_reason,
+        )
+        from custom_components.localshift.engine.types import (
+            OptimizerInputs,
+            PlannerReasonCode,
+        )
+
+        slots = [self._slot(i, 0.119) for i in range(10)]
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+        )
+        inputs = OptimizerInputs(
+            cycle_id="c", initial_soc_pct=50.0, slots=slots, all_solcast=[]
+        )
+        # slot_idx 5 is post-DW (terminal_penalty_idx=2); price 0.119 > base 0.08.
+        reason = classify_charge_reason(
+            slots[5], 5, slots, 50.0, config, 2, inputs=inputs
+        )
+        assert reason != PlannerReasonCode.CHEAP_IMPORT_WINDOW
+
+    def test_hold_label_uses_per_slot_threshold(self):
+        """A post-DW HOLD above base is not labelled SOLAR_OPPORTUNITY_WAIT."""
+        from custom_components.localshift.engine.reason_codes import (
+            classify_hold_reason,
+        )
+        from custom_components.localshift.engine.types import (
+            OptimizerInputs,
+            PlannerReasonCode,
+        )
+
+        # solar later so the opportunity factor would be > 0 if the slot were "cheap".
+        slots = [self._slot(i, 0.119) for i in range(6)] + [
+            self._slot(6, 0.119, solar=5.0, load=0.0)
+        ]
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+        )
+        inputs = OptimizerInputs(
+            cycle_id="c",
+            initial_soc_pct=50.0,
+            slots=slots,
+            all_solcast=[{"period_start": "2026-06-04T05:00:00", "pv_estimate": 5.0}],
+        )
+        reason = classify_hold_reason(
+            50.0,
+            slots[3],
+            49.0,
+            config,
+            None,
+            slot_idx=3,
+            slots=slots,
+            terminal_penalty_idx=2,  # slot 3 is post-DW; 0.119 > base 0.08
+            inputs=inputs,
+        )
+        assert reason != PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
