@@ -99,6 +99,74 @@ class TestFeasibleActions:
         actions = feasible_actions(50.0, slot, config)
         assert PlannerAction.CHARGE_GRID_NORMAL in actions
 
+    def test_no_grid_charge_above_target_self_consumption(self):
+        """Grid charging is capped at the demand-window target, not 100%.
+
+        Regression for the above-target top-up: at 98% SOC with a cheap price just
+        before the demand window, the optimizer used to grid-charge to ~100% because
+        the gate was soc < max_soc_pct. Grid charging must stop at the target.
+        """
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=20.0,
+            demand_window_target_soc_pct=95.0,
+        )
+        slot = SlotContext(
+            slot_index=0,
+            slot_interval_minutes=30,
+            timestamp_iso="2024-01-01T00:00:00+00:00",
+            buy_price=15.0,  # cheap AND very-cheap (would otherwise add NORMAL+BOOST)
+            sell_price=10.0,
+            solar_kwh=1.0,
+            consumption_kwh=1.0,
+            is_demand_window_slot=False,
+        )
+
+        actions = feasible_actions(98.0, slot, config)  # above the 95% target
+        assert PlannerAction.CHARGE_GRID_NORMAL not in actions
+        assert PlannerAction.CHARGE_GRID_BOOST not in actions
+
+    def test_grid_charge_allowed_below_target_self_consumption(self):
+        """The target cap must not block legitimate pre-charge below target."""
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            effective_cheap_price=20.0,
+            demand_window_target_soc_pct=95.0,
+        )
+        slot = SlotContext(
+            slot_index=0,
+            slot_interval_minutes=30,
+            timestamp_iso="2024-01-01T00:00:00+00:00",
+            buy_price=15.0,
+            sell_price=10.0,
+            solar_kwh=1.0,
+            consumption_kwh=1.0,
+            is_demand_window_slot=False,
+        )
+
+        actions = feasible_actions(90.0, slot, config)  # below the 95% target
+        assert PlannerAction.CHARGE_GRID_NORMAL in actions
+
+    def test_arbitrage_charges_above_target(self):
+        """Arbitrage mode keeps the physical ceiling so it can chase spreads."""
+        config = OptimizerConfig(
+            optimization_mode="arbitrage",
+            demand_window_target_soc_pct=95.0,
+        )
+        slot = SlotContext(
+            slot_index=0,
+            slot_interval_minutes=30,
+            timestamp_iso="2024-01-01T00:00:00+00:00",
+            buy_price=15.0,
+            sell_price=10.0,
+            solar_kwh=1.0,
+            consumption_kwh=1.0,
+            is_demand_window_slot=False,
+        )
+
+        actions = feasible_actions(98.0, slot, config)  # above target, but arbitrage
+        assert PlannerAction.CHARGE_GRID_NORMAL in actions
+
     def test_expensive_price_blocks_charge_self_consumption(self):
         """Expensive import price blocks charging in self_consumption mode."""
         config = OptimizerConfig(
