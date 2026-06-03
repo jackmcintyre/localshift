@@ -173,18 +173,29 @@ def cheap_threshold_for_slot(
 
     Issue #800 (overnight SOC floor bounce / sawtooth).
     ``effective_cheap_price`` is a "now" value that today's low-solar urgency may have
-    inflated above the genuinely-cheap base (to fund pre-charge before *today's* demand
-    window). That urgency does not apply to slots at/after the demand-window entry —
-    using the inflated value there classifies tomorrow-night slots as "cheap" and drives
-    net-negative overnight sawtooth charging. For those slots, gate on the un-inflated
-    ``base_cheap_price`` instead. Pre-demand-window slots keep the urgency-aware value.
+    inflated above the genuinely-cheap base (to fund pre-charge before the demand window).
+    That urgency only legitimately applies to slots close to the upcoming demand window, so
+    the inflated value is used only inside the urgency window
+    ``[urgency_window_start_idx, terminal_penalty_idx)``; every other slot (post-DW, and any
+    slot more than ~4h before the DW — e.g. tonight's overnight when the next horizon DW is
+    tomorrow evening) is gated on the un-inflated ``base_cheap_price``. Using the inflated
+    value outside that window classifies overnight slots as "cheap" and drives net-negative
+    sawtooth charging.
+
+    Backward compatible: when ``urgency_window_start_idx`` is None (e.g. direct unit calls),
+    the inflated price applies to all pre-DW slots (legacy: base only at/after the DW entry).
     """
     threshold = config.effective_cheap_price
-    if (
-        config.base_cheap_price is not None
-        and terminal_penalty_idx is not None
-        and slot_idx >= terminal_penalty_idx
-    ):
+    if config.base_cheap_price is None or terminal_penalty_idx is None:
+        return threshold
+
+    uw_start = config.urgency_window_start_idx
+    if uw_start is None:
+        in_urgency_window = slot_idx < terminal_penalty_idx  # legacy
+    else:
+        in_urgency_window = uw_start <= slot_idx < terminal_penalty_idx
+
+    if not in_urgency_window:
         threshold = min(threshold, config.base_cheap_price)
     return threshold
 

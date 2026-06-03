@@ -291,6 +291,132 @@ class TestCheapThresholdForSlot:
         )
 
 
+class TestUrgencyWindowGate:
+    """Issue #800 follow-up: the inflated price applies only inside the urgency window.
+
+    When the plan recomputes after the day's DW has begun, the first DW-entry in the rolling
+    horizon is tomorrow evening — so tonight's overnight is technically "pre-DW" but far
+    outside the urgency window. Without bounding the urgency window, those overnight slots
+    are gated on the inflated price and the sawtooth recurs.
+    """
+
+    def _config(self, uw_start):
+        return OptimizerConfig(
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            urgency_window_start_idx=uw_start,
+        )
+
+    def test_far_pre_dw_slot_uses_base(self):
+        """A pre-DW slot earlier than the urgency window gates on the base price."""
+        config = self._config(uw_start=34)
+        # slot 10 is pre-DW but well before the urgency window [34, 40) -> base.
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=10, terminal_penalty_idx=40)
+            == _BASE_CHEAP
+        )
+
+    def test_in_urgency_window_uses_effective(self):
+        """A pre-DW slot inside the urgency window keeps the urgency-aware price."""
+        config = self._config(uw_start=34)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=36, terminal_penalty_idx=40)
+            == _INFLATED_CHEAP
+        )
+
+    def test_post_dw_still_uses_base(self):
+        """Post-DW slots remain base-gated regardless of the urgency window."""
+        config = self._config(uw_start=34)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=42, terminal_penalty_idx=40)
+            == _BASE_CHEAP
+        )
+
+    def test_none_window_is_legacy_all_pre_dw_effective(self):
+        """Backward compat: no urgency window => inflated price for every pre-DW slot."""
+        config = self._config(uw_start=None)
+        assert (
+            cheap_threshold_for_slot(config, slot_idx=10, terminal_penalty_idx=40)
+            == _INFLATED_CHEAP
+        )
+
+    def test_end_to_end_no_overnight_sawtooth_when_dw_is_tomorrow(self):
+        """Plan computed after today's DW: tonight's overnight must not sawtooth-charge.
+
+        Mirrors the live finding — the only DW in the horizon is tomorrow evening, the
+        overnight is priced just under the inflated threshold but above base, and there is a
+        morning peak to arbitrage against. With the urgency window bounded, the overnight is
+        base-gated and does not charge. (RED without the fix: ~3.9 kWh of overnight charge.)
+        """
+        start = datetime(2026, 6, 3, 18, 0)  # now: after today's DW
+
+        def price(t):
+            h = t.hour + t.minute / 60.0
+            if t.day == 4 and 15.0 <= h < 21.0:
+                return _DW_PEAK
+            if t.day == 4 and 0.0 <= h < 6.0:
+                return _OVERNIGHT  # cheap only by the inflated threshold
+            if t.day == 4 and 6.0 <= h < 8.0:
+                return _MORNING_PEAK
+            if t.day == 3:
+                return 0.13
+            return 0.12
+
+        def solar(t):
+            h = t.hour + t.minute / 60.0
+            return 0.5 if (t.day == 4 and 9.0 <= h < 15.0) else 0.0
+
+        n = int((datetime(2026, 6, 4, 16, 0) - start).total_seconds() / 60 / INTERVAL)
+        slots = []
+        for i in range(n):
+            t = start + timedelta(minutes=INTERVAL * i)
+            h = t.hour + t.minute / 60.0
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=t.isoformat(),
+                    slot_interval_minutes=INTERVAL,
+                    buy_price=price(t),
+                    sell_price=0.05,
+                    solar_kwh=solar(t),
+                    consumption_kwh=0.3,
+                    is_demand_window_entry=(t.day == 4 and abs(h - 15.0) < 1e-9),
+                    is_demand_window_slot=(t.day == 4 and 15.0 <= h < 21.0),
+                )
+            )
+        config = OptimizerConfig(
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=95.0,
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            target_shortfall_penalty_per_pct=0.03,
+            soc_bins=100,
+        )
+        result = DPPlanner(config).plan(
+            OptimizerInputs(
+                cycle_id="overnight-gap",
+                initial_soc_pct=60.0,
+                slots=slots,
+                config=config,
+                all_solcast=[],
+            )
+        )
+        overnight_charges = [
+            d
+            for d in result.decisions
+            if d.action in _CHARGE_ACTIONS
+            and datetime.fromisoformat(d.timestamp_iso).day == 4
+            and datetime.fromisoformat(d.timestamp_iso).hour < 6
+            and d.buy_price > _BASE_CHEAP
+        ]
+        assert overnight_charges == [], (
+            "overnight slots before tomorrow's DW must gate on base, not the inflated "
+            f"price; got charges at {[c.timestamp_iso for c in overnight_charges]}"
+        )
+
+
 class TestPostDwConsistency:
     """Issue #800 follow-up: penalty + reason-code labels agree with the gate.
 
