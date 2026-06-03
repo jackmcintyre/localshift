@@ -217,6 +217,7 @@ class OptimizerFacade:
                 solcast_analysis_tomorrow=getattr(
                     data, "solcast_analysis_tomorrow", None
                 ),
+                solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
             )
             result = self._planner.plan(inputs)
@@ -410,6 +411,7 @@ class OptimizerFacade:
                 solcast_analysis_tomorrow=getattr(
                     data, "solcast_analysis_tomorrow", None
                 ),
+                solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
             )
             result = self._planner.plan(inputs)
 

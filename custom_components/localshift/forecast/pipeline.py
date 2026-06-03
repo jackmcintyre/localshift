@@ -146,6 +146,7 @@ class ForecastPipeline:
             resolver = ConfidenceResolver(
                 getattr(data, "solcast_analysis_today", None),
                 getattr(data, "solcast_analysis_tomorrow", None),
+                absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
             )
             solar_kwh = sum_solar_before_target(
                 all_solcast, now_dt, target_hour, resolver=resolver
@@ -188,6 +189,7 @@ class ForecastPipeline:
             resolver = ConfidenceResolver(
                 getattr(data, "solcast_analysis_today", None),
                 getattr(data, "solcast_analysis_tomorrow", None),
+                absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
             )
             solar_kwh = sum_solar_before_target(
                 all_solcast, now_dt, target_hour, resolver=resolver

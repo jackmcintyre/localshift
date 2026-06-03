@@ -187,6 +187,8 @@ CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
+CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
+CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
@@ -224,6 +226,9 @@ DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
 )
+DEFAULT_STALE_SOLAR_CONSERVATIVE = True
+DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING = 0.3
+DEFAULT_ABSENT_SOLAR_CONFIDENCE = 0.3
 DEFAULT_SPIKE_PRICE_PERCENTILE = 75  # Only export at top 25% of spike prices
 DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
@@ -325,6 +330,13 @@ THRESHOLD_RANGES = {
         "unit": "$/%-point",
         "icon": "mdi:target",
     },
+    CONF_STALE_SOLAR_CONFIDENCE_CEILING: {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "",
+        "icon": "mdi:weather-sunny-off",
+    },
 }
 
 # -----------------------------------------------------------------------------
@@ -337,6 +349,7 @@ SWITCH_SPIKE_DISCHARGE_CONSERVATIVE = "spike_discharge_conservative"
 SWITCH_DRY_RUN = "dry_run"
 SWITCH_DEMAND_WINDOW_BLOCK = "demand_window_block"
 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
+SWITCH_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 
 # Consolidated notification switch (Issue #214)
 SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
@@ -351,6 +364,7 @@ SWITCH_DEFAULTS = {
     SWITCH_DRY_RUN: False,
     SWITCH_DEMAND_WINDOW_BLOCK: True,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
+    SWITCH_STALE_SOLAR_CONSERVATIVE: True,
     SWITCH_NOTIFICATIONS_ENABLED: True,  # Consolidated notification toggle
     SWITCH_ENABLE_LEARNING: False,  # Users must opt-in to active optimization
 }
@@ -362,6 +376,7 @@ SWITCH_ICONS = {
     SWITCH_DRY_RUN: "mdi:test-tube",
     SWITCH_DEMAND_WINDOW_BLOCK: "mdi:clock-alert-outline",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:transfer-down",
+    SWITCH_STALE_SOLAR_CONSERVATIVE: "mdi:weather-sunny-off",
     SWITCH_NOTIFICATIONS_ENABLED: "mdi:bell",
     SWITCH_ENABLE_LEARNING: "mdi:brain",
 }
@@ -373,6 +388,7 @@ SWITCH_NAMES = {
     SWITCH_DRY_RUN: "Dry Run",
     SWITCH_DEMAND_WINDOW_BLOCK: "Demand Window Block",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
+    SWITCH_STALE_SOLAR_CONSERVATIVE: "Stale Solar Conservative",
     SWITCH_NOTIFICATIONS_ENABLED: "Notifications Enabled",
     SWITCH_ENABLE_LEARNING: "Enable Learning",
 }

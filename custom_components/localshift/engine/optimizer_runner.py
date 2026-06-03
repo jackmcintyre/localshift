@@ -249,6 +249,8 @@ def _build_optimizer_config(
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
+        CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+        CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -256,6 +258,8 @@ def _build_optimizer_config(
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
+        DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+        DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_TARGET_PENALTY,
     )
@@ -271,6 +275,13 @@ def _build_optimizer_config(
     # Allow reaching target during DW via solar (instead of by DW start)
     allow_dw_entry_under_target = config_options.get(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
+    )
+
+    stale_solar_conservative = bool(
+        config_options.get(CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE)
+    )
+    stale_solar_confidence_ceiling = float(
+        config_options.get(CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING)
     )
 
     optimization_mode = str(
@@ -346,6 +357,8 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
+        stale_solar_conservative=stale_solar_conservative,
+        stale_solar_confidence_ceiling=stale_solar_confidence_ceiling,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,

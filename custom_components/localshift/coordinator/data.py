@@ -296,6 +296,8 @@ class CoordinatorData:
     allow_dw_entry_under_target: bool = (
         False  # Allow DW entry when solar can reach target
     )
+    solar_absent_confidence: float = 1.0
+    """Confidence to use when Solcast analysis is absent; 0.3 when stale_solar_conservative=True."""
 
     # Shared charging decisions (computed once, used by both forecast and active_mode)
     forecast_charging_decisions: list[ChargingDecision] = field(default_factory=list)

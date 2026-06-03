@@ -752,6 +752,15 @@ class TestNormalizeWeather:
         assert SolarAccuracyTracker._normalize_weather("blustery") == "unknown"
 
 
+def _fill_tracker_with_bias(tracker, forecast: float, actual: float, count: int):
+    """Helper: add `count` period records with given forecast/actual values."""
+    from datetime import datetime, timezone
+    for i in range(count):
+        period = datetime(2026, 1, 1, 6 + i // 2, (i % 2) * 30, tzinfo=timezone.utc)
+        tracker.record_forecast(period, forecast, "sunny")
+        tracker.backfill_actual(period, actual)
+
+
 class TestComputeContextBias:
     """Tests for _compute_context_bias method."""
 
@@ -842,3 +851,53 @@ class TestComputeContextBias:
         assert count == 2
         assert BIAS_HALF_LIFE_DAYS == 7.0
         assert weighted_bias == pytest.approx(expected, rel=0.01)
+
+
+# ─── accuracy_confidence_ceiling tests ─────────────────────────────────────
+
+
+class TestAccuracyConfidenceCeiling:
+    """Tests for accuracy_confidence_ceiling method."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        """Create mock HomeAssistant instance."""
+        hass = MagicMock()
+        hass.data = {}
+        return hass
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        """Create SolarAccuracyTracker instance."""
+        return SolarAccuracyTracker(mock_hass, "test_entry")
+
+    def test_accuracy_ceiling_dormant_below_sample_threshold(self, tracker):
+        """Returns 1.0 (no cap) when fewer than MIN_SOLAR_CORRECTION_SAMPLES records exist."""
+        # tracker fixture starts empty → 0 samples
+        assert tracker.accuracy_confidence_ceiling() == pytest.approx(1.0)
+        assert tracker.accuracy_confidence_ceiling(low=0.2, high=0.9) == pytest.approx(1.0)
+
+    def test_accuracy_ceiling_low_when_poor_accuracy(self, tracker):
+        """Returns 'low' param when accuracy is ≤ 50%."""
+        # Build 20 records with extreme over-forecasting (accuracy ≈ 0%)
+        _fill_tracker_with_bias(tracker, forecast=10.0, actual=0.1, count=20)
+        assert tracker.has_sufficient_samples()
+        ceiling = tracker.accuracy_confidence_ceiling(low=0.25, high=1.0)
+        assert ceiling == pytest.approx(0.25)
+
+    def test_accuracy_ceiling_high_when_good_accuracy(self, tracker):
+        """Returns 'high' param when accuracy is ≥ 85%."""
+        # Build 20 records with near-perfect forecasting
+        _fill_tracker_with_bias(tracker, forecast=1.0, actual=1.0, count=20)
+        assert tracker.has_sufficient_samples()
+        ceiling = tracker.accuracy_confidence_ceiling(low=0.3, high=1.0)
+        assert ceiling == pytest.approx(1.0)
+
+    def test_accuracy_ceiling_interpolates_midrange(self, tracker):
+        """Linear interpolation between low and high for 50% < accuracy < 85%."""
+        # accuracy ~67.5% (MAPE ~32.5%, actual = forecast * 0.675 → bias ≈ 32.5%)
+        _fill_tracker_with_bias(tracker, forecast=1.0, actual=0.675, count=20)
+        assert tracker.has_sufficient_samples()
+        ceiling = tracker.accuracy_confidence_ceiling(low=0.3, high=1.0)
+        # accuracy = 100 - 32.5 = 67.5 → interpolation at (67.5-50)/(85-50) = 0.5
+        assert 0.3 < ceiling < 1.0

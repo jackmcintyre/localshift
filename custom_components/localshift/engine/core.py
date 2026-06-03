@@ -219,6 +219,7 @@ class DPPlanner:
                 confidence_resolver = ConfidenceResolver(
                     inputs.solcast_analysis_today,
                     inputs.solcast_analysis_tomorrow,
+                    absent_confidence=getattr(inputs, "solar_absent_confidence", 1.0),
                 )
                 future_solar_gain_pct = projected_solcast_gain_pct(
                     inputs.all_solcast,
@@ -445,6 +446,7 @@ class DPPlanner:
                 confidence_resolver = ConfidenceResolver(
                     inputs.solcast_analysis_today,
                     inputs.solcast_analysis_tomorrow,
+                    absent_confidence=getattr(inputs, "solar_absent_confidence", 1.0),
                 )
 
                 # Helper computes gain between end of plan and target time

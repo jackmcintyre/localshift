@@ -191,6 +191,7 @@ class SlotBuilder:
         resolver = ConfidenceResolver(
             getattr(data, "solcast_analysis_today", None),
             getattr(data, "solcast_analysis_tomorrow", None),
+            absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
         )
 
         contexts, counts = self._process_all_slots(

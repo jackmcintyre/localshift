@@ -570,13 +570,18 @@ class StateReader:
 
         """
         from ..forecast.solcast_analysis import extract_analysis_from_entity
+        from ..utils.entity_configs import STALENESS_THRESHOLDS
 
         # Extract analysis from forecast entities
         data.solcast_analysis_today = extract_analysis_from_entity(
-            self.hass, today_entity
+            self.hass,
+            today_entity,
+            stale_threshold=STALENESS_THRESHOLDS.get(CONF_SOLCAST_FORECAST_TODAY),
         )
         data.solcast_analysis_tomorrow = extract_analysis_from_entity(
-            self.hass, tomorrow_entity
+            self.hass,
+            tomorrow_entity,
+            stale_threshold=STALENESS_THRESHOLDS.get(CONF_SOLCAST_FORECAST_TOMORROW),
         )
 
         # Read Solcast MAPE accuracy sensor if available
