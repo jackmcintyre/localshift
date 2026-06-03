@@ -39,19 +39,31 @@ class ConfidenceResolver:
         if self._today and self._today.intervals:
             for interval in self._today.intervals:
                 if interval.period_start.date() == slot_date:
-                    return get_confidence_for_period(self._today, period_start, absent_confidence=self._absent_confidence)
+                    return get_confidence_for_period(
+                        self._today,
+                        period_start,
+                        absent_confidence=self._absent_confidence,
+                    )
 
         # Check tomorrow's analysis
         if self._tomorrow and self._tomorrow.intervals:
             for interval in self._tomorrow.intervals:
                 if interval.period_start.date() == slot_date:
-                    return get_confidence_for_period(self._tomorrow, period_start, absent_confidence=self._absent_confidence)
+                    return get_confidence_for_period(
+                        self._tomorrow,
+                        period_start,
+                        absent_confidence=self._absent_confidence,
+                    )
 
         # Fallback: try today's day_confidence, then tomorrow's, then absent_confidence
         if self._today:
-            return get_confidence_for_period(self._today, period_start, absent_confidence=self._absent_confidence)
+            return get_confidence_for_period(
+                self._today, period_start, absent_confidence=self._absent_confidence
+            )
         if self._tomorrow:
-            return get_confidence_for_period(self._tomorrow, period_start, absent_confidence=self._absent_confidence)
+            return get_confidence_for_period(
+                self._tomorrow, period_start, absent_confidence=self._absent_confidence
+            )
         return self._absent_confidence
 
     def get_analysis_for_period(self, period_start: datetime) -> Any | None:

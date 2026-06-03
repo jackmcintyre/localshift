@@ -48,7 +48,11 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         DEFAULT_MINIMUM_TARGET_SOC,
     ),
     (CONF_TARGET_PENALTY, "Target Shortfall Penalty", DEFAULT_TARGET_PENALTY),
-    (CONF_STALE_SOLAR_CONFIDENCE_CEILING, "Stale Solar Confidence Ceiling", DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING),
+    (
+        CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+        "Stale Solar Confidence Ceiling",
+        DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+    ),
 ]
 
 

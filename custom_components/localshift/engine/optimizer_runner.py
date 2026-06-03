@@ -278,10 +278,14 @@ def _build_optimizer_config(
     )
 
     stale_solar_conservative = bool(
-        config_options.get(CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE)
+        config_options.get(
+            CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE
+        )
     )
     stale_solar_confidence_ceiling = float(
-        config_options.get(CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING)
+        config_options.get(
+            CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
+        )
     )
 
     optimization_mode = str(

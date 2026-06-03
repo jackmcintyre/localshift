@@ -149,7 +149,9 @@ def extract_analysis_from_entity(
                     ConfidenceInterval(
                         period_start=period_start,
                         spread_kwh=float(interval_data.get("spread_kwh", 0.0)),
-                        confidence=max(0.0, min(1.0, float(interval_data.get("confidence", 1.0)))),
+                        confidence=max(
+                            0.0, min(1.0, float(interval_data.get("confidence", 1.0)))
+                        ),
                     )
                 )
 
@@ -188,7 +190,9 @@ def extract_analysis_from_entity(
 
 
 def get_confidence_for_period(
-    analysis: SolcastAnalysis | None, period_start: datetime, absent_confidence: float = 1.0
+    analysis: SolcastAnalysis | None,
+    period_start: datetime,
+    absent_confidence: float = 1.0,
 ) -> float:
     """Get confidence score for a specific period.
 
