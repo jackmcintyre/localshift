@@ -60,6 +60,12 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.EXPORT_PROACTIVE: 3,
 }
 
+# Issue #800 follow-up: hours before the demand-window entry over which the urgency-inflated
+# effective_cheap_price is considered valid. Matches the urgency ramp window in
+# price_calculator._calculate_urgency_adjusted_price (total_window = 4.0h). Slots earlier
+# than this use the un-inflated base price for the cheap-charge gate.
+_URGENCY_WINDOW_HOURS = 4.0
+
 
 class DPPlanner:
     """Deterministic dynamic-programming battery optimizer.
@@ -148,6 +154,14 @@ class DPPlanner:
 
         terminal_penalty_idx = self._determine_terminal_penalty_idx(
             config, demand_bounds
+        )
+
+        # Issue #800 follow-up: the urgency-inflated effective_cheap_price is only valid
+        # near the demand window. Record where the urgency window begins so the cheap-price
+        # gate uses the inflated value only there and the un-inflated base elsewhere
+        # (otherwise tonight's overnight — far before tomorrow's DW — sawtooths).
+        config.urgency_window_start_idx = self._determine_urgency_window_start_idx(
+            slots, terminal_penalty_idx
         )
 
         dp, terminal_penalty_by_bin = self._initialize_dp_tables(
@@ -325,6 +339,35 @@ class DPPlanner:
         # Always apply penalty at DW entry to incentivize charging before DW
 
         return demand_bounds["entry_idx"]
+
+    def _determine_urgency_window_start_idx(
+        self,
+        slots: list[SlotContext],
+        terminal_penalty_idx: int | None,
+    ) -> int | None:
+        """Index of the first slot within the urgency window before the DW entry.
+
+        The urgency-inflated ``effective_cheap_price`` only legitimately applies to slots
+        within ~``_URGENCY_WINDOW_HOURS`` of the demand-window entry (matching the urgency
+        ramp in ``price_calculator``). Slots earlier than that — notably tonight's overnight
+        when the next horizon DW is tomorrow evening — must be gated on the un-inflated base
+        instead (Issue #800 follow-up). Returns None when there is no demand window.
+        """
+        if terminal_penalty_idx is None:
+            return None
+        try:
+            dw_time = datetime.fromisoformat(slots[terminal_penalty_idx].timestamp_iso)
+        except (ValueError, IndexError, TypeError):
+            return None
+        cutoff = dw_time - timedelta(hours=_URGENCY_WINDOW_HOURS)
+        for i in range(terminal_penalty_idx + 1):
+            try:
+                slot_time = datetime.fromisoformat(slots[i].timestamp_iso)
+            except (ValueError, TypeError):
+                continue
+            if slot_time >= cutoff:
+                return i
+        return terminal_penalty_idx
 
     def _initialize_dp_tables(
         self,
