@@ -1132,9 +1132,17 @@ def test_feasible_actions_gate_disabled_in_arbitrage_mode():
     assert PlannerAction.CHARGE_GRID_BOOST in actions
 
 
-def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
-    """When SOC >= target (no deficit), gate should not suppress grid charging."""
-    # SOC=85 >= target=80 → deficit=0 → gate does not fire
+def test_feasible_actions_grid_charge_capped_at_target():
+    """At/above the demand-window target, grid charging is capped (not offered).
+
+    Previously, with SOC >= target the solar-sufficiency gate did not fire and a
+    cheap price would still offer grid charge — producing marginal above-target
+    top-ups (e.g. grid-charging at 98% just before the demand window). Grid
+    charging is now capped at ``demand_window_target_soc_pct`` in self-consumption
+    mode, so only HOLD remains. (The solar gate still does not fire here; the
+    target cap is the operative brake. Solar may still fill above target for free.)
+    """
+    # SOC=85 >= target=80 → above the grid-charge ceiling
     slots = [
         _make_slot(slot_index=i, buy_price=0.08, solar_kwh=0.0, consumption_kwh=0.3)
         for i in range(4)
@@ -1156,9 +1164,9 @@ def test_feasible_actions_gate_not_fired_when_soc_already_at_target():
         terminal_penalty_idx=4,
     )
 
-    # No deficit → gate does not fire → price-gated grid charge offered
+    # Above target → grid charge capped even though price is cheap and gate is idle
     assert PlannerAction.HOLD in actions
-    assert PlannerAction.CHARGE_GRID_NORMAL in actions
+    assert PlannerAction.CHARGE_GRID_NORMAL not in actions
 
 
 def test_projected_solar_soc_gain_pct_positive_surplus():

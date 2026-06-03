@@ -120,7 +120,22 @@ def feasible_actions(
 
     actions = []
 
-    can_charge = soc_pct < config.max_soc_pct
+    # Grid charging is capped at the demand-window target in self-consumption
+    # mode, not at the physical 100% ceiling. The target (battery_target plus any
+    # learned drain/headroom margin) is the SOC the planner is trying to reach for
+    # demand-window readiness; grid should fill the battery up to it and no further.
+    # Without this cap, any cheap slot below 100% invites a marginal above-target
+    # top-up (e.g. grid-charging at 98% just before the demand window) that the
+    # full-retail self-consumption credit makes look profitable but which only
+    # cycles the battery for negligible gain. Solar can still fill above the target
+    # for free (export actions are handled separately), and arbitrage mode keeps the
+    # physical ceiling so it can still chase price spreads.
+    charge_ceiling = (
+        config.demand_window_target_soc_pct
+        if config.optimization_mode == "self_consumption"
+        else config.max_soc_pct
+    )
+    can_charge = soc_pct < charge_ceiling
 
     actions.append(PlannerAction.HOLD)
 
