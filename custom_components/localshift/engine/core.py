@@ -150,7 +150,7 @@ class DPPlanner:
             config, demand_bounds
         )
 
-        dp = self._initialize_dp_tables(
+        dp, terminal_penalty_by_bin = self._initialize_dp_tables(
             n_slots, soc_grid, config, terminal_penalty_idx, solar_capable, inputs
         )
 
@@ -166,6 +166,7 @@ class DPPlanner:
             terminal_penalty_idx,
             inputs,
             negative_fit_avoidance_context,
+            terminal_penalty_by_bin,
         )
 
         decisions, totals, reason_histogram = self._forward_reconstruct(
@@ -333,22 +334,45 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         solar_can_reach_target: bool,
         inputs: OptimizerInputs,
-    ) -> list[dict[int, tuple[float, PlannerAction, int, float, float, float]]]:
-        """Initialize DP tables with terminal costs.
+    ) -> tuple[
+        list[dict[int, tuple[float, PlannerAction, int, float, float, float]]],
+        dict[int, float],
+    ]:
+        """Initialize DP tables and compute the per-bin demand-window-entry penalty.
 
         In self-consumption mode, credits future solar gain (Issue #619) to
-
         prevent grid charging when solar will cover the shortfall.
 
-        Issue #624: In self_consumption mode, treat target as hard constraint by
+        Issue #624: In self_consumption mode, treat target as a hard constraint by
+        using a very high cost for states below target.
 
-        using infinite cost for states below target at terminal penalty index.
+        Issue #811/#816 (horizon-end myopia): in the strict target mode
+        (``allow_dw_entry_under_target=False``) the target/shortfall penalty is applied
+        at the DEMAND-WINDOW ENTRY (``terminal_penalty_idx``) during backward induction,
+        NOT at the end of the planning horizon. Applying it at the horizon boundary made
+        the optimizer grid-charge overnight to hit a target at an arbitrary cutoff (which
+        moves every cycle as the rolling horizon slides), contradicting the Control
+        Philosophy and producing horizon-dependent overnight charging.
 
+        When ``allow_dw_entry_under_target=True`` (Issue #505), the target may instead be
+        met at any point DURING the demand window via solar, so the penalty stays at the
+        horizon boundary (``dp[n_slots]``) as before — relocating it to the entry would
+        wrongly force pre-charge that mid-DW solar was meant to cover.
+
+        Returns ``(dp, terminal_penalty_by_bin)`` where ``terminal_penalty_by_bin`` maps
+        soc-bin index -> shortfall penalty to add at ``terminal_penalty_idx`` (empty when
+        there is no demand window, or when the penalty stays at the horizon boundary).
         """
 
         dp: list[dict[int, tuple[float, PlannerAction, int, float, float, float]]] = [
             {} for _ in range(n_slots + 1)
         ]
+
+        # Horizon-end boundary carries no target (Issue #811): always zero.
+        for bin_idx in range(len(soc_grid)):
+            dp[n_slots][bin_idx] = (0.0, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
+
+        terminal_penalty_by_bin: dict[int, float] = {}
 
         if terminal_penalty_idx is not None:
             target = config.demand_window_target_soc_pct
@@ -431,22 +455,24 @@ class DPPlanner:
                         effective_soc, target, config
                     )
 
-                dp[n_slots][bin_idx] = (
-                    shortfall_penalty,
-                    PlannerAction.HOLD,
-                    bin_idx,
-                    0.0,
-                    0.0,
-                    0.0,
-                )
+                if config.allow_dw_entry_under_target:
+                    # Issue #505: target may be met mid-DW via solar — keep the penalty
+                    # at the horizon boundary (legacy behaviour) so it does not force
+                    # pre-charge before the demand window.
+                    dp[n_slots][bin_idx] = (
+                        shortfall_penalty,
+                        PlannerAction.HOLD,
+                        bin_idx,
+                        0.0,
+                        0.0,
+                        0.0,
+                    )
+                else:
+                    # Issue #811/#816: strict mode — apply at the DW entry during backward
+                    # induction, not at the arbitrary horizon boundary.
+                    terminal_penalty_by_bin[bin_idx] = shortfall_penalty
 
-        else:
-            n_bins = len(soc_grid)
-
-            for bin_idx in range(n_bins):
-                dp[n_slots][bin_idx] = (0.0, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
-
-        return dp
+        return dp, terminal_penalty_by_bin
 
     def _get_terminal_diagnostics(
         self,
@@ -494,6 +520,7 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         inputs: OptimizerInputs,
         negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
+        terminal_penalty_by_bin: dict[int, float] | None = None,
     ) -> int:
         """Perform backward induction to fill DP tables.
 
@@ -505,6 +532,10 @@ class DPPlanner:
             config: Optimizer config
             terminal_penalty_idx: Terminal penalty index
             inputs: Optimizer inputs
+            terminal_penalty_by_bin: Per-bin shortfall penalty applied at the DW-entry
+                slot (Issue #811/#816); the cost of entering the demand window at that
+                bin's SOC. Constant across actions at that slot, so it is added after
+                action selection.
 
         Returns:
 
@@ -514,9 +545,11 @@ class DPPlanner:
 
         n_slots = len(slots)
         states_explored = 0
+        penalty_by_bin = terminal_penalty_by_bin or {}
 
         for slot_idx in range(n_slots - 1, -1, -1):
             slot = slots[slot_idx]
+            apply_terminal_penalty = slot_idx == terminal_penalty_idx
 
             for bin_idx, soc in enumerate(soc_grid):
                 best, action_count = self._compute_best_action(
@@ -531,6 +564,11 @@ class DPPlanner:
                     inputs,
                     negative_fit_avoidance_context,
                 )
+                if apply_terminal_penalty:
+                    # Cost of entering the demand window at this SOC (Issue #811/#816).
+                    penalty = penalty_by_bin.get(bin_idx, 0.0)
+                    if penalty:
+                        best = (best[0] + penalty, *best[1:])
                 dp[slot_idx][bin_idx] = best
                 states_explored += action_count
 

@@ -1255,7 +1255,13 @@ def test_projected_solar_soc_gain_pct_respects_slot_range():
 
 
 def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar():
-    """Integration: on a sunny day with enough solar, no grid charging before demand window."""
+    """Integration: on a sunny day with enough solar, no grid charging before demand window.
+
+    Issue #811/#816: in strict mode the target is enforced at DW *entry*, not held to the
+    end of the DW. The battery is expected to discharge during the demand window to cover
+    its load (that is the point of pre-charging), so end-of-DW SOC may fall below target —
+    that is correct, not a shortfall.
+    """
     # 8 pre-DW slots (09:00–13:00) with strong solar; DW entry at slot 8
     # SOC deficit: 80% - 70% = 10% (1.35 kWh)
     # Solar surplus: 8 slots * (0.6 kWh solar - 0.2 kWh consumption) = 3.2 kWh net
@@ -1314,11 +1320,18 @@ def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar(
         f"Expected SOC ≥80% at DW entry (slot 8), got {soc_at_dw_entry:.1f}%"
     )
 
-    # Terminal shortfall should be zero (target is met)
-    final_decision = result.decisions[-1]
-    terminal_shortfall = max(0.0, 80.0 - final_decision.predicted_soc_pct)
-    assert terminal_shortfall == 0.0, (
-        f"Expected zero terminal shortfall, got {terminal_shortfall:.1f}%"
+    # Issue #811/#816: the target is enforced at DW entry, not held to the end of the DW.
+    # The battery should discharge during the demand window (slots 8-11, $0.30, no solar)
+    # to cover its load rather than hoard charge to a horizon-end target — so no grid
+    # import at the peak, and end-of-DW SOC is allowed to fall below target.
+    dw_decisions = result.decisions[8:]
+    dw_grid_import = sum(d.grid_import_kwh for d in dw_decisions)
+    assert dw_grid_import == 0.0, (
+        f"battery should cover DW load from storage, not import at the peak; "
+        f"got {dw_grid_import:.2f} kWh of DW grid import"
+    )
+    assert result.decisions[-1].predicted_soc_pct < soc_at_dw_entry, (
+        "battery should discharge through the demand window (it was pre-charged to be used)"
     )
 
     # Any grid charging in the pre-DW solar window (slots 0-7) should be economically
