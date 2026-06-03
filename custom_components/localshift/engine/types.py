@@ -207,6 +207,18 @@ class OptimizerConfig:
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
 
+    base_cheap_price: float | None = None
+    """Un-inflated "genuinely cheap" threshold (percentile-derived), $/kWh.
+
+    ``effective_cheap_price`` is computed for *now* and may be inflated by today's
+    low-solar urgency (``_calculate_urgency_adjusted_price``) so the optimizer will
+    pay more to reach *today's* demand-window target. That urgency rationale does not
+    hold for slots at/after the demand window (i.e. tomorrow), so applying the inflated
+    threshold there wrongly classifies tomorrow-night slots as "cheap" and produces
+    net-negative overnight sawtooth charging. Past the demand-window entry, grid
+    charging is gated on this un-inflated base instead. Falls back to
+    ``effective_cheap_price`` when ``None`` (backward compatibility)."""
+
     switching_penalty: float = 0.02
     """Penalty applied when switching away from the currently commanded action ($/switch)."""
 
