@@ -2525,7 +2525,7 @@ def test_is_cheap_import_window_expensive_price():
         soc_bins=20,
     )
 
-    result = _is_cheap_import_window(slot, config, None, [slot])
+    result = _is_cheap_import_window(slot, 0, config, None, [slot])
     assert result is False
 
 
