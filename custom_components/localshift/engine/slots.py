@@ -21,9 +21,10 @@ from zoneinfo import ZoneInfo
 
 from ..coordinator.data import AdaptiveParameters
 from ..forecast.solar import get_solar_for_slot_by_interval
+from ..forecast.solar_accuracy import SolarAccuracyTracker
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
-from .slot_schedule import TOTAL_SLOTS, compute_hybrid_slot_schedule
+from .slot_schedule import compute_hybrid_slot_schedule
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,30 +121,57 @@ class SlotBuilder:
         self,
         config_options: dict[str, Any],
         ha_timezone: str,
+        solar_accuracy_tracker: SolarAccuracyTracker | None = None,
     ) -> None:
         """Store DW time config and timezone for slot generation.
 
         Args:
             config_options: Integration config options (for DW start/end parsing).
             ha_timezone: Home Assistant timezone string (e.g., "Australia/Sydney").
+            solar_accuracy_tracker: Optional tracker for bias correction readiness check.
 
         """
         self._config_options = config_options
         self._ha_timezone = ha_timezone
+        self._solar_accuracy_tracker = solar_accuracy_tracker
 
     def build_slots(
         self,
         data: Any,
         adaptive_params: AdaptiveParameters | None,
         now_dt: datetime | None = None,
+        override_general_forecast: list[dict[str, Any]] | None = None,
+        override_feed_in_forecast: list[dict[str, Any]] | None = None,
     ) -> tuple[list[SlotContext], SlotBuildMetadata]:
-        """Build SlotContext list from raw coordinator data."""
+        """Build SlotContext list from raw coordinator data.
+
+        Args:
+            data: CoordinatorData with prices, forecasts, etc.
+            adaptive_params: Adaptive parameters for solar confidence.
+            now_dt: Current datetime (optional, defaults to now).
+            override_general_forecast: Shadow forecast to use instead of data.general_forecast.
+            override_feed_in_forecast: Shadow forecast to use instead of data.feed_in_forecast.
+
+        """
         now_local = (
             now_dt.astimezone() if now_dt is not None else datetime.now().astimezone()
         )
+
+        # Use override forecasts if provided (for shadow optimizer runs)
+        general_forecast = (
+            override_general_forecast
+            if override_general_forecast is not None
+            else data.general_forecast
+        )
+        feed_in_forecast = (
+            override_feed_in_forecast
+            if override_feed_in_forecast is not None
+            else data.feed_in_forecast
+        )
+
         hybrid_slots, hybrid_metadata = compute_hybrid_slot_schedule(
             now_local=now_local,
-            general_forecast=data.general_forecast,
+            general_forecast=general_forecast,
             ha_timezone=self._ha_timezone,
         )
 
@@ -155,6 +183,16 @@ class SlotBuilder:
         base_slot = self._compute_base_slot(now_local)
         local_tz = self._get_local_timezone()
 
+        # Create ConfidenceResolver for cross-day confidence lookup
+        from custom_components.localshift.forecast.analysis_resolver import (
+            ConfidenceResolver,
+        )
+
+        resolver = ConfidenceResolver(
+            getattr(data, "solcast_analysis_today", None),
+            getattr(data, "solcast_analysis_tomorrow", None),
+        )
+
         contexts, counts = self._process_all_slots(
             hybrid_slots=hybrid_slots,
             data=data,
@@ -164,6 +202,8 @@ class SlotBuilder:
             local_tz=local_tz,
             dw_start_time=dw_start_time,
             dw_end_time=dw_end_time,
+            feed_in_forecast=feed_in_forecast,
+            resolver=resolver,
         )
 
         metadata = SlotBuildMetadata(
@@ -223,6 +263,8 @@ class SlotBuilder:
         local_tz: ZoneInfo | None,
         dw_start_time: time,
         dw_end_time: time,
+        feed_in_forecast: list[dict[str, Any]] | None = None,
+        resolver: Any | None = None,
     ) -> tuple[list[SlotContext], dict[str, int]]:
         """Process all hybrid slots and return contexts with counts."""
         contexts: list[SlotContext] = []
@@ -247,6 +289,8 @@ class SlotBuilder:
                 dw_start_time=dw_start_time,
                 dw_end_time=dw_end_time,
                 prev_in_demand_window=prev_in_demand_window,
+                feed_in_forecast=feed_in_forecast,
+                resolver=resolver,
             )
             contexts.append(ctx)
             for key in counts:
@@ -267,6 +311,8 @@ class SlotBuilder:
         dw_start_time: time,
         dw_end_time: time,
         prev_in_demand_window: bool,
+        feed_in_forecast: list[dict[str, Any]] | None = None,
+        resolver: Any | None = None,
     ) -> tuple[SlotContext, dict[str, int], bool]:
         """Process a single slot, returning (context, counts, in_demand_window)."""
         slot_start: datetime = slot["start"]
@@ -283,10 +329,20 @@ class SlotBuilder:
         }
 
         buy_price = float(slot.get("price", 0.0))
-        sell_price = self._get_sell_price(data.feed_in_forecast, slot_start)
+        # Use override feed_in_forecast if provided (for shadow optimizer)
+        sell_price = self._get_sell_price(
+            feed_in_forecast if feed_in_forecast is not None else data.feed_in_forecast,
+            slot_start,
+        )
 
+        # Get confidence from resolver (defaults to 1.0 if no resolver)
+        confidence = resolver.get_confidence(slot_start) if resolver else 1.0
         solar_kwh = self._get_solar_kwh(
-            all_solcast, slot_start, interval_minutes, solar_confidence_factor
+            all_solcast,
+            slot_start,
+            interval_minutes,
+            solar_confidence_factor,
+            confidence,
         )
         if solar_kwh < 0.001:
             counts["defaulted_solar"] = 1
@@ -339,11 +395,27 @@ class SlotBuilder:
         slot_start: datetime,
         interval_minutes: int,
         solar_confidence_factor: float,
+        confidence: float = 1.0,
     ) -> float:
-        """Get solar kWh for a slot with confidence factor applied."""
+        """Get solar kWh for a slot.
+
+        If bias correction has sufficient samples, return raw solar
+        (bias correction will be applied by OptimizerFacade).
+        Otherwise, apply solar_confidence_factor as fallback.
+        """
         solar_kwh = get_solar_for_slot_by_interval(
-            all_solcast, slot_start, interval_minutes
+            all_solcast, slot_start, interval_minutes, confidence
         )
+
+        # Check if bias correction is ready
+        if (
+            self._solar_accuracy_tracker is not None
+            and self._solar_accuracy_tracker.has_sufficient_samples()
+        ):
+            # Bias correction will handle it - return raw
+            return max(0.0, solar_kwh)
+
+        # Fall back to solar_confidence_factor
         return max(0.0, solar_kwh * solar_confidence_factor)
 
     def _get_consumption_kwh(
@@ -359,25 +431,39 @@ class SlotBuilder:
             return 0.0
 
         elapsed_min = (slot_start - base_slot).total_seconds() / 60.0
-        fixed_idx = min(int(elapsed_min // 15), TOTAL_SLOTS - 1)
+        slot_start_min = elapsed_min
+        slot_end_min = elapsed_min + interval_minutes
 
-        if not (0 <= fixed_idx < len(load_forecast_slots)):
+        start_bin = int(slot_start_min // 15)
+        end_bin = int((slot_end_min - 1e-9) // 15)
+
+        if end_bin < 0 or start_bin >= len(load_forecast_slots):
             return 0.0
 
-        consumption_kw = load_forecast_slots[fixed_idx]
-        consumption_kwh = consumption_kw * interval_minutes / 60.0
+        start_bin = max(0, start_bin)
+        end_bin = min(end_bin, len(load_forecast_slots) - 1)
+
+        consumption_kwh = 0.0
+        for idx in range(start_bin, end_bin + 1):
+            bin_start = idx * 15
+            bin_end = bin_start + 15
+            overlap = max(
+                0.0, min(slot_end_min, bin_end) - max(slot_start_min, bin_start)
+            )
+            if overlap <= 0.0:
+                continue
+            consumption_kwh += load_forecast_slots[idx] * overlap / 60.0
 
         if interval_minutes == 30 and 11 <= slot_start.hour <= 14:
             _LOGGER.info(
-                "ISSUE_500 slot_builder: slot=%d time=%s interval=%d fixed_idx=%d "
-                "slots_len=%d kw_idx_%d=%.3f kwh=%.3f",
+                "ISSUE_500 slot_builder: slot=%d time=%s interval=%d bins=%d-%d "
+                "slots_len=%d kwh=%.3f",
                 slot_index,
                 slot_start.strftime("%H:%M"),
                 interval_minutes,
-                fixed_idx,
+                start_bin,
+                end_bin,
                 len(load_forecast_slots),
-                fixed_idx,
-                consumption_kw,
                 consumption_kwh,
             )
 
@@ -393,7 +479,7 @@ class SlotBuilder:
             time object parsed from "HH:MM:SS" or "HH:MM" format.
 
         """
-        from ..const import (  # noqa: PLC0415
+        from custom_components.localshift.const import (
             DEFAULT_DEMAND_WINDOW_END,
             DEFAULT_DEMAND_WINDOW_START,
         )

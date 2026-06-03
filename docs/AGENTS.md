@@ -1,86 +1,35 @@
-# LocalShift Documentation - Index
+# Documentation Index (Legacy)
 
-## Overview
+**Note:** This file is legacy. The primary index is now **[INDEX.md](INDEX.md)** which provides comprehensive, domain-specific guidance.
 
-Documentation for LocalShift Home Assistant integration. 14 documents covering architecture, development, and usage.
+## Quick Reference
 
-## Document Index
+| Domain | Primary Doc | Also Useful |
+|--------|-------------|-------------|
+| Optimizer (DP) | `PLANNING_MODEL.md` | `OPTIMIZER_DP_ROLLOUT.md`, `TROUBLESHOOTING.md` |
+| Entities | `ENTITY_REFERENCE.md` + `AGENTS.md` (root) | `ARCHITECTURE.md` |
+| State Machine | `ARCHITECTURE.md` | `TROUBLESHOOTING.md` |
+| Forecasts | `ARCHITECTURE.md`, `FORECAST_DRIVEN_CONTROL.md` | `LOAD_FORECASTING.md` |
+| Learning System | `LEARNING_SYSTEM.md` | `OPTIMIZER_DP_ROLLOUT.md` |
+| General | `ARCHITECTURE.md` | `DEVELOPER_GUIDE.md` |
 
-| Document | Purpose | Lines |
-|----------|---------|-------|
-| `ARCHITECTURE.md` | System architecture and design | ~938 |
-| `DEVELOPER_GUIDE.md` | Development guide and patterns | ~600 |
-| `PLANNING_MODEL.md` | DP optimizer extension guide | ~322 |
-| `ENTITY_REFERENCE.md` | Entity definitions and attributes | ~400 |
-| `COVERAGE.md` | Coverage policy and tracking | ~200 |
-| `API.md` | Public API reference | ~300 |
-| `MIGRATION.md` | Migration guides | ~250 |
-| `TESTING.md` | Testing patterns and examples | ~400 |
-| `DEPLOYMENT.md` | Deployment procedures | ~180 |
-| `CHANGELOG.md` | Version history | ~500 |
-| `CONFIGURATION.md` | Configuration options | ~350 |
-| `TROUBLESHOOTING.md` | Common issues and solutions | ~280 |
-| `PERFORMANCE.md` | Performance considerations | ~200 |
-| `CONTRIBUTING.md` | Contribution guidelines | ~150 |
+## Critical Docs (Legacy)
 
-## Critical Documents
+| Document | When Needed |
+|----------|-------------|
+| `PLANNING_MODEL.md` | Optimizer changes (MUST READ) |
+| `ENTITY_REFERENCE.md` | Adding/removing entities |
+| `ARCHITECTURE.md` | Understanding system |
+| `DEVELOPER_GUIDE.md` | Development patterns |
 
-### For Optimizer Changes (MUST READ)
+## Update Required
 
-**`PLANNING_MODEL.md`** - Decision guide for modifying DP optimizer:
-
-| Question | Action |
-|----------|--------|
-| Is it impossible/forbidden? | Add to `feasible_actions()` |
-| Is it a requirement by deadline? | Add to `terminal_cost()` |
-| Is it discouraged/preferred? | Add penalty to `stage_cost()` |
-
-### For New Entities
-
-**`ENTITY_REFERENCE.md`** - MUST update when adding/removing entities:
-- Entity ID format
-- State attributes
-- Available modes
-- Default values
-
-### For Architecture Changes
-
-**`ARCHITECTURE.md`** - System overview:
-- Component diagram
-- Data flow
-- State machine
-- Integration points
-
-## Where to Look
-
-| Task | Document |
-|------|----------|
-| Understand system | `ARCHITECTURE.md` |
-| Modify optimizer | `PLANNING_MODEL.md` |
-| Add entity | `ENTITY_REFERENCE.md` |
-| Write tests | `TESTING.md`, `../tests/AGENTS.md` |
-| Deploy changes | `DEPLOYMENT.md` |
-| Debug issues | `TROUBLESHOOTING.md` |
-| Configure options | `CONFIGURATION.md` |
-| Contribute | `CONTRIBUTING.md` |
-
-## Documentation Updates
-
-**When adding/removing entities, update:**
+When adding/removing entities:
 1. `ENTITY_REFERENCE.md` - Entity definitions
-2. `ARCHITECTURE.md` - If system architecture changes
-3. `DEVELOPER_GUIDE.md` - If development patterns change
-4. `CHANGELOG.md` - Document the change
-
-## Conventions
-
-- **Markdown format** with tables for structured data
-- **Code blocks** with syntax highlighting (python, yaml, bash)
-- **Cross-references** using relative links
-- **Keep updated** - Docs should match code
+2. `ARCHITECTURE.md` - If architecture changes
 
 ## See Also
 
-- `../AGENTS.md` - Root project guidelines
-- `../custom_components/localshift/AGENTS.md` - Integration guide
-- `../tests/AGENTS.md` - Testing guide
+- `INDEX.md` — **Primary documentation index (use this first!)**
+- `../AGENTS.md` - Root rules (includes doc-first skill)
+- `../custom_components/localshift/AGENTS.md` - Integration

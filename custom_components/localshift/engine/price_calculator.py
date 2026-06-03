@@ -18,6 +18,7 @@ from ..const import (
     DEFAULT_MAX_PRECHARGE_PRICE,
 )
 from ..coordinator.data import CoordinatorData
+from ..pricing.types import ForecastSlot
 from .utils import parse_forecast_dt
 
 
@@ -28,7 +29,7 @@ def _parse_price_entry(
 
     Returns dict with: start_local, end_local, price, duration_minutes, is_overlap.
     """
-    if not isinstance(entry, dict):
+    if not hasattr(entry, "get"):
         return None
 
     start_raw = entry.get("start_time")
@@ -249,7 +250,7 @@ class PriceCalculator:
 
     def _collect_forecast_prices_and_base(
         self,
-        general_forecast: list[dict[str, Any]],
+        general_forecast: list[ForecastSlot],
         now_dt: datetime,
         horizon_hours: float = 24.0,
     ) -> tuple[list[float], float, float]:
@@ -271,7 +272,7 @@ class PriceCalculator:
 
         forecast_prices = []
         for forecast in general_forecast:
-            if not isinstance(forecast, dict):
+            if not hasattr(forecast, "get"):
                 continue
             start = self._parse_forecast_dt(forecast.get("start_time"))
             if start is None:
@@ -482,7 +483,7 @@ class PriceCalculator:
         data.effective_cheap_price = self._apply_threshold_hysteresis(raw_threshold)
 
     def _get_fit_price_for_period(
-        self, feed_in_forecast: list[dict[str, Any]], mid_local: datetime
+        self, feed_in_forecast: list[ForecastSlot], mid_local: datetime
     ) -> float:
         """Get FIT price for a specific time from forecast."""
         for forecast in feed_in_forecast:
@@ -499,7 +500,7 @@ class PriceCalculator:
     def _compute_weighted_fit(
         self,
         all_solcast: list[dict[str, Any]],
-        feed_in_forecast: list[dict[str, Any]],
+        feed_in_forecast: list[ForecastSlot],
         now_dt: datetime,
         target_dt: datetime,
     ) -> tuple[float, float]:

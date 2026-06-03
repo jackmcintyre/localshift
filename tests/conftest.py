@@ -47,6 +47,13 @@ import pytest
 from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
+from custom_components.localshift.const import (
+    CONF_PRICING_FEED_IN_FORECAST,
+    CONF_PRICING_FEED_IN_PRICE,
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_GENERAL_PRICE,
+    CONF_PRICING_PRICE_SPIKE,
+)
 from custom_components.localshift.coordinator import CoordinatorData
 
 # Import realistic HA state simulation
@@ -121,7 +128,13 @@ def mock_hass():
 def mock_entry():
     """Create a mock ConfigEntry."""
     entry = MagicMock()
-    entry.data = {}
+    entry.data = {
+        CONF_PRICING_GENERAL_PRICE: "sensor.general_price",
+        CONF_PRICING_FEED_IN_PRICE: "sensor.feed_in_price",
+        CONF_PRICING_GENERAL_FORECAST: "sensor.general_forecast",
+        CONF_PRICING_FEED_IN_FORECAST: "sensor.feed_in_forecast",
+        CONF_PRICING_PRICE_SPIKE: "binary_sensor.price_spike",
+    }
     entry.options = {
         "battery_target": 90,
         "cheap_price_percentile": 40,
@@ -274,7 +287,7 @@ def realistic_entity_states_with_forecasts(realistic_entity_states):
         )
     )
 
-    # Add Amber price forecasts (using DEFAULT_ENTITY_IDS naming)
+    # Add Amber price forecasts (using generic naming - discovered during config flow)
     general_forecast = create_sample_amber_price_forecast(
         num_periods=48,
         base_price=0.25,
@@ -284,14 +297,14 @@ def realistic_entity_states_with_forecasts(realistic_entity_states):
         base_price=0.08,
     )
 
-    states["sensor.100h_general_forecast"] = create_amber_price_forecast_state(
+    states["sensor.general_forecast"] = create_amber_price_forecast_state(
         general_forecast,
-        entity_id="sensor.100h_general_forecast",
+        entity_id="sensor.general_forecast",
         friendly_name="General Price Forecast",
     )
-    states["sensor.100h_feed_in_forecast"] = create_amber_price_forecast_state(
+    states["sensor.feed_in_forecast"] = create_amber_price_forecast_state(
         feed_in_forecast,
-        entity_id="sensor.100h_feed_in_forecast",
+        entity_id="sensor.feed_in_forecast",
         friendly_name="Feed-in Price Forecast",
     )
 
@@ -436,17 +449,17 @@ def mock_hass_partial_availability(realistic_entity_states):
     """
     states = realistic_entity_states.copy()
 
-    # Make some entities unavailable (using DEFAULT_ENTITY_IDS naming)
+    # Make some entities unavailable (using generic naming)
     states["sensor.my_home_percentage_charged"] = MockState(
         "sensor.my_home_percentage_charged", "unavailable", {}
     )
-    states["sensor.100h_general_price"] = MockState(
-        "sensor.100h_general_price", "unavailable", {}
+    states["sensor.general_price"] = MockState(
+        "sensor.general_price", "unavailable", {}
     )
 
     # Remove some entities entirely (simulating missing entities)
     del states["sensor.my_home_solar_power"]
-    del states["binary_sensor.100h_price_spike"]
+    del states["binary_sensor.price_spike"]
 
     hass = MagicMock()
     mock_states = MockStates(states)
@@ -467,11 +480,11 @@ def mock_hass_price_spike(realistic_entity_states):
         MagicMock with price_spike binary sensor set to 'on'
     """
     states = realistic_entity_states.copy()
-    states["binary_sensor.100h_price_spike"] = MockState(
-        "binary_sensor.100h_price_spike", "on", {}
+    states["binary_sensor.price_spike"] = MockState(
+        "binary_sensor.price_spike", "on", {}
     )
-    states["sensor.100h_general_price"] = MockState(
-        "sensor.100h_general_price",
+    states["sensor.general_price"] = MockState(
+        "sensor.general_price",
         "2.50",
         {"unit_of_measurement": "$/kWh", "friendly_name": "General Price"},
     )
@@ -545,8 +558,8 @@ def mock_hass_negative_prices(realistic_entity_states):
         MagicMock with negative general price
     """
     states = realistic_entity_states.copy()
-    states["sensor.100h_general_price"] = MockState(
-        "sensor.100h_general_price",
+    states["sensor.general_price"] = MockState(
+        "sensor.general_price",
         "-0.05",
         {"unit_of_measurement": "$/kWh", "friendly_name": "General Price"},
     )

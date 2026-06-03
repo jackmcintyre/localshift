@@ -687,63 +687,6 @@ class TestStartupGracePeriod:
 
 
 # =============================================================================
-# POST-COMPUTE CALLBACK TESTS
-# =============================================================================
-
-
-@pytest.mark.skip(
-    reason="Phase 3 removed post_compute_func from evaluate_state_machine"
-)
-class TestPostComputeCallback:
-    """Tests for the optional post-compute callback hook."""
-
-    def test_post_compute_callback_is_invoked(self, state_machine, coordinator_data):
-        """State machine should invoke post_compute_func after recompute."""
-        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
-        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
-
-        mock_engine = MagicMock()
-        mock_engine.compute_derived_values = MagicMock()
-        post_compute = MagicMock()
-
-        asyncio.run(
-            state_machine.evaluate_state_machine(
-                coordinator_data,
-                mock_engine,
-                post_compute_func=post_compute,
-            )
-        )
-
-        post_compute.assert_called_once()
-
-    def test_post_compute_callback_failure_is_non_blocking(
-        self, state_machine, coordinator_data
-    ):
-        """Exceptions from post_compute_func should not abort evaluation."""
-        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
-        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
-
-        mock_engine = MagicMock()
-        mock_engine.compute_derived_values = MagicMock()
-        notify_func = MagicMock()
-
-        def failing_post_compute() -> None:
-            raise RuntimeError("shadow callback failure")
-
-        asyncio.run(
-            state_machine.evaluate_state_machine(
-                coordinator_data,
-                mock_engine,
-                notify_func=notify_func,
-                post_compute_func=failing_post_compute,
-            )
-        )
-
-        # Evaluation continued and still notified listeners.
-        notify_func.assert_called_once()
-
-
-# =============================================================================
 # MODE TRANSITION TESTS
 # =============================================================================
 
@@ -1035,6 +978,155 @@ class TestManualOverride:
 
         # Manual override should be cleared
         assert coordinator_data.manual_override == False
+
+
+class TestStateMachineInternalBranches:
+    """Targeted branch tests for uncovered state machine helpers."""
+
+    def test_tesla_override_sets_flags_on_first_detection(
+        self, state_machine, coordinator_data
+    ):
+        """First Tesla override detection should set tracking flags."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.0
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+
+        should_skip = state_machine._handle_tesla_override_state(coordinator_data, now)
+
+        assert should_skip is True
+        assert state_machine._tesla_override_detected is True
+        assert state_machine._tesla_override_detected_at == now
+
+    def test_tesla_override_cooldown_blocks_then_expires(
+        self, state_machine, coordinator_data
+    ):
+        """Tesla override cooldown should block checks, then clear when elapsed."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.0
+        detected_at = dt_aware(2026, 3, 1, 10, 0, 0)
+
+        state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+
+        coordinator_data.operation_mode = "autonomous"
+        coordinator_data.backup_reserve = 20.0
+
+        released_at = dt_aware(2026, 3, 1, 10, 5, 0)
+        should_skip_during_cooldown = state_machine._handle_tesla_override_state(
+            coordinator_data, released_at
+        )
+
+        assert should_skip_during_cooldown is True
+        assert state_machine._tesla_override_detected is False
+        assert state_machine._tesla_override_released_at == released_at
+
+        after_cooldown = released_at + timedelta(minutes=31)
+        should_skip_after_cooldown = state_machine._handle_tesla_override_state(
+            coordinator_data, after_cooldown
+        )
+
+        assert should_skip_after_cooldown is False
+        assert state_machine._tesla_override_released_at is None
+
+    def test_handle_debounce_timing_clears_stale_and_starts_timer(self, state_machine):
+        """Debounce helper should clear stale timers and start desired timer."""
+        stale_mode = BatteryMode.BOOST_CHARGING
+        desired_mode = BatteryMode.PROACTIVE_EXPORT
+        state_machine._mode_desired_since[stale_mode] = dt_aware(2026, 3, 1, 9, 0, 0)
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+
+        should_wait = state_machine._handle_debounce_timing(
+            desired_mode, now, timedelta(minutes=2)
+        )
+
+        assert should_wait is True
+        assert stale_mode not in state_machine._mode_desired_since
+        assert state_machine._mode_desired_since[desired_mode] == now
+
+    def test_handle_debounce_timing_allows_transition_after_elapsed(
+        self, state_machine
+    ):
+        """Debounce helper should return False when elapsed meets debounce."""
+        desired_mode = BatteryMode.PROACTIVE_EXPORT
+        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
+        state_machine._mode_desired_since[desired_mode] = desired_since
+
+        should_wait = state_machine._handle_debounce_timing(
+            desired_mode,
+            desired_since + timedelta(minutes=2, seconds=1),
+            timedelta(minutes=2),
+        )
+
+        assert should_wait is False
+
+    def test_record_transition_metrics_records_lag_and_trims_history(
+        self, state_machine, coordinator_data
+    ):
+        """Transition metrics should record lag, cap history, and clear decision state."""
+        base = dt_aware(2026, 3, 1, 10, 0, 0)
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.decision_mode = BatteryMode.GRID_CHARGING
+        coordinator_data.decision_timestamp = base - timedelta(seconds=12)
+        coordinator_data.decision_lag_history = [
+            {"lag_seconds": float(i)} for i in range(60)
+        ]
+
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = base
+            state_machine._record_transition_metrics(
+                coordinator_data,
+                BatteryMode.GRID_CHARGING,
+                dry_run=False,
+            )
+
+        assert state_machine._last_successful_transition == base
+        assert coordinator_data.implementation_timestamp == base
+        assert coordinator_data.decision_lag_seconds == 12.0
+        assert len(coordinator_data.decision_lag_history) == 50
+        assert coordinator_data.decision_timestamp is None
+        assert coordinator_data.decision_mode is None
+
+    def test_set_commanded_mode_updates_mode_and_clears_timers(self, state_machine):
+        """Direct commanded mode setter should clear pending desired timers."""
+        state_machine._mode_desired_since[BatteryMode.PROACTIVE_EXPORT] = dt_aware(
+            2026, 3, 1, 10, 0, 0
+        )
+
+        state_machine.set_commanded_mode(BatteryMode.BOOST_CHARGING)
+
+        assert state_machine._commanded_mode == BatteryMode.BOOST_CHARGING
+        assert state_machine._mode_desired_since == {}
+
+    def test_should_skip_health_check_when_manual_override(
+        self, state_machine, coordinator_data
+    ):
+        """Health check skip helper should skip during manual override."""
+        coordinator_data.manual_override = True
+
+        should_skip = state_machine._should_skip_health_check(
+            coordinator_data, dt_aware(2026, 3, 1, 10, 0, 0)
+        )
+
+        assert should_skip is True
+
+    def test_soc_monitoring_logs_when_target_reached_in_grid_charging(
+        self, state_machine, coordinator_data
+    ):
+        """SOC monitoring should hit target-reached branch for clamped grid charge."""
+
+        def get_option(key, default):
+            if key == CONF_BATTERY_TARGET:
+                return 90.0
+            return default
+
+        state_machine._get_option = get_option
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+        coordinator_data.soc = 90.0
+
+        result = asyncio.run(state_machine._handle_soc_monitoring(coordinator_data))
+
+        assert result is False
 
 
 # =============================================================================

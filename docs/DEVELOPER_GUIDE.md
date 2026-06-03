@@ -6,81 +6,106 @@ This guide covers the technical architecture of the LocalShift integration for d
 
 ```
 custom_components/localshift/
+├── __init__.py               # Integration entry point, creates coordinator
+├── const.py                  # Constants, enums, entity keys, defaults
+├── computation_engine.py     # Orchestrates forecast + optimizer execution
+│
 ├── coordinator/              # Data coordination
-│   ├── coordinator.py        # Main coordinator, ties all modules together
-│   └── data.py               # Data structures (CoordinatorData, ChargingDecision)
+│   ├── coordinator.py        # LocalShiftCoordinator: tiered ticks, event handling
+│   └── data.py              # CoordinatorData, OptimizerResult dataclasses
 │
-├── engine/                   # Optimization engine
-│   ├── optimizer_dp.py       # DP solver (core algorithm)
+├── engine/                  # DP Optimization engine
+│   ├── optimizer_dp.py      # Core DP solver (feasible_actions, stage_cost, terminal_cost)
+│   ├── optimizer_facade.py  # Facade: slot building, corrections, planner, runtime mode
 │   ├── optimizer_runner.py   # Coordinator integration
-│   ├── optimizer_facade.py   # Facade for optimizer access
-│   ├── slot_builder.py       # SlotContext construction
-│   ├── slot_schedule.py      # Hybrid slot schedule
-│   ├── price_calculator.py   # Price calculations
+│   ├── constraints.py       # Hard constraint functions (feasible_actions)
+│   ├── cost.py              # Cost function components (stage_cost, terminal_cost)
+│   ├── types.py             # Type definitions (SlotContext, OptimizerConfig, etc.)
+│   ├── core.py              # Core optimizer logic
+│   ├── parameters.py       # Adaptive parameter management (Thompson sampling)
+│   ├── outcomes.py          # Decision outcome tracking
+│   ├── pattern_analyzer.py   # Bias detection (weekly patterns)
+│   ├── counterfactual.py    # TOU baseline scoring
+│   ├── optimization_controller.py # Real-time contextual adjustments
+│   ├── slots.py             # Slot building (SlotBuilder, SlotBuildMetadata)
+│   ├── slot_schedule.py     # Hybrid slot schedule (5-min + 15-min)
+│   ├── price_calculator.py  # Price calculations
 │   ├── price_signal_engine.py # Price signal orchestration
-│   ├── parameter_optimizer.py # Thompson sampling parameter tuning
-│   ├── pattern_analyzer.py   # Bias detection
-│   ├── decision_outcome_tracker.py # Decision tracking
-│   ├── optimization_controller.py # Real-time evaluation
-│   ├── excess_solar.py       # Excess solar engine
+│   ├── excess_solar.py      # Excess solar detection
 │   ├── excess_solar_signals.py # Load shift signals
-│   ├── soc_simulator.py      # SOC simulation
-│   ├── spike_analyzer.py     # Price spike detection
-│   ├── utils.py              # General utilities
-│   └── weather_diagnostics.py # Weather diagnostics
+│   ├── soc_simulator.py     # SOC simulation
+│   ├── spike_analyzer.py    # Price spike detection
+│   ├── dp_math.py           # DP math utilities
+│   ├── weather_diagnostics.py # Weather diagnostics
+│   └── utils.py             # Engine utilities
 │
-├── forecast/                 # Forecasting modules
-│   ├── pipeline.py           # Forecast orchestration
-│   ├── history.py            # Historical data fetching
-│   ├── load.py               # Load forecasting
-│   ├── solar.py              # Solar calculations
-│   ├── solar_accuracy.py     # Solar accuracy tracking
-│   ├── accuracy.py           # Forecast accuracy engine
-│   ├── history_store.py      # Forecast history storage
-│   └── bootstrapper.py       # Forecast initialization
+├── forecast/                # Forecasting modules
+│   ├── pipeline.py          # Forecast orchestration
+│   ├── load.py              # Load forecasting
+│   ├── solar.py             # Solar calculations
+│   ├── accuracy.py          # Forecast accuracy engine
+│   ├── solar_accuracy.py    # Solar accuracy tracking
+│   ├── history.py           # Historical data fetching
+│   ├── history_store.py     # Forecast history storage
+│   ├── bootstrapper.py      # Forecast initialization
+│   ├── load_deviation.py    # Real-time load deviation detection
+│   ├── solar_events.py      # Mid-day solar re-optimization detection
+│   └── corrections.py       # Cloud bias corrections
 │
-├── integration/              # External integrations
-│   ├── controller.py         # Battery controller (Teslemetry)
-│   └── client.py             # Powerwall service client
+├── integration/             # External integrations
+│   ├── controller.py        # Battery controller (Teslemetry)
+│   └── client.py            # Powerwall service client
 │
-├── learning/                 # ML/Adaptive learning
-│   ├── orchestrator.py       # Learning system coordinator
-│   └── correlation.py        # Weather correlation engine
+├── learning/                # Adaptive learning system
+│   ├── orchestrator.py      # Learning system coordinator
+│   ├── correlation.py       # Weather correlation regression + storage facade
+│   ├── temperature.py       # Weather forecast fetching/parsing/caching
+│   └── anomaly.py           # Weather anomaly detection
 │
-├── services/                 # Services
-│   ├── notification.py       # Notification service
-│   └── subscription.py       # Subscription manager
+├── services/                # Core services
+│   ├── evaluation_dispatcher.py # Decides when to trigger re-evaluation
+│   ├── notification_service.py  # Notification dispatch
+│   └── subscription_manager.py # Entity subscriptions and timers
 │
-├── state/                    # State machine
-│   ├── machine.py            # State machine evaluator
-│   ├── reader.py             # External entity reader
-│   └── validator.py          # Transition validator
+├── state/                   # State machine
+│   ├── machine.py           # StateMachine: state evaluation and transitions
+│   ├── mode_configs.py      # Per-mode configuration and executor mapping
+│   ├── reader.py            # External entity reader
+│   └── validator.py         # Transition validator
 │
-├── utils/                    # Shared utilities
-│   ├── validation.py         # Entity validation
-│   └── costs.py              # Cost tracking
+├── sensors/                 # Sensor implementations (organized by domain)
+│   ├── base.py              # Base sensor class
+│   ├── pricing.py           # Price-related sensors (3 sensors)
+│   ├── forecast.py          # Forecast/optimizer sensors (9 sensors)
+│   ├── status.py            # Status/health sensors (7 sensors)
+│   ├── learning.py          # Learning-related sensors (4 sensors)
+│   ├── optimizer.py         # Optimizer-specific sensors (3 sensors)
+│   ├── misc.py              # Miscellaneous sensors (2 sensors)
+│   ├── load_deviation.py    # Load deviation sensor (1 sensor)
+│   └── cloud_event.py       # Cloud event sensor (1 sensor)
 │
-├── config_flow/              # Configuration flow
-│   ├── __init__.py           # Config flow entry point
-│   ├── schemas.py            # Config schemas
-│   └── validators.py         # Config validators
+├── utils/                   # Shared utilities
+│   ├── validation.py        # Entity validation
+│   ├── costs.py             # Cost tracking
+│   └── entity_configs.py    # Entity configuration helpers
 │
-├── *.py (entities)           # Entity platforms at root
-│   ├── sensor.py             # 27 sensor entities
-│   ├── binary_sensor.py      # 10 binary sensor entities
-│   ├── switch.py             # 8 switch entities
-│   ├── number.py             # 4 number entities
-│   ├── select.py             # 2 select entities
-│   └── button.py             # 2 button entities
+├── config_flow/             # HA configuration flow
+│   ├── __init__.py          # Config flow entry point
+│   ├── schemas.py           # Config schemas
+│   └── validators.py        # Config validators
 │
-├── __init__.py               # Integration entry point
-├── const.py                  # Constants, enums, configuration defaults
-├── computation_engine.py     # Computes derived values, determines active mode
-├── manifest.json             # Home Assistant manifest
-├── strings.json              # Localization strings
+├── *.py (HA entity platforms - root level per HA convention)
+│   ├── sensor.py            # 30 sensor entities (delegates to sensors/ package)
+│   ├── binary_sensor.py     # 10 binary sensor entities
+│   ├── switch.py            # 8 switch entities
+│   ├── number.py            # 4 number entities
+│   ├── select.py            # 2 select entities
+│   └── button.py            # 2 button entities
 │
-└── translations/
-    └── en.json               # English translations
+├── manifest.json            # HA manifest
+├── strings.json             # Localization strings
+├── dashboard.yaml           # Dashboard configuration
+└── AGENTS.md                # Agent rules for this integration
 ```
 
 ## Key Concepts
@@ -99,691 +124,103 @@ The system operates in one of these modes (defined in `const.py`):
 | `DEMAND_BLOCK` | self_consumption | 10% | Self-consumption enforced |
 | `MANUAL` | — | — | Manual control (automation disabled) |
 
-### State Machine Priority Chain
+Mode selection is driven by the DP optimizer with safety gates. See [PLANNING_MODEL.md](PLANNING_MODEL.md) for details.
 
-The state machine evaluates conditions in priority order (highest first):
+### Optimization Modes
 
-```
-1. Manual override?     → MANUAL (preserve user command)
-2. Demand window?      → DEMAND_BLOCK (enforce self-consumption)
-3. Price spike?        → SPIKE_DISCHARGE (export if enabled)
-4. Manual button?      → Execute button action
-5. Proactive export?  → PROACTIVE_EXPORT (export before negative)
-6. Cheap price?       → GRID_CHARGING or BOOST_CHARGING
-7. Default            → SELF_CONSUMPTION
-```
+| Mode | Description |
+|------|-------------|
+| `auto` | Full automation with DP optimizer |
+| `eco` | Economic optimization (cost-focused) |
+| `self_consumption` | Maximize self-consumption only |
 
-### Debounce Timers
+### Entity Architecture
 
-The state machine uses debounce timers to prevent rapid mode switching:
+The integration creates 56 entities:
 
-| Transition | Debounce |
-|------------|----------|
-| Spike discharge | 0 seconds (immediate) |
-| Demand block | 0 seconds (immediate) |
-| Manual override | 0 seconds (immediate) |
-| Grid charging | 5 minutes |
-| Self consumption | 5 minutes |
+| Platform | Count | Notes |
+|----------|-------|-------|
+| Sensors | 30 | Implementation in `sensors/` package |
+| Binary Sensors | 10 | In `binary_sensor.py` |
+| Switches | 8 | In `switch.py` |
+| Numbers | 4 | In `number.py` |
+| Selects | 2 | Battery mode, optimization mode |
+| Buttons | 2 | Update forecast, reset learning |
 
-### Objective Function Calibration
+Sensors are organized by domain in the `sensors/` package for maintainability.
 
-The optimizer's objective function balances multiple cost terms. The calibration
-reflects physical and economic realities, not user preferences.
+## Extension Points
 
-| Parameter | Value | Rationale | Issue |
-|-----------|-------|-----------|-------|
-| `target_shortfall_penalty_per_pct` | `effective_cheap_price × battery_kwh / 100 × 1.5` | Cost to import 1% SOC at cheapest price | #438 |
-| `cycle_penalty_per_kwh` | `$0.05/kWh` | Efficiency loss + battery degradation | #516 |
+### Adding a New Sensor
 
-The cycle penalty represents the true cost of cycling battery energy through the grid:
-- **Round-trip efficiency loss**: ~13% (92% charge × 95% discharge) at average prices
-- **Battery degradation**: Each cycle reduces lifespan; amortized cost per kWh
+1. Create sensor class in appropriate `sensors/*.py` file
+2. Register in `sensor.py` platform `async_setup_entry`
+3. Add entity key to `const.py` ENTITY_KEYS
+4. Update [ENTITY_REFERENCE.md](ENTITY_REFERENCE.md)
 
-These values prevent the optimizer from making marginal trades that appear profitable
-but result in net losses after accounting for wear and inefficiency.
-
-## Core Classes
-
-### Coordinator (`coordinator/coordinator.py`)
-
-The `LocalShiftCoordinator` is the central hub:
-
+Example for a pricing sensor:
 ```python
-class LocalShiftCoordinator:
-    """Main coordinator that ties all modules together."""
-
-    def __init__(self, hass, entry):
-        # Initialize all modules
-        self._state_reader = StateReader(hass, entry, self.data)
-        self._computation_engine = ComputationEngine(hass, entry, self.data)
-        self._state_machine = StateMachine(battery_controller, notifications, ...)
-        self._battery_controller = BatteryController(hass, self.data, ...)
-
-        # Subscribe to entity changes
-        self._state_reader.subscribe(self._on_external_change)
-
-        # Set up 1-minute periodic tick
-        async_track_time_interval(hass, self._on_tick, timedelta(minutes=1))
-
-    async def _on_external_change(self, event):
-        """Called when any monitored entity changes."""
-        self._read_external_state()
-        self._compute_derived_values()
-        await self._evaluate_state_machine()
-
-    async def _on_tick(self, now):
-        """Called every minute."""
-        self._read_external_state()
-        self._compute_derived_values()
-        await self._evaluate_state_machine()
-```
-
-**Responsibilities:**
-- Subscribes to all external entity changes
-- Runs 1-minute periodic tick
-- Coordinates data flow between modules
-- Manages configuration updates
-
-### CoordinatorData (`coordinator/data.py`)
-
-A dataclass holding all computed state:
-
-```python
-@dataclass
-class CoordinatorData:
-    """Snapshot of all computed data."""
-
-    # Raw reads from external entities
-    grid_power_kw: float
-    battery_power_kw: float
-    soc: float
-    general_price: float
-    feed_in_price: float
-    # ... more raw values
-
-    # Computed binary sensors
-    demand_window_active: bool
-    forecast_spike_within_window: bool
-    solar_can_reach_target: bool
-    # ... more computed bools
-
-    # Computed sensors
-    active_mode: BatteryMode
-    effective_cheap_price: float
-    solar_battery_forecast: dict
-    # ... more computed values
-
-    # Cost tracking
-    grid_import_cost: float
-    grid_export_revenue: float
-    battery_savings: float
-```
-
-### StateReader (`state/reader.py`)
-
-Reads values from Home Assistant entities:
-
-```python
-class StateReader:
-    """Reads external entity state into CoordinatorData."""
-
-    def read_all(self):
-        """Read all monitored entities."""
-        self.data.soc = self._get_entity_state(CONF_TESLEMETRY_SOC)
-        self.data.general_price = self._get_entity_state(CONF_AMBER_GENERAL_PRICE)
-        # ... reads all required entities
-```
-
-**Monitored Entities (14):**
-- Teslemetry: operation_mode, backup_reserve, SOC, grid/battery/solar/load power
-- Amber: general_price, feed_in_price, general/feed_in forecasts, price_spike
-- Solcast: forecast_today, forecast_tomorrow
-
-### ComputationEngine (`computation_engine.py`)
-
-Computes all derived values:
-
-```python
-class ComputationEngine:
-    """Computes derived values and determines active mode."""
-
-    def compute_derived_values(self, data: CoordinatorData):
-        """Main entry point for all computations."""
-
-        # 1. Compute directional power
-        data.grid_import_power_kw = max(data.grid_power_kw, 0)
-        data.grid_export_power_kw = max(-data.grid_power_kw, 0)
-
-        # 2. Compute demand window
-        data.demand_window_active = self._compute_demand_window(data)
-
-        # 3. Compute effective cheap price
-        data.effective_cheap_price = self._compute_effective_cheap_price(data)
-
-        # 4. Compute solar forecast
-        self._compute_solar_forecast(data)
-
-        # 5. Determine active mode
-        data.active_mode = self._compute_active_mode(data)
-```
-
-**Key Methods:**
-- `_compute_demand_window()`: Is current time within configured window?
-- `_compute_effective_cheap_price()`: Dynamic price threshold with urgency
-- `_compute_solar_forecast()`: SOC projection using Solcast data
-- `_compute_active_mode()`: State machine priority evaluation
-
-### DP Optimizer (`engine/optimizer_dp.py`)
-
-Computes optimal battery decisions over 24 hours:
-
-```python
-def plan(self, inputs: OptimizerInputs, config: OptimizerConfig) -> OptimizerResult:
-    """Compute optimal 24-hour plan with DP.
-
-    Returns:
-        OptimizerResult with decisions, net_cost, solve_time, etc.
-    """
-    # Build SOC grid (50 bins by default)
-    # Forward pass: compute cost-to-go for all (slot, soc_bin) states
-    # Backward pass: reconstruct optimal action sequence
-    return OptimizerResult(...)
-```
-
-The optimizer is invoked via `run_optimizer()` in `engine/optimizer_runner.py`:
-1. `SlotBuilder` constructs `SlotContext` objects from coordinator data
-2. `DPPlanner.plan()` computes optimal decisions
-3. `_derive_runtime_apply_plan()` maps actions to battery modes
-
-### StateMachine (`state/machine.py`)
-
-Evaluates and executes mode transitions:
-
-```python
-class BatteryStateMachine:
-    """Manages battery mode state machine evaluation."""
-
-    async def evaluate(self, data, computation_engine):
-        """Compare desired mode with commanded mode, execute transitions."""
-
-        desired = data.active_mode
-
-        # Check if transition needed
-        if desired == self._commanded_mode:
-            return  # No change needed
-
-        # Check debounce
-        debounce = self.get_debounce_for_transition(
-            self._commanded_mode, desired
-        )
-
-        if not self._has_elapsed(desired_since, debounce):
-            return  # Still in debounce period
-
-        # Execute transition
-        await self._execute_mode_transition(data, desired)
-        self._commanded_mode = desired
-```
-
-**Key Features:**
-- Debounce timers prevent rapid switching
-- Health check runs every minute to detect drift
-- Manual override timeout (configurable)
-- Transition success validation
-
-### WeatherCorrelation (`learning/correlation.py`)
-
-Learns and applies temperature-based consumption adjustments:
-
-```python
-class WeatherCorrelation:
-    """Weather-aware consumption prediction using degree-day model."""
-
-    async def async_initialize(self):
-        """Load persisted coefficients from HA storage."""
-
-    def learn_from_sample(self, hour: int, temperature: float, actual_load_kw: float):
-        """Update coefficients based on observed temperature/load pair."""
-
-    def predict_load(self, hour: int, temperature: float, base_load_kw: float) -> tuple[float, str]:
-        """Apply learned coefficients to predict load given temperature."""
-
-    def get_temperature_forecast(self) -> list[TemperatureForecast]:
-        """Fetch forecasted temperatures from weather entity."""
-
-    def get_diagnostics(self) -> dict[str, Any]:
-        """Return learning statistics for diagnostics."""
-```
-
-**Key Features:**
-- Degree-day model with separate cooling/heating coefficients per hour
-- HA storage integration for persistence
-- Confidence levels based on sample count (low/medium/high)
-- Configurable cooling and heating thresholds
-
-### HistoryFetcher (`forecast/history.py`)
-
-Fetches historical consumption data with day-of-week awareness:
-
-```python
-class HistoryFetcher:
-    """Fetches and caches historical load data from HA statistics."""
-
-    async def async_get_historical_hourly_averages(self, entity_id: str):
-        """Get hourly averages, cached until midnight."""
-
-    def get_profile_for_day(self, target_date: datetime) -> tuple[dict, dict, str]:
-        """Get appropriate hourly profile based on target day's day-of-week."""
-
-    def get_weekday_profile(self) -> tuple[dict[int, float], dict[int, int]]:
-        """Get weekday profile for diagnostics."""
-
-    def get_weekend_profile(self) -> tuple[dict[int, float], dict[int, int]]:
-        """Get weekend profile for diagnostics."""
-```
-
-**Day-of-Week Aware Profiles:**
-- Separates historical samples by day type (weekday: Mon-Fri, weekend: Sat-Sun)
-- Calculates separate hourly averages for each profile
-- Falls back to combined profile if insufficient samples
-- Requires minimum 12 hours with 3+ samples each for day-specific profiles
-
-### BatteryController (`integration/controller.py`)
-
-Issues commands to Powerwall via Teslemetry:
-
-```python
-class BatteryController:
-    """Controls Powerwall via Teslemetry."""
-
-    async def set_force_charge(self, data, dry_run=False):
-        """Start grid charging."""
-        if dry_run:
-            _LOGGER.info("[DRY RUN] Would set force charge")
-            return True
-
-        # Set allow_export to pv_only
-        await self._set_allow_export("pv_only")
-
-        # Wait 5 seconds for API to process
-        await asyncio.sleep(5)
-
-        # Set operation mode to backup
-        await self._set_operation_mode("backup")
-
-        await asyncio.sleep(5)
-
-        # Set backup reserve to 10%
-        await self._set_backup_reserve(10)
-
-        return True
-
-    async def set_force_discharge(self, data, dry_run=False):
-        """Start discharging to export."""
-        if dry_run:
-            _LOGGER.info("[DRY RUN] Would set force discharge")
-            return True
-
-        # Set allow_export to battery_ok (CRITICAL for Powerwall 3)
-        await self._set_allow_export("battery_ok")
-
-        await asyncio.sleep(5)
-
-        # Set operation mode to autonomous
-        await self._set_operation_mode("autonomous")
-
-        await asyncio.sleep(5)
-
-        # Set backup reserve to 10%
-        await self._set_backup_reserve(10)
-
-        return True
-```
-
-**Important Notes:**
-- 5-second delays between API calls prevent race conditions
-- `allow_export=battery_ok` required for battery export (Powerwall 3)
-- All methods support `dry_run` for testing
-
-## Configuration Flow
-
-### Entity Selection (Step 1-3)
-
-The config flow has 3 steps:
-
-1. **Teslemetry Entities**: Select Powerwall control entities
-2. **Amber Electric Entities**: Select pricing and forecast entities
-3. **Solcast Entities**: Select solar forecast entities
-
-### Options Flow
-
-After setup, users can configure all settings via **Configure**:
-
-#### Notification Settings
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| Notify Service | (first available) | Notification service for alerts |
-
-#### Demand Window Timing
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| Demand Window Start | 15:00 | Time when demand window begins (battery held for evening peak) |
-| Demand Window End | 21:00 | Time when demand window ends (normal operation resumes) |
-| Manual Override Timeout | 4 hours | Hours before manual mode automatically returns to self-consumption (0 = never) |
-
-#### Price Thresholds
-
-| Option | Range | Default | Description |
-|--------|-------|---------|-------------|
-| Cheap Price Percentile | 5-50% | 25% | Price percentile threshold for grid charging (e.g., 25 = charge when price is in bottom 25%) |
-| Max Pre-charge Price | $0.00-0.50/kWh | $0.20/kWh | Maximum price to pay for pre-charging battery |
-| Price Deadband | $0.00-0.10/kWh | $0.03/kWh | Minimum price difference to start/stop charging (prevents rapid cycling) |
-| Spike Price Percentile | 50-95% | 75% | Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices) |
-
-#### Battery Settings
-
-| Option | Range | Default | Description |
-|--------|-------|---------|-------------|
-| Battery Target | 50-100% | 100% | Target SOC % for demand window (battery reserved for evening peak) |
-| Minimum Target SOC | 5-30% | 20% | Minimum SOC % maintained during discharge modes (spike, proactive export) |
-
-#### Advanced Settings
-
-| Option | Range | Default | Description |
-|--------|-------|---------|-------------|
-| Recent Load Weight | 0.0-1.0 | 0.67 | Weight given to recent load vs historical average (0.67 = 2/3 recent, 1/3 historical) |
-
-**Note:** All options are stored in `entry.options` (not `entry.data`) so they can be changed without reconfiguring the entire integration. For backward compatibility, the coordinator checks `options` first, then falls back to `data` for existing entries.
-
-## Learning System Internals
-
-The learning system (Issue #170) provides adaptive parameter optimization. This section covers how to extend and debug it.
-
-### Architecture Overview
-
-The learning system consists of four main components:
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| `DecisionOutcomeTracker` | `engine/decision_outcome_tracker.py` | Records mode transitions and backfills outcomes |
-| `ParameterOptimizer` | `engine/parameter_optimizer.py` | Adjusts parameters using Thompson sampling |
-| `PatternAnalyzer` | `engine/pattern_analyzer.py` | Detects systematic biases across dimensions |
-| `OptimizationController` | `engine/optimization_controller.py` | Real-time parameter evaluation |
-
-### Adding New Optimizable Parameters
-
-To add a new parameter that the learning system can adjust:
-
-#### 1. Define the parameter in `const.py`
-
-```python
-from dataclasses import dataclass
-
-@dataclass(frozen=True)
-class OptimizableParam:
-    """Definition of a parameter that the learning system can adjust."""
-    name: str
-    default: float
-    min_val: float
-    max_val: float
-    step: float
-    description: str
-
-OPTIMIZABLE_PARAMS: dict[str, OptimizableParam] = {
-    # ... existing parameters ...
-    "new_parameter": OptimizableParam(
-        name="new_parameter",
-        default=0.0,
-        min_val=-10.0,
-        max_val=10.0,
-        step=1.0,
-        description="Description of what this parameter does.",
-    ),
-}
-```
-
-#### 2. Apply the parameter in the decision engine
-
-```python
-# In grid_charge_decision.py, proactive_export.py, or forecast_computer.py
-
-def _should_grid_charge_at_slot(self, ...):
-    # Get the adaptive parameter
-    new_param = self._adaptive_params.get("new_parameter", 0.0) if self._adaptive_params else 0.0
+# sensors/pricing.py
+class EffectiveCheapPriceSensor(LocalShiftSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:currency-usd"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     
-    # Apply it to the decision logic
-    adjusted_value = base_value + new_param
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.data.get("price_cheap_effective")
 ```
 
-#### 3. Update `SlotBuilder` and `OptimizerConfig`
+### Modifying the Optimizer
 
-Ensure the new parameter is applied during slot building:
+Any optimizer changes MUST consult [PLANNING_MODEL.md](PLANNING_MODEL.md) first:
 
-```python
-# In engine/slot_builder.py
-def _apply_adaptive_params(self, slot: SlotContext) -> SlotContext:
-    if self._adaptive_params:
-        slot.consumption_kwh *= (1 + self._adaptive_params.consumption_forecast_bias)
-    return slot
+| Question | Answer → |
+|----------|----------|
+| Impossible/forbidden? | Add to `feasible_actions()` |
+| Required by deadline? | Add to `terminal_cost()` |
+| Discouraged/preferred? | Add penalty to `stage_cost()` |
 
-# In engine/optimizer_dp.py or engine/optimizer_runner.py
-config = OptimizerConfig(
-    battery_capacity_kwh=...,
-    demand_window_target_soc_pct=self._adaptive_params.demand_window_buffer_pct,
-    # ... other adaptive params
-)
-```
+Key files:
+- `engine/optimizer_dp.py` — DP solver
+- `engine/constraints.py` — Hard constraints
+- `engine/cost.py` — Cost functions
+- `engine/types.py` — Type definitions
 
-### Testing the Feedback Loop
+### Changing Evaluation Triggers
 
-The learning system can be tested using the integration test framework:
+Evaluation triggers are defined in `services/evaluation_dispatcher.py`:
+- State change triggers
+- Stale price detection
+- Load deviation detection (>1kW for 10min, >3kW for 5min)
+- Solar event detection
 
-```python
-# tests/test_learning_integration.py
+### Config Flow Changes
 
-async def test_learning_improves_decisions():
-    """Verify that learning improves decision quality over time."""
-    # 1. Create mock coordinator with learning enabled
-    # 2. Simulate 100 decisions with varying outcomes
-    # 3. Verify parameter adjustments are made
-    # 4. Verify later decisions have higher scores
-```
+Config flow is in `config_flow/__init__.py`:
+- Initial setup: 3 steps (user, entity mapping, settings)
+- Options flow: 2 steps (entity_mappings, settings)
 
-### Debugging Learning Issues
+## Key Sensors
 
-**Parameter not changing:**
-- Check `sensor.localshift_learning_status` — phase should be "tuning" or "optimizing"
-- Verify 50+ decisions have been recorded (warm-up requirement)
-- Check `switch.localshift_enable_learning` is ON
+Important sensors for debugging:
 
-**Unexpected parameter values:**
-- Review `sensor.localshift_decision_history` for recent decisions
-- Check outcome scores — low scores trigger parameter adjustments
-- Use `button.localshift_reset_learning` to start fresh
-
-**Learning stuck in "observing":**
-- Normal during first 2-3 days
-- Verify decisions are being recorded in `decision_history`
-- Check coordinator logs for decision tracking
-
-### Storage Structure
-
-Learning data is persisted in HA Storage under these keys:
-
-```python
-# Storage keys (scoped to entry_id)
-f"localshift.decision_outcomes.{entry_id}"  # DecisionRecord list
-f"localshift.param_optimizer.{entry_id}"    # ParameterOptimizer state
-f"localshift.pattern_analysis.{entry_id}"   # PatternAnalyzer data
-f"localshift.opt_controller.{entry_id}"     # OptimizationController weights
-```
-
-### Safety Mechanisms
-
-The learning system has built-in safety rails:
-
-| Mechanism | Implementation |
-|-----------|----------------|
-| Warm-up period | `min_observations = 50` in ParameterOptimizer |
-| Step limits | Parameters move max 1 step per update |
-| Bounds clamping | All values clamped to `min_val`/`max_val` |
-| Rollback | 3 consecutive days of declining score triggers revert |
-
----
-
-## Adding New Battery Modes
-
-To add a new battery mode:
-
-### 1. Add to BatteryMode enum (`const.py`)
-
-```python
-class BatteryMode(str, Enum):
-    SELF_CONSUMPTION = "self_consumption"
-    GRID_CHARGING = "grid_charging"
-    BOOST_CHARGING = "boost_charging"
-    SPIKE_DISCHARGE = "spike_discharge"
-    DEMAND_BLOCK = "demand_block"
-    MANUAL = "manual"
-    NEW_MODE = "new_mode"  # Add here
-```
-
-### 2. Add to state machine priority (`computation_engine.py`)
-
-```python
-def _compute_active_mode(self, data):
-    # ... existing conditions ...
-
-    # Add new mode condition
-    if self._new_condition(data):
-        return BatteryMode.NEW_MODE
-
-    return BatteryMode.SELF_CONSUMPTION
-```
-
-### 3. Add transition logic (`state/machine.py`)
-
-```python
-elif target == BatteryMode.NEW_MODE:
-    transition_success = await self._battery_controller.set_new_mode(...)
-```
-
-### 4. Add controller method (`integration/controller.py`)
-
-```python
-async def set_new_mode(self, data, dry_run=False):
-    """Implement new mode."""
-    ...
-```
-
-### 5. Add expected state (`state/machine.py`)
-
-```python
-def _get_expected_state_for_mode(self, mode):
-    if mode == BatteryMode.NEW_MODE:
-        return ("operation_mode", reserve, "export_mode")
-```
-
-## Testing
-
-### Running Tests
-
-Tests must be run using `uv run pytest` because the `homeassistant` package is only installed in the uv virtual environment:
-
-```bash
-# Run all tests
-uv run pytest
-
-# Run specific test file
-uv run pytest tests/test_computation_engine.py
-
-# Run with verbose output
-uv run pytest -v
-
-# Run specific test
-uv run pytest tests/test_computation_engine.py::test_compute_derived_values
-```
-
-**Common Mistakes:**
-
-```bash
-# ❌ WRONG - Uses system Python, homeassistant not available
-pytest
-
-# ❌ WRONG - Same issue
-python -m pytest
-
-# ✅ CORRECT - Uses uv virtual environment with homeassistant
-uv run pytest
-```
-
-If you run tests without `uv run`, you'll see a helpful error message:
-
-```
-ERROR: Tests must be run with 'uv run pytest', not 'pytest' directly.
-
-  Correct:   uv run pytest
-  Incorrect: pytest or python -m pytest
-
-The homeassistant package is only installed in the uv virtual environment.
-```
-
-### Manual Testing
-
-1. **Dry Run Mode**: Enable `switch.localshift_dry_run` to test without affecting the battery.
-
-2. **Check Logs**: Filter logs by `localshift` to see state machine decisions.
-
-3. **Developer Tools**: Use Developer Tools → States to verify entity values.
-
-### Test Scenarios
-
-See `TEST_SCENARIOS.md` for comprehensive test cases covering:
-- Deadband/hysteresis behavior
-- Manual override protection
-- Price spike discharge
-- Cheap grid charging
-- Demand window blocking
-
-## Debugging Tips
-
-### Common Issues
-
-**Battery not charging:**
-- Check `sensor.localshift_battery_mode` — should be `grid_charging` or `boost_charging`
-- Check `binary_sensor.localshift_demand_window` — charging blocked during DW
-- Check price — must be below `effective_cheap_price`
-
-**Spike discharge not working:**
-- Check `switch.localshift_spike_discharge_enabled` is ON
-- Check time — spike discharge only allowed 6am-midnight
-- Check `binary_sensor.localshift_price_spike_coming`
-
-**Battery not exporting:**
-- Check Powerwall 3 requires `allow_export` set to `battery_ok`
-- Check `select.my_home_allow_export` entity
-
-### Log Messages
-
-Key log levels:
-- `INFO`: Mode transitions, user actions
-- `DEBUG`: Debounce timing, health checks
-- `WARNING`: Hardware drift detected
-- `ERROR`: Command failures
-
-### Sensor Attributes
-
-Many sensors have extra attributes for debugging:
-- `effective_cheap_price.urgency`: Urgency factor (0-1)
-- `solar_battery_forecast.hourly_forecast`: Detailed SOC projection
-- `net_electricity_cost_today.*_cost`: Cost breakdown
+| Sensor | Purpose |
+|--------|---------|
+| `sensor.localshift_optimizer_plan` | Current optimization plan |
+| `sensor.localshift_optimizer_plan_grid` | Grid view of plan |
+| `sensor.localshift_optimizer_plan_detailed` | Detailed per-slot decisions |
+| `sensor.localshift_forecast_battery` | Battery SOC forecast |
+| `sensor.localshift_cost_electricity_net` | Net electricity cost |
+| `sensor.localshift_decision_log` | Recent optimizer decisions |
+| `sensor.localshift_learning_status` | Learning system status |
+| `sensor.localshift_automation_ready` | System ready for automation |
 
 ## Code Style
 
 The project follows these conventions:
 
+- **Python**: 3.13+ with type hints
 - **Type hints**: All functions have type annotations
 - **Docstrings**: Google-style docstrings for public methods
 - **Logging**: Use `_LOGGER.info/debug/warning/error`
@@ -793,116 +230,64 @@ The project follows these conventions:
 ## Prerequisites for Development
 
 1. **Home Assistant**: A running HA instance (dev or production)
-2. **Python**: 3.11+ for type hints
-3. **Editor**: VS Code with Pylance recommended
+2. **Python**: 3.13+ (required for type hints)
+3. **Tools**: `uv` for package management
 
 ### Local Development
 
 ```bash
 # Clone the repository
-git clone https://github.com/jackmcintyre/ha-solar-battery-automation.git
+git clone https://github.com/jackmcintyre/localshift.git
 
-# Copy to HA custom_components
-cp -r custom_components/localshift ~/.config/homeassistant/custom_components/
+# Set up development environment
+cd localshift
+uv sync
 
-# Restart HA to load changes
+# Run tests
+uv run pytest
+
+# Lint
+uv run ruff check custom_components/localshift
 ```
 
-## Automated Deployment
+### Deployment
 
-When running Cline and Home Assistant on the same host (in different Docker containers), you can automate deployment when `main` is updated.
-
-### Prerequisites
-
-1. **Mount HA config into Cline container:**
-
-   Add the HA config directory as a volume mount to your Cline/VSCode container:
-
-   ```yaml
-   # In docker-compose.yml for Cline container
-   services:
-     cline:
-       volumes:
-         - /mnt/user/appdata/Home-Assistant-Container:/homeassistant
-   ```
-
-   Or with Docker run:
-   ```bash
-   docker run ... -v /mnt/user/appdata/Home-Assistant-Container:/homeassistant ...
-   ```
-
-2. **Create a Home Assistant Long-Lived Access Token:**
-
-   - Go to HA Profile → Security → Long-Lived Access Tokens
-   - Create a token named "Cline Deploy"
-   - Set as environment variable: `export HA_LONG_LIVED_TOKEN="your_token_here"`
-
-### Deployment Script
-
-The `deploy.sh` script handles deployment:
+When running locally with Home Assistant:
 
 ```bash
-# Basic deployment (pulls latest main, copies files, reloads integration)
-./deploy.sh
+# Deploy to HA custom_components
+./deploy.sh --reserve && ./deploy.sh
 
-# Dry run to see what would happen
+# Dry run
 ./deploy.sh --dry-run
-
-# Deploy without reloading (if you want to restart HA manually)
-./deploy.sh --no-reload
 ```
 
-### Environment Variables
+The `deploy.sh` script copies files to HA and reloads the integration.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HA_CONFIG` | `/homeassistant` | Path to HA config directory |
-| `HA_URL` | `http://homeassistant:8123` | HA API URL |
-| `HA_LONG_LIVED_TOKEN` | (none) | Token for API reload |
+## Testing
 
-### Automatic Deployment on Pull
-
-To automatically deploy when pulling changes, create a git post-merge hook:
+Tests are in `tests/` directory:
 
 ```bash
-# Create .git/hooks/post-merge
-#!/bin/bash
-./deploy.sh
+# Run all tests with coverage
+uv run pytest --cov=custom_components/localshift --cov-report=term-missing
 
-# Make executable
-chmod +x .git/hooks/post-merge
+# Run specific test file
+uv run pytest tests/test_optimizer_dp_solve.py -v
+
+# Run with verbose output
+uv run pytest -vvs
 ```
 
-Now whenever you `git pull` on main, the integration will automatically deploy.
+See [tests/AGENTS.md](tests/AGENTS.md) for test patterns.
 
-### What Gets Reloaded vs Requires Restart
+## Architecture Overview
 
-| Change Type | Reload Works? | Restart Needed? |
-|-------------|---------------|-----------------|
-| Python code changes | ✅ Yes | No |
-| `manifest.json` changes | ⚠️ Partial | Recommended |
-| New dependencies | ❌ No | Yes |
-| Config flow changes | ⚠️ Partial | Sometimes |
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system architecture.
 
-### Manual Deployment
+## Related Documentation
 
-If you prefer manual control:
-
-```bash
-# 1. Pull latest changes
-git pull origin main
-
-# 2. Copy to HA config
-cp -r custom_components/localshift /homeassistant/custom_components/
-
-# 3. Reload integration via HA UI
-# Settings → Devices & Services → LocalShift → ⋮ → Reload
-```
-
-## References
-
-- `docs/ARCHITECTURE.md` - System architecture diagrams
-- `docs/ENTITY_REFERENCE.md` - Complete entity documentation
-- `docs/FORECAST_DRIVEN_CONTROL.md` - Forecast design
-- `docs/CHANGE_DETECTION.md` - Change detection design
-- `TEST_SCENARIOS.md` - Test cases
+- [PLANNING_MODEL.md](PLANNING_MODEL.md) - Optimizer design (MUST READ for engine changes)
+- [ENTITY_REFERENCE.md](ENTITY_REFERENCE.md) - Complete entity catalog
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture diagrams
+- [INDEX.md](INDEX.md) - Documentation index

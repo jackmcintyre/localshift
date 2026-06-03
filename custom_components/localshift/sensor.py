@@ -3,6 +3,8 @@
 from .sensors import (
     AutomationReadySensor,
     CheapChargeStopPriceSensor,
+    CloudEventSensor,
+    ComparisonResultSensor,
     DecisionLagSensor,
     DecisionLogSensor,
     DecisionQualitySensor,
@@ -10,6 +12,7 @@ from .sensors import (
     EntityHealthSensor,
     ExcessSolarSensor,
     ExtendedForecastAccuracySensor,
+    ForecastAccuracyComparisonSensor,
     ForecastAccuracySensor,
     ForecastDiagnosticsSensor,
     ForecastHistorySensor,
@@ -22,19 +25,24 @@ from .sensors import (
     LoadShiftSignalSensor,
     MinimumTargetSOCSensor,
     NetElectricityCostSensor,
+    OptimizerAdvantageSensor,
     OptimizerPlanDetailedSensor,
     OptimizerPlanGridSensor,
     OptimizerPlanSensor,
     OptimizerSummarySensor,
+    PriceDeltaSensor,
     SolarBatteryForecastSensor,
     SolarForecastAccuracySensor,
     SolarWeightedAvgFITSensor,
+    SolcastConfidenceTodaySensor,
+    SolcastConfidenceTomorrowSensor,
 )
 from .sensors.base import LocalShiftSensorBase
 
 # For backward compatibility - these were previously defined inline
 __all__ = [
     "LocalShiftSensorBase",
+    "CloudEventSensor",
     "EffectiveCheapPriceSensor",
     "CheapChargeStopPriceSensor",
     "SolarWeightedAvgFITSensor",
@@ -56,6 +64,7 @@ __all__ = [
     "LearningStatusSensor",
     "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
+    "OptimizerAdvantageSensor",
     "DecisionLagSensor",
     "ExtendedForecastAccuracySensor",
     "ForecastStatusSensor",
@@ -63,6 +72,13 @@ __all__ = [
     "OptimizerPlanDetailedSensor",
     "OptimizerSummarySensor",
     "SolarForecastAccuracySensor",
+    # Comparison sensors (Issue #300)
+    "ComparisonResultSensor",
+    "PriceDeltaSensor",
+    # Solcast confidence sensors (Issue #778)
+    "SolcastConfidenceTodaySensor",
+    "SolcastConfidenceTomorrowSensor",
+    "ForecastAccuracyComparisonSensor",
 ]
 
 
@@ -72,6 +88,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     from .sensors import (
         AutomationReadySensor,
         CheapChargeStopPriceSensor,
+        CloudEventSensor,
+        ComparisonResultSensor,
         DecisionLagSensor,
         DecisionLogSensor,
         DecisionQualitySensor,
@@ -79,6 +97,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         EntityHealthSensor,
         ExcessSolarSensor,
         ExtendedForecastAccuracySensor,
+        ForecastAccuracyComparisonSensor,
         ForecastAccuracySensor,
         ForecastDiagnosticsSensor,
         ForecastHistorySensor,
@@ -91,13 +110,17 @@ async def async_setup_entry(hass, entry, async_add_entities):
         LoadShiftSignalSensor,
         MinimumTargetSOCSensor,
         NetElectricityCostSensor,
+        OptimizerAdvantageSensor,
         OptimizerPlanDetailedSensor,
         OptimizerPlanGridSensor,
         OptimizerPlanSensor,
         OptimizerSummarySensor,
+        PriceDeltaSensor,
         SolarBatteryForecastSensor,
         SolarForecastAccuracySensor,
         SolarWeightedAvgFITSensor,
+        SolcastConfidenceTodaySensor,
+        SolcastConfidenceTomorrowSensor,
     )
 
     coordinator = entry.runtime_data
@@ -131,6 +154,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         LearningStatusSensor(coordinator, entry),
         DecisionQualitySensor(coordinator, entry),
         LearningDecisionHistorySensor(coordinator, entry),
+        # Counterfactual optimizer advantage sensor (Issue #683)
+        OptimizerAdvantageSensor(coordinator, entry),
         # Decision-to-implementation lag sensor (Issue #501)
         DecisionLagSensor(coordinator, entry),
         # Extended forecast accuracy sensor (Issue #270)
@@ -145,6 +170,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
         ),  # Was OptimizerShadowPlanSensor
         OptimizerSummarySensor(coordinator, entry),  # Was OptimizerShadowSummarySensor
         SolarForecastAccuracySensor(coordinator, entry),
+        CloudEventSensor(coordinator, entry),
+        # Comparison sensors (Issue #300)
+        ComparisonResultSensor(coordinator, entry),
+        PriceDeltaSensor(coordinator, entry),
+        # Solcast confidence sensors (Issue #778)
+        SolcastConfidenceTodaySensor(coordinator, entry),
+        SolcastConfidenceTomorrowSensor(coordinator, entry),
+        ForecastAccuracyComparisonSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)

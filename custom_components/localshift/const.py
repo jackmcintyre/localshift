@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Final
 
 # -----------------------------------------------------------------------------
 # Domain
@@ -104,9 +105,22 @@ CONF_PRICING_GENERAL_FORECAST = "pricing_general_forecast"
 CONF_PRICING_FEED_IN_FORECAST = "pricing_feed_in_forecast"
 CONF_PRICING_PRICE_SPIKE = "pricing_price_spike"
 
+# Pricing data source (Issue #300)
+CONF_PRICING_DATA_SOURCE = "pricing_data_source"
+CONF_COMPARISON_MODE = "comparison_mode"
+
+# Pricing source options
+PRICING_SOURCE_AMBER = "amber"
+PRICING_SOURCE_AMBER_EXPRESS = "amber_express"
+
+# Comparison mode options
+COMPARISON_MODE_DISABLED = "disabled"
+COMPARISON_MODE_ENABLED = "enabled"
+
 # Solcast entities
 CONF_SOLCAST_FORECAST_TODAY = "solcast_forecast_today"
 CONF_SOLCAST_FORECAST_TOMORROW = "solcast_forecast_tomorrow"
+CONF_SOLCAST_ACCURACY = "solcast_accuracy"  # Issue #778: Solcast v4.5.1 MAPE sensor
 
 # Notification service
 CONF_NOTIFY_SERVICE = "notify_service"
@@ -128,6 +142,10 @@ DEFAULT_WEATHER_LEARNING_ENABLED = True
 # Manual override auto-clear timeout
 CONF_MANUAL_OVERRIDE_TIMEOUT = "manual_override_timeout"
 
+# Pricing data source defaults (Issue #300)
+DEFAULT_PRICING_DATA_SOURCE = PRICING_SOURCE_AMBER
+DEFAULT_COMPARISON_MODE = COMPARISON_MODE_DISABLED
+
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Default Entity IDs
 # -----------------------------------------------------------------------------
@@ -143,14 +161,17 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_ALLOW_EXPORT: "select.my_home_allow_export",
     CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID: "switch.my_home_allow_charging_from_grid",
     CONF_TESLEMETRY_SOLAR_ENERGY: "sensor.my_home_solar_energy",
-    CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
-    CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-    CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-    CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
-    CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+    CONF_PRICING_GENERAL_PRICE: "",  # Empty - discovered during config flow
+    CONF_PRICING_FEED_IN_PRICE: "",  # Empty - discovered during config flow
+    CONF_PRICING_GENERAL_FORECAST: "",  # Empty - discovered during config flow
+    CONF_PRICING_FEED_IN_FORECAST: "",  # Empty - discovered during config flow
+    CONF_PRICING_PRICE_SPIKE: "",  # Empty - discovered during config flow
     CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_pv_forecast_forecast_today",
     CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_pv_forecast_forecast_tomorrow",
+    CONF_SOLCAST_ACCURACY: "sensor.solcast_pv_forecast_accuracy",  # Issue #778
     CONF_WEATHER_ENTITY: DEFAULT_WEATHER_ENTITY,
+    CONF_PRICING_DATA_SOURCE: DEFAULT_PRICING_DATA_SOURCE,
+    CONF_COMPARISON_MODE: DEFAULT_COMPARISON_MODE,
 }
 
 # -----------------------------------------------------------------------------
@@ -170,6 +191,7 @@ CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
+CONF_TARGET_PENALTY = "target_penalty"
 
 # Optimization mode options
 OPTIMIZATION_MODE_SELF_CONSUMPTION = "self_consumption"
@@ -192,6 +214,12 @@ DEFAULT_LOAD_DECAY_FACTOR = 0.8  # 20% reduction per hour for exponential decay
 DEFAULT_LOAD_INITIAL_WEIGHT = (
     0.8  # Initial weight for current hour (80% recent, 20% historical)
 )
+DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT = (
+    0.3  # 30% instantaneous for current hour blend (Issue #728)
+)
+DEFAULT_CURRENT_HOUR_RECENT_WEIGHT = (
+    0.7  # 70% recent 1-hour average for current hour blend (Issue #728)
+)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
@@ -202,6 +230,7 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
+DEFAULT_TARGET_PENALTY = 0.015  # $/%-point demand window urgency
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -289,6 +318,13 @@ THRESHOLD_RANGES = {
         "unit": "$/switch",
         "icon": "mdi:swap-vertical-variant",
     },
+    CONF_TARGET_PENALTY: {
+        "min": 0.000,
+        "max": 0.100,
+        "step": 0.005,
+        "unit": "$/%-point",
+        "icon": "mdi:target",
+    },
 }
 
 # -----------------------------------------------------------------------------
@@ -350,6 +386,7 @@ SELECT_OPTIMIZATION_MODE = "optimization_mode"
 
 SELECT_OPTIONS = {
     SELECT_BATTERY_MODE: [
+        "automatic",
         "self_consumption",
         "grid_charging",
         "boost_charging",
@@ -495,6 +532,9 @@ STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
 # Prevents false positives when Tesla API is still propagating state changes.
 STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
 
+# Coalesce entity state changes before running expensive reevaluation.
+STATE_CHANGE_COALESCE_SECONDS = 15
+
 # -----------------------------------------------------------------------------
 # Proactive Export Constants
 # -----------------------------------------------------------------------------
@@ -506,6 +546,20 @@ PROACTIVE_EXPORT_MIN_RESERVE_PERCENT = 4.0
 # Buffer above current SOC for proactive export reserve setting.
 # 5% prevents immediate discharge below reserve threshold.
 PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
+
+# -----------------------------------------------------------------------------
+# Negative FIT Avoidance Constants (Issue #719)
+# -----------------------------------------------------------------------------
+
+# Maximum headroom below battery target for negative-FIT avoidance (percentage points)
+MAX_NEGATIVE_FIT_HEADROOM_PCT: Final[float] = 20.0
+
+# Conservative buffer factor for overflow estimates (0.8 = use 80% of forecast)
+NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
+
+# Minimum net benefit ($/kWh) required to allow proactive export inside
+# demand window while running negative-FIT avoidance.
+NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
 
 # -----------------------------------------------------------------------------
 # Tesla Override Detection Constants

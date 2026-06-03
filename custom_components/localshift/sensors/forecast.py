@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.util import dt as dt_util
 
+from ..pricing.types import ForecastSlot
 from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
+
+
+def _get_slot_attr(slot: Any, key: str, default: Any = None) -> Any:
+    """Get attribute from dict or ForecastSlot object.
+
+    Issue #300: Handles both dict and ForecastSlot types for backwards compatibility.
+    """
+    if isinstance(slot, dict):
+        return slot.get(key, default)
+    elif isinstance(slot, ForecastSlot):
+        return getattr(slot, key, default)
+    else:
+        return default
 
 
 class SolarBatteryForecastSensor(LocalShiftSensorBase):
@@ -23,7 +39,19 @@ class SolarBatteryForecastSensor(LocalShiftSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return self.coordinator.data.solar_battery_forecast
+        attrs = dict(self.coordinator.data.solar_battery_forecast)
+        from custom_components.localshift.forecast.analysis_resolver import (
+            ConfidenceResolver,
+        )
+
+        resolver = ConfidenceResolver(
+            getattr(self.coordinator.data, "solcast_analysis_today", None),
+            getattr(self.coordinator.data, "solcast_analysis_tomorrow", None),
+        )
+        confidence = resolver.get_confidence(dt_util.now())
+        attrs["solar_confidence_used"] = confidence
+        attrs["solar_blend_applied"] = confidence < 1.0
+        return attrs
 
 
 class NetElectricityCostSensor(LocalShiftSensorBase):
@@ -91,6 +119,7 @@ class OptimizerPlanSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan"
     _attr_name = "Optimizer Plan"
     _attr_icon = "mdi:chart-bar"
+    _unrecorded_attributes = frozenset({"slots"})
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = len(self.coordinator.data.optimizer_decisions or [])
@@ -147,19 +176,25 @@ class ForecastPricesSensor(LocalShiftSensorBase):
                     "price": dec.get("sell_price"),
                 })
         else:
+            # Issue #300: Use normalized ForecastSlot fields (start_time, per_kwh)
+            # Handle both dict and ForecastSlot types
             for slot in d.general_forecast:
-                ts = slot.get("timestamp", "")
+                ts = _get_slot_attr(slot, "start_time", "")
+                if isinstance(ts, datetime):
+                    ts = ts.isoformat()
                 time_str = ts[11:16] if len(ts) >= 16 else ""
                 buy_prices.append({
                     "time": time_str,
-                    "price": slot.get("price"),
+                    "price": _get_slot_attr(slot, "per_kwh"),
                 })
             for slot in d.feed_in_forecast:
-                ts = slot.get("timestamp", "")
+                ts = _get_slot_attr(slot, "start_time", "")
+                if isinstance(ts, datetime):
+                    ts = ts.isoformat()
                 time_str = ts[11:16] if len(ts) >= 16 else ""
                 sell_prices.append({
                     "time": time_str,
-                    "price": slot.get("price"),
+                    "price": _get_slot_attr(slot, "per_kwh"),
                 })
 
         return {
@@ -167,6 +202,9 @@ class ForecastPricesSensor(LocalShiftSensorBase):
             "sell_prices": sell_prices,
             "effective_cheap_price": round(d.effective_cheap_price, 4),
             "cheap_charge_stop_price": round(d.cheap_charge_stop_price, 4),
+            "planner_threshold_used": round(d.planner_threshold_used, 4)
+            if d.planner_threshold_used is not None
+            else None,
             "forecast_import_cost": round(d.forecast_import_cost or 0.0, 2),
             "forecast_export_revenue": round(d.forecast_export_revenue or 0.0, 2),
             "forecast_net_cost": round(d.forecast_net_cost or 0.0, 2),
@@ -288,11 +326,14 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
             "weather_correlation_confidence": self.coordinator.data.weather_correlation_confidence,
             "weather_adjustment_applied": self.coordinator.data.weather_adjustment_applied,
             "weather_learning_enabled": self.coordinator.data.weather_learning_enabled,
-            "weather_cooling_coefficient": round(
-                self.coordinator.data.weather_cooling_coefficient, 4
+            "weather_avg_cooling_slope": round(
+                self.coordinator.data.weather_avg_cooling_slope, 4
             ),
-            "weather_heating_coefficient": round(
-                self.coordinator.data.weather_heating_coefficient, 4
+            "weather_avg_heating_slope": round(
+                self.coordinator.data.weather_avg_heating_slope, 4
+            ),
+            "weather_avg_r_squared": round(
+                self.coordinator.data.weather_avg_r_squared, 4
             ),
             "weather_sample_count": self.coordinator.data.weather_sample_count,
             "load_forecast_slots_sample": {

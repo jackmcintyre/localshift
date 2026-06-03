@@ -19,6 +19,7 @@ from ..const import (
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
 )
 from ..coordinator.data import CoordinatorData
+from ..pricing.types import ForecastSlot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class SpikeAnalyzer:
         entry: ConfigEntry,
         get_switch_state: Callable[[str], bool],
         parse_time_option: Callable[[str, str], time],
-        analyze_spike_window: Callable[[list[dict], datetime, float], tuple],
+        analyze_spike_window: Callable[[list[ForecastSlot], datetime, float], tuple],
         calculate_spike_price_threshold: Callable[[list[float], float], float],
     ) -> None:
         """Initialize analyzer dependencies."""
@@ -66,6 +67,7 @@ class SpikeAnalyzer:
         # Hardcoded default (Issue #214)
         lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
 
+        # Issue #300: analyze_spike_window no longer needs pricing_source
         spike_end, max_price, spike_prices = self._analyze_spike_window(
             data.feed_in_forecast, now_dt, lookahead
         )

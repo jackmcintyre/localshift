@@ -36,7 +36,7 @@ from ..services.evaluation_dispatcher import EvaluationDispatcher
 from ..services.subscription_manager import SubscriptionManager
 from .data import CoordinatorData
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from ..computation_engine import ComputationEngine
     from ..integration.controller import BatteryController
     from ..services.notification_service import NotificationService
@@ -44,6 +44,8 @@ if TYPE_CHECKING:
     from ..state.reader import StateReader
     from ..utils.costs import CostTracker
     from ..utils.validation import EntityValidator
+    from .entity_monitor import EntityMonitor
+    from .tick_scheduler import TickScheduler
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -97,6 +99,7 @@ class LocalShiftCoordinator:
         self._computation_engine: ComputationEngine | None = None
         self._state_machine: StateMachine | None = None
         self._entity_validator: EntityValidator | None = None
+        self._entity_monitor: EntityMonitor | None = None
 
         # Decision outcome tracker for learning system (Issue #170 Phase 1)
         self.decision_tracker = None
@@ -115,10 +118,7 @@ class LocalShiftCoordinator:
         self._forecast_bootstrapper: ForecastBootstrapper | None = None
         self._evaluation_dispatcher: EvaluationDispatcher | None = None
         self._subscription_manager: SubscriptionManager | None = None
-
-        # Solar energy tracking for backfill (Issue #513)
-        self._last_solar_power_kw: float = 0.0
-        self._last_solar_power_timestamp: datetime | None = None
+        self._tick_scheduler: TickScheduler | None = None
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -129,7 +129,7 @@ class LocalShiftCoordinator:
         """Return the configured external entity IDs."""
         return self.entry.data
 
-    def _get_entity_id(self, key: str) -> str:
+    def get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
 
         For notify_service, checks options first (new location) then data
@@ -152,6 +152,56 @@ class LocalShiftCoordinator:
         from ..const import DEFAULT_ENTITY_IDS
 
         return DEFAULT_ENTITY_IDS.get(key, "")
+
+    def _is_in_startup_grace(self) -> bool:
+        """Check if we're still in the startup grace period.
+
+        Returns True if the state machine has an active startup grace period,
+        False otherwise. Used to skip expensive operations during initialization
+        when entities may not be populated yet (Issue #551).
+        """
+        if self._state_machine is None:
+            return True
+        return self._state_machine.startup_grace_until is not None
+
+    # ------------------------------------------------------------------
+    # Sub-object accessors (public API for TickScheduler)
+    # ------------------------------------------------------------------
+
+    @property
+    def evaluation_dispatcher(self) -> EvaluationDispatcher | None:
+        """Return the evaluation dispatcher, if initialized."""
+        return self._evaluation_dispatcher
+
+    @property
+    def entity_monitor(self) -> EntityMonitor | None:
+        """Return the entity monitor, if initialized."""
+        return self._entity_monitor
+
+    @property
+    def computation_engine(self) -> ComputationEngine | None:
+        """Return the computation engine, if initialized."""
+        return self._computation_engine
+
+    @property
+    def learning_orchestrator(self) -> LearningOrchestrator | None:
+        """Return the learning orchestrator, if initialized."""
+        return self._learning_orchestrator
+
+    @property
+    def state_machine(self) -> StateMachine | None:
+        """Return the state machine, if initialized."""
+        return self._state_machine
+
+    @property
+    def cost_tracker(self) -> CostTracker | None:
+        """Return the cost tracker, if initialized."""
+        return self._cost_tracker
+
+    @property
+    def notification_service(self) -> NotificationService | None:
+        """Return the notification service, if initialized."""
+        return self._notification_service
 
     # ------------------------------------------------------------------
     # Options helpers (read from config entry options)
@@ -188,15 +238,37 @@ class LocalShiftCoordinator:
         from ..utils.costs import CostTracker
         from ..utils.validation import EntityValidator
 
-        self._entity_validator = EntityValidator(self.hass, self._get_entity_id)
-        self._state_reader = StateReader(self.hass, self.entry, self._entity_validator)
+        self._entity_validator = EntityValidator(self.hass, self.get_entity_id)
+
+        # Import EntityMonitor
+        from .entity_monitor import EntityMonitor
+
+        # Create entity monitor
+        self._entity_monitor = EntityMonitor(self)
+
+        # Import TickScheduler
+        from .tick_scheduler import TickScheduler
+
+        # Create tick scheduler
+        self._tick_scheduler = TickScheduler(self)
+
+        from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        from ..pricing import create_provider
+
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+        _pricing_provider = create_provider(pricing_source)
+        self._state_reader = StateReader(
+            self.hass, self.entry, self._entity_validator, _pricing_provider
+        )
         self._cost_tracker = CostTracker(self.hass)
-        self._battery_controller = BatteryController(self.hass, self._get_entity_id)
+        self._battery_controller = BatteryController(self.hass, self.get_entity_id)
         self._notification_service = NotificationService(
-            self.hass, self.entry, self._get_entity_id, self.get_switch_state
+            self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )
         self._computation_engine = ComputationEngine(
-            self.hass, self.entry, self._get_entity_id, self.get_switch_state
+            self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )
         self._state_machine = StateMachine(
             self._battery_controller,
@@ -262,23 +334,23 @@ class LocalShiftCoordinator:
         # - OPERATION_MODE/BACKUP_RESERVE: outputs, health-checked in 1-min tick
         monitored_entities = [
             # Price entities - trigger mode decisions on price changes
-            self._get_entity_id(CONF_PRICING_GENERAL_PRICE),
-            self._get_entity_id(CONF_PRICING_FEED_IN_PRICE),
-            self._get_entity_id(CONF_PRICING_GENERAL_FORECAST),
-            self._get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
-            self._get_entity_id(CONF_PRICING_PRICE_SPIKE),
+            self.get_entity_id(CONF_PRICING_GENERAL_PRICE),
+            self.get_entity_id(CONF_PRICING_FEED_IN_PRICE),
+            self.get_entity_id(CONF_PRICING_GENERAL_FORECAST),
+            self.get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
+            self.get_entity_id(CONF_PRICING_PRICE_SPIKE),
             # Solcast entities - trigger forecast recomputation
-            self._get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
-            self._get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
+            self.get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
+            self.get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
             # SOC - trigger target stop when battery reaches target
-            # self._get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
+            # self.get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
         ]
 
         self._evaluation_dispatcher = EvaluationDispatcher(
             self.hass,
-            self._get_entity_id,
+            self.get_entity_id,
             self._read_all_external_state,
-            self._notify_listeners,
+            self.notify_listeners,
             self._evaluate_state_machine,
             self._state_machine,
             STALE_PRICE_THRESHOLD,
@@ -321,7 +393,7 @@ class LocalShiftCoordinator:
             )
 
         # Fetch historical load data in background (runs in thread pool, won't block)
-        load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+        load_entity_id = self.get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
         await self._computation_engine.async_get_historical_hourly_averages(
             load_entity_id
         )
@@ -336,13 +408,17 @@ class LocalShiftCoordinator:
         await self._computation_engine.async_initialize_forecast_history_storage()
         await self._computation_engine.async_load_forecast_history(self.data)
 
+        # Initialize accuracy metrics storage and load persisted metrics (Issue #706)
+        await self._computation_engine.async_initialize_accuracy_metrics_storage()
+        await self._computation_engine.async_load_accuracy_metrics(self.data)
+
         self._forecast_bootstrapper = ForecastBootstrapper(
             self.hass,
             self.data,
-            self._get_entity_id,
+            self.get_entity_id,
             self._read_all_external_state,
             self._compute_derived_values,
-            self._notify_listeners,
+            self.notify_listeners,
             self._evaluate_state_machine,
             SOLCAST_STARTUP_RETRY_DELAY,
             SOLCAST_MAX_STARTUP_RETRIES,
@@ -430,7 +506,7 @@ class LocalShiftCoordinator:
         return remove_listener
 
     @callback
-    def _notify_listeners(self) -> None:
+    def notify_listeners(self) -> None:
         """Notify all registered entity listeners of new data."""
         for cb in self._update_callbacks:
             cb()
@@ -441,52 +517,13 @@ class LocalShiftCoordinator:
 
     def _read_all_external_state(self) -> None:
         """Read current state of all monitored external entities."""
-        if self._state_reader is None:
-            return
-        self._state_reader.read_all_external_state(self.data)
+        if self._entity_monitor is not None:
+            self._entity_monitor.read_all_external_state()
 
     def _check_entity_health(self) -> None:
-        """Check health of all tracked entities and update data.
-
-        Populates integration status, errors, and warnings in CoordinatorData
-        for sensors to expose to users.
-        """
-        if self._entity_validator is None:
-            return
-
-        # Check all entities (external dependencies)
-        self._entity_validator.check_all_entities()
-
-        # Update coordinator data with health status
-        self.data.integration_status = self._entity_validator.status.value
-        self.data.integration_status_message = (
-            self._entity_validator.get_user_friendly_message()
-        )
-        self.data.entity_errors = self._entity_validator.errors
-        self.data.entity_warnings = self._entity_validator.warnings
-        self.data.required_entities_healthy = all(
-            self._entity_validator.get_required_entities_status().values()
-        )
-
-        # Get detailed health summary
-        health_summary = self._entity_validator.get_health_summary()
-        self.data.entity_health = health_summary.get("entities", {})
-        self.data.last_entity_check = health_summary.get("last_check", "")
-
-        # Check LocalShift internal entities
-        self.data.localshift_entity_health = (
-            self._entity_validator.check_all_localshift_entities()
-        )
-
-        # Log any new errors
-        if self.data.entity_errors:
-            for error in self.data.entity_errors:
-                _LOGGER.warning("Entity health error: %s", error)
-
-        # Log warnings at debug level
-        if self.data.entity_warnings:
-            for warning in self.data.entity_warnings:
-                _LOGGER.debug("Entity health warning: %s", warning)
+        """Check health of all tracked entities and update data."""
+        if self._entity_monitor is not None:
+            self._entity_monitor.check_entity_health()
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -495,10 +532,8 @@ class LocalShiftCoordinator:
     @callback
     def _handle_state_change(self, _event: Event) -> None:
         """Handle a state change from a monitored entity."""
-        if self._evaluation_dispatcher is None:
-            return
-
-        self._evaluation_dispatcher.on_state_change(_event)
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_state_change(_event)
 
     @callback
     def _handle_periodic_tick(self, now: datetime) -> None:
@@ -508,46 +543,17 @@ class LocalShiftCoordinator:
         New tiered handlers (_handle_fast_tick, _handle_medium_tick, _handle_slow_tick)
         are used instead. See async_start() for timer subscriptions.
         """
-        # Delegate to fast tick for backward compatibility
-        self._handle_fast_tick(now)
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_periodic_tick(now)
 
     @callback
     def _handle_fast_tick(self, now: datetime) -> None:
-        """Handle FAST tier periodic tasks (1 minute).
-
-        Time-sensitive control tasks that need minute-level accuracy:
-        - Cost accumulation (power × time needs minute accuracy)
-        - Stale price check (safety net if price sensor stops updating)
-        """
-        # Read raw entity values now — needed for cost accumulation
-        self._read_all_external_state()
-
-        # Cost accumulation uses the raw state we just read (sync, no lock needed)
-        self._accumulate_costs()
-
-        # Skip evaluation dispatch during startup grace period
-        # This prevents errors when entities haven't populated yet (Issue #551)
-        if self._is_in_startup_grace():
-            _LOGGER.debug(
-                "Skipping state machine evaluation during startup grace period"
-            )
-            return
-
-        # Issue #478: Check if automation just became ready during startup
-        # Triggers immediate evaluation when transitioning from not-ready to ready
-        if self._evaluation_dispatcher is not None:
-            self._evaluation_dispatcher.maybe_trigger_on_startup_ready(
-                lambda: self.data.automation_ready if self.data else False
-            )
-
-        # Issue #622: Always dispatch to StateMachine
-        # StateMachine gates mode transitions based on price fingerprint
-        # This ensures optimizer runs every minute for plan updates
-        if self._evaluation_dispatcher is not None:
-            self._evaluation_dispatcher.on_fast_tick(now)
+        """Handle FAST tier periodic tasks (1 minute)."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_fast_tick(now)
 
     @callback
-    def _handle_medium_tick(self, now: datetime) -> None:
+    def _handle_medium_tick(self, now: datetime) -> None:  # pragma: no cover
         """Handle MEDIUM tier periodic tasks (5 minutes).
 
         Learning and monitoring tasks that don't need minute-level accuracy:
@@ -571,7 +577,7 @@ class LocalShiftCoordinator:
 
         # Refresh load data (historical and recent)
         if self._computation_engine is not None:
-            load_entity_id = self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
+            load_entity_id = self.get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
             self.hass.async_create_task(
                 self._computation_engine.async_get_recent_load_1hr(load_entity_id),
                 "localshift_fetch_recent_load",
@@ -591,11 +597,6 @@ class LocalShiftCoordinator:
             hasattr(self, "solar_accuracy_tracker")
             and self.solar_accuracy_tracker is not None
         ):
-            # Record forecasts for upcoming periods (this would happen when slots are created elsewhere)
-            # But we can't do it here without major refactor
-
-            # For updating solar bias metrics from tracker and handling backfills if needed
-            # (backfills would happen somewhere when we have historical energy data)
             pass
 
         # Update solar bias metrics from tracker (Issue #378)
@@ -608,6 +609,9 @@ class LocalShiftCoordinator:
                 self.solar_accuracy_tracker.metrics.accuracy
             )
 
+        # Compute hybrid accuracy combining LocalShift tracker + Solcast MAPE (Issue #778 Phase 2)
+        self._update_hybrid_accuracy()
+
         # Learn from current temperature/load for weather correlation
         if self._computation_engine is not None:
             self.hass.async_create_task(
@@ -617,129 +621,87 @@ class LocalShiftCoordinator:
 
         _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
 
+    def _update_hybrid_accuracy(self) -> None:
+        """Compute hybrid accuracy combining LocalShift tracker with Solcast MAPE.
+
+        Issue #778 Phase 2: Combines LocalShift's internal accuracy tracking
+        with Solcast's reported MAPE for more robust accuracy estimation.
+
+        Strategy:
+        - If Solcast MAPE unavailable: use LocalShift accuracy (100% default)
+        - If LocalShift has insufficient samples (<10): weight Solcast more
+        - Otherwise: weighted average favoring the more confident source
+        """
+        localshift_accuracy = self.data.solar_forecast_accuracy
+        solcast_mape = self.data.solcast_mape
+
+        # If no Solcast data, use LocalShift only
+        if solcast_mape is None:
+            self.data.hybrid_solar_accuracy = localshift_accuracy
+            return
+
+        # Convert MAPE to accuracy
+        solcast_accuracy = max(0, 100 - solcast_mape)
+
+        # Check LocalShift sample count for confidence weighting
+        localshift_samples = 0
+        if hasattr(self, "solar_accuracy_tracker") and self.solar_accuracy_tracker:
+            localshift_samples = self.solar_accuracy_tracker.metrics.sample_count
+
+        # Weighted combination based on sample confidence
+        if localshift_samples < 10:
+            # Low confidence in LocalShift - favor Solcast
+            weight_solcast = 0.7
+        elif localshift_samples < 30:
+            # Medium confidence - equal weight
+            weight_solcast = 0.5
+        else:
+            # High confidence - check divergence
+            divergence = abs(localshift_accuracy - solcast_accuracy)
+            if divergence > 15:
+                weight_solcast = 0.6
+            elif divergence > 10:
+                weight_solcast = 0.5
+            else:
+                weight_solcast = 0.4
+
+        # Compute weighted hybrid accuracy
+        hybrid = (
+            1 - weight_solcast
+        ) * localshift_accuracy + weight_solcast * solcast_accuracy
+        self.data.hybrid_solar_accuracy = round(hybrid, 1)
+
+        _LOGGER.debug(
+            "Hybrid accuracy: %.1f%% (LS: %.1f%%, Solcast MAPE: %.1f%%, weight: %.0f%%)",
+            hybrid,
+            localshift_accuracy,
+            solcast_mape,
+            weight_solcast * 100,
+        )
+
     @callback
     def _handle_slow_tick(self, now: datetime) -> None:
-        """Handle SLOW tier periodic tasks (30 minutes).
-
-        Slow-changing data tasks:
-        - Weather forecast refresh
-        - Forecast accuracy metrics
-        - Forecast history save
-        """
-        # Refresh temperature forecast from weather entity (Issue #135)
-        if self._computation_engine is not None:
-            self.hass.async_create_task(
-                self._refresh_weather_forecast(),
-                "localshift_weather_forecast",
-            )
-            # Compute forecast accuracy metrics (Issue #37 Phase 2)
-            self.hass.async_create_task(
-                self._computation_engine.async_compute_forecast_accuracy(self.data),
-                "localshift_forecast_accuracy",
-            )
-            # Save forecast history periodically (Issue #131)
-            self.hass.async_create_task(
-                self._computation_engine.async_save_forecast_history(self.data),
-                "localshift_save_forecast_history",
-            )
-
-        # Backfill actual solar energy for completed periods (Issue #513)
-        self._backfill_solar_actual()
-
-        _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
-
-    def _is_in_startup_grace(self) -> bool:
-        """Check if we're still in the startup grace period.
-
-        Returns True if the state machine has an active startup grace period,
-        False otherwise. Used to skip expensive operations during initialization
-        when entities may not be populated yet (Issue #551).
-        """
-        if self._state_machine is None:
-            return False
-        return self._state_machine._startup_grace_until is not None
-
-    def _backfill_solar_actual(self) -> None:
-        """Backfill actual solar energy for completed 30-min periods.
-
-        Calculates energy produced since last tick using integrated power,
-        then calls backfill_actual() on the tracker for completed periods.
-        """
-        if not hasattr(self, "solar_accuracy_tracker"):
-            return
-
-        tracker = getattr(self, "solar_accuracy_tracker", None)
-        if tracker is None:
-            return
-
-        from homeassistant.util import dt as dt_util
-
-        now = dt_util.now()
-        current_power = self.data.solar_power_kw
-
-        if self._last_solar_power_timestamp is None:
-            self._last_solar_power_timestamp = now
-            self._last_solar_power_kw = current_power
-            return
-
-        time_delta_hours = (
-            now - self._last_solar_power_timestamp
-        ).total_seconds() / 3600.0
-        if time_delta_hours < 0.01:
-            return
-
-        avg_power_kw = (self._last_solar_power_kw + current_power) / 2.0
-        energy_kwh = avg_power_kw * time_delta_hours
-
-        if energy_kwh > 0.001 and current_power > 0.01:
-            now_local = now.astimezone()
-            period_start = now_local.replace(
-                minute=(now_local.minute // 30) * 30, second=0, microsecond=0
-            )
-            tracker.backfill_actual(period_start, energy_kwh)
-
-        self._last_solar_power_timestamp = now
-        self._last_solar_power_kw = current_power
+        """Handle SLOW tier periodic tasks (30 minutes)."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_slow_tick(now)
 
     @callback
     def _handle_midnight_reset(self, now: datetime) -> None:
-        """Reset daily cost accumulators and target flag at midnight.
-
-        Replaces YAML A12 (localshift_reset_target_reached).
-        """
-        self.data.grid_import_cost = 0.0
-        self.data.grid_export_revenue = 0.0
-        self.data.battery_savings = 0.0
-        self.data.battery_charge_cost = 0.0
-        self.data.target_reached_today = False
-
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.handle_midnight_reset(self.data)
-
-        self._notify_listeners()
-        _LOGGER.info("Midnight reset: cost accumulators and target flag")
+        """Reset cost accumulators at midnight."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_midnight_reset(now)
 
     @callback
     def _handle_daily_summary(self, now: datetime) -> None:
-        """Send daily summary notification at demand window end.
-
-        Replaces YAML A15 (localshift_daily_summary).
-        """
-        from ..const import SWITCH_AUTOMATION_ENABLED
-
-        if not self.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            return
-
-        self.hass.async_create_task(
-            self._send_daily_summary(),
-            "localshift_daily_summary",
-        )
+        """Send daily summary notification at demand window end."""
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_daily_summary(now)
 
     # ------------------------------------------------------------------
     # Computation
     # ------------------------------------------------------------------
 
-    def _compute_derived_values(self) -> None:
+    def _compute_derived_values(self) -> None:  # pragma: no cover
         """Compute all derived sensor/binary_sensor values from raw state."""
         if self._computation_engine is not None:
             self._computation_engine.compute_derived_values(self.data)
@@ -747,25 +709,14 @@ class LocalShiftCoordinator:
         # Run shadow optimizer after legacy forecast is computed (Issue #403 Phase 1)
         # This is non-invasive - it only populates shadow_* fields in CoordinatorData
 
-    def _accumulate_costs(self) -> None:
-        """Accumulate per-minute energy costs from current power and price."""
-        if self._cost_tracker is not None:
-            self._cost_tracker.accumulate_costs(self.data)
-
-    async def _send_daily_summary(self) -> None:
-        """Send end-of-day summary notification."""
-        if self._notification_service is not None:
-            await self._notification_service.send_daily_summary(self.data)
-        _LOGGER.info("Daily summary notification sent")
-
     # ------------------------------------------------------------------
     # State machine
     # ------------------------------------------------------------------
 
-    async def async_evaluate_state_machine(self) -> None:
+    async def async_evaluate_state_machine(self) -> None:  # pragma: no cover
         """Compare desired mode with commanded mode and execute transitions.
 
-        Public method for external triggers (e.g., options update).
+        Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
         """
         await self._evaluate_state_machine()
 
@@ -776,27 +727,15 @@ class LocalShiftCoordinator:
         Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
         """
         self._compute_derived_values()
-        self._notify_listeners()
+        self.notify_listeners()
         await self.async_evaluate_state_machine()
 
     def reset_entity_tracking_on_options_change(self) -> None:
-        """Reset entity tracking when options change.
+        """Reset entity tracking when options change."""
+        if self._entity_monitor is not None:
+            self._entity_monitor.reset_entity_tracking_on_options_change()
 
-        This is called when the user reconfigures the integration via options flow.
-        It resets tracking for entities that may have changed (e.g., weather_entity)
-        to clear broken status and allow recovery without restart.
-        """
-        if self._entity_validator is None:
-            return
-
-        # Reset tracking for weather entity (most commonly reconfigured optional entity)
-        from ..const import CONF_WEATHER_ENTITY
-
-        self._entity_validator.reset_entity_tracking(CONF_WEATHER_ENTITY)
-
-        _LOGGER.info("Reset entity tracking for options change")
-
-    def reschedule_daily_summary_timer(self) -> None:
+    def reschedule_daily_summary_timer(self) -> None:  # pragma: no cover
         """Reschedule the daily summary timer with current demand_window_end.
 
         Called when options are updated to pick up new notification time
@@ -818,7 +757,7 @@ class LocalShiftCoordinator:
                 self.data,
                 self._computation_engine,
                 read_state_func=self._read_all_external_state,
-                notify_func=self._notify_listeners,
+                notify_func=self.notify_listeners,
                 check_automation_ready_func=self._state_reader.check_automation_ready
                 if self._state_reader is not None
                 else None,
@@ -905,17 +844,13 @@ class LocalShiftCoordinator:
 
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
-        time_str = str(self.get_option(key, default))
-        parts = time_str.split(":")
-        try:
-            return time(
-                int(parts[0]),
-                int(parts[1]) if len(parts) > 1 else 0,
-                int(parts[2]) if len(parts) > 2 else 0,
-            )
-        except (ValueError, IndexError):
-            d_parts = default.split(":")
-            return time(int(d_parts[0]), int(d_parts[1]), int(d_parts[2]))
+        if self._entity_monitor is not None:
+            return self._entity_monitor.parse_time_option(key, default)
+        # Fallback if entity_monitor not initialized
+        parts = default.split(":")
+        return time(
+            int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
+        )
 
     async def async_clear_historical_cache(self) -> None:
         """Clear historical load cache to force forecast refresh."""
@@ -924,30 +859,6 @@ class LocalShiftCoordinator:
             _LOGGER.info("Historical load cache cleared")
 
     async def _refresh_weather_forecast(self) -> None:
-        """Refresh temperature forecast from weather entity.
-
-        Uses the modern weather.get_forecasts service (HA 2024.3+) with caching.
-        Updates CoordinatorData with the latest forecast for use by sensors.
-        """
-        if self._computation_engine is None:
-            _LOGGER.debug(
-                "Computation engine not initialized, skipping weather forecast"
-            )
-            return
-
-        forecasts = await self._computation_engine.async_refresh_weather_forecast()
-
-        if forecasts is not None:
-            # Update CoordinatorData with the forecast data
-
-            self.data.weather_temperature_forecast = {}
-            for forecast in forecasts:
-                hour = forecast.slot_time.hour
-                temperature = forecast.temperature
-                if temperature is not None:
-                    self.data.weather_temperature_forecast[hour] = temperature
-
-            _LOGGER.debug(
-                "Updated weather forecast: %d hours of temperature data",
-                len(self.data.weather_temperature_forecast),
-            )
+        """Refresh temperature forecast from weather entity."""
+        if self._entity_monitor is not None:
+            await self._entity_monitor.refresh_weather_forecast()

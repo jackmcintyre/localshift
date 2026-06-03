@@ -55,7 +55,7 @@ class ForecastHistoryStore:
 
             if history:
                 now_dt = dt_util.now()
-                cutoff = now_dt - timedelta(hours=4)
+                cutoff = now_dt - timedelta(hours=24)
                 valid_entries = self._filter_valid_history_entries(history, cutoff)
 
                 data.forecast_history = valid_entries

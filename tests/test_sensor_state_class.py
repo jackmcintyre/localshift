@@ -1,6 +1,7 @@
 """Test that sensors have correct state_class for statistics.
 
 Issue #266: Add state_class to forecast sensors for statistics support.
+Issue #703: OptimizerAdvantageSensor must use TOTAL for monetary device_class.
 """
 
 from unittest.mock import Mock
@@ -11,6 +12,7 @@ from homeassistant.components.sensor import SensorStateClass
 from custom_components.localshift.sensor import (
     ForecastAccuracySensor,
     ForecastPricesSensor,
+    OptimizerAdvantageSensor,
     OptimizerPlanGridSensor,
     SolarBatteryForecastSensor,
 )
@@ -79,3 +81,13 @@ def test_forecast_prices_sensor_has_measurement_state_class():
     sensor = ForecastPricesSensor(mock_coordinator, mock_entry)
 
     assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
+
+
+def test_optimizer_advantage_sensor_uses_total_state_class():
+    mock_coordinator = Mock()
+    mock_coordinator.data = Mock()
+    mock_entry = Mock()
+
+    sensor = OptimizerAdvantageSensor(mock_coordinator, mock_entry)
+
+    assert sensor._attr_state_class == SensorStateClass.TOTAL

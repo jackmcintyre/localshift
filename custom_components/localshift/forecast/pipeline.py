@@ -50,6 +50,8 @@ class ForecastPipeline:
         base_slot = now_dt.replace(minute=current_5min, second=0, microsecond=0)
         current_hour = base_slot.hour
 
+        self._load_forecaster.reset_weather_adjustment_applied()
+
         slots: list[float] = []
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
@@ -72,6 +74,9 @@ class ForecastPipeline:
             slots.append(load_kw)
 
         data.load_forecast_slots = slots
+        data.weather_adjustment_applied = (
+            self._load_forecaster.get_weather_adjustment_applied()
+        )
         _LOGGER.info(
             "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f",
             len(slots),
@@ -134,7 +139,17 @@ class ForecastPipeline:
             deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
 
             all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour)
+            from custom_components.localshift.forecast.analysis_resolver import (
+                ConfidenceResolver,
+            )
+
+            resolver = ConfidenceResolver(
+                getattr(data, "solcast_analysis_today", None),
+                getattr(data, "solcast_analysis_tomorrow", None),
+            )
+            solar_kwh = sum_solar_before_target(
+                all_solcast, now_dt, target_hour, resolver=resolver
+            )
 
             target_dt = now_dt.replace(
                 hour=target_hour, minute=0, second=0, microsecond=0
@@ -166,7 +181,17 @@ class ForecastPipeline:
             deficit_kwh = max((target_pct - data.soc) / 100 * BATTERY_CAPACITY_KWH, 0)
 
             all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
-            solar_kwh = sum_solar_before_target(all_solcast, now_dt, target_hour)
+            from custom_components.localshift.forecast.analysis_resolver import (
+                ConfidenceResolver,
+            )
+
+            resolver = ConfidenceResolver(
+                getattr(data, "solcast_analysis_today", None),
+                getattr(data, "solcast_analysis_tomorrow", None),
+            )
+            solar_kwh = sum_solar_before_target(
+                all_solcast, now_dt, target_hour, resolver=resolver
+            )
 
             expected_load_kw = self._price_signals.get_expected_load_kw_from_slots(
                 data, hours_to_target

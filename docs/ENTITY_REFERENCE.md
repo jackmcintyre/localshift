@@ -4,14 +4,14 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **54 entities** grouped under a single "LocalShift" device:
+The integration creates **63 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 28 | `sensor` |
-| Binary Sensors | 10 | `binary_sensor` |
+| Sensors | 35 | `sensor` |
+| Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
-| Numbers | 4 | `number` |
+| Numbers | 5 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
 
@@ -82,32 +82,7 @@ State: -0.0053
 
 ---
 
-### 4. sensor.localshift_battery_mode
-
-**Purpose:** Current battery automation mode from the state machine.
-
-**State:** One of the following mode strings:
-
-| Mode | Description |
-|------|-------------|
-| `self_consumption` | Default — battery powers house, grid used as needed |
-| `grid_charging` | Force charging from grid at 3.3kW (backup mode) |
-| `boost_charging` | Force charging at 5kW (autonomous + reserve=100%) |
-| `spike_discharge` | Force discharging to export during price spikes |
-| `proactive_export` | Exporting battery before negative FIT periods |
-| `demand_block` | Self consumption enforced during demand window |
-| `manual` | Automation disabled, user has manual control |
-
-**Example Data:**
-```
-State: grid_charging
-```
-
-**How to Use:** This is the primary sensor for understanding what the automation is doing. Check this first when debugging.
-
----
-
-### 5. sensor.localshift_forecast_battery
+### 4. sensor.localshift_forecast_battery
 
 **Purpose:** Predicted battery SOC at demand window start.
 
@@ -146,7 +121,7 @@ Attributes:
 
 ---
 
-### 6. sensor.localshift_cost_electricity_net
+### 5. sensor.localshift_cost_electricity_net
 
 **Purpose:** Net cost for the day (import cost - export revenue).
 
@@ -173,7 +148,7 @@ Attributes:
 
 ---
 
-### 7. sensor.localshift_decision_log
+### 6. sensor.localshift_decision_log
 
 **Purpose:** History of mode changes with human-readable reasons.
 
@@ -204,7 +179,7 @@ Attributes:
 
 ---
 
-### 8. sensor.localshift_forecast_history
+### 7. sensor.localshift_forecast_history
 
 **Purpose:** Historical forecast predictions for comparison with actuals.
 
@@ -223,11 +198,11 @@ State: 200
 
 ---
 
-### 9. sensor.localshift_forecast_daily
+### 8. sensor.localshift_optimizer_plan
 
-**Purpose:** Core 24-hour forecast with SOC, solar, and consumption data.
+**Purpose:** Core 24-hour optimizer plan with SOC, solar, and consumption data.
 
-Split from the original monolithic sensor to stay under Home Assistant's 16KB attribute limit (Issue #37). Related sensors: `forecast_prices`, `forecast_grid`, `forecast_diagnostics`.
+**Note:** Phase 5 (#447) renamed from `sensor.localshift_forecast_daily`. Now reads from DP optimizer decisions.
 
 **State:** Count of forecast slots (96 × 15-min slots)
 
@@ -243,25 +218,23 @@ Attributes:
   forecast_hourly: [...24 entries...]
 ```
 
-**Forecast Slot Structure:**
+**Plan Slot Structure:**
 
-Each slot in `forecast_slots` contains:
+Each slot in the optimizer plan contains:
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
-| `time` | string | HH:MM format | `09:05` |
-| `hour` | int | Hour (0-23) | `9` |
-| `minute` | int | Minute (0, 15, 30, 45) | `5` |
-| `predicted_soc` | float | Predicted battery SOC (%) | `33.9` |
-| `solar_kwh` | float | Solar production (kWh) | `0.7259` |
-| `consumption_kwh` | float | Estimated consumption (kWh) | `0.2522` |
-| `net_kwh` | float | Net energy (solar - consumption) | `0.4737` |
-| `buy_price` | float | Buy price ($/kWh) | `0.07` |
-| `sell_price` | float | Sell price ($/kWh) | `0.01` |
+| `slot_idx` | int | Slot index (0-95) | `0` |
+| `action` | string | Optimizer action | `hold`, `charge_grid_normal`, `export_proactive` |
+| `reason_code` | string | Why this action was chosen | `IDLE`, `PRICE_ABOVE_THRESHOLD` |
+| `objective_terms` | dict | Cost/revenue breakdown | `{import_cost: 0.0, export_revenue: 0.0, ...}` |
+| `predicted_soc_pct` | float | Predicted battery SOC (%) | `75.5` |
+| `grid_import_kwh` | float | Grid import (kWh) | `0.825` |
+| `grid_export_kwh` | float | Grid export (kWh) | `0.0` |
 
 ---
 
-### 10. sensor.localshift_forecast_prices
+### 9. sensor.localshift_forecast_prices
 
 **Purpose:** Price forecast data for history collection.
 
@@ -288,41 +261,34 @@ Attributes:
 
 ---
 
-### 11. sensor.localshift_forecast_grid
+### 10. sensor.localshift_optimizer_plan_grid
 
-**Purpose:** Grid interaction forecast data for history collection.
+**Purpose:** Grid interaction plan data projected by the DP optimizer.
 
-Split from `forecast_daily` to stay under 16KB limit (Issue #37).
+**Note:** Phase 5 (#447) renamed from `sensor.localshift_forecast_grid`. Now reads projected import/export from optimizer.
 
 **State Class:** `measurement` — Supports long-term statistics (Issue #266)
 
-**State:** Total forecast grid import (kWh)
+**State:** Total projected grid import (kWh)
 
 **Example Data:**
 ```
 State: 22.245
 Attributes:
-  total_grid_import_kwh: 22.245
-  total_grid_export_kwh: 1.206
-  grid_charge_slots: 23
-  proactive_export_slots: 0
-  grid_interaction: [...96 slots...]
+  projected_import_kwh: 12.5
+  projected_export_kwh: 8.3
+  projected_net_cost: 2.45
+  action_breakdown:
+    HOLD: 70
+    CHARGE_GRID_NORMAL: 10
+    EXPORT_PROACTIVE: 8
+    CHARGE_FOR_DEMAND_WINDOW: 8
+  planner: "DP_OPTIMIZER"
 ```
-
-**Grid Interaction Slot Structure:**
-
-| Field | Type | Description | Example |
-|-------|------|-------------|---------|
-| `time` | string | HH:MM format | `09:05` |
-| `grid_import_kwh` | float | Grid import (kWh) | `0.825` |
-| `grid_export_kwh` | float | Grid export (kWh) | `0.0` |
-| `grid_charge` | bool | Grid charging active | `true` |
-| `grid_charge_boost` | bool | Boost charging active | `true` |
-| `proactive_export` | bool | Proactive export active | `false` |
 
 ---
 
-### 12. sensor.localshift_forecast_diagnostics
+### 11. sensor.localshift_forecast_diagnostics
 
 **Purpose:** Diagnostic and debug data for the forecast system.
 
@@ -344,13 +310,15 @@ Attributes:
   weather_condition: rainy
   weather_correlation_confidence: medium
   weather_learning_enabled: true
-  weather_cooling_coefficient: 0.3022
+  weather_avg_cooling_slope: 0.3022
+  weather_avg_heating_slope: 0.1845
+  weather_avg_r_squared: 0.42
   weather_sample_count: 5723
 ```
 
 ---
 
-### 13. sensor.localshift_target_soc_minimum
+### 12. sensor.localshift_target_soc_minimum
 
 **Purpose:** Minimum target SOC for discharge modes (base reserve).
 
@@ -367,9 +335,11 @@ This is the floor SOC maintained during spike discharge and proactive export mod
 
 ---
 
-### 14. sensor.localshift_excess_solar
+### 13. sensor.localshift_excess_solar
 
 **Purpose:** Forecasted excess solar energy available for discretionary loads.
+
+**Note:** Entity ID is `sensor.localshift_excess_solar`.
 
 **State:** Total excess solar until battery reaches 100% (kWh)
 
@@ -393,7 +363,7 @@ Attributes:
 
 ---
 
-### 15. sensor.localshift_load_shift_signal
+### 14. sensor.localshift_load_shift_signal
 
 **Purpose:** Simple actionable signal for load-shifting automations.
 
@@ -423,7 +393,7 @@ Attributes:
 
 ---
 
-### 16. sensor.localshift_forecast_accuracy
+### 15. sensor.localshift_forecast_accuracy
 
 **Purpose:** Compares past forecast predictions with actual outcomes to track accuracy.
 
@@ -453,7 +423,7 @@ Attributes:
 
 ---
 
-### 17. sensor.localshift_integration_status
+### 16. sensor.localshift_integration_status
 
 **Purpose:** Overall integration health status.
 
@@ -484,7 +454,7 @@ Attributes:
 
 ---
 
-### 18. sensor.localshift_entity_health
+### 17. sensor.localshift_entity_health
 
 **Purpose:** Detailed health status for all tracked entities.
 
@@ -503,7 +473,7 @@ Attributes:
 
 ---
 
-### 19. sensor.localshift_learning_status
+### 18. sensor.localshift_learning_status
 
 **Purpose:** Current learning system status and parameter values.
 
@@ -533,7 +503,7 @@ Attributes:
 
 ---
 
-### 20. sensor.localshift_decision_quality
+### 19. sensor.localshift_decision_quality
 
 **Purpose:** Rolling decision quality score.
 
@@ -557,7 +527,7 @@ Attributes:
 
 ---
 
-### 21. sensor.localshift_learning_decision_history
+### 20. sensor.localshift_learning_decision_history
 
 **Purpose:** Recent decision history with outcomes.
 
@@ -574,24 +544,159 @@ Attributes:
 
 ---
 
-### 22. sensor.localshift_backfill_status
+### 21. sensor.localshift_optimizer_advantage
 
-**Purpose:** Statistics backfill validation status.
+**Purpose:** Counterfactual TOU baseline comparison showing optimizer value.
 
-Added in Issue #267. Shows the status of the last backfill operation that validates decision outcomes against metered statistics from Home Assistant.
+Added in Issue #683 to measure whether the optimizer performs better than a simple time-of-use baseline strategy (charge during cheapest 4 hours, discharge during peak).
 
-**State:** One of: `not_run`, `validated`, `discrepancies`, `error`
+**State Class:** `measurement`
+
+**State:** Daily optimizer advantage in $ (negative = TOU cheaper, positive = optimizer cheaper)
 
 **Example Data:**
 ```
-State: not_run
+State: 1.25
+Attributes:
+  advantage_7d: 8.75
+  advantage_daily_avg: 1.25
+  advantage_percent: 15.2
+  tou_cost: 8.25
+  actual_cost: 7.00
+  degrading: false
 ```
 
-**Icon:** Dynamic (check-circle for validated, alert-circle for discrepancies, close-circle for error, database-clock for not_run)
+**Key Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `advantage_7d` | float | 7-day rolling total advantage ($) |
+| `advantage_daily_avg` | float | Daily average over 7 days ($) |
+| `advantage_percent` | float | Advantage as percentage of TOU cost |
+| `tou_cost` | float | Estimated cost with TOU baseline strategy ($) |
+| `actual_cost` | float | Actual cost with optimizer decisions ($) |
+| `degrading` | bool | Whether advantage trend is negative |
+
+**Use Case:** This sensor answers "Is the optimizer actually saving money compared to simple TOU rules?" The TOU baseline strategy charges during the cheapest 4 hours and discharges/self-consumes during peak hours. A positive value means the optimizer is outperforming this simple baseline.
+
+**Icon:** `mdi:scale-balance`
 
 ---
 
-### 23. sensor.localshift_extended_forecast_accuracy
+### 22. sensor.localshift_decision_lag
+
+**Purpose:** Time between decision timestamp and implementation timestamp.
+
+Added in Issue #501. Tracks the latency between when a decision is made and when it is actually implemented by the Powerwall.
+
+**State Class:** `measurement`
+
+**State:** Decision lag in seconds
+
+**Example Data:**
+```
+State: 45.2
+Attributes:
+  current_lag: 45.2
+  last_transition:
+    timestamp: "2026-02-26T09:05:37"
+    lag_seconds: 45.2
+    mode_from: "self_consumption"
+    mode_to: "grid_charging"
+  history: [...last 20 transitions...]
+  avg_lag_24h: 38.5
+  max_lag_24h: 120.3
+  min_lag_24h: 12.1
+  total_transitions: 15
+  decision_timestamp: "2026-02-26T09:05:00"
+  implementation_timestamp: "2026-02-26T09:05:45"
+```
+
+---
+
+### 23. sensor.localshift_forecast_status
+
+**Purpose:** Current forecast data readiness status.
+
+Added in Issue #319. Indicates whether forecast data is ready for automation decisions.
+
+**State:** One of: `ready`, `partial`, `stale`, `error`
+
+| Status | Meaning |
+|--------|---------|
+| `ready` | All forecast data available and fresh |
+| `partial` | Some forecast data missing or stale |
+| `stale` | Forecast data is outdated |
+| `error` | Error loading forecast data |
+
+**Example Data:**
+```
+State: ready
+Attributes:
+  forecast_ready: true
+  solcast_today_entries: 48
+  solcast_tomorrow_entries: 48
+  debug_mode_source: "normal"
+```
+
+**Icon:** Dynamic (check-circle for ready, alert-circle for partial, close-circle for stale, weather-sunny-alert for error)
+
+---
+
+### 24. sensor.localshift_automation_ready
+
+**Purpose:** Overall automation readiness status.
+
+Added in Issue #349. Combines all readiness checks into a single indicator.
+
+**State:** `ready` or `not_ready`
+
+**Example Data:**
+```
+State: ready
+Attributes:
+  automation_ready: true
+  status_checks:
+    soc_available: true
+    prices_available: true
+    forecast_ready: true
+    mode_valid: true
+  missing_inputs: []
+  soc: 75.5
+  operation_mode: "self_consumption"
+  backup_reserve: 10.0
+  prices_available: true
+  forecast_status: "ready"
+```
+
+**Icon:** Dynamic (check-decagram for ready, decagram-outline for not ready)
+
+---
+
+### 25. sensor.localshift_solar_forecast_accuracy
+
+**Purpose:** Solar forecast accuracy compared to actual generation.
+
+Tracks how well the Solcast solar forecast matches actual solar production.
+
+**State Class:** `measurement`
+
+**State:** Solar forecast accuracy percentage (0-100%)
+
+**Example Data:**
+```
+State: 92.5
+Attributes:
+  bias: 0.05
+  mape: 7.5
+  sample_count: 30
+```
+
+**Icon:** `mdi:solar-power-variant`
+
+---
+
+### 26. sensor.localshift_extended_forecast_accuracy
 
 **Purpose:** Extended forecast accuracy with long-term metrics.
 
@@ -616,7 +721,7 @@ Attributes:
 
 ---
 
-### 24. sensor.localshift_load_deviation
+### 27. sensor.localshift_load_deviation
 
 **Purpose:** Real-time diagnostic for current load-vs-forecast deviation while an optimizer runtime plan is active.
 
@@ -656,11 +761,65 @@ Attributes:
 
 ---
 
-### 25. sensor.localshift_optimizer_shadow_plan
+### 25. sensor.localshift_cloud_event
 
-**Purpose:** DP optimizer shadow plan for comparison.
+**Purpose:** Real-time diagnostic for solar cloud event detection and re-optimization status.
 
-Added in Issue #403. Shows the plan computed by the DP optimizer running in shadow mode alongside the legacy planner.
+Added in Issue #685. Monitors actual solar production vs forecast for sudden cloud events. Triggers re-optimization when production drops significantly below Solcast forecast (onset: <50% for >10min; severe: <25% immediate) and detects clearing (production >120% of depressed average for >10min).
+
+**State:** Current actual-to-forecast ratio (dimensionless, 0.0-1.0+); 0.0 when inactive or no forecast
+
+**Example Data:**
+```
+State: 0.2000
+Attributes:
+  status: triggered
+  triggered: true
+  event_type: onset_severe
+  actual_kw: 1.0
+  forecast_kw: 5.0
+  ratio: 0.2
+  cloud_scale_factor: 0.2
+  depressed_avg_kw: null
+  onset_started_at: null
+  clearing_started_at: null
+  last_triggered_at: 2026-03-12T12:00:00+00:00
+  cooldown_until: 2026-03-12T12:15:00+00:00
+  cooldown_remaining_seconds: 900
+```
+
+**Status values:**
+
+| Status | Meaning |
+|--------|---------|
+| `inactive` | Optimizer runtime plan is not currently active |
+| `no_forecast` | Solcast forecast unavailable or below minimum threshold (0.3 kW) |
+| `normal` | Solar production within normal range of forecast |
+| `cooldown` | Onset re-trigger is temporarily blocked after a recent event |
+| `onset_pending` | Moderate onset (<50%) detected but 10-min window accumulating |
+| `cloud_event` | Currently in cloud event, tracking samples for clearing detection |
+| `clearing_pending` | Clearing detected but 10-min window accumulating |
+| `triggered` | Event threshold exceeded and re-optimization was requested |
+
+**Event types:**
+
+| Event Type | Trigger |
+|------------|---------|
+| `onset_severe` | Ratio < 25% — triggers immediately |
+| `onset_moderate` | Ratio < 50% — triggers after 10-min confirmation |
+| `clearing` | Production > 120% of depressed average — triggers after 10-min confirmation |
+
+**Icon:** `mdi:weather-partly-cloudy`
+
+---
+
+### 26. sensor.localshift_optimizer_plan_detailed
+
+**Purpose:** Detailed DP optimizer plan with full decision breakdown.
+
+**Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_plan`. DP optimizer is now the active planner.
+
+**Recorder Note (#467):** The `decisions` attribute is excluded from database recording because it can exceed 26KB (larger than the 16KB recorder limit). The attribute remains available in real-time for dashboard charts, but historical queries will not include it. Other attributes (`enabled`, `success`, `total_slots`, `computed_at`) are recorded normally.
 
 **State:** One of: `computed`, `error`, `disabled`
 
@@ -684,15 +843,15 @@ Attributes:
   computed_at: "2026-03-01T10:00:00+11:00"
 ```
 
-**Icon:** Dynamic (mdi:shadow for computed, mdi:shadow-off for error/disabled)
+**Icon:** Dynamic (mdi:check-circle for success, mdi:alert-circle for error/disabled)
 
 ---
 
-### 26. sensor.localshift_optimizer_shadow_summary
+### 29. sensor.localshift_optimizer_summary
 
-**Purpose:** DP optimizer shadow run summary.
+**Purpose:** DP optimizer run summary.
 
-Added in Issue #403. Shows aggregate metrics from the shadow optimizer run including timing, success status, and projected costs.
+**Note:** Phase 5 (#447) renamed from `sensor.localshift_optimizer_shadow_summary`. Shows aggregate metrics from the optimizer run.
 
 **State:** One of: `success`, `failed`, `disabled`
 
@@ -709,66 +868,57 @@ Attributes:
     cheap_price_percentile: 25
 ```
 
+**Attributes (existing):**
+- `terminal_shortfall_pct` - Projected % shortfall from target at horizon end
+- `computed_at` - Timestamp of last optimization run
+- `solve_status` - Status of optimizer solve
+
+**Attributes (new):**
+- `peak_soc_pct` - Maximum SOC projected in the plan
+- `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
+- `projected_solar_gain_pct` - Raw projected solar SOC gain
+- `forecast_accuracy` - Current forecast accuracy (0-1)
+- `accuracy_discount_factor` - Applied discount (0.5-1.0)
+- `adjusted_solar_gain_pct` - Discounted projected solar SOC gain
+- `effective_soc_at_terminal` - SOC used in terminal cost calculation
+
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
 ---
 
-### 27. sensor.localshift_optimizer_comparison
+### 30. sensor.localshift_comparison_result (Issue #300)
 
-**Purpose:** Legacy vs optimizer plan comparison.
+**Purpose:** Comparison result between primary and shadow pricing sources.
 
-Added in Issue #403 Phase E. Shows side-by-side comparison metrics for operator trust-building.
+Added in Issue #300 for A/B comparison between Amber and Amber Express pricing data.
 
-**State Class:** `measurement`
-
-**State:** Mismatch count (0 = plans match), `null` when disabled, `-1` when comparison failed
+**State:** `match` if primary and shadow decisions align, `mismatch` otherwise
 
 **Example Data:**
 ```
-State: 3
-Attributes:
-  enabled: true
-  comparison_available: true
-  comparison_succeeded: true
-  net_cost_delta: -0.15
-  import_kwh_delta: -1.5
-  export_kwh_delta: 0.5
-  legacy_projected_net_cost: 2.50
-  optimizer_projected_net_cost: 2.35
-  legacy_meets_dw_target: true
-  optimizer_meets_dw_target: true
-  total_slots: 48
-  aligned_slots: 48
-  mismatch_count: 3
-  mismatch_by_type:
-    ACTION_MISMATCH: 2
-    IMPORT_QUANTITY_MISMATCH: 1
-  top_mismatches:
-    - slot_index: 5
-      mismatch_type: "ACTION_MISMATCH"
-      legacy_action: "hold"
-      optimizer_action: "charge_grid_normal"
-      reason_detail: "Optimizer avoids costly legacy action..."
-      legacy_net_cost: 0.25
-      optimizer_net_cost: 0.10
-  summary:
-    total_mismatches: 3
-    total_cost_impact: 0.45
-    most_significant_type: "ACTION_MISMATCH"
-  comparison_time_ms: 12.5
+State: match
 ```
 
-**Key Attributes:**
+**Icon:** `mdi:compare`
 
-| Attribute | Description |
-|-----------|-------------|
-| `net_cost_delta` | Optimizer cost - Legacy cost (negative = optimizer cheaper) |
-| `mismatch_by_type` | Count of mismatches by classification type |
-| `top_mismatches` | Top 5 slots with largest disagreements |
-| `legacy_meets_dw_target` | Whether legacy plan reaches demand window SOC target |
-| `optimizer_meets_dw_target` | Whether optimizer plan reaches demand window SOC target |
+---
 
-**Icon:** Dynamic (mdi:check-circle-outline for 0 mismatches, mdi:compare-horizontal for 1-3, mdi:compare for 4+)
+### 31. sensor.localshift_price_delta (Issue #300)
+
+**Purpose:** Price difference between primary and shadow pricing sources.
+
+Added in Issue #300 to show the delta between Amber and Amber Express prices.
+
+**State:** Price difference in $/kWh
+
+**Example Data:**
+```
+State: 0.0200
+Attributes:
+  unit_of_measurement: $/kWh
+```
+
+**Icon:** `mdi:currency-usd`
 
 ---
 
@@ -927,6 +1077,23 @@ Attributes:
 
 ---
 
+### 11. binary_sensor.localshift_amber_demand_window (Issue #300)
+
+**Purpose:** Demand window status from Amber Express integration.
+
+Added in Issue #300 to provide real-time demand window detection from Amber Express.
+
+**State:** `on` when Amber Express demand window is active, `off` otherwise
+
+**Example Data:**
+```
+State: on
+```
+
+**Icon:** Dynamic (clock-alert when on, clock-check when off)
+
+---
+
 ## Switches
 
 ### 1. switch.localshift_automation_enabled
@@ -1077,6 +1244,10 @@ State: on
 
 ## Numbers (Configuration Thresholds)
 
+> **Note:** These entities have `entity_category="config"` and are hidden from the main dashboard by default. Access them via:
+> - Device → Configuration section
+> - Settings → Devices & Services → LocalShift → Configure → Advanced
+
 ### 1. number.localshift_cheap_price_percentile
 
 **Purpose:** Percentile of near-term forecast prices used as base cheap threshold.
@@ -1145,6 +1316,30 @@ State: 10.0
 
 ---
 
+### 5. number.localshift_target_shortfall_penalty
+
+**Purpose:** Penalty per percentage-point below demand window target SOC.
+
+| Property | Value |
+|----------|-------|
+| Range | $0.000-$0.100/%-point |
+| Default | $0.015/%-point |
+| Unit | $/%-point |
+
+**Tuning Guide:**
+- **Increase** to force earlier/more aggressive grid charging to hit target
+- **Decrease** to rely more on solar (wait longer before grid charging)
+- **$0.000** disables demand window target enforcement (not recommended)
+
+**Impact:** Lower values (e.g., $0.015 vs $0.030) reduce overnight grid charging urgency.
+
+**Example Data:**
+```
+State: 0.015
+```
+
+---
+
 ## Selects (Mode Control)
 
 ### 1. select.localshift_battery_mode
@@ -1157,6 +1352,7 @@ Added in Issue #382 to replace manual control buttons with a single select entit
 
 | Option | Description |
 |--------|-------------|
+| `automatic` | Enable automation — optimizer controls mode selection |
 | `self_consumption` | Default — battery powers house, grid used as needed |
 | `grid_charging` | Force charging from grid at 3.3kW (backup mode) |
 | `boost_charging` | Force charging at 5kW (autonomous + reserve=100%) |
@@ -1164,16 +1360,20 @@ Added in Issue #382 to replace manual control buttons with a single select entit
 | `proactive_export` | Exporting battery before negative FIT periods |
 
 **Behavior:**
-- When automation is enabled: Select shows current automated mode (read-only display)
-- When user changes select: Automation automatically disables, user's choice is honored
-- When automation is re-enabled: System takes control of select immediately
+- When automation is ON: Select displays the actual mode from the optimizer (`self_consumption`, `grid_charging`, `demand_block`, `hold`, etc.)
+- When automation is OFF: Select displays the user's manually chosen mode
+- When user selects a mode (not "automatic"): Automation disables, user's choice is applied
+- When user selects "automatic": Automation enables, optimizer takes control
+
+**Displayed Values:** The select may show modes not in the options list (e.g., `demand_block`, `hold`) when the optimizer transitions to internal states. This reflects the actual system state.
 
 **Example Data:**
 ```
-State: grid_charging
+State: spike_discharge
+State: demand_block  (internal optimizer mode, shown when automation ON)
 ```
 
-**Use Case:** Manual control of battery mode. Select a mode to disable automation and apply that mode to the battery. Re-enable automation to return to automated control.
+**Use Case:** Manual control of battery mode. Select a mode to disable automation and apply that mode to the battery. Select "automatic" to return to automated control. Use `switch.localshift_automation_enabled` to toggle automation directly.
 
 ---
 
@@ -1193,7 +1393,7 @@ Added in Issue #406 to allow runtime switching between self-consumption and arbi
 **Behavior:**
 - Updates integration option `optimization_mode`
 - Triggers immediate recompute/evaluate cycle
-- Changes planner objective and action feasibility in both shadow and active modes
+- Changes planner objective and action feasibility
 
 **Example Data:**
 ```
@@ -1221,22 +1421,19 @@ State: 2026-02-24T02:32:04+00:00 (last pressed)
 
 ---
 
-### 2. button.localshift_reset_learning_data
+### 2. button.localshift_reset_learning
 
-**Action:** Reset all learning system data and start fresh.
-
-Added in Issue #170 Phase 5 for user control over learning system state.
+**Action:** Reset learning system decision tracking and start fresh.
 
 **Effect:**
-- Clears all decision records
-- Resets learned parameters to defaults
+- Clears decision tracker state
+- Clears recent decision log
+- Resets performance metrics
 - Returns learning status to "observing" phase
-- Clears pattern analysis data
-- Resets optimization weights
 
 **Use Case:** Start fresh after significant household changes, or if the system has learned sub-optimal parameters.
 
-**Warning:** This erases all learned data. The system will need another 2-3 days of observation before parameter optimization resumes.
+**Note:** This clears decision history and metrics, not all learned parameters.
 
 ---
 
@@ -1295,7 +1492,6 @@ slots:
     objective_terms:
       import_cost: 0.0
       export_revenue: 0.0
-      cycle_penalty: 0.0
       shortfall_penalty: 0.0
 total_slots: 96
 forecast_horizon_hours: 24.0
@@ -1333,7 +1529,7 @@ If you have dashboards or automations referencing the old entity IDs:
 
 ## Debugging Tips
 
-1. **Start with `sensor.localshift_battery_mode`** — This tells you what the automation thinks it should be doing.
+1. **Start with `select.localshift_battery_mode`** — This shows the current battery mode and allows manual control. When automation is enabled, it displays the automated mode; when disabled, you can manually select modes.
 
 2. **Check binary sensors** — They show the conditions being evaluated:
    - `demand_window` — Are we in peak hours?
@@ -1345,7 +1541,7 @@ If you have dashboards or automations referencing the old entity IDs:
    - `forecast_prices` shows price thresholds
    - `cost_electricity_net` shows cost breakdown
    - `forecast_battery` shows predicted SOC
-   - `excess_solar` shows detailed excess calculations
+   - `excess_solar_kwh` shows detailed excess calculations
 
 4. **Use decision log** — `sensor.localshift_decision_log` shows the last 10 mode changes with reasons.
 

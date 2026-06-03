@@ -26,6 +26,9 @@ from custom_components.localshift.engine.dp_math import (
     _simulate_max_soc_in_demand_window,
     _simulate_solar_only_terminal_soc,
 )
+
+# Re-export transition function
+from custom_components.localshift.engine.transitions import transition
 from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
@@ -42,6 +45,7 @@ __all__ = [
     "feasible_actions",
     "stage_cost",
     "terminal_cost",
+    "transition",
     "ObjectiveTerms",
     "OptimizerConfig",
     "OptimizerInputs",

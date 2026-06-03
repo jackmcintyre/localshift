@@ -10,10 +10,12 @@ from custom_components.localshift.config_flow import (
     LocalShiftOptionsFlow,
 )
 from custom_components.localshift.const import (
+    CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_NOTIFY_SERVICE,
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_FEED_IN_FORECAST,
     CONF_PRICING_FEED_IN_PRICE,
     CONF_PRICING_GENERAL_FORECAST,
@@ -29,6 +31,7 @@ from custom_components.localshift.const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     DOMAIN,
+    PRICING_SOURCE_AMBER_EXPRESS,
 )
 
 
@@ -279,7 +282,7 @@ class TestUserStep:
         result = await flow.async_step_user(user_input)
 
         assert result["type"] == FlowResultType.FORM
-        assert result["step_id"] == "pricing"
+        assert result["step_id"] == "pricing_source"
 
     @pytest.mark.asyncio
     async def test_user_step_invalid_input_shows_errors(self, mock_hass):
@@ -354,6 +357,37 @@ class TestPricingStep:
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "solcast"
 
+    @pytest.mark.asyncio
+    async def test_pricing_step_amber_express_without_forecasts_proceeds_to_solcast(
+        self, mock_hass
+    ):
+        """Amber Express should not require separate forecast entities."""
+        flow = LocalShiftConfigFlow()
+        flow.hass = mock_hass
+        flow._teslemetry_data = {}
+        flow._pricing_source_data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+
+        def mock_get_state(entity_id):
+            if "binary_sensor" in entity_id:
+                return create_mock_state(entity_id, "off", "binary_sensor")
+            return create_mock_state(entity_id, "0.25", "sensor")
+
+        mock_hass.states.get = mock_get_state
+
+        user_input = {
+            CONF_PRICING_GENERAL_PRICE: "sensor.amber_express_100h_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.amber_express_100h_feed_in_price",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_express_100h_price_spike",
+        }
+
+        result = await flow.async_step_pricing(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "solcast"
+
 
 # =============================================================================
 # SOLCAST STEP TESTS
@@ -381,6 +415,10 @@ class TestSolcastStep:
         flow.hass = mock_hass
         flow._teslemetry_data = {
             CONF_TESLEMETRY_OPERATION_MODE: "select.tesla_powerwall_operation_mode",
+        }
+        flow._pricing_source_data = {
+            CONF_PRICING_DATA_SOURCE: "amber",
+            CONF_COMPARISON_MODE: "disabled",
         }
         flow._pricing_data = {
             CONF_PRICING_GENERAL_PRICE: "sensor.amber_general_price",
@@ -493,6 +531,69 @@ class TestOptionsFlow:
         # The result merges with existing options, so check that our input is included
         for key, value in user_input.items():
             assert result["data"][key] == value
+
+    @pytest.mark.asyncio
+    async def test_options_flow_shows_pricing_source_first(
+        self, mock_hass, mock_config_entry
+    ):
+        """Test options flow starts with pricing source selection step."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+        mock_config_entries = MagicMock()
+        mock_config_entries.async_get_known_entry = MagicMock(
+            return_value=mock_config_entry
+        )
+        mock_config_entries.async_update_entry = MagicMock()
+        mock_hass.config_entries = mock_config_entries
+        flow.hass = mock_hass
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+
+        result = await flow.async_step_init()
+
+        # Issue #779: async_step_init now shows a menu with 4 options
+        assert result["type"] == FlowResultType.MENU
+        assert result["step_id"] == "init"
+        assert "options_pricing_source" in result["menu_options"]
+        assert "entity_mappings" in result["menu_options"]
+        assert "settings" in result["menu_options"]
+        assert "advanced" in result["menu_options"]
+
+    @pytest.mark.asyncio
+    async def test_options_flow_pricing_source_updates_and_proceeds(
+        self, mock_hass, mock_config_entry
+    ):
+        """Test pricing source selection updates config and proceeds to entity mappings."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+        mock_config_entries = MagicMock()
+        mock_config_entries.async_get_known_entry = MagicMock(
+            return_value=mock_config_entry
+        )
+        mock_config_entries.async_update_entry = MagicMock()
+        mock_hass.config_entries = mock_config_entries
+        flow.hass = mock_hass
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: "amber",
+            CONF_COMPARISON_MODE: "enabled",
+        }
+
+        user_input = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+
+        result = await flow.async_step_options_pricing_source(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "entity_mappings"
+        mock_config_entries.async_update_entry.assert_called_once()
 
 
 # =============================================================================
@@ -836,20 +937,13 @@ class TestOptionsFlowMigration:
         mock_hass.config_entries = mock_config_entries
         flow.hass = mock_hass
 
-        # Update only one field
-        user_input = {
-            CONF_NOTIFY_SERVICE: "notify.new_service",
-            CONF_DEMAND_WINDOW_START: "17:00:00",
-            CONF_DEMAND_WINDOW_END: "21:00:00",
-            CONF_MANUAL_OVERRIDE_TIMEOUT: 12,
-        }
+        # Issue #779: async_step_init now shows a menu, not a form
+        # So user_input should be None to get the menu
+        result = await flow.async_step_init(None)
 
-        result = await flow.async_step_init(user_input)
-
-        # Should either create entry or show form (depending on validation)
-        assert result["type"] in [FlowResultType.CREATE_ENTRY, FlowResultType.FORM]
-        if result["type"] == FlowResultType.CREATE_ENTRY:
-            assert result["data"][CONF_NOTIFY_SERVICE] == "notify.new_service"
+        # Should show menu
+        assert result["type"] == FlowResultType.MENU
+        assert result["step_id"] == "init"
 
     @pytest.mark.asyncio
     async def test_options_flow_empty_initial_options(

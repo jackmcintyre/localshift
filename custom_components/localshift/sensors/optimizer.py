@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.util import dt as dt_util
 
 from .base import LocalShiftSensorBase
 
@@ -14,6 +16,7 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan_detailed"
     _attr_name = "Optimizer Plan Detailed"
     _attr_icon = "mdi:format-list-bulleted"
+    _unrecorded_attributes = frozenset({"decisions"})
 
     def _update_from_coordinator(self) -> None:
         summary = self.coordinator.data.optimizer_summary or {}
@@ -29,6 +32,19 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
         d = self.coordinator.data
         decisions = d.optimizer_decisions or []
         summary = d.optimizer_summary or {}
+        from custom_components.localshift.forecast.analysis_resolver import (
+            ConfidenceResolver,
+        )
+
+        resolver = ConfidenceResolver(
+            getattr(d, "solcast_analysis_today", None),
+            getattr(d, "solcast_analysis_tomorrow", None),
+        )
+        now = dt_util.now()
+        confidences = [
+            resolver.get_confidence(now + timedelta(hours=i)) for i in range(24)
+        ]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
 
         return {
             "enabled": summary.get("enabled", False),
@@ -39,6 +55,15 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
             "forecast_horizon_hours": d.forecast_horizon_hours,
             "computed_at": summary.get("cycle_timestamp_iso")
             or summary.get("computed_at"),
+            "solar_confidence_avg": avg_confidence,
+            "solar_confidence_regime": (
+                "high"
+                if avg_confidence >= 0.7
+                else "medium"
+                if avg_confidence >= 0.4
+                else "low"
+            ),
+            "solar_blend_applied": avg_confidence < 1.0,
         }
 
     @property
@@ -69,6 +94,21 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         summary = self.coordinator.data.optimizer_summary or {}
+        d = self.coordinator.data
+        from custom_components.localshift.forecast.analysis_resolver import (
+            ConfidenceResolver,
+        )
+
+        resolver = ConfidenceResolver(
+            getattr(d, "solcast_analysis_today", None),
+            getattr(d, "solcast_analysis_tomorrow", None),
+        )
+        now = dt_util.now()
+        confidences = [
+            resolver.get_confidence(now + timedelta(hours=i)) for i in range(24)
+        ]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
+
         return {
             "enabled": summary.get("enabled", False),
             "success": summary.get("success", False),
@@ -87,6 +127,22 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "projected_net_cost": summary.get("projected_net_cost"),
             "terminal_shortfall_pct": summary.get("terminal_shortfall_pct"),
             "initial_soc_pct": summary.get("initial_soc_pct"),
+            "peak_soc_pct": summary.get("peak_soc_pct"),
+            "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+            "projected_solar_gain_pct": summary.get("projected_solar_gain_pct"),
+            "forecast_accuracy": summary.get("forecast_accuracy"),
+            "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
+            "adjusted_solar_gain_pct": summary.get("adjusted_solar_gain_pct"),
+            "effective_soc_at_terminal": summary.get("effective_soc_at_terminal"),
+            "solar_confidence_avg": avg_confidence,
+            "solar_confidence_regime": (
+                "high"
+                if avg_confidence >= 0.7
+                else "medium"
+                if avg_confidence >= 0.4
+                else "low"
+            ),
+            "solar_blend_applied": avg_confidence < 1.0,
         }
 
     @property

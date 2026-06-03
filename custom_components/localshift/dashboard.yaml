@@ -134,10 +134,11 @@ views:
           - type: markdown
             content: >
               {% set mode = states('select.localshift_battery_mode') %}
+              {% set automation = states('switch.localshift_automation_enabled') %}
               {% set soc = states('sensor.my_home_percentage_charged') | int(0) %}
               {% set target = states('number.localshift_battery_target') | int(100) %}
 
-              {% if mode == 'manual' %}
+              {% if automation == 'off' %}
               🟠 **Manual control active** — automation disabled
 
               {% elif mode == 'spike_discharge' %}
@@ -154,6 +155,9 @@ views:
 
               {% elif mode == 'demand_block' %}
               🟠 **Demand window active** — protecting from grid imports
+
+              {% elif mode == 'hold' %}
+              ⏸️ **Hold** — temporary pause
 
               {% else %}
               ⚪ **Self consumption** — normal operation
@@ -725,9 +729,9 @@ views:
 
               Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
 
-              Force Discharge Active: {{ states('select.localshift_battery_mode') == 'force_discharge' }}
+              Force Discharge Active: {{ states('binary_sensor.localshift_force_discharge_active') == 'on' }}
 
-              Force Charge Active: {{ states('select.localshift_battery_mode') == 'force_charge' }}
+              Force Charge Active: {{ states('binary_sensor.localshift_force_charge_active') == 'on' }}
 
               Boost Charge Active: {{ states('select.localshift_battery_mode') == 'boost_charging' }}
 
@@ -854,9 +858,11 @@ views:
 
               Total Samples: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_sample_count') | default(0) }}
 
-              Cooling Coefficient: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_cooling_coefficient') | default(0) }} kW/°C
+              Cooling Slope: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_avg_cooling_slope') | default(0) }} kW/°C
 
-              Heating Coefficient: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_heating_coefficient') | default(0) }} kW/°C
+              Heating Slope: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_avg_heating_slope') | default(0) }} kW/°C
+
+              Average R²: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_avg_r_squared') | default(0) }}
 
               Adjustment Applied: {{ state_attr('sensor.localshift_forecast_diagnostics', 'weather_adjustment_applied') | default(false) }}
 

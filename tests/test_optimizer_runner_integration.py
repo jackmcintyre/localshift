@@ -67,10 +67,10 @@ def mock_coordinator_data():
                 {"start_time": "2026-03-03T05:42:00", "per_kwh": 0.1},
                 {"start_time": "2026-03-03T05:57:00", "per_kwh": 0.12000000000000001},
                 {"start_time": "2026-03-03T06:12:00", "per_kwh": 0.14},
-            ]  # noqa: E501
+            ]
             self.feed_in_forecast = [
                 {"start_time": "2026-03-02T22:12:00", "per_kwh": 0.05}
-            ]  # noqa: E501
+            ]
             self.solcast_today = [
                 {"period_end": "2026-03-02T22:12:00", "pv_estimate": 0},
                 {"period_end": "2026-03-02T22:42:00", "pv_estimate": 0},
@@ -90,7 +90,7 @@ def mock_coordinator_data():
                 {"period_end": "2026-03-03T05:42:00", "pv_estimate": 1.8},
                 {"period_end": "2026-03-03T06:12:00", "pv_estimate": 2.0},
                 {"period_end": "2026-03-03T06:42:00", "pv_estimate": 1.8},
-            ]  # noqa: E501
+            ]
             self.solcast_tomorrow = []
             self.load_forecast_slots = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
             self.adaptive_params = None
@@ -193,40 +193,24 @@ class TestBuildOptimizerConfig:
     ):
         """Verify objective weight defaults (calibrated formula, not hardcoded 1.0)."""
         config = _build_optimizer_config(mock_coordinator_data, config_options)
-        # Penalty must be calibrated: effective_cheap_price * battery_kwh / 100 * factor
-        # With effective_cheap_price=0.12, battery=13.5 kWh, safety_factor=1.5:
-        # 0.12 * 13.5 / 100 * 1.5 = 0.02430
+        # Issue #779: Penalties are now user-configurable, not auto-computed
+        # Values come from config_options or fall back to defaults
         assert config.target_shortfall_penalty_per_pct != 1.0
-        assert 0.010 <= config.target_shortfall_penalty_per_pct <= 0.100
-        assert config.cycle_penalty_per_kwh == 0.05
+        assert 0.000 <= config.target_shortfall_penalty_per_pct <= 0.100
 
-    def test_config_penalty_calibrated_to_tariff(
-        self, mock_coordinator_data, config_options
+    def test_config_penalty_from_options(self, mock_coordinator_data, config_options):
+        """target_shortfall_penalty_per_pct is read from config options."""
+        custom_options = {**config_options, "target_penalty": 0.050}
+        config = _build_optimizer_config(mock_coordinator_data, custom_options)
+        assert config.target_shortfall_penalty_per_pct == 0.050
+
+    def test_config_penalty_uses_default_when_not_in_options(
+        self, mock_coordinator_data
     ):
-        """target_shortfall_penalty_per_pct is calibrated from effective_cheap_price."""
-        # mock_coordinator_data has effective_cheap_price=0.12
-        config = _build_optimizer_config(mock_coordinator_data, config_options)
-        # Safety factor = 1.5 (Issue #610: reduced from 3.0 to avoid overwhelming solar penalty)
-        expected = pytest.approx(0.12 * 13.5 / 100.0 * 1.5, rel=1e-4)
-        assert config.target_shortfall_penalty_per_pct == expected
-
-    def test_config_penalty_not_hardcoded_to_1(
-        self, mock_coordinator_data, config_options
-    ):
-        """The penalty must not be 1.0 (the original miscalibrated value). Fixes #438."""
-        config = _build_optimizer_config(mock_coordinator_data, config_options)
-        assert config.target_shortfall_penalty_per_pct != 1.0
-
-    def test_config_penalty_scales_with_cheap_price(self, mock_coordinator_data):
-        """Penalty scales proportionally with effective_cheap_price."""
-        mock_coordinator_data.effective_cheap_price = 0.20
-        config_high = _build_optimizer_config(mock_coordinator_data, {})
-        mock_coordinator_data.effective_cheap_price = 0.10
-        config_low = _build_optimizer_config(mock_coordinator_data, {})
-        # Higher cheap price → higher penalty (2x cheap price → 2x penalty)
-        assert config_high.target_shortfall_penalty_per_pct == pytest.approx(
-            config_low.target_shortfall_penalty_per_pct * 2.0, rel=1e-4
-        )
+        """target_shortfall_penalty_per_pct defaults when not in options."""
+        config = _build_optimizer_config(mock_coordinator_data, {})
+        # Default is 0.015 (DEFAULT_TARGET_PENALTY)
+        assert config.target_shortfall_penalty_per_pct == 0.015
 
     def test_config_uses_default_allow_dw_entry_under_target(
         self, mock_coordinator_data
@@ -259,117 +243,6 @@ class TestBuildOptimizerConfig:
         assert config.effective_cheap_price == pytest.approx(0.12)
         assert config.self_consumption_value_per_kwh == pytest.approx(0.26)
         assert config.export_price_margin == pytest.approx(0.10)
-
-
-# ---------------------------------------------------------------------------
-# Test: Slot context parity
-# ---------------------------------------------------------------------------
-
-
-# DEPRECATED: Phase 2 (#444) replaced _build_slot_contexts with SlotBuilder
-# Tests moved to tests/test_slot_builder.py
-
-
-class TestParityCompleteness:
-    """Tests for parity completeness tracking."""
-
-    def test_completeness_100_when_all_fields_present(self, mock_coordinator_data):
-        """Verify 100% completeness when all fields populated."""
-        _, parity_info = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        assert parity_info["completeness_pct"] == 100.0
-        assert parity_info["defaulted_fields"] == {}
-
-    def test_completeness_reduced_when_defaults_used(self, mock_coordinator_data):
-        """Verify completeness reduced when defaults used."""
-        # Remove buy_price from first slot (and fallback if present)
-        mock_coordinator_data.daily_forecast[0].pop("buy_price", None)
-        mock_coordinator_data.daily_forecast[0].pop("general_price", None)
-
-        _, parity_info = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        assert parity_info["completeness_pct"] < 100.0
-        assert "buy_price" in parity_info["defaulted_fields"]
-        assert parity_info["defaulted_fields"]["buy_price"] == 1
-
-    def test_total_fields_checked(self, mock_coordinator_data):
-        """Verify total_fields_checked is correct."""
-        _, parity_info = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        # 4 fields checked per slot: buy_price, sell_price, solar_kwh, consumption_kwh
-        expected = 4 * len(mock_coordinator_data.daily_forecast)
-        assert parity_info["total_fields_checked"] == expected
-
-
-# ---------------------------------------------------------------------------
-# Test: Alignment validation
-# ---------------------------------------------------------------------------
-
-
-class TestValidateSlotAlignment:
-    """Tests for _validate_slot_alignment."""
-
-    def test_valid_when_aligned(self, mock_coordinator_data):
-        """Verify validation passes for properly aligned data."""
-        contexts, _ = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        result = _validate_slot_alignment(
-            mock_coordinator_data.daily_forecast, contexts
-        )
-        assert result["valid"] is True
-        assert result["issues"] == []
-
-    def test_detects_count_mismatch(self, mock_coordinator_data):
-        """Verify detection of slot count mismatch."""
-        contexts, _ = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        # Remove one context to create mismatch
-        contexts = contexts[:-1]
-        result = _validate_slot_alignment(
-            mock_coordinator_data.daily_forecast, contexts
-        )
-        assert result["valid"] is False
-        assert any("slot_count_mismatch" in issue for issue in result["issues"])
-
-    def test_detects_index_mismatch(self, mock_coordinator_data):
-        """Verify detection of slot index mismatch."""
-        contexts, _ = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        # Corrupt slot_index
-        contexts[0].slot_index = 99
-        result = _validate_slot_alignment(
-            mock_coordinator_data.daily_forecast, contexts
-        )
-        assert result["valid"] is False
-        assert any("index_mismatch" in issue for issue in result["issues"])
-
-    def test_warns_on_missing_timestamp(self, mock_coordinator_data):
-        """Verify warning for missing timestamp."""
-        mock_coordinator_data.daily_forecast[0]["timestamp_iso"] = ""
-        contexts, _ = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        result = _validate_slot_alignment(
-            mock_coordinator_data.daily_forecast, contexts
-        )
-        assert any("missing_timestamp" in w for w in result["warnings"])
-
-    def test_warns_on_negative_price(self, mock_coordinator_data):
-        """Verify warning for negative buy price."""
-        mock_coordinator_data.daily_forecast[0]["buy_price"] = -0.10
-        contexts, _ = pytest.skip(
-            "Phase 2 (#444): _build_slot_contexts replaced by SlotBuilder"
-        )
-        result = _validate_slot_alignment(
-            mock_coordinator_data.daily_forecast, contexts
-        )
-        assert any("negative_buy_price" in w for w in result["warnings"])
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +317,35 @@ class TestBuildSummary:
         assert summary["cycle_timestamp_iso"] == "2025-01-15T06:00:00Z"
         assert summary["computed_at"] == "2025-01-15T06:00:00Z"
 
+    def test_includes_terminal_diagnostics(self, mock_coordinator_data):
+        """Verify terminal diagnostic fields included in summary."""
+        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+
+        result = OptimizerResult(
+            success=True,
+            total_slots=3,
+            forecast_accuracy=0.75,
+            accuracy_discount_factor=0.75,
+            peak_soc_pct=92.0,
+            dw_entry_soc_pct=88.0,
+        )
+        summary = _build_summary(result, "cycle123", "2025-01-15T06:00:00Z")
+
+        assert summary["forecast_accuracy"] == 0.75
+        assert summary["accuracy_discount_factor"] == 0.75
+        assert summary["peak_soc_pct"] == 92.0
+        assert summary["dw_entry_soc_pct"] == 88.0
+
+    def test_terminal_diagnostics_none_when_not_set(self, mock_coordinator_data):
+        """Verify None diagnostics pass through as None."""
+        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+
+        result = OptimizerResult(success=True, total_slots=3)
+        summary = _build_summary(result, "cycle123", "2025-01-15T06:00:00Z")
+
+        assert summary["forecast_accuracy"] is None
+        assert summary["peak_soc_pct"] is None
+
 
 class TestNormalizeInitialSoc:
     """Tests for initial SOC normalization and validation guard."""
@@ -508,86 +410,3 @@ class TestNormalizeInitialSoc:
 
         assert normalized == pytest.approx(config.max_soc_pct)
         assert info["normalization"] == "clamped_to_bounds"
-
-
-# ---------------------------------------------------------------------------
-# Test: Full optimizer run integration
-# ---------------------------------------------------------------------------
-
-
-class TestRunOptimizer:
-    """Integration tests for run_optimizer entry point."""
-
-    @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_optimizer_writes_summary(self, mock_coordinator_data):
-        """Verify optimizer writes summary after run."""
-        run_optimizer(mock_coordinator_data, {})
-
-        assert mock_coordinator_data.optimizer_summary is not None
-        assert mock_coordinator_data.optimizer_summary["enabled"] is True
-
-    @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_optimizer_writes_results(self, mock_coordinator_data, config_options):
-        """Verify optimizer writes full results."""
-        run_optimizer(mock_coordinator_data, config_options)
-
-        assert mock_coordinator_data.optimizer_summary is not None
-        assert mock_coordinator_data.optimizer_result is not None
-        assert mock_coordinator_data.optimizer_decisions is not None
-
-    @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_summary_includes_parity_info(self, mock_coordinator_data, config_options):
-        """Verify parity info in summary after run."""
-        run_optimizer(mock_coordinator_data, config_options)
-
-        summary = mock_coordinator_data.optimizer_summary
-        assert "parity_completeness_pct" in summary
-        assert "alignment_valid" in summary
-
-    @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_handles_empty_forecast(self, config_options):
-        """Verify graceful handling of empty forecast."""
-
-        class EmptyData:
-            def __init__(self):
-                self.soc = 50.0
-                self.daily_forecast: list = []
-                self.optimizer_summary: dict | None = None
-                self.optimizer_result: dict | None = None
-                self.optimizer_decisions: list = []
-
-        empty_data = EmptyData()
-        run_optimizer(empty_data, config_options)
-
-        assert empty_data.optimizer_summary is not None
-        assert empty_data.optimizer_summary["success"] is False
-        assert "no_slots_available" in empty_data.optimizer_summary["error_message"]
-
-    @pytest.mark.skip("Phase 2 (#444): Mock data needs timezone-aware updates")
-    def test_invalid_initial_soc_sets_error_summary(self, config_options):
-        """Invalid initial SOC should surface a deterministic error summary."""
-
-        class InvalidSocData:
-            def __init__(self):
-                self.soc = 0.0
-                self.daily_forecast = [
-                    {
-                        "timestamp_iso": "2025-01-15T06:00:00Z",
-                        "slot_interval_minutes": 30,
-                        "buy_price": 0.25,
-                        "sell_price": 0.08,
-                        "solar_kwh": 0.5,
-                        "consumption_kwh": 1.2,
-                    }
-                ]
-                self.optimizer_summary: dict | None = None
-                self.optimizer_result: dict | None = None
-                self.optimizer_decisions: list = []
-
-        data = InvalidSocData()
-        run_optimizer(data, config_options)
-
-        assert data.optimizer_summary is not None
-        assert data.optimizer_summary["success"] is False
-        assert data.optimizer_summary["error_message"] == "invalid_initial_soc"
-        assert "initial_soc_info" in data.optimizer_summary

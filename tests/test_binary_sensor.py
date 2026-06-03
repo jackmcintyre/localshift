@@ -3,19 +3,20 @@
 Issue #660: Add missing platform entity tests (0% coverage)
 """
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from custom_components.localshift.binary_sensor import (
+    AmberExpressDemandWindowSensor,
     BoostChargeActiveSensor,
     BoostChargeNeededSensor,
     DemandWindowActiveSensor,
     ExcessSolarAvailableSensor,
-    ForecastExpensivePeriodSensor,
-    ForecastSpikeWithinWindowSensor,
     ForceChargeActiveSensor,
     ForceDischargeActiveSensor,
+    ForecastExpensivePeriodSensor,
+    ForecastSpikeWithinWindowSensor,
     LocalShiftBinarySensorBase,
     SolarCanReachTargetSensor,
     TeslaOverrideActiveSensor,
@@ -411,7 +412,7 @@ class TestAsyncSetupEntry:
     async def test_async_setup_entry_creates_all_sensors(
         self, mock_coordinator, mock_entry
     ):
-        """Test that async_setup_entry creates all 10 binary sensors."""
+        """Test that async_setup_entry creates all 11 binary sensors."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
 
@@ -420,7 +421,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 10
+        assert len(added_entities) == 11
 
         sensor_classes = [type(s) for s in added_entities]
         assert ForecastSpikeWithinWindowSensor in sensor_classes
@@ -433,6 +434,7 @@ class TestAsyncSetupEntry:
         assert DemandWindowActiveSensor in sensor_classes
         assert ExcessSolarAvailableSensor in sensor_classes
         assert TeslaOverrideActiveSensor in sensor_classes
+        assert AmberExpressDemandWindowSensor in sensor_classes
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_passes_coordinator(

@@ -51,6 +51,7 @@ Determines which actions are physically/legal possible for a given state.
 | Price thresholds | Only charge if price is cheap (self-consumption mode) | L1419-1428 |
 | Solar sufficiency | Suppress grid charging when solar covers deficit | L1378-1416 |
 | Export profitability | Only export if sell price exceeds threshold | L1437-1446 |
+| Negative-FIT DW guardrail | In avoidance mode, DW export allowed only if net benefit >= $0.02/kWh | `engine/constraints.py` / `engine/core.py` |
 
 ### When to Add Hard Constraints
 
@@ -93,7 +94,6 @@ Encodes preferences, costs, and behavioral biases into a scalar cost.
 |---------|---------|---------|---------------|
 | `import_cost` | `grid_import × buy_price` | Direct cost of buying from grid | L1754 |
 | `export_revenue` | `grid_export × sell_price` | Revenue from selling (negative cost) | L1755 |
-| `cycle_penalty` | `(import + export) × $0.05/kWh` | Anti-wear, discourages frivolous cycling | L1757 |
 | `switching_penalty` | `$0.02` if action ≠ current | Stability, hysteresis against flip-flopping | L1761 |
 | `uncertainty_penalty` | Scales with horizon gap | Risk aversion when forecast is short | L1765-1774 |
 | `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportunity cost of exporting | L1779-1814 |
@@ -105,7 +105,6 @@ Encodes preferences, costs, and behavioral biases into a scalar cost.
 net_cost = (
     import_cost 
     - export_revenue 
-    + cycle_penalty 
     + switching_penalty 
     + uncertainty_penalty 
     - self_consumption_value
@@ -114,6 +113,8 @@ net_cost = (
 ```
 
 Note: `self_consumption_value` is subtracted because it's a credit (value provided).
+
+**Anti-cycling:** Protection against wasteful cycling is handled by the `futile_cycling_penalty` term, which penalises grid charging when forward simulation shows the charged energy will drain through household load before reaching a useful period (solar surplus or demand window). The `switching_penalty` provides additional stability by discouraging frequent mode changes. There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
 
 ### When to Add Soft Penalties
 
@@ -266,14 +267,13 @@ All penalty rates are configurable via `OptimizerConfig`:
 class OptimizerConfig:
     # Penalty rates
     target_shortfall_penalty_per_pct: float = 0.030  # $/%-point
-    cycle_penalty_per_kwh: float = 0.01              # $/kWh
     switching_penalty: float = 0.05                  # $ per mode switch
     self_consumption_value_per_kwh: float = 0.25     # $/kWh
     export_price_margin: float = 0.02                # $/kWh above self-consumption
 ```
 
 Tuning guidelines:
-- **Increase penalty** → Stronger discouragement (e.g., higher cycle penalty = less cycling)
+- **Increase penalty** → Stronger discouragement (e.g., higher switching penalty = fewer mode changes)
 - **Decrease penalty** → Weaker discouragement (e.g., lower export margin = more exports)
 - **Set to zero** → Disable penalty (use caution, may lead to undesired behavior)
 
@@ -301,6 +301,37 @@ When adding a constraint or penalty:
    # Run with penalty enabled vs disabled
    # Verify behavior change is as expected
    ```
+
+## Control Philosophy
+
+These rules define the intended operating philosophy for `self_consumption` mode.
+They are **not** just preferences — they are part of the system's identity.
+Future changes should not violate them without explicit discussion.
+
+### Principles
+
+1. **Economics over comfort.** The goal is to minimize electricity cost, not to keep the battery full.
+2. **Grid import is acceptable overnight.** If the battery runs down and the house uses the grid, that is often the correct outcome. Overnight charging is generally wasteful and should stay penalized.
+3. **Low overnight SOC is not a bug.** The battery spending hours at 10% SOC is acceptable if that is the cheapest path. Do not interpret this as a problem that needs fixing.
+4. **Proactive charging needs strong justification.** Charging before a deadline is justified only when target-feasibility says so, not just to avoid low SOC or to feel "ready."
+5. **Anti-goal: do not optimize for overnight reserve.** In `self_consumption`, there is no implicit objective to "hold reserve overnight at all costs." If you find yourself adding reserve-holding behavior, stop and check whether it was requested.
+
+### Anti-Goals
+
+These are behaviors that should **not** appear in `self_consumption` unless explicitly requested:
+
+- Holding a meaningful reserve overnight (e.g., 25–35%) without explicit reason
+- Charging from the grid to avoid falling below minimum SOC
+- Reducing anti-cycling penalties to enable more overnight charging
+- Interpreting low overnight SOC as a reason to change the planning model
+
+### Guardrail Questions
+
+Before proposing changes to optimizer behavior, ask:
+
+- "Is this adding reserve-holding behavior?" If yes, it needs explicit approval.
+- "Am I treating low overnight SOC as a bug?" If yes, reconsider the framing.
+- "Does this change make proactive charging easier?" If yes, make sure it is gated by a real deadline, not just comfort.
 
 ## References
 

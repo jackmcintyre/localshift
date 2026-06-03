@@ -164,7 +164,7 @@ class SocSimulator:
             Elapsed minutes until 100% SOC, or None if it never fills
 
         """
-        from .slot_schedule import TOTAL_SLOTS  # noqa: PLC0415
+        from custom_components.localshift.engine.slot_schedule import TOTAL_SLOTS
 
         soc = start_soc
         base_slot = start_slot.replace(second=0, microsecond=0)

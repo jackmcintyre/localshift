@@ -50,6 +50,16 @@ for FILE in $STAGED_FILES; do
         if [ -f "$TEST_SUBDIR" ]; then
             TEST_FILE_PATHS+=("$TEST_SUBDIR")
             echo "✅ Test file exists: $TEST_SUBDIR"
+            
+            # Check for additional test files that test the same module
+            # e.g., test_solar_5min.py, test_solar_helpers.py for solar.py
+            ADDITIONAL_TESTS=$(find "tests/${SUBDIR}" -name "test_${MODULE_NAME}_*.py" -type f 2>/dev/null)
+            if [ -n "$ADDITIONAL_TESTS" ]; then
+                for TEST in $ADDITIONAL_TESTS; do
+                    TEST_FILE_PATHS+=("$TEST")
+                    echo "✅ Additional test file: $TEST"
+                done
+            fi
             continue
         fi
     fi

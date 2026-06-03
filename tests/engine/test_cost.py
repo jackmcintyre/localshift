@@ -1,5 +1,6 @@
 """Tests for cost functions (stage_cost, terminal_cost, penalty factors)."""
 
+import pytest
 from datetime import UTC, datetime
 
 from custom_components.localshift.engine.cost import (
@@ -73,22 +74,6 @@ class TestStageCost:
         terms = stage_cost(PlannerAction.EXPORT_PROACTIVE, 0.0, 1.0, slot, config)
         assert terms.export_revenue == 10.0
 
-    def test_cycle_penalty_applied(self):
-        """Cycle penalty applied for grid import/export."""
-        config = OptimizerConfig(cycle_penalty_per_kwh=0.5)
-        slot = SlotContext(
-            slot_index=0,
-            timestamp_iso=datetime.now(UTC).isoformat(),
-            buy_price=30.0,
-            sell_price=10.0,
-            solar_kwh=0.0,
-            consumption_kwh=2.0,
-            is_demand_window_slot=False,
-            slot_interval_minutes=5,
-        )
-        terms = stage_cost(PlannerAction.CHARGE_GRID_NORMAL, 1.0, 0.0, slot, config)
-        assert terms.cycle_penalty == 0.5  # 1 kWh * 0.5 c/kWh
-
     def test_switching_penalty_for_mode_switch(self):
         """Switching penalty applied when action changes."""
         config = OptimizerConfig(switching_penalty=100.0)
@@ -128,7 +113,7 @@ class TestStageCost:
         )
 
         terms = stage_cost(PlannerAction.EXPORT_PROACTIVE, 0.0, 1.0, slot, config)
-        assert terms.export_revenue == 0.0  # Clamped to 0
+        assert terms.export_revenue == -10.0  # Issue #719: no longer clamped
 
     def test_stage_cost_returns_objective_terms(self):
         """stage_cost returns ObjectiveTerms with all expected fields."""
@@ -149,7 +134,6 @@ class TestStageCost:
         # Check all expected fields exist
         assert hasattr(terms, "import_cost")
         assert hasattr(terms, "export_revenue")
-        assert hasattr(terms, "cycle_penalty")
         assert hasattr(terms, "shortfall_penalty")
         assert hasattr(terms, "switching_penalty")
 
@@ -199,7 +183,7 @@ class TestStageCost:
         assert terms.uncertainty_penalty > 0
 
     def test_futile_cycling_penalty_applied(self):
-        """Futile cycling penalty applied for grid charging."""
+        """Futile cycling penalty applied for grid charging (eff_loss + margin)."""
         config = OptimizerConfig(charge_efficiency=0.95, discharge_efficiency=0.95)
         slot = SlotContext(
             slot_index=0,
@@ -221,8 +205,13 @@ class TestStageCost:
             futile_cycling_penalty_factor=0.5,
         )
 
-        # Futile cycling penalty should be > 0
-        assert terms.futile_cycling_penalty > 0
+        # Futile cycling penalty: grid_import × (eff_loss + 0.30) × buy_price × factor
+        # eff_loss = 1 - 0.95^2 = 0.0975
+        # (0.0975 + 0.30) × $30 × 0.5 = $5.96
+        eff_loss = 1.0 - 0.95 * 0.95
+        margin = 0.30
+        expected = 1.0 * (eff_loss + margin) * 30.0 * 0.5
+        assert terms.futile_cycling_penalty == pytest.approx(expected, abs=0.1)
 
     def test_self_consumption_value_with_soc_cap(self):
         """Self-consumption value capped by available SOC."""
@@ -294,12 +283,11 @@ class TestObjectiveTerms:
         terms = ObjectiveTerms(
             import_cost=100.0,
             export_revenue=50.0,  # Revenue is subtracted (negative cost)
-            cycle_penalty=10.0,
             shortfall_penalty=5.0,
             switching_penalty=3.0,
         )
 
-        expected = 100.0 - 50.0 + 10.0 + 5.0 + 3.0
+        expected = 100.0 - 50.0 + 5.0 + 3.0
         assert terms.net_cost == expected
 
     def test_net_cost_handles_zero_values(self):
@@ -307,7 +295,6 @@ class TestObjectiveTerms:
         terms = ObjectiveTerms(
             import_cost=0.0,
             export_revenue=0.0,
-            cycle_penalty=0.0,
             shortfall_penalty=0.0,
             switching_penalty=0.0,
         )
@@ -318,32 +305,6 @@ class TestObjectiveTerms:
         terms = ObjectiveTerms(
             import_cost=50.0,
             export_revenue=-20.0,  # Export cost money (e.g., grid charges)
-            cycle_penalty=0.0,
-            shortfall_penalty=0.0,
-            switching_penalty=0.0,
-        )
-
-        # -(-20.0) = +20.0
-        expected = 50.0 - (-20.0)
-        assert terms.net_cost == expected
-
-    def test_net_cost_with_zero_values(self):
-        """net_cost handles zero values."""
-        terms = ObjectiveTerms(
-            import_cost=0.0,
-            export_revenue=0.0,
-            cycle_penalty=0.0,
-            shortfall_penalty=0.0,
-            switching_penalty=0.0,
-        )
-        assert terms.net_cost == 0.0
-
-    def test_net_cost_negative_export_no_self_consumption(self):
-        """Negative export revenue increases cost."""
-        terms = ObjectiveTerms(
-            import_cost=50.0,
-            export_revenue=-20.0,  # Export cost money (e.g., grid charges)
-            cycle_penalty=0.0,
             shortfall_penalty=0.0,
             switching_penalty=0.0,
         )

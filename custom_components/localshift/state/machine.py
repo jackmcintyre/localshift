@@ -1146,6 +1146,11 @@ class StateMachine:
                 self._commanded_mode, data, mismatch_details
             )
 
+    @property
+    def startup_grace_until(self) -> datetime | None:
+        """Return the startup grace period deadline, if active."""
+        return self._startup_grace_until
+
     def set_startup_grace(self, grace_seconds: int = 30) -> None:
         """Set startup grace period to wait for entities to populate."""
         self._startup_grace_until = dt_util.now() + timedelta(seconds=grace_seconds)

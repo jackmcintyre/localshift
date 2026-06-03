@@ -10,6 +10,8 @@ from ..const import BatteryMode
 
 if TYPE_CHECKING:
     from ..forecast.accuracy import ExtendedAccuracyMetrics
+    from ..forecast.solcast_analysis import SolcastAnalysis
+    from ..pricing.types import ForecastSlot
 
 
 def _default_extended_accuracy_metrics() -> Any:
@@ -24,29 +26,33 @@ class PerformanceMetrics:
     """Aggregated performance metrics for the learning system.
 
     Issue #170 Phase 1: Tracks decision outcomes and efficiency metrics.
+    Issue #683: Added counterfactual TOU baseline metrics for optimizer value measurement.
     """
 
     # Daily metrics
     total_decisions_today: int = 0
     avg_decision_score_today: float = 0.0
-    grid_charge_efficiency: float = 0.0  # kWh used vs kWh needed
-    export_loss_ratio: float = (
-        0.0  # exported kWh that was grid-purchased / total grid purchased
-    )
+    grid_charge_efficiency: float = 0.0
+    export_loss_ratio: float = 0.0
     unnecessary_grid_charge_kwh: float = 0.0
 
     # Rolling metrics (7-day)
     avg_decision_score_7d: float = 0.0
     avg_daily_cost_7d: float = 0.0
-    cost_trend: str = "stable"  # "improving", "stable", "degrading"
+    cost_trend: str = "stable"
 
     # Per-mode metrics
-    mode_durations_today: dict[str, float] = field(
-        default_factory=dict
-    )  # mode -> minutes
-    mode_cost_attribution: dict[str, float] = field(
-        default_factory=dict
-    )  # mode -> $ cost/saving
+    mode_durations_today: dict[str, float] = field(default_factory=dict)
+    mode_cost_attribution: dict[str, float] = field(default_factory=dict)
+
+    # Counterfactual metrics (Issue #683)
+    counterfactual_tou_cost: float = 0.0
+    counterfactual_actual_cost: float = 0.0
+    optimizer_advantage_daily: float = 0.0
+    optimizer_advantage_7d: float = 0.0
+    optimizer_advantage_daily_avg: float = 0.0
+    optimizer_advantage_percent: float = 0.0
+    counterfactual_degrading: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -61,6 +67,13 @@ class PerformanceMetrics:
             "cost_trend": self.cost_trend,
             "mode_durations_today": self.mode_durations_today,
             "mode_cost_attribution": self.mode_cost_attribution,
+            "counterfactual_tou_cost": self.counterfactual_tou_cost,
+            "counterfactual_actual_cost": self.counterfactual_actual_cost,
+            "optimizer_advantage_daily": self.optimizer_advantage_daily,
+            "optimizer_advantage_7d": self.optimizer_advantage_7d,
+            "optimizer_advantage_daily_avg": self.optimizer_advantage_daily_avg,
+            "optimizer_advantage_percent": self.optimizer_advantage_percent,
+            "counterfactual_degrading": self.counterfactual_degrading,
         }
 
     @classmethod
@@ -77,6 +90,15 @@ class PerformanceMetrics:
             cost_trend=data.get("cost_trend", "stable"),
             mode_durations_today=data.get("mode_durations_today", {}),
             mode_cost_attribution=data.get("mode_cost_attribution", {}),
+            counterfactual_tou_cost=data.get("counterfactual_tou_cost", 0.0),
+            counterfactual_actual_cost=data.get("counterfactual_actual_cost", 0.0),
+            optimizer_advantage_daily=data.get("optimizer_advantage_daily", 0.0),
+            optimizer_advantage_7d=data.get("optimizer_advantage_7d", 0.0),
+            optimizer_advantage_daily_avg=data.get(
+                "optimizer_advantage_daily_avg", 0.0
+            ),
+            optimizer_advantage_percent=data.get("optimizer_advantage_percent", 0.0),
+            counterfactual_degrading=data.get("counterfactual_degrading", False),
         )
 
 
@@ -157,14 +179,38 @@ class CoordinatorData:
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False
+
+    # Shadow prices for A/B comparison (Issue #300)
+    general_price_shadow: float = 0.0
+    feed_in_price_shadow: float = 0.0
+    general_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
+    feed_in_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
+
+    # Decision comparison results
+    primary_decision: str = ""
+    shadow_decision: str = ""
+    comparison_match: bool = True
+    price_delta: float = 0.0  # Difference between sources
+
+    # Demand window from Amber Express (Issue #300)
+    demand_window_amber: bool = False
+
     prices_available: bool = (
         True  # False when price entities are unavailable (Issue #330)
     )
-    general_forecast: list[dict[str, Any]] = field(default_factory=list)
-    feed_in_forecast: list[dict[str, Any]] = field(default_factory=list)
+    general_forecast: list[ForecastSlot] = field(default_factory=list)
+    feed_in_forecast: list[ForecastSlot] = field(default_factory=list)
     solcast_today: list[dict[str, Any]] = field(default_factory=list)
     solcast_tomorrow: list[dict[str, Any]] = field(default_factory=list)
     allow_export: str = "unknown"
+
+    # Solcast v4.5.1 analysis attribute data (Issue #778)
+    solcast_analysis_today: SolcastAnalysis | None = None
+    solcast_analysis_tomorrow: SolcastAnalysis | None = None
+    solcast_mape: float | None = None  # From sensor.solcast_pv_forecast_accuracy
+    avg_confidence_today: float = 1.0
+    avg_confidence_tomorrow: float = 1.0
+    low_confidence_periods: list[tuple[datetime, float]] = field(default_factory=list)
 
     # Computed binary sensors
     forecast_spike_within_window: bool = False
@@ -189,6 +235,7 @@ class CoordinatorData:
     # Computed sensors
     effective_cheap_price: float = 0.0
     cheap_charge_stop_price: float = 0.0
+    planner_threshold_used: float | None = None  # Threshold the optimizer actually used
     solar_weighted_avg_fit: float = 0.0
     solar_remaining_kwh: float = 0.0
     active_mode: BatteryMode = BatteryMode.SELF_CONSUMPTION
@@ -310,13 +357,11 @@ class CoordinatorData:
     weather_correlation_confidence: str = "low"  # low/medium/high
     weather_adjustment_applied: bool = False  # Whether weather adjustment was used
     weather_learning_enabled: bool = True  # Whether learning is enabled
-    weather_cooling_coefficient: float = (
-        0.0  # Learned kW per °C above cooling threshold
-    )
-    weather_heating_coefficient: float = (
-        0.0  # Learned kW per °C below heating threshold
-    )
+    weather_avg_cooling_slope: float = 0.0  # Average kW per °C above cooling threshold
+    weather_avg_heating_slope: float = 0.0  # Average kW per °C below heating threshold
+    weather_avg_r_squared: float = 0.0  # Average regression fit quality
     weather_sample_count: int = 0  # Number of samples used for learning
+    weather_anomaly_weight: float = 1.0  # Issue #681: Weight for rollback evaluation
 
     # Forecast accuracy tracking fields (Issue #37 Phase 2)
     # SOC prediction errors (predicted - actual, in percentage points)
@@ -372,6 +417,9 @@ class CoordinatorData:
         default_factory=dict
     )  # Solar forecast bias metrics and correction factors
     solar_forecast_accuracy: float = 100.0  # Overall solar forecast accuracy percentage
+    hybrid_solar_accuracy: float | None = (
+        None  # Combined LocalShift + Solcast MAPE accuracy
+    )
 
     # --- Optimization controller (Issue #170 Phase 4) ---
     optimization_weights: dict[str, float] = field(
@@ -453,6 +501,10 @@ class CoordinatorData:
     """
 
     load_deviation_diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    cloud_event_diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    cloud_event_solar_scale_factor: float | None = None
 
     # ---------------------------------------------------------------------------
     # --- Decision-to-Implementation Lag Tracking (Issue #501) ---

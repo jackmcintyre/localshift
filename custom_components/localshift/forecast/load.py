@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntry
 
 from ..const import (
+    DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT,
+    DEFAULT_CURRENT_HOUR_RECENT_WEIGHT,
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
 )
@@ -38,6 +40,7 @@ class LoadForecaster:
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
         self._forecast_corrections: ForecastCorrectionProvider | None = None
+        self._weather_adjustment_applied = False  # Track if weather adjustment was used
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -57,6 +60,14 @@ class LoadForecaster:
         self, provider: ForecastCorrectionProvider | None
     ) -> None:
         self._forecast_corrections = provider
+
+    def get_weather_adjustment_applied(self) -> bool:
+        """Return whether weather adjustment was applied in last forecast."""
+        return self._weather_adjustment_applied
+
+    def reset_weather_adjustment_applied(self) -> None:
+        """Reset weather adjustment flag before new forecast computation."""
+        self._weather_adjustment_applied = False
 
     def parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
@@ -242,8 +253,17 @@ class LoadForecaster:
             Tuple of (load_kw, source_tag)
 
         """
-        if hour_distance == 0 and current_load_kw > 0:
-            return current_load_kw, "live_load"
+        if hour_distance == 0:
+            if current_load_kw > 0 and recent_load_kw > 0:
+                blended = (
+                    DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT * current_load_kw
+                    + DEFAULT_CURRENT_HOUR_RECENT_WEIGHT * recent_load_kw
+                )
+                return blended, "blended_live"
+            elif current_load_kw > 0:
+                return current_load_kw, "live_load"
+            elif recent_load_kw > 0:
+                return recent_load_kw, "recent_load"
 
         if hour_distance <= 3 and recent_load_kw > 0 and has_historical:
             live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
@@ -342,7 +362,9 @@ class LoadForecaster:
             "no_coefficients",
             "low_confidence",
             "invalid_hour",
+            "weather_none",
         ):
+            self._weather_adjustment_applied = True
             return weather_adjusted, adjustment_source
 
         return adjusted_load_kw, adjusted_source

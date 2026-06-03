@@ -229,7 +229,7 @@ For specific entity issues:
 **Solutions:**
 1. Check `sensor.localshift_decision_history` count — needs to be 50+
 2. Enable `switch.localshift_enable_learning`
-3. Verify state machine is running — check `sensor.localshift_battery_mode` for changes
+3. Verify state machine is running — check `select.localshift_battery_mode` for mode changes
 4. Wait 2-3 days for warm-up period to complete
 
 **Expected Timeline:**
@@ -252,11 +252,13 @@ For specific entity issues:
 3. Press the button
 
 **What Gets Reset:**
-- All decision records cleared
-- Learned parameters reset to defaults
-- Pattern analysis data cleared
-- Optimization weights reset
+- Decision records cleared
+- Weather regression statistics cleared (temperature history retained)
+- Recent decision log cleared
+- Performance metrics reset
 - Learning status returns to "observing"
+
+**Note:** Parameter optimizer and pattern analysis data are not reset by this button yet.
 
 **Note:** The system will need another 2-3 days of observation before parameter optimization resumes.
 

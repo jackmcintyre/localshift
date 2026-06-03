@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from custom_components.localshift.forecast.solar_accuracy import (
+        SolarAccuracyTracker,
+    )
 
 # -----------------------------------------------------------------------------
 # Action vocabulary
@@ -184,21 +189,6 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
-    cycle_penalty_per_kwh: float = 0.05
-    """Penalty per kWh cycled to reflect true battery cycling cost.
-
-    True cost components:
-    - Efficiency loss (13% round-trip × avg price): ~$0.02/kWh
-    - Battery degradation: ~$0.01-0.03/kWh
-    - Total: $0.03-0.05/kWh
-
-    Using the upper bound ($0.05) ensures cheap-import arbitrage is only
-    attractive for spreads > 5¢/kWh, eliminating marginal trades that waste
-    cycle life for minimal savings.
-
-    Fixes #516.
-    """
-
     # --- SOC discretization ---
     soc_bins: int = 50
     """Number of SOC bins for DP state space (higher = more precise, slower)."""
@@ -253,9 +243,6 @@ class ObjectiveTerms:
     export_revenue: float = 0.0
     """Revenue from grid export in this slot (positive = revenue)."""
 
-    cycle_penalty: float = 0.0
-    """Penalty for battery cycling."""
-
     shortfall_penalty: float = 0.0
     """Terminal penalty applied at demand window boundary (only for terminal slots)."""
 
@@ -282,7 +269,6 @@ class ObjectiveTerms:
             self.import_cost
             - self.export_revenue
             - self.self_consumption_value
-            + self.cycle_penalty
             + self.shortfall_penalty
             + self.uncertainty_penalty
             + self.switching_penalty
@@ -295,7 +281,6 @@ class ObjectiveTerms:
         return {
             "import_cost": self.import_cost,
             "export_revenue": self.export_revenue,
-            "cycle_penalty": self.cycle_penalty,
             "shortfall_penalty": self.shortfall_penalty,
             "self_consumption_value": self.self_consumption_value,
             "uncertainty_penalty": self.uncertainty_penalty,
@@ -421,6 +406,52 @@ class OptimizerResult:
     reason_code_histogram: dict[str, int] = field(default_factory=dict)
     """Count of each reason code across all slots (for diagnostics)."""
 
+    # Terminal cost diagnostic fields (PR #789 wiring)
+    forecast_accuracy: float | None = None
+    """Forecast accuracy (0-1.0) used for solar discount. None if no terminal penalty."""
+
+    accuracy_discount_factor: float | None = None
+    """Discount factor applied to solar gain (0.5-1.0)."""
+
+    peak_soc_pct: float | None = None
+    """Peak SOC (%) across all planned slots."""
+
+    dw_entry_soc_pct: float | None = None
+    """SOC (%) at demand window entry slot. None if no DW."""
+
+
+# -----------------------------------------------------------------------------
+# Negative FIT avoidance context
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NegativeFitAvoidanceContext:
+    """Immutable context for recoverability-based negative-FIT avoidance.
+
+    The planner may proactively discharge at positive FIT before a bad-price
+    spill window when conservative future solar can still recover the battery
+    to target by the relevant deadline.
+    """
+
+    risk_window_start_idx: int
+    """Index of the first slot in the spill-risk window (first sell_price <= 0)."""
+
+    risk_window_end_idx: int
+    """Index of the last slot in the spill-risk window (inclusive)."""
+
+    required_headroom_kwh: float
+    """Estimated storage space (kWh) needed to absorb spill during risk window."""
+
+    recovery_deadline_idx: int | None
+    """Slot index by which target must be recoverable (demand window or horizon end)."""
+
+    conservative_recovery_kwh_by_slot: tuple[float, ...]
+    """Conservative recoverable solar (kWh) from each slot to recovery deadline."""
+
+    recoverability_floor_pct_by_slot: tuple[float, ...]
+    """Precomputed recoverability floor (%) for each slot based on future recovery potential."""
+
 
 # -----------------------------------------------------------------------------
 # Optimizer inputs
@@ -453,3 +484,12 @@ class OptimizerInputs:
 
     all_solcast: list[dict[str, Any]] = field(default_factory=list)
     """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
+
+    solcast_analysis_today: Any | None = None
+    """Solcast analysis for today with confidence data (Issue #794)."""
+
+    solcast_analysis_tomorrow: Any | None = None
+    """Solcast analysis for tomorrow with confidence data (Issue #794)."""
+
+    solar_accuracy_tracker: SolarAccuracyTracker | None = None
+    """Tracker for forecast accuracy to apply discount to terminal cost (Issue #785)."""

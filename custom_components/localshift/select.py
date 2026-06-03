@@ -77,7 +77,10 @@ class BatteryModeSelect(SelectEntity):
         self._attr_name = SELECT_NAMES[SELECT_BATTERY_MODE]
         self._attr_icon = SELECT_ICONS[SELECT_BATTERY_MODE]
         self._attr_options = SELECT_OPTIONS[SELECT_BATTERY_MODE]
-        self._previous_mode: str = "self_consumption"
+        self._manual_mode: str = entry.options.get(
+            "manual_battery_mode", "self_consumption"
+        )
+        self._previous_mode = self._manual_mode
         self._internal_update: bool = False
         self._last_committed_mode: str | None = None
         self._update_count: int = 0
@@ -90,37 +93,51 @@ class BatteryModeSelect(SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """Return the current selected option."""
-        mode = self.coordinator.data.active_mode
-        if mode == BatteryMode.MANUAL:
-            return self._previous_mode
-        if mode == BatteryMode.DEMAND_BLOCK:
+        """Return the current selected option.
+
+        When automation is ON, shows the actual mode from the optimizer
+        (SELF_CONSUMPTION, GRID_CHARGING, DEMAND_BLOCK, HOLD, etc.).
+        When automation is OFF, shows the user's manual mode selection.
+        """
+        if self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
+            mode = self.coordinator.data.active_mode
+            if mode is not None:
+                return mode.value
             return "self_consumption"
-        if mode in (
-            BatteryMode.SELF_CONSUMPTION,
-            BatteryMode.GRID_CHARGING,
-            BatteryMode.BOOST_CHARGING,
-            BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.PROACTIVE_EXPORT,
-        ):
-            return mode.value
-        return "self_consumption"
+        return self._manual_mode
 
     async def async_select_option(self, option: str) -> None:
         """Handle selection of a new battery mode."""
         _LOGGER.info("Battery mode select changed to: %s", option)
+        if option not in self._attr_options:
+            _LOGGER.error("Invalid battery mode selected: %s", option)
+            return
 
         old_mode = self.current_option
-        self._previous_mode = option
 
-        if self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            _LOGGER.info("Disabling automation due to manual mode selection")
-            self.coordinator.set_switch_state(SWITCH_AUTOMATION_ENABLED, False)
-            option_key = f"switch_state_{SWITCH_AUTOMATION_ENABLED}"
-            new_options = {**self._entry.options, option_key: False}
+        if option == "automatic":
+            self.coordinator.set_switch_state(SWITCH_AUTOMATION_ENABLED, True)
+            new_options = {
+                **self._entry.options,
+                "switch_state_automation_enabled": True,
+            }
+            self.coordinator.data.manual_override = False
             self.hass.config_entries.async_update_entry(
                 self._entry, options=new_options
             )
+            await self.coordinator.async_recompute_and_evaluate()
+            self.async_write_ha_state()
+            return
+
+        # Manual mode
+        self.coordinator.set_switch_state(SWITCH_AUTOMATION_ENABLED, False)
+        new_options = {
+            **self._entry.options,
+            "switch_state_automation_enabled": False,
+            "manual_battery_mode": option,
+        }
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+        self.coordinator.data.manual_override = True
 
         try:
             target_mode = BatteryMode(option)
@@ -135,19 +152,17 @@ class BatteryModeSelect(SelectEntity):
                 option,
                 old_mode,
             )
-            self._previous_mode = old_mode or "self_consumption"
-            self._internal_update = True
             self.async_write_ha_state()
-            self._internal_update = False
             return
 
+        self._manual_mode = option
+        self._previous_mode = option
         if self.coordinator._notification_service is not None:
             await (
                 self.coordinator._notification_service.send_manual_action_notification(
                     f"Manual {target_mode.display_name}", self.coordinator.data
                 )
             )
-
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
@@ -155,6 +170,11 @@ class BatteryModeSelect(SelectEntity):
         self.async_on_remove(
             self.coordinator.async_add_listener(self._handle_coordinator_update)
         )
+        # Sync manual_override flag with automation switch state
+        if not self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
+            self.coordinator.data.manual_override = True
+        else:
+            self.coordinator.data.manual_override = False
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -164,11 +184,6 @@ class BatteryModeSelect(SelectEntity):
 
         self._update_count += 1
         current_mode = self.current_option
-
-        if self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            mode = self.coordinator.data.active_mode
-            if mode != BatteryMode.MANUAL and mode != BatteryMode.DEMAND_BLOCK:
-                current_mode = mode.value
 
         if current_mode != self._last_committed_mode:
             self._change_count += 1

@@ -34,15 +34,6 @@ from .slots import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
 
-# Safety multiplier for shortfall penalty calibration.
-# The penalty is set to (cheapest_grid_price * battery_kwh / 100) * this factor.
-# A value of 1.5 means the optimizer mildly prefers pre-charging over risking
-# a shortfall, but won't pay more than 1.5x the remediation cost to do so.
-# Reduced from 3.0 → 1.5 (Issue #610): at 3.0 the shortfall penalty overwhelmed
-# the solar opportunity penalty, causing compulsive overnight charging even when
-# large solar surplus was forecast for the next day.
-_SHORTFALL_PENALTY_SAFETY_FACTOR = 1.5
-
 
 def _get_ha_timezone() -> str:
     """Get Home Assistant timezone string.
@@ -70,7 +61,7 @@ def _map_mode_to_action(mode: Any) -> PlannerAction | None:
         PlannerAction or None if mode is not actionable by optimizer.
 
     """
-    from ..const import BatteryMode  # noqa: PLC0415
+    from custom_components.localshift.const import BatteryMode
 
     if mode == BatteryMode.SELF_CONSUMPTION:
         return PlannerAction.HOLD
@@ -248,7 +239,7 @@ def _build_optimizer_config(
     Phase B (#403): Complete mapping of all config fields from user settings.
     Uses safe defaults for tunable parameters that will be exposed in Phase C.
     """
-    from ..const import (  # noqa: PLC0415
+    from custom_components.localshift.const import (
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
@@ -259,12 +250,14 @@ def _build_optimizer_config(
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_SWITCHING_PENALTY,
+        CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_SWITCHING_PENALTY,
+        DEFAULT_TARGET_PENALTY,
     )
 
     # User-configurable target SOC for demand window
@@ -297,6 +290,10 @@ def _build_optimizer_config(
 
     switching_penalty = float(
         config_options.get(CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY)
+    )
+
+    target_penalty = float(
+        config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
     )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
@@ -339,21 +336,9 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
-        # --- Objective weights ---
-        # Calibrated to the actual cost of buying 1% SOC at the cheapest grid price,
-        # with a safety margin so the optimizer mildly prefers pre-charging over shortfall.
-        # Formula: effective_cheap_price ($/kWh) * battery_kwh / 100 * safety_factor
-        # Example at typical Amber overnight rates: 0.15 * 13.5 / 100 * 1.5 = $0.030/%-pt
-        # (Fixes #438 — original hardcoded 1.0 was ~53x the actual remediation cost)
-        # (Issue #610 — reduced safety_factor from 3.0→1.5 to avoid overwhelming the
-        #  solar opportunity penalty, which caused compulsive overnight grid charging)
-        target_shortfall_penalty_per_pct=(
-            effective_cheap_price
-            * BATTERY_CAPACITY_KWH
-            / 100.0
-            * _SHORTFALL_PENALTY_SAFETY_FACTOR
-        ),
-        cycle_penalty_per_kwh=0.05,  # True cycle cost (Fixes #516)
+        # --- Objective weights (user-configurable via Number entities or Options Flow) ---
+        # Issue #779: Previously auto-computed from tariff, now user-configurable
+        target_shortfall_penalty_per_pct=target_penalty,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---
@@ -589,6 +574,14 @@ def _build_summary(
         if alignment.get("warnings"):
             summary["alignment_warnings"] = alignment["warnings"]
 
+    # Terminal diagnostics (PR #789)
+    # Note: adjusted_solar_gain_pct and effective_soc_at_terminal removed in Issue #816
+    # (no longer used in terminal cost calculation)
+    summary["forecast_accuracy"] = result.forecast_accuracy
+    summary["accuracy_discount_factor"] = result.accuracy_discount_factor
+    summary["peak_soc_pct"] = result.peak_soc_pct
+    summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
+
     return summary
 
 
@@ -631,7 +624,7 @@ class OptimizerSafetyGate:
             config_options: Integration options from config_entry.options
 
         """
-        from ..const import (  # noqa: PLC0415
+        from custom_components.localshift.const import (
             OPTIMIZER_FORECAST_FRESHNESS_MINUTES,
         )
 
@@ -785,7 +778,7 @@ def _derive_runtime_apply_plan(
             - reason: Explanation for the decision
 
     """
-    from ..const import BatteryMode  # noqa: PLC0415
+    from custom_components.localshift.const import BatteryMode
 
     if not decisions or current_slot_idx < 0 or current_slot_idx >= len(decisions):
         return {

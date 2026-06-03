@@ -47,9 +47,7 @@ def stage_cost(
         ObjectiveTerms with all cost components broken down.
     """
     import_cost = grid_import_kwh * slot.buy_price
-    export_revenue = grid_export_kwh * max(0.0, slot.sell_price)
-    cycle_kwh = grid_import_kwh + grid_export_kwh
-    cycle_penalty = cycle_kwh * config.cycle_penalty_per_kwh
+    export_revenue = grid_export_kwh * slot.sell_price
 
     # Switching penalty (Issue #524)
     # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
@@ -76,6 +74,8 @@ def stage_cost(
             uncertainty_penalty = 0.05 * horizon_penalty_factor * grid_import_kwh
 
     # Calculate self-consumption value (Issue #406)
+    # Battery energy used to cover household load has value because it avoids
+    # buying from grid at retail price.
     self_consumption_value = 0.0
     if config.optimization_mode == "self_consumption":
         net_load = slot.consumption_kwh - slot.solar_kwh
@@ -97,17 +97,28 @@ def stage_cost(
                 )
                 battery_for_load = min(battery_for_load, max_load_kwh)
 
-            self_consumption_value = battery_for_load * max(0.0, slot.buy_price)
+            self_consumption_value = battery_for_load * slot.buy_price
 
     # Issue #638: futile cycling penalty.
+    # Penalizes grid charging when the charged energy will drain through house load
+    # before reaching a useful period (solar surplus or demand window).
+    # Formula: grid_import_kWh × (eff_loss + margin) × buy_price × drain_factor
+    # The penalty includes efficiency loss plus a margin to discourage marginal cycling.
+    # PHILOSOPHY NOTE: in self_consumption, overnight charging is generally wasteful
+    # and should stay penalized. Do not reduce these penalties to encourage
+    # reserve-holding behavior. See docs/PLANNING_MODEL.md "Control Philosophy".
     futile_cycling_penalty = 0.0
     if action in (
         PlannerAction.CHARGE_GRID_NORMAL,
         PlannerAction.CHARGE_GRID_BOOST,
     ):
+        # Efficiency loss portion + margin to discourage marginal arbitrage
+        # Old formula: eff_loss only (~12.6% of import)
+        # New formula: eff_loss + margin (~50% of import) to prevent wasteful cycling
+        eff_loss = 1.0 - config.charge_efficiency * config.discharge_efficiency
         futile_cycling_penalty = (
             grid_import_kwh
-            * (1.0 - config.charge_efficiency * config.discharge_efficiency)
+            * (eff_loss + 0.30)  # eff_loss (~12.6%) + margin (30%)
             * slot.buy_price
             * futile_cycling_penalty_factor
         )
@@ -115,7 +126,6 @@ def stage_cost(
     return ObjectiveTerms(
         import_cost=import_cost,
         export_revenue=export_revenue,
-        cycle_penalty=cycle_penalty,
         self_consumption_value=self_consumption_value,
         uncertainty_penalty=uncertainty_penalty,
         switching_penalty=switching_penalty,
