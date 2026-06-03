@@ -383,6 +383,9 @@ class PriceCalculator:
             data.general_forecast, now_dt, data.forecast_horizon_hours
         )
 
+        # Issue #800: record un-inflated percentile base (see compute_effective_cheap_price).
+        data.base_cheap_price = base
+
         try:
             # Include tomorrow's forecast when target is tomorrow morning
             all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
@@ -469,6 +472,11 @@ class PriceCalculator:
         _, base, max_price = self._collect_forecast_prices_and_base(
             data.general_forecast, now_dt, data.forecast_horizon_hours
         )
+
+        # Issue #800: record the un-inflated "genuinely cheap" percentile base so the
+        # optimizer can gate post-demand-window (tomorrow) slots on it instead of the
+        # urgency-inflated effective price (which would cause overnight sawtooth charging).
+        data.base_cheap_price = base
 
         solar_gap = not data.solar_can_reach_target
 

@@ -137,8 +137,11 @@ def feasible_actions(
         and not (_solar_covers_deficit or _global_solar_covers)
     ):
         if config.optimization_mode == "self_consumption":
-            price_is_cheap = slot.buy_price <= config.effective_cheap_price
-            price_is_very_cheap = slot.buy_price <= config.effective_cheap_price * 0.8
+            cheap_threshold = _cheap_threshold_for_slot(
+                config, slot_idx, terminal_penalty_idx
+            )
+            price_is_cheap = slot.buy_price <= cheap_threshold
+            price_is_very_cheap = slot.buy_price <= cheap_threshold * 0.8
 
             if price_is_cheap:
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
@@ -155,6 +158,31 @@ def feasible_actions(
     )
 
     return actions
+
+
+def _cheap_threshold_for_slot(
+    config: OptimizerConfig,
+    slot_idx: int,
+    terminal_penalty_idx: int | None,
+) -> float:
+    """Return the cheap-price threshold to apply to a slot's grid-charge gate.
+
+    Issue #800 (overnight SOC floor bounce / sawtooth).
+    ``effective_cheap_price`` is a "now" value that today's low-solar urgency may have
+    inflated above the genuinely-cheap base (to fund pre-charge before *today's* demand
+    window). That urgency does not apply to slots at/after the demand-window entry —
+    using the inflated value there classifies tomorrow-night slots as "cheap" and drives
+    net-negative overnight sawtooth charging. For those slots, gate on the un-inflated
+    ``base_cheap_price`` instead. Pre-demand-window slots keep the urgency-aware value.
+    """
+    threshold = config.effective_cheap_price
+    if (
+        config.base_cheap_price is not None
+        and terminal_penalty_idx is not None
+        and slot_idx >= terminal_penalty_idx
+    ):
+        threshold = min(threshold, config.base_cheap_price)
+    return threshold
 
 
 def check_global_solar_sufficiency(
