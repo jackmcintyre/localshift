@@ -186,6 +186,7 @@ CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
+CONF_MIN_CYCLE_SAVING = "min_cycle_saving"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
@@ -236,6 +237,9 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
 DEFAULT_TARGET_PENALTY = 0.015  # $/%-point demand window urgency
+DEFAULT_MIN_CYCLE_SAVING = (
+    0.25  # $/kWh minimum saving over holding to justify cycling the battery
+)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -280,6 +284,13 @@ THRESHOLD_RANGES = {
         "step": 0.01,
         "unit": "$/kWh",
         "icon": "mdi:swap-horizontal",
+    },
+    CONF_MIN_CYCLE_SAVING: {
+        "min": 0.00,
+        "max": 1.00,
+        "step": 0.05,
+        "unit": "$/kWh",
+        "icon": "mdi:battery-sync-outline",
     },
     CONF_SPIKE_PRICE_PERCENTILE: {
         "min": 50,

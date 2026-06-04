@@ -244,6 +244,19 @@ class OptimizerConfig:
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
 
+    min_cycle_saving: float = 0.0
+    """Minimum saving over holding ($/kWh charged) required to justify cycling the
+    battery via a grid charge. 0.0 disables the gate (legacy behaviour).
+
+    Applied in ``core._compute_best_action``: a grid charge is dropped when it beats the
+    HOLD alternative by a positive but sub-threshold margin. Because the margin is the
+    DP's real cost difference (``hold_total_cost - charge_total_cost``), it already
+    credits every value source — evening-peak avoidance, demand-window target, backup
+    readiness — so genuine pre-charge and spike capture are preserved while thin
+    speculative arbitrage is dropped. Dataclass default is 0.0 so unit tests are
+    unaffected; production sets it from ``CONF_MIN_CYCLE_SAVING`` (default 0.25) in
+    ``optimizer_runner``."""
+
     forecast_horizon_hours: float = 24.0
     """Actual hours of forecast available (Issue #431)."""
 
