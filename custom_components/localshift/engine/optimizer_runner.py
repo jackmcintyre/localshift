@@ -247,6 +247,7 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
         CONF_EXPORT_PRICE_MARGIN,
+        CONF_MIN_CYCLE_SAVING,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
@@ -256,6 +257,7 @@ def _build_optimizer_config(
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_EXPORT_PRICE_MARGIN,
+        DEFAULT_MIN_CYCLE_SAVING,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
@@ -309,6 +311,10 @@ def _build_optimizer_config(
 
     target_penalty = float(
         config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
+    )
+
+    min_cycle_saving = float(
+        config_options.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING)
     )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
@@ -366,6 +372,7 @@ def _build_optimizer_config(
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
+        min_cycle_saving=min_cycle_saving,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---

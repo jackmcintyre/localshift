@@ -668,6 +668,7 @@ class DPPlanner:
         best_export = 0.0
         best_next_soc = soc
         states_explored = 0
+        hold_total_cost: float | None = None
 
         for action in actions:
             next_soc, grid_import, grid_export = _transition(soc, action, slot, config)
@@ -725,6 +726,33 @@ class DPPlanner:
                 futile_cycling_penalty_factor=futile_factor,
             )
             total_cost = stage.net_cost + future_cost
+
+            if action == PlannerAction.HOLD:
+                hold_total_cost = total_cost
+            elif (
+                config.min_cycle_saving > 0.0
+                and charge_kwh > 0.0
+                and hold_total_cost is not None
+                and action
+                in (
+                    PlannerAction.CHARGE_GRID_NORMAL,
+                    PlannerAction.CHARGE_GRID_BOOST,
+                )
+            ):
+                # Min-cycle-saving gate (anti-micro-cycling): a grid charge is only worth
+                # a battery cycle if it beats simply holding by at least
+                # config.min_cycle_saving dollars per kWh charged. The margin
+                # (hold_total_cost - total_cost) is the DP's real cost difference, so it
+                # already credits every value source the optimizer sees — evening-peak
+                # avoidance, the demand-window target, backup readiness — via future_cost.
+                # That preserves genuine pre-charge and spike capture while dropping thin
+                # speculative arbitrage. A HARD skip; unlike the soft penalties (#606/#804)
+                # it cannot be paid through. HOLD is appended first by feasible_actions, so
+                # hold_total_cost is set before any charge action is evaluated.
+                saving = hold_total_cost - total_cost
+                if 0.0 < saving < config.min_cycle_saving * charge_kwh:
+                    states_explored += 1
+                    continue
 
             if total_cost < best_cost or (
                 total_cost == best_cost
