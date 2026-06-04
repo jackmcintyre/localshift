@@ -104,7 +104,12 @@ class PriceSignalEngine:
         )
 
     def compute_effective_cheap_price(
-        self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
+        self,
+        data: CoordinatorData,
+        now_dt: datetime,
+        before_dw: bool,
+        target_hour: int,
+        target_pct: float = 0.0,
     ) -> None:
         """Compute final effective cheap price threshold."""
         self._price_calculator.compute_effective_cheap_price(
@@ -112,6 +117,7 @@ class PriceSignalEngine:
             now_dt=now_dt,
             before_dw=before_dw,
             target_hour=target_hour,
+            target_pct=target_pct,
         )
 
     def compute_solar_weighted_avg_fit(
