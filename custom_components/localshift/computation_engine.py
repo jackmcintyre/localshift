@@ -236,6 +236,16 @@ class ComputationEngine:
         """
         now_dt = dt_util.now()
 
+        # Robust daily reset of the demand-window pre-charge latch. ``target_reached_today``
+        # is otherwise only cleared by a single midnight ``async_track_time_change`` event;
+        # if that event is ever missed (restart/reload spanning local midnight, DST), the
+        # latch stays True for up to 24h and silently disables all pre-charge. A date-change
+        # check here is immune to missed events.
+        today = now_dt.date()
+        if data.last_target_reset_date != today:
+            data.target_reached_today = False
+            data.last_target_reset_date = today
+
         # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
         self._load_forecaster.set_adaptive_params(data.adaptive_params)
 
@@ -392,6 +402,7 @@ class ComputationEngine:
             now_dt=now_dt,
             before_dw=before_dw,
             target_hour=target_hour,
+            target_pct=target_pct,
         )
 
         # ---- Step 8: cheap_charge_stop_price ----
