@@ -212,8 +212,8 @@ class TestSwitchKeys:
         assert SWITCH_DEMAND_WINDOW_BLOCK in SWITCH_KEYS
 
     def test_switch_keys_count(self):
-        """Test there are 8 switch keys."""
-        assert len(SWITCH_KEYS) == 8
+        """Test there are 9 switch keys."""
+        assert len(SWITCH_KEYS) == 9
 
 
 class TestAsyncSetupEntry:

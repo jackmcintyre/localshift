@@ -47,6 +47,9 @@ class SolarBatteryForecastSensor(LocalShiftSensorBase):
         resolver = ConfidenceResolver(
             getattr(self.coordinator.data, "solcast_analysis_today", None),
             getattr(self.coordinator.data, "solcast_analysis_tomorrow", None),
+            absent_confidence=getattr(
+                self.coordinator.data, "solar_absent_confidence", 1.0
+            ),
         )
         confidence = resolver.get_confidence(dt_util.now())
         attrs["solar_confidence_used"] = confidence

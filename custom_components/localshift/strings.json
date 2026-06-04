@@ -287,6 +287,10 @@
         "name": "Allow Early DW Entry",
         "description": "Allow entering demand window below target if solar forecast can reach target during window."
       },
+      "stale_solar_conservative": {
+        "name": "Stale Solar Conservative",
+        "description": "When Solcast data is stale or absent, cap solar confidence to force pre-charging. Prevents missed pre-charge on low-accuracy forecast days."
+      },
       "notifications_enabled": {
         "name": "Notifications Enabled",
         "description": "Enable all notifications (mode transitions, daily summaries, manual actions, alerts). Turn off to silence all notifications."

@@ -39,6 +39,7 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
         resolver = ConfidenceResolver(
             getattr(d, "solcast_analysis_today", None),
             getattr(d, "solcast_analysis_tomorrow", None),
+            absent_confidence=getattr(d, "solar_absent_confidence", 1.0),
         )
         now = dt_util.now()
         confidences = [
@@ -102,6 +103,7 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
         resolver = ConfidenceResolver(
             getattr(d, "solcast_analysis_today", None),
             getattr(d, "solcast_analysis_tomorrow", None),
+            absent_confidence=getattr(d, "solar_absent_confidence", 1.0),
         )
         now = dt_util.now()
         confidences = [

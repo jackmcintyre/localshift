@@ -306,6 +306,11 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": bool,
         "staleness_minutes": None,
     },
+    "switch.localshift_stale_solar_conservative": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
     "switch.localshift_notifications_enabled": {
         "category": EntityCategory.REQUIRED,
         "expected_type": bool,
@@ -342,6 +347,11 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "staleness_minutes": None,
     },
     "number.localshift_minimum_target_soc": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
+    "number.localshift_stale_solar_confidence_ceiling": {
         "category": EntityCategory.REQUIRED,
         "expected_type": float,
         "staleness_minutes": None,

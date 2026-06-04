@@ -21,9 +21,12 @@ from .const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
     CONF_PRICING_DATA_SOURCE,
+    CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+    CONF_STALE_SOLAR_CONSERVATIVE,
     CONF_SWITCHING_PENALTY,
     CONF_TARGET_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
+    DEFAULT_ABSENT_SOLAR_CONFIDENCE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_COMPARISON_MODE,
@@ -34,10 +37,12 @@ from .const import (
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRICING_DATA_SOURCE,
+    DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
     DEFAULT_SWITCHING_PENALTY,
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_STALE_SOLAR_CONSERVATIVE,
 )
 from .const import (
     BatteryMode as _BatteryMode,
@@ -178,6 +183,48 @@ class ComputationEngine:
         _LOGGER.info("Solar accuracy tracker connected to computation engine")
 
     # ========================================================================
+    # STALENESS CEILINGS
+    # ========================================================================
+
+    def _stamp_confidence_ceilings(self, data: CoordinatorData) -> None:
+        """Stamp resolved confidence_ceiling on each SolcastAnalysis and set solar_absent_confidence.
+
+        Called once per compute cycle, before the optimizer runs, so all
+        ConfidenceResolver sites see the cap without per-site threading.
+        """
+        conservative = self._get_switch_state(SWITCH_STALE_SOLAR_CONSERVATIVE)
+        ceiling = float(
+            self.entry.options.get(
+                CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+                DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+            )
+        )
+
+        # Accuracy ceiling from tracker (dormant today: returns 1.0 when < 20 samples)
+        tracker = getattr(self._optimizer_facade, "_solar_accuracy_tracker", None)
+        accuracy_ceiling = (
+            tracker.accuracy_confidence_ceiling(low=ceiling)
+            if tracker is not None
+            else 1.0
+        )
+
+        # Set absent confidence on data (used by all ConfidenceResolver sites)
+        data.solar_absent_confidence = (
+            DEFAULT_ABSENT_SOLAR_CONFIDENCE if conservative else 1.0
+        )
+
+        # Stamp ceiling on each analysis object
+        for analysis in (data.solcast_analysis_today, data.solcast_analysis_tomorrow):
+            if analysis is None:
+                continue
+            if conservative and analysis.is_stale:
+                resolved = min(ceiling, accuracy_ceiling)
+            else:
+                # Fresh data: only the accuracy ceiling applies (dormant today → 1.0)
+                resolved = min(1.0, accuracy_ceiling)
+            analysis.confidence_ceiling = resolved
+
+    # ========================================================================
     # MAIN ENTRY POINT
     # ========================================================================
 
@@ -254,6 +301,9 @@ class ComputationEngine:
             SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
         )
         data.allow_dw_entry_under_target = allow_dw_under_target and before_dw
+
+        # ---- Stamp staleness confidence ceilings on Solcast analysis objects ----
+        self._stamp_confidence_ceilings(data)
 
         # ---- Phase 1 (#441): Shared load forecast slots ----
         # Builds data.load_forecast_slots for use by DP optimizer and other helpers.
@@ -546,6 +596,13 @@ class ComputationEngine:
             ),
             CONF_ALLOW_DW_ENTRY_UNDER_TARGET: self._get_switch_state(
                 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
+            ),
+            CONF_STALE_SOLAR_CONSERVATIVE: self._get_switch_state(
+                SWITCH_STALE_SOLAR_CONSERVATIVE
+            ),
+            CONF_STALE_SOLAR_CONFIDENCE_CEILING: self.entry.options.get(
+                CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+                DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
             ),
             CONF_OPTIMIZATION_MODE: self.entry.options.get(
                 CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE

@@ -501,6 +501,23 @@ class SolarAccuracyTracker:
         """
         return self._metrics.sample_count >= MIN_SOLAR_CORRECTION_SAMPLES
 
+    def accuracy_confidence_ceiling(self, low: float = 0.3, high: float = 1.0) -> float:
+        """Return a confidence ceiling derived from realized forecast accuracy.
+
+        Returns 1.0 (no cap) when insufficient samples exist (dormant until
+        MIN_SOLAR_CORRECTION_SAMPLES = 20 periods are recorded).
+        Once active, maps accuracy% to a ceiling: <=50% → low, linear to 1.0 at >=85%.
+        """
+        if not self.has_sufficient_samples():
+            return 1.0
+        accuracy = self._metrics.accuracy  # 0-100 scale
+        if accuracy <= 50.0:
+            return low
+        if accuracy >= 85.0:
+            return high
+        # Linear interpolation between (50, low) and (85, high)
+        return low + (high - low) * (accuracy - 50.0) / 35.0
+
     def get_bias_correction(
         self,
         time_of_day: str,

@@ -170,6 +170,12 @@ class OptimizerConfig:
     allow_dw_entry_under_target: bool = False
     """If True, allow reaching target during DW via solar (instead of by DW start)."""
 
+    stale_solar_conservative: bool = True
+    """If True, cap confidence when Solcast data is stale or absent."""
+
+    stale_solar_confidence_ceiling: float = 0.3
+    """Confidence ceiling applied when stale_solar_conservative and data is stale."""
+
     # --- Objective weights ---
     target_shortfall_penalty_per_pct: float = 0.030
     """Penalty applied per % SOC below target at demand-window entry ($/%-point).
@@ -515,6 +521,9 @@ class OptimizerInputs:
 
     solcast_analysis_tomorrow: Any | None = None
     """Solcast analysis for tomorrow with confidence data (Issue #794)."""
+
+    solar_absent_confidence: float = 1.0
+    """Absent-forecast confidence passed to ConfidenceResolver (issue stale-solar-fix)."""
 
     solar_accuracy_tracker: SolarAccuracyTracker | None = None
     """Tracker for forecast accuracy to apply discount to terminal cost (Issue #785)."""
