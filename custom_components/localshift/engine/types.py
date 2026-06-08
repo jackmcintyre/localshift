@@ -271,6 +271,32 @@ class OptimizerConfig:
     treats HOLD as a hard constraint: "Do Not Discharge."
     """
 
+    # --- Charge curve modeling ---
+    charge_taper_start_pct: float = 80.0
+    """SOC percentage above which charge rate begins tapering.
+
+    A lithium battery (and the Powerwall inverter) holds near-constant power up to a
+    "knee", then enters the constant-voltage phase where charge power falls toward zero
+    as it approaches full. Below this SOC the configured charge rate is delivered in full;
+    above it the rate is linearly derated toward ``charge_taper_min_factor`` at 100%.
+    Modelling this stops the planner from believing it can add the last ~15-20% as fast as
+    the bulk-charge region, which previously produced over-optimistic last-minute top-ups
+    that fell short of target (the rate is lower than expected as the battery fills)."""
+
+    charge_taper_min_factor: float = 0.2
+    """Fraction of nominal charge rate still available at 100% SOC (end of the taper).
+
+    The taper ramps the rate linearly from 1.0 at ``charge_taper_start_pct`` down to this
+    floor at ``max_soc_pct``. Kept > 0 so the model never predicts an infinitely-slow
+    final approach (which would make the target unreachable in finite slots)."""
+
+    # --- Anti-sawtooth protection ---
+    min_soc_floor_buffer_pct: float = 1.0
+    """Buffer above min_soc_pct where anti-sawtooth protection applies."""
+
+    min_floor_charge_gain_pct: float = 2.0
+    """Minimum SOC gain required to justify charging within floor buffer."""
+
 
 # -----------------------------------------------------------------------------
 # Per-slot decision output
