@@ -506,9 +506,23 @@ def test_feasible_actions_blocks_grid_charging_in_demand_window(default_config):
 
 def test_terminal_penalty_applied_at_dw_entry_by_default():
     """When switch is off, shortfall is measured at demand window entry."""
+    # Horizon starts BEFORE the demand window so the entry is a genuine transition into
+    # the DW (slot 1), not an in-progress DW at slot 0 (which _find_demand_window_bounds
+    # now correctly ignores — see test_mid_dw_target_undercharge).
     slots = [
         SlotContext(
             slot_index=0,
+            timestamp_iso="2026-01-03T17:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.30,
+            sell_price=0.0,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_entry=False,
+            is_demand_window_slot=False,
+        ),
+        SlotContext(
+            slot_index=1,
             timestamp_iso="2026-01-03T18:00:00",
             slot_interval_minutes=30,
             buy_price=0.30,
@@ -519,7 +533,7 @@ def test_terminal_penalty_applied_at_dw_entry_by_default():
             is_demand_window_slot=True,
         ),
         SlotContext(
-            slot_index=1,
+            slot_index=2,
             timestamp_iso="2026-01-03T18:30:00",
             slot_interval_minutes=30,
             buy_price=0.30,
@@ -529,7 +543,7 @@ def test_terminal_penalty_applied_at_dw_entry_by_default():
             is_demand_window_slot=True,
         ),
         SlotContext(
-            slot_index=2,
+            slot_index=3,
             timestamp_iso="2026-01-03T19:00:00",
             slot_interval_minutes=30,
             buy_price=0.30,

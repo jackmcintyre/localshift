@@ -300,7 +300,23 @@ class DPPlanner:
         end_idx = None
         in_demand_window = False
 
+        # When the plan is computed mid-demand-window, slot 0 is already inside the DW and
+        # slots.py flags it as an entry (prev_in_demand_window is seeded False). That
+        # in-progress DW is not a future deadline the optimizer can pre-charge for — taking
+        # it as terminal_penalty_idx pins the target penalty at the present instant and
+        # leaves the next REAL DW entry (e.g. tomorrow's) with no pre-charge incentive. So
+        # ignore entries until we have exited that initial in-progress block.
+        started_in_dw = bool(slots) and slots[0].is_demand_window_slot
+        exited_initial_dw = not started_in_dw
+
         for i, slot in enumerate(slots):
+            if not exited_initial_dw:
+                if not slot.is_demand_window_slot:
+                    exited_initial_dw = True
+                else:
+                    # Still inside the initial in-progress DW block: skip its (false) entry.
+                    continue
+
             if slot.is_demand_window_entry:
                 if entry_idx is None:
                     entry_idx = i

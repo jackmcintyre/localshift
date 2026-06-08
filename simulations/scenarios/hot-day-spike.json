@@ -175,7 +175,7 @@
   },
   "expected": {
     "price_spike": true,
-    "solar_can_reach_target": false,
+    "solar_can_reach_target": true,
     "optimizer_result_success": true
   }
 }
