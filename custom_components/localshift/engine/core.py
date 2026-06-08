@@ -773,7 +773,10 @@ class DPPlanner:
                     and slot_idx >= config.urgency_window_start_idx
                 )
 
-                if charge_soc_gain < config.min_floor_charge_gain_pct and not in_urgency_window:
+                if (
+                    charge_soc_gain < config.min_floor_charge_gain_pct
+                    and not in_urgency_window
+                ):
                     # Tiny charge at SOC floor without urgent need - skip to avoid sawtooth
                     states_explored += 1
                     continue
