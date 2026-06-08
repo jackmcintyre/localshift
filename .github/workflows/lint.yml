@@ -39,6 +39,16 @@ jobs:
       - name: Run deptry
         run: uv run deptry custom_components/localshift --ignore DEP002,DEP003 || true
 
+      # Hybrid dead-code guardrail (issue #837). NON-BLOCKING by design:
+      # it WARNS but never fails the build (exit 0 / `|| true`, like deptry)
+      # so it cannot break unrelated PRs. It combines static AST references
+      # with runtime coverage; in the lint job no coverage.json is present,
+      # so this runs static-only and reports MEDIUM (static) findings for
+      # triage. The HIGH-confidence (static + 0% runtime) signal is surfaced
+      # in the test job where coverage.json exists.
+      - name: Hybrid dead-code detector (warn-only)
+        run: uv run python scripts/hybrid_dead_code.py --min-confidence medium || true
+
   pyright:
     runs-on: ubuntu-latest
     continue-on-error: true  # Pre-existing type issues - non-blocking
