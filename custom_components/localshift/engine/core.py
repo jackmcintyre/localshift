@@ -754,6 +754,33 @@ class DPPlanner:
                     states_explored += 1
                     continue
 
+            # SOC-floor anti-sawtooth guard
+            if (
+                soc <= config.min_soc_pct + config.min_soc_floor_buffer_pct
+                and action
+                in (
+                    PlannerAction.CHARGE_GRID_NORMAL,
+                    PlannerAction.CHARGE_GRID_BOOST,
+                )
+            ):
+                # At SOC floor, only allow charging if:
+                # 1. Charge amount is meaningful (> min_floor_charge_gain_pct SOC) OR
+                # 2. We are within urgency window before demand window
+                charge_soc_gain = next_soc - soc
+                in_urgency_window = (
+                    terminal_penalty_idx is not None
+                    and config.urgency_window_start_idx is not None
+                    and slot_idx >= config.urgency_window_start_idx
+                )
+
+                if (
+                    charge_soc_gain < config.min_floor_charge_gain_pct
+                    and not in_urgency_window
+                ):
+                    # Tiny charge at SOC floor without urgent need - skip to avoid sawtooth
+                    states_explored += 1
+                    continue
+
             if total_cost < best_cost or (
                 total_cost == best_cost
                 and _ACTION_PRIORITY.get(action, 99)

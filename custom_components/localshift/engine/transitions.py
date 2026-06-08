@@ -119,6 +119,54 @@ def _transition_hold_deficit(
     return next_soc, grid_import_kwh, 0.0
 
 
+def _tapered_stored_kwh(
+    soc_pct: float,
+    charge_rate_kw: float,
+    slot_hours: float,
+    config: OptimizerConfig,
+) -> float:
+    """Energy *stored in the battery* this slot, accounting for the CV-phase taper.
+
+    Below ``charge_taper_start_pct`` the full ``charge_rate_kw`` (post charge_efficiency)
+    is delivered. Above it the rate is linearly derated toward
+    ``charge_taper_min_factor`` at ``max_soc_pct``. Because SOC rises within the slot, the
+    rate falls as charging proceeds, so the result is integrated over a handful of
+    sub-steps rather than evaluated at a single SOC. Returns stored kWh (post-efficiency);
+    the caller divides by ``charge_efficiency`` for the grid draw.
+    """
+    eff = config.charge_efficiency
+    capacity_kwh = config.battery_capacity_kwh
+    taper_start = config.charge_taper_start_pct
+    max_soc = config.max_soc_pct
+
+    untapered_stored = charge_rate_kw * eff * slot_hours
+
+    # Fast path: the slot never reaches the taper knee, so no derating applies.
+    approx_end_soc = soc_pct + (untapered_stored / capacity_kwh) * 100.0
+    if approx_end_soc <= taper_start or capacity_kwh <= 0.0:
+        return untapered_stored
+
+    span = max(1e-6, max_soc - taper_start)
+    min_factor = config.charge_taper_min_factor
+    steps = 8
+    dt = slot_hours / steps
+    soc = soc_pct
+    stored = 0.0
+    for _ in range(steps):
+        if soc <= taper_start:
+            factor = 1.0
+        elif soc >= max_soc:
+            break
+        else:
+            factor = 1.0 - (soc - taper_start) / span * (1.0 - min_factor)
+        step_stored = charge_rate_kw * eff * factor * dt
+        headroom_kwh = max(0.0, (max_soc - soc) / 100.0 * capacity_kwh)
+        step_stored = min(step_stored, headroom_kwh)
+        stored += step_stored
+        soc += (step_stored / capacity_kwh) * 100.0
+    return stored
+
+
 def _transition_charge_grid(
     soc_pct: float,
     slot: SlotContext,
@@ -134,8 +182,10 @@ def _transition_charge_grid(
     slot_hours = slot.slot_interval_minutes / 60.0
     net_kwh = slot.solar_kwh - slot.consumption_kwh
     capacity_kwh = config.battery_capacity_kwh
-    max_charge_kwh = charge_rate_kw * slot_hours
-    effective_charge_kwh = max_charge_kwh * config.charge_efficiency
+    effective_charge_kwh = _tapered_stored_kwh(
+        soc_pct, charge_rate_kw, slot_hours, config
+    )
+    max_charge_kwh = effective_charge_kwh / config.charge_efficiency
 
     if net_kwh > 0:
         next_soc, grid_import = _charge_grid_with_solar(
