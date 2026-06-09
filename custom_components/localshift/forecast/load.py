@@ -13,6 +13,8 @@ from ..const import (
     DEFAULT_CURRENT_HOUR_RECENT_WEIGHT,
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+    LOAD_SPIKE_MULTIPLIER,
+    MAX_PLAUSIBLE_LOAD_KW,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -122,6 +124,9 @@ class LoadForecaster:
         Returns tuple of (kW, source_tag).
 
         """
+        current_load_kw = self._clamp_instantaneous_load(
+            current_load_kw, recent_load_kw
+        )
         historical_kw = self._get_historical(hourly_avg_kw, slot_hour)
         base_load_kw, base_source = self._calculate_base_load(
             historical_kw,
@@ -143,7 +148,43 @@ class LoadForecaster:
                 slot_hour,
                 season,
             )
+        if final_load_kw > MAX_PLAUSIBLE_LOAD_KW:
+            _LOGGER.warning(
+                "LOAD_FORECAST_CEILING (Issue #826): forecast %.3f kW for hour %d "
+                "exceeds ceiling %.3f kW; clamping",
+                final_load_kw,
+                slot_hour,
+                MAX_PLAUSIBLE_LOAD_KW,
+            )
+            final_load_kw = MAX_PLAUSIBLE_LOAD_KW
         return round(final_load_kw, 3), adjusted_source
+
+    def _clamp_instantaneous_load(
+        self, current_load_kw: float, recent_load_kw: float
+    ) -> float:
+        """Reject transient instantaneous load spikes (Issue #826).
+
+        A single live reading must not exceed a generous multiple of the recent
+        1-hour rolling average, nor an absolute plausible ceiling. This prevents a
+        sub-minute appliance/EV/compressor inrush spike from propagating into the
+        whole-hour consumption forecast. Bounds are generous enough never to affect
+        normal operation (real sustained load is < 10 kW).
+        """
+        if current_load_kw <= 0:
+            return current_load_kw
+        ceiling = MAX_PLAUSIBLE_LOAD_KW
+        if recent_load_kw > 0:
+            ceiling = min(ceiling, recent_load_kw * LOAD_SPIKE_MULTIPLIER)
+        if current_load_kw > ceiling:
+            _LOGGER.warning(
+                "LOAD_SPIKE_CLAMP (Issue #826): instantaneous load %.3f kW exceeds "
+                "ceiling %.3f kW (recent_avg=%.3f kW); clamping to ceiling",
+                current_load_kw,
+                ceiling,
+                recent_load_kw,
+            )
+            return ceiling
+        return current_load_kw
 
     def _get_historical(self, hourly_avg_kw: dict[int, float], slot_hour: int) -> float:
         """Get historical load for a specific hour.

@@ -223,6 +223,15 @@ DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT = (
 DEFAULT_CURRENT_HOUR_RECENT_WEIGHT = (
     0.7  # 70% recent 1-hour average for current hour blend (Issue #728)
 )
+# Issue #826: Physical sanity bounds on the load forecast. A transient
+# instantaneous reading (e.g. compressor inrush, EV start) must not propagate
+# into the whole-hour consumption forecast. The home's real sustained load has
+# never exceeded ~10 kW, so these bounds sit comfortably above normal operation
+# and only reject implausible spikes.
+MAX_PLAUSIBLE_LOAD_KW = 15.0  # absolute ceiling on any per-slot load forecast (kW)
+LOAD_SPIKE_MULTIPLIER = (
+    4.0  # instantaneous load may exceed the recent 1-hr avg by at most this factor
+)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
