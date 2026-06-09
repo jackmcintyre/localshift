@@ -429,6 +429,90 @@ class TestCheckGlobalSolarSufficiency:
         result = check_global_solar_sufficiency(50.0, 0, [], config)
         assert result is False
 
+    def test_low_forecast_accuracy_discounts_solar_gain(self):
+        """Gate must not over-trust forecast solar in a low-accuracy regime.
+
+        Regression for the 2026-06-09 demand-window undercharge (recurrence of
+        #816). The hard feasibility gate simulates solar-only SOC from the *raw*
+        forecast. When forecast accuracy is poor, that raw projection over-states
+        pre-DW solar, the gate concludes "solar will reach target" and strips grid
+        pre-charge from the feasible set, and the battery enters the DW undercharged.
+
+        The shortfall *cost* classifier (reason_codes._is_target_shortfall_risk)
+        already discounts projected solar by forecast accuracy; this gate must be
+        no more optimistic than that classifier.
+        """
+        from custom_components.localshift.engine.constraints import (
+            check_global_solar_sufficiency,
+        )
+
+        # Raw solar comfortably reaches target: from 50% SOC, two rate-limited
+        # slots add ~2.3 kWh each (23%/slot on a 10 kWh battery) -> ~96% raw.
+        slots = [
+            SlotContext(
+                slot_index=i,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T00:00:00+00:00",
+                buy_price=30.0,
+                sell_price=10.0,
+                solar_kwh=5.0,
+                consumption_kwh=0.0,
+                is_demand_window_slot=False,
+            )
+            for i in range(2)
+        ]
+
+        # Full trust (accuracy=1.0): raw projection reaches target -> covered.
+        config_trusted = OptimizerConfig(
+            battery_capacity_kwh=10.0,
+            demand_window_target_soc_pct=80.0,
+            solar_charge_rate_kw=5.0,
+            charge_efficiency=0.92,
+            solar_forecast_accuracy=1.0,
+        )
+        assert check_global_solar_sufficiency(50.0, 0, slots, config_trusted) is True
+
+        # Low accuracy (0.2): discounted gain ~ (96-50)*0.2 = ~9% -> ~59% < 80%,
+        # so solar does NOT cover and grid pre-charge stays feasible.
+        config_unreliable = OptimizerConfig(
+            battery_capacity_kwh=10.0,
+            demand_window_target_soc_pct=80.0,
+            solar_charge_rate_kw=5.0,
+            charge_efficiency=0.92,
+            solar_forecast_accuracy=0.2,
+        )
+        assert (
+            check_global_solar_sufficiency(50.0, 0, slots, config_unreliable) is False
+        )
+
+    def test_default_forecast_accuracy_preserves_behavior(self):
+        """A config with no accuracy set (default 1.0) keeps the legacy gate result."""
+        from custom_components.localshift.engine.constraints import (
+            check_global_solar_sufficiency,
+        )
+
+        config = OptimizerConfig(
+            battery_capacity_kwh=10.0,
+            demand_window_target_soc_pct=80.0,
+            solar_charge_rate_kw=5.0,
+            charge_efficiency=0.92,
+        )
+        slots = [
+            SlotContext(
+                slot_index=i,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T00:00:00+00:00",
+                buy_price=30.0,
+                sell_price=10.0,
+                solar_kwh=5.0,
+                consumption_kwh=0.0,
+                is_demand_window_slot=False,
+            )
+            for i in range(2)
+        ]
+        assert config.solar_forecast_accuracy == 1.0
+        assert check_global_solar_sufficiency(50.0, 0, slots, config) is True
+
     def test_rate_limited_solar_returns_false(self):
         """Returns False when charge rate limit prevents capturing all solar.
 
