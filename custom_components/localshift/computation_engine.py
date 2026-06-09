@@ -559,35 +559,12 @@ class ComputationEngine:
             target_hour=target_hour,
         )
 
-    def _compute_solar_weighted_avg_fit(
-        self, data: CoordinatorData, now_dt: datetime, target_hour: int, after_dw: bool
-    ) -> None:
-        """Compute solar-weighted average feed-in tariff."""
-        self._forecast_pipeline.compute_solar_weighted_avg_fit(
-            data=data,
-            now_dt=now_dt,
-            target_hour=target_hour,
-            after_dw=after_dw,
-        )
-
     def _get_dp_decision_at_demand_window(
         self, data: CoordinatorData, target_hour: int
     ) -> dict | None:
         """Get the DP decision at or just after the demand window start time."""
         return self._forecast_pipeline._get_dp_decision_at_demand_window(
             data, target_hour
-        )
-
-    def _get_expected_load_kw_from_slots(
-        self, data: CoordinatorData, hours_to_target: float
-    ) -> float:
-        """Estimate average load kW until DW using data.load_forecast_slots (Phase 4, #441).
-
-        Averages slots from current slot to DW entry slot. Falls back to current
-        load if no forecast slots available.
-        """
-        return self._price_signals.get_expected_load_kw_from_slots(
-            data, hours_to_target
         )
 
     # ========================================================================
