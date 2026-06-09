@@ -164,6 +164,15 @@ class DPPlanner:
             slots, terminal_penalty_idx
         )
 
+        # Feed live forecast accuracy into the pre-charge feasibility gate so it
+        # discounts projected solar the same way the shortfall cost model does
+        # (check_global_solar_sufficiency / _is_target_shortfall_risk). Prevents the
+        # gate over-trusting an inaccurate forecast and blocking grid pre-charge
+        # (2026-06-09 demand-window undercharge; recurrence of #816).
+        config.solar_forecast_accuracy = get_forecast_accuracy(
+            inputs.solar_accuracy_tracker
+        )
+
         dp, terminal_penalty_by_bin = self._initialize_dp_tables(
             n_slots, soc_grid, config, terminal_penalty_idx, solar_capable, inputs
         )

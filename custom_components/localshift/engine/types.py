@@ -176,6 +176,16 @@ class OptimizerConfig:
     stale_solar_confidence_ceiling: float = 0.3
     """Confidence ceiling applied when stale_solar_conservative and data is stale."""
 
+    solar_forecast_accuracy: float = 1.0
+    """Forecast accuracy (0-1) used to discount projected solar in the pre-charge
+    feasibility gate (``check_global_solar_sufficiency``).
+
+    Set per-plan from ``get_forecast_accuracy(inputs.solar_accuracy_tracker)`` so the
+    hard gate is no more optimistic than the shortfall cost model
+    (``reason_codes._is_target_shortfall_risk``), which already discounts projected
+    solar by the same accuracy. Default 1.0 (full trust) preserves legacy behavior
+    for unit tests and standalone use. See the 2026-06-09 DW undercharge / #816."""
+
     # --- Objective weights ---
     target_shortfall_penalty_per_pct: float = 0.030
     """Penalty applied per % SOC below target at demand-window entry ($/%-point).

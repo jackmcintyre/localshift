@@ -262,7 +262,17 @@ def check_global_solar_sufficiency(
     simulated_terminal_soc = _simulate_solar_only_terminal_soc(
         soc_pct, remaining_slots, relative_terminal_idx, config
     )
-    return simulated_terminal_soc >= config.demand_window_target_soc_pct
+
+    # Discount the projected solar gain by forecast accuracy so this hard
+    # feasibility gate is no more optimistic than the shortfall cost model
+    # (reason_codes._is_target_shortfall_risk, which applies the same discount).
+    # Without it, a low-accuracy forecast that over-projects pre-DW solar makes the
+    # gate conclude "solar reaches target" and strips grid pre-charge from the
+    # feasible set, causing demand-window undercharge (2026-06-09 incident; #816).
+    # Mirrors the classifier: discount only the positive gain over current SOC.
+    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
+    discounted_gain = max(0.0, simulated_terminal_soc - soc_pct) * accuracy
+    return (soc_pct + discounted_gain) >= config.demand_window_target_soc_pct
 
 
 def is_cheap_import_window(
