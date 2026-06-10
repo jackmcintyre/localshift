@@ -52,6 +52,12 @@ class ForecastPipeline:
 
         self._load_forecaster.reset_weather_adjustment_applied()
 
+        robust_current_kw = (
+            data.recent_load_short_kw
+            if data.recent_load_short_kw > 0
+            else data.load_power_kw
+        )
+
         slots: list[float] = []
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
@@ -64,7 +70,7 @@ class ForecastPipeline:
                 hourly_avg_kw=historical_avg_kw,
                 slot_hour=slot_hour,
                 current_hour=current_hour,
-                current_load_kw=data.load_power_kw,
+                current_load_kw=robust_current_kw,
                 recent_load_kw=recent_load_kw,
                 temperature=temperature,
                 hours_ahead=hours_ahead,
@@ -78,11 +84,12 @@ class ForecastPipeline:
             self._load_forecaster.get_weather_adjustment_applied()
         )
         _LOGGER.info(
-            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f",
+            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f, robust_current=%.3f",
             len(slots),
             [round(slots[i], 3) for i in range(4, min(9, len(slots)))],
             recent_load_kw,
             historical_avg_kw.get(12, -1),
+            robust_current_kw,
         )
 
     def compute_solar_battery_forecast(

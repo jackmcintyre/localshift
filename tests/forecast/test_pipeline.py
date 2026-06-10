@@ -415,3 +415,60 @@ def test_get_dp_decision_when_target_hour_already_passed():
         decision = pipeline._get_dp_decision_at_demand_window(data, target_hour=18)
 
     assert decision is not None
+
+
+def test_uses_robust_short_window_when_available():
+    """When recent_load_short_kw > 0, pipeline feeds it as current_load_kw; load_power_kw is unchanged."""
+    data = CoordinatorData()
+    data.weather_temperature_forecast = {}
+    data.load_power_kw = 20.671
+    data.recent_load_short_kw = 2.6
+
+    load_forecaster = _StubLoadForecaster(1.0)
+    pipeline = ForecastPipeline(
+        load_forecaster=load_forecaster,
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+    now_dt = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+    pipeline.compute_load_forecast_slots(
+        data=data,
+        now_dt=now_dt,
+        historical_avg_kw={10: 2.5},
+        recent_load_kw=2.5,
+        total_slots=4,
+    )
+
+    assert all(call["current_load_kw"] == 2.6 for call in load_forecaster.calls)
+    assert data.load_power_kw == 20.671
+
+
+def test_falls_back_to_instantaneous_when_short_zero():
+    """When recent_load_short_kw is 0.0, pipeline falls back to load_power_kw."""
+    data = CoordinatorData()
+    data.weather_temperature_forecast = {}
+    data.load_power_kw = 1.4
+    data.recent_load_short_kw = 0.0
+
+    load_forecaster = _StubLoadForecaster(1.0)
+    pipeline = ForecastPipeline(
+        load_forecaster=load_forecaster,
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+    now_dt = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+    pipeline.compute_load_forecast_slots(
+        data=data,
+        now_dt=now_dt,
+        historical_avg_kw={10: 1.4},
+        recent_load_kw=1.4,
+        total_slots=4,
+    )
+
+    assert all(call["current_load_kw"] == 1.4 for call in load_forecaster.calls)

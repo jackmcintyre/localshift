@@ -15,6 +15,7 @@ New in this patch (Issue #151):
 from __future__ import annotations
 
 import logging
+import statistics
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -78,7 +79,11 @@ except Exception:  # pragma: no cover
 
     dt_util = _DTUtilStub()  # pragma: no cover
 
-from ..const import HISTORY_WINDOW_DAYS, MIN_SAMPLES_PER_HOUR
+from ..const import (
+    HISTORY_WINDOW_DAYS,
+    MIN_SAMPLES_PER_HOUR,
+    RECENT_LOAD_SHORT_WINDOW_SAMPLES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,6 +127,7 @@ class HistoryFetcher:
 
         # Recent load cache (1-hour average)
         self._recent_load_1hr_kw: float = 0.0
+        self._recent_load_short_kw: float = 0.0
         self._recent_load_cache_time: datetime | None = None
         self._recent_load_1hr_statistic_id: str = ""
         self._recent_load_1hr_samples: int = 0
@@ -674,6 +680,9 @@ class HistoryFetcher:
                 self._fetch_recent_load_sync, entity_id, now
             )
             self._recent_load_1hr_kw = float(result.get("recent_avg_kw", 0.0) or 0.0)
+            self._recent_load_short_kw = float(
+                result.get("recent_load_short_kw", 0.0) or 0.0
+            )
             self._recent_load_1hr_statistic_id = str(result.get("statistic_id", ""))
             self._recent_load_1hr_samples = int(result.get("samples", 0) or 0)
             self._recent_load_1hr_last_error = str(result.get("error", ""))
@@ -682,6 +691,7 @@ class HistoryFetcher:
         except Exception as e:
             _LOGGER.warning("Failed to fetch recent load: %s", e)
             self._recent_load_1hr_kw = 0.0
+            self._recent_load_short_kw = 0.0
             self._recent_load_1hr_statistic_id = ""
             self._recent_load_1hr_samples = 0
             self._recent_load_1hr_last_error = str(e)
@@ -837,6 +847,7 @@ class HistoryFetcher:
         """
         rows = data.get("rows", [])
         values: list[float] = []
+        pairs: list[tuple[Any, float]] = []
 
         for row in rows:
             if not isinstance(row, dict):
@@ -845,19 +856,39 @@ class HistoryFetcher:
             if mean_val in (None, "unknown", "unavailable"):
                 continue
             try:
-                values.append(float(mean_val))
+                fval = float(mean_val)
             except (TypeError, ValueError):
                 continue
+            values.append(fval)
+            pairs.append((row.get("start"), fval))
 
         if not values:
             return self._error_result("no numeric mean values", resolved_entity_id)
 
+        recent_avg = sum(values) / len(values)
+        short_kw = self._compute_short_window_median(
+            pairs, RECENT_LOAD_SHORT_WINDOW_SAMPLES
+        )
+
         return {
-            "recent_avg_kw": sum(values) / len(values),
+            "recent_avg_kw": recent_avg,
+            "recent_load_short_kw": short_kw,
             "samples": len(values),
             "statistic_id": resolved_entity_id,
             "error": "",
         }
+
+    def _compute_short_window_median(
+        self, pairs: list[tuple[Any, float]], k: int
+    ) -> float:
+        """Return the median of the k most-recent 5-min stat means (by start timestamp).
+
+        Rows without a start key are treated as oldest so they sort to the end only
+        among their own bucket; rows with real starts always rank ahead of them.
+        """
+        pairs_sorted = sorted(pairs, key=lambda p: (p[0] is None, p[0]))
+        window = [m for _, m in pairs_sorted[-k:]]
+        return statistics.median(window) if window else 0.0
 
     def _error_result(self, error: str, statistic_id: str = "") -> dict[str, Any]:
         """Create standardized error result.
@@ -872,6 +903,7 @@ class HistoryFetcher:
         """
         return {
             "recent_avg_kw": 0.0,
+            "recent_load_short_kw": 0.0,
             "samples": 0,
             "statistic_id": statistic_id,
             "error": error,
