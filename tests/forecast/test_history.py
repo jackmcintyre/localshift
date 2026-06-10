@@ -740,6 +740,66 @@ class TestComputeRecentAverage:
 
         assert "error" in result
 
+    def test_short_window_median_attenuates_spike(self, history_fetcher):
+        """Spike in the most-recent row inflates 1hr avg but median stays at middle value."""
+        data = {
+            "rows": [
+                {"start": 100, "mean": 2.4},
+                {"start": 200, "mean": 2.6},
+                {"start": 300, "mean": 20.6},
+            ]
+        }
+        result = history_fetcher._compute_recent_average(data, "sensor.test")
+        assert result["recent_load_short_kw"] == pytest.approx(2.6)
+        assert result["recent_avg_kw"] == pytest.approx((2.4 + 2.6 + 20.6) / 3)
+
+    def test_short_window_takes_trailing_k_by_start(self, history_fetcher):
+        """With 5 out-of-order rows, median is taken from the 3 largest-start rows."""
+        data = {
+            "rows": [
+                {"start": 500, "mean": 5.0},
+                {"start": 100, "mean": 1.0},
+                {"start": 400, "mean": 4.0},
+                {"start": 300, "mean": 3.0},
+                {"start": 200, "mean": 2.0},
+            ]
+        }
+        result = history_fetcher._compute_recent_average(data, "sensor.test")
+        # trailing 3 by start: 300->3.0, 400->4.0, 500->5.0; median=4.0
+        assert result["recent_load_short_kw"] == pytest.approx(4.0)
+
+    def test_short_window_fewer_than_k_rows(self, history_fetcher):
+        """With only 2 rows, median of those 2 rows is returned."""
+        data = {
+            "rows": [
+                {"start": 100, "mean": 2.0},
+                {"start": 200, "mean": 4.0},
+            ]
+        }
+        result = history_fetcher._compute_recent_average(data, "sensor.test")
+        assert result["recent_load_short_kw"] == pytest.approx(3.0)
+
+    def test_short_window_missing_start_uses_source_order(self, history_fetcher):
+        """Rows without a start key sort to the end; median uses last 3 in source order."""
+        data = {
+            "rows": [
+                {"mean": 1.0},
+                {"mean": 2.0},
+                {"mean": 3.0},
+                {"mean": 4.0},
+                {"mean": 5.0},
+            ]
+        }
+        result = history_fetcher._compute_recent_average(data, "sensor.test")
+        # All no-start rows; stable sort → source order preserved; last 3: 3.0, 4.0, 5.0
+        assert result["recent_load_short_kw"] == pytest.approx(4.0)
+
+    def test_short_window_zero_when_no_values(self, history_fetcher):
+        """When no numeric values exist the short-window key is 0.0 (from error result)."""
+        data = {"rows": [{"mean": None}]}
+        result = history_fetcher._compute_recent_average(data, "sensor.test")
+        assert result.get("recent_load_short_kw") == 0.0
+
 
 class TestFetchStatisticsDataEdgeCases:
     """Tests for _fetch_statistics_data edge cases."""
