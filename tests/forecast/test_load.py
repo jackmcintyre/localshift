@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.forecast.load import (
-    LoadForecaster,
-)
-from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
 from custom_components.localshift.const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+)
+from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
+from custom_components.localshift.forecast.load import (
+    LoadForecaster,
 )
 
 
@@ -540,6 +540,66 @@ class TestLoadForecasterExponentialDecay:
         expected = 0.3 * 0.45 + 0.7 * 0.5
         assert abs(kw - round(expected, 3)) < 0.001
         assert source == "blended_live"
+
+
+class TestLoadForecasterSpikeGuardrail:
+    """Issue #826: physical sanity bounds reject transient load spikes."""
+
+    def test_instantaneous_spike_clamped_to_recent_multiple(self):
+        """A 20.671 kW spike with 2.587 kW recent avg must not inflate the forecast."""
+        forecaster = _create_load_forecaster()
+        # current clamped to recent*4 = 10.348; blend = 0.3*10.348 + 0.7*2.587 = 4.915
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 2.399},
+            slot_hour=12,
+            current_hour=12,
+            current_load_kw=20.671,
+            recent_load_kw=2.587,
+            hours_ahead=0.0,
+        )
+        assert kw < 6.0  # far below the 20.671 inflation
+        assert kw == pytest.approx(4.915, abs=0.05)
+
+    def test_normal_load_not_clamped(self):
+        """Normal load within 4x of recent avg is unaffected by the guardrail."""
+        forecaster = _create_load_forecaster()
+        # current 3.0 < recent*4 = 10.0, so blend = 0.3*3.0 + 0.7*2.5 = 2.65
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 2.5},
+            slot_hour=12,
+            current_hour=12,
+            current_load_kw=3.0,
+            recent_load_kw=2.5,
+            hours_ahead=0.0,
+        )
+        assert kw == pytest.approx(2.65, abs=0.01)
+
+    def test_spike_with_no_recent_avg_clamped_to_absolute_ceiling(self):
+        """With no recent rolling avg, a spike is clamped to the absolute ceiling."""
+        forecaster = _create_load_forecaster()
+        # recent=0 -> live_load path returns clamped current = MAX_PLAUSIBLE_LOAD_KW (15.0)
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={},
+            slot_hour=12,
+            current_hour=12,
+            current_load_kw=100.0,
+            recent_load_kw=0.0,
+            hours_ahead=0.0,
+        )
+        assert kw <= 15.0
+
+    def test_final_output_never_exceeds_ceiling(self):
+        """No forecast path may emit a value above MAX_PLAUSIBLE_LOAD_KW."""
+        forecaster = _create_load_forecaster()
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 50.0},  # absurd historical to probe the output ceiling
+            slot_hour=12,
+            current_hour=None,  # skip blending -> falls back to historical/profile
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            hours_ahead=None,
+        )
+        assert kw <= 15.0
 
 
 @pytest.fixture
