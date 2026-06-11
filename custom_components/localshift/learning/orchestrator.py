@@ -174,13 +174,6 @@ class LearningOrchestrator:
             self._forecast_corrections.to_dict()
         )
 
-    def handle_periodic_save(self) -> None:
-        """Schedule a periodic save of learning data."""
-        self.hass.async_create_task(
-            self.async_save_all(),
-            "localshift_periodic_learning_save",
-        )
-
     def handle_midnight_reset(self, data) -> None:
         """Handle learning-specific midnight reset tasks."""
         if self.decision_tracker is not None:

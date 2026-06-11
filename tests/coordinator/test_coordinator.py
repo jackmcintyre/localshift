@@ -1098,28 +1098,81 @@ class TestCoordinatorBootstrapperAndLearning:
         # Verify orchestrator was called
         mock_orchestrator.async_save_all.assert_called_once()
 
-    def test_handle_learning_save_calls_orchestrator_when_present(self, coordinator):
-        """Test _handle_learning_save calls orchestrator when present."""
+    def test_save_learning_data_calls_solar_tracker(self, coordinator):
+        """Test _save_learning_data persists the solar accuracy tracker."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        coordinator._learning_orchestrator = AsyncMock()
+        tracker = AsyncMock()
+        coordinator.solar_accuracy_tracker = tracker
+
+        asyncio.run(coordinator._save_learning_data())
+
+        tracker.async_save.assert_called_once()
+
+    def test_save_learning_data_no_tracker_attribute(self, coordinator):
+        """Test _save_learning_data tolerates a missing tracker (failed startup)."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        coordinator._learning_orchestrator = AsyncMock()
+        # Ensure the attribute is absent (getattr guard path)
+        if hasattr(coordinator, "solar_accuracy_tracker"):
+            del coordinator.solar_accuracy_tracker
+
+        # Should not raise
+        asyncio.run(coordinator._save_learning_data())
+
+    def test_save_learning_data_tracker_save_does_not_block_orchestrator(
+        self, coordinator
+    ):
+        """Tracker save runs after the orchestrator save; ordering is preserved."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        calls = []
+        orchestrator = AsyncMock()
+        orchestrator.async_save_all.side_effect = lambda: calls.append("orchestrator")
+        tracker = AsyncMock()
+        tracker.async_save.side_effect = lambda: calls.append("tracker")
+        coordinator._learning_orchestrator = orchestrator
+        coordinator.solar_accuracy_tracker = tracker
+
+        asyncio.run(coordinator._save_learning_data())
+
+        assert calls == ["orchestrator", "tracker"]
+
+    def test_handle_learning_save_schedules_save_learning_data(self, coordinator):
+        """Test _handle_learning_save schedules the shared _save_learning_data path."""
         from datetime import UTC, datetime
         from unittest.mock import MagicMock
 
-        mock_orchestrator = MagicMock()
-        coordinator._learning_orchestrator = mock_orchestrator
+        coordinator.hass.async_create_task = MagicMock()
 
         # Call the method
         coordinator._handle_learning_save(datetime.now(UTC))
 
-        # Verify orchestrator was called
-        mock_orchestrator.handle_periodic_save.assert_called_once()
+        # Verify it scheduled _save_learning_data (the one shared save path that
+        # also covers the solar accuracy tracker)
+        coordinator.hass.async_create_task.assert_called_once()
+        call_args = coordinator.hass.async_create_task.call_args
+        assert call_args[0][1] == "localshift_periodic_learning_save"
+        # Close the un-awaited coroutine to avoid a RuntimeWarning
+        call_args[0][0].close()
 
     def test_handle_learning_save_when_orchestrator_is_none(self, coordinator):
-        """Test _handle_learning_save returns early when orchestrator is None."""
+        """Test _handle_learning_save does not raise when orchestrator is None."""
         from datetime import UTC, datetime
+        from unittest.mock import MagicMock
 
+        coordinator.hass.async_create_task = MagicMock()
         coordinator._learning_orchestrator = None
 
         # Should not raise
         coordinator._handle_learning_save(datetime.now(UTC))
+        call_args = coordinator.hass.async_create_task.call_args
+        call_args[0][0].close()
 
 
 class TestCoordinatorEntityHealthLogging:

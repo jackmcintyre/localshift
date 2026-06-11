@@ -652,6 +652,51 @@ class TestSolarAccuracyTracker:
         # save_pending should be reset
         assert tracker._save_pending is False
 
+    @pytest.mark.asyncio
+    async def test_save_load_round_trip_survives_fresh_tracker(self, mock_hass):
+        """record_forecast -> backfill_actual -> async_save -> fresh tracker load.
+
+        Regression for root cause B: samples must survive a process restart.
+        """
+        # Use a single in-memory store shared between the two trackers to
+        # simulate the .storage file persisting across a restart.
+        saved_payload = {}
+
+        store = MagicMock()
+
+        async def _save(data):
+            saved_payload.clear()
+            saved_payload.update(data)
+
+        async def _load():
+            return saved_payload or None
+
+        store.async_save = AsyncMock(side_effect=_save)
+        store.async_load = AsyncMock(side_effect=_load)
+
+        tracker = SolarAccuracyTracker(mock_hass, "test_entry")
+        tracker._store = store
+
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny")
+        tracker.backfill_actual(period_start, 1.5)
+
+        assert tracker._save_pending is True
+        await tracker.async_save()
+        store.async_save.assert_called_once()
+        assert tracker._save_pending is False
+
+        # Fresh tracker on the same store == a restart.
+        reloaded = SolarAccuracyTracker(mock_hass, "test_entry")
+        reloaded._store = store
+        await reloaded.async_load()
+
+        assert reloaded.metrics.sample_count == 1
+        assert len(reloaded._period_records) == 1
+        assert reloaded._period_records[0].forecast_kwh == 2.0
+        assert reloaded._period_records[0].actual_kwh == 1.5
+        assert reloaded.metrics.overall_bias == tracker.metrics.overall_bias
+
 
 class TestGetTimeOfDay:
     """Tests for _get_time_of_day static method."""
