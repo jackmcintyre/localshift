@@ -251,6 +251,31 @@ class OptimizerConfig:
     shortfall penalty. None ⇒ legacy behavior (boost only at very-cheap prices) for existing
     tests and direct callers."""
 
+    max_precharge_price: float | None = None
+    """Operator price ceiling for target-driven pre-charge ($/kWh), from
+    ``CONF_MAX_PRECHARGE_PRICE`` (default 0.20).
+
+    Target-first eligibility (2026-06-12): reaching the demand-window target is a
+    constraint the operator has authorized paying up to this price for — the same ceiling
+    the live urgency ramp in ``price_calculator`` already uses. Plumbed into the engine so
+    ``compute_pre_dw_charge_thresholds`` can size the pre-DW charge gate to the target
+    instead of leaving the target structurally unreachable on days with few cheap slots.
+    None ⇒ feature inert (legacy gate behaviour) for unit tests and direct callers."""
+
+    pre_dw_charge_thresholds: list[float] | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): per-slot charge-price threshold for
+    slots before the demand-window entry (target-first eligibility, 2026-06-12).
+
+    Computed by ``constraints.compute_pre_dw_charge_thresholds`` as the max of (a) the
+    legacy cheap threshold, (b) the urgency ramp evaluated at that slot's own time
+    (time-consistent — a morning plan sees the same unlocks afternoon re-plans will), and
+    (c) the "water level": the marginal price of the cheapest set of pre-DW slots whose
+    combined charge capacity closes the SOC deficit to target, clamped to
+    ``max_precharge_price``. ``cheap_threshold_for_slot`` returns these for pre-DW slots
+    when present; slots at/after the DW entry are unaffected (still gated on
+    ``base_cheap_price`` — the #800 overnight-sawtooth protection is untouched).
+    None ⇒ legacy behaviour."""
+
     base_cheap_price: float | None = None
     """Un-inflated "genuinely cheap" threshold (percentile-derived), $/kWh.
 

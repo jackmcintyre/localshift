@@ -247,6 +247,7 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
         CONF_EXPORT_PRICE_MARGIN,
+        CONF_MAX_PRECHARGE_PRICE,
         CONF_MIN_CYCLE_SAVING,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
@@ -257,6 +258,7 @@ def _build_optimizer_config(
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_EXPORT_PRICE_MARGIN,
+        DEFAULT_MAX_PRECHARGE_PRICE,
         DEFAULT_MIN_CYCLE_SAVING,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
@@ -315,6 +317,13 @@ def _build_optimizer_config(
 
     min_cycle_saving = float(
         config_options.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING)
+    )
+
+    # Target-first eligibility (2026-06-12): the operator's pre-charge price ceiling.
+    # Already governs the live urgency ramp in price_calculator; plumbed into the engine
+    # so compute_pre_dw_charge_thresholds can size the pre-DW charge gate to the target.
+    max_precharge_price = float(
+        config_options.get(CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE)
     )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
@@ -380,6 +389,7 @@ def _build_optimizer_config(
         self_consumption_value_per_kwh=self_consumption_value_per_kwh,
         effective_cheap_price=effective_cheap_price,
         base_cheap_price=base_cheap_price,
+        max_precharge_price=max_precharge_price,
         switching_penalty=switching_penalty,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
