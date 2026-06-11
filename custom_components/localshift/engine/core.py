@@ -773,12 +773,31 @@ class DPPlanner:
             )
             total_cost = stage.net_cost + future_cost
 
+            # Demand-window pre-charge exemption (2026-06-11 sub-target incident): a charge
+            # inside the urgency window that is still below the DW target is needed to reach
+            # that target, not speculative cycling. Without exempting it, the min-cycle-saving
+            # gate drops each early pre-charge slot — its per-slot margin over simply deferring
+            # the charge is below the threshold because the charge "could" happen later — and
+            # those deferrals compound: by the time charging is forced it is deep in the
+            # taper region with too few slots left, so the plan enters the DW under target
+            # (live: 91.8% vs a 95% target, holding the first slots instead of charging).
+            # Mirrors the SOC-floor anti-sawtooth guard's urgency-window exemption below.
+            # Safe vs the #800 overnight sawtooth: those slots are post-DW / far pre-DW and
+            # never inside an urgency window, so the gate stays fully active there.
+            is_urgency_precharge = (
+                terminal_penalty_idx is not None
+                and config.urgency_window_start_idx is not None
+                and config.urgency_window_start_idx <= slot_idx < terminal_penalty_idx
+                and soc < config.demand_window_target_soc_pct
+            )
+
             if action == PlannerAction.HOLD:
                 hold_total_cost = total_cost
             elif (
                 config.min_cycle_saving > 0.0
                 and charge_kwh > 0.0
                 and hold_total_cost is not None
+                and not is_urgency_precharge
                 and action
                 in (
                     PlannerAction.CHARGE_GRID_NORMAL,
