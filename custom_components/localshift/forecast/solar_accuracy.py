@@ -297,11 +297,20 @@ class SolarAccuracyTracker:
         self,
         period_start: datetime,
         actual_kwh: float,
+        is_boost: bool | None = None,
     ) -> None:
         """Backfill actual solar energy for a completed period.
 
         Called by coordinator after a period ends. Calculates bias and stores
         the completed record.
+
+        Args:
+            period_start: Start of the completed 30-min period.
+            actual_kwh: Measured solar energy for the period.
+            is_boost: Override the pending's boost flag at flush time. The boost
+                state recorded when the forecast was made may differ from the
+                state during the period itself. ``None`` (default) preserves the
+                pending's existing flag — backward compatible with old callers.
         """
         key = period_start.isoformat()
         pending = self._pending_forecasts.pop(key, None)
@@ -313,6 +322,15 @@ class SolarAccuracyTracker:
             )
             return
 
+        # Drop information-free overnight samples (zero forecast AND zero actual)
+        # so they don't inflate sample_count toward the 20-sample threshold.
+        # Dusk periods (forecast > 0, tiny actual) are kept — that bias matters.
+        if pending.forecast_kwh <= 0.01 and actual_kwh <= 0.01:
+            return
+
+        if is_boost is not None:
+            pending.is_boost_period = is_boost
+
         pending.actual_kwh = actual_kwh
         pending.__post_init__()
 
@@ -322,12 +340,33 @@ class SolarAccuracyTracker:
         self._recompute_metrics()
 
         _LOGGER.info(
-            "Solar period %s: forecast=%.3f kWh, actual=%.3f kWh, bias=%.1f%%",
+            "Solar period %s: forecast=%.3f kWh, actual=%.3f kWh, bias=%.1f%%%s",
             period_start.strftime("%H:%M"),
             pending.forecast_kwh,
             actual_kwh,
             pending.bias * 100,
+            " (boost, excluded from metrics)" if pending.is_boost_period else "",
         )
+
+    def evict_stale_pendings(self, max_age_hours: float = 4.0) -> None:
+        """Drop past-dated pending forecasts that never received an actual.
+
+        Safety net for periods that never got a backfill (e.g. a restart
+        mid-period). Only past-dated entries are dropped; future horizon slots
+        are legitimately pending.
+        """
+        from datetime import timedelta
+
+        cutoff = dt_util.now() - timedelta(hours=max_age_hours)
+        stale = [
+            key
+            for key, record in self._pending_forecasts.items()
+            if record.period_start < cutoff
+        ]
+        for key in stale:
+            del self._pending_forecasts[key]
+        if stale:
+            _LOGGER.debug("Evicted %d stale pending solar forecasts", len(stale))
 
     def _recompute_metrics(self) -> None:
         """Recompute aggregated metrics from all period records."""
@@ -500,6 +539,28 @@ class SolarAccuracyTracker:
             True if sample_count >= MIN_SOLAR_CORRECTION_SAMPLES.
         """
         return self._metrics.sample_count >= MIN_SOLAR_CORRECTION_SAMPLES
+
+    def get_status_dict(self) -> dict[str, Any]:
+        """Return metrics plus operational status for sensor observability.
+
+        Surfaces how close the tracker is to activating bias correction
+        (sample_count vs MIN_SOLAR_CORRECTION_SAMPLES) and how many pending /
+        boost-excluded records there are — so progress is visible without
+        log-diving.
+        """
+        status = self._metrics.to_dict()
+        status.update({
+            "pending_forecasts": len(self._pending_forecasts),
+            "samples_until_active": max(
+                0, MIN_SOLAR_CORRECTION_SAMPLES - self._metrics.sample_count
+            ),
+            "min_samples_required": MIN_SOLAR_CORRECTION_SAMPLES,
+            "correction_active": self.has_sufficient_samples(),
+            "boost_records_excluded": sum(
+                1 for r in self._period_records if r.is_boost_period
+            ),
+        })
+        return status
 
     def accuracy_confidence_ceiling(self, low: float = 0.3, high: float = 1.0) -> float:
         """Return a confidence ceiling derived from realized forecast accuracy.

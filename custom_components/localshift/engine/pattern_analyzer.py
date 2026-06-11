@@ -713,6 +713,11 @@ class PatternAnalyzer:
         """
         return self._last_report
 
+    @property
+    def last_analysis_time(self) -> datetime | None:
+        """Return the timestamp of the last analysis (persisted across restarts)."""
+        return self._last_analysis_time
+
     def should_run_analysis(self, days_since_last: int, new_decisions: int) -> bool:
         """Check if pattern analysis should run.
 

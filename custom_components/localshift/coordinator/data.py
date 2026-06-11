@@ -423,6 +423,9 @@ class CoordinatorData:
     active_bias_corrections: list[dict[str, Any]] = field(
         default_factory=list
     )  # Currently active corrections
+    last_pattern_analysis: str | None = (
+        None  # ISO timestamp of the last pattern-analysis run
+    )
     solar_bias_metrics: dict[str, Any] = field(
         default_factory=dict
     )  # Solar forecast bias metrics and correction factors

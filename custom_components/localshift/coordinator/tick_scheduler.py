@@ -26,6 +26,19 @@ _LOGGER = logging.getLogger(__name__)
 class TickScheduler:
     """Manages periodic task execution for coordinator."""
 
+    # Solar backfill period geometry / robustness thresholds.
+    _PERIOD_SECONDS = 1800.0  # 30-min accuracy period
+    # A flushed period must be at least this fraction covered by integration
+    # intervals, else it is discarded rather than recorded as a full actual.
+    # Guards the restart case: the baseline re-establishes mid-period, so that
+    # period only accumulates partial energy (Issue: partial-coverage poisoning).
+    _MIN_COVERAGE_FRACTION = 0.9
+    # Intervals longer than this (e.g. an event-loop stall or a long gap) are
+    # not integrated — one giant trapezoid prorated across many periods would
+    # produce several plausible-looking but garbage samples. We re-baseline and
+    # skip integration; the spanned periods fall below the coverage gate.
+    _MAX_INTEGRATION_SECONDS = 900.0  # 15 min
+
     def __init__(
         self,
         coordinator: LocalShiftCoordinator,
@@ -41,6 +54,15 @@ class TickScheduler:
         # Moved from coordinator — only TickScheduler reads/writes these
         self._last_solar_power_kw: float | None = None
         self._last_solar_power_timestamp: datetime | None = None
+
+        # Accumulate-and-flush state for solar backfill attribution.
+        # Energy integrated each medium tick is prorated into these wall-clock
+        # 30-min buckets (keyed by ISO period_start) and flushed once the
+        # period's end is in the past — so energy lands on the period it was
+        # produced in, not the period that just started.
+        self._period_energy_accum: dict[str, float] = {}  # ISO period_start -> kWh
+        self._period_boost_flags: dict[str, bool] = {}  # ISO period_start -> boost seen
+        self._period_coverage_accum: dict[str, float] = {}  # ISO -> seconds covered
 
     @callback
     def handle_state_change(self, _event: Event) -> None:
@@ -148,12 +170,11 @@ class TickScheduler:
                 self._coordinator.data
             )
 
-        # Backfill solar forecast accuracy for completed periods (Issue #378)
-        if (
-            hasattr(self._coordinator, "solar_accuracy_tracker")
-            and self._coordinator.solar_accuracy_tracker is not None
-        ):
-            pass
+        # Backfill solar forecast accuracy for completed periods (Issue #378).
+        # Runs on the 5-min cadence: shorter trapezoid integration is far more
+        # accurate for fast-changing solar power and makes boundary proration
+        # nearly exact.
+        self._backfill_solar_actual()
 
         # Update solar bias metrics from tracker (Issue #378)
         if (
@@ -161,7 +182,7 @@ class TickScheduler:
             and self._coordinator.solar_accuracy_tracker is not None
         ):
             self._coordinator.data.solar_bias_metrics = (
-                self._coordinator.solar_accuracy_tracker.metrics.to_dict()
+                self._coordinator.solar_accuracy_tracker.get_status_dict()
             )
             self._coordinator.data.solar_forecast_accuracy = (
                 self._coordinator.solar_accuracy_tracker.metrics.accuracy
@@ -216,9 +237,6 @@ class TickScheduler:
                 ),
                 "localshift_save_accuracy_metrics",
             )
-
-        # Backfill actual solar energy for completed periods (Issue #513)
-        self._backfill_solar_actual()
 
         _LOGGER.debug("Slow tick completed: weather forecast and accuracy metrics")
 
@@ -291,20 +309,32 @@ class TickScheduler:
             self._coordinator.cost_tracker.accumulate_costs(self._coordinator.data)
 
     def _backfill_solar_actual(self) -> None:
-        """Backfill actual solar energy for completed 30-min periods.
+        """Accumulate solar energy into wall-clock periods and flush completed ones.
 
-        Calculates energy produced since last tick using integrated power,
-        then calls backfill_actual() on the tracker for completed periods.
+        Each medium tick integrates solar power since the previous tick
+        (trapezoid) and prorates that energy across every 30-min wall-clock
+        period the interval overlaps. A period is flushed to the tracker once
+        its end is in the past, so energy produced 09:30-10:00 is attributed to
+        the 09:30 period and flushed at the first tick after 10:00 — the
+        attribution fix — instead of to the 10:00 period that just started.
+
+        Boost intervals continue to accumulate (the daily ~3pm boost no longer
+        orphans pending forecasts); their periods are flagged so the tracker
+        excludes them from metrics. The dusk power gate is gone — whether a
+        record is meaningful is decided at flush time by the tracker.
+
+        Two robustness guards keep partial/garbage samples out of the (now
+        persisted) learning store: a period must be >=90% covered by integration
+        intervals to be recorded (else it is discarded — handles the restart
+        re-baseline mid-period), and intervals longer than 15 min are not
+        integrated at all (an event-loop stall would otherwise smear one
+        trapezoid across many periods as plausible-looking garbage).
         """
-        if not hasattr(self._coordinator, "solar_accuracy_tracker"):
-            return
-
         tracker = getattr(self._coordinator, "solar_accuracy_tracker", None)
         if tracker is None:
             return
 
-        if getattr(self._coordinator.data, "boost_charge_active", False) is True:
-            return
+        from datetime import timedelta
 
         from homeassistant.util import dt as dt_util
 
@@ -318,21 +348,82 @@ class TickScheduler:
 
         assert self._last_solar_power_kw is not None  # nosec B101 — type narrowing, not assertion
 
-        time_delta_hours = (
-            now - self._last_solar_power_timestamp
-        ).total_seconds() / 3600.0
-        if time_delta_hours < 0.01:
+        last_ts = self._last_solar_power_timestamp
+        interval_seconds = (now - last_ts).total_seconds()
+        if interval_seconds / 3600.0 < 0.01:
+            # Interval too short to integrate; keep the baseline for next tick.
             return
 
-        avg_power_kw = (self._last_solar_power_kw + current_power) / 2.0
-        energy_kwh = avg_power_kw * time_delta_hours
-
-        if energy_kwh > 0.001 and current_power > 0.01:
-            now_local = now.astimezone()
-            period_start = now_local.replace(
-                minute=(now_local.minute // 30) * 30, second=0, microsecond=0
+        # Pathological gap (stall / long pause): re-baseline without integrating.
+        # The periods spanned by the gap stay below the coverage gate and are
+        # discarded at flush, rather than recording a smeared trapezoid.
+        if interval_seconds <= self._MAX_INTEGRATION_SECONDS:
+            boost_active = bool(
+                getattr(self._coordinator.data, "boost_charge_active", False)
             )
-            tracker.backfill_actual(period_start, energy_kwh)
+            energy_kwh = ((self._last_solar_power_kw + current_power) / 2.0) * (
+                interval_seconds / 3600.0
+            )
 
+            # Prorate this interval's energy across every 30-min wall-clock period
+            # it overlaps, accumulating both energy and covered seconds. Keys are
+            # the local :00/:30 floor serialized with .isoformat(), matching the
+            # pending-forecast keys recorded by optimizer_facade.
+            start_local = last_ts.astimezone()
+            end_local = now.astimezone()
+            period_start = start_local.replace(
+                minute=(start_local.minute // 30) * 30, second=0, microsecond=0
+            )
+            while period_start < end_local:
+                period_end = period_start + timedelta(minutes=30)
+                overlap_seconds = (
+                    min(end_local, period_end) - max(start_local, period_start)
+                ).total_seconds()
+                if overlap_seconds > 0:
+                    key = period_start.isoformat()
+                    self._period_energy_accum[key] = self._period_energy_accum.get(
+                        key, 0.0
+                    ) + energy_kwh * (overlap_seconds / interval_seconds)
+                    self._period_coverage_accum[key] = (
+                        self._period_coverage_accum.get(key, 0.0) + overlap_seconds
+                    )
+                    if boost_active:
+                        self._period_boost_flags[key] = True
+                period_start = period_end
+
+        # Advance the integration baseline.
         self._last_solar_power_timestamp = now
         self._last_solar_power_kw = current_power
+
+        # Flush every period whose end is now in the past (record or discard).
+        self._flush_completed_periods(tracker, now.astimezone())
+
+        # Drop pendings that never received an actual (e.g. restart mid-period).
+        tracker.evict_stale_pendings()
+
+    def _flush_completed_periods(self, tracker, now_local: datetime) -> None:
+        """Flush accumulated periods whose end is in the past.
+
+        A period is recorded only if it is at least _MIN_COVERAGE_FRACTION
+        covered by integration intervals; otherwise it is discarded (its
+        pending forecast is later cleaned by evict_stale_pendings) so a
+        partially-observed period is not recorded as a full-period actual.
+        """
+        from datetime import timedelta
+
+        min_coverage = self._MIN_COVERAGE_FRACTION * self._PERIOD_SECONDS
+        for key in list(self._period_energy_accum.keys()):
+            period_start = datetime.fromisoformat(key)
+            if period_start + timedelta(minutes=30) > now_local:
+                continue
+            kwh = self._period_energy_accum.pop(key)
+            coverage = self._period_coverage_accum.pop(key, 0.0)
+            is_boost = self._period_boost_flags.pop(key, False)
+            if coverage < min_coverage:
+                _LOGGER.debug(
+                    "Discarding partially-covered solar period %s (%.0f%% covered)",
+                    period_start.strftime("%H:%M"),
+                    100.0 * coverage / self._PERIOD_SECONDS,
+                )
+                continue
+            tracker.backfill_actual(period_start, kwh, is_boost=is_boost)
