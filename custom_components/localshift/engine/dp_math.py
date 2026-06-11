@@ -5,6 +5,57 @@ SOC grid construction, bin mapping, cost interpolation, and solar simulation.
 
 from custom_components.localshift.engine.types import OptimizerConfig, SlotContext
 
+# --- Deficit-aware urgency window (Issue #800 follow-up / 2026-06-11 incident) ---
+URGENCY_WINDOW_MIN_HOURS = 4.0
+"""Floor for the urgency window (the pre-#559-creep fixed value).
+
+The #559 stability anchor: never widen *below* this, so near-target plans keep the
+narrow 4h urgency ramp that stopped urgency creep from charging at marginal prices."""
+
+URGENCY_WINDOW_MAX_HOURS = 8.0
+"""Cap for the urgency window (the pre-#559 value).
+
+Bounds urgency creep and #800 overnight-sawtooth exposure: a pathological deficit can
+never widen the window past 8h, so slots more than 8h before the demand window always
+gate on the un-inflated base price."""
+
+URGENCY_CHARGE_MARGIN_HOURS = 0.5
+"""Safety margin added to the bare charge-time estimate.
+
+Mirrors the ``boost_needed`` margin in ``forecast/pipeline.py`` so the window opens
+slightly before the charge would have to start flat-out to reach target in time."""
+
+
+def urgency_window_hours(
+    soc_pct: float,
+    target_pct: float,
+    battery_capacity_kwh: float,
+    charge_rate_kw: float,
+    charge_efficiency: float,
+    *,
+    min_hours: float = URGENCY_WINDOW_MIN_HOURS,
+    max_hours: float = URGENCY_WINDOW_MAX_HOURS,
+    margin_hours: float = URGENCY_CHARGE_MARGIN_HOURS,
+) -> float:
+    """Hours before the demand window over which urgency pre-charge is legitimate.
+
+    The window is sized to the SOC deficit: how long flat-out normal-rate grid charging
+    would take to close the gap to target, plus a small margin, clamped to ``[min_hours,
+    max_hours]``. A fixed 4h window (the previous behaviour) blocked morning charging when
+    a deep deficit needed more runway than 4h (2026-06-11 incident: 11.6% -> 95% needs
+    ~4.2h). The floor preserves the #559 anti-creep behaviour for near-target plans; the
+    cap bounds #800 overnight-sawtooth exposure.
+
+    Mirrors the rate-aware charge-time math at ``forecast/pipeline.py`` (``deficit /
+    (rate * efficiency)``). Degenerate rate/efficiency/deficit collapses to ``min_hours``.
+    """
+    deficit_kwh = max(0.0, (target_pct - soc_pct) / 100.0 * battery_capacity_kwh)
+    rate = charge_rate_kw * charge_efficiency
+    if rate <= 0.0 or deficit_kwh <= 0.0:
+        return min_hours
+    hours = deficit_kwh / rate + margin_hours
+    return max(min_hours, min(max_hours, hours))
+
 
 def _build_soc_grid(config: OptimizerConfig) -> list[float]:
     """Build SOC discretization grid from min_soc_pct to max_soc_pct."""

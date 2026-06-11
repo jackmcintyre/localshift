@@ -1,6 +1,6 @@
 """Tests for DPPlanner core class."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
@@ -594,3 +594,81 @@ class TestDPPlannerEdgeCoverage:
 
         # The planner completes — we just need the code path executed
         assert result.success is True
+
+
+class TestDeficitAwareUrgencyWindow:
+    """Test 8: _determine_urgency_window_start_idx widens with the SOC deficit.
+
+    The urgency window is anchored to the demand-window entry and sized to how much
+    pre-charge runway the deficit needs (floor 4h, cap 8h). A deep deficit reaches
+    further back than the old fixed 4h; a near-target deficit stays at the 4h floor.
+    """
+
+    INTERVAL = 30
+
+    def _slots(self, n_pre: int, start: datetime) -> list[SlotContext]:
+        # n_pre pre-DW 30-min slots, then a DW-entry slot at index n_pre.
+        slots = []
+        for i in range(n_pre + 1):
+            t = start + timedelta(minutes=self.INTERVAL * i)
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=t.isoformat(),
+                    slot_interval_minutes=self.INTERVAL,
+                    buy_price=0.16,
+                    sell_price=0.05,
+                    solar_kwh=0.0,
+                    consumption_kwh=0.3,
+                    is_demand_window_entry=(i == n_pre),
+                    is_demand_window_slot=(i == n_pre),
+                )
+            )
+        return slots
+
+    def test_deep_deficit_reaches_back_beyond_four_hours(self):
+        """SOC 4%, DW +6h: window ~4.55h => start idx earlier than the fixed-4h slot.
+
+        The fixed-4h window cuts off at 11:00 (index 4). A 4% -> 95% deficit needs ~4.55h
+        of runway, cutting off at ~10:27, so the window reaches one slot further back to
+        index 3 (10:30) — proving the window widens with the deficit.
+        """
+        start = datetime(2026, 6, 11, 9, 0, tzinfo=UTC)
+        slots = self._slots(12, start)  # 12 × 30min = 6h pre-DW; DW entry at index 12
+        config = OptimizerConfig(
+            demand_window_target_soc_pct=95.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            charge_efficiency=0.92,
+        )
+        idx = DPPlanner()._determine_urgency_window_start_idx(
+            slots, terminal_penalty_idx=12, initial_soc_pct=4.0, config=config
+        )
+        assert idx == 3
+
+    def test_near_target_deficit_stays_at_four_hour_floor(self):
+        """SOC 90%, DW +6h: window collapses to the 4h floor => start idx at DW-4h."""
+        start = datetime(2026, 6, 11, 9, 0, tzinfo=UTC)
+        slots = self._slots(12, start)
+        config = OptimizerConfig(
+            demand_window_target_soc_pct=95.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            charge_efficiency=0.92,
+        )
+        idx = DPPlanner()._determine_urgency_window_start_idx(
+            slots, terminal_penalty_idx=12, initial_soc_pct=90.0, config=config
+        )
+        # 4h floor: cutoff = 15:00 - 4h = 11:00 = index 4.
+        assert idx == 4
+
+    def test_no_demand_window_returns_none(self):
+        start = datetime(2026, 6, 11, 9, 0, tzinfo=UTC)
+        slots = self._slots(4, start)
+        config = OptimizerConfig(demand_window_target_soc_pct=95.0)
+        assert (
+            DPPlanner()._determine_urgency_window_start_idx(
+                slots, terminal_penalty_idx=None, initial_soc_pct=11.0, config=config
+            )
+            is None
+        )

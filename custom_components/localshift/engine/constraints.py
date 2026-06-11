@@ -15,6 +15,13 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+VERY_CHEAP_PRICE_FACTOR = 0.8
+"""Fraction of the cheap threshold below which a price is "very cheap".
+
+A price at/below ``cheap_threshold × VERY_CHEAP_PRICE_FACTOR`` unconditionally unlocks
+boost charging (a genuine bargain worth filling fast). Shared with the reason-code
+classifier so the "very cheap" boundary agrees everywhere it is applied."""
+
 
 def _determine_export_actions(
     soc_pct: float,
@@ -156,11 +163,30 @@ def feasible_actions(
                 config, slot_idx, terminal_penalty_idx
             )
             price_is_cheap = slot.buy_price <= cheap_threshold
-            price_is_very_cheap = slot.buy_price <= cheap_threshold * 0.8
+            price_is_very_cheap = (
+                slot.buy_price <= cheap_threshold * VERY_CHEAP_PRICE_FACTOR
+            )
 
             if price_is_cheap:
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
-                if price_is_very_cheap:
+                # Shortfall-aware boost (2026-06-11 incident): boost is normally reserved
+                # for genuinely very-cheap prices, but if normal-rate charging from here
+                # cannot reach the demand-window target in the slots remaining, unlock
+                # boost so the DP has a feasible path to target instead of eating the
+                # terminal shortfall penalty. At an equal price, boost stores more per
+                # slot; the very-cheap gate alone left the target unreachable while prices
+                # sat just above 0.8× threshold. The ``slot_idx < terminal_penalty_idx``
+                # guard is load-bearing: it confines this to pre-DW slots so a post-DW low
+                # SOC + cheap price can never unlock overnight boost (#800 in a new costume).
+                normal_cannot_reach_target = (
+                    terminal_penalty_idx is not None
+                    and slot_idx < terminal_penalty_idx
+                    and config.max_normal_gain_pct_to_terminal is not None
+                    and slot_idx < len(config.max_normal_gain_pct_to_terminal)
+                    and soc_pct + config.max_normal_gain_pct_to_terminal[slot_idx]
+                    < config.demand_window_target_soc_pct
+                )
+                if price_is_very_cheap or normal_cannot_reach_target:
                     actions.append(PlannerAction.CHARGE_GRID_BOOST)
         else:
             actions.append(PlannerAction.CHARGE_GRID_NORMAL)
@@ -192,8 +218,10 @@ def cheap_threshold_for_slot(
     That urgency only legitimately applies to slots close to the upcoming demand window, so
     the inflated value is used only inside the urgency window
     ``[urgency_window_start_idx, terminal_penalty_idx)``; every other slot (post-DW, and any
-    slot more than ~4h before the DW — e.g. tonight's overnight when the next horizon DW is
-    tomorrow evening) is gated on the un-inflated ``base_cheap_price``. Using the inflated
+    slot earlier than the deficit-derived urgency window — e.g. tonight's overnight when the
+    next horizon DW is tomorrow evening) is gated on the un-inflated ``base_cheap_price``.
+    The window width is deficit-derived (floor 4h, cap 8h) via
+    ``dp_math.urgency_window_hours``, not a fixed 4h. Using the inflated
     value outside that window classifies overnight slots as "cheap" and drives net-negative
     sawtooth charging.
 
@@ -213,6 +241,61 @@ def cheap_threshold_for_slot(
     if not in_urgency_window:
         threshold = min(threshold, config.base_cheap_price)
     return threshold
+
+
+def compute_max_normal_gain_pct_to_terminal(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int | None,
+) -> list[float] | None:
+    """Max SOC %-points normal-rate grid charging can add from each slot to the DW entry.
+
+    For each slot index ``i < terminal_penalty_idx`` this returns the most SOC the battery
+    could gain by charging at the *normal* grid rate in every chargeable slot from ``i`` up
+    to (but not including) the demand-window entry — i.e. an SOC-independent upper bound on
+    reachable gain. The shortfall-aware boost gate in ``feasible_actions`` compares
+    ``soc_pct + gain[i]`` against the target: when even this optimistic normal-rate ceiling
+    falls short, boost is unlocked so the DP keeps a feasible path to target.
+
+    A slot contributes ``charge_rate_kw × slot_hours × charge_efficiency /
+    battery_capacity_kwh × 100`` %-points when it is non-DW and its price is at/below the
+    per-slot cheap threshold (``cheap_threshold_for_slot``); otherwise it carries the
+    running suffix sum unchanged. Entries at/after ``terminal_penalty_idx`` are ``0.0``.
+
+    The charge taper (``charge_taper_start_pct``) is deliberately ignored: it depends on the
+    SOC *trajectory*, which is incompatible with this SOC-independent precompute. That makes
+    the gain slightly optimistic only near the 80%+ taper boundary, so boost can be
+    under-granted there — a safe error direction (we never over-boost from this bound).
+
+    Pre-DW solar gain is likewise ignored, which biases the other way: boost can unlock even
+    when normal-rate charging *plus* solar would have reached target. This is benign — the DP
+    still cost-selects, and at an equal price boost costs the same per kWh as normal, so an
+    over-grant of *feasibility* does not force an over-charge.
+
+    Returns ``None`` when there is no demand window (``terminal_penalty_idx is None``) or the
+    mode is not self-consumption, which keeps the gate dormant (boost only at very-cheap) for
+    existing tests and direct callers.
+    """
+    if terminal_penalty_idx is None or config.optimization_mode != "self_consumption":
+        return None
+
+    gains = [0.0] * len(slots)
+    cumulative = 0.0
+    for j in range(min(terminal_penalty_idx, len(slots)) - 1, -1, -1):
+        slot = slots[j]
+        if not slot.is_demand_window_slot:
+            threshold = cheap_threshold_for_slot(config, j, terminal_penalty_idx)
+            if slot.buy_price <= threshold:
+                slot_hours = slot.slot_interval_minutes / 60.0
+                cumulative += (
+                    config.charge_rate_kw
+                    * slot_hours
+                    * config.charge_efficiency
+                    / config.battery_capacity_kwh
+                    * 100.0
+                )
+        gains[j] = cumulative
+    return gains
 
 
 def check_global_solar_sufficiency(

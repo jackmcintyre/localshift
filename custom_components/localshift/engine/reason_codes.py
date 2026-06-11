@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from custom_components.localshift.engine.constraints import (
+    VERY_CHEAP_PRICE_FACTOR,
     cheap_threshold_for_slot,
 )
 from custom_components.localshift.engine.penalties import (
@@ -234,7 +235,7 @@ def _is_cheap_import_window(
     if slot.buy_price > threshold:
         return False
     is_blind = _is_blind_to_future_solar(terminal_penalty_idx, slots, inputs=inputs)
-    return not is_blind or slot.buy_price <= (threshold * 0.8)
+    return not is_blind or slot.buy_price <= (threshold * VERY_CHEAP_PRICE_FACTOR)
 
 
 def _is_blind_to_future_solar(

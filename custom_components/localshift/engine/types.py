@@ -225,16 +225,31 @@ class OptimizerConfig:
 
     urgency_window_start_idx: int | None = None
     """Solver-derived (set by ``DPPlanner._solve``): index of the first slot within the
-    urgency window (~4h) before the demand-window entry (Issue #800 follow-up).
+    urgency window before the demand-window entry (Issue #800 follow-up). The window width is
+    deficit-derived (floor 4h, cap 8h) via ``dp_math.urgency_window_hours`` — a deep SOC
+    deficit needs more pre-charge runway than a fixed 4h allows (2026-06-11 incident).
 
     The urgency-inflated ``effective_cheap_price`` is a "now" value that is only legitimate
-    for slots close to the upcoming demand window (its urgency ramp is ~4h). When the plan
+    for slots close to the upcoming demand window (its urgency ramp tracks the same window).
+    When the plan
     recomputes after the day's demand window has begun, the first DW-entry in the rolling
     horizon is *tomorrow* evening, so tonight's overnight slots are technically "pre-DW" —
     but they are far outside the urgency window, so gating them on the inflated price
     re-introduces the overnight sawtooth. ``cheap_threshold_for_slot`` therefore applies the
     inflated price only to slots in ``[urgency_window_start_idx, terminal_penalty_idx)`` and
     gates everything else on the un-inflated base. None ⇒ legacy (base only post-DW)."""
+
+    max_normal_gain_pct_to_terminal: list[float] | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): per-slot upper bound on the SOC
+    %-points normal-rate grid charging could add from that slot to the demand-window entry
+    (2026-06-11 shortfall incident).
+
+    Computed by ``constraints.compute_max_normal_gain_pct_to_terminal``. The shortfall-aware
+    boost gate in ``feasible_actions`` compares ``soc_pct + gain[slot_idx]`` against the
+    demand-window target: when even this optimistic normal-rate ceiling falls short, boost is
+    unlocked so the DP keeps a feasible path to target rather than eating the terminal
+    shortfall penalty. None ⇒ legacy behavior (boost only at very-cheap prices) for existing
+    tests and direct callers."""
 
     base_cheap_price: float | None = None
     """Un-inflated "genuinely cheap" threshold (percentile-derived), $/kWh.

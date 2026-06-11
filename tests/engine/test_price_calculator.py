@@ -944,6 +944,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime()
         target_hour = (now + timedelta(hours=6)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = [
             {
                 "start_time": now.isoformat(),
@@ -952,7 +953,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         ]
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.10, max_price=0.50
+            data, now, target_hour, base=0.10, max_price=0.50, target_pct=0.0
         )
         assert result == 0.10
 
@@ -961,10 +962,11 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime().replace(minute=0, second=0, microsecond=0)
         target_hour = (now + timedelta(hours=1)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = []
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.10, max_price=0.50
+            data, now, target_hour, base=0.10, max_price=0.50, target_pct=0.0
         )
         assert result > 0.10
 
@@ -973,6 +975,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime().replace(minute=0, second=0, microsecond=0)
         target_hour = (now + timedelta(hours=1)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = [
             {
                 "start_time": now.isoformat(),
@@ -981,7 +984,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         ]
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.10, max_price=0.50
+            data, now, target_hour, base=0.10, max_price=0.50, target_pct=0.0
         )
         assert result >= 0.25
 
@@ -990,12 +993,43 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime().replace(minute=0, second=0, microsecond=0)
         target_hour = (now + timedelta(minutes=30)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = []
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.40, max_price=0.50
+            data, now, target_hour, base=0.40, max_price=0.50, target_pct=0.0
         )
         assert result <= 0.50
+
+    def test_deep_deficit_widens_urgency_window(self, calculator):
+        """A deep SOC deficit engages urgency at 4.1h out, where a fixed 4h window cannot.
+
+        With a forecast floor pinned at the base price, urgency only lifts the threshold
+        when the deficit-derived window reaches past ``hours_left``. From 11% -> 95% the
+        window is ~4.235h, so at 4.1h out urgency is engaged (> base); the legacy 4h window
+        (target_pct=0) and a near-target deficit both leave the threshold at base.
+        """
+        # now 10:54, target 15:00 -> exactly 4.1h of runway.
+        now = datetime(2026, 6, 11, 10, 54, tzinfo=timezone.utc)
+        target_hour = 15
+        # Forecast floor == base so urgency_price is what drives the result, not the floor.
+        forecast = [{"start_time": now.isoformat(), "per_kwh": 0.10}]
+
+        def _call(soc, target_pct):
+            data = MagicMock()
+            data.soc = soc
+            data.general_forecast = forecast
+            return calculator._calculate_urgency_adjusted_price(
+                data, now, target_hour, base=0.10, max_price=0.50, target_pct=target_pct
+            )
+
+        deep = _call(soc=11.0, target_pct=95.0)
+        legacy = _call(soc=11.0, target_pct=0.0)
+        near_target = _call(soc=90.0, target_pct=95.0)
+
+        assert deep > 0.10, "deep deficit must engage urgency at 4.1h out"
+        assert legacy == 0.10, "legacy 4h window: no urgency beyond 4h out"
+        assert near_target == 0.10, "shallow deficit stays at the 4h floor"
 
 
 class TestComputeEffectiveCheapPricePreliminary:
@@ -1139,6 +1173,7 @@ class TestComputeEffectiveCheapPrice:
         """Test urgency price when solar cannot reach target."""
         now = _make_utc_datetime()
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = [{"start_time": now.isoformat(), "per_kwh": 0.10}]
         data.forecast_horizon_hours = 12.0
         data.solar_can_reach_target = False
