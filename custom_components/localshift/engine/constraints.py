@@ -319,7 +319,6 @@ def compute_pre_dw_charge_thresholds(
     from datetime import datetime
 
     from custom_components.localshift.engine.dp_math import (
-        _simulate_solar_only_terminal_soc,
         urgency_ramp_price,
         urgency_window_hours,
     )
@@ -351,49 +350,12 @@ def compute_pre_dw_charge_thresholds(
         config.charge_efficiency,
     )
 
-    # Expected SOC at DW entry on solar alone, discounting only the positive gain by
-    # forecast accuracy — the same shape as check_global_solar_sufficiency, so the
-    # required grid charge is no more optimistic than the solar feasibility gate
-    # (the raw-vs-discounted asymmetry behind the 2026-06-09 undercharge / #816).
-    sim_soc = _simulate_solar_only_terminal_soc(
-        initial_soc_pct, slots, terminal_penalty_idx, config
+    required_stored_kwh = _required_stored_kwh_to_target(
+        slots, config, terminal_penalty_idx, initial_soc_pct
     )
-    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
-    if sim_soc >= initial_soc_pct:
-        expected_soc_at_dw = initial_soc_pct + (sim_soc - initial_soc_pct) * accuracy
-    else:
-        expected_soc_at_dw = sim_soc
-    required_stored_kwh = max(
-        0.0,
-        (config.demand_window_target_soc_pct - expected_soc_at_dw)
-        / 100.0
-        * config.battery_capacity_kwh,
+    water = _target_funding_water_level(
+        slots, config, terminal_penalty_idx, required_stored_kwh, ramp_base, max_price
     )
-
-    water = ramp_base
-    if required_stored_kwh > 0.0:
-        candidates: list[tuple[float, float]] = []
-        for j in range(terminal_penalty_idx):
-            slot = slots[j]
-            if slot.is_demand_window_slot:
-                continue
-            stored_kwh = (
-                config.boost_charge_rate_kw
-                * (slot.slot_interval_minutes / 60.0)
-                * config.charge_efficiency
-            )
-            if stored_kwh > 0.0:
-                candidates.append((slot.buy_price, stored_kwh))
-        candidates.sort(key=lambda c: c[0])
-        # Insufficient capacity even using every pre-DW slot: authorize the ceiling.
-        water = max_price
-        cumulative = 0.0
-        for price, stored_kwh in candidates:
-            cumulative += stored_kwh
-            if cumulative >= required_stored_kwh:
-                water = price
-                break
-        water = max(ramp_base, min(water, max_price))
 
     thresholds: list[float] = []
     for j, slot in enumerate(slots):
@@ -411,6 +373,81 @@ def compute_pre_dw_charge_thresholds(
         # max_precharge_price this function must never tighten the existing gate.
         thresholds.append(max(legacy[j], ramp_j, water))
     return thresholds
+
+
+def _required_stored_kwh_to_target(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int,
+    initial_soc_pct: float,
+) -> float:
+    """Grid charge (stored kWh) needed to reach the DW target, net of expected solar.
+
+    Expected SOC at DW entry on solar alone, discounting only the positive gain by
+    forecast accuracy — the same shape as ``check_global_solar_sufficiency``, so the
+    required grid charge is no more optimistic than the solar feasibility gate
+    (the raw-vs-discounted asymmetry behind the 2026-06-09 undercharge / #816).
+    """
+    from custom_components.localshift.engine.dp_math import (
+        _simulate_solar_only_terminal_soc,
+    )
+
+    sim_soc = _simulate_solar_only_terminal_soc(
+        initial_soc_pct, slots, terminal_penalty_idx, config
+    )
+    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
+    if sim_soc >= initial_soc_pct:
+        expected_soc_at_dw = initial_soc_pct + (sim_soc - initial_soc_pct) * accuracy
+    else:
+        expected_soc_at_dw = sim_soc
+    return max(
+        0.0,
+        (config.demand_window_target_soc_pct - expected_soc_at_dw)
+        / 100.0
+        * config.battery_capacity_kwh,
+    )
+
+
+def _target_funding_water_level(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int,
+    required_stored_kwh: float,
+    ramp_base: float,
+    max_price: float,
+) -> float:
+    """Marginal buy price of the cheapest pre-DW slot set that closes the deficit.
+
+    Eligibility by ``price <= water level`` IS cheapest-sufficient-set funding: the DP
+    funds the target from the cheapest slots first and pricier slots unlock only when
+    genuinely needed. When even every pre-DW slot together cannot close the deficit,
+    the operator's full ``max_precharge_price`` ceiling is authorized.
+    """
+    if required_stored_kwh <= 0.0:
+        return ramp_base
+
+    candidates: list[tuple[float, float]] = []
+    for j in range(terminal_penalty_idx):
+        slot = slots[j]
+        if slot.is_demand_window_slot:
+            continue
+        stored_kwh = (
+            config.boost_charge_rate_kw
+            * (slot.slot_interval_minutes / 60.0)
+            * config.charge_efficiency
+        )
+        if stored_kwh > 0.0:
+            candidates.append((slot.buy_price, stored_kwh))
+    candidates.sort(key=lambda c: c[0])
+
+    water = max_price
+    cumulative = 0.0
+    for price, stored_kwh in candidates:
+        cumulative += stored_kwh
+        if cumulative >= required_stored_kwh:
+            water = price
+            break
+    return max(ramp_base, min(water, max_price))
 
 
 def compute_max_normal_gain_pct_to_terminal(
