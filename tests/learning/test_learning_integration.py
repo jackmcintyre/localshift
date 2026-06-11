@@ -338,26 +338,14 @@ class TestLearningOrchestratorForecastCorrections:
 
         assert state_machine._decision_tracker is tracker
 
-    @pytest.mark.parametrize(
-        ("learning_status", "starting_days", "expects_analysis", "expected_days"),
-        [
-            ("observing", 5, False, 6),
-            ("observing", 6, True, 0),
-            ("tuning", 3, False, 4),
-            ("tuning", 4, True, 0),
-            ("optimizing", 1, False, 2),
-            ("optimizing", 2, True, 0),
-        ],
-    )
-    def test_handle_midnight_reset_uses_phase_specific_interval(
-        self,
-        mock_hass,
-        mock_entry,
-        learning_status,
-        starting_days,
-        expects_analysis,
-        expected_days,
+    def test_handle_midnight_reset_saves_but_never_runs_analysis(
+        self, mock_hass, mock_entry
     ):
+        """Midnight reset persists learning data but no longer triggers analysis.
+
+        Analysis is now scheduled from the medium tick based on the persisted
+        last_analysis_time, not a per-restart day counter.
+        """
         orchestrator = LearningOrchestrator(mock_hass, mock_entry, lambda _key: False)
         orchestrator.decision_tracker = MagicMock(
             async_save=MagicMock(return_value=None)
@@ -368,10 +356,8 @@ class TestLearningOrchestratorForecastCorrections:
         orchestrator.pattern_analyzer = MagicMock(
             async_save=MagicMock(return_value=None)
         )
-        orchestrator._days_since_pattern_analysis = starting_days
 
         data = CoordinatorData()
-        data.learning_status = learning_status
         orchestrator.handle_midnight_reset(data)
 
         task_names = [
@@ -380,49 +366,7 @@ class TestLearningOrchestratorForecastCorrections:
         assert "localshift_save_decision_outcomes" in task_names
         assert "localshift_save_param_optimizer" in task_names
         assert "localshift_save_pattern_analyzer" in task_names
-        assert ("localshift_pattern_analysis" in task_names) is expects_analysis
-        assert orchestrator._days_since_pattern_analysis == expected_days
-
-        for call in mock_hass.async_create_task.call_args_list:
-            coro = call.args[0]
-            if hasattr(coro, "close"):
-                coro.close()
-        mock_hass.async_create_task.reset_mock()
-
-    def test_handle_midnight_reset_keeps_counter_across_phase_changes(
-        self, mock_hass, mock_entry
-    ):
-        orchestrator = LearningOrchestrator(mock_hass, mock_entry, lambda _key: False)
-        orchestrator.decision_tracker = MagicMock(
-            async_save=MagicMock(return_value=None)
-        )
-        orchestrator.param_optimizer = MagicMock(
-            async_save=MagicMock(return_value=None)
-        )
-        orchestrator.pattern_analyzer = MagicMock(
-            async_save=MagicMock(return_value=None)
-        )
-        orchestrator._days_since_pattern_analysis = 1
-
-        data = CoordinatorData()
-        data.learning_status = "observing"
-        orchestrator.handle_midnight_reset(data)
-        assert orchestrator._days_since_pattern_analysis == 2
-
-        for call in mock_hass.async_create_task.call_args_list:
-            coro = call.args[0]
-            if hasattr(coro, "close"):
-                coro.close()
-        mock_hass.async_create_task.reset_mock()
-
-        data.learning_status = "tuning"
-        orchestrator.handle_midnight_reset(data)
-
-        task_names = [
-            call.args[1] for call in mock_hass.async_create_task.call_args_list
-        ]
         assert "localshift_pattern_analysis" not in task_names
-        assert orchestrator._days_since_pattern_analysis == 3
 
         for call in mock_hass.async_create_task.call_args_list:
             coro = call.args[0]
@@ -513,7 +457,8 @@ class TestLearningOrchestratorForecastCorrections:
         await orchestrator._run_pattern_analysis(data)
 
         orchestrator.pattern_analyzer.analyze.assert_not_called()
-        assert orchestrator._last_pattern_analysis is None
+        # Too few decisions backs off so a fresh install does not retry every tick.
+        assert orchestrator._next_analysis_attempt is not None
 
     @pytest.mark.asyncio
     async def test_run_pattern_analysis_updates_status_and_biases(
@@ -528,11 +473,14 @@ class TestLearningOrchestratorForecastCorrections:
         report.biases_detected = [bias]
         report.data_points_analyzed = 120
 
+        analysis_time = datetime(2026, 6, 11, 0, 0)
         orchestrator.decision_tracker = MagicMock(
             get_recent_decisions=MagicMock(return_value=[1] * 60)
         )
         orchestrator.pattern_analyzer = MagicMock(
-            analyze=MagicMock(return_value=report)
+            analyze=MagicMock(return_value=report),
+            async_save=AsyncMock(),
+            last_analysis_time=analysis_time,
         )
         orchestrator.param_optimizer = MagicMock(set_bias_corrections=MagicMock())
 
@@ -542,7 +490,9 @@ class TestLearningOrchestratorForecastCorrections:
         assert data.pattern_report_summary == {"summary": 1}
         assert data.active_bias_corrections == [{"bias": 1}]
         assert data.learning_status == "optimizing"
-        assert orchestrator._last_pattern_analysis is not None
+        # New last_analysis_time is persisted immediately and surfaced on data.
+        orchestrator.pattern_analyzer.async_save.assert_awaited_once()
+        assert data.last_pattern_analysis == analysis_time.isoformat()
 
     @pytest.mark.asyncio
     async def test_run_pattern_analysis_sets_observing_for_low_sample_report(
@@ -559,7 +509,9 @@ class TestLearningOrchestratorForecastCorrections:
             get_recent_decisions=MagicMock(return_value=[1] * 60)
         )
         orchestrator.pattern_analyzer = MagicMock(
-            analyze=MagicMock(return_value=report)
+            analyze=MagicMock(return_value=report),
+            async_save=AsyncMock(),
+            last_analysis_time=datetime(2026, 6, 11, 0, 0),
         )
         orchestrator.param_optimizer = MagicMock(set_bias_corrections=MagicMock())
 

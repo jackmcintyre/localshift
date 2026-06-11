@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from ..const import SWITCH_ENABLE_LEARNING
 from ..engine.counterfactual import CounterfactualEvaluator
@@ -42,8 +43,12 @@ class LearningOrchestrator:
         self.pattern_analyzer: Any | None = None
         self.optimization_controller: Any | None = None
 
-        self._last_pattern_analysis: datetime | None = None
-        self._days_since_pattern_analysis = 0
+        # Throttle for pattern-analysis scheduling. In-memory only: prevents
+        # double-scheduling while the task runs and re-attempting every 5 min on
+        # a fresh install with too few decisions. Due-ness itself is driven by
+        # the pattern analyzer's persisted last_analysis_time, so this resetting
+        # to None on restart is harmless.
+        self._next_analysis_attempt: datetime | None = None
         self._forecast_corrections: ForecastCorrectionProvider | None = None
         self._forecast_corrections_store = Store(
             hass,
@@ -188,21 +193,11 @@ class LearningOrchestrator:
                 "localshift_save_param_optimizer",
             )
 
-        self._days_since_pattern_analysis += 1
-        analysis_interval = self._get_pattern_analysis_interval(
-            getattr(data, "learning_status", "observing")
-        )
-        if (
-            self.pattern_analyzer is not None
-            and self.decision_tracker is not None
-            and self._days_since_pattern_analysis >= analysis_interval
-        ):
-            self._days_since_pattern_analysis = 0
-            self.hass.async_create_task(
-                self._run_pattern_analysis(data),
-                "localshift_pattern_analysis",
-            )
-
+        # Pattern analysis is no longer triggered here. The old in-memory day
+        # counter reset on every restart (the system restarts every 1-2 days),
+        # so it never reached the 7-day interval and analysis never ran. It is
+        # now scheduled from update_medium_tick based on the persisted
+        # last_analysis_time (see maybe_run_pattern_analysis).
         if self.pattern_analyzer is not None:
             self.hass.async_create_task(
                 self.pattern_analyzer.async_save(),
@@ -211,6 +206,83 @@ class LearningOrchestrator:
 
     def _get_pattern_analysis_interval(self, learning_status: str) -> int:
         return self._PATTERN_ANALYSIS_INTERVALS.get(learning_status, 7)
+
+    @staticmethod
+    def _derive_learning_status(decision_count: int) -> str:
+        """Derive learning status from how many decisions are available.
+
+        Equivalent to the thresholds applied inside _run_pattern_analysis:
+        report.data_points_analyzed == len(decisions) and the same 720h decision
+        window is used, so deriving from the count at startup is identical.
+        """
+        if decision_count >= 100:
+            return "optimizing"
+        if decision_count >= 50:
+            return "tuning"
+        return "observing"
+
+    def maybe_run_pattern_analysis(self, data) -> None:
+        """Schedule pattern analysis when it is due, based on persisted state.
+
+        Due when the analyzer has never run, or when more than the
+        status-dependent interval (7/5/3 days) has elapsed since the persisted
+        last_analysis_time. A short in-memory throttle prevents double-scheduling
+        while the task runs and stops a too-few-decisions install from retrying
+        every 5 minutes.
+        """
+        if self.pattern_analyzer is None or self.decision_tracker is None:
+            return
+
+        now = dt_util.now()
+        if (
+            self._next_analysis_attempt is not None
+            and now < self._next_analysis_attempt
+        ):
+            return
+
+        last = self.pattern_analyzer.last_analysis_time
+        interval_days = self._get_pattern_analysis_interval(
+            getattr(data, "learning_status", "observing")
+        )
+        due = last is None or (now - last) >= timedelta(days=interval_days)
+        if not due:
+            return
+
+        # Reserve a 1h window so the running task is not re-scheduled. If the run
+        # skips for too few decisions it pushes this out to 24h itself.
+        self._next_analysis_attempt = now + timedelta(hours=1)
+        self.hass.async_create_task(
+            self._run_pattern_analysis(data),
+            "localshift_pattern_analysis",
+        )
+
+    def restore_runtime_state(self, data) -> None:
+        """Re-derive ephemeral learning state after a restart.
+
+        learning_status, the last pattern report summary, and active bias
+        corrections are not persisted as such — but everything needed to
+        reconstruct them is. This re-derives them from the persisted decision
+        deque and pattern report so sensors render correctly and bias
+        corrections (which only lived in memory) survive a restart.
+        """
+        if self.decision_tracker is not None:
+            recent = self.decision_tracker.get_recent_decisions(hours=720)
+            data.learning_status = self._derive_learning_status(len(recent))
+
+        if self.pattern_analyzer is None:
+            return
+
+        report = self.pattern_analyzer.get_last_report()
+        if report is not None:
+            data.pattern_report_summary = report.get_summary()
+            data.active_bias_corrections = [
+                bc.to_dict() for bc in report.biases_detected
+            ]
+            if self.param_optimizer is not None and report.biases_detected:
+                self.param_optimizer.set_bias_corrections(report.biases_detected)
+
+        last = self.pattern_analyzer.last_analysis_time
+        data.last_pattern_analysis = last.isoformat() if last is not None else None
 
     def update_medium_tick(self, data) -> None:
         """Run learning and monitoring tasks on medium tick."""
@@ -260,6 +332,11 @@ class LearningOrchestrator:
                     len(active_adjustments),
                 )
 
+        # Schedule pattern analysis if it is due. handle_medium_tick skips during
+        # the startup grace period, so the first post-grace tick (~5-35 min after
+        # a restart) runs any overdue analysis — startup catch-up for free.
+        self.maybe_run_pattern_analysis(data)
+
     async def _run_pattern_analysis(self, data) -> None:
         """Run weekly pattern analysis to generate bias corrections."""
         if self.pattern_analyzer is None or self.decision_tracker is None:
@@ -272,29 +349,29 @@ class LearningOrchestrator:
                 "Pattern analysis skipped: only %d decisions (need 50+)",
                 len(decisions),
             )
+            # Back off so a fresh install does not retry every medium tick.
+            self._next_analysis_attempt = dt_util.now() + timedelta(hours=24)
             return
 
         report = self.pattern_analyzer.analyze(decisions)
+        # Persist the new last_analysis_time immediately so a crash before the
+        # next 5-min periodic save does not lose the "analysis ran" timestamp.
+        await self.pattern_analyzer.async_save()
 
         data.pattern_report_summary = report.get_summary()
         data.active_bias_corrections = [bc.to_dict() for bc in report.biases_detected]
-
-        total_samples = report.data_points_analyzed
-        if total_samples >= 100:
-            data.learning_status = "optimizing"
-        elif total_samples >= 50:
-            data.learning_status = "tuning"
-        else:
-            data.learning_status = "observing"
+        data.learning_status = self._derive_learning_status(report.data_points_analyzed)
 
         if self.param_optimizer is not None and report.biases_detected:
             self.param_optimizer.set_bias_corrections(report.biases_detected)
-            _LOGGER.info(
-                "Pattern analysis complete: %d bias corrections applied",
-                len(report.biases_detected),
-            )
 
-        self._last_pattern_analysis = datetime.now()
+        last = self.pattern_analyzer.last_analysis_time
+        data.last_pattern_analysis = last.isoformat() if last is not None else None
+        _LOGGER.info(
+            "Pattern analysis complete: %d decisions analyzed, %d biases detected",
+            report.data_points_analyzed,
+            len(report.biases_detected),
+        )
 
         _LOGGER.info(
             "Pattern analysis complete: %d decisions analyzed, %d biases detected",
