@@ -540,7 +540,7 @@ class TestForecastDiagnosticsSensor:
             debug_forecast_slot_time="10:00",
             debug_first_forecast_slot_time="09:00",
             debug_time_gap_seconds=120.5,
-            debug_mode_source="forecast",
+            debug_mode_source="optimizer",
             allow_export="yes",
             weather_entity_id="weather.home",
             weather_temperature_current=25.0,

@@ -175,7 +175,7 @@ class TestForecastStatusSensor:
             forecast_ready=True,
             solcast_today=[1, 2, 3],
             solcast_tomorrow=[4, 5],
-            debug_mode_source="live",
+            debug_mode_source="optimizer",
         )
         attrs = sensor.extra_state_attributes
         assert attrs["solcast_today_entries"] == 3

@@ -286,6 +286,13 @@ class ComputationEngine:
         if data.manual_override:
             data.active_mode = _BatteryMode.MANUAL
             data.debug_mode_source = "manual_override"
+            # The optimizer's current-slot lookup never runs on the manual path
+            # (we return below), so reset the slot fields to avoid showing a
+            # stale match from a prior optimizer tick.
+            data.debug_forecast_slot_found = False
+            data.debug_forecast_slot_time = ""
+            data.debug_first_forecast_slot_time = ""
+            data.debug_time_gap_seconds = 0.0
             # Skip DP optimizer and other mode decisions when in manual mode
             return
 

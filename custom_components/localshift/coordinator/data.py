@@ -322,7 +322,9 @@ class CoordinatorData:
     debug_forecast_slot_time: str = ""  # Time of matched forecast slot (HH:MM)
     debug_first_forecast_slot_time: str = ""  # Time of first forecast slot (HH:MM)
     debug_time_gap_seconds: float = 0.0  # Seconds between now and first forecast slot
-    debug_mode_source: str = "unknown"  # "forecast" or "fallback"
+    debug_mode_source: str = (
+        "unknown"  # "manual_override" | "optimizer" | "fallback" | "unknown"
+    )
     debug_dry_run: bool = False  # Dry run mode active
     debug_commanded_mode: str = ""  # State machine's commanded mode
     debug_pending_transition: str = ""  # Pending mode transition (if any)

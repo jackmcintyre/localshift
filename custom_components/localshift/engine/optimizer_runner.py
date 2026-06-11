@@ -873,6 +873,57 @@ def _derive_runtime_apply_plan(
     }
 
 
+def _current_slot_debug_info(
+    data: Any,
+) -> tuple[int, bool, str, str, float]:
+    """Locate the current optimizer slot and expose diagnostics about the match.
+
+    Returns:
+        (idx, found, matched_slot_hhmm, first_slot_hhmm, gap_seconds)
+
+        - idx: index of the matched slot, or 0 as fallback.
+        - found: True only on a real ``slot_time <= now < slot_end`` match;
+          False means the silent ``idx=0`` fallback is in effect (exactly what
+          the debug fields exist to surface).
+        - matched_slot_hhmm: HH:MM of the matched slot ("" when not found).
+        - first_slot_hhmm: HH:MM of the first parsable slot ("" when none).
+        - gap_seconds: now minus the first parsable slot timestamp (0.0 when
+          none parses).
+
+    """
+    now = datetime.now(UTC)
+
+    decisions = data.optimizer_decisions
+    if not decisions:
+        return 0, False, "", "", 0.0
+
+    first_slot_hhmm = ""
+    gap_seconds = 0.0
+
+    for idx, decision in enumerate(decisions):
+        timestamp_str = decision.get("timestamp_iso", "")
+        if not timestamp_str:
+            continue
+
+        try:
+            slot_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+
+        if not first_slot_hhmm:
+            first_slot_hhmm = slot_time.strftime("%H:%M")
+            gap_seconds = (now - slot_time).total_seconds()
+
+        slot_end = slot_time + timedelta(
+            minutes=decision.get("slot_interval_minutes", 30)
+        )
+        if slot_time <= now < slot_end:
+            return idx, True, slot_time.strftime("%H:%M"), first_slot_hhmm, gap_seconds
+
+    # No slot brackets now: fall back to the first slot (idx 0).
+    return 0, False, "", first_slot_hhmm, gap_seconds
+
+
 def _find_current_slot_index(data: Any) -> int:
     """
     Find the index of the current slot in the optimizer decisions.
@@ -884,28 +935,5 @@ def _find_current_slot_index(data: Any) -> int:
         Index of current slot, or 0 as fallback
 
     """
-    now = datetime.now(UTC)
-
-    decisions = data.optimizer_decisions
-    if not decisions:
-        return 0
-
-    # Find the first slot where timestamp_iso is >= now
-    for idx, decision in enumerate(decisions):
-        timestamp_str = decision.get("timestamp_iso", "")
-        if not timestamp_str:
-            continue
-
-        try:
-            slot_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            slot_end = slot_time + timedelta(
-                minutes=decision.get("slot_interval_minutes", 30)
-            )
-
-            if slot_time <= now < slot_end:
-                return idx
-        except (ValueError, TypeError):
-            continue
-
-    # Default: use first slot
-    return 0
+    idx, _found, _matched, _first, _gap = _current_slot_debug_info(data)
+    return idx

@@ -12,6 +12,9 @@ from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.engine.optimizer_facade import (
     OptimizerFacade,
 )
+from custom_components.localshift.engine.optimizer_runner import (
+    _current_slot_debug_info,
+)
 
 
 class _StubSlotBuilder:
@@ -50,6 +53,10 @@ def test_run_inline_no_slots_leaves_optimizer_fields():
     facade.run_inline(data=data, now_dt=now_dt, config_options={})
 
     assert data.optimizer_decisions == [{"action": "hold"}]
+    # Mode-decision debug fields (PR C): the early exit marks a non-optimizer
+    # fallback so the fields never go stale.
+    assert data.debug_mode_source == "fallback"
+    assert data.debug_forecast_slot_found is False
 
 
 def test_facade_wires_solar_can_reach_target_in_dw_correctly():
@@ -328,7 +335,15 @@ def test_assign_active_mode_sets_mode_and_apply_status():
     facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
     data = CoordinatorData()
     data.active_mode = BatteryMode.SELF_CONSUMPTION
-    data.optimizer_decisions = [{"action": "charge_grid_normal"}]
+    # A decision whose window brackets "now" (huge interval) so the current-slot
+    # lookup reports a real match and the debug_* fields are populated.
+    data.optimizer_decisions = [
+        {
+            "action": "charge_grid_normal",
+            "timestamp_iso": "2020-01-01T00:00:00+00:00",
+            "slot_interval_minutes": 9_999_999,
+        }
+    ]
     result = MagicMock()
     optimizer_config = MagicMock()
     decision_time = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
@@ -337,10 +352,6 @@ def test_assign_active_mode_sets_mode_and_apply_status():
         patch(
             "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
         ) as mock_gate,
-        patch(
-            "custom_components.localshift.engine.optimizer_facade._find_current_slot_index",
-            return_value=2,
-        ),
         patch(
             "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
             return_value={
@@ -368,6 +379,13 @@ def test_assign_active_mode_sets_mode_and_apply_status():
     assert data.optimizer_safety_block_reason == ""
     assert data.decision_timestamp == decision_time
     assert data.decision_mode == BatteryMode.GRID_CHARGING
+    # Mode-decision debug fields (PR C): a real slot match attributed to the
+    # optimizer.
+    assert data.debug_mode_source == "optimizer"
+    assert data.debug_forecast_slot_found is True
+    assert data.debug_forecast_slot_time == "00:00"
+    assert data.debug_first_forecast_slot_time == "00:00"
+    assert data.debug_time_gap_seconds > 0
 
 
 def test_assign_active_mode_falls_back_on_invalid_battery_mode():
@@ -383,10 +401,6 @@ def test_assign_active_mode_falls_back_on_invalid_battery_mode():
             "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
         ) as mock_gate,
         patch(
-            "custom_components.localshift.engine.optimizer_facade._find_current_slot_index",
-            return_value=0,
-        ),
-        patch(
             "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
             return_value={"battery_mode": "not-a-mode", "action": "hold"},
         ),
@@ -399,6 +413,53 @@ def test_assign_active_mode_falls_back_on_invalid_battery_mode():
 
     assert data.active_mode == BatteryMode.SELF_CONSUMPTION
     assert data.optimizer_last_apply_status == "fallback"
+    assert data.debug_mode_source == "fallback"
+
+
+def test_current_slot_debug_info_matched():
+    """A decision whose window brackets now reports a real match."""
+    data = CoordinatorData()
+    data.optimizer_decisions = [
+        {
+            "timestamp_iso": "2020-01-01T00:00:00+00:00",
+            "slot_interval_minutes": 9_999_999,
+        }
+    ]
+    idx, found, matched, first, gap = _current_slot_debug_info(data)
+    assert idx == 0
+    assert found is True
+    assert matched == "00:00"
+    assert first == "00:00"
+    assert gap > 0
+
+
+def test_current_slot_debug_info_past_window_no_match():
+    """A past slot whose window has closed reports found=False with the
+    first-slot diagnostics still populated (the silent idx=0 fallback)."""
+    data = CoordinatorData()
+    data.optimizer_decisions = [
+        {"timestamp_iso": "2020-01-01T00:00:00+00:00", "slot_interval_minutes": 30}
+    ]
+    idx, found, matched, first, gap = _current_slot_debug_info(data)
+    assert idx == 0
+    assert found is False
+    assert matched == ""
+    assert first == "00:00"
+    assert gap > 0
+
+
+def test_current_slot_debug_info_empty_decisions():
+    """No decisions -> no match and no diagnostics."""
+    data = CoordinatorData()
+    data.optimizer_decisions = []
+    assert _current_slot_debug_info(data) == (0, False, "", "", 0.0)
+
+
+def test_current_slot_debug_info_malformed_timestamp():
+    """An unparsable timestamp is skipped; with no parsable slot, no match."""
+    data = CoordinatorData()
+    data.optimizer_decisions = [{"timestamp_iso": "not-a-timestamp"}]
+    assert _current_slot_debug_info(data) == (0, False, "", "", 0.0)
 
 
 class _ShadowSlotBuilderWithOneSlot:
