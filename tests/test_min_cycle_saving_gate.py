@@ -247,3 +247,147 @@ def test_gate_preserves_target_seeking_precharge():
         f"gate wrongly blocked target-seeking pre-charge: SOC@DW-entry={gated:.1f}% "
         f"(target 80%)"
     )
+
+
+# --- World 3: high-SOC taper-region pre-charge (2026-06-11 sub-target incident) --------
+# Live plan computed 14:25 with SOC 88%, target 95%, DW at 15:00: the gate dropped each
+# early 5-min pre-charge slot (its per-slot margin over deferring was < 0.25/kWh), so the
+# optimizer HELD the first slots and only started charging late — entering the DW at 91.8%
+# (a 3.2pt shortfall). Because target pre-charge happens entirely in the 80-95% taper band,
+# the deferred late charge is too slow to recover. The urgency-window exemption lets the
+# needed pre-charge through while the gate stays active for speculative/overnight charges.
+
+_W3_TARGET = 95.0
+_W3_DW_ENTRY = 7  # 15:00
+
+
+def _taper_precharge_slots():
+    # 7 five-minute pre-DW slots (14:25-14:55) then the 15:00 demand window.
+    pre = [
+        (0.184, 0.107, 0.140),
+        (0.135, 0.107, 0.140),
+        (0.125, 0.107, 0.139),
+        (0.125, 0.107, 0.142),
+        (0.125, 0.107, 0.143),
+        (0.125, 0.107, 0.144),
+        (0.125, 0.107, 0.146),
+    ]
+    slots = []
+    mins = 25
+    for i, (solar, load, buy) in enumerate(pre):
+        slots.append(
+            SlotContext(
+                slot_index=i,
+                timestamp_iso=f"2026-06-11T14:{mins:02d}:00",
+                slot_interval_minutes=5,
+                buy_price=buy,
+                sell_price=0.06,
+                solar_kwh=solar,
+                consumption_kwh=load,
+            )
+        )
+        mins += 5
+    dw = [
+        (0.447, 0.613, 0.156),
+        (0.234, 0.476, 0.170),
+        (0.048, 0.499, 0.182),
+        (0.010, 0.510, 0.188),
+        (0.000, 0.591, 0.188),
+    ]
+    hh, mm = 15, 0
+    for j, (solar, load, buy) in enumerate(dw):
+        slots.append(
+            SlotContext(
+                slot_index=_W3_DW_ENTRY + j,
+                timestamp_iso=f"2026-06-11T{hh:02d}:{mm:02d}:00",
+                slot_interval_minutes=30,
+                buy_price=buy,
+                sell_price=0.10,
+                solar_kwh=solar,
+                consumption_kwh=load,
+                is_demand_window_entry=(j == 0),
+                is_demand_window_slot=True,
+            )
+        )
+        mm += 30
+        if mm >= 60:
+            mm, hh = 0, hh + 1
+    # post-DW exit so the DW block closes
+    slots.append(
+        SlotContext(
+            slot_index=_W3_DW_ENTRY + len(dw),
+            timestamp_iso="2026-06-11T17:30:00",
+            slot_interval_minutes=30,
+            buy_price=0.18,
+            sell_price=0.10,
+            solar_kwh=0.0,
+            consumption_kwh=0.5,
+        )
+    )
+    return slots
+
+
+def _plan_taper(min_saving):
+    cfg = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        charge_rate_kw=3.3,
+        boost_charge_rate_kw=5.0,
+        charge_efficiency=0.92,
+        discharge_efficiency=0.95,
+        min_soc_pct=10.0,
+        max_soc_pct=100.0,
+        demand_window_target_soc_pct=_W3_TARGET,
+        optimization_mode="self_consumption",
+        effective_cheap_price=0.19,
+        base_cheap_price=0.19,
+        charge_taper_start_pct=80.0,
+        charge_taper_min_factor=0.2,
+        target_shortfall_penalty_per_pct=0.03,
+        soc_bins=50,
+        switching_penalty=0.08,
+        min_cycle_saving=min_saving,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="taper",
+        initial_soc_pct=88.0,
+        slots=_taper_precharge_slots(),
+        config=cfg,
+        current_action=PlannerAction.HOLD,
+    )
+    return DPPlanner().plan(inputs)
+
+
+def _dw_entry_soc(result):
+    return next(
+        d.predicted_soc_pct for d in result.decisions if d.slot_index == _W3_DW_ENTRY
+    )
+
+
+def test_gate_does_not_procrastinate_taper_region_precharge():
+    """The gate must not defer urgency-window pre-charge into a sub-target DW entry.
+
+    RED before the urgency-window exemption: the gate drops the early 5-min charges, the
+    optimizer holds them, and the deferred late charge (in the taper band) enters the DW
+    well under target. GREEN after: it charges in the urgency window and reaches target.
+    """
+    gated = _plan_taper(PROD_DEFAULT)
+    early_actions = [d.action for d in gated.decisions[:_W3_DW_ENTRY]]
+    n_charge = sum(a in CHARGE_ACTIONS for a in early_actions)
+    # It must charge through the urgency window, not hold and start late.
+    assert n_charge >= 5, (
+        f"gate procrastinated pre-charge; pre-DW actions={[a.value for a in early_actions]}"
+    )
+    entry = _dw_entry_soc(gated)
+    assert entry >= 94.0, f"DW-entry SOC {entry:.1f}% below target after exemption"
+
+
+def test_taper_precharge_matches_ungated_with_exemption():
+    """With the exemption, the gate no longer changes the urgency-window pre-charge plan.
+
+    The whole pre-DW window is urgency pre-charge, so a 0.25 gate and a disabled gate must
+    now reach the same DW-entry SOC (the gate is fully exempted there).
+    """
+    assert (
+        abs(_dw_entry_soc(_plan_taper(PROD_DEFAULT)) - _dw_entry_soc(_plan_taper(0.0)))
+        < 0.5
+    )
