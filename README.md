@@ -181,20 +181,35 @@ A ready-to-use Lovelace dashboard is included at `dashboards/localshift.yaml`. A
          title: LocalShift
          icon: mdi:battery-sync
    ```
-2. Restart Home Assistant
-3. Access the dashboard from the sidebar
+2. Install the dashboard's custom cards (see Prerequisites below)
+3. Restart Home Assistant
+4. Access the dashboard from the sidebar
+
+The dashboard has three views: **Overview** (mission control — a command card
+with live status, power flows, and a fused plan timeline, plus the decision
+feed, money, and quick controls), **Settings** (all controls grouped by how
+often you touch them), and **Debug** (full state dump and the slot-by-slot
+optimizer plan).
 
 ### Prerequisites
 
-The dashboard uses custom cards that must be installed via HACS:
-- [power-flow-card-plus](https://github.com/ulic75/power-flow-card-plus)
-- [apexcharts-card](https://github.com/RomRider/apexcharts-card)
+The Overview is built on LocalShift's own Lovelace cards — **no HACS cards
+required**. The card bundle ships with the integration at
+`custom_components/localshift/www/localshift-cards.js`. Install it once:
+
+1. Copy `custom_components/localshift/www/localshift-cards.js` to
+   `<your-ha-config>/www/localshift/localshift-cards.js`
+2. **Settings → Dashboards → Resources → Add resource:**
+   - URL: `/local/localshift/localshift-cards.js`
+   - Type: `JavaScript module`
 
 The dashboard also references entities from:
 - **Teslemetry** — `my_home_*` entities (Powerwall)
 - **Amber Electric** — `100h_*` entities (pricing)
 
-Adjust entity IDs in the dashboard YAML to match your setup if different.
+Adjust entity IDs to match your setup if different — each card accepts an
+`entities:` map, and the command card takes `dw_start` / `dw_end` for your
+peak (demand-window) hours.
 
 ## State Machine
 

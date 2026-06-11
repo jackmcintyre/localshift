@@ -2,10 +2,26 @@
 # LocalShift Battery Automation Dashboard
 # =============================================================================
 #
+# Three views:
+#   - Overview: mission control — a bespoke command card (status + live flows
+#     + a fused plan timeline), the decision feed, money, and quick controls.
+#   - Settings: all LocalShift controls, grouped by how often you touch them.
+#   - Debug:    full state dump, decision log, and slot-by-slot optimizer plan.
+#
 # Dashboard primarily uses entities from the localshift custom component.
-# Also references:
-#   - my_home_* entities from Tesla Powerwall integration
-#   - 100h_* entities from Amber Electric YAML package
+# Also references entities from two other integrations — ADJUST THESE TO
+# MATCH YOUR SETUP (search & replace):
+#   - my_home_*  entities from the Tesla Powerwall integration (Teslemetry)
+#   - 100h_*     entities from the Amber Electric YAML package
+#
+# No HACS cards required. The Overview uses LocalShift's own cards, shipped
+# with the integration at custom_components/localshift/www/localshift-cards.js.
+# Install the cards once:
+#   1. Copy custom_components/localshift/www/localshift-cards.js
+#      to <ha-config>/www/localshift/localshift-cards.js
+#   2. Settings -> Dashboards -> Resources -> Add resource:
+#        URL:  /local/localshift/localshift-cards.js
+#        Type: JavaScript module
 #
 # Add to configuration.yaml:
 #   lovelace:
@@ -21,371 +37,267 @@
 
 title: LocalShift
 views:
-  # =============================================================================
-  # VIEW 1: DASHBOARD (Main View - What You Check 20x/Day)
-  # =============================================================================
-  - title: Dashboard
-    path: dashboard
+  # ===========================================================================
+  # VIEW 1: OVERVIEW — mission control
+  # One bespoke command card carries the story: status + live flows + a fused
+  # timeline (price bands, peak window, planned actions, SOC actual & plan).
+  # Supporting cards: the decision feed ("why"), money, and quick controls.
+  # Cards are defined in www/localshift-cards.js (see install note above).
+  # ===========================================================================
+  - title: Overview
+    path: overview
     icon: mdi:view-dashboard
     type: sections
     max_columns: 2
     sections:
-      # --- LEFT COLUMN: Power Flow & Forecast Chart ---
+      - type: grid
+        column_span: 2
+        cards:
+          # Entity ids and the peak window are configurable; defaults live in
+          # www/localshift-cards.js. Example:
+          #   entities:
+          #     soc: sensor.my_home_percentage_charged
+          #     buy_price: sensor.100h_general_price
+          #   dw_start: "15:00"
+          #   dw_end: "21:00"
+          - type: custom:localshift-command-card
+            grid_options:
+              columns: full
 
-      # Power Flow Card
       - type: grid
         cards:
-          - type: custom:power-flow-card-plus
-            entities:
-              battery:
-                entity: sensor.my_home_battery_power
-                state_of_charge: sensor.my_home_percentage_charged
-              grid:
-                entity: sensor.my_home_grid_power
-                secondary_info: {}
-              solar:
-                entity: sensor.my_home_solar_power
-                display_zero_state: true
-              home:
-                secondary_info: {}
-                entity: sensor.my_home_load_power
-            clickable_entities: true
-            display_zero_lines: true
-            use_new_flow_rate_model: true
-            w_decimals: 0
-            kw_decimals: 1
-            min_flow_rate: 0.75
-            max_flow_rate: 6
-            max_expected_power: 2000
-            min_expected_power: 0.01
-            watt_threshold: 1000
-            transparency_zero_lines: 0
-            sort_individual_devices: false
+          - type: custom:localshift-decisions-card
 
-      # SOC Forecast Chart
-      # sensor.localshift_optimizer_plan state = integer slot count (e.g. 57)
-      # sensor.localshift_optimizer_plan_detailed.decisions[] holds per-slot data
-      # decisions[].timestamp_iso + decisions[].predicted_soc_pct used here
       - type: grid
         cards:
-          - type: custom:apexcharts-card
-            header:
-              title: SOC - Past 24h & Future 24h
-              show: true
-            chart_type: line
-            graph_span: 48h
-            span:
-              offset: "+24h"
-            series:
-              - entity: sensor.my_home_percentage_charged
-                name: Actual SOC
-                color: "#3B82F6"
-                stroke_width: 3
-                curve: smooth
-                type: line
-                extend_to: false
-              - entity: sensor.localshift_optimizer_plan_detailed
-                name: Planned SOC
-                color: "#F59E0B"
-                stroke_width: 2
-                stroke_dash: 5
-                type: line
-                extend_to: false
-                data_generator: |
-                  return (entity.attributes.decisions || []).map(function(d) {
-                    return [new Date(d.timestamp_iso).getTime(), d.predicted_soc_pct];
-                  });
-            yaxis:
-              - min: 0
-                max: 100
-                decimals: 0
-            hours_12: false
-            now:
-              show: true
-              label: Now
-              color: "#EF4444"
-            cache: true
-            update_interval: "60sec"
+          - type: custom:localshift-money-card
 
-      # --- RIGHT COLUMN: Status & Actions ---
-
-      # Mode & Battery Status
       - type: grid
         cards:
           - type: heading
-            heading: Mode & Battery
-            heading_style: title
-
-          - type: tile
-            entity: select.localshift_battery_mode
-            name: Mode
-
-          - type: gauge
-            entity: sensor.my_home_percentage_charged
-            name: Battery
-            min: 0
-            max: 100
-            severity:
-              green: 50
-              yellow: 20
-              red: 10
-            needle: true
-
-          - type: markdown
-            content: >
-              {% set mode = states('select.localshift_battery_mode') %}
-              {% set automation = states('switch.localshift_automation_enabled') %}
-              {% set soc = states('sensor.my_home_percentage_charged') | int(0) %}
-              {% set target = states('number.localshift_battery_target') | int(100) %}
-
-              {% if automation == 'off' %}
-              🟠 **Manual control active** — automation disabled
-
-              {% elif mode == 'spike_discharge' %}
-              🔴 **Exporting to grid** — price spike detected
-
-              {% elif mode == 'boost_charging' %}
-              🟡 **Fast charging (5kW)** — urgent charge before demand window
-
-              {% elif mode == 'grid_charging' %}
-              🟢 **Grid charging (3.3kW)** — price below threshold
-
-              {% elif mode == 'proactive_export' %}
-              🟢 **Exporting battery** — negative feed-in price coming
-
-              {% elif mode == 'demand_block' %}
-              🟠 **Demand window active** — protecting from grid imports
-
-              {% elif mode == 'hold' %}
-              ⏸️ **Hold** — temporary pause
-
-              {% else %}
-              ⚪ **Self consumption** — normal operation
-
-              {% endif %}
-
-      # DP Optimizer Performance Card
-      - type: grid
-        cards:
-          - type: heading
-            heading: Optimizer Performance
-            heading_style: title
-
-          - type: markdown
-            content: >
-              {%- set summary = 'sensor.localshift_optimizer_summary' %}
-              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
-              {%- set status = states(summary) %}
-              {%- set success = state_attr(summary, 'success') | default(false) %}
-              {%- set solve_time = state_attr(summary, 'solve_time_seconds') | default(0) | float(0) %}
-              {%- set slots = states('sensor.localshift_optimizer_plan') | int(0) %} {# state = slot count #}
-              {%- set net = states(plan) | default(0) | float(0) %}
-              {%- set import_kwh = state_attr(plan, 'projected_import_kwh') | default(0) | float(0) %}
-              {%- set export_kwh = state_attr(plan, 'projected_export_kwh') | default(0) | float(0) %}
-              {%- set shortfall = state_attr(summary, 'terminal_shortfall_pct') | default(0) | float(0) %}
-              {%- set breakdown = state_attr(plan, 'action_breakdown') | default({}) %}
-              {%- set planner = state_attr(plan, 'planner') | default('unknown') %}
-              {%- set cycle_id = state_attr(summary, 'cycle_id') | default('-') %}
-
-              {% if not success %}
-              <ha-alert alert-type="error">Optimizer error — check logs</ha-alert>
-              {% endif %}
-
-              **Planner:** {{ planner }} · **Solve:** {{ (solve_time * 1000) | round(0) | int }}ms · **Slots:** {{ slots }}
-
-              **Projected Net:** ${{ net | round(3) }} · **Import:** {{ import_kwh | round(2) }} kWh · **Export:** {{ export_kwh | round(2) }} kWh
-
-              **Terminal Shortfall:** {{ shortfall | round(1) }}%
-
-              **Actions:** Hold {{ breakdown.get('hold', 0) }} · Grid Charge {{ breakdown.get('charge_grid_normal', 0) }} · Boost {{ breakdown.get('charge_grid_boost', 0) }} · Export {{ breakdown.get('proactive_export', 0) }}
-
-              *Cycle: {{ cycle_id[:8] if cycle_id else '-' }}*
-
-      # Today's Cost (Hero Metric)
-      # Forecast section now uses optimizer_plan_grid for projected cost/import/export
-      - type: grid
-        columns: 2
-        cards:
-          - type: markdown
-            content: >
-              Earned Today
-
-              {% set cost = 'sensor.localshift_cost_electricity_net' %}
-              {% set net = states(cost) | default(0) | float(0) %}
-              {% if net >= 0 %}
-              # 💸 ${{ net | round(2) }}
-              {% else %}
-              # 💰 ${{ (net * -1) | round(2) }}
-              {% endif %}
-
-              ---
-
-              **Import:** ${{ state_attr(cost, 'grid_import_cost') | default(0) | float(0) | round(2) }}
-              **Export:** ${{ state_attr(cost, 'grid_export_revenue') | default(0) | float(0) | round(2) }}
-          - type: markdown
-            content: >
-              Forecast Today
-
-              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
-              {%- set net = states(plan) | default(0) | float(0) %}
-              {% if net >= 0 %}
-              # 📊 ${{ net | round(2) }}
-              {% else %}
-              # 📈 ${{ (net * -1) | round(2) }}
-              {% endif %}
-
-              ---
-
-              **Projected Import:** {{ state_attr(plan, 'projected_import_kwh') | default(0) | float(0) | round(2) }} kWh
-              **Projected Export:** {{ state_attr(plan, 'projected_export_kwh') | default(0) | float(0) | round(2) }} kWh
-
-      # Prices & Alerts
-      - type: grid
-        cards:
-          - type: heading
-            heading: Prices & Alerts
-            heading_style: title
-
-          - type: tile
-            entity: sensor.100h_general_price
-            name: Buy Price
-            icon: mdi:cart-arrow-down
-
-          - type: tile
-            entity: sensor.100h_feed_in_price
-            name: Sell Price
-            icon: mdi:cart-arrow-up
-
-          - type: tile
-            entity: sensor.localshift_price_cheap_effective
-            name: Cheap Threshold
-            icon: mdi:tag-outline
-
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: binary_sensor.100h_price_spike
-                state: "on"
-            card:
-              type: tile
-              entity: binary_sensor.100h_price_spike
-              name: Price Spike
-              color: red
-
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: binary_sensor.localshift_demand_window
-                state: "on"
-            card:
-              type: tile
-              entity: binary_sensor.localshift_demand_window
-              name: Demand Window
-              color: orange
-
-      # Solar Outlook
-      # Migrated from sensor.localshift_forecast_battery to optimizer entities.
-      # can_reach_target and terminal_shortfall sourced from optimizer_summary.
-      - type: grid
-        cards:
-          - type: heading
-            heading: Solar Outlook
-            heading_style: title
-
-          - type: markdown
-            content: >
-              {%- set summary = 'sensor.localshift_optimizer_summary' %}
-              {%- set target = states('number.localshift_battery_target') | default(100) | int(100) %}
-              {%- set soc = states('sensor.my_home_percentage_charged') | default(0) | int(0) %}
-              {%- set shortfall = state_attr(summary, 'terminal_shortfall_pct') | default(0) | float(0) %}
-              {%- set boost_needed = is_state('binary_sensor.localshift_charge_boost_needed', 'on') %}
-              {%- set can_reach = shortfall <= 5.0 %}
-              {%- set plan = 'sensor.localshift_optimizer_plan_grid' %}
-              {%- set import_kwh = state_attr(plan, 'projected_import_kwh') | default(0) | float(0) %}
-              {%- set export_kwh = state_attr(plan, 'projected_export_kwh') | default(0) | float(0) %}
-
-              **Target:** {{ soc }}% → {{ target }}%
-              **Projected Import:** {{ import_kwh | round(2) }} kWh · **Export:** {{ export_kwh | round(2) }} kWh
-
-              {% if can_reach %}
-              ✅ **On track** — terminal shortfall {{ shortfall | round(1) }}%
-              {% elif boost_needed %}
-              ⚡ **Boost needed** — shortfall {{ shortfall | round(1) }}%
-              {% else %}
-              ⚠️ **Solar gap** — {{ shortfall | round(1) }}% shortfall at end of horizon
-              {% endif %}
-
-      # Forecast Logic
-      - type: grid
-        cards:
-          - type: heading
-            heading: Forecast Logic
-            heading_style: title
-
-          - type: markdown
-            content: |
-              {%- set diagnostics = 'sensor.localshift_forecast_diagnostics' %}
-              {%- set profile_type = state_attr(diagnostics, 'consumption_profile_type') %}
-              {%- set profile_selected = state_attr(diagnostics, 'forecast_profile_selected') %}
-              {%- set weekday_counts = state_attr(diagnostics, 'weekday_sample_counts') | default({}) %}
-              {%- set weekend_counts = state_attr(diagnostics, 'weekend_sample_counts') | default({}) %}
-              {%- set weather_enabled = state_attr(diagnostics, 'weather_learning_enabled') %}
-              {%- set weather_entity = state_attr(diagnostics, 'weather_entity_id') %}
-              {%- set weather_temp = state_attr(diagnostics, 'weather_temperature_current') %}
-              {%- set weather_confidence = state_attr(diagnostics, 'weather_correlation_confidence') %}
-              {%- set weather_samples = state_attr(diagnostics, 'weather_sample_count') %}
-              {%- set recent_load = state_attr(diagnostics, 'recent_load_1hr_kw') %}
-              {%- set weekday_total = weekday_counts.values() | sum | default(0) %}
-              {%- set weekend_total = weekend_counts.values() | sum | default(0) %}
-
-              <ha-alert alert-type="{{ 'success' if profile_type == 'weekday_weekend' else 'warning' }}">
-              {% if profile_type == 'weekday_weekend' -%}
-              Separate weekday/weekend profiles active
-              {%- else -%}
-              Combined profile — need more data for weekday/weekend split
-              {%- endif %}
-              </ha-alert>
-
-              **Consumption Profile** · *{{ profile_selected }}*
-              {{ weekday_total }} weekday samples · {{ weekend_total }} weekend samples
-
-              ---
-
-              {% if weather_entity -%}
-              **Weather Correlation** · `{{ weather_entity }}`
-              {{ weather_temp }}°C · Confidence: {{ weather_confidence }} · {{ weather_samples }} samples
-              {%- else -%}
-              <ha-alert alert-type="warning">No weather entity configured</ha-alert>
-              {%- endif %}
-
-              ---
-
-              **Recent Load**
-              {{ recent_load | round(2) }} kW average (last 1 hour)
-            card_size: 6
-
-      # Quick Actions
-      - type: grid
-        cards:
-          - type: heading
-            heading: Quick Actions
+            heading: Quick Controls
             heading_style: title
 
           - type: tile
             entity: select.localshift_battery_mode
             name: Battery Mode
+            features:
+              - type: select-options
+
+          - type: tile
+            entity: number.localshift_battery_target
+            name: Peak Target
+            features:
+              - type: numeric-input
+                style: slider
 
           - type: button
             name: Update Forecast
             icon: mdi:refresh
             tap_action:
-              action: call-service
-              service: button.press
+              action: perform-action
+              perform_action: button.press
               target:
                 entity_id: button.localshift_update_forecast
             icon_height: 40px
 
-      # Learning System
+  # ===========================================================================
+  # VIEW 2: SETTINGS
+  # Grouped by how often you touch them: master switches first, behaviour
+  # rules next, fine-tuning numbers last. Tuning defaults are sensible —
+  # most installs never need to change them.
+  # ===========================================================================
+  - title: Settings
+    path: settings
+    icon: mdi:tune
+    type: sections
+    max_columns: 2
+    sections:
+      # --- Master Switches -------------------------------------------------------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Master Switches
+            heading_style: title
+
+          - type: tile
+            entity: switch.localshift_automation_enabled
+            name: Automation
+            icon: mdi:power
+
+          - type: tile
+            entity: switch.localshift_dry_run
+            name: Dry Run
+            icon: mdi:test-tube
+            color: amber
+
+          - type: tile
+            entity: switch.localshift_notifications_enabled
+            name: Notifications
+            icon: mdi:bell-outline
+
+          - type: markdown
+            content: >
+              **Automation** is the master switch — off means LocalShift never
+              touches the battery. **Dry run** keeps automation logic running
+              but only logs what it *would* do.
+
+      # --- Mode & Manual Actions --------------------------------------------------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Mode & Manual Actions
+            heading_style: title
+
+          - type: tile
+            entity: select.localshift_battery_mode
+            name: Battery Mode
+            features:
+              - type: select-options
+
+          - type: button
+            name: Update Forecast
+            icon: mdi:refresh
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.localshift_update_forecast
+            icon_height: 40px
+
+          - type: markdown
+            content: >
+              Setting a mode by hand is temporary — automation will take over
+              again on its next cycle (turn **Automation** off first for a
+              lasting override). *automatic* = let the optimizer decide ·
+              *self_consumption* = solar + battery run the house ·
+              *grid_charging* = charge at 3.3 kW · *boost_charging* = charge
+              at 5 kW · *spike_discharge* = sell to the grid ·
+              *proactive_export* = export ahead of negative feed-in prices.
+
+      # --- Targets ----------------------------------------------------------------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Targets
+            heading_style: title
+
+          - type: tile
+            entity: number.localshift_battery_target
+            name: Demand Window Target
+            features:
+              - type: numeric-input
+                style: slider
+
+          - type: tile
+            entity: number.localshift_minimum_target_soc
+            name: Minimum SOC
+            features:
+              - type: numeric-input
+                style: slider
+
+          - type: tile
+            entity: select.localshift_optimization_mode
+            name: Optimization Mode
+            features:
+              - type: select-options
+
+          - type: markdown
+            content: >
+              **Demand window target** is the SOC the battery should reach
+              before the evening demand window. **Minimum SOC** is the floor
+              the battery won't discharge below. **Optimization mode:**
+              *self_consumption* favours covering the house; *arbitrage* also
+              trades on price spreads.
+
+      # --- Charging Rules -----------------------------------------------------------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Charging Rules
+            heading_style: title
+
+          - type: tile
+            entity: switch.localshift_demand_window_block
+            name: Block Grid Charging in Demand Window
+            color: orange
+
+          - type: tile
+            entity: switch.localshift_allow_dw_entry_under_target
+            name: Allow DW Entry Under Target
+            color: green
+
+          - type: tile
+            entity: switch.localshift_spike_discharge_enabled
+            name: Spike Discharge
+
+          - type: tile
+            entity: switch.localshift_spike_discharge_conservative
+            name: Conservative Spike Discharge
+
+          - type: tile
+            entity: switch.localshift_stale_solar_conservative
+            name: Stale Solar Conservative
+
+          - type: markdown
+            content: >
+              **Allow DW entry under target** lets the demand window start
+              below target when solar is forecast to close the gap.
+              **Conservative spike discharge** keeps a dynamic reserve while
+              selling. **Stale solar conservative** distrusts the solar
+              forecast when Solcast data is stale or missing.
+
+      # --- Price & Optimizer Tuning (advanced) ---------------------------------------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Price & Optimizer Tuning
+            heading_style: title
+
+          - type: markdown
+            content: >
+              ⚙️ *Advanced — the defaults are sensible. Change one thing at a
+              time and watch the plan for a day.*
+
+          - type: tile
+            entity: number.localshift_cheap_price_percentile
+            name: Cheap Price Percentile
+            features:
+              - type: numeric-input
+                style: slider
+
+          - type: tile
+            entity: number.localshift_max_pre_charge_price
+            name: Max Pre-charge Price
+
+          - type: tile
+            entity: number.localshift_min_cycle_saving
+            name: Min Cycle Saving
+
+          - type: tile
+            entity: number.localshift_switching_penalty
+            name: Switching Penalty
+
+          - type: tile
+            entity: number.localshift_target_shortfall_penalty
+            name: Shortfall Penalty
+
+          - type: tile
+            entity: number.localshift_stale_solar_confidence_ceiling
+            name: Stale Solar Confidence Ceiling
+
+          - type: markdown
+            content: |
+              Resulting thresholds right now:
+              **Charge when below:** ${{ states('sensor.localshift_price_cheap_effective') }}/kWh · **Stop charging at:** ${{ states('sensor.localshift_price_cheap_charge_stop') }}/kWh
+
+              **Cheap price percentile** sets where in the price forecast
+              "cheap" begins. **Min cycle saving** is the $/kWh margin needed
+              to justify wearing the battery. **Switching penalty** damps
+              rapid mode flapping. **Shortfall penalty** controls how hard
+              the optimizer pushes to hit the demand window target.
+
+      # --- Learning System -------------------------------------------------------------
       - type: grid
         cards:
           - type: heading
@@ -401,166 +313,29 @@ views:
             entity: sensor.localshift_learning_status
             name: Status
 
-          - type: gauge
-            entity: sensor.localshift_decision_quality
-            name: Decision Quality
-            min: 0
-            max: 100
-            severity:
-              green: 70
-              yellow: 50
-              red: 30
-            needle: true
-
-          - type: markdown
-            content: >
-              {%- set status = states('sensor.localshift_learning_status') %}
-              {%- set quality = states('sensor.localshift_decision_quality') | default(0) | float(0) %}
-              {%- set decisions = state_attr('sensor.localshift_learning_status', 'total_decisions_today') | default(0) | int(0) %}
-              {%- set trend = state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') %}
-              {%- set score_7d = state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | default(0) | float(0) * 100 %}
-
-              **{{ decisions }}** decisions today · {{ score_7d | round(0) }}% 7-day avg
-
-              {% if trend == 'improving' %}
-              📈 **{{ trend }}** — learning from data
-              {% elif trend == 'degrading' %}
-              📉 **{{ trend }}** — review settings
-              {% else %}
-              ➡️ **{{ trend }}**
-              {% endif %}
-
-          - type: markdown
-            content: >
-              {%- set weights = state_attr('sensor.localshift_learning_status', 'optimization_weights') | default({}) %}
-              {%- set adjustments = state_attr('sensor.localshift_learning_status', 'contextual_adjustments_active') | default([]) %}
-
-              **Optimization Weights**
-              Cost: {{ (weights.get('cost_minimization', 0.5) * 100) | round(0) }}% ·
-              Export: {{ (weights.get('export_avoidance', 0.2) * 100) | round(0) }}% ·
-              Target: {{ (weights.get('target_achievement', 0.2) * 100) | round(0) }}% ·
-              Cycle: {{ (weights.get('cycle_reduction', 0.1) * 100) | round(0) }}%
-
-              {% if adjustments %}
-              ---
-              **Active Adjustments**
-              {% for adj in adjustments %}
-              · {{ adj.get('param_name', '') }}: {{ adj.get('adjustment', 0) | round(1) }} ({{ adj.get('reason', '') }})
-              {% endfor %}
-              {% endif %}
-
-      # Adaptive Parameters Card
-      - type: grid
-        cards:
-          - type: heading
-            heading: Adaptive Parameters
-            heading_style: title
-
-          - type: markdown
-            content: |
-              {%- set learning = 'sensor.localshift_learning_status' %}
-              {%- set learning_state = states(learning) %}
-              {%- set params = state_attr(learning, 'adaptive_parameters') %}
-              {%- set overrides = state_attr(learning, 'contextual_adjustments_active') | default([]) %}
-              {%- set config = state_attr('sensor.localshift_optimizer_summary', 'config_options') | default({}) %}
-
-              **Optimizer Config**
-
-              Mode: {{ config.get('optimization_mode', 'unknown') }} · Control: {{ config.get('optimizer_control_mode', 'unknown') }} · Min SOC: {{ config.get('minimum_target_soc', 0) }}% · Target: {{ config.get('battery_target', 0) }}%
-
-              ---
-
-              **Learning Status:** {{ learning_state }}
-
-              {% if params is not none and params %}
-              **Adaptive Parameters**
-              {% for k, v in params.items() %}
-              · {{ k | replace('_', ' ') | title }}: {{ v | round(3) if v is number else v }}
-              {% endfor %}
-              {% elif learning_state in ['disabled', 'unavailable', 'unknown'] %}
-              *Learning system {{ learning_state }} — no adaptive parameters*
-              {% else %}
-              *Adaptive parameters not yet available — learning system initialising*
-              {% endif %}
-
-              {% if overrides %}
-              ---
-              **Active Contextual Overrides**
-              {% for o in overrides %}
-              · {{ o.get('param_name', '') }}: {{ o.get('adjustment', 0) | round(3) }} — {{ o.get('reason', '') }}
-              {% endfor %}
-              {% endif %}
-
-  # =============================================================================
-  # VIEW 2: CONTROLS (Adjust Settings Occasionally)
-  # =============================================================================
-  - title: Controls
-    path: controls
-    icon: mdi:tune
-    type: sections
-    max_columns: 2
-    sections:
-      # --- LEFT COLUMN ---
-
-      # Automation
-      - type: grid
-        cards:
-          - type: heading
-            heading: Automation
-            heading_style: title
-
-          - type: tile
-            entity: switch.localshift_automation_enabled
-            name: Automation
-            icon: mdi:power
-
-          - type: tile
-            entity: switch.localshift_enable_learning
-            name: Learning
-            icon: mdi:brain
-
-          - type: tile
-            entity: switch.localshift_dry_run
-            name: Dry Run
-            icon: mdi:test-tube
-            color: amber
-
-      # Manual Actions
-      - type: grid
-        cards:
-          - type: heading
-            heading: Manual Actions
-            heading_style: title
-
-          - type: tile
-            entity: select.localshift_battery_mode
-            name: Battery Mode
-
           - type: button
-            name: Update Forecast
-            icon: mdi:refresh
+            name: Reset Learning Data
+            icon: mdi:restore-alert
             tap_action:
-              action: call-service
-              service: button.press
-              target:
-                entity_id: button.localshift_update_forecast
-            icon_height: 40px
-
-          - type: button
-            name: Reset Learning
-            icon: mdi:brain
-            tap_action:
-              action: call-service
-              service: button.press
+              action: perform-action
+              perform_action: button.press
               target:
                 entity_id: button.localshift_reset_learning
+              confirmation:
+                text: This wipes all learned parameters and restarts observation. Continue?
             icon_height: 40px
 
-      # Live System (Tesla Controls)
+          - type: markdown
+            content: >
+              When enabled, LocalShift scores its own decisions and gradually
+              tunes optimization weights. It starts in *observing* and only
+              adjusts parameters once it has enough data.
+
+      # --- Powerwall (live system) --------------------------------------------------------
       - type: grid
         cards:
           - type: heading
-            heading: Live System
+            heading: Powerwall
             heading_style: title
 
           - type: tile
@@ -587,64 +362,57 @@ views:
             name: Solar Power
             icon: mdi:solar-power
 
-      # --- RIGHT COLUMN ---
-
-      # Charging Rules
-      - type: grid
-        cards:
-          - type: heading
-            heading: Charging Rules
-            heading_style: title
-
-          - type: tile
-            entity: switch.localshift_spike_discharge_enabled
-            name: Spike Discharge
-
-          - type: tile
-            entity: switch.localshift_demand_window_block
-            name: Demand Block
-            color: orange
-
-          - type: tile
-            entity: switch.localshift_allow_dw_entry_under_target
-            name: Allow DW Entry Under Target
-            color: green
-
-      # Price Thresholds
-      - type: grid
-        cards:
-          - type: heading
-            heading: Price Thresholds
-            heading_style: title
-
-          - type: tile
-            entity: number.localshift_cheap_price_percentile
-            name: Cheap %
-
-          - type: tile
-            entity: number.localshift_max_pre_charge_price
-            name: Max Pre-charge
-
           - type: markdown
             content: >
-              **Current Effective:** ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
-              **Stop Charging At:** ${{ states('sensor.localshift_price_cheap_charge_stop') }}/kWh
+              ⚠️ LocalShift drives *operation mode* and *backup reserve* when
+              automation is on — manual changes here will be overwritten on
+              the next cycle.
 
-      # Forecast & Battery Settings
+      # --- System Health -------------------------------------------------------------------
       - type: grid
         cards:
           - type: heading
-            heading: Forecast & Battery
+            heading: System Health
             heading_style: title
 
           - type: tile
-            entity: number.localshift_battery_target
-            name: Battery Target
+            entity: sensor.localshift_integration_status
+            name: Integration
+            icon: mdi:heart-pulse
 
+          - type: tile
+            entity: sensor.localshift_automation_ready
+            name: Automation Ready
+            icon: mdi:check-circle-outline
 
-  # =============================================================================
+          - type: tile
+            entity: sensor.localshift_forecast_status
+            name: Forecast Status
+            icon: mdi:crystal-ball
+
+          - type: tile
+            entity: sensor.localshift_entity_health
+            name: Entity Health
+            icon: mdi:stethoscope
+
+          - type: markdown
+            content: |
+              {% set errors = state_attr('sensor.localshift_entity_health', 'errors') | default([]) %}
+              {% set warnings = state_attr('sensor.localshift_entity_health', 'warnings') | default([]) %}
+              {% if errors | length == 0 and warnings | length == 0 %}
+              ✅ No entity errors or warnings.
+              {% else %}
+              {% for error in errors %}
+              - 🔴 {{ error }}
+              {% endfor %}
+              {% for warning in warnings %}
+              - 🟡 {{ warning }}
+              {% endfor %}
+              {% endif %}
+
+  # ===========================================================================
   # VIEW 3: DEBUG (Power User Diagnostics)
-  # =============================================================================
+  # ===========================================================================
   - title: Debug
     path: debug
     icon: mdi:bug
@@ -669,6 +437,8 @@ views:
 
               Mode: {{ states('select.localshift_battery_mode') }}
 
+              Optimization Mode: {{ states('select.localshift_optimization_mode') }}
+
               SOC: {{ states('sensor.my_home_percentage_charged') }}%
 
               Battery Power: {{ states('sensor.my_home_battery_power') }} kW
@@ -676,6 +446,8 @@ views:
               Grid Power: {{ states('sensor.my_home_grid_power') }} kW
 
               Solar Power: {{ states('sensor.my_home_solar_power') }} kW
+
+              Load Power: {{ states('sensor.my_home_load_power') }} kW
 
               Buy Price: ${{ states('sensor.100h_general_price') }}/kWh
 
@@ -690,6 +462,10 @@ views:
               Integration Status: {{ states('sensor.localshift_integration_status') }}
 
               Entity Health: {{ states('sensor.localshift_entity_health') }}
+
+              Automation Ready: {{ states('sensor.localshift_automation_ready') }}
+
+              Forecast Status: {{ states('sensor.localshift_forecast_status') }}
 
               {% set entities = state_attr('sensor.localshift_entity_health', 'entities') | default({}) %}
               {% set errors = state_attr('sensor.localshift_entity_health', 'errors') | default([]) %}
@@ -729,15 +505,27 @@ views:
 
               Max Buy Forecast Price: ${{ state_attr('binary_sensor.localshift_price_spike_coming', 'max_buy_forecast_price') | default(0) }}/kWh
 
-              Force Discharge Active: {{ states('binary_sensor.localshift_force_discharge_active') == 'on' }}
+              Discharge Forced: {{ states('binary_sensor.localshift_discharge_forced') == 'on' }}
 
-              Force Charge Active: {{ states('binary_sensor.localshift_force_charge_active') == 'on' }}
+              Charge Forced: {{ states('binary_sensor.localshift_charge_forced') == 'on' }}
 
               Boost Charge Active: {{ states('select.localshift_battery_mode') == 'boost_charging' }}
 
               Solar Can Reach Target: {{ states('binary_sensor.localshift_solar_can_reach_target') }}
 
               Boost Charge Needed: {{ states('binary_sensor.localshift_charge_boost_needed') }}
+
+              Price Expensive Coming: {{ states('binary_sensor.localshift_price_expensive_coming') }}
+
+              Excess Solar Available: {{ states('binary_sensor.localshift_excess_solar_available') }}
+
+              Excess Solar Forecast: {{ states('sensor.localshift_excess_solar_kwh') }} kWh
+
+              Load Shift Signal: {{ states('sensor.localshift_load_shift_signal') }}
+
+              Tesla Override Active: {{ states('binary_sensor.localshift_tesla_override_active') }}
+
+              Amber Demand Window: {{ states('binary_sensor.localshift_amber_demand_window') }}
 
               === DEBUG: MODE DECISION (from forecast_diagnostics) ===
 
@@ -759,7 +547,19 @@ views:
 
               Max Pre-charge Price: ${{ states('number.localshift_max_pre_charge_price') }}/kWh
 
+              Min Cycle Saving: ${{ states('number.localshift_min_cycle_saving') }}/kWh
+
+              Switching Penalty: ${{ states('number.localshift_switching_penalty') }}/switch
+
+              Target Shortfall Penalty: ${{ states('number.localshift_target_shortfall_penalty') }}/%-pt
+
+              Stale Solar Confidence Ceiling: {{ states('number.localshift_stale_solar_confidence_ceiling') }}
+
               Battery Target: {{ states('number.localshift_battery_target') }}%
+
+              Minimum Target SOC: {{ states('number.localshift_minimum_target_soc') }}%
+
+              Target SOC Minimum (effective): {{ states('sensor.localshift_target_soc_minimum') }}%
 
               Effective Cheap Price: ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
 
@@ -795,6 +595,20 @@ views:
 
               Computed At: {{ state_attr('sensor.localshift_optimizer_plan_detailed', 'computed_at') | default('-') }}
 
+              Optimizer Advantage: {{ states('sensor.localshift_optimizer_advantage') }}
+
+              === FORECAST ACCURACY ===
+
+              Forecast Accuracy: {{ states('sensor.localshift_forecast_accuracy') }}
+
+              Solar Forecast Accuracy: {{ states('sensor.localshift_solar_forecast_accuracy') }}%
+
+              Extended Forecast Accuracy: {{ states('sensor.localshift_extended_forecast_accuracy') }}
+
+              Load Deviation: {{ states('sensor.localshift_load_deviation') }}
+
+              Decision Lag: {{ states('sensor.localshift_decision_lag') }}
+
               === FORECAST DIAGNOSTICS (from forecast_diagnostics sensor) ===
 
               Current Load: {{ state_attr('sensor.localshift_forecast_diagnostics', 'current_load_kw') | default(0) }} kW
@@ -827,8 +641,9 @@ views:
 
               Latest Timestamp: {{ state_attr('sensor.localshift_decision_log', 'timestamp') }}
 
-              Recent History:
-              {% for entry in state_attr('sensor.localshift_decision_log', 'history') | default([]) | slice(-5) %}
+              Recent History (newest first):
+              {% set hist = state_attr('sensor.localshift_decision_log', 'history') or [] %}
+              {% for entry in hist[-10:] | reverse %}
                 - {{ entry.get('timestamp', '') }}: {{ entry.get('reason', '') }} (SOC: {{ entry.get('soc') }}%)
               {% endfor %}
 
@@ -920,6 +735,8 @@ views:
 
               Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
 
+              Amber Demand Window: {{ states('binary_sensor.localshift_amber_demand_window') }}
+
               Excess Solar Available: {{ states('binary_sensor.localshift_excess_solar_available') }}
 
               Tesla Override Active: {{ states('binary_sensor.localshift_tesla_override_active') }}
@@ -937,6 +754,8 @@ views:
               Demand Window Block: {{ states('switch.localshift_demand_window_block') }}
 
               Allow DW Entry Under Target: {{ states('switch.localshift_allow_dw_entry_under_target') }}
+
+              Stale Solar Conservative: {{ states('switch.localshift_stale_solar_conservative') }}
 
               Notifications Enabled: {{ states('switch.localshift_notifications_enabled') }}
 
@@ -957,7 +776,6 @@ views:
                 - select.localshift_battery_mode
 
       # --- DP Optimizer Slot Detail Table ---
-      # Replaces the deleted legacy Grid Summary table.
       # Source: sensor.localshift_optimizer_plan_detailed.decisions[]
       - type: grid
         cards:
