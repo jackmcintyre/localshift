@@ -53,6 +53,7 @@ class ForecastPipeline:
         self._load_forecaster.reset_weather_adjustment_applied()
 
         slots: list[float] = []
+        source_counts: dict[str, int] = {}
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
@@ -60,7 +61,7 @@ class ForecastPipeline:
             season = SolarAccuracyTracker._get_season(slot_start)
             hours_ahead = i / 4.0
             temperature = data.weather_temperature_forecast.get(slot_hour)
-            load_kw, _ = self._load_forecaster.estimate_hourly_consumption_kw(
+            load_kw, source = self._load_forecaster.estimate_hourly_consumption_kw(
                 hourly_avg_kw=historical_avg_kw,
                 slot_hour=slot_hour,
                 current_hour=current_hour,
@@ -72,8 +73,10 @@ class ForecastPipeline:
                 season=season,
             )
             slots.append(load_kw)
+            source_counts[source] = source_counts.get(source, 0) + 1
 
         data.load_forecast_slots = slots
+        data.forecast_consumption_source_counts = source_counts
         data.weather_adjustment_applied = (
             self._load_forecaster.get_weather_adjustment_applied()
         )

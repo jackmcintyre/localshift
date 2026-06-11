@@ -3,10 +3,10 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.forecast.pipeline import (
     ForecastPipeline,
 )
-from custom_components.localshift.coordinator import CoordinatorData
 
 
 class _StubLoadForecaster:
@@ -17,6 +17,25 @@ class _StubLoadForecaster:
     def estimate_hourly_consumption_kw(self, **_kwargs):
         self.calls.append(_kwargs)
         return self._value, "stub"
+
+    def reset_weather_adjustment_applied(self) -> None:
+        pass
+
+    def get_weather_adjustment_applied(self) -> bool:
+        return False
+
+
+class _VaryingSourceLoadForecaster:
+    """Returns a source that cycles through a fixed list, slot by slot."""
+
+    def __init__(self, sources: list[str]) -> None:
+        self._sources = sources
+        self._i = 0
+
+    def estimate_hourly_consumption_kw(self, **_kwargs):
+        source = self._sources[self._i % len(self._sources)]
+        self._i += 1
+        return 1.0, source
 
     def reset_weather_adjustment_applied(self) -> None:
         pass
@@ -68,6 +87,38 @@ def test_compute_load_forecast_slots_populates_slots():
 
     assert len(data.load_forecast_slots) == 8
     assert all(slot == 1.2 for slot in data.load_forecast_slots)
+    # Source counts are tallied across every slot.
+    assert data.forecast_consumption_source_counts == {"stub": 8}
+
+
+def test_compute_load_forecast_slots_tallies_source_counts():
+    """forecast_consumption_source_counts sums to total_slots, keys = sources."""
+    data = CoordinatorData()
+    data.weather_temperature_forecast = {}
+    data.load_power_kw = 0.5
+
+    sources = ["statistics", "blended_live", "weather_heating"]
+    pipeline = ForecastPipeline(
+        load_forecaster=_VaryingSourceLoadForecaster(sources),
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+    total_slots = 9
+    pipeline.compute_load_forecast_slots(
+        data=data,
+        now_dt=datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC),
+        historical_avg_kw={10: 0.5},
+        recent_load_kw=0.5,
+        total_slots=total_slots,
+    )
+
+    counts = data.forecast_consumption_source_counts
+    assert sum(counts.values()) == total_slots
+    assert set(counts) == set(sources)
+    assert counts == {"statistics": 3, "blended_live": 3, "weather_heating": 3}
 
 
 def test_compute_load_forecast_slots_passes_context():
