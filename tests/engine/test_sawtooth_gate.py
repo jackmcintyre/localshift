@@ -416,6 +416,85 @@ class TestUrgencyWindowGate:
             f"price; got charges at {[c.timestamp_iso for c in overnight_charges]}"
         )
 
+    def test_deep_soc_overnight_still_base_gated(self):
+        """Deficit-aware window must not re-open the #800 overnight sawtooth.
+
+        2026-06-11 follow-up: the urgency window now widens with the SOC deficit. Even a deep
+        overnight SOC (12% -> 95% target) yields only a ~4.2h window (hard-capped at 8h), far
+        short of the 9h+ needed to reach tonight's overnight before tomorrow's 15:00 DW. So
+        the overnight stays base-gated and does not sawtooth-charge. (Regression guard for
+        #800 under the new deficit-aware window.)
+        """
+        start = datetime(2026, 6, 3, 18, 0)  # now: after today's DW
+
+        def price(t):
+            h = t.hour + t.minute / 60.0
+            if t.day == 4 and 15.0 <= h < 21.0:
+                return _DW_PEAK
+            if t.day == 4 and 0.0 <= h < 6.0:
+                return _OVERNIGHT  # cheap only by the inflated threshold
+            if t.day == 4 and 6.0 <= h < 8.0:
+                return _MORNING_PEAK
+            if t.day == 3:
+                return 0.13
+            return 0.12
+
+        def solar(t):
+            h = t.hour + t.minute / 60.0
+            return 0.5 if (t.day == 4 and 9.0 <= h < 15.0) else 0.0
+
+        n = int((datetime(2026, 6, 4, 16, 0) - start).total_seconds() / 60 / INTERVAL)
+        slots = []
+        for i in range(n):
+            t = start + timedelta(minutes=INTERVAL * i)
+            h = t.hour + t.minute / 60.0
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=t.isoformat(),
+                    slot_interval_minutes=INTERVAL,
+                    buy_price=price(t),
+                    sell_price=0.05,
+                    solar_kwh=solar(t),
+                    consumption_kwh=0.3,
+                    is_demand_window_entry=(t.day == 4 and abs(h - 15.0) < 1e-9),
+                    is_demand_window_slot=(t.day == 4 and 15.0 <= h < 21.0),
+                )
+            )
+        config = OptimizerConfig(
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=95.0,
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            target_shortfall_penalty_per_pct=0.03,
+            soc_bins=100,
+        )
+        result = DPPlanner(config).plan(
+            OptimizerInputs(
+                cycle_id="overnight-gap-deep-soc",
+                initial_soc_pct=12.0,  # deep deficit -> ~4.2h window, still well short
+                slots=slots,
+                config=config,
+                all_solcast=[],
+            )
+        )
+        # Tonight's overnight (day-4 00:00-06:00) is >9h before the 15:00 DW, far outside
+        # the ~4.2h deficit window (and the 8h cap): those slots stay base-gated.
+        overnight_charges = [
+            d
+            for d in result.decisions
+            if d.action in _CHARGE_ACTIONS
+            and datetime.fromisoformat(d.timestamp_iso).day == 4
+            and datetime.fromisoformat(d.timestamp_iso).hour < 6
+            and d.buy_price > _BASE_CHEAP
+        ]
+        assert overnight_charges == [], (
+            "deep-SOC deficit must not widen the urgency window into tonight's overnight; "
+            f"got charges at {[c.timestamp_iso for c in overnight_charges]}"
+        )
+
 
 class TestPostDwConsistency:
     """Issue #800 follow-up: penalty + reason-code labels agree with the gate.

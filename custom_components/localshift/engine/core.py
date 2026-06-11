@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from custom_components.localshift.engine.constraints import (
+    compute_max_normal_gain_pct_to_terminal,
+)
+from custom_components.localshift.engine.constraints import (
     feasible_actions as _constraints_feasible_actions,
 )
 from custom_components.localshift.engine.cost import (
@@ -21,6 +24,7 @@ from custom_components.localshift.engine.dp_math import (
     _interpolate_cost_to_soc,
     _map_soc_to_bin,
     _simulate_max_soc_in_demand_window,
+    urgency_window_hours,
 )
 from custom_components.localshift.engine.negative_fit import (
     derive_negative_fit_avoidance_context,
@@ -59,12 +63,6 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.CHARGE_GRID_BOOST: 2,
     PlannerAction.EXPORT_PROACTIVE: 3,
 }
-
-# Issue #800 follow-up: hours before the demand-window entry over which the urgency-inflated
-# effective_cheap_price is considered valid. Matches the urgency ramp window in
-# price_calculator._calculate_urgency_adjusted_price (total_window = 4.0h). Slots earlier
-# than this use the un-inflated base price for the cheap-charge gate.
-_URGENCY_WINDOW_HOURS = 4.0
 
 
 class DPPlanner:
@@ -161,7 +159,18 @@ class DPPlanner:
         # gate uses the inflated value only there and the un-inflated base elsewhere
         # (otherwise tonight's overnight — far before tomorrow's DW — sawtooths).
         config.urgency_window_start_idx = self._determine_urgency_window_start_idx(
-            slots, terminal_penalty_idx
+            slots, terminal_penalty_idx, inputs.initial_soc_pct, config
+        )
+
+        # Shortfall-aware boost (2026-06-11 incident): precompute, per slot, the most SOC
+        # normal-rate grid charging could add from that slot to the demand-window entry, so
+        # the boost gate can unlock boost when normal alone cannot reach target. Must come
+        # after urgency_window_start_idx (the precompute calls cheap_threshold_for_slot,
+        # which reads it) and before _initialize_dp_tables. Follows the existing
+        # config-attach precedent (urgency_window_start_idx / solar_forecast_accuracy);
+        # per-call cost in the DP inner loop is one index + compare.
+        config.max_normal_gain_pct_to_terminal = (
+            compute_max_normal_gain_pct_to_terminal(slots, config, terminal_penalty_idx)
         )
 
         # Feed live forecast accuracy into the pre-charge feasibility gate so it
@@ -370,14 +379,19 @@ class DPPlanner:
         self,
         slots: list[SlotContext],
         terminal_penalty_idx: int | None,
+        initial_soc_pct: float,
+        config: OptimizerConfig,
     ) -> int | None:
         """Index of the first slot within the urgency window before the DW entry.
 
         The urgency-inflated ``effective_cheap_price`` only legitimately applies to slots
-        within ~``_URGENCY_WINDOW_HOURS`` of the demand-window entry (matching the urgency
-        ramp in ``price_calculator``). Slots earlier than that — notably tonight's overnight
-        when the next horizon DW is tomorrow evening — must be gated on the un-inflated base
-        instead (Issue #800 follow-up). Returns None when there is no demand window.
+        within the urgency window of the demand-window entry (matching the urgency ramp in
+        ``price_calculator``). The window width is deficit-derived (floor 4h, cap 8h) via
+        ``dp_math.urgency_window_hours`` — a deep SOC deficit needs more pre-charge runway
+        than a fixed 4h allows (2026-06-11 incident: 11.6% -> 95% needs ~4.2h). Slots earlier
+        than that — notably tonight's overnight when the next horizon DW is tomorrow
+        evening — must be gated on the un-inflated base instead (Issue #800 follow-up).
+        Returns None when there is no demand window.
         """
         if terminal_penalty_idx is None:
             return None
@@ -385,7 +399,14 @@ class DPPlanner:
             dw_time = datetime.fromisoformat(slots[terminal_penalty_idx].timestamp_iso)
         except (ValueError, IndexError, TypeError):
             return None
-        cutoff = dw_time - timedelta(hours=_URGENCY_WINDOW_HOURS)
+        window_hours = urgency_window_hours(
+            initial_soc_pct,
+            config.demand_window_target_soc_pct,
+            config.battery_capacity_kwh,
+            config.charge_rate_kw,
+            config.charge_efficiency,
+        )
+        cutoff = dw_time - timedelta(hours=window_hours)
         for i in range(terminal_penalty_idx + 1):
             try:
                 slot_time = datetime.fromisoformat(slots[i].timestamp_iso)

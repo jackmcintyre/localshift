@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
+    CHARGE_RATE_GRID_KW,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -19,6 +20,7 @@ from ..const import (
 )
 from ..coordinator.data import CoordinatorData
 from ..pricing.types import ForecastSlot
+from .dp_math import urgency_window_hours
 from .utils import parse_forecast_dt
 
 # A stale ``target_reached_today`` latch (e.g. from a missed midnight reset) must not
@@ -337,6 +339,7 @@ class PriceCalculator:
         target_hour: int,
         base: float,
         max_price: float,
+        target_pct: float,
     ) -> float:
         """Calculate urgency-adjusted cheap price threshold.
 
@@ -358,10 +361,19 @@ class PriceCalculator:
         if target_dt <= now_dt:
             target_dt += timedelta(days=1)
         hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-        # Issue #559 Root Cause 2: shortened from 8h to 4h to reduce urgency creep.
-        # A wider window caused prices to be raised well before any real urgency,
-        # resulting in grid charging at e.g. $0.19 when the threshold was $0.18.
-        total_window = 4.0
+        # Issue #559 Root Cause 2: 4h is now the FLOOR (not a fixed value) — narrow enough to
+        # avoid urgency creep raising prices well before any real need (charging at $0.19 when
+        # the threshold is $0.18). 2026-06-11 incident: a deep SOC deficit needs more than 4h
+        # of charge runway, so the window widens (deficit-derived, capped 8h) only when the
+        # battery genuinely cannot reach target in 4h. Shared with the optimizer's urgency
+        # window via dp_math.urgency_window_hours.
+        total_window = urgency_window_hours(
+            data.soc,
+            target_pct,
+            BATTERY_CAPACITY_KWH,
+            CHARGE_RATE_GRID_KW,
+            0.92,
+        )
         urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
         urgency_price = base + (max_price - base) * urgency
 
@@ -432,7 +444,7 @@ class PriceCalculator:
             data.effective_cheap_price = base
         else:
             data.effective_cheap_price = self._calculate_urgency_adjusted_price(
-                data, now_dt, target_hour, base, max_price
+                data, now_dt, target_hour, base, max_price, target_pct
             )
 
     def _apply_threshold_hysteresis(self, raw_threshold: float) -> float:
@@ -514,7 +526,7 @@ class PriceCalculator:
             raw_threshold = base
         else:
             raw_threshold = self._calculate_urgency_adjusted_price(
-                data, now_dt, target_hour, base, max_price
+                data, now_dt, target_hour, base, max_price, target_pct
             )
 
         # Apply hysteresis and smoothing (Issue #282)
