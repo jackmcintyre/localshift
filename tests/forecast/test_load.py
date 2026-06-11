@@ -283,11 +283,19 @@ class TestLoadForecasterExponentialDecay:
         assert kw == 0.75
 
     def test_weather_correlation_skipped_low_confidence(self, mock_weather_correlation):
-        """Test weather correlation skipped when confidence is low."""
+        """predict_load is the authority: a "low_confidence" result keeps base.
+
+        The pre-gate on the hour's max-of-zones label was removed (it was
+        strictly redundant with predict_load's per-zone gate and would wrongly
+        suppress a usable zone in a mixed hour). Here predict_load itself refuses
+        the adjustment by returning "low_confidence" even though it returned a
+        candidate value, so the blended-live base must be kept.
+        """
         mock_entry = _create_mock_entry()
         mock_weather_correlation.get_coefficients_for_hour.return_value = MagicMock(
             confidence="low"
         )
+        mock_weather_correlation.predict_load.return_value = (0.99, "low_confidence")
 
         forecaster = LoadForecaster(
             mock_entry, weather_correlation=mock_weather_correlation
@@ -651,10 +659,13 @@ class TestWeatherAdjustmentTracking:
         assert forecaster.get_weather_adjustment_applied() is True
 
     def test_weather_adjustment_flag_not_set_for_low_confidence(self):
+        # Authority moved to predict_load: it refuses by returning a
+        # "low_confidence" source, so the flag stays unset even though a coef
+        # exists for the hour. (Previously a "low" hour label pre-gated this.)
         mock_entry = _create_mock_entry()
         weather = MagicMock()
         weather.get_coefficients_for_hour.return_value = MagicMock(confidence="low")
-        weather.predict_load.return_value = (1.5, "weather_adjusted")
+        weather.predict_load.return_value = (1.5, "low_confidence")
 
         forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
         forecaster.reset_weather_adjustment_applied()
