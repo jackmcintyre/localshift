@@ -298,6 +298,11 @@ class LocalShiftCoordinator:
             self._learning_orchestrator.optimization_controller
         )
 
+        # Re-derive ephemeral learning state from persisted data before sensors
+        # first render: learning_status from the decision deque, and the last
+        # pattern report / bias corrections (which only lived in memory).
+        self._learning_orchestrator.restore_runtime_state(self.data)
+
         # Initialize solar forecast accuracy tracker (Issue #378)
         from ..forecast.solar_accuracy import SolarAccuracyTracker
 
