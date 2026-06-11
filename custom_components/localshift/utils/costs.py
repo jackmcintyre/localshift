@@ -34,12 +34,15 @@ class CostTracker:
         export_revenue = max(-data.grid_power_kw, 0.0) * data.feed_in_price / 60
         data.grid_export_revenue += export_revenue
 
-        # Battery savings: battery discharge × buy price (avoided purchase)
-        savings = max(-data.battery_power_kw, 0.0) * data.general_price / 60
+        # Tesla/Teslemetry sign convention: battery_power_kw > 0 = DISCHARGING,
+        # battery_power_kw < 0 = CHARGING (matches binary_sensor.py:228 and
+        # engine/excess_solar_signals.py:173 which use < -0.1 for "charging").
+        # Battery savings: discharge (positive power) × buy price (avoided purchase)
+        savings = max(data.battery_power_kw, 0.0) * data.general_price / 60
         data.battery_savings += savings
 
-        # Battery charge cost: battery charge × buy price
-        charge_cost = max(data.battery_power_kw, 0.0) * data.general_price / 60
+        # Battery charge cost: charge (negative power) × buy price
+        charge_cost = max(-data.battery_power_kw, 0.0) * data.general_price / 60
         data.battery_charge_cost += charge_cost
 
     def reset_daily_accumulators(self, data: CoordinatorData) -> None:

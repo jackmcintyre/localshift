@@ -26,7 +26,7 @@ def coordinator_data():
     """Create CoordinatorData with power and price values."""
     data = CoordinatorData()
     data.grid_power_kw = 2.5  # Importing 2.5kW
-    data.battery_power_kw = -1.0  # Discharging 1kW
+    data.battery_power_kw = 1.0  # Discharging 1kW (positive = discharge)
     data.general_price = 0.30  # $0.30/kWh buy price
     data.feed_in_price = 0.08  # $0.08/kWh sell price
     data.grid_import_cost = 0.0
@@ -72,31 +72,31 @@ class TestAccumulateCosts:
     def test_accumulate_battery_savings_discharge(self, cost_tracker, coordinator_data):
         """Test battery savings when discharging (avoided purchase)."""
         coordinator_data.grid_power_kw = 0.0
-        coordinator_data.battery_power_kw = -1.5  # Discharging 1.5kW (negative)
+        coordinator_data.battery_power_kw = 1.5  # Discharging 1.5kW (positive)
         coordinator_data.general_price = 0.30
 
         cost_tracker.accumulate_costs(coordinator_data)
 
-        # Savings = -battery_power × buy_price / 60 = 1.5 × 0.30 / 60
+        # Savings = battery_power × buy_price / 60 = 1.5 × 0.30 / 60
         expected_savings = 1.5 * 0.30 / 60
         assert coordinator_data.battery_savings == pytest.approx(expected_savings)
 
     def test_accumulate_battery_charge_cost(self, cost_tracker, coordinator_data):
         """Test battery charge cost accumulation."""
         coordinator_data.grid_power_kw = 0.0
-        coordinator_data.battery_power_kw = 3.3  # Charging at 3.3kW (positive)
+        coordinator_data.battery_power_kw = -3.3  # Charging at 3.3kW (negative)
         coordinator_data.general_price = 0.15
 
         cost_tracker.accumulate_costs(coordinator_data)
 
-        # Charge cost = battery_power × buy_price / 60 = 3.3 × 0.15 / 60
+        # Charge cost = -battery_power × buy_price / 60 = 3.3 × 0.15 / 60
         expected_cost = 3.3 * 0.15 / 60
         assert coordinator_data.battery_charge_cost == pytest.approx(expected_cost)
 
     def test_accumulate_all_together(self, cost_tracker, coordinator_data):
         """Test accumulation with all power flows simultaneously."""
         coordinator_data.grid_power_kw = 1.0  # 1kW import
-        coordinator_data.battery_power_kw = 2.0  # 2kW charging
+        coordinator_data.battery_power_kw = -2.0  # 2kW charging (negative)
         coordinator_data.general_price = 0.25
         coordinator_data.feed_in_price = 0.10
 
@@ -158,20 +158,41 @@ class TestAccumulateCosts:
         # Export revenue should be calculated
         assert coordinator_data.grid_export_revenue > 0
 
-    def test_accumulate_negative_battery_zero_charge(
+    def test_accumulate_positive_battery_zero_charge(
         self, cost_tracker, coordinator_data
     ):
-        """Test that negative battery power (discharge) doesn't add charge cost."""
-        coordinator_data.battery_power_kw = -3.0  # Discharging
+        """Test that positive battery power (discharge) doesn't add charge cost."""
+        coordinator_data.battery_power_kw = 3.0  # Discharging (positive)
         coordinator_data.general_price = 0.30
         coordinator_data.grid_power_kw = 0.0
 
         cost_tracker.accumulate_costs(coordinator_data)
 
-        # Charge cost should be 0 (max of negative value and 0)
+        # Charge cost should be 0 (max of -positive value and 0)
         assert coordinator_data.battery_charge_cost == 0.0
         # Savings should be calculated
         assert coordinator_data.battery_savings > 0
+
+    def test_tesla_sign_convention_discharge_accrues_savings_not_charge_cost(
+        self, cost_tracker, coordinator_data
+    ):
+        """Pin the Tesla/Teslemetry sign convention against a live snapshot.
+
+        Snapshot (2026-06-11 23:28 +10): Battery Power +0.381 kW exactly covered
+        0.381 kW of load with grid and solar at 0 — i.e. positive battery power is
+        DISCHARGING. Under the corrected convention this must accrue battery_savings
+        (avoided purchase) and leave battery_charge_cost at exactly $0.00. The old
+        inverted code did the reverse (Savings permanently $0, Charge Cost accruing
+        the value of discharge).
+        """
+        coordinator_data.grid_power_kw = 0.0
+        coordinator_data.battery_power_kw = 0.381  # Discharging to cover load
+        coordinator_data.general_price = 0.30
+
+        cost_tracker.accumulate_costs(coordinator_data)
+
+        assert coordinator_data.battery_savings > 0
+        assert coordinator_data.battery_charge_cost == 0.0
 
 
 # =============================================================================
