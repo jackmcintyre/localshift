@@ -27,7 +27,17 @@
  * /local/ from <ha-config>/www — copy it there (step 1) when updating.
  */
 
-const LS_VERSION = "1.0.0";
+const LS_VERSION = "1.0.1";
+
+/** Default to full section width in the sections-view grid. */
+const LS_FULL_WIDTH = {
+  getLayoutOptions() {
+    return { grid_columns: "full", grid_rows: "auto" };
+  },
+  getGridOptions() {
+    return { columns: "full", rows: "auto" };
+  },
+};
 
 const LS_ENTITIES = {
   soc: "sensor.my_home_percentage_charged",
@@ -372,9 +382,14 @@ class LocalShiftCommandCard extends HTMLElement {
       return 0;
     };
     const tierFill = {
-      1: "rgba(52,211,153,0.12)",
-      2: "rgba(251,146,60,0.10)",
-      3: "rgba(248,113,113,0.14)",
+      1: "rgba(52,211,153,0.07)",
+      2: "rgba(251,146,60,0.07)",
+      3: "rgba(248,113,113,0.12)",
+    };
+    const tierEdge = {
+      1: "rgba(52,211,153,0.55)",
+      2: "rgba(251,146,60,0.55)",
+      3: "rgba(248,113,113,0.7)",
     };
     let i = 0;
     while (i < inWin.length) {
@@ -386,6 +401,7 @@ class LocalShiftCommandCard extends HTMLElement {
         const slotMs = (inWin[i].slot_interval_minutes || 5) * 60e3;
         const b = x(inWin[j].t + slotMs);
         svg += `<rect x="${a}" y="${plotTop}" width="${Math.max(0.5, b - a)}" height="${plotBot - plotTop}" fill="${tierFill[tier]}"/>`;
+        svg += `<rect x="${a}" y="${plotBot + 2}" width="${Math.max(0.5, b - a)}" height="2.5" rx="1.25" fill="${tierEdge[tier]}"/>`;
       }
       i = j + 1;
     }
@@ -439,15 +455,20 @@ class LocalShiftCommandCard extends HTMLElement {
     svg += `<line x1="${x(now)}" y1="${plotTop - 4}" x2="${x(now)}" y2="${laneBot}" stroke="#ef4444" stroke-width="1.5"/>`;
     svg += `<text x="${x(now)}" y="${plotTop - 6}" text-anchor="middle" class="ls-now-label">now</text>`;
 
-    // time axis labels (every 6 h, snapped)
-    const firstTick = Math.ceil(t0 / (6 * 3600e3)) * 6 * 3600e3;
-    for (let t = firstTick; t <= t1; t += 6 * 3600e3) {
+    // time axis labels — every 6 h, snapped to LOCAL 00/06/12/18
+    const cursor = new Date(t0);
+    cursor.setMinutes(0, 0, 0);
+    while (cursor.getTime() < t0 || cursor.getHours() % 6 !== 0)
+      cursor.setHours(cursor.getHours() + 1);
+    while (cursor.getTime() <= t1) {
+      const t = cursor.getTime();
       const d = new Date(t);
       const lab = d.getHours() === 0
         ? d.toLocaleDateString([], { weekday: "short" })
         : lsHHMM(d);
       svg += `<text x="${x(t)}" y="${labelY}" text-anchor="middle" class="ls-axis-label">${lab}</text>`;
       svg += `<line x1="${x(t)}" y1="${laneBot + 2}" x2="${x(t)}" y2="${laneBot + 7}" stroke="rgba(148,163,184,0.4)"/>`;
+      cursor.setHours(cursor.getHours() + 6);
     }
 
     return `
@@ -673,18 +694,34 @@ class LocalShiftDecisionsCard extends HTMLElement {
   }
   _render() {
     if (!this._hass || !this._cfg) return;
-    const hist = (lsAttr(this._hass, this._cfg.entity, "history", []) || []).slice(-this._cfg.limit).reverse();
+    // collapse runs of identical reasons into one entry with a count
+    const raw = lsAttr(this._hass, this._cfg.entity, "history", []) || [];
+    const groups = [];
+    for (const h of raw) {
+      const reason = h.reason || "—";
+      const last = groups[groups.length - 1];
+      if (last && last.reason === reason) {
+        last.count += 1;
+        last.latest = h;
+      } else {
+        groups.push({ reason, count: 1, first: h, latest: h });
+      }
+    }
+    const shown = groups.slice(-this._cfg.limit).reverse();
     const missing = lsMissingEntities(this._hass, [this._cfg.entity]);
-    const rows = hist.length
-      ? hist
-          .map((h, idx) => {
-            const ts = h.timestamp || h.time || "";
+    const rows = shown.length
+      ? shown
+          .map((g, idx) => {
+            const ts = g.latest.timestamp || g.latest.time || "";
+            const since = g.first.timestamp || g.first.time || "";
+            const extra =
+              g.count > 1 ? ` · ×${g.count} since ${lsEsc(lsRelTime(since))}` : "";
             return `
             <div class="ls-row ${idx === 0 ? "first" : ""}">
-              <div class="ls-rail"><div class="ls-node"></div>${idx < hist.length - 1 ? '<div class="ls-line"></div>' : ""}</div>
+              <div class="ls-rail"><div class="ls-node"></div>${idx < shown.length - 1 ? '<div class="ls-line"></div>' : ""}</div>
               <div class="ls-body">
-                <div class="ls-reason">${lsEsc(h.reason || "—")}</div>
-                <div class="ls-meta">${lsEsc(lsRelTime(ts))}${h.soc !== undefined ? ` · SOC ${lsEsc(h.soc)}%` : ""}</div>
+                <div class="ls-reason">${lsEsc(g.reason)}</div>
+                <div class="ls-meta">${lsEsc(lsRelTime(ts))}${g.latest.soc !== undefined ? ` · SOC ${lsEsc(g.latest.soc)}%` : ""}${extra}</div>
               </div>
             </div>`;
           })
@@ -837,6 +874,10 @@ class LocalShiftMoneyCard extends HTMLElement {
 }
 
 /* ============================================================ register === */
+
+Object.assign(LocalShiftCommandCard.prototype, LS_FULL_WIDTH);
+Object.assign(LocalShiftDecisionsCard.prototype, LS_FULL_WIDTH);
+Object.assign(LocalShiftMoneyCard.prototype, LS_FULL_WIDTH);
 
 if (!customElements.get("localshift-command-card"))
   customElements.define("localshift-command-card", LocalShiftCommandCard);

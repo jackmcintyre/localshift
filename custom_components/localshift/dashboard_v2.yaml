@@ -64,6 +64,8 @@ views:
           #   dw_start: "15:00"
           #   dw_end: "21:00"
           - type: custom:localshift-command-card
+            grid_options:
+              columns: full
 
       - type: grid
         cards:
