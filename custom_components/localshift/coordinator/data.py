@@ -371,6 +371,8 @@ class CoordinatorData:
     weather_avg_heating_slope: float = 0.0  # Average kW per °C below heating threshold
     weather_avg_r_squared: float = 0.0  # Average regression fit quality
     weather_sample_count: int = 0  # Number of samples used for learning
+    weather_usable_hours: int = 0  # Hours whose label is medium or high
+    weather_hours_with_data: int = 0  # Hours with any regression result
     weather_anomaly_weight: float = 1.0  # Issue #681: Weight for rollback evaluation
 
     # Forecast accuracy tracking fields (Issue #37 Phase 2)

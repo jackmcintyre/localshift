@@ -52,17 +52,25 @@ class WeatherDiagnosticsEngine:
         data.weather_avg_heating_slope = diagnostics.get("average_heating_slope", 0.0)
         data.weather_avg_r_squared = diagnostics.get("average_r_squared", 0.0)
 
+        # Majority rule: the old "high if ANY hour is high" let a single good
+        # hour brand the whole forecast "high". Report the label the bulk of
+        # hours actually support, and surface the usable/total counts so the
+        # number behind the label is visible.
         hourly_results = diagnostics.get("hourly_regression", {})
-        has_high_confidence = any(
-            coef.get("confidence") == "high" for coef in hourly_results.values()
-        )
-        has_medium_confidence = any(
-            coef.get("confidence") == "medium" for coef in hourly_results.values()
-        )
-        if has_high_confidence:
+        confidences = [
+            coef.get("confidence", "low") for coef in hourly_results.values()
+        ]
+        n_hours = len(confidences)
+        n_high = confidences.count("high")
+        n_usable = n_high + confidences.count("medium")
+        if n_hours and n_high * 2 >= n_hours:
             data.weather_correlation_confidence = "high"
-        elif has_medium_confidence:
+        elif n_hours and n_usable * 2 >= n_hours:
             data.weather_correlation_confidence = "medium"
+        else:
+            data.weather_correlation_confidence = "low"
+        data.weather_usable_hours = n_usable
+        data.weather_hours_with_data = n_hours
 
         # Issue #681: Weather anomaly detection for rollback protection
         current_temp = weather_correlation.get_current_temperature()

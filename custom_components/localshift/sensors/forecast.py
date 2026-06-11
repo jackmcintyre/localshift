@@ -327,6 +327,8 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
             },
             "weather_condition": self.coordinator.data.weather_condition,
             "weather_correlation_confidence": self.coordinator.data.weather_correlation_confidence,
+            "weather_usable_hours": self.coordinator.data.weather_usable_hours,
+            "weather_hours_with_data": self.coordinator.data.weather_hours_with_data,
             "weather_adjustment_applied": self.coordinator.data.weather_adjustment_applied,
             "weather_learning_enabled": self.coordinator.data.weather_learning_enabled,
             "weather_avg_cooling_slope": round(

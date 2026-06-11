@@ -39,6 +39,25 @@ def _linear_stats(n: int, slope: float) -> ZoneStats:
     )
 
 
+def _stats_from_points(xs: list[float], ys: list[float]) -> ZoneStats:
+    """Build ZoneStats from explicit (x, y) points (for low-r² junk fits)."""
+    return ZoneStats(
+        n=len(xs),
+        sum_x=float(sum(xs)),
+        sum_y=float(sum(ys)),
+        sum_xx=float(sum(x * x for x in xs)),
+        sum_xy=float(sum(x * y for x, y in zip(xs, ys, strict=False))),
+        sum_yy=float(sum(y * y for y in ys)),
+    )
+
+
+def _junk_stats(n: int) -> ZoneStats:
+    """A zone with n>=samples but a near-zero r² (a "junk" fit)."""
+    xs = [float(i) for i in range(1, n + 1)]
+    ys = [10.0 if x <= 2 else 0.05 for x in xs]  # r^2 ~ 0.003, well below 0.10
+    return _stats_from_points(xs, ys)
+
+
 class TestZoneStats:
     def test_roundtrip(self):
         stats = ZoneStats(n=2, sum_x=3.0, sum_y=4.0, sum_xx=5.0, sum_xy=6.0, sum_yy=7.0)
@@ -584,6 +603,51 @@ class TestDelegationsAndDiagnostics:
                     data=HourlyRegressionData(
                         mild=ZoneStats(),
                         heating=_linear_stats(30, 2.0),
+                        cooling=_linear_stats(30, 1.0),
+                    ),
+                )
+            ]
+        }
+        diagnostics = correlation.get_diagnostics()
+        assert diagnostics["hourly_regression"][8]["confidence"] == "high"
+
+    def test_build_hourly_result_mixed_zone_caps_confidence_at_medium(
+        self, correlation
+    ):
+        """A reportable junk zone caps the hour label below the good zone.
+
+        Heating has enough samples (n=20) but a near-zero r² (junk fit); cooling
+        is a clean n=30 high fit. The old max-rule reported "high"; the hour must
+        now be "medium" because a reportable zone failed the r² gate.
+        """
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=_junk_stats(20),
+                        cooling=_linear_stats(30, 1.0),
+                    ),
+                )
+            ]
+        }
+        diagnostics = correlation.get_diagnostics()
+        assert diagnostics["hourly_regression"][8]["confidence"] == "medium"
+
+    def test_build_hourly_result_undersampled_zone_does_not_cap(self, correlation):
+        """An under-sampled second zone is not reportable and does not cap.
+
+        Heating has only n=10 samples (below MIN_SAMPLES_PER_ZONE) so it is not
+        reportable; cooling is a clean n=30 high fit. The hour stays "high".
+        """
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-26",
+                    data=HourlyRegressionData(
+                        mild=ZoneStats(),
+                        heating=_junk_stats(10),
                         cooling=_linear_stats(30, 1.0),
                     ),
                 )

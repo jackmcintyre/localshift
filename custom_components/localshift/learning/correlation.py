@@ -595,11 +595,23 @@ class WeatherCorrelation:
         heating_conf = self._calculate_confidence(aggregated.heating.n, heating_r2)
         cooling_conf = self._calculate_confidence(aggregated.cooling.n, cooling_r2)
 
-        confidence = "low"
-        if "high" in (heating_conf, cooling_conf):
-            confidence = "high"
-        elif "medium" in (heating_conf, cooling_conf):
-            confidence = "medium"
+        zone_pairs = (
+            (heating_conf, aggregated.heating.n, heating_r2),
+            (cooling_conf, aggregated.cooling.n, cooling_r2),
+        )
+        # Zones with enough samples are "reportable"; a reportable zone failing
+        # the r² gate is a junk fit and caps the hour label (the old max-rule let
+        # a passable cooling fit mask a junk heating fit, reporting "high" at
+        # r²≈0.07). Under-sampled zones do not cap.
+        reportable = [(c, r2) for c, n, r2 in zone_pairs if n >= MIN_SAMPLES_PER_ZONE]
+        passing = [c for c, r2 in reportable if r2 >= MIN_R_SQUARED]
+
+        if not passing:
+            confidence = "low"
+        elif len(passing) < len(reportable):
+            confidence = "medium"  # mixed hour: usable fit + a junk reportable zone
+        else:
+            confidence = "high" if "high" in passing else "medium"
 
         r_squared_values = [
             value
