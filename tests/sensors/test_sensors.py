@@ -120,7 +120,7 @@ class Fixtures:
         data.debug_forecast_slot_time = "2024-01-01T14:00:00"
         data.debug_first_forecast_slot_time = "2024-01-01T10:00:00"
         data.debug_time_gap_seconds = 300
-        data.debug_mode_source = "automatic"
+        data.debug_mode_source = "optimizer"
         data.allow_export = True
         data.weather_entity_id = "weather.home"
         data.weather_temperature_current = 25.0

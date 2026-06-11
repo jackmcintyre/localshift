@@ -468,6 +468,8 @@ views:
               Forecast Status: {{ states('sensor.localshift_forecast_status') }}
 
               {% set entities = state_attr('sensor.localshift_entity_health', 'entities') | default({}) %}
+              {% set ls_entities = state_attr('sensor.localshift_entity_health', 'localshift_entities') | default({}) %}
+              {% set all_entities = dict((entities.items() | list) + (ls_entities.items() | list)) %}
               {% set errors = state_attr('sensor.localshift_entity_health', 'errors') | default([]) %}
               {% set warnings = state_attr('sensor.localshift_entity_health', 'warnings') | default([]) %}
 
@@ -481,17 +483,10 @@ views:
                 - {{ warning }}
               {% endfor %}
 
-              Stale Entities:
-              {% for name, info in entities.items() %}
-              {%- if info.status == 'stale' %}
-                - {{ info.entity_id }}: {{ info.error_message | default('stale') }}
-              {%- endif %}
-              {%- endfor %}
-
-              Missing Entities:
-              {% for name, info in entities.items() %}
-              {%- if info.status == 'missing' %}
-                - {{ info.entity_id }}: {{ info.error_message | default('missing') }}
+              Unhealthy Entities:
+              {% for name, info in all_entities.items() %}
+              {%- if info.status != 'ok' %}
+                - {{ info.entity_id }}: {{ info.status }}{% if info.error_message %} ({{ info.error_message }}){% endif %}
               {%- endif %}
               {%- endfor %}
 
@@ -519,7 +514,7 @@ views:
 
               Excess Solar Available: {{ states('binary_sensor.localshift_excess_solar_available') }}
 
-              Excess Solar Forecast: {{ states('sensor.localshift_excess_solar_kwh') }} kWh
+              Excess Solar Forecast: {{ states('sensor.localshift_excess_solar') }} kWh
 
               Load Shift Signal: {{ states('sensor.localshift_load_shift_signal') }}
 
@@ -705,11 +700,11 @@ views:
 
               Cost Trend: {{ state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') }}
 
-              Grid Charge Efficiency: {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
+              Grid Charge Efficiency (not yet computed): {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
 
-              Export Loss Ratio: {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
+              Export Loss Ratio (not yet computed): {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
 
-              Unnecessary Grid Charge: {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
+              Unnecessary Grid Charge (not yet computed): {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
 
               Mode Durations Today: {{ state_attr('sensor.localshift_learning_status', 'mode_durations_today') | default({}) }}
 

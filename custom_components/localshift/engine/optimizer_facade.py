@@ -16,6 +16,7 @@ from .optimizer_runner import (
     OptimizerSafetyGate,
     _build_optimizer_config,
     _build_summary,
+    _current_slot_debug_info,
     _derive_runtime_apply_plan,
     _find_current_slot_index,
     _normalize_initial_soc,
@@ -195,6 +196,7 @@ class OptimizerFacade:
 
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
+                self._mark_mode_debug_fallback(data)
                 return
 
             optimizer_config = _build_optimizer_config(data, config_options)
@@ -204,6 +206,7 @@ class OptimizerFacade:
                 _LOGGER.warning(
                     "DP optimizer: invalid SOC %s, skipping", soc_info.get("error")
                 )
+                self._mark_mode_debug_fallback(data)
                 return
 
             cycle_id = uuid.uuid4().hex[:12]
@@ -235,6 +238,7 @@ class OptimizerFacade:
             _LOGGER.warning(
                 "Inline DP optimizer failed (non-blocking): %s", exc, exc_info=True
             )
+            self._mark_mode_debug_fallback(data)
 
     def _write_optimizer_fields(
         self,
@@ -294,6 +298,17 @@ class OptimizerFacade:
             "warnings": [],
         }
 
+        # Surface the current-slot lookup that drives the apply plan. found=False
+        # means the silent idx=0 fallback is in effect — exactly what these
+        # debug fields exist to expose (Mode Source / Forecast Slot Found).
+        current_slot_idx, slot_found, slot_hhmm, first_hhmm, gap_seconds = (
+            _current_slot_debug_info(data)
+        )
+        data.debug_forecast_slot_found = slot_found
+        data.debug_forecast_slot_time = slot_hhmm
+        data.debug_first_forecast_slot_time = first_hhmm
+        data.debug_time_gap_seconds = gap_seconds
+
         safety_gate = OptimizerSafetyGate(config_options)
         gate_result = safety_gate.check_admission(data, result, alignment)
 
@@ -306,12 +321,12 @@ class OptimizerFacade:
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "blocked"
             data.optimizer_safety_block_reason = gate_result.block_reason or ""
+            data.debug_mode_source = "fallback"
             _LOGGER.warning(
                 "Optimizer safety gate failed — defaulting to SELF_CONSUMPTION"
             )
             return
 
-        current_slot_idx = _find_current_slot_index(data)
         apply_plan = _derive_runtime_apply_plan(
             data.optimizer_decisions, current_slot_idx, optimizer_config
         )
@@ -334,6 +349,7 @@ class OptimizerFacade:
             data.active_mode = new_mode
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
+            data.debug_mode_source = "optimizer"
             _LOGGER.info(
                 "DP optimizer: selected %s (action=%s, slot=%d)",
                 battery_mode_str,
@@ -348,6 +364,18 @@ class OptimizerFacade:
 
             data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "fallback"
+            data.debug_mode_source = "fallback"
+
+    @staticmethod
+    def _mark_mode_debug_fallback(data: CoordinatorData) -> None:
+        """Mark the mode-decision debug fields as a non-optimizer fallback.
+
+        Called from run_inline early exits so the debug_* fields never go stale
+        when the optimizer did not produce a decision this tick.
+        """
+        data.debug_mode_source = "fallback"
+        data.debug_forecast_slot_found = False
+        data.debug_forecast_slot_time = ""
 
     def _run_shadow_comparison(
         self,

@@ -210,25 +210,28 @@ class SnapshotGenerator:
     def _entity_health(self) -> str:
         integration_status = self.state("sensor.localshift_integration_status")
         entity_health = self.state("sensor.localshift_entity_health")
+        # The sensor state counts both dependency entities and localshift
+        # entities; the unhealthy ones often live in localshift_entities, so
+        # merge both and report every non-"ok" status (stale, missing,
+        # unavailable, unknown, invalid_value).
         entities = self.attr("sensor.localshift_entity_health", "entities", {})
+        ls_entities = self.attr(
+            "sensor.localshift_entity_health", "localshift_entities", {}
+        )
+        all_entities = {**(entities or {}), **(ls_entities or {})}
         errors = self.attr("sensor.localshift_entity_health", "errors", [])
         warnings = self.attr("sensor.localshift_entity_health", "warnings", [])
 
-        # Find stale and missing entities
-        stale = []
-        missing = []
-        for name, info in (entities or {}).items():
-            if info.get("status") == "stale":
-                stale.append(
-                    f"- {info.get('entity_id')}: {info.get('error_message', 'stale')}"
-                )
-            elif info.get("status") == "missing":
-                missing.append(
-                    f"- {info.get('entity_id')}: {info.get('error_message', 'missing')}"
+        unhealthy = []
+        for _name, info in all_entities.items():
+            if info.get("status") != "ok":
+                error_message = info.get("error_message")
+                suffix = f" ({error_message})" if error_message else ""
+                unhealthy.append(
+                    f"- {info.get('entity_id')}: {info.get('status')}{suffix}"
                 )
 
-        stale_str = "\n".join(stale) if stale else "None"
-        missing_str = "\n".join(missing) if missing else "None"
+        unhealthy_str = "\n".join(unhealthy) if unhealthy else "None"
         errors_str = "\n".join(f"- {e}" for e in (errors or [])) if errors else "None"
         warnings_str = (
             "\n".join(f"- {w}" for w in (warnings or [])) if warnings else "None"
@@ -248,11 +251,8 @@ class SnapshotGenerator:
 **Warnings:** {len(warnings or [])}
 {warnings_str}
 
-**Stale Entities:**
-{stale_str}
-
-**Missing Entities:**
-{missing_str}"""
+**Unhealthy Entities:**
+{unhealthy_str}"""
 
     def _internal_state_flags(self) -> str:
         automation = self.state("switch.localshift_automation_enabled")
@@ -686,8 +686,8 @@ class SnapshotGenerator:
 | **Avg Score Today** | {avg_today} |
 | **Avg Score 7d** | {avg_7d} |
 | **Cost Trend** | {trend} |
-| **Grid Charge Efficiency** | {grid_eff}% |
-| **Export Loss Ratio** | {export_loss}% |"""
+| **Grid Charge Efficiency** (not yet computed) | {grid_eff}% |
+| **Export Loss Ratio** (not yet computed) | {export_loss}% |"""
 
     def _binary_sensors(self) -> str:
         sensors = [
