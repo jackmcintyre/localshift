@@ -550,28 +550,12 @@ class TestLoadForecasterExponentialDecay:
         assert source == "blended_live"
 
 
-class TestLoadForecasterSpikeGuardrail:
-    """Issue #826: physical sanity bounds reject transient load spikes."""
+class TestLoadForecasterOutputCeiling:
+    """Issue #826: data-driven output ceiling and no input clamp."""
 
-    def test_instantaneous_spike_clamped_to_recent_multiple(self):
-        """A 20.671 kW spike with 2.587 kW recent avg must not inflate the forecast."""
+    def test_no_input_clamp_passes_current_through(self):
+        """Without the clamp, current_load_kw is passed directly; blend = 0.3*3.0 + 0.7*2.5 = 2.65."""
         forecaster = _create_load_forecaster()
-        # current clamped to recent*4 = 10.348; blend = 0.3*10.348 + 0.7*2.587 = 4.915
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={12: 2.399},
-            slot_hour=12,
-            current_hour=12,
-            current_load_kw=20.671,
-            recent_load_kw=2.587,
-            hours_ahead=0.0,
-        )
-        assert kw < 6.0  # far below the 20.671 inflation
-        assert kw == pytest.approx(4.915, abs=0.05)
-
-    def test_normal_load_not_clamped(self):
-        """Normal load within 4x of recent avg is unaffected by the guardrail."""
-        forecaster = _create_load_forecaster()
-        # current 3.0 < recent*4 = 10.0, so blend = 0.3*3.0 + 0.7*2.5 = 2.65
         kw, _ = forecaster.estimate_hourly_consumption_kw(
             hourly_avg_kw={12: 2.5},
             slot_hour=12,
@@ -580,34 +564,34 @@ class TestLoadForecasterSpikeGuardrail:
             recent_load_kw=2.5,
             hours_ahead=0.0,
         )
+        # No clamp; data-driven ceiling = 2.5*3=7.5 > 2.65 so no ceiling hit either
         assert kw == pytest.approx(2.65, abs=0.01)
 
-    def test_spike_with_no_recent_avg_clamped_to_absolute_ceiling(self):
-        """With no recent rolling avg, a spike is clamped to the absolute ceiling."""
+    def test_output_ceiling_is_data_driven(self):
+        """Per-slot ceiling = max(hourly_avg_kw)*3; low-peak home clamps, high-peak home does not."""
         forecaster = _create_load_forecaster()
-        # recent=0 -> live_load path returns clamped current = MAX_PLAUSIBLE_LOAD_KW (15.0)
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={},
+
+        # Case 1: peak avg = 2.0 kW, ceiling = 6.0 kW; live-load path returns 50.0 → clamped
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 2.0},
             slot_hour=12,
             current_hour=12,
-            current_load_kw=100.0,
+            current_load_kw=50.0,
             recent_load_kw=0.0,
             hours_ahead=0.0,
         )
-        assert kw <= 15.0
+        assert kw == pytest.approx(6.0)
 
-    def test_final_output_never_exceeds_ceiling(self):
-        """No forecast path may emit a value above MAX_PLAUSIBLE_LOAD_KW."""
-        forecaster = _create_load_forecaster()
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={12: 50.0},  # absurd historical to probe the output ceiling
+        # Case 2: peak avg = 10.0 kW, ceiling = 30.0 kW; 20.0 kW is below ceiling, not clamped
+        kw2, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 10.0},
             slot_hour=12,
-            current_hour=None,  # skip blending -> falls back to historical/profile
-            current_load_kw=0.0,
+            current_hour=12,
+            current_load_kw=20.0,
             recent_load_kw=0.0,
-            hours_ahead=None,
+            hours_ahead=0.0,
         )
-        assert kw <= 15.0
+        assert kw2 == pytest.approx(20.0)
 
 
 @pytest.fixture

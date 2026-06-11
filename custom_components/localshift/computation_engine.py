@@ -363,6 +363,7 @@ class ComputationEngine:
 
         # Bridge recent load data
         data.recent_load_1hr_kw = self._history_fetcher._recent_load_1hr_kw
+        data.recent_load_short_kw = self._history_fetcher._recent_load_short_kw
         data.recent_load_1hr_statistic_id = (
             self._history_fetcher._recent_load_1hr_statistic_id
         )
@@ -695,6 +696,11 @@ class ComputationEngine:
     def _recent_load_1hr_kw(self) -> float:
         """Get recent 1hr load from history fetcher."""
         return self._history_fetcher._recent_load_1hr_kw
+
+    @property
+    def _recent_load_short_kw(self) -> float:
+        """Get recent short-window load from history fetcher."""
+        return self._history_fetcher._recent_load_short_kw
 
     @property
     def _recent_load_1hr_statistic_id(self) -> str:
