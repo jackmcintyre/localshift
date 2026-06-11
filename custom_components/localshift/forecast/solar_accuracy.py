@@ -540,6 +540,28 @@ class SolarAccuracyTracker:
         """
         return self._metrics.sample_count >= MIN_SOLAR_CORRECTION_SAMPLES
 
+    def get_status_dict(self) -> dict[str, Any]:
+        """Return metrics plus operational status for sensor observability.
+
+        Surfaces how close the tracker is to activating bias correction
+        (sample_count vs MIN_SOLAR_CORRECTION_SAMPLES) and how many pending /
+        boost-excluded records there are — so progress is visible without
+        log-diving.
+        """
+        status = self._metrics.to_dict()
+        status.update({
+            "pending_forecasts": len(self._pending_forecasts),
+            "samples_until_active": max(
+                0, MIN_SOLAR_CORRECTION_SAMPLES - self._metrics.sample_count
+            ),
+            "min_samples_required": MIN_SOLAR_CORRECTION_SAMPLES,
+            "correction_active": self.has_sufficient_samples(),
+            "boost_records_excluded": sum(
+                1 for r in self._period_records if r.is_boost_period
+            ),
+        })
+        return status
+
     def accuracy_confidence_ceiling(self, low: float = 0.3, high: float = 1.0) -> float:
         """Return a confidence ceiling derived from realized forecast accuracy.
 

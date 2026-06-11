@@ -624,7 +624,7 @@ class LocalShiftCoordinator:
             hasattr(self, "solar_accuracy_tracker")
             and self.solar_accuracy_tracker is not None
         ):
-            self.data.solar_bias_metrics = self.solar_accuracy_tracker.metrics.to_dict()
+            self.data.solar_bias_metrics = self.solar_accuracy_tracker.get_status_dict()
             self.data.solar_forecast_accuracy = (
                 self.solar_accuracy_tracker.metrics.accuracy
             )

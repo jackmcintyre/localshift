@@ -683,12 +683,13 @@ async def test_handle_medium_tick_with_solar_tracker(coordinator):
     coordinator._state_machine = MagicMock()
     coordinator._state_machine.startup_grace_until = None  # No grace period
 
-    # Mock solar accuracy tracker
+    # Mock solar accuracy tracker. The medium tick now publishes the richer
+    # get_status_dict() payload (metrics + activation/pending/boost status).
     coordinator.solar_accuracy_tracker = MagicMock()
-    coordinator.solar_accuracy_tracker.metrics = MagicMock()
-    coordinator.solar_accuracy_tracker.metrics.to_dict = MagicMock(
-        return_value={"bias": 0.1}
+    coordinator.solar_accuracy_tracker.get_status_dict = MagicMock(
+        return_value={"bias": 0.1, "correction_active": False}
     )
+    coordinator.solar_accuracy_tracker.metrics = MagicMock()
     coordinator.solar_accuracy_tracker.metrics.accuracy = 0.95
 
     coordinator.data = MagicMock()
@@ -697,8 +698,11 @@ async def test_handle_medium_tick_with_solar_tracker(coordinator):
 
     scheduler.handle_medium_tick(now)
 
-    # Should update solar bias metrics
-    assert coordinator.data.solar_bias_metrics == {"bias": 0.1}
+    # Should publish the status dict and the accuracy scalar.
+    assert coordinator.data.solar_bias_metrics == {
+        "bias": 0.1,
+        "correction_active": False,
+    }
     assert coordinator.data.solar_forecast_accuracy == 0.95
 
 

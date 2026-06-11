@@ -506,6 +506,49 @@ class TestSolarAccuracyTracker:
 
         assert tracker.has_sufficient_samples() is True
 
+    def test_get_status_dict_below_threshold(self, tracker):
+        """get_status_dict reports progress toward activation while dormant."""
+        from custom_components.localshift.forecast.solar_accuracy import (
+            MIN_SOLAR_CORRECTION_SAMPLES,
+        )
+
+        for i in range(5):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 1.0)
+        # A still-pending forecast for a future slot.
+        tracker.record_forecast(datetime(2026, 2, 1, 10, 0, tzinfo=UTC), 2.0, "sunny")
+        # A boost record (excluded from sample_count). The boost flag is set at
+        # record time and preserved through backfill.
+        boost = datetime(2026, 1, 20, 14, 0, tzinfo=UTC)
+        tracker.record_forecast(boost, 5.0, "sunny", is_boost=True)
+        tracker.backfill_actual(boost, 1.0)
+
+        status = tracker.get_status_dict()
+
+        assert status["sample_count"] == 5
+        assert status["min_samples_required"] == MIN_SOLAR_CORRECTION_SAMPLES
+        assert status["samples_until_active"] == MIN_SOLAR_CORRECTION_SAMPLES - 5
+        assert status["correction_active"] is False
+        assert status["pending_forecasts"] == 1
+        assert status["boost_records_excluded"] == 1
+        # Still carries the underlying metrics fields.
+        assert "overall_bias" in status
+        assert "accuracy" in status
+
+    def test_get_status_dict_active_clamps_samples_until_active(self, tracker):
+        """Once enough samples exist, correction is active and the gap is 0."""
+        for i in range(20):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 1.0)
+
+        status = tracker.get_status_dict()
+
+        assert status["sample_count"] == 20
+        assert status["samples_until_active"] == 0
+        assert status["correction_active"] is True
+
     def test_get_bias_correction_with_data(self, tracker):
         """Test get_bias_correction with historical data."""
         # Add historical data with known bias (need 20+ samples for correction)
