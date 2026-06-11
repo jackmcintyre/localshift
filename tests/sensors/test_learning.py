@@ -36,6 +36,8 @@ def _make_coordinator(overrides: dict | None = None) -> Mock:
     data.optimization_weights = {"cost": 0.7, "comfort": 0.3}
     data.contextual_adjustments_active = True
     data.recent_decision_log = [{"mode": "grid_charging"} for _ in range(25)]
+    data.last_pattern_analysis = "2026-06-11T00:05:00+00:00"
+    data.active_bias_corrections = [{"bias": 1}, {"bias": 2}]
 
     coordinator = Mock()
     coordinator.data = data
@@ -65,6 +67,19 @@ class TestLearningStatusSensor:
         assert "mode_cost_attribution" in attrs
         assert "optimization_weights" in attrs
         assert attrs["contextual_adjustments_active"] is True
+        assert attrs["last_pattern_analysis"] == "2026-06-11T00:05:00+00:00"
+        assert attrs["active_bias_corrections"] == 2
+
+    def test_extra_state_attributes_handles_missing_last_pattern_analysis(self):
+        """last_pattern_analysis falls back to None when the field is absent."""
+        sensor = _make_sensor(LearningStatusSensor)
+        # Simulate an older data object without the field (defensive getattr).
+        del sensor.coordinator.data.last_pattern_analysis
+        sensor.coordinator.data.active_bias_corrections = []
+        sensor._update_from_coordinator()
+        attrs = sensor.extra_state_attributes
+        assert attrs["last_pattern_analysis"] is None
+        assert attrs["active_bias_corrections"] == 0
 
     def test_icon_optimizing(self):
         sensor = _make_sensor(LearningStatusSensor, status="optimizing")

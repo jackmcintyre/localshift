@@ -33,6 +33,8 @@ class LearningStatusSensor(LocalShiftSensorBase):
             },
             "optimization_weights": d.optimization_weights,
             "contextual_adjustments_active": d.contextual_adjustments_active,
+            "last_pattern_analysis": getattr(d, "last_pattern_analysis", None),
+            "active_bias_corrections": len(d.active_bias_corrections),
         }
 
     @property

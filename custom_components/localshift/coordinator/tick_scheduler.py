@@ -161,7 +161,7 @@ class TickScheduler:
             and self._coordinator.solar_accuracy_tracker is not None
         ):
             self._coordinator.data.solar_bias_metrics = (
-                self._coordinator.solar_accuracy_tracker.metrics.to_dict()
+                self._coordinator.solar_accuracy_tracker.get_status_dict()
             )
             self._coordinator.data.solar_forecast_accuracy = (
                 self._coordinator.solar_accuracy_tracker.metrics.accuracy
