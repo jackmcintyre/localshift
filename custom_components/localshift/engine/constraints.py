@@ -227,7 +227,24 @@ def cheap_threshold_for_slot(
 
     Backward compatible: when ``urgency_window_start_idx`` is None (e.g. direct unit calls),
     the inflated price applies to all pre-DW slots (legacy: base only at/after the DW entry).
+
+    Target-first eligibility (2026-06-12): when ``config.pre_dw_charge_thresholds`` is
+    present (computed by ``compute_pre_dw_charge_thresholds``), pre-DW slots return their
+    precomputed per-slot threshold instead — sized so the demand-window target is fundable
+    from the cheapest sufficient slots up to ``max_precharge_price``, and time-consistent
+    (each slot gated at the urgency the live controller will have when it arrives). Slots
+    at/after the DW entry never use the list, so post-DW gating is byte-for-byte the
+    legacy base-price behaviour (#800 protection).
     """
+    pre_dw = config.pre_dw_charge_thresholds
+    if (
+        pre_dw is not None
+        and terminal_penalty_idx is not None
+        and slot_idx < terminal_penalty_idx
+        and slot_idx < len(pre_dw)
+    ):
+        return pre_dw[slot_idx]
+
     threshold = config.effective_cheap_price
     if config.base_cheap_price is None or terminal_penalty_idx is None:
         return threshold
@@ -241,6 +258,159 @@ def cheap_threshold_for_slot(
     if not in_urgency_window:
         threshold = min(threshold, config.base_cheap_price)
     return threshold
+
+
+def compute_pre_dw_charge_thresholds(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int | None,
+    initial_soc_pct: float,
+) -> list[float] | None:
+    """Per-slot charge-price thresholds that make the DW target fundable (2026-06-12).
+
+    The hard cheap-price gate in ``feasible_actions`` is the load-bearing anti-sawtooth
+    lever (soft penalties get paid through — #800/#804/#816), but gating *pre-DW* slots at
+    the cheap percentile made the demand-window target structurally unreachable on days
+    with few cheap slots: 2026-06-12 live, a 12.7 kWh deficit met ~1.2 h of eligible slot
+    time, the plan entered the DW at 48.5% vs a 95% target, and held at 11–13 ¢ midday
+    while scheduling 13–15.7 ¢ imports all evening. The #624 hard target constraint and
+    the shortfall penalty could not fix it: no penalty can buy an action that is not in
+    the feasible set.
+
+    For each slot before the DW entry this returns the max of:
+
+    - the legacy ``cheap_threshold_for_slot`` value (never tightens the gate),
+    - the urgency ramp (``dp_math.urgency_ramp_price``) evaluated at that slot's OWN time,
+      so a morning plan sees the same near-DW unlocks the live controller's re-plans will
+      apply when those slots arrive (fixes the now-scalar time-inconsistency that made
+      plans procrastinate and lie), and
+    - the "water level": the marginal buy price of the cheapest set of pre-DW slots whose
+      combined boost-rate charge capacity closes the SOC deficit to target (net of
+      accuracy-discounted solar, mirroring ``check_global_solar_sufficiency``). Eligibility
+      by price ≤ water level IS the cheapest-sufficient-set: the DP funds the target from
+      the cheapest slots first and pricier slots unlock only when genuinely needed.
+
+    Everything is clamped to ``config.max_precharge_price`` — the operator's existing
+    pre-charge authorization ceiling. Slots at/after the DW entry keep their legacy
+    thresholds untouched (post-DW/overnight gating on ``base_cheap_price`` is the #800
+    protection and this function never widens it).
+
+    Water-level capacity sizing uses the boost rate and ignores the >80% charge taper
+    (slightly optimistic, i.e. the water level errs low); the ramp term guarantees
+    eligibility keeps widening toward the ceiling as the DW approaches, so taper optimism
+    cannot strand the target.
+
+    Returns None (feature inert, legacy behaviour) when there is no demand window, the
+    mode is not self-consumption, ``max_precharge_price`` is unset, or the ceiling does
+    not exceed the ramp base. Callers must reset ``config.pre_dw_charge_thresholds`` to
+    None before invoking (this function reads legacy thresholds via
+    ``cheap_threshold_for_slot``, which consults that field).
+    """
+    if (
+        terminal_penalty_idx is None
+        or terminal_penalty_idx <= 0
+        or config.optimization_mode != "self_consumption"
+        or config.max_precharge_price is None
+        or not slots
+        or terminal_penalty_idx >= len(slots)
+    ):
+        return None
+
+    from datetime import datetime
+
+    from custom_components.localshift.engine.dp_math import (
+        _simulate_solar_only_terminal_soc,
+        urgency_ramp_price,
+        urgency_window_hours,
+    )
+
+    ramp_base = (
+        config.base_cheap_price
+        if config.base_cheap_price is not None
+        else config.effective_cheap_price
+    )
+    max_price = config.max_precharge_price
+    if max_price <= ramp_base:
+        return None
+
+    legacy = [
+        cheap_threshold_for_slot(config, j, terminal_penalty_idx)
+        for j in range(len(slots))
+    ]
+
+    try:
+        dw_time = datetime.fromisoformat(slots[terminal_penalty_idx].timestamp_iso)
+    except (ValueError, TypeError):
+        return None
+
+    window_hours = urgency_window_hours(
+        initial_soc_pct,
+        config.demand_window_target_soc_pct,
+        config.battery_capacity_kwh,
+        config.charge_rate_kw,
+        config.charge_efficiency,
+    )
+
+    # Expected SOC at DW entry on solar alone, discounting only the positive gain by
+    # forecast accuracy — the same shape as check_global_solar_sufficiency, so the
+    # required grid charge is no more optimistic than the solar feasibility gate
+    # (the raw-vs-discounted asymmetry behind the 2026-06-09 undercharge / #816).
+    sim_soc = _simulate_solar_only_terminal_soc(
+        initial_soc_pct, slots, terminal_penalty_idx, config
+    )
+    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
+    if sim_soc >= initial_soc_pct:
+        expected_soc_at_dw = initial_soc_pct + (sim_soc - initial_soc_pct) * accuracy
+    else:
+        expected_soc_at_dw = sim_soc
+    required_stored_kwh = max(
+        0.0,
+        (config.demand_window_target_soc_pct - expected_soc_at_dw)
+        / 100.0
+        * config.battery_capacity_kwh,
+    )
+
+    water = ramp_base
+    if required_stored_kwh > 0.0:
+        candidates: list[tuple[float, float]] = []
+        for j in range(terminal_penalty_idx):
+            slot = slots[j]
+            if slot.is_demand_window_slot:
+                continue
+            stored_kwh = (
+                config.boost_charge_rate_kw
+                * (slot.slot_interval_minutes / 60.0)
+                * config.charge_efficiency
+            )
+            if stored_kwh > 0.0:
+                candidates.append((slot.buy_price, stored_kwh))
+        candidates.sort(key=lambda c: c[0])
+        # Insufficient capacity even using every pre-DW slot: authorize the ceiling.
+        water = max_price
+        cumulative = 0.0
+        for price, stored_kwh in candidates:
+            cumulative += stored_kwh
+            if cumulative >= required_stored_kwh:
+                water = price
+                break
+        water = max(ramp_base, min(water, max_price))
+
+    thresholds: list[float] = []
+    for j, slot in enumerate(slots):
+        if j >= terminal_penalty_idx:
+            thresholds.append(legacy[j])
+            continue
+        try:
+            slot_time = datetime.fromisoformat(slot.timestamp_iso)
+            hours_to_dw = max(0.0, (dw_time - slot_time).total_seconds() / 3600.0)
+            ramp_j = urgency_ramp_price(ramp_base, max_price, hours_to_dw, window_hours)
+        except (ValueError, TypeError):
+            ramp_j = ramp_base
+        # ramp_j and water are ≤ max_price by construction; legacy is deliberately NOT
+        # clamped to the ceiling — on a spike day whose percentile base exceeds
+        # max_precharge_price this function must never tighten the existing gate.
+        thresholds.append(max(legacy[j], ramp_j, water))
+    return thresholds
 
 
 def compute_max_normal_gain_pct_to_terminal(

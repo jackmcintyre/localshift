@@ -20,7 +20,7 @@ from ..const import (
 )
 from ..coordinator.data import CoordinatorData
 from ..pricing.types import ForecastSlot
-from .dp_math import urgency_window_hours
+from .dp_math import urgency_ramp_price, urgency_window_hours
 from .utils import parse_forecast_dt
 
 # A stale ``target_reached_today`` latch (e.g. from a missed midnight reset) must not
@@ -374,8 +374,10 @@ class PriceCalculator:
             CHARGE_RATE_GRID_KW,
             0.92,
         )
-        urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
-        urgency_price = base + (max_price - base) * urgency
+        # Shared with the optimizer's per-slot pre-DW thresholds
+        # (constraints.compute_pre_dw_charge_thresholds) so the live "now" threshold and
+        # the value the DP assumes each future slot will be gated at cannot drift apart.
+        urgency_price = urgency_ramp_price(base, max_price, hours_left, total_window)
 
         min_forecast = max_price
         now_dt_local = dt_util.as_local(now_dt) if now_dt.tzinfo else now_dt

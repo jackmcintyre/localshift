@@ -57,6 +57,33 @@ def urgency_window_hours(
     return max(min_hours, min(max_hours, hours))
 
 
+def urgency_ramp_price(
+    base_price: float,
+    max_price: float,
+    hours_to_dw: float,
+    window_hours: float,
+) -> float:
+    """Charge-price threshold at a moment ``hours_to_dw`` before the demand window.
+
+    The single source of truth for the urgency ramp: the threshold rises linearly from
+    ``base_price`` at the window's outer edge to ``max_price`` at the demand-window entry.
+    ``price_calculator._calculate_urgency_adjusted_price`` uses it for the live "now"
+    threshold and ``constraints.compute_pre_dw_charge_thresholds`` evaluates it at each
+    future slot's own time, so the plan the DP produces in the morning agrees with what
+    the live controller will be willing to pay when those slots arrive (the
+    time-inconsistency behind the 2026-06-12 undercharge: a now-scalar threshold gated
+    afternoon slots a morning plan could never use).
+
+    Outside the window (``hours_to_dw >= window_hours``) the ramp contributes nothing
+    (returns ``base_price``); a degenerate window or an inverted ``max_price < base_price``
+    also collapses to ``base_price`` so a misconfigured ceiling can never *tighten* the gate.
+    """
+    if window_hours <= 0.0 or max_price <= base_price:
+        return base_price
+    urgency = max(min(1.0 - (hours_to_dw / window_hours), 1.0), 0.0)
+    return base_price + (max_price - base_price) * urgency
+
+
 def _build_soc_grid(config: OptimizerConfig) -> list[float]:
     """Build SOC discretization grid from min_soc_pct to max_soc_pct."""
     if config.soc_bins <= 1:

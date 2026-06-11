@@ -9,6 +9,7 @@ from typing import Any
 
 from custom_components.localshift.engine.constraints import (
     compute_max_normal_gain_pct_to_terminal,
+    compute_pre_dw_charge_thresholds,
 )
 from custom_components.localshift.engine.constraints import (
     feasible_actions as _constraints_feasible_actions,
@@ -162,24 +163,36 @@ class DPPlanner:
             slots, terminal_penalty_idx, inputs.initial_soc_pct, config
         )
 
-        # Shortfall-aware boost (2026-06-11 incident): precompute, per slot, the most SOC
-        # normal-rate grid charging could add from that slot to the demand-window entry, so
-        # the boost gate can unlock boost when normal alone cannot reach target. Must come
-        # after urgency_window_start_idx (the precompute calls cheap_threshold_for_slot,
-        # which reads it) and before _initialize_dp_tables. Follows the existing
-        # config-attach precedent (urgency_window_start_idx / solar_forecast_accuracy);
-        # per-call cost in the DP inner loop is one index + compare.
-        config.max_normal_gain_pct_to_terminal = (
-            compute_max_normal_gain_pct_to_terminal(slots, config, terminal_penalty_idx)
-        )
-
         # Feed live forecast accuracy into the pre-charge feasibility gate so it
         # discounts projected solar the same way the shortfall cost model does
         # (check_global_solar_sufficiency / _is_target_shortfall_risk). Prevents the
         # gate over-trusting an inaccurate forecast and blocking grid pre-charge
-        # (2026-06-09 demand-window undercharge; recurrence of #816).
+        # (2026-06-09 demand-window undercharge; recurrence of #816). Must come before
+        # compute_pre_dw_charge_thresholds, whose required-charge estimate applies the
+        # same discount.
         config.solar_forecast_accuracy = get_forecast_accuracy(
             inputs.solar_accuracy_tracker
+        )
+
+        # Target-first eligibility (2026-06-12): per-slot pre-DW charge thresholds sized
+        # so the demand-window target is fundable from the cheapest sufficient slots up
+        # to max_precharge_price, and time-consistent (each slot gated at the urgency it
+        # will have when it arrives, not today's now-scalar). Reset first: the precompute
+        # reads legacy thresholds via cheap_threshold_for_slot, which consults this field.
+        config.pre_dw_charge_thresholds = None
+        config.pre_dw_charge_thresholds = compute_pre_dw_charge_thresholds(
+            slots, config, terminal_penalty_idx, inputs.initial_soc_pct
+        )
+
+        # Shortfall-aware boost (2026-06-11 incident): precompute, per slot, the most SOC
+        # normal-rate grid charging could add from that slot to the demand-window entry, so
+        # the boost gate can unlock boost when normal alone cannot reach target. Must come
+        # after urgency_window_start_idx and pre_dw_charge_thresholds (the precompute calls
+        # cheap_threshold_for_slot, which reads both) and before _initialize_dp_tables.
+        # Follows the existing config-attach precedent (urgency_window_start_idx /
+        # solar_forecast_accuracy); per-call cost in the DP inner loop is one index + compare.
+        config.max_normal_gain_pct_to_terminal = (
+            compute_max_normal_gain_pct_to_terminal(slots, config, terminal_penalty_idx)
         )
 
         dp, terminal_penalty_by_bin = self._initialize_dp_tables(
@@ -784,11 +797,26 @@ class DPPlanner:
             # Mirrors the SOC-floor anti-sawtooth guard's urgency-window exemption below.
             # Safe vs the #800 overnight sawtooth: those slots are post-DW / far pre-DW and
             # never inside an urgency window, so the gate stays fully active there.
+            #
+            # Target-first eligibility (2026-06-12): when pre_dw_charge_thresholds is
+            # active, ANY pre-DW charge below target is target-driven — feasible_actions
+            # only offers it at/below that slot's target-funded threshold — so the
+            # exemption covers the whole pre-DW range, not just the 4-8h urgency window.
+            # Without this, min-cycle-saving re-introduces the procrastination the
+            # thresholds exist to fix (each early slot's margin over deferring is thin,
+            # the deferrals compound, and the plan undershoots — the #860 incident shape).
+            # Post-DW slots are never exempted by either branch.
             is_urgency_precharge = (
                 terminal_penalty_idx is not None
-                and config.urgency_window_start_idx is not None
-                and config.urgency_window_start_idx <= slot_idx < terminal_penalty_idx
+                and slot_idx < terminal_penalty_idx
                 and soc < config.demand_window_target_soc_pct
+                and (
+                    config.pre_dw_charge_thresholds is not None
+                    or (
+                        config.urgency_window_start_idx is not None
+                        and config.urgency_window_start_idx <= slot_idx
+                    )
+                )
             )
 
             if action == PlannerAction.HOLD:
