@@ -1,9 +1,10 @@
 """Tests for forecast/solar_accuracy.py - Solar forecast accuracy tracking."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.forecast.solar_accuracy import (
     BIAS_HALF_LIFE_DAYS,
@@ -377,6 +378,70 @@ class TestSolarAccuracyTracker:
         assert len(tracker._period_records) == 2
         assert tracker._metrics.sample_count == 1
         assert tracker._period_records[-1].is_boost_period is True
+
+    def test_backfill_is_boost_override_true(self, tracker):
+        """is_boost=True at flush time overrides a non-boost pending."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny", is_boost=False)
+        tracker.backfill_actual(period_start, 1.0, is_boost=True)
+
+        assert tracker._period_records[-1].is_boost_period is True
+        # Boost records are excluded from metrics.
+        assert tracker._metrics.sample_count == 0
+
+    def test_backfill_is_boost_override_false(self, tracker):
+        """is_boost=False at flush time overrides a boost-tagged pending."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny", is_boost=True)
+        tracker.backfill_actual(period_start, 1.0, is_boost=False)
+
+        assert tracker._period_records[-1].is_boost_period is False
+        assert tracker._metrics.sample_count == 1
+
+    def test_backfill_is_boost_none_preserves_pending_flag(self, tracker):
+        """is_boost=None (default) preserves the pending's recorded flag."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny", is_boost=True)
+        tracker.backfill_actual(period_start, 1.0)  # no is_boost arg
+
+        assert tracker._period_records[-1].is_boost_period is True
+
+    def test_backfill_zero_forecast_zero_actual_dropped(self, tracker):
+        """Information-free overnight samples are dropped, not counted."""
+        period_start = datetime(2026, 1, 15, 2, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 0.0, "clear")
+        tracker.backfill_actual(period_start, 0.0)
+
+        # Pending consumed, but no record appended and sample_count unchanged.
+        assert period_start.isoformat() not in tracker._pending_forecasts
+        assert len(tracker._period_records) == 0
+        assert tracker._metrics.sample_count == 0
+
+    def test_backfill_dusk_forecast_positive_tiny_actual_kept(self, tracker):
+        """Dusk periods (forecast > 0, ~0 actual) ARE kept — that bias matters."""
+        period_start = datetime(2026, 1, 15, 19, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 0.5, "clear")
+        tracker.backfill_actual(period_start, 0.0)
+
+        assert len(tracker._period_records) == 1
+        assert tracker._metrics.sample_count == 1
+
+    def test_evict_stale_pendings_drops_past_keeps_future(self, tracker):
+        """Past-dated pendings are evicted; future horizon slots are retained."""
+        now = dt_util.now()
+        stale = (now - timedelta(hours=6)).replace(minute=0, second=0, microsecond=0)
+        recent = (now - timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        future = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+
+        tracker.record_forecast(stale, 2.0, "sunny")
+        tracker.record_forecast(recent, 2.0, "sunny")
+        tracker.record_forecast(future, 2.0, "sunny")
+
+        tracker.evict_stale_pendings(max_age_hours=4.0)
+
+        assert stale.isoformat() not in tracker._pending_forecasts
+        assert recent.isoformat() in tracker._pending_forecasts
+        assert future.isoformat() in tracker._pending_forecasts
 
     def test_get_bias_correction_no_data(self, tracker):
         """Test get_bias_correction with no historical data returns 1.0."""

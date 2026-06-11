@@ -140,6 +140,28 @@ async def test_handle_medium_tick(coordinator):
 
 
 @pytest.mark.asyncio
+async def test_handle_medium_tick_drives_solar_backfill(coordinator):
+    """Solar backfill now runs on the medium (5-min) tick, not the slow tick."""
+    scheduler = TickScheduler(coordinator)
+    now = datetime.now()
+
+    coordinator._entity_monitor = MagicMock()
+    coordinator._entity_monitor.read_all_external_state = MagicMock()
+    coordinator._entity_monitor.check_entity_health = MagicMock()
+    coordinator._state_machine = MagicMock()
+    coordinator._state_machine.startup_grace_until = None
+    coordinator._learning_orchestrator = None
+    coordinator._computation_engine = None
+    coordinator.data = MagicMock()
+
+    scheduler._backfill_solar_actual = MagicMock()
+
+    scheduler.handle_medium_tick(now)
+
+    scheduler._backfill_solar_actual.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_handle_medium_tick_startup_grace(coordinator):
     """Test handle_medium_tick skips operations during startup grace period."""
     scheduler = TickScheduler(coordinator)
@@ -177,15 +199,15 @@ async def test_handle_slow_tick(coordinator):
         )
     )
 
-    # Mock backfill method
+    # Backfill now runs on the medium tick, not the slow tick.
     scheduler._backfill_solar_actual = MagicMock()
 
     scheduler.handle_slow_tick(now)
 
     # Should schedule async task for weather refresh
     assert coordinator.hass.async_create_task.call_count >= 1
-    # Should schedule backfill
-    scheduler._backfill_solar_actual.assert_called_once()
+    # Slow tick no longer backfills solar accuracy (moved to medium tick)
+    scheduler._backfill_solar_actual.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -356,9 +378,6 @@ async def test_handle_slow_tick_with_computation_engine(coordinator):
     )
     coordinator.data = MagicMock()
 
-    # Mock backfill method
-    scheduler._backfill_solar_actual = MagicMock()
-
     scheduler.handle_slow_tick(now)
 
     # Should create async tasks for forecast accuracy and history
@@ -460,80 +479,176 @@ async def test_backfill_solar_actual_small_time_delta(coordinator):
     coordinator.solar_accuracy_tracker.backfill_actual.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_backfill_solar_actual_zero_energy(coordinator):
-    """Test _backfill_solar_actual skips backfill for zero energy."""
+def _aligned_times(base_hour, base_min, tick_hour, tick_min):
+    """Build two tz-aware datetimes in the HA default timezone for backfill tests."""
     from homeassistant.util import dt as dt_util
 
-    scheduler = TickScheduler(coordinator)
+    tz = dt_util.now().tzinfo
+    baseline = datetime(2026, 6, 11, base_hour, base_min, tzinfo=tz)
+    tick_now = datetime(2026, 6, 11, tick_hour, tick_min, tzinfo=tz)
+    return baseline, tick_now
 
-    # Mock tracker
-    coordinator.solar_accuracy_tracker = MagicMock()
-    coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
 
-    # Set timestamp 1 hour ago with zero power
-    now = dt_util.now()
-    scheduler._last_solar_power_timestamp = now - timedelta(hours=1)
-    scheduler._last_solar_power_kw = 0.0
-    coordinator.data = MagicMock()
-    coordinator.data.solar_power_kw = 0.0
-
-    scheduler._backfill_solar_actual()
-
-    # Should NOT call backfill_actual due to zero energy
-    coordinator.solar_accuracy_tracker.backfill_actual.assert_not_called()
+def _expected_period(ts):
+    """Floor a timestamp to its local :00/:30 period, matching the scheduler."""
+    local = ts.astimezone()
+    return local.replace(minute=(local.minute // 30) * 30, second=0, microsecond=0)
 
 
 @pytest.mark.asyncio
-async def test_backfill_solar_actual_success(coordinator):
-    """Test _backfill_solar_actual successfully backfills energy."""
-    from homeassistant.util import dt as dt_util
+async def test_backfill_attribution_lands_on_producing_period(coordinator):
+    """Energy produced 09:35-10:00 lands on the 09:30 period, flushed after 10:00.
+
+    Headline regression: the just-started 10:00 period must NOT be backfilled at
+    the 10:05 tick — it lands on the period the energy was actually produced in.
+    """
+    from unittest.mock import patch
 
     scheduler = TickScheduler(coordinator)
-
-    # Mock tracker
     coordinator.solar_accuracy_tracker = MagicMock()
     coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
-
-    # Set timestamp 30 minutes ago with solar power
-    now = dt_util.now()
-    scheduler._last_solar_power_timestamp = now - timedelta(minutes=30)
-    scheduler._last_solar_power_kw = 4.0
+    coordinator.solar_accuracy_tracker.evict_stale_pendings = MagicMock()
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 6.0
+    coordinator.data.boost_charge_active = False
 
-    scheduler._backfill_solar_actual()
+    baseline, tick_now = _aligned_times(9, 35, 10, 5)
+    scheduler._last_solar_power_timestamp = baseline
+    scheduler._last_solar_power_kw = 4.0
 
-    # Should call backfill_actual with calculated energy
+    with patch("homeassistant.util.dt.now", return_value=tick_now):
+        scheduler._backfill_solar_actual()
+
+    # Exactly one completed period flushed: the 09:30 period.
     coordinator.solar_accuracy_tracker.backfill_actual.assert_called_once()
-    # Verify energy calculation: avg_power * time = (4+6)/2 * 0.5 = 2.5 kWh
-    args = coordinator.solar_accuracy_tracker.backfill_actual.call_args[0]
-    assert args[1] > 2.0  # Energy should be around 2.5 kWh
-
-    # Verify timestamp updated
-    assert scheduler._last_solar_power_kw == 6.0
+    call = coordinator.solar_accuracy_tracker.backfill_actual.call_args
+    expected = _expected_period(baseline)
+    assert call.args[0] == expected
+    # The 10:00 period has not completed at 10:05 -> still pending in the accumulator.
+    later = expected + timedelta(minutes=30)
+    assert later.isoformat() in scheduler._period_energy_accum
+    # Energy split 25/30 to the completed period; total = (4+6)/2 * 0.5 = 2.5 kWh.
+    assert call.args[1] == pytest.approx(2.5 * (25 / 30), rel=1e-3)
+    assert call.kwargs["is_boost"] is False
 
 
 @pytest.mark.asyncio
-async def test_backfill_solar_actual_skips_during_boost(coordinator):
-    """Boost charging periods should not contaminate solar accuracy backfill."""
-    from homeassistant.util import dt as dt_util
+async def test_backfill_proration_splits_across_boundary(coordinator):
+    """An interval spanning a :00 boundary splits energy proportionally."""
+    from unittest.mock import patch
 
     scheduler = TickScheduler(coordinator)
-
     coordinator.solar_accuracy_tracker = MagicMock()
     coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
+    coordinator.solar_accuracy_tracker.evict_stale_pendings = MagicMock()
+    coordinator.data = MagicMock()
+    coordinator.data.solar_power_kw = 6.0
+    coordinator.data.boost_charge_active = False
 
-    now = dt_util.now()
-    scheduler._last_solar_power_timestamp = now - timedelta(minutes=30)
+    # 09:45 -> 10:15: 15 min in the 09:30 period, 15 min in the 10:00 period.
+    baseline, tick_now = _aligned_times(9, 45, 10, 15)
+    scheduler._last_solar_power_timestamp = baseline
     scheduler._last_solar_power_kw = 4.0
+
+    with patch("homeassistant.util.dt.now", return_value=tick_now):
+        scheduler._backfill_solar_actual()
+
+    # total = (4+6)/2 * 0.5h = 2.5 kWh, split 50/50 across the two periods.
+    expected = _expected_period(baseline)
+    call = coordinator.solar_accuracy_tracker.backfill_actual.call_args
+    assert call.args[0] == expected  # 09:30, the completed period
+    assert call.args[1] == pytest.approx(1.25, rel=1e-3)
+    # The 10:00 period is still accumulating with its half.
+    later = expected + timedelta(minutes=30)
+    assert scheduler._period_energy_accum[later.isoformat()] == pytest.approx(
+        1.25, rel=1e-3
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_during_boost_flags_and_consumes_pending(coordinator):
+    """Boost intervals keep accumulating; the flush tags the period as boost.
+
+    Regression for the pending-forecast orphan leak: the pending IS consumed
+    (backfill_actual called) even during the daily ~3pm boost.
+    """
+    from unittest.mock import patch
+
+    scheduler = TickScheduler(coordinator)
+    coordinator.solar_accuracy_tracker = MagicMock()
+    coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
+    coordinator.solar_accuracy_tracker.evict_stale_pendings = MagicMock()
     coordinator.data = MagicMock()
     coordinator.data.solar_power_kw = 6.0
     coordinator.data.boost_charge_active = True
 
-    scheduler._backfill_solar_actual()
+    baseline, tick_now = _aligned_times(9, 35, 10, 5)
+    scheduler._last_solar_power_timestamp = baseline
+    scheduler._last_solar_power_kw = 4.0
 
-    coordinator.solar_accuracy_tracker.backfill_actual.assert_not_called()
+    with patch("homeassistant.util.dt.now", return_value=tick_now):
+        scheduler._backfill_solar_actual()
+
+    coordinator.solar_accuracy_tracker.backfill_actual.assert_called_once()
+    assert (
+        coordinator.solar_accuracy_tracker.backfill_actual.call_args.kwargs["is_boost"]
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_zero_power_still_flushes(coordinator):
+    """Zero-power completed periods still flush; the tracker decides meaningfulness.
+
+    Regression for the removed `current_power > 0.01` gate — declining-to-zero
+    dusk periods are no longer dropped at the scheduler level.
+    """
+    from unittest.mock import patch
+
+    scheduler = TickScheduler(coordinator)
+    coordinator.solar_accuracy_tracker = MagicMock()
+    coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
+    coordinator.solar_accuracy_tracker.evict_stale_pendings = MagicMock()
+    coordinator.data = MagicMock()
+    coordinator.data.solar_power_kw = 0.0
+    coordinator.data.boost_charge_active = False
+
+    baseline, tick_now = _aligned_times(18, 35, 19, 5)
+    scheduler._last_solar_power_timestamp = baseline
+    scheduler._last_solar_power_kw = 0.0
+
+    with patch("homeassistant.util.dt.now", return_value=tick_now):
+        scheduler._backfill_solar_actual()
+
+    # The completed dusk period is flushed with ~0 energy (tracker gate decides).
+    coordinator.solar_accuracy_tracker.backfill_actual.assert_called_once()
+    assert (
+        coordinator.solar_accuracy_tracker.backfill_actual.call_args.args[1]
+        == pytest.approx(0.0)
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_evicts_stale_pendings(coordinator):
+    """evict_stale_pendings runs after the flush."""
+    from unittest.mock import patch
+
+    scheduler = TickScheduler(coordinator)
+    coordinator.solar_accuracy_tracker = MagicMock()
+    coordinator.solar_accuracy_tracker.backfill_actual = MagicMock()
+    coordinator.solar_accuracy_tracker.evict_stale_pendings = MagicMock()
+    coordinator.data = MagicMock()
+    coordinator.data.solar_power_kw = 6.0
+    coordinator.data.boost_charge_active = False
+
+    baseline, tick_now = _aligned_times(9, 35, 10, 5)
+    scheduler._last_solar_power_timestamp = baseline
+    scheduler._last_solar_power_kw = 4.0
+
+    with patch("homeassistant.util.dt.now", return_value=tick_now):
+        scheduler._backfill_solar_actual()
+
+    coordinator.solar_accuracy_tracker.evict_stale_pendings.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -576,9 +691,6 @@ async def test_handle_slow_tick_no_entity_monitor(coordinator):
     # Mock dependencies
     coordinator._entity_monitor = None
     coordinator._computation_engine = None
-
-    # Mock backfill method
-    scheduler._backfill_solar_actual = MagicMock()
 
     # Should not raise
     scheduler.handle_slow_tick(now)
