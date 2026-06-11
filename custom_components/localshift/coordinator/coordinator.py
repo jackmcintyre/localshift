@@ -477,15 +477,30 @@ class LocalShiftCoordinator:
         if self._learning_orchestrator is not None:
             await self._learning_orchestrator.async_save_all()
 
+        # Persist solar accuracy samples. The tracker is owned by the
+        # coordinator (not the orchestrator), so async_save_all() misses it.
+        # async_save() early-returns unless there are pending changes and
+        # swallows its own exceptions, so this is a cheap, safe no-op most
+        # ticks and cannot block the orchestrator save above (which runs first
+        # to preserve existing behavior). The getattr guard matters because the
+        # attribute is only created in async_start and this can run on a
+        # failed-startup teardown.
+        tracker = getattr(self, "solar_accuracy_tracker", None)
+        if tracker is not None:
+            await tracker.async_save()
+
     @callback
     def _handle_learning_save(self, now: datetime) -> None:
         """Periodic save of learning data to prevent data loss on restart.
 
         Fires every 5 minutes to ensure data is persisted even if HA
-        restarts unexpectedly.
+        restarts unexpectedly. Shares the same path as the shutdown save so
+        the solar accuracy tracker is covered by both.
         """
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.handle_periodic_save()
+        self.hass.async_create_task(
+            self._save_learning_data(),
+            "localshift_periodic_learning_save",
+        )
 
     # ------------------------------------------------------------------
     # Entity update subscription (for sensor/binary_sensor entities)

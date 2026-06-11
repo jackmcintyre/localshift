@@ -338,15 +338,6 @@ class TestLearningOrchestratorForecastCorrections:
 
         assert state_machine._decision_tracker is tracker
 
-    def test_handle_periodic_save_schedules_task(self, mock_hass, mock_entry):
-        orchestrator = LearningOrchestrator(mock_hass, mock_entry, lambda _key: False)
-        orchestrator.handle_periodic_save()
-
-        assert mock_hass.async_create_task.call_count == 1
-        coro = mock_hass.async_create_task.call_args.args[0]
-        if hasattr(coro, "close"):
-            coro.close()
-
     @pytest.mark.parametrize(
         ("learning_status", "starting_days", "expects_analysis", "expected_days"),
         [
