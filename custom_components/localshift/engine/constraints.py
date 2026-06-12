@@ -300,11 +300,16 @@ def compute_pre_dw_charge_thresholds(
     eligibility keeps widening toward the ceiling as the DW approaches, so taper optimism
     cannot strand the target.
 
+    Side effect: records the raw funding water level (None when there is no deficit) on
+    ``config.pre_dw_funding_water_level`` so the min-cycle-saving exemption can scope
+    itself to genuinely target-funding charges (see ``core._is_urgency_precharge``).
+
     Returns None (feature inert, legacy behaviour) when there is no demand window, the
     mode is not self-consumption, ``max_precharge_price`` is unset, or the ceiling does
-    not exceed the ramp base. Callers must reset ``config.pre_dw_charge_thresholds`` to
-    None before invoking (this function reads legacy thresholds via
-    ``cheap_threshold_for_slot``, which consults that field).
+    not exceed the ramp base. Callers must reset ``config.pre_dw_charge_thresholds`` AND
+    ``config.pre_dw_funding_water_level`` to None before invoking (this function reads
+    legacy thresholds via ``cheap_threshold_for_slot``, which consults the former, and
+    the inert early-returns never touch the latter).
     """
     if (
         terminal_penalty_idx is None
@@ -354,8 +359,14 @@ def compute_pre_dw_charge_thresholds(
         slots, config, terminal_penalty_idx, initial_soc_pct
     )
     water = _target_funding_water_level(
-        slots, config, terminal_penalty_idx, required_stored_kwh, ramp_base, max_price
+        slots, config, terminal_penalty_idx, required_stored_kwh, max_price
     )
+    # Expose the raw funding water level (None when there is no deficit) so the
+    # min-cycle-saving exemption can distinguish target-funding charges (price ≤ water)
+    # from merely legacy-cheap ones (see ``_is_urgency_precharge``). Deliberately NOT
+    # floored at ramp_base: the floor would re-admit every base-percentile-cheap slot,
+    # which is exactly the non-funding population the exemption must exclude.
+    config.pre_dw_funding_water_level = water
 
     thresholds: list[float] = []
     for j, slot in enumerate(slots):
@@ -371,7 +382,8 @@ def compute_pre_dw_charge_thresholds(
         # ramp_j and water are ≤ max_price by construction; legacy is deliberately NOT
         # clamped to the ceiling — on a spike day whose percentile base exceeds
         # max_precharge_price this function must never tighten the existing gate.
-        thresholds.append(max(legacy[j], ramp_j, water))
+        # ramp_j ≥ ramp_base always, so a None water (no deficit) needs no substitute.
+        thresholds.append(max(legacy[j], ramp_j, water if water is not None else 0.0))
     return thresholds
 
 
@@ -413,18 +425,21 @@ def _target_funding_water_level(
     config: OptimizerConfig,
     terminal_penalty_idx: int,
     required_stored_kwh: float,
-    ramp_base: float,
     max_price: float,
-) -> float:
+) -> float | None:
     """Marginal buy price of the cheapest pre-DW slot set that closes the deficit.
 
     Eligibility by ``price <= water level`` IS cheapest-sufficient-set funding: the DP
     funds the target from the cheapest slots first and pricier slots unlock only when
     genuinely needed. When even every pre-DW slot together cannot close the deficit,
     the operator's full ``max_precharge_price`` ceiling is authorized.
+
+    Returns the raw water level (un-floored by the ramp base — callers that fold it into
+    the per-slot threshold max already include the ramp term), or None when there is no
+    deficit and hence nothing to fund.
     """
     if required_stored_kwh <= 0.0:
-        return ramp_base
+        return None
 
     candidates: list[tuple[float, float]] = []
     for j in range(terminal_penalty_idx):
@@ -447,7 +462,7 @@ def _target_funding_water_level(
         if cumulative >= required_stored_kwh:
             water = price
             break
-    return max(ramp_base, min(water, max_price))
+    return min(water, max_price)
 
 
 def compute_max_normal_gain_pct_to_terminal(

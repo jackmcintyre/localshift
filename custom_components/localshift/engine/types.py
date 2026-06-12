@@ -276,6 +276,19 @@ class OptimizerConfig:
     ``base_cheap_price`` — the #800 overnight-sawtooth protection is untouched).
     None ⇒ legacy behaviour."""
 
+    pre_dw_funding_water_level: float | None = None
+    """Solver-derived (set by ``DPPlanner._solve`` via ``compute_pre_dw_charge_thresholds``):
+    the raw target-funding water level — the marginal buy price of the cheapest set of
+    pre-DW slots whose combined boost capacity closes the SOC deficit to the demand-window
+    target ($/kWh), clamped to ``max_precharge_price``. None when there is no deficit (or
+    the thresholds are inert).
+
+    Distinct from the (b)/(c) max in ``pre_dw_charge_thresholds``: this carries ONLY the
+    funding component, un-floored by the ramp base, so the min-cycle-saving exemption can
+    tell a genuinely target-funding charge (price ≤ water level, part of the
+    cheapest-sufficient set) from a merely legacy-cheap one whose energy drains to the SOC
+    floor before the demand window (the 2026-06-13 overnight sawtooth regression)."""
+
     base_cheap_price: float | None = None
     """Un-inflated "genuinely cheap" threshold (percentile-derived), $/kWh.
 

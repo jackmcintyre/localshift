@@ -172,6 +172,7 @@ def _evaluate_action_cost(
 def _is_urgency_precharge(
     slot_idx: int,
     soc: float,
+    buy_price: float,
     terminal_penalty_idx: int | None,
     config: OptimizerConfig,
 ) -> bool:
@@ -189,19 +190,29 @@ def _is_urgency_precharge(
     Safe vs the #800 overnight sawtooth: those slots are post-DW / far pre-DW and
     never inside an urgency window, so the gate stays fully active there.
 
-    Target-first eligibility (2026-06-12): when pre_dw_charge_thresholds is
-    active, ANY pre-DW charge below target is target-driven — feasible_actions
-    only offers it at/below that slot's target-funded threshold — so the
-    exemption covers the whole pre-DW range, not just the 4-8h urgency window.
-    Without this, min-cycle-saving re-introduces the procrastination the
-    thresholds exist to fix (each early slot's margin over deferring is thin,
-    the deferrals compound, and the plan undershoots — the #860 incident shape).
-    Post-DW slots are never exempted by either branch.
+    Target-first eligibility (2026-06-12): a pre-DW charge at/below the funding
+    water level (config.pre_dw_funding_water_level — the marginal price of the
+    cheapest sufficient slot set) is target-driven even outside the 4-8h urgency
+    window, so it is exempted too. Without this, min-cycle-saving re-introduces
+    the procrastination the per-slot thresholds exist to fix (each early slot's
+    margin over deferring is thin, the deferrals compound, and the plan
+    undershoots — the #860 incident shape).
+
+    The water-level test is deliberately NOT "pre_dw_charge_thresholds is not
+    None": those thresholds are max(legacy, ramp, water), and the LEGACY
+    component keeps slots eligible for reasons unrelated to funding the target.
+    A blanket exemption re-enabled the #800 overnight sawtooth (2026-06-13
+    regression: a 12.5¢ floor-bounce charge at 03:00, fully drained before the
+    8.3¢ midday slots that actually fund the DW target). Energy charged in a
+    far-out, above-water slot drains to the SOC floor before the DW, funds
+    nothing, and must face the gate. Post-DW slots are never exempted by either
+    branch.
 
     Args:
 
         slot_idx: Index of the current slot.
         soc: Current SOC percentage.
+        buy_price: The slot's grid buy price ($/kWh).
         terminal_penalty_idx: Terminal penalty index or None.
         config: Optimizer config.
 
@@ -216,7 +227,10 @@ def _is_urgency_precharge(
         and slot_idx < terminal_penalty_idx
         and soc < config.demand_window_target_soc_pct
         and (
-            config.pre_dw_charge_thresholds is not None
+            (
+                config.pre_dw_funding_water_level is not None
+                and buy_price <= config.pre_dw_funding_water_level
+            )
             or (
                 config.urgency_window_start_idx is not None
                 and config.urgency_window_start_idx <= slot_idx
@@ -435,8 +449,10 @@ class DPPlanner:
         # so the demand-window target is fundable from the cheapest sufficient slots up
         # to max_precharge_price, and time-consistent (each slot gated at the urgency it
         # will have when it arrives, not today's now-scalar). Reset first: the precompute
-        # reads legacy thresholds via cheap_threshold_for_slot, which consults this field.
+        # reads legacy thresholds via cheap_threshold_for_slot, which consults this field,
+        # and its inert early-returns never write the water level.
         config.pre_dw_charge_thresholds = None
+        config.pre_dw_funding_water_level = None
         config.pre_dw_charge_thresholds = compute_pre_dw_charge_thresholds(
             slots, config, terminal_penalty_idx, inputs.initial_soc_pct
         )
@@ -988,7 +1004,7 @@ class DPPlanner:
 
         # is_urgency_precharge depends only on loop-invariant quantities, so hoist it.
         urgency_precharge = _is_urgency_precharge(
-            slot_idx, soc, terminal_penalty_idx, config
+            slot_idx, soc, slot.buy_price, terminal_penalty_idx, config
         )
 
         dp_next = dp[slot_idx + 1]
