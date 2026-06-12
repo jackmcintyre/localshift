@@ -28,6 +28,22 @@ BIAS_HALF_LIFE_DAYS = 7.0
 MIN_SOLAR_CORRECTION_SAMPLES = 20
 
 
+def _period_key(period_start: datetime) -> str:
+    """Derive the pending-forecast dict key for a 30-min period.
+
+    Floors to the :00/:30 boundary (second/microsecond zeroed) so both sides
+    of the record/backfill handshake agree regardless of caller timestamp
+    quirks. Live Amber slot timestamps carry a +1-second offset (18:00:01),
+    while the coordinator's actuals integration floors to the exact boundary
+    (18:00:00) — keying on the raw isoformat made every backfill pop miss, so
+    no sample was ever recorded (2026-06-12 zero-samples incident: 50 pending,
+    0 samples after a full daytime).
+    """
+    return period_start.replace(
+        minute=(period_start.minute // 30) * 30, second=0, microsecond=0
+    ).isoformat()
+
+
 @dataclass
 class SolarPeriodRecord:
     """Record of forecast vs actual for a 30-min period.
@@ -268,9 +284,9 @@ class SolarAccuracyTracker:
         """Record a solar forecast for a 30-min period.
 
         Called when building slots - stores forecast for later comparison.
-        Uses the key as ISO format string for pending lookup.
+        Keyed by the floored 30-min boundary (see _period_key).
         """
-        key = period_start.isoformat()
+        key = _period_key(period_start)
         time_of_day = self._get_time_of_day(period_start)
         season = self._get_season(period_start)
 
@@ -312,7 +328,7 @@ class SolarAccuracyTracker:
                 state during the period itself. ``None`` (default) preserves the
                 pending's existing flag — backward compatible with old callers.
         """
-        key = period_start.isoformat()
+        key = _period_key(period_start)
         pending = self._pending_forecasts.pop(key, None)
 
         if pending is None:

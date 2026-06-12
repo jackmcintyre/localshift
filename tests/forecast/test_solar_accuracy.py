@@ -1,6 +1,6 @@
 """Tests for forecast/solar_accuracy.py - Solar forecast accuracy tracking."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -317,6 +317,47 @@ class TestSolarAccuracyTracker:
 
         # Should be no records
         assert len(tracker._period_records) == 0
+
+    def test_backfill_matches_offset_second_timestamps(self, tracker):
+        """Live Amber slot timestamps carry +1s (18:00:01); the actuals
+        integration floors to the boundary (18:00:00). The period key must
+        floor both sides or every backfill misses (2026-06-12 zero-samples
+        incident: 50 pending, 0 samples after a full daytime)."""
+        tz = timezone(timedelta(hours=10))
+        recorded_at = datetime(2026, 6, 12, 10, 0, 1, tzinfo=tz)
+        flushed_at = datetime(2026, 6, 12, 10, 0, 0, tzinfo=tz)
+
+        tracker.record_forecast(recorded_at, 2.5, "sunny")
+        tracker.backfill_actual(flushed_at, 2.0)
+
+        assert tracker._pending_forecasts == {}
+        assert len(tracker._period_records) == 1
+        assert tracker._metrics.sample_count == 1
+
+    def test_backfill_matches_thirty_minute_boundary_with_seconds(self, tracker):
+        """The :30 boundary floors the same way as :00."""
+        tz = timezone(timedelta(hours=10))
+        tracker.record_forecast(
+            datetime(2026, 6, 12, 10, 30, 1, tzinfo=tz), 1.5, "sunny"
+        )
+        tracker.backfill_actual(datetime(2026, 6, 12, 10, 30, 0, tzinfo=tz), 1.2)
+
+        assert len(tracker._period_records) == 1
+
+    def test_rerecord_with_different_seconds_overwrites_single_pending(self, tracker):
+        """Re-recording the same period with a different second offset must
+        replace the pending, not create a duplicate key."""
+        tz = timezone(timedelta(hours=10))
+        tracker.record_forecast(
+            datetime(2026, 6, 12, 10, 0, 1, tzinfo=tz), 2.5, "sunny"
+        )
+        tracker.record_forecast(
+            datetime(2026, 6, 12, 10, 0, 0, tzinfo=tz), 3.0, "sunny"
+        )
+
+        assert len(tracker._pending_forecasts) == 1
+        (record,) = tracker._pending_forecasts.values()
+        assert record.forecast_kwh == 3.0
 
     def test_backfill_multiple_records(self, tracker):
         """Test multiple backfills."""
@@ -907,9 +948,10 @@ class TestNormalizeWeather:
 
 def _fill_tracker_with_bias(tracker, forecast: float, actual: float, count: int):
     """Helper: add `count` period records with given forecast/actual values."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     for i in range(count):
-        period = datetime(2026, 1, 1, 6 + i // 2, (i % 2) * 30, tzinfo=timezone.utc)
+        period = datetime(2026, 1, 1, 6 + i // 2, (i % 2) * 30, tzinfo=UTC)
         tracker.record_forecast(period, forecast, "sunny")
         tracker.backfill_actual(period, actual)
 
@@ -1028,7 +1070,9 @@ class TestAccuracyConfidenceCeiling:
         """Returns 1.0 (no cap) when fewer than MIN_SOLAR_CORRECTION_SAMPLES records exist."""
         # tracker fixture starts empty → 0 samples
         assert tracker.accuracy_confidence_ceiling() == pytest.approx(1.0)
-        assert tracker.accuracy_confidence_ceiling(low=0.2, high=0.9) == pytest.approx(1.0)
+        assert tracker.accuracy_confidence_ceiling(low=0.2, high=0.9) == pytest.approx(
+            1.0
+        )
 
     def test_accuracy_ceiling_low_when_poor_accuracy(self, tracker):
         """Returns 'low' param when accuracy is ≤ 50%."""
