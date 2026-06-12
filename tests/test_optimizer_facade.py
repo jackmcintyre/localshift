@@ -335,6 +335,8 @@ def test_assign_active_mode_sets_mode_and_apply_status():
     facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
     data = CoordinatorData()
     data.active_mode = BatteryMode.SELF_CONSUMPTION
+    # #622 gate replacement: an allowed evaluation may commit a fresh mode.
+    data.mode_decision_allowed = True
     # A decision whose window brackets "now" (huge interval) so the current-slot
     # lookup reports a real match and the debug_* fields are populated.
     data.optimizer_decisions = [
@@ -392,6 +394,8 @@ def test_assign_active_mode_falls_back_on_invalid_battery_mode():
     facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
     data = CoordinatorData()
     data.active_mode = BatteryMode.GRID_CHARGING
+    # #622 gate replacement: an allowed evaluation may commit a fresh mode.
+    data.mode_decision_allowed = True
     data.optimizer_decisions = [{"action": "hold"}]
     result = MagicMock()
     optimizer_config = MagicMock()
@@ -414,6 +418,105 @@ def test_assign_active_mode_falls_back_on_invalid_battery_mode():
     assert data.active_mode == BatteryMode.SELF_CONSUMPTION
     assert data.optimizer_last_apply_status == "fallback"
     assert data.debug_mode_source == "fallback"
+
+
+def _frozen_data_with_decided_mode(decided: BatteryMode) -> CoordinatorData:
+    """A frozen evaluation: active_mode already decided, decision NOT allowed."""
+    data = CoordinatorData()
+    data.active_mode = decided
+    data.mode_decision_allowed = False
+    data.debug_mode_source = "optimizer"  # source of the held decision
+    return data
+
+
+def test_assign_active_mode_frozen_optimizer_branch_pins_mode():
+    """#622 gate replacement: frozen + normal optimizer branch holds active_mode
+    and records debug_plan_mode_pending instead."""
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = _frozen_data_with_decided_mode(BatteryMode.SELF_CONSUMPTION)
+    data.optimizer_decisions = [
+        {
+            "action": "charge_grid_normal",
+            "timestamp_iso": "2020-01-01T00:00:00+00:00",
+            "slot_interval_minutes": 9_999_999,
+        }
+    ]
+
+    with (
+        patch(
+            "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
+        ) as mock_gate,
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
+            return_value={
+                "battery_mode": BatteryMode.GRID_CHARGING.value,
+                "action": "charge_grid_normal",
+            },
+        ),
+    ):
+        mock_gate.return_value.check_admission.return_value = SimpleNamespace(
+            allowed=True, block_reason=None
+        )
+        facade._assign_active_mode(data, MagicMock(), MagicMock(), {})
+
+    # Mode held, no decision-lag write, plan surfaced as pending.
+    assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+    assert data.decision_timestamp is None
+    assert data.decision_mode is None
+    assert data.debug_plan_mode_pending == BatteryMode.GRID_CHARGING.value
+    # debug_mode_source reflects the HELD decision, not the frozen plan.
+    assert data.debug_mode_source == "optimizer"
+    # Observability (apply status) still refreshes.
+    assert data.optimizer_last_apply_status == "ready_to_apply"
+
+
+def test_assign_active_mode_frozen_safety_block_pins_mode():
+    """#622 gate replacement: frozen + safety-gate block holds active_mode."""
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = _frozen_data_with_decided_mode(BatteryMode.GRID_CHARGING)
+
+    with patch(
+        "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
+    ) as mock_gate:
+        mock_gate.return_value.check_admission.return_value = SimpleNamespace(
+            allowed=False, block_reason="stale forecast"
+        )
+        facade._assign_active_mode(data, MagicMock(), MagicMock(), {})
+
+    # Block would default to SELF_CONSUMPTION, but frozen → hold GRID_CHARGING.
+    assert data.active_mode == BatteryMode.GRID_CHARGING
+    assert data.decision_timestamp is None
+    assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
+    # Block status is observability and still recorded.
+    assert data.optimizer_last_apply_status == "blocked"
+    assert data.optimizer_safety_block_reason == "stale forecast"
+
+
+def test_assign_active_mode_frozen_valueerror_pins_mode():
+    """#622 gate replacement: frozen + invalid-mode fallback holds active_mode."""
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = _frozen_data_with_decided_mode(BatteryMode.GRID_CHARGING)
+    data.optimizer_decisions = [{"action": "hold"}]
+
+    with (
+        patch(
+            "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
+        ) as mock_gate,
+        patch(
+            "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
+            return_value={"battery_mode": "not-a-mode", "action": "hold"},
+        ),
+    ):
+        mock_gate.return_value.check_admission.return_value = SimpleNamespace(
+            allowed=True, block_reason=None
+        )
+        facade._assign_active_mode(data, MagicMock(), MagicMock(), {})
+
+    # Fallback would default to SELF_CONSUMPTION, but frozen → hold GRID_CHARGING.
+    assert data.active_mode == BatteryMode.GRID_CHARGING
+    assert data.decision_timestamp is None
+    assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
+    assert data.optimizer_last_apply_status == "fallback"
 
 
 def test_current_slot_debug_info_matched():

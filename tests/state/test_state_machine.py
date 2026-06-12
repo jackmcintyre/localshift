@@ -1456,24 +1456,28 @@ class TestDecisionFingerprint:
         fp2 = state_machine._get_decision_fingerprint(coordinator_data)
 
         assert fp1 == fp2
-        assert fp1 == "0.2500|0.0800|False"
+        # #622 gate replacement: fingerprint now enumerates the full discrete
+        # decision context: buy|sell|spike|dw_active|soc_floor_breached.
+        assert fp1 == "0.2500|0.0800|False|False|False"
 
 
 class TestModeTransitionGating:
-    """Test that mode transitions are gated on fingerprint.
+    """Test that mode decisions are gated on the decision-context fingerprint.
 
-    Issue #622: Mode transitions only occur when price fingerprint changes.
-    Optimizer always runs to update plan data.
+    #622 gate replacement: the decision token is consumed at evaluation time
+    (in _apply_decision_token), and the facade pins active_mode when frozen.
+    The state machine no longer gates transitions itself — it only converges
+    toward the decided mode.
     """
 
     @pytest.mark.asyncio
-    async def test_optimizer_runs_even_if_price_unchanged(
+    async def test_token_consumed_at_evaluation(
         self,
         state_machine,
         coordinator_data,
         computation_engine,
     ):
-        """Optimizer always runs even if price unchanged."""
+        """First evaluation with a price consumes the token (stores fingerprint)."""
         # Set up data with prices and a different desired mode
         coordinator_data.general_price = 0.25
         coordinator_data.feed_in_price = 0.08
@@ -1481,57 +1485,57 @@ class TestModeTransitionGating:
         # Set desired mode different from commanded mode (which is SELF_CONSUMPTION)
         coordinator_data.active_mode = BatteryMode.GRID_CHARGING
 
-        # First evaluation sets fingerprint and transitions
+        # First evaluation: decision allowed, fingerprint stored
         await state_machine.evaluate_state_machine(
             coordinator_data,
             computation_engine,
         )
 
-        # Verify fingerprint was set
+        # The token was consumed by the evaluation itself: the fingerprint is
+        # now stored (this only happens on a decision-allowed evaluation).
         fingerprint = state_machine._get_decision_fingerprint(coordinator_data)
         assert fingerprint is not None
-        assert state_machine._last_decision_fingerprint is not None
+        assert state_machine._last_evaluated_fingerprint == fingerprint
+        # FIX 1 (transience guarantee): even though this evaluation GRANTED a
+        # token, the flag is reset to False in the evaluate finally block so it
+        # cannot leak True into the out-of-lock recompute.
+        assert coordinator_data.mode_decision_allowed is False
 
     @pytest.mark.asyncio
-    async def test_mode_transition_skipped_if_price_unchanged(
+    async def test_second_eval_same_price_is_frozen(
         self,
         state_machine,
         coordinator_data,
         computation_engine,
-        mock_battery_controller,
     ):
-        """Mode transition is skipped when fingerprint unchanged."""
-        # Set up data with prices and different desired mode
+        """A second evaluation with unchanged context is frozen (no new token).
+
+        This is the deferred-redemption kill: the first eval consumes the token,
+        and the second eval on the same context yields mode_decision_allowed=False
+        regardless of what the plan would do.
+        """
         coordinator_data.general_price = 0.25
         coordinator_data.feed_in_price = 0.08
         coordinator_data.price_spike = False
         coordinator_data.active_mode = BatteryMode.GRID_CHARGING
 
-        # First evaluation to set fingerprint and transition
         await state_machine.evaluate_state_machine(
             coordinator_data,
             computation_engine,
         )
+        # First eval granted a token (it stored a non-None fingerprint). The
+        # flag itself is transient (FIX 1) and already reset to False here.
+        first_fp = state_machine._last_evaluated_fingerprint
+        assert first_fp is not None
+        assert coordinator_data.mode_decision_allowed is False
 
-        # Verify fingerprint was set
-        fingerprint = state_machine._get_decision_fingerprint(coordinator_data)
-        assert fingerprint is not None
-        assert state_machine._last_decision_fingerprint is not None
-
-        # Reset mock to track second call
-        mock_battery_controller.set_force_charge.reset_mock()
-
-        # Change desired mode but keep same prices
-        coordinator_data.active_mode = BatteryMode.BOOST_CHARGING
-
-        # Second evaluation should skip transition due to same prices
+        # Second evaluation, same prices: frozen, fingerprint unchanged.
         await state_machine.evaluate_state_machine(
             coordinator_data,
             computation_engine,
         )
-
-        # Mode transition should be skipped (no new calls)
-        mock_battery_controller.set_force_charge.assert_not_called()
+        assert coordinator_data.mode_decision_allowed is False
+        assert state_machine._last_evaluated_fingerprint == first_fp
 
     @pytest.mark.asyncio
     async def test_first_evaluation_allows_transition(
@@ -1663,3 +1667,469 @@ class TestModeTransitionGating:
 
         # NOW transition should have happened despite unchanged prices
         mock_battery_controller.set_proactive_export.assert_called_once()
+
+
+# =============================================================================
+# #622 GATE REPLACEMENT — DECISION-TOKEN ARCHITECTURE
+# =============================================================================
+# These tests exercise the once-per-decision-context invariant: the optimizer
+# may select a *new* mode only when the discrete decision context changes; the
+# state machine always converges hardware toward the already-decided mode.
+
+
+class FakeFacadeEngine:
+    """Computation-engine stub that mimics the real optimizer-facade contract.
+
+    Real flow: compute_derived_values() → facade._assign_active_mode() pins
+    data.active_mode when data.mode_decision_allowed is False, and re-decides it
+    (to whatever the plan wants) only when True. This stub reproduces exactly
+    that pin/commit behaviour so the state machine can be driven through the
+    knife-edge without the full optimizer.
+    """
+
+    def __init__(self, plan_mode: BatteryMode) -> None:
+        # The mode the "plan" currently wants (the oscillating knife-edge value).
+        self.plan_mode = plan_mode
+        # The value of data.mode_decision_allowed observed on the LAST call.
+        # The flag is transient (reset in the evaluate finally block), so a test
+        # cannot read it after evaluate_state_machine returns — it captures the
+        # in-lock value here instead.
+        self.last_decision_allowed: bool | None = None
+
+    def compute_derived_values(self, data) -> None:
+        self.last_decision_allowed = data.mode_decision_allowed
+        if data.mode_decision_allowed:
+            # Allowed: the facade commits the fresh plan mode.
+            if self.plan_mode != data.active_mode:
+                data.decision_timestamp = dt_aware(2026, 2, 16, 16, 0, 0)
+                data.decision_mode = self.plan_mode
+            data.active_mode = self.plan_mode
+            data.debug_plan_mode_pending = None
+        else:
+            # Frozen: pin active_mode, surface the would-be plan mode.
+            data.debug_plan_mode_pending = (
+                self.plan_mode.value if self.plan_mode != data.active_mode else None
+            )
+
+
+class TestDecisionTokenInvariant:
+    """THE INVARIANT TEST plus the exception/bypass coverage (#622 replacement)."""
+
+    def _run(self, state_machine, data, engine):
+        asyncio.run(state_machine.evaluate_state_machine(data, engine))
+
+    def test_invariant_transitions_le_distinct_fingerprints(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Knife-edge: many evals across price intervals, plan oscillating every
+        eval; executed transitions must be ≤ distinct fingerprint values.
+        """
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        # Real engine decisions are immediate-debounce modes so a granted token
+        # transitions on the same tick.
+        engine = FakeFacadeEngine(BatteryMode.GRID_CHARGING)
+
+        transitions = []
+        original = state_machine._execute_mode_transition
+
+        async def _counting(data, target):
+            result = await original(data, target)
+            if result:
+                transitions.append(target)
+            return result
+
+        state_machine._execute_mode_transition = _counting
+
+        # 4 price intervals, ~6 evals each (tick + coalesce cadence). Each eval
+        # the plan oscillates between two immediate modes.
+        prices = [0.25, 0.25, 0.25, 0.30, 0.30, 0.30, 0.20, 0.20, 0.20, 0.40, 0.40, 0.40]
+        oscillate = [BatteryMode.GRID_CHARGING, BatteryMode.SPIKE_DISCHARGE]
+        distinct_fps = set()
+        for i, price in enumerate(prices):
+            coordinator_data.general_price = price
+            coordinator_data.price_spike = False
+            engine.plan_mode = oscillate[i % 2]
+            distinct_fps.add(
+                state_machine._get_decision_fingerprint(coordinator_data)
+            )
+            self._run(state_machine, coordinator_data, engine)
+
+        # The crown jewel: at most one transition per distinct decision context.
+        assert len(transitions) <= len(distinct_fps)
+        # And concretely: 4 distinct prices → ≤ 4 transitions, not ~12.
+        assert len(distinct_fps) == 4
+        # Guard against a vacuous pass: the knife-edge MUST have driven some
+        # transitions (otherwise the invariant is trivially satisfied).
+        assert len(transitions) >= 1
+
+    def test_token_flag_reset_after_granting_evaluation(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """FIX 1 test (a): after an evaluation that GRANTED a token, the
+        transient flag is reset to False (it cannot leak True)."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.GRID_CHARGING)
+
+        self._run(state_machine, coordinator_data, engine)
+
+        # The evaluation observed an allowed decision in-lock...
+        assert engine.last_decision_allowed is True
+        # ...but the flag is reset to False once the evaluation completes.
+        assert coordinator_data.mode_decision_allowed is False
+
+    def test_out_of_lock_recompute_cannot_commit_ungated_mode(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """FIX 1 test (b) — the invariant-leak scenario: an evaluation grants a
+        token (price change), then the OUT-OF-LOCK recompute runs the engine's
+        compute_derived_values(data) directly with the plan now preferring a
+        different mode. Because the flag was reset, active_mode is held (pinned)
+        and decision_timestamp is not written.
+        """
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+
+        # In-lock evaluation grants a token; plan == current so no mode change.
+        self._run(state_machine, coordinator_data, engine)
+        assert coordinator_data.mode_decision_allowed is False
+        coordinator_data.decision_timestamp = None
+
+        # Out-of-lock recompute: the plan now prefers a DIFFERENT mode. This
+        # mirrors coordinator.async_recompute_and_evaluate's pre-lock
+        # _compute_derived_values call, which must see the flag frozen at False.
+        engine.plan_mode = BatteryMode.GRID_CHARGING
+        engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert coordinator_data.decision_timestamp is None
+        assert (
+            coordinator_data.debug_plan_mode_pending
+            == BatteryMode.GRID_CHARGING.value
+        )
+
+    def test_frozen_eval_pins_mode_no_decision_timestamp(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Same fingerprint, plan flips → no transition, active_mode pinned, no
+        decision_timestamp write."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+
+        # First eval: decision allowed, mode stays SELF_CONSUMPTION (plan == current).
+        self._run(state_machine, coordinator_data, engine)
+        coordinator_data.decision_timestamp = None
+
+        # Plan flips on the SAME price — must be frozen.
+        engine.plan_mode = BatteryMode.GRID_CHARGING
+        mock_battery_controller.set_force_charge.reset_mock()
+        self._run(state_machine, coordinator_data, engine)
+
+        assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert coordinator_data.decision_timestamp is None
+        assert coordinator_data.debug_plan_mode_pending == BatteryMode.GRID_CHARGING.value
+        mock_battery_controller.set_force_charge.assert_not_called()
+
+    def test_deferred_token_kill(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Price change with a stable plan, then plan flips at next tick with the
+        same price → NO transition (the original deferred-redemption bug)."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+
+        # Tick 1: price changes, plan stable (stays SELF_CONSUMPTION). Token spent
+        # by the evaluation, no transition.
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+        self._run(state_machine, coordinator_data, engine)
+        mock_battery_controller.set_force_charge.reset_mock()
+
+        # Tick 2: SAME price, plan now flips to GRID_CHARGING. Under the old gate
+        # the stale token would be redeemed here. Now: frozen, no transition.
+        engine.plan_mode = BatteryMode.GRID_CHARGING
+        self._run(state_machine, coordinator_data, engine)
+
+        assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller.set_force_charge.assert_not_called()
+
+    def test_none_price_never_grants_transition(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """price → None → same price restores → still frozen; new price → one
+        decision. None must never grant a transition."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+
+        # Tick 1: establish context, plan stable.
+        self._run(state_machine, coordinator_data, engine)
+        stored_fp = state_machine._last_evaluated_fingerprint
+
+        # Tick 2: price unavailable (None) + plan flips. None must freeze and must
+        # NOT overwrite the stored fingerprint.
+        coordinator_data.general_price = None
+        engine.plan_mode = BatteryMode.GRID_CHARGING
+        self._run(state_machine, coordinator_data, engine)
+        assert coordinator_data.mode_decision_allowed is False
+        assert state_machine._last_evaluated_fingerprint == stored_fp
+        mock_battery_controller.set_force_charge.assert_not_called()
+
+        # Tick 3: same price returns — still frozen (no context change).
+        coordinator_data.general_price = 0.25
+        self._run(state_machine, coordinator_data, engine)
+        assert coordinator_data.mode_decision_allowed is False
+        mock_battery_controller.set_force_charge.assert_not_called()
+
+        # Tick 4: genuinely new price — exactly one decision.
+        coordinator_data.general_price = 0.40
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is True
+        assert coordinator_data.active_mode == BatteryMode.GRID_CHARGING
+        mock_battery_controller.set_force_charge.assert_called_once()
+
+    def test_spike_onset_grants_one_decision(
+        self, state_machine, coordinator_data
+    ):
+        """price_spike False→True is a context change → one decision."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.price_spike = False
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+        self._run(state_machine, coordinator_data, engine)
+
+        coordinator_data.price_spike = True
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is True
+
+        # Same spike state → frozen.
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is False
+
+    def test_dw_active_flip_grants_one_decision(
+        self, state_machine, coordinator_data
+    ):
+        """demand_window_active flip is a context change → one decision."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.demand_window_active = False
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+        self._run(state_machine, coordinator_data, engine)
+
+        coordinator_data.demand_window_active = True
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is True
+
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is False
+
+    def test_soc_floor_breach_flip_grants_one_decision(
+        self, state_machine, coordinator_data, mock_get_option
+    ):
+        """soc < minimum_target_soc flip is a context change → one decision."""
+        # mock_get_option returns the default for minimum_target_soc, which is
+        # the canonical DEFAULT_MINIMUM_TARGET_SOC (= 20). We cross the floor
+        # inside the 10-20 band (25 → 15) so this test would catch a regression
+        # to the old hardcoded default of 10.0.
+        coordinator_data.general_price = 0.25
+        coordinator_data.soc = 25.0
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+        self._run(state_machine, coordinator_data, engine)
+
+        # Drop SOC below the floor (20) but above the old wrong default (10).
+        coordinator_data.soc = 15.0
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is True
+
+        # Still below floor, same context → frozen.
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is False
+
+
+class TestConvergeWhileFrozen:
+    """Frozen evaluations still converge hardware toward the decided mode."""
+
+    def _run(self, state_machine, data, engine, now):
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = now
+            asyncio.run(state_machine.evaluate_state_machine(data, engine))
+
+    def test_proactive_export_debounce_completes_across_frozen_evals(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """A PROACTIVE_EXPORT debounce started on an allowed eval completes across
+        subsequent frozen evals (debounce progression is convergence)."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.PROACTIVE_EXPORT)
+
+        # Tick 1 (allowed): decision = PROACTIVE_EXPORT, debounce starts.
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 0, 0)
+        )
+        mock_battery_controller.set_proactive_export.assert_not_called()
+        assert BatteryMode.PROACTIVE_EXPORT in state_machine._mode_desired_since
+
+        # Tick 2 (frozen, same price): still converging toward decided mode.
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 1, 0)
+        )
+        assert coordinator_data.mode_decision_allowed is False
+        mock_battery_controller.set_proactive_export.assert_not_called()
+
+        # Tick 3 (frozen): debounce satisfied → transition completes.
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 2, 1)
+        )
+        mock_battery_controller.set_proactive_export.assert_called_once()
+        assert state_machine._commanded_mode == BatteryMode.PROACTIVE_EXPORT
+
+    def test_failed_transition_retries_across_frozen_evals(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """A failed command retries toward the decided mode on later frozen evals."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.GRID_CHARGING)
+
+        # First the command fails.
+        mock_battery_controller.set_force_charge = AsyncMock(return_value=False)
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 0, 0)
+        )
+        assert state_machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+
+        # Next eval is frozen (same price), but the command now succeeds — the
+        # state machine retries toward the decided mode without a fresh token.
+        mock_battery_controller.set_force_charge = AsyncMock(return_value=True)
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 1, 0)
+        )
+        assert coordinator_data.mode_decision_allowed is False
+        assert state_machine._commanded_mode == BatteryMode.GRID_CHARGING
+
+    def test_validator_blocked_then_unblocked_retries_without_fresh_token(
+        self, state_machine, coordinator_data, mock_battery_controller, mock_entity_validator
+    ):
+        """A validator-blocked transition retries on a later frozen eval once the
+        validator allows it — and a DIFFERENT desired mode while frozen does NOT
+        execute (active_mode is pinned to the decided mode)."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.GRID_CHARGING)
+
+        # Validator blocks the first (allowed) transition.
+        mock_entity_validator.should_allow_automation.return_value = False
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 0, 0)
+        )
+        assert state_machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+
+        # While still frozen, the plan tries to flip to a DIFFERENT mode. Because
+        # active_mode is pinned to the decided GRID_CHARGING, the machine never
+        # converges toward SPIKE_DISCHARGE.
+        engine.plan_mode = BatteryMode.SPIKE_DISCHARGE
+        mock_entity_validator.should_allow_automation.return_value = True
+        self._run(
+            state_machine, coordinator_data, engine, dt_aware(2026, 2, 16, 16, 1, 0)
+        )
+        assert coordinator_data.mode_decision_allowed is False
+        # Converged toward the DECIDED mode (GRID_CHARGING), not the frozen plan.
+        assert state_machine._commanded_mode == BatteryMode.GRID_CHARGING
+        mock_battery_controller.set_force_discharge.assert_not_called()
+
+
+class TestInvalidateDecisionFingerprint:
+    """Deliberate re-decision points (#622 gate replacement)."""
+
+    def test_invalidate_grants_next_decision(
+        self, state_machine, coordinator_data
+    ):
+        """After invalidate_decision_fingerprint, the next eval decides even with
+        an unchanged price."""
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+
+        # Same price → would normally be frozen.
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert engine.last_decision_allowed is False
+
+        # Invalidate → next eval is an allowed decision.
+        state_machine.invalidate_decision_fingerprint("config change")
+        assert state_machine._last_evaluated_fingerprint is None
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert engine.last_decision_allowed is True
+
+    def test_manual_override_timeout_invalidates_fingerprint(
+        self, state_machine, coordinator_data
+    ):
+        """FIX 2: after the manual-override auto-timeout clears the override, the
+        NEXT evaluation with UNCHANGED prices is decision-allowed and the
+        optimizer mode commits — not pinned at MANUAL until the next price
+        change.
+        """
+        state_machine._commanded_mode = BatteryMode.MANUAL
+        coordinator_data.active_mode = BatteryMode.MANUAL
+        coordinator_data.manual_override = True
+        coordinator_data.general_price = 0.25
+        # Override set long ago → beyond the default 24h timeout.
+        state_machine._manual_override_set_at = dt_aware(2020, 1, 1, 0, 0, 0)
+
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+
+        # Eval 1: timeout fires, clears the override AND invalidates the
+        # fingerprint. (The token for this eval was already spent before the
+        # timeout handler ran, so the invalidation takes effect next tick.)
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert coordinator_data.manual_override is False
+        assert state_machine._last_evaluated_fingerprint is None
+
+        # Eval 2: prices UNCHANGED, yet the optimizer mode commits because the
+        # fingerprint was invalidated — without FIX 2 this would stay frozen
+        # (pinned at MANUAL) until a genuine price change.
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert engine.last_decision_allowed is True
+        assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
+
+    def test_startup_grace_end_invalidates_fingerprint(
+        self, state_machine, coordinator_data
+    ):
+        """A token burned during startup grace (e.g. while the safety gate was
+        still blocking, committing the SC fallback) must not pin that fallback
+        after grace ends: grace-end invalidates the fingerprint so the next
+        evaluation re-decides from the now-populated inputs.
+        """
+        coordinator_data.general_price = 0.25
+        coordinator_data.automation_ready = True
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+
+        # Eval 1 DURING grace: the token is consumed (decision allowed) even
+        # though _evaluate_core returns early on the grace check.
+        state_machine.set_startup_grace(grace_seconds=60)
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert engine.last_decision_allowed is True
+        assert state_machine._last_evaluated_fingerprint is not None
+
+        # Grace expires → eval 2 hits the grace-end branch, which invalidates.
+        state_machine._startup_grace_until = dt_aware(2020, 1, 1, 0, 0, 0)
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert state_machine._last_evaluated_fingerprint is None
+
+        # Eval 3: prices UNCHANGED, yet decision-allowed — the plan can replace
+        # the fallback committed during grace instead of staying frozen until
+        # the next genuine price change.
+        engine.plan_mode = BatteryMode.GRID_CHARGING
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
+        assert engine.last_decision_allowed is True
+        assert coordinator_data.active_mode == BatteryMode.GRID_CHARGING

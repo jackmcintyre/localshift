@@ -204,8 +204,11 @@ class EvaluationDispatcher:
         if not self._load_deviation_detector.evaluate(coordinator.data, now):
             return False
 
+        # #622 gate replacement: a load-deviation reoptimization may update the
+        # plan but must NOT grant a mode re-decision — pass invalidate_decision
+        # False so the once-per-context invariant holds.
         self.hass.async_create_task(
-            coordinator.async_recompute_and_evaluate(),
+            coordinator.async_recompute_and_evaluate(invalidate_decision=False),
             "localshift_reoptimize_load_deviation",
         )
         return True
@@ -218,8 +221,10 @@ class EvaluationDispatcher:
         if not self._solar_event_detector.evaluate(coordinator.data, now):
             return False
 
+        # #622 gate replacement: a solar-event reoptimization may update the plan
+        # but must NOT grant a mode re-decision — pass invalidate_decision False.
         self.hass.async_create_task(
-            coordinator.async_recompute_and_evaluate(),
+            coordinator.async_recompute_and_evaluate(invalidate_decision=False),
             "localshift_reoptimize_solar_event",
         )
         return True
