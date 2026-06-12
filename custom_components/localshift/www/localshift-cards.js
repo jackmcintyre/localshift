@@ -142,8 +142,11 @@ async function lsFetchHistory(hass, cache, key, entityId, startMs, endMs, ttlMs)
   const now = Date.now();
   const hit = cache[key];
   if (hit && now - hit.at < ttlMs) return hit.data;
-  if (hit && hit.pending) return hit.data || [];
-  cache[key] = { at: hit ? hit.at : 0, data: hit ? hit.data : [], pending: true };
+  // The pending lock must expire: a request that never settles (e.g. a tab
+  // left open across an HA restart) would otherwise freeze history forever.
+  if (hit && hit.pending && now - hit.pendingAt < 30e3) return hit.data || [];
+  const mine = { at: hit ? hit.at : 0, data: hit ? hit.data : [], pending: true, pendingAt: now };
+  cache[key] = mine;
   try {
     const url =
       `history/period/${new Date(startMs).toISOString()}` +
@@ -156,11 +159,11 @@ async function lsFetchHistory(hass, cache, key, entityId, startMs, endMs, ttlMs)
       .map((r) => ({ t: new Date(r.last_changed || r.last_updated).getTime(), v: parseFloat(r.state) }))
       .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
       .sort((a, b) => a.t - b.t);
-    cache[key] = { at: Date.now(), data, pending: false };
+    if (cache[key] === mine) cache[key] = { at: Date.now(), data, pending: false };
     return data;
   } catch (e) {
-    cache[key] = { at: Date.now(), data: (hit && hit.data) || [], pending: false };
-    return cache[key].data;
+    if (cache[key] === mine) cache[key] = { at: Date.now(), data: (hit && hit.data) || [], pending: false };
+    return (hit && hit.data) || [];
   }
 }
 
@@ -436,13 +439,14 @@ class LocalShiftCommandCard extends HTMLElement {
       i = j + 1;
     }
 
-    // actual SOC (history)
-    if (socHist && socHist.length > 1) {
-      const pts = socHist
-        .filter((p) => p.t >= t0 && p.t <= now)
-        .map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`)
-        .join(" ");
-      if (pts) svg += `<polyline points="${pts}" fill="none" stroke="var(--primary-text-color)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    // actual SOC (history, extended to the live state so the line keeps
+    // tracking current SOC even when the history fetch lags or fails)
+    const liveSoc = lsNum(hass, this._e.soc, NaN);
+    const actual = (socHist || []).filter((p) => p.t >= t0 && p.t <= now);
+    if (Number.isFinite(liveSoc)) actual.push({ t: now, v: liveSoc });
+    if (actual.length > 1) {
+      const pts = actual.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+      svg += `<polyline points="${pts}" fill="none" stroke="var(--primary-text-color)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     }
 
     // planned SOC (dashed, future)
