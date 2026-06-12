@@ -65,6 +65,263 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.EXPORT_PROACTIVE: 3,
 }
 
+_GRID_CHARGE_ACTIONS = (
+    PlannerAction.CHARGE_GRID_NORMAL,
+    PlannerAction.CHARGE_GRID_BOOST,
+)
+
+
+def _evaluate_action_cost(
+    action: PlannerAction,
+    soc: float,
+    slot: SlotContext,
+    slot_idx: int,
+    slots: list[SlotContext],
+    soc_grid: list[float],
+    dp_next: dict,
+    config: OptimizerConfig,
+    inputs: OptimizerInputs,
+    terminal_penalty_idx: int | None,
+) -> tuple[float, int, float, float, float, float]:
+    """Compute per-action cost for a single (slot, soc-bin, action) triple.
+
+    Returns a plain tuple of (next_soc, next_bin, grid_import, grid_export,
+    charge_kwh, total_cost) with all intermediate quantities already applied:
+    SOC clamping, bin lookup with inf-fallback interpolation, switching cost,
+    Issue #610 solar-opportunity factor, Issue #638 futile-cycling factor, and
+    stage + future cost summation.
+
+    Args:
+
+        action: Action to evaluate.
+        soc: Current SOC percentage.
+        slot: Current slot context.
+        slot_idx: Index of the current slot.
+        slots: All slot contexts.
+        soc_grid: SOC discretisation grid.
+        dp_next: dp[slot_idx + 1] — the next-slot value table (NOT the whole dp list).
+        config: Optimizer config.
+        inputs: Optimizer inputs (for current_action and all_solcast).
+        terminal_penalty_idx: Terminal penalty index or None.
+
+    Returns:
+
+        Tuple of (next_soc, next_bin, grid_import, grid_export, charge_kwh, total_cost).
+
+    """
+
+    next_soc, grid_import, grid_export = _transition(soc, action, slot, config)
+    next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
+    next_bin = _map_soc_to_bin(next_soc, soc_grid)
+    future_cost = dp_next.get(next_bin, (float("inf"),))[0]
+
+    if future_cost == float("inf") and dp_next:
+        future_cost = _interpolate_cost_to_soc(
+            next_soc, soc_grid, {k: v[0] for k, v in dp_next.items()}
+        )
+
+    is_switch = (
+        slot_idx == 0
+        and inputs.current_action is not None
+        and action != inputs.current_action
+    )
+
+    # Issue #610: horizon-aware solar opportunity cost
+
+    solar_opp_factor = get_solar_opportunity_penalty_factor(
+        action=action,
+        grid_import_kwh=grid_import,
+        slot=slot,
+        slot_idx=slot_idx,
+        slots=slots,
+        config=config,
+        terminal_penalty_idx=terminal_penalty_idx,
+        all_solcast=inputs.all_solcast,
+    )
+
+    # Issue #638: futile cycling penalty
+
+    charge_kwh = max(0.0, next_soc - soc) / 100.0 * config.battery_capacity_kwh
+
+    futile_factor = get_futile_cycling_penalty_factor(
+        action=action,
+        slot_idx=slot_idx,
+        slots=slots,
+        config=config,
+        soc_after_charge_pct=next_soc,
+        charge_kwh=charge_kwh,
+        terminal_penalty_idx=terminal_penalty_idx,
+    )
+
+    stage = _cost_stage_cost(
+        action,
+        grid_import,
+        grid_export,
+        slot,
+        config,
+        soc_pct=soc,
+        is_switch=is_switch,
+        solar_opportunity_penalty_factor=solar_opp_factor,
+        futile_cycling_penalty_factor=futile_factor,
+    )
+    total_cost = stage.net_cost + future_cost
+
+    return next_soc, next_bin, grid_import, grid_export, charge_kwh, total_cost
+
+
+def _is_urgency_precharge(
+    slot_idx: int,
+    soc: float,
+    terminal_penalty_idx: int | None,
+    config: OptimizerConfig,
+) -> bool:
+    """Return True when this slot qualifies as a demand-window pre-charge that must be exempted from the min-cycle-saving gate.
+
+    Demand-window pre-charge exemption (2026-06-11 sub-target incident): a charge
+    inside the urgency window that is still below the DW target is needed to reach
+    that target, not speculative cycling. Without exempting it, the min-cycle-saving
+    gate drops each early pre-charge slot — its per-slot margin over simply deferring
+    the charge is below the threshold because the charge "could" happen later — and
+    those deferrals compound: by the time charging is forced it is deep in the
+    taper region with too few slots left, so the plan enters the DW under target
+    (live: 91.8% vs a 95% target, holding the first slots instead of charging).
+    Mirrors the SOC-floor anti-sawtooth guard's urgency-window exemption below.
+    Safe vs the #800 overnight sawtooth: those slots are post-DW / far pre-DW and
+    never inside an urgency window, so the gate stays fully active there.
+
+    Target-first eligibility (2026-06-12): when pre_dw_charge_thresholds is
+    active, ANY pre-DW charge below target is target-driven — feasible_actions
+    only offers it at/below that slot's target-funded threshold — so the
+    exemption covers the whole pre-DW range, not just the 4-8h urgency window.
+    Without this, min-cycle-saving re-introduces the procrastination the
+    thresholds exist to fix (each early slot's margin over deferring is thin,
+    the deferrals compound, and the plan undershoots — the #860 incident shape).
+    Post-DW slots are never exempted by either branch.
+
+    Args:
+
+        slot_idx: Index of the current slot.
+        soc: Current SOC percentage.
+        terminal_penalty_idx: Terminal penalty index or None.
+        config: Optimizer config.
+
+    Returns:
+
+        True when the slot should be exempt from the min-cycle-saving gate.
+
+    """
+
+    return (
+        terminal_penalty_idx is not None
+        and slot_idx < terminal_penalty_idx
+        and soc < config.demand_window_target_soc_pct
+        and (
+            config.pre_dw_charge_thresholds is not None
+            or (
+                config.urgency_window_start_idx is not None
+                and config.urgency_window_start_idx <= slot_idx
+            )
+        )
+    )
+
+
+def _min_cycle_saving_blocks(
+    action: PlannerAction,
+    charge_kwh: float,
+    total_cost: float,
+    hold_total_cost: float | None,
+    is_urgency_precharge: bool,
+    config: OptimizerConfig,
+) -> bool:
+    """Return True when the min-cycle-saving gate blocks the given charge action.
+
+    Min-cycle-saving gate (anti-micro-cycling): a grid charge is only worth
+    a battery cycle if it beats simply holding by at least
+    config.min_cycle_saving dollars per kWh charged. The margin
+    (hold_total_cost - total_cost) is the DP's real cost difference, so it
+    already credits every value source the optimizer sees — evening-peak
+    avoidance, the demand-window target, backup readiness — via future_cost.
+    That preserves genuine pre-charge and spike capture while dropping thin
+    speculative arbitrage. A HARD skip; unlike the soft penalties (#606/#804)
+    it cannot be paid through. HOLD is appended first by feasible_actions, so
+    hold_total_cost is set before any charge action is evaluated.
+
+    Args:
+
+        action: Action being evaluated.
+        charge_kwh: kWh of charge gained by the action (from clamped next_soc).
+        total_cost: Total DP cost of the action (stage + future).
+        hold_total_cost: Total DP cost of the HOLD action for this state (or None
+            when HOLD has not yet been evaluated — should not happen in practice).
+        is_urgency_precharge: Whether this slot is exempt from the gate.
+        config: Optimizer config.
+
+    Returns:
+
+        True when the action should be skipped (gate fires).
+
+    """
+
+    if not (
+        config.min_cycle_saving > 0.0
+        and charge_kwh > 0.0
+        and hold_total_cost is not None
+        and not is_urgency_precharge
+        and action in _GRID_CHARGE_ACTIONS
+    ):
+        return False
+    saving = hold_total_cost - total_cost
+    return 0.0 < saving < config.min_cycle_saving * charge_kwh
+
+
+def _floor_guard_blocks(
+    action: PlannerAction,
+    soc: float,
+    next_soc: float,
+    slot_idx: int,
+    terminal_penalty_idx: int | None,
+    config: OptimizerConfig,
+) -> bool:
+    """Return True when the SOC-floor anti-sawtooth guard blocks the given charge action.
+
+    SOC-floor anti-sawtooth guard: at SOC floor, only allow charging if:
+    1. Charge amount is meaningful (> min_floor_charge_gain_pct SOC), OR
+    2. We are within the urgency window before the demand window.
+
+    Tiny charges at the SOC floor without an urgent need produce sawtooth
+    oscillation — the optimizer charges by a hair, decays back to floor,
+    and repeats — so they are skipped. The urgency-window exemption mirrors
+    the min-cycle-saving gate's exemption: slots inside the urgency window
+    are target-driven and must not be blocked.
+
+    Args:
+
+        action: Action being evaluated.
+        soc: Current SOC percentage.
+        next_soc: Next SOC percentage (after clamping).
+        slot_idx: Index of the current slot.
+        terminal_penalty_idx: Terminal penalty index or None.
+        config: Optimizer config.
+
+    Returns:
+
+        True when the action should be skipped (guard fires).
+
+    """
+
+    if not (
+        soc <= config.min_soc_pct + config.min_soc_floor_buffer_pct
+        and action in _GRID_CHARGE_ACTIONS
+    ):
+        return False
+    charge_soc_gain = next_soc - soc
+    in_urgency_window = (
+        terminal_penalty_idx is not None
+        and config.urgency_window_start_idx is not None
+        and slot_idx >= config.urgency_window_start_idx
+    )
+    return charge_soc_gain < config.min_floor_charge_gain_pct and not in_urgency_window
+
 
 class DPPlanner:
     """Deterministic dynamic-programming battery optimizer.
@@ -729,150 +986,47 @@ class DPPlanner:
         states_explored = 0
         hold_total_cost: float | None = None
 
+        # is_urgency_precharge depends only on loop-invariant quantities, so hoist it.
+        urgency_precharge = _is_urgency_precharge(
+            slot_idx, soc, terminal_penalty_idx, config
+        )
+
+        dp_next = dp[slot_idx + 1]
+
         for action in actions:
-            next_soc, grid_import, grid_export = _transition(soc, action, slot, config)
-            next_soc = max(config.min_soc_pct, min(config.max_soc_pct, next_soc))
-            next_bin = _map_soc_to_bin(next_soc, soc_grid)
-            future_cost = dp[slot_idx + 1].get(next_bin, (float("inf"),))[0]
-
-            if future_cost == float("inf") and dp[slot_idx + 1]:
-                future_cost = _interpolate_cost_to_soc(
-                    next_soc, soc_grid, {k: v[0] for k, v in dp[slot_idx + 1].items()}
-                )
-
-            is_switch = (
-                slot_idx == 0
-                and inputs.current_action is not None
-                and action != inputs.current_action
-            )
-
-            # Issue #610: horizon-aware solar opportunity cost
-
-            solar_opp_factor = get_solar_opportunity_penalty_factor(
-                action=action,
-                grid_import_kwh=grid_import,
-                slot=slot,
-                slot_idx=slot_idx,
-                slots=slots,
-                config=config,
-                terminal_penalty_idx=terminal_penalty_idx,
-                all_solcast=inputs.all_solcast,
-            )
-
-            # Issue #638: futile cycling penalty
-
-            charge_kwh = max(0.0, next_soc - soc) / 100.0 * config.battery_capacity_kwh
-
-            futile_factor = get_futile_cycling_penalty_factor(
-                action=action,
-                slot_idx=slot_idx,
-                slots=slots,
-                config=config,
-                soc_after_charge_pct=next_soc,
-                charge_kwh=charge_kwh,
-                terminal_penalty_idx=terminal_penalty_idx,
-            )
-
-            stage = _cost_stage_cost(
-                action,
-                grid_import,
-                grid_export,
-                slot,
-                config,
-                soc_pct=soc,
-                is_switch=is_switch,
-                solar_opportunity_penalty_factor=solar_opp_factor,
-                futile_cycling_penalty_factor=futile_factor,
-            )
-            total_cost = stage.net_cost + future_cost
-
-            # Demand-window pre-charge exemption (2026-06-11 sub-target incident): a charge
-            # inside the urgency window that is still below the DW target is needed to reach
-            # that target, not speculative cycling. Without exempting it, the min-cycle-saving
-            # gate drops each early pre-charge slot — its per-slot margin over simply deferring
-            # the charge is below the threshold because the charge "could" happen later — and
-            # those deferrals compound: by the time charging is forced it is deep in the
-            # taper region with too few slots left, so the plan enters the DW under target
-            # (live: 91.8% vs a 95% target, holding the first slots instead of charging).
-            # Mirrors the SOC-floor anti-sawtooth guard's urgency-window exemption below.
-            # Safe vs the #800 overnight sawtooth: those slots are post-DW / far pre-DW and
-            # never inside an urgency window, so the gate stays fully active there.
-            #
-            # Target-first eligibility (2026-06-12): when pre_dw_charge_thresholds is
-            # active, ANY pre-DW charge below target is target-driven — feasible_actions
-            # only offers it at/below that slot's target-funded threshold — so the
-            # exemption covers the whole pre-DW range, not just the 4-8h urgency window.
-            # Without this, min-cycle-saving re-introduces the procrastination the
-            # thresholds exist to fix (each early slot's margin over deferring is thin,
-            # the deferrals compound, and the plan undershoots — the #860 incident shape).
-            # Post-DW slots are never exempted by either branch.
-            is_urgency_precharge = (
-                terminal_penalty_idx is not None
-                and slot_idx < terminal_penalty_idx
-                and soc < config.demand_window_target_soc_pct
-                and (
-                    config.pre_dw_charge_thresholds is not None
-                    or (
-                        config.urgency_window_start_idx is not None
-                        and config.urgency_window_start_idx <= slot_idx
-                    )
+            next_soc, next_bin, grid_import, grid_export, charge_kwh, total_cost = (
+                _evaluate_action_cost(
+                    action,
+                    soc,
+                    slot,
+                    slot_idx,
+                    slots,
+                    soc_grid,
+                    dp_next,
+                    config,
+                    inputs,
+                    terminal_penalty_idx,
                 )
             )
 
             if action == PlannerAction.HOLD:
                 hold_total_cost = total_cost
-            elif (
-                config.min_cycle_saving > 0.0
-                and charge_kwh > 0.0
-                and hold_total_cost is not None
-                and not is_urgency_precharge
-                and action
-                in (
-                    PlannerAction.CHARGE_GRID_NORMAL,
-                    PlannerAction.CHARGE_GRID_BOOST,
-                )
+            elif _min_cycle_saving_blocks(
+                action,
+                charge_kwh,
+                total_cost,
+                hold_total_cost,
+                urgency_precharge,
+                config,
             ):
-                # Min-cycle-saving gate (anti-micro-cycling): a grid charge is only worth
-                # a battery cycle if it beats simply holding by at least
-                # config.min_cycle_saving dollars per kWh charged. The margin
-                # (hold_total_cost - total_cost) is the DP's real cost difference, so it
-                # already credits every value source the optimizer sees — evening-peak
-                # avoidance, the demand-window target, backup readiness — via future_cost.
-                # That preserves genuine pre-charge and spike capture while dropping thin
-                # speculative arbitrage. A HARD skip; unlike the soft penalties (#606/#804)
-                # it cannot be paid through. HOLD is appended first by feasible_actions, so
-                # hold_total_cost is set before any charge action is evaluated.
-                saving = hold_total_cost - total_cost
-                if 0.0 < saving < config.min_cycle_saving * charge_kwh:
-                    states_explored += 1
-                    continue
+                states_explored += 1
+                continue
 
-            # SOC-floor anti-sawtooth guard
-            if (
-                soc <= config.min_soc_pct + config.min_soc_floor_buffer_pct
-                and action
-                in (
-                    PlannerAction.CHARGE_GRID_NORMAL,
-                    PlannerAction.CHARGE_GRID_BOOST,
-                )
+            if _floor_guard_blocks(
+                action, soc, next_soc, slot_idx, terminal_penalty_idx, config
             ):
-                # At SOC floor, only allow charging if:
-                # 1. Charge amount is meaningful (> min_floor_charge_gain_pct SOC) OR
-                # 2. We are within urgency window before demand window
-                charge_soc_gain = next_soc - soc
-                in_urgency_window = (
-                    terminal_penalty_idx is not None
-                    and config.urgency_window_start_idx is not None
-                    and slot_idx >= config.urgency_window_start_idx
-                )
-
-                if (
-                    charge_soc_gain < config.min_floor_charge_gain_pct
-                    and not in_urgency_window
-                ):
-                    # Tiny charge at SOC floor without urgent need - skip to avoid sawtooth
-                    states_explored += 1
-                    continue
+                states_explored += 1
+                continue
 
             if total_cost < best_cost or (
                 total_cost == best_cost
