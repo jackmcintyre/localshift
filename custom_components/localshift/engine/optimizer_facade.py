@@ -66,6 +66,13 @@ class OptimizerFacade:
 
         recorded = 0
         for slot in slots:
+            # Only 30-min slots represent a full accuracy period. The hybrid
+            # schedule's near-term 5-min slots can land on a :00/:30 boundary
+            # and would otherwise overwrite the pending with ~5 minutes of
+            # forecast energy — compared against a 30-min actual, that reads
+            # as a systematic ~6x under-forecast.
+            if getattr(slot, "slot_interval_minutes", 30) != 30:
+                continue
             period_start = datetime.fromisoformat(slot.timestamp_iso)
             if not self._is_backfillable_period_start(period_start):
                 continue

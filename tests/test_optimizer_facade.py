@@ -248,6 +248,36 @@ def test_record_forecasts_for_slots_records_only_backfillable_timestamps():
     )
 
 
+def test_record_forecasts_for_slots_skips_5min_hybrid_slots():
+    """A near-term 5-min hybrid slot landing on a :00/:30 boundary must not
+    be recorded as the period forecast: its solar_kwh covers ~5 minutes, and
+    comparing it against a 30-min actual reads as a systematic ~6x
+    under-forecast."""
+    tracker = MagicMock()
+    slots = [
+        SimpleNamespace(
+            solar_kwh=0.1,
+            timestamp_iso="2026-06-12T10:00:01+10:00",
+            slot_interval_minutes=5,
+        ),
+        SimpleNamespace(
+            solar_kwh=0.6,
+            timestamp_iso="2026-06-12T10:30:01+10:00",
+            slot_interval_minutes=30,
+        ),
+    ]
+
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    facade.set_solar_accuracy_tracker(tracker)
+    facade._record_forecasts_for_slots(slots, "sunny")
+
+    assert tracker.record_forecast.call_count == 1
+    assert (
+        tracker.record_forecast.call_args.kwargs["period_start"].isoformat()
+        == "2026-06-12T10:30:01+10:00"
+    )
+
+
 def test_record_forecasts_for_slots_passes_boost_flag():
     tracker = MagicMock()
     slots = [
