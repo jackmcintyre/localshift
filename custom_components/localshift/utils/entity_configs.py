@@ -133,7 +133,11 @@ STALENESS_THRESHOLDS: dict[str, timedelta] = {
     CONF_TESLEMETRY_OPERATION_MODE: timedelta(minutes=5),
     CONF_PRICING_GENERAL_PRICE: timedelta(minutes=10),
     CONF_PRICING_FEED_IN_PRICE: timedelta(minutes=10),
-    CONF_SOLCAST_FORECAST_TODAY: timedelta(hours=2),
+    # Solcast auto-polls 5x/day on a fixed 4.8h cadence (00:00, 04:48, 09:36,
+    # 14:24, 19:12 local); thresholds must exceed that interval or the entity
+    # is flagged stale for ~2.8h of every poll window, falsely degrading
+    # health and engaging the stale-solar confidence ceiling.
+    CONF_SOLCAST_FORECAST_TODAY: timedelta(hours=5),
     CONF_SOLCAST_FORECAST_TOMORROW: timedelta(hours=6),
 }
 
