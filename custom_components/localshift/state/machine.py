@@ -14,8 +14,10 @@ from ..const import (
     BACKUP_RESERVE_MAX_VALID,
     CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
+    CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+    DEFAULT_MINIMUM_TARGET_SOC,
     PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
@@ -87,8 +89,12 @@ class StateMachine:
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
-        # Issue #622: Fingerprint for gating mode transitions on price changes
-        self._last_decision_fingerprint: str | None = None
+        # Decision-token gating (#622 gate replacement): the mode may be
+        # re-decided at most once per discrete decision-context change. The
+        # fingerprint is consumed by the *evaluation* that observes the change
+        # (not by a transition), which kills the old deferred-redemption bug
+        # where a stale token was redeemed minutes later by a non-price input.
+        self._last_evaluated_fingerprint: str | None = None
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -143,16 +149,31 @@ class StateMachine:
         return self._tesla_override_detected
 
     def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
-        """Generate fingerprint from price data for gating mode transitions.
+        """Generate the discrete decision-context fingerprint.
 
-        Issue #622: Mode transitions are gated on price changes. This fingerprint
-        captures the price state that affects mode decisions.
+        #622 gate replacement: the mode may be re-decided only when the discrete
+        decision context changes. This fingerprint enumerates every legitimate
+        re-decision trigger so the once-per-context invariant holds by
+        construction — no timers, no dwell:
+
+        - buy/sell price (Amber's 5-min interval is the primary trigger)
+        - spike: price-spike onset
+        - dw_active: demand-window boundary crossing
+        - soc_floor_breached: SOC dropped below the optimizer's minimum target
+
+        ``dw_active`` and ``soc_floor_breached`` are read from ``data`` *before*
+        compute_derived_values refreshes them this tick. The resulting 1-tick
+        detection lag is acceptable and intended: the very next evaluation (≤1
+        min away) carries the refreshed values, and treating the pre-refresh
+        snapshot as the decision context keeps the fingerprint consistent with
+        the prices read at the same instant.
 
         Args:
-            data: Coordinator data with current prices.
+            data: Coordinator data with current prices and state.
 
         Returns:
-            Fingerprint string "{buy}|{sell}|{spike}" or None if prices unavailable.
+            Fingerprint string or None if prices are unavailable. None must NOT
+            count as a context change (the caller freezes on None).
 
         """
         buy = data.general_price
@@ -162,7 +183,13 @@ class StateMachine:
         if buy is None or sell is None:
             return None
 
-        return f"{buy:.4f}|{sell:.4f}|{spike}"
+        dw_active = data.demand_window_active
+        min_target_soc = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        soc_floor_breached = data.soc is not None and data.soc < min_target_soc
+
+        return f"{buy:.4f}|{sell:.4f}|{spike}|{dw_active}|{soc_floor_breached}"
 
     def _get_mode_config(
         self, target: BatteryMode, data: CoordinatorData
@@ -317,6 +344,15 @@ class StateMachine:
 
         self._startup_grace_until = None
 
+        # #622 gate replacement: grace-end is the startup-settle re-decision
+        # point (enumerated exception). A token may already have been burned by
+        # an evaluation during grace while the safety gate was still blocking
+        # (e.g. optimizer slots absent pre-Solcast), committing the SC fallback;
+        # without invalidation the first real decision would stay frozen until
+        # the next price change (~5 min). Invalidate so the first post-grace
+        # evaluation re-decides from the now-populated inputs.
+        self.invalidate_decision_fingerprint("startup grace ended")
+
         # Issue #349: Check if automation is ready before inferring mode
         # At startup, entities may not be populated, leading to incorrect mode inference
         if not data.automation_ready:
@@ -380,6 +416,12 @@ class StateMachine:
         )
         data.manual_override = False
         self._manual_override_set_at = None
+        # #622 gate replacement: the timeout is a deliberate re-decision point.
+        # Without invalidating the fingerprint the facade would keep pinning
+        # active_mode at MANUAL until the next genuine price change (up to ~5
+        # min away), because an unchanged decision context grants no token.
+        # Invalidate so the very next evaluation is decision-allowed.
+        self.invalidate_decision_fingerprint("manual override timeout")
         # Send notification about manual override timeout
         await self._notification_service.send_manual_override_timeout_notification(
             data, timeout_hours
@@ -388,7 +430,9 @@ class StateMachine:
         # A full recompute already ran at the top of this lock
         # (Item 5 fix).
         # desired remains MANUAL this cycle; the next periodic tick
-        # (at most 1 minute away) will recompute the correct mode.
+        # (at most 1 minute away) will recompute the correct mode — now that the
+        # fingerprint is invalidated, that tick is decision-allowed and the
+        # optimizer mode commits instead of staying pinned at MANUAL.
 
     async def _handle_soc_monitoring(self, data: CoordinatorData) -> bool:
         """Handle SOC-based charge target enforcement.
@@ -512,20 +556,58 @@ class StateMachine:
             if not data.automation_ready and check_automation_ready_func is not None:
                 in_grace = self._startup_grace_until is not None
                 check_automation_ready_func(data, suppress_warning=in_grace)
+
+            # #622 gate replacement: consume the decision token at evaluation
+            # time, from fresh post-read_state data, BEFORE compute_derived_values
+            # runs the optimizer facade. The facade reads data.mode_decision_allowed
+            # to decide whether it may re-select active_mode this tick.
+            self._apply_decision_token(data)
+
             computation_engine.compute_derived_values(data)
 
             try:
                 await self._evaluate_core(data, computation_engine)
             finally:
+                # #622 gate replacement (transience guarantee): the decision
+                # token is valid ONLY within this in-lock window, from
+                # _apply_decision_token above to here. Resetting it (even on
+                # exception) guarantees the flag is never True for the
+                # OUT-OF-LOCK compute_derived_values call at the top of
+                # coordinator.async_recompute_and_evaluate — so a load-deviation
+                # or solar reoptimize can never commit an ungated mode decision.
+                data.mode_decision_allowed = False
                 if notify_func is not None:
                     notify_func()
+
+    def _apply_decision_token(self, data: CoordinatorData) -> None:
+        """Consume the decision token for this evaluation (#622 gate replacement).
+
+        Computes the discrete decision-context fingerprint from fresh data and
+        sets ``data.mode_decision_allowed`` accordingly. The token is consumed by
+        the evaluation that *observes* a context change — not by a later
+        transition — so a stale token can never be redeemed by a non-price input
+        on a subsequent tick (the original deferred-redemption bug).
+
+        A None fingerprint (price sensor unavailable) never grants a decision and
+        never overwrites the stored fingerprint: we stay frozen on the last known
+        context until a genuinely new value arrives.
+        """
+        fingerprint = self._get_decision_fingerprint(data)
+        decision_allowed = (
+            fingerprint is not None and fingerprint != self._last_evaluated_fingerprint
+        )
+        if decision_allowed:
+            # Consume immediately: the evaluation, not the transition, spends the
+            # token. Covers every downstream path (including debounce-in-progress).
+            self._last_evaluated_fingerprint = fingerprint
+            _LOGGER.debug("Decision token granted (fingerprint=%s)", fingerprint)
+        data.mode_decision_allowed = decision_allowed
 
     async def _evaluate_core(
         self, data: CoordinatorData, computation_engine: ComputationEngine
     ) -> None:
         """Core evaluation logic extracted from evaluate_state_machine."""
         now = dt_util.now()
-        desired = data.active_mode
 
         if self._handle_startup_grace_period(data, now):
             return
@@ -533,6 +615,16 @@ class StateMachine:
             return
 
         await self._handle_manual_override_timeout(data, now)
+
+        # #622 gate replacement: the convergence-while-frozen guarantee rests on
+        # the optimizer facade (_commit_or_hold_mode), not on any local state
+        # here. While frozen the facade holds data.active_mode at the last
+        # committed decision, so ``desired`` below cannot name a new mode; a
+        # frozen evaluation can only converge hardware toward that held decision
+        # (debounce progression, failed/blocked-command retry, health checks).
+        # On an allowed evaluation the facade has just (re-)selected
+        # data.active_mode and the transition logic drives toward the new mode.
+        desired = data.active_mode
 
         if desired == self._commanded_mode:
             await self._handle_stable_mode(data)
@@ -559,8 +651,15 @@ class StateMachine:
         debounce = self._get_debounce_duration(desired)
         debounce_in_progress = desired in self._mode_desired_since
 
+        # #622 gate replacement: the "decide only on context change" gate now
+        # lives at the facade (active_mode is pinned when frozen), so this path
+        # is only reached when converging toward the already-decided mode —
+        # either a fresh decision this tick, or an in-flight debounce / retry.
+        # No price-fingerprint check here: starting/continuing the debounce and
+        # retrying a failed or validator-blocked command are convergence, not
+        # new decisions.
         if not debounce_in_progress:
-            if await self._handle_new_desired_mode(data, desired, now, debounce):
+            if self._start_debounce(desired, now, debounce):
                 return
 
         if not await self._check_debounce_and_transition(data, desired, now, debounce):
@@ -573,23 +672,6 @@ class StateMachine:
         for mode in list(self._mode_desired_since.keys()):
             if mode != desired:
                 self._mode_desired_since.pop(mode, None)
-
-    async def _handle_new_desired_mode(
-        self,
-        data: CoordinatorData,
-        desired: BatteryMode,
-        now: datetime,
-        debounce: timedelta,
-    ) -> bool:
-        """Handle new desired mode (debounce not in progress).
-
-        Returns True if caller should return, False to continue.
-        """
-        if self._should_skip_price_unchanged(data, desired):
-            if not self._get_switch_state("dry_run"):
-                await self._perform_health_check(data)
-            return True
-        return self._start_debounce(data, desired, now, debounce)
 
     async def _execute_transition_with_validation(
         self, data: CoordinatorData, desired: BatteryMode, now: datetime
@@ -646,29 +728,8 @@ class StateMachine:
             old_mode, desired, data
         )
 
-    def _should_skip_price_unchanged(
-        self, data: CoordinatorData, desired: BatteryMode
-    ) -> bool:
-        """Check if transition should be skipped due to unchanged price."""
-        fingerprint = self._get_decision_fingerprint(data)
-        price_changed = (
-            fingerprint != self._last_decision_fingerprint
-            or self._last_decision_fingerprint is None
-        )
-
-        if not price_changed:
-            _LOGGER.debug(
-                "Price unchanged (fingerprint=%s), skipping new mode transition %s → %s",
-                fingerprint,
-                self._commanded_mode.value,
-                desired.value,
-            )
-            return True
-        return False
-
     def _start_debounce(
         self,
-        data: CoordinatorData,
         desired: BatteryMode,
         now: datetime,
         debounce: timedelta,
@@ -676,9 +737,11 @@ class StateMachine:
         """Start debounce timer for new desired mode.
 
         Returns True if caller should return (wait for debounce), False if debounce is 0.
+
+        #622 gate replacement: the decision token is consumed in
+        _apply_decision_token at evaluation time, not here — a debounce start is
+        convergence toward the decided mode, never a fresh decision.
         """
-        fingerprint = self._get_decision_fingerprint(data)
-        self._last_decision_fingerprint = fingerprint
         self._mode_desired_since[desired] = now
         if debounce > timedelta(0):
             _LOGGER.info(
@@ -1172,6 +1235,24 @@ class StateMachine:
             "Commanded mode set directly to %s (manual button press)",
             mode.value,
         )
+
+    def invalidate_decision_fingerprint(self, reason: str) -> None:
+        """Force the next evaluation to be an allowed decision (#622 gate replacement).
+
+        Clears the stored decision-context fingerprint so the next evaluation
+        sees a "changed" context and may re-select the mode. Used for deliberate
+        re-decision points (user config changes, automation re-enable) where the
+        plan genuinely needs to take effect now, independent of price movement.
+
+        NOT called by the load-deviation / solar-event reoptimizers: those may
+        update the plan but must not grant a mode change (the invariant holds).
+
+        Args:
+            reason: Human-readable reason for the invalidation (logged at INFO).
+
+        """
+        _LOGGER.info("Decision fingerprint invalidated: %s", reason)
+        self._last_evaluated_fingerprint = None
 
     @property
     def in_mode_transition(self) -> bool:

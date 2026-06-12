@@ -740,12 +740,26 @@ class LocalShiftCoordinator:
         """
         await self._evaluate_state_machine()
 
-    async def async_recompute_and_evaluate(self) -> None:
+    async def async_recompute_and_evaluate(
+        self, invalidate_decision: bool = True
+    ) -> None:
         """Public method for triggering recomputation and state evaluation.
 
         Called by switch and number platforms when configuration changes.
         Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
+
+        Args:
+            invalidate_decision: When True (the default), force the next state
+                machine evaluation to be an allowed re-decision (#622 gate
+                replacement) — used for deliberate config-change re-decision
+                points. The load-deviation / solar-event reoptimizers pass False:
+                they may update the plan but must NOT grant a mode change.
+
         """
+        if invalidate_decision and self._state_machine is not None:
+            self._state_machine.invalidate_decision_fingerprint(
+                "async_recompute_and_evaluate (config change)"
+            )
         self._compute_derived_values()
         self.notify_listeners()
         await self.async_evaluate_state_machine()

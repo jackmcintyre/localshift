@@ -546,3 +546,20 @@ class CoordinatorData:
     Each entry: {from_mode, to_mode, lag_seconds, decision_time, implementation_time}.
     Max 50 entries.
     """
+
+    # ---------------------------------------------------------------------------
+    # --- Decision-token gating (#622 gate replacement) ---
+    # ---------------------------------------------------------------------------
+    # Transient per-evaluation flag set by the state machine BEFORE
+    # compute_derived_values runs. When False the optimizer facade must NOT
+    # re-decide active_mode (it pins the previously-decided mode); the would-be
+    # plan mode is surfaced via debug_plan_mode_pending instead. Default False so
+    # any code path that forgets to set it freezes rather than thrashes.
+
+    mode_decision_allowed: bool = False
+    """True only on evaluations where the decision context changed (one decision
+    per price/spike/DW-boundary/SOC-floor change). Transient; not persisted."""
+
+    debug_plan_mode_pending: str | None = None
+    """When the decision is frozen, the mode the plan would have selected
+    ("plan wants X, decision held at Y"). None when no decision is pending."""

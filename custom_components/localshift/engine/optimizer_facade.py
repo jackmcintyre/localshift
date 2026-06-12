@@ -309,6 +309,13 @@ class OptimizerFacade:
         data.debug_first_forecast_slot_time = first_hhmm
         data.debug_time_gap_seconds = gap_seconds
 
+        # #622 gate replacement: the mode may be (re-)decided only on an allowed
+        # evaluation. When frozen, every branch below records its block-status /
+        # debug observability but must NOT touch active_mode, decision_timestamp
+        # or decision_mode — the previously-decided mode is pinned. The would-be
+        # plan mode is surfaced via debug_plan_mode_pending instead.
+        decision_allowed = data.mode_decision_allowed
+
         safety_gate = OptimizerSafetyGate(config_options)
         gate_result = safety_gate.check_admission(data, result, alignment)
 
@@ -318,10 +325,14 @@ class OptimizerFacade:
                 gate_result.block_reason,
             )
 
-            data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "blocked"
             data.optimizer_safety_block_reason = gate_result.block_reason or ""
-            data.debug_mode_source = "fallback"
+            self._commit_or_hold_mode(
+                data,
+                _BatteryMode.SELF_CONSUMPTION,
+                decision_allowed,
+                mode_source="fallback",
+            )
             _LOGGER.warning(
                 "Optimizer safety gate failed — defaulting to SELF_CONSUMPTION"
             )
@@ -335,26 +346,17 @@ class OptimizerFacade:
         battery_mode_str = apply_plan.get("battery_mode", "")
         try:
             new_mode = _BatteryMode(battery_mode_str)
-            if new_mode != data.active_mode:
-                decision_time = dt_util.now()
-                if decision_time is not None:
-                    data.decision_timestamp = decision_time
-                    data.decision_mode = new_mode
-                    _LOGGER.info(
-                        "Decision lag tracking: mode change %s → %s at %s",
-                        data.active_mode.value,
-                        new_mode.value,
-                        decision_time.isoformat(),
-                    )
-            data.active_mode = new_mode
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
-            data.debug_mode_source = "optimizer"
+            self._commit_or_hold_mode(
+                data, new_mode, decision_allowed, mode_source="optimizer"
+            )
             _LOGGER.info(
-                "DP optimizer: selected %s (action=%s, slot=%d)",
+                "DP optimizer: selected %s (action=%s, slot=%d, decision_allowed=%s)",
                 battery_mode_str,
                 apply_plan.get("action"),
                 current_slot_idx,
+                decision_allowed,
             )
         except ValueError:
             _LOGGER.warning(
@@ -362,9 +364,51 @@ class OptimizerFacade:
                 battery_mode_str,
             )
 
-            data.active_mode = _BatteryMode.SELF_CONSUMPTION
             data.optimizer_last_apply_status = "fallback"
-            data.debug_mode_source = "fallback"
+            self._commit_or_hold_mode(
+                data,
+                _BatteryMode.SELF_CONSUMPTION,
+                decision_allowed,
+                mode_source="fallback",
+            )
+
+    @staticmethod
+    def _commit_or_hold_mode(
+        data: CoordinatorData,
+        new_mode: Any,
+        decision_allowed: bool,
+        mode_source: str,
+    ) -> None:
+        """Commit a freshly-decided mode, or hold the pinned mode when frozen.
+
+        #622 gate replacement. On an allowed evaluation this commits ``new_mode``
+        to ``data.active_mode`` (with decision-lag tracking) exactly as before.
+        On a frozen evaluation it leaves ``active_mode`` / ``decision_timestamp``
+        / ``decision_mode`` untouched and records the would-be mode in
+        ``debug_plan_mode_pending`` so the dashboard can show "plan wants X,
+        decision held at Y".
+        """
+        if not decision_allowed:
+            # Frozen: pin the previously-decided mode, surface the pending plan.
+            data.debug_plan_mode_pending = (
+                new_mode.value if new_mode != data.active_mode else None
+            )
+            return
+
+        if new_mode != data.active_mode:
+            decision_time = dt_util.now()
+            if decision_time is not None:
+                data.decision_timestamp = decision_time
+                data.decision_mode = new_mode
+                _LOGGER.info(
+                    "Decision lag tracking: mode change %s → %s at %s",
+                    data.active_mode.value,
+                    new_mode.value,
+                    decision_time.isoformat(),
+                )
+        data.active_mode = new_mode
+        data.debug_mode_source = mode_source
+        data.debug_plan_mode_pending = None
 
     @staticmethod
     def _mark_mode_debug_fallback(data: CoordinatorData) -> None:

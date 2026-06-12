@@ -383,6 +383,43 @@ def test_fast_tick_triggers_load_deviation_reoptimization():
         hass.async_create_task.call_args.args[1]
         == "localshift_reoptimize_load_deviation"
     )
+    # #622 gate replacement: a reoptimization may update the plan but must NOT
+    # grant a mode re-decision.
+    coordinator.async_recompute_and_evaluate.assert_called_once_with(
+        invalidate_decision=False
+    )
+
+
+def test_load_deviation_reoptimization_does_not_invalidate_decision():
+    """#622 gate replacement: load-deviation reoptimizer passes invalidate_decision=False."""
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    coordinator = StubCoordinator()
+
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        coordinator.read_state,
+        MagicMock(),
+        AsyncMock(),
+        MagicMock(in_mode_transition=False),
+        timedelta(minutes=10),
+    )
+    # Load-deviation does not fire; solar-event does.
+    dispatcher._load_deviation_detector = MagicMock()
+    dispatcher._load_deviation_detector.evaluate.return_value = False
+    dispatcher._solar_event_detector = MagicMock()
+    dispatcher._solar_event_detector.evaluate.return_value = True
+
+    dispatcher.on_fast_tick(dt_util.now())
+
+    assert (
+        hass.async_create_task.call_args.args[1] == "localshift_reoptimize_solar_event"
+    )
+    coordinator.async_recompute_and_evaluate.assert_called_once_with(
+        invalidate_decision=False
+    )
 
 
 def test_fast_tick_uses_periodic_evaluation_when_no_load_deviation_trigger():
