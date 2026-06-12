@@ -600,9 +600,7 @@ class StateMachine:
             # Consume immediately: the evaluation, not the transition, spends the
             # token. Covers every downstream path (including debounce-in-progress).
             self._last_evaluated_fingerprint = fingerprint
-            _LOGGER.debug(
-                "Decision token granted (fingerprint=%s)", fingerprint
-            )
+            _LOGGER.debug("Decision token granted (fingerprint=%s)", fingerprint)
         data.mode_decision_allowed = decision_allowed
 
     async def _evaluate_core(
