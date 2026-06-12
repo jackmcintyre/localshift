@@ -30,11 +30,97 @@ _LOGGER = logging.getLogger(__name__)
 # Minimum samples per group before considering it for bias detection
 MIN_SAMPLES_FOR_BIAS = 10
 
+# Issue #449 Phase 7: compare against PlannerAction (DP-native) values
+_GRID_CHARGE_ACTIONS = frozenset({
+    PlannerAction.CHARGE_GRID_NORMAL,
+    PlannerAction.CHARGE_GRID_BOOST,
+})
+
+# Threshold for 'resulted in export' / 'exported grid energy'
+_SIGNIFICANT_EXPORT_KWH = 0.5
+
+# Lost more than 10% SOC unexpectedly
+_UNDER_CHARGE_SOC_DROP_PCT = -10
+
 # Minimum weeks a pattern must persist before becoming actionable
 MIN_WEEKS_OBSERVED = 2
 
 # Standard deviation threshold for bias detection
 BIAS_STD_DEV_THRESHOLD = 1.0
+
+
+def _mean_and_std(scores: list[float]) -> tuple[float, float]:
+    """Return (mean, sample std) for a non-empty list of scores.
+
+    Uses the n-1 (Bessel-corrected) denominator for sample standard deviation.
+    Returns std of 0.0 when only one sample is present.
+
+    Precondition: scores must be non-empty (callers are responsible for guarding).
+    """
+    n = len(scores)
+    mean = sum(scores) / n
+    if n > 1:
+        variance = sum((s - mean) ** 2 for s in scores) / (n - 1)
+        std = math.sqrt(variance)
+    else:
+        std = 0.0
+    return mean, std
+
+
+def _over_charge_rate(decisions: list[DecisionRecord]) -> float:
+    """Fraction of grid-charge decisions that exported > _SIGNIFICANT_EXPORT_KWH.
+
+    Issue #449 Phase 7: compare against PlannerAction (DP-native) values.
+    Returns 0.0 when there are no grid-charge decisions.
+    """
+    grid_charge_count = sum(
+        1 for d in decisions if d.mode_chosen in _GRID_CHARGE_ACTIONS
+    )
+    if grid_charge_count == 0:
+        return 0.0
+    over_charge_count = sum(
+        1
+        for d in decisions
+        if d.mode_chosen in _GRID_CHARGE_ACTIONS
+        and d.actual_export_kwh is not None
+        and d.actual_export_kwh > _SIGNIFICANT_EXPORT_KWH
+    )
+    return over_charge_count / grid_charge_count
+
+
+def _under_charge_rate(decisions: list[DecisionRecord], sample_count: int) -> float:
+    """Fraction of decisions where SOC dropped unexpectedly (Lost more than 10% SOC unexpectedly).
+
+    CRITICAL INVARIANT: sample_count is the number of decisions with
+    outcome_score IS NOT None — NOT len(decisions). The under-charge count
+    scans ALL decisions. This asymmetry is intentional; do not recompute
+    sample_count from decisions here.
+    """
+    under_charge_count = sum(
+        1
+        for d in decisions
+        if d.actual_soc_change is not None
+        and d.actual_soc_change < _UNDER_CHARGE_SOC_DROP_PCT
+    )
+    return under_charge_count / sample_count
+
+
+def _export_loss_rate(decisions: list[DecisionRecord], sample_count: int) -> float:
+    """Fraction of decisions that exported and imported > _SIGNIFICANT_EXPORT_KWH.
+
+    Captures decisions where grid-purchased energy was subsequently exported
+    (a loss). Scans ALL decisions but is normalised by sample_count (decisions
+    with outcome_score IS NOT None) — same asymmetry as _under_charge_rate.
+    """
+    export_loss_count = sum(
+        1
+        for d in decisions
+        if d.actual_export_kwh is not None
+        and d.actual_export_kwh > _SIGNIFICANT_EXPORT_KWH
+        and d.actual_import_kwh is not None
+        and d.actual_import_kwh > _SIGNIFICANT_EXPORT_KWH
+    )
+    return export_loss_count / sample_count
 
 
 class PatternAnalyzer:
@@ -161,12 +247,7 @@ class PatternAnalyzer:
 
         # Compute global stats
         if all_scores:
-            stats.global_mean = sum(all_scores) / len(all_scores)
-            if len(all_scores) > 1:
-                variance = sum((s - stats.global_mean) ** 2 for s in all_scores) / (
-                    len(all_scores) - 1
-                )
-                stats.global_std = math.sqrt(variance)
+            stats.global_mean, stats.global_std = _mean_and_std(all_scores)
 
         return stats
 
@@ -190,54 +271,7 @@ class PatternAnalyzer:
         if sample_count == 0:
             return PatternBucket(key=key, dimension=dimension)
 
-        mean_score = sum(scores) / sample_count
-
-        # Standard deviation
-        if sample_count > 1:
-            variance = sum((s - mean_score) ** 2 for s in scores) / (sample_count - 1)
-            std_score = math.sqrt(variance)
-        else:
-            std_score = 0.0
-
-        # Over-charge rate: grid charge decisions that resulted in export
-        # Issue #449 Phase 7: compare against PlannerAction (DP-native) values
-        _grid_charge_actions = {
-            PlannerAction.CHARGE_GRID_NORMAL,
-            PlannerAction.CHARGE_GRID_BOOST,
-        }
-        grid_charge_count = sum(
-            1 for d in decisions if d.mode_chosen in _grid_charge_actions
-        )
-        over_charge_count = sum(
-            1
-            for d in decisions
-            if d.mode_chosen in _grid_charge_actions
-            and d.actual_export_kwh is not None
-            and d.actual_export_kwh > 0.5
-        )
-        over_charge_rate = (
-            over_charge_count / grid_charge_count if grid_charge_count > 0 else 0.0
-        )
-
-        # Under-charge rate: SOC dropped below target
-        under_charge_count = sum(
-            1
-            for d in decisions
-            if d.actual_soc_change is not None
-            and d.actual_soc_change < -10  # Lost more than 10% SOC unexpectedly
-        )
-        under_charge_rate = under_charge_count / sample_count
-
-        # Export loss rate: exported grid-purchased energy
-        export_loss_count = sum(
-            1
-            for d in decisions
-            if d.actual_export_kwh is not None
-            and d.actual_export_kwh > 0.5
-            and d.actual_import_kwh is not None
-            and d.actual_import_kwh > 0.5
-        )
-        export_loss_rate = export_loss_count / sample_count
+        mean_score, std_score = _mean_and_std(scores)
 
         return PatternBucket(
             key=key,
@@ -245,9 +279,9 @@ class PatternAnalyzer:
             sample_count=sample_count,
             mean_score=mean_score,
             std_score=std_score,
-            over_charge_rate=over_charge_rate,
-            under_charge_rate=under_charge_rate,
-            export_loss_rate=export_loss_rate,
+            over_charge_rate=_over_charge_rate(decisions),
+            under_charge_rate=_under_charge_rate(decisions, sample_count),
+            export_loss_rate=_export_loss_rate(decisions, sample_count),
         )
 
     def detect_biases(
