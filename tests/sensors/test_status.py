@@ -3,12 +3,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.forecast.accuracy import ExtendedAccuracyMetrics
 from custom_components.localshift.sensors.status import (
     AutomationReadySensor,
     DecisionLagSensor,
     EntityHealthSensor,
-    ExtendedForecastAccuracySensor,
     ForecastAccuracySensor,
     ForecastStatusSensor,
     IntegrationStatusSensor,
@@ -238,54 +236,6 @@ class TestAutomationReadySensor:
         sensor = _sensor(AutomationReadySensor)
         sensor._attr_native_value = "not_ready"
         assert sensor.icon == "mdi:decagram-outline"
-
-
-class TestExtendedForecastAccuracySensor:
-    def test_update_with_none(self):
-        metrics = ExtendedAccuracyMetrics(accuracy_24h=None)
-        sensor = _sensor(
-            ExtendedForecastAccuracySensor, extended_accuracy_metrics=metrics
-        )
-        sensor._update_from_coordinator()
-        assert sensor._attr_native_value is None
-
-    def test_update_with_value(self):
-        metrics = ExtendedAccuracyMetrics(accuracy_24h=95.5)
-        sensor = _sensor(
-            ExtendedForecastAccuracySensor, extended_accuracy_metrics=metrics
-        )
-        sensor._update_from_coordinator()
-        assert sensor._attr_native_value == pytest.approx(95.5)
-
-    def test_extra_state_attributes_all_none(self):
-        metrics = ExtendedAccuracyMetrics()
-        sensor = _sensor(
-            ExtendedForecastAccuracySensor, extended_accuracy_metrics=metrics
-        )
-        attrs = sensor.extra_state_attributes
-        assert attrs["accuracy_24h"] is None
-        assert attrs["accuracy_7d"] is None
-        assert attrs["accuracy_30d"] is None
-        assert attrs["last_updated"] is None
-
-    def test_extra_state_attributes_with_values(self):
-        now = datetime(2026, 3, 12, 12, 0, 0)
-        metrics = ExtendedAccuracyMetrics(
-            accuracy_24h=95.0,
-            accuracy_7d=93.0,
-            accuracy_30d=91.0,
-            bias=-1.5,
-            mape=3.2,
-            sample_count=100,
-            last_updated=now,
-        )
-        sensor = _sensor(
-            ExtendedForecastAccuracySensor, extended_accuracy_metrics=metrics
-        )
-        attrs = sensor.extra_state_attributes
-        assert attrs["accuracy_24h"] == pytest.approx(95.0)
-        assert attrs["sample_count"] == 100
-        assert attrs["last_updated"] == now.isoformat()
 
 
 class TestDecisionLagSensor:

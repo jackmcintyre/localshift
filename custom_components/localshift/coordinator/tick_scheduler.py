@@ -255,6 +255,13 @@ class TickScheduler:
         self._coordinator.data.battery_savings = 0.0
         self._coordinator.data.battery_charge_cost = 0.0
         self._coordinator.data.target_reached_today = False
+        # Issue #868: reset the daily energy accumulators alongside the cost
+        # accumulators so the performance-metric ratios start fresh each day.
+        self._coordinator.data.grid_import_kwh_today = 0.0
+        self._coordinator.data.grid_export_kwh_today = 0.0
+        self._coordinator.data.grid_to_battery_kwh_today = 0.0
+        self._coordinator.data.soc_gain_during_grid_charge_kwh_today = 0.0
+        self._coordinator.data.export_while_battery_not_full_kwh_today = 0.0
 
         if self._coordinator.learning_orchestrator is not None:
             self._coordinator.learning_orchestrator.handle_midnight_reset(

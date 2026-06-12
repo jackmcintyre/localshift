@@ -67,6 +67,15 @@ BOOST_CHARGE_MAX_SOC = 80.0
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
 
+# Issue #868: Export-leak protection gate (optimization_controller.py Rule 2).
+# When the daily export_loss_ratio metric exceeds 0.3, Rule 2 nudges the optimizer
+# to be more conservative about exporting. This flag keeps that behavioural rule
+# OFF by default so computing the metric (now real) does not silently arm the
+# adjustment on systems that already have the learning switch enabled. The metric
+# becomes visible on the dashboard first; an operator flips this constant ON in a
+# follow-up once real export_loss_ratio values have been observed.
+EXPORT_LEAK_PROTECTION_ENABLED = False
+
 # Force discharge time window (dummy tariff limitation)
 DISCHARGE_EARLIEST_HOUR = 6
 

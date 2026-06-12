@@ -14,7 +14,6 @@ from custom_components.localshift.sensors import (
     EffectiveCheapPriceSensor,
     EntityHealthSensor,
     ExcessSolarSensor,
-    ExtendedForecastAccuracySensor,
     ForecastAccuracySensor,
     ForecastDiagnosticsSensor,
     ForecastHistorySensor,
@@ -211,14 +210,6 @@ class Fixtures:
         ]
         data.decision_timestamp = None
         data.implementation_timestamp = None
-        data.extended_accuracy_metrics = MagicMock()
-        data.extended_accuracy_metrics.accuracy_24h = 85.0
-        data.extended_accuracy_metrics.accuracy_7d = 82.0
-        data.extended_accuracy_metrics.accuracy_30d = 80.0
-        data.extended_accuracy_metrics.bias = 1.5
-        data.extended_accuracy_metrics.mape = 10.0
-        data.extended_accuracy_metrics.sample_count = 100
-        data.extended_accuracy_metrics.last_updated = None
         data.forecast_status = "ready"
         data.forecast_ready = True
         data.solcast_today = [{"time": "2024-01-01T10:00:00"}] * 10
@@ -367,13 +358,6 @@ class TestStatusSensors(Fixtures):
         assert sensor.native_value == 2.5
         attrs = sensor.extra_state_attributes
         assert attrs["avg_lag_24h"] == 2.5
-
-    def test_extended_forecast_accuracy(self, mock_coordinator, mock_entry):
-        sensor = ExtendedForecastAccuracySensor(mock_coordinator, mock_entry)
-        sensor._update_from_coordinator()
-        assert sensor.native_value == 85.0
-        attrs = sensor.extra_state_attributes
-        assert attrs["accuracy_7d"] == 82.0
 
 
 class TestLearningSensors(Fixtures):

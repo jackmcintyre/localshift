@@ -361,11 +361,6 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": float,
         "staleness_minutes": 60,
     },
-    "sensor.localshift_extended_forecast_accuracy": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": float,
-        "staleness_minutes": 1440,
-    },
     "sensor.localshift_solar_forecast_accuracy": {
         "category": EntityCategory.OPTIONAL,
         "expected_type": float,
@@ -375,11 +370,6 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "category": EntityCategory.OPTIONAL,
         "expected_type": float,
         "staleness_minutes": 15,
-    },
-    "sensor.localshift_cost_reconciliation": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": str,
-        "staleness_minutes": 1440,
     },
     "sensor.localshift_learning_status": {
         "category": EntityCategory.OPTIONAL,

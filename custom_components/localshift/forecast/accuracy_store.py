@@ -8,7 +8,6 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from ..coordinator.data import CoordinatorData
-from .accuracy import ExtendedAccuracyMetrics
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,18 +59,6 @@ class AccuracyMetricsStore:
                 "forecast_error_sell_price_1h", 0.0
             )
             data.forecast_comparisons_made = stored.get("forecast_comparisons_made", 0)
-            # Restore extended metrics
-            extended_raw = stored.get("extended_accuracy_metrics")
-            if extended_raw is not None:
-                if isinstance(extended_raw, dict):
-                    data.extended_accuracy_metrics = ExtendedAccuracyMetrics.from_dict(
-                        extended_raw
-                    )
-                else:
-                    _LOGGER.warning(
-                        "Malformed extended_accuracy_metrics in storage (expected dict, got %s); using defaults",
-                        type(extended_raw).__name__,
-                    )
             _LOGGER.info(
                 "Loaded forecast accuracy metrics from storage (comparisons=%d)",
                 data.forecast_comparisons_made,
@@ -94,7 +81,6 @@ class AccuracyMetricsStore:
                 "forecast_error_buy_price_1h": data.forecast_error_buy_price_1h,
                 "forecast_error_sell_price_1h": data.forecast_error_sell_price_1h,
                 "forecast_comparisons_made": data.forecast_comparisons_made,
-                "extended_accuracy_metrics": data.extended_accuracy_metrics.to_dict(),
             }
             await self._store.async_save(stored)
             _LOGGER.debug(

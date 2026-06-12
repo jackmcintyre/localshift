@@ -686,8 +686,8 @@ class SnapshotGenerator:
 | **Avg Score Today** | {avg_today} |
 | **Avg Score 7d** | {avg_7d} |
 | **Cost Trend** | {trend} |
-| **Grid Charge Efficiency** (not yet computed) | {grid_eff}% |
-| **Export Loss Ratio** (not yet computed) | {export_loss}% |"""
+| **Grid Charge Efficiency** | {grid_eff}% |
+| **Export Loss Ratio** | {export_loss}% |"""
 
     def _binary_sensors(self) -> str:
         sensors = [

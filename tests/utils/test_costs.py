@@ -250,3 +250,97 @@ class TestResetDailyAccumulators:
         assert coordinator_data.operation_mode == "autonomous"
         # Cost should be reset
         assert coordinator_data.grid_import_cost == 0.0
+
+
+# =============================================================================
+# ISSUE #868: DAILY ENERGY (kWh) ACCUMULATION
+# =============================================================================
+
+
+class TestAccumulateEnergyKwh:
+    """Per-minute kWh accumulation for the #868 performance metrics."""
+
+    def _make_data(self, **overrides):
+        data = CoordinatorData()
+        data.grid_power_kw = 0.0
+        data.battery_power_kw = 0.0
+        data.general_price = 0.30
+        data.feed_in_price = 0.08
+        data.soc = 50.0
+        for key, val in overrides.items():
+            setattr(data, key, val)
+        return data
+
+    def test_charging_from_grid_accumulates_grid_to_battery(self, cost_tracker):
+        """Importing + charging accumulates grid-to-battery kWh = min(charge, import)/60."""
+        # grid_power_kw=3.0 import, battery_power_kw=-2.0 charging.
+        data = self._make_data(grid_power_kw=3.0, battery_power_kw=-2.0, soc=50.0)
+        cost_tracker.accumulate_costs(data)
+
+        # First sample seeds SOC baseline (no gain yet).
+        assert data.grid_import_kwh_today == pytest.approx(3.0 / 60)
+        assert data.grid_to_battery_kwh_today == pytest.approx(2.0 / 60)
+        assert data.soc_gain_during_grid_charge_kwh_today == 0.0
+        # Not exporting, so export accumulators stay zero.
+        assert data.grid_export_kwh_today == 0.0
+        assert data.export_while_battery_not_full_kwh_today == 0.0
+
+    def test_soc_gain_tracked_after_first_sample(self, cost_tracker):
+        """SOC gain while grid-charging converts SOC delta to kWh on the 2nd sample."""
+        data = self._make_data(grid_power_kw=3.0, battery_power_kw=-2.0, soc=50.0)
+        cost_tracker.accumulate_costs(data)  # seeds baseline at 50%
+        data.soc = 51.0  # +1% over the interval
+        cost_tracker.accumulate_costs(data)
+
+        # 1% of 13.5 kWh = 0.135 kWh gained, attributed to grid charging.
+        assert data.soc_gain_during_grid_charge_kwh_today == pytest.approx(
+            0.01 * 13.5
+        )
+
+    def test_exporting_with_battery_room_counts_as_leak(self, cost_tracker):
+        """Exporting while SOC < full accumulates both export and export-with-room."""
+        # grid_power_kw=-4.0 export, battery idle, SOC has room.
+        data = self._make_data(grid_power_kw=-4.0, battery_power_kw=0.0, soc=60.0)
+        cost_tracker.accumulate_costs(data)
+
+        assert data.grid_export_kwh_today == pytest.approx(4.0 / 60)
+        assert data.export_while_battery_not_full_kwh_today == pytest.approx(4.0 / 60)
+        # Not importing/charging.
+        assert data.grid_import_kwh_today == 0.0
+        assert data.grid_to_battery_kwh_today == 0.0
+
+    def test_exporting_with_full_battery_not_a_leak(self, cost_tracker):
+        """Exporting while the battery is full counts to export total but not leak."""
+        data = self._make_data(grid_power_kw=-4.0, battery_power_kw=0.0, soc=100.0)
+        cost_tracker.accumulate_costs(data)
+
+        assert data.grid_export_kwh_today == pytest.approx(4.0 / 60)
+        assert data.export_while_battery_not_full_kwh_today == 0.0
+
+    def test_idle_below_deadband_accumulates_nothing(self, cost_tracker):
+        """Power flows under the 0.1 kW deadband are treated as idle/noise."""
+        data = self._make_data(grid_power_kw=0.05, battery_power_kw=-0.05, soc=50.0)
+        cost_tracker.accumulate_costs(data)
+
+        assert data.grid_import_kwh_today == 0.0
+        assert data.grid_export_kwh_today == 0.0
+        assert data.grid_to_battery_kwh_today == 0.0
+        assert data.soc_gain_during_grid_charge_kwh_today == 0.0
+        assert data.export_while_battery_not_full_kwh_today == 0.0
+
+    def test_reset_daily_accumulators_zeroes_energy_fields(self, cost_tracker):
+        """CostTracker.reset_daily_accumulators clears the new kWh fields."""
+        data = self._make_data()
+        data.grid_import_kwh_today = 5.0
+        data.grid_export_kwh_today = 3.0
+        data.grid_to_battery_kwh_today = 2.0
+        data.soc_gain_during_grid_charge_kwh_today = 1.5
+        data.export_while_battery_not_full_kwh_today = 1.0
+
+        cost_tracker.reset_daily_accumulators(data)
+
+        assert data.grid_import_kwh_today == 0.0
+        assert data.grid_export_kwh_today == 0.0
+        assert data.grid_to_battery_kwh_today == 0.0
+        assert data.soc_gain_during_grid_charge_kwh_today == 0.0
+        assert data.export_while_battery_not_full_kwh_today == 0.0

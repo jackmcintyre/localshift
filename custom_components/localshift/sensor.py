@@ -11,7 +11,6 @@ from .sensors import (
     EffectiveCheapPriceSensor,
     EntityHealthSensor,
     ExcessSolarSensor,
-    ExtendedForecastAccuracySensor,
     ForecastAccuracyComparisonSensor,
     ForecastAccuracySensor,
     ForecastDiagnosticsSensor,
@@ -66,7 +65,6 @@ __all__ = [
     "LearningDecisionHistorySensor",
     "OptimizerAdvantageSensor",
     "DecisionLagSensor",
-    "ExtendedForecastAccuracySensor",
     "ForecastStatusSensor",
     "AutomationReadySensor",
     "OptimizerPlanDetailedSensor",
@@ -96,7 +94,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         EffectiveCheapPriceSensor,
         EntityHealthSensor,
         ExcessSolarSensor,
-        ExtendedForecastAccuracySensor,
         ForecastAccuracyComparisonSensor,
         ForecastAccuracySensor,
         ForecastDiagnosticsSensor,
@@ -158,8 +155,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         OptimizerAdvantageSensor(coordinator, entry),
         # Decision-to-implementation lag sensor (Issue #501)
         DecisionLagSensor(coordinator, entry),
-        # Extended forecast accuracy sensor (Issue #270)
-        ExtendedForecastAccuracySensor(coordinator, entry),
         # Forecast status sensor (Issue #319)
         ForecastStatusSensor(coordinator, entry),
         # Automation ready sensor (Issue #349)
