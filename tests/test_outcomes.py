@@ -868,6 +868,125 @@ class TestOutcomeScoringEdgeCases:
         assert summary.mode_cost_attribution == {}
 
 
+class TestEnergyPerformanceMetrics:
+    """Issue #868: the three energy metrics computed in get_daily_summary."""
+
+    def _data(self, **kw):
+        data = CoordinatorData()
+        for k, v in kw.items():
+            setattr(data, k, v)
+        return data
+
+    def test_metrics_default_to_zero_when_data_none(self, mock_hass):
+        """data=None keeps the three metrics at 0.0 (graceful degradation)."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+        summary = tracker.get_daily_summary(None)
+
+        assert summary.grid_charge_efficiency == 0.0
+        assert summary.export_loss_ratio == 0.0
+        assert summary.unnecessary_grid_charge_kwh == 0.0
+
+    def test_grid_charge_efficiency_computed(self, mock_hass):
+        """efficiency = soc_gain / grid_to_battery, clamped [0, 1]."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        data = self._data(
+            grid_to_battery_kwh_today=2.0,
+            soc_gain_during_grid_charge_kwh_today=1.6,
+        )
+
+        summary = tracker.get_daily_summary(data)
+
+        assert summary.grid_charge_efficiency == pytest.approx(0.8)
+
+    def test_grid_charge_efficiency_clamped_to_one(self, mock_hass):
+        """efficiency never exceeds 1.0 even if soc_gain > grid_to_battery."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        data = self._data(
+            grid_to_battery_kwh_today=1.0,
+            soc_gain_during_grid_charge_kwh_today=2.5,
+        )
+
+        summary = tracker.get_daily_summary(data)
+
+        assert summary.grid_charge_efficiency == 1.0
+
+    def test_grid_charge_efficiency_zero_denominator(self, mock_hass):
+        """Below 0.1 kWh grid-to-battery => 0.0 (divide-by-zero guard)."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        data = self._data(
+            grid_to_battery_kwh_today=0.05,
+            soc_gain_during_grid_charge_kwh_today=0.04,
+        )
+
+        summary = tracker.get_daily_summary(data)
+
+        assert summary.grid_charge_efficiency == 0.0
+
+    def test_export_loss_ratio_computed(self, mock_hass):
+        """ratio = export_with_room / total_export, clamped [0, 1]."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        data = self._data(
+            grid_export_kwh_today=4.0,
+            export_while_battery_not_full_kwh_today=1.0,
+        )
+
+        summary = tracker.get_daily_summary(data)
+
+        assert summary.export_loss_ratio == pytest.approx(0.25)
+
+    def test_export_loss_ratio_zero_denominator(self, mock_hass):
+        """Below 0.1 kWh total export => 0.0 (divide-by-zero guard)."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        data = self._data(
+            grid_export_kwh_today=0.05,
+            export_while_battery_not_full_kwh_today=0.05,
+        )
+
+        summary = tracker.get_daily_summary(data)
+
+        assert summary.export_loss_ratio == 0.0
+
+    def test_unnecessary_grid_charge_is_min_of_charge_and_export(self, mock_hass):
+        """unnecessary = round(min(grid_to_battery, grid_export), 2)."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        data = self._data(
+            grid_to_battery_kwh_today=2.345,
+            grid_export_kwh_today=5.0,
+        )
+
+        summary = tracker.get_daily_summary(data)
+
+        assert summary.unnecessary_grid_charge_kwh == pytest.approx(2.35)
+
+    def test_metrics_present_when_decisions_exist(
+        self, mock_hass, coordinator_data
+    ):
+        """Energy metrics are computed on the with-decisions return path too."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        tracker.record_decision(
+            coordinator_data,
+            BatteryMode.GRID_CHARGING,
+            BatteryMode.SELF_CONSUMPTION,
+        )
+        coordinator_data.soc = 60.0
+        tracker.record_decision(
+            coordinator_data,
+            BatteryMode.SELF_CONSUMPTION,
+            BatteryMode.GRID_CHARGING,
+        )
+        coordinator_data.grid_to_battery_kwh_today = 2.0
+        coordinator_data.soc_gain_during_grid_charge_kwh_today = 1.0
+        coordinator_data.grid_export_kwh_today = 4.0
+        coordinator_data.export_while_battery_not_full_kwh_today = 2.0
+
+        summary = tracker.get_daily_summary(coordinator_data)
+
+        assert summary.total_decisions_today == 1
+        assert summary.grid_charge_efficiency == pytest.approx(0.5)
+        assert summary.export_loss_ratio == pytest.approx(0.5)
+
+
 class TestTargetScoreGradient:
     """Tests for smooth gradient target scoring (Issue #626 Task 1)."""
 

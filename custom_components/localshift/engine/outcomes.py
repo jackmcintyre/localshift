@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from ..const import BatteryMode
+from ..const import BATTERY_CAPACITY_KWH, BatteryMode
 from ..coordinator.data import PerformanceMetrics
 from .optimizer_dp import PlannerAction
 
@@ -562,8 +562,6 @@ class DecisionOutcomeTracker:
 
         if (below_target and can_increase_soc) or (above_target and can_decrease_soc):
             # Scale penalty by how achievable the target was
-            # Powerwall 2 capacity is 13.5 kWh
-            BATTERY_CAPACITY_KWH = 13.5  # TODO: make configurable
             required_kwh = target_diff * BATTERY_CAPACITY_KWH / 100
             available_kwh = record.forecast_solar_remaining_kwh or 0.0
             achievability = min(available_kwh / max(required_kwh, 0.1), 1.0)
@@ -653,8 +651,17 @@ class DecisionOutcomeTracker:
 
         return mode_durations, mode_costs
 
-    def get_daily_summary(self) -> PerformanceMetrics:
+    def get_daily_summary(
+        self, data: CoordinatorData | None = None
+    ) -> PerformanceMetrics:
         """Aggregate today's decision outcomes into summary metrics.
+
+        Args:
+            data: Current coordinator data, used to compute the energy-based
+                performance metrics (grid_charge_efficiency, export_loss_ratio,
+                unnecessary_grid_charge_kwh) from the daily kWh accumulators
+                (Issue #868). When None, those three metrics stay at their 0.0
+                defaults so existing callers/tests degrade gracefully.
 
         Returns:
             PerformanceMetrics with today's aggregated data and 7-day rolling metrics.
@@ -678,10 +685,17 @@ class DecisionOutcomeTracker:
         avg_score_7d = sum(week_scores) / len(week_scores) if week_scores else 0.0
         cost_trend = self._compute_cost_trend(week_scores)
 
+        # Energy metrics are derived from the daily kWh accumulators, independent
+        # of whether any decisions completed today.
+        grid_eff, export_loss, unnecessary_kwh = self._compute_energy_metrics(data)
+
         if not today_decisions:
             return PerformanceMetrics(
                 total_decisions_today=0,
                 avg_decision_score_today=0.0,
+                grid_charge_efficiency=grid_eff,
+                export_loss_ratio=export_loss,
+                unnecessary_grid_charge_kwh=unnecessary_kwh,
                 avg_decision_score_7d=avg_score_7d,
                 cost_trend=cost_trend,
                 mode_durations_today={},
@@ -698,11 +712,59 @@ class DecisionOutcomeTracker:
         return PerformanceMetrics(
             total_decisions_today=len(today_decisions),
             avg_decision_score_today=avg_score,
+            grid_charge_efficiency=grid_eff,
+            export_loss_ratio=export_loss,
+            unnecessary_grid_charge_kwh=unnecessary_kwh,
             avg_decision_score_7d=avg_score_7d,
             cost_trend=cost_trend,
             mode_durations_today=mode_durations,
             mode_cost_attribution=mode_costs,
         )
+
+    @staticmethod
+    def _compute_energy_metrics(
+        data: CoordinatorData | None,
+    ) -> tuple[float, float, float]:
+        """Compute the three Issue #868 energy performance metrics.
+
+        Pure and deterministic; divide-by-zero-safe; ratios clamped to [0, 1].
+        All inputs come from the daily kWh accumulators on CoordinatorData.
+
+        Returns:
+            (grid_charge_efficiency, export_loss_ratio, unnecessary_grid_charge_kwh)
+
+            - grid_charge_efficiency: battery energy gained while grid-charging /
+              grid energy delivered to the battery, clamped [0, 1]. A daily proxy
+              (SOC-delta based) — 0.0 when grid_to_battery < 0.1 kWh.
+            - export_loss_ratio: energy exported while the battery had room /
+              total energy exported, clamped [0, 1]. 0.0 when total export < 0.1 kWh.
+              This is the value the export-leak gate (Rule 2) reads.
+            - unnecessary_grid_charge_kwh: a conservative lower bound on grid energy
+              charged into the battery while also exporting — min(grid_to_battery,
+              grid_export) — rounded to 2 dp.
+
+        """
+        if data is None:
+            return 0.0, 0.0, 0.0
+
+        grid_to_battery = data.grid_to_battery_kwh_today
+        soc_gain = data.soc_gain_during_grid_charge_kwh_today
+        total_export = data.grid_export_kwh_today
+        export_with_room = data.export_while_battery_not_full_kwh_today
+
+        if grid_to_battery < 0.1:
+            grid_efficiency = 0.0
+        else:
+            grid_efficiency = max(0.0, min(1.0, soc_gain / grid_to_battery))
+
+        if total_export < 0.1:
+            export_loss = 0.0
+        else:
+            export_loss = max(0.0, min(1.0, export_with_room / total_export))
+
+        unnecessary_kwh = round(min(grid_to_battery, total_export), 2)
+
+        return grid_efficiency, export_loss, unnecessary_kwh
 
     def get_decision_log(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return recent decisions as dictionaries for sensor attributes.

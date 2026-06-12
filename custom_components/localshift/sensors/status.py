@@ -203,37 +203,6 @@ class AutomationReadySensor(LocalShiftSensorBase):
             return "mdi:decagram-outline"
 
 
-class ExtendedForecastAccuracySensor(LocalShiftSensorBase):
-    _attr_unique_id = "localshift_extended_forecast_accuracy"
-    _attr_name = "Extended Forecast Accuracy"
-    _attr_icon = "mdi:chart-timeline-variant"
-    _attr_native_unit_of_measurement = "%"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def _update_from_coordinator(self) -> None:
-        acc = self.coordinator.data.extended_accuracy_metrics.accuracy_24h
-        self._attr_native_value = round(acc, 1) if acc is not None else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        m = self.coordinator.data.extended_accuracy_metrics
-        return {
-            "accuracy_24h": round(m.accuracy_24h, 1)
-            if m.accuracy_24h is not None
-            else None,
-            "accuracy_7d": round(m.accuracy_7d, 1)
-            if m.accuracy_7d is not None
-            else None,
-            "accuracy_30d": round(m.accuracy_30d, 1)
-            if m.accuracy_30d is not None
-            else None,
-            "bias": round(m.bias, 2),
-            "mape": round(m.mape, 2),
-            "sample_count": m.sample_count,
-            "last_updated": m.last_updated.isoformat() if m.last_updated else None,
-        }
-
-
 class DecisionLagSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_decision_lag"
     _attr_name = "Decision Lag"

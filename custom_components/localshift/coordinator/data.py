@@ -9,16 +9,8 @@ from typing import TYPE_CHECKING, Any
 from ..const import BatteryMode
 
 if TYPE_CHECKING:
-    from ..forecast.accuracy import ExtendedAccuracyMetrics
     from ..forecast.solcast_analysis import SolcastAnalysis
     from ..pricing.types import ForecastSlot
-
-
-def _default_extended_accuracy_metrics() -> Any:
-    """Factory for ExtendedAccuracyMetrics that avoids circular import at module load."""
-    from ..forecast.accuracy import ExtendedAccuracyMetrics
-
-    return ExtendedAccuracyMetrics()
 
 
 @dataclass
@@ -284,6 +276,19 @@ class CoordinatorData:
     battery_savings: float = 0.0
     battery_charge_cost: float = 0.0
 
+    # Daily energy accumulators (Issue #868) — real per-minute kWh accounting used
+    # to compute grid_charge_efficiency / export_loss_ratio / unnecessary_grid_charge_kwh.
+    # In-memory only (no persistence), matching the daily cost accumulators above.
+    grid_import_kwh_today: float = 0.0  # Total grid energy imported today
+    grid_export_kwh_today: float = 0.0  # Total grid energy exported today
+    grid_to_battery_kwh_today: float = 0.0  # Grid energy charged into the battery
+    soc_gain_during_grid_charge_kwh_today: float = (
+        0.0  # Battery energy gained while charging from grid
+    )
+    export_while_battery_not_full_kwh_today: float = (
+        0.0  # Exported energy that could have charged a non-full battery
+    )
+
     # Forecast cost accumulators (rest of today)
     forecast_import_cost: float = 0.0  # Expected grid import cost
     forecast_export_revenue: float = 0.0  # Expected grid export revenue
@@ -446,11 +451,6 @@ class CoordinatorData:
     contextual_adjustments_active: list[dict[str, Any]] = field(
         default_factory=list
     )  # Active contextual adjustments
-
-    # --- Extended forecast accuracy (Issue #270) ---
-    extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
-        default_factory=_default_extended_accuracy_metrics
-    )
 
     # --- Hybrid timescale metadata (Issue #329) ---
     hybrid_slot_metadata: dict[str, Any] = field(

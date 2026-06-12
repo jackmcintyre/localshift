@@ -45,7 +45,6 @@ from .status import (
     AutomationReadySensor,
     DecisionLagSensor,
     EntityHealthSensor,
-    ExtendedForecastAccuracySensor,
     ForecastAccuracySensor,
     ForecastStatusSensor,
     IntegrationStatusSensor,
@@ -87,7 +86,6 @@ __all__ = [
     "ForecastAccuracySensor",
     "ForecastStatusSensor",
     "AutomationReadySensor",
-    "ExtendedForecastAccuracySensor",
     "DecisionLagSensor",
     # Misc
     "ExcessSolarSensor",

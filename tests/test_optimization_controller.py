@@ -9,6 +9,9 @@ from custom_components.localshift.engine.outcomes import (
     DecisionOutcomeTracker,
     DecisionRecord,
 )
+from custom_components.localshift.engine import (
+    optimization_controller as optimization_controller_module,
+)
 from custom_components.localshift.engine.optimization_controller import (
     ObjectiveWeights,
     OptimizationController,
@@ -835,8 +838,17 @@ class TestRealTimeAdjustments:
         analyzer = MagicMock(spec=PatternAnalyzer)
         return OptimizationController(mock_hass, "test", tracker, optimizer, analyzer)
 
-    def test_export_leak_detection_applied(self, controller):
-        """Test that high export loss ratio triggers adjustment."""
+    def test_export_leak_detection_applied(self, controller, monkeypatch):
+        """High export loss ratio triggers the adjustment when the gate is enabled.
+
+        Issue #868: Rule 2 is gated behind EXPORT_LEAK_PROTECTION_ENABLED, so the
+        flag must be enabled for the rule to fire.
+        """
+        monkeypatch.setattr(
+            optimization_controller_module,
+            "EXPORT_LEAK_PROTECTION_ENABLED",
+            True,
+        )
         data = CoordinatorData()
         data.performance_metrics.export_loss_ratio = 0.4
         data.soc = 50.0
@@ -847,8 +859,29 @@ class TestRealTimeAdjustments:
         assert "export_threshold_adjustment" in result.values
         assert result.values["export_threshold_adjustment"] == 1.0
 
-    def test_export_leak_not_applied_below_threshold(self, controller):
-        """Test that low export loss ratio does not trigger adjustment."""
+    def test_export_leak_gate_off_by_default_does_not_fire(self, controller):
+        """Issue #868: with EXPORT_LEAK_PROTECTION_ENABLED at its default (False),
+        a high export_loss_ratio must NOT arm the adjustment — no behaviour change
+        ships even though the metric is now computed and learning may be on."""
+        assert (
+            optimization_controller_module.EXPORT_LEAK_PROTECTION_ENABLED is False
+        )
+        data = CoordinatorData()
+        data.performance_metrics.export_loss_ratio = 0.4
+        data.soc = 50.0
+        params = AdaptiveParameters()
+
+        result = controller._apply_contextual_adjustments(params, data)
+
+        assert "export_threshold_adjustment" not in result.values
+
+    def test_export_leak_not_applied_below_threshold(self, controller, monkeypatch):
+        """Low export loss ratio does not trigger adjustment even when gate is on."""
+        monkeypatch.setattr(
+            optimization_controller_module,
+            "EXPORT_LEAK_PROTECTION_ENABLED",
+            True,
+        )
         data = CoordinatorData()
         data.performance_metrics.export_loss_ratio = 0.2
         data.soc = 50.0

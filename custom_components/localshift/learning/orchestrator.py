@@ -289,7 +289,7 @@ class LearningOrchestrator:
         if self.decision_tracker is not None:
             self.decision_tracker.backfill_outcomes(data)
 
-            data.performance_metrics = self.decision_tracker.get_daily_summary()
+            data.performance_metrics = self.decision_tracker.get_daily_summary(data)
             data.recent_decision_log = self.decision_tracker.get_decision_log(limit=20)
 
             if self.decision_tracker.save_pending:

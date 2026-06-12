@@ -598,8 +598,6 @@ views:
 
               Solar Forecast Accuracy: {{ states('sensor.localshift_solar_forecast_accuracy') }}%
 
-              Extended Forecast Accuracy: {{ states('sensor.localshift_extended_forecast_accuracy') }}
-
               Load Deviation: {{ states('sensor.localshift_load_deviation') }}
 
               Decision Lag: {{ states('sensor.localshift_decision_lag') }}
@@ -700,11 +698,11 @@ views:
 
               Cost Trend: {{ state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') }}
 
-              Grid Charge Efficiency (not yet computed): {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
+              Grid Charge Efficiency: {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
 
-              Export Loss Ratio (not yet computed): {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
+              Export Loss Ratio: {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
 
-              Unnecessary Grid Charge (not yet computed): {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
+              Unnecessary Grid Charge: {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
 
               Mode Durations Today: {{ state_attr('sensor.localshift_learning_status', 'mode_durations_today') | default({}) }}
 
