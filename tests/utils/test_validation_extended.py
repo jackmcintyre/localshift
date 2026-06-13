@@ -1502,19 +1502,83 @@ class TestCheckOrphanedOwnedEntities:
         assert orphan["state"] == "unavailable"
         assert orphan["restored"] is True
 
-    def test_orphan_with_live_state(
+    def test_active_owned_entity_not_in_config_is_not_flagged(
         self, mock_hass: MagicMock
     ) -> None:
-        """Orphan with a live state reports state value and restored=False."""
-        orphan_id = "number.localshift_demand_window_import_penalty"
-        entry = self._make_registry_entry(orphan_id, "cfg_1")
+        """REGRESSION GUARD (#883): owned entry NOT in LOCALSHIFT_ENTITY_CONFIG with
+        a real live state (e.g. '0.08', 'on', '67.0') must NOT be reported as an
+        orphan.  The old code flagged these entities causing 13 false-positive orphan
+        warnings in production.
+        """
+        # Simulate an active entity the integration provides but that isn't in the
+        # health watch-list (e.g. a diagnostic number or extra binary_sensor).
+        active_id = "number.localshift_demand_window_import_penalty"
+        entry = self._make_registry_entry(active_id, "cfg_1")
 
         mock_registry = MagicMock()
         mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
 
         live_state = MagicMock()
         live_state.state = "0.08"
-        mock_hass.states.get = lambda eid: live_state if eid == orphan_id else None
+        mock_hass.states.get = lambda eid: live_state if eid == active_id else None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        # Active entity must NOT appear in the orphan map
+        assert active_id not in result, (
+            f"Active entity {active_id!r} with state '0.08' was falsely flagged as orphan"
+        )
+
+    def test_active_owned_entity_with_unknown_state_is_not_flagged(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Owned entry with state 'unknown' (e.g. sensor.localshift_forecast_accuracy_comparison
+        before enough samples) must NOT be reported as an orphan.
+        """
+        active_id = "sensor.localshift_forecast_accuracy_comparison"
+        entry = self._make_registry_entry(active_id, "cfg_1")
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
+
+        live_state = MagicMock()
+        live_state.state = "unknown"
+        mock_hass.states.get = lambda eid: live_state if eid == active_id else None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert active_id not in result, (
+            f"Entity {active_id!r} with state 'unknown' was falsely flagged as orphan"
+        )
+
+    def test_unavailable_owned_entity_not_in_config_is_flagged(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Owned entry NOT in LOCALSHIFT_ENTITY_CONFIG whose state is 'unavailable'
+        IS a genuine orphan (entity the integration no longer provides) and must be
+        reported.
+        """
+        orphan_id = "number.localshift_cycle_penalty"
+        entry = self._make_registry_entry(orphan_id, "cfg_1")
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
+
+        unavailable_state = MagicMock()
+        unavailable_state.state = "unavailable"
+        mock_hass.states.get = lambda eid: unavailable_state if eid == orphan_id else None
 
         validator = _create_validator(mock_hass)
 
@@ -1526,15 +1590,19 @@ class TestCheckOrphanedOwnedEntities:
 
         assert orphan_id in result
         orphan = result[orphan_id]
-        assert orphan["state"] == "0.08"
+        assert orphan["state"] == "unavailable"
+        assert orphan["disabled"] is False
         assert orphan["restored"] is False
 
-    def test_orphan_disabled_flag(
+    def test_user_disabled_owned_entry_is_not_flagged(
         self, mock_hass: MagicMock
     ) -> None:
-        """Disabled orphan entry sets disabled=True."""
-        orphan_id = "number.localshift_cycle_penalty"
-        entry = self._make_registry_entry(orphan_id, "cfg_1", disabled=True)
+        """User-disabled owned entry must NOT be reported as an orphan.
+
+        A disabled entity is intentionally inactive — it is not a code-removed ghost.
+        """
+        disabled_id = "number.localshift_cycle_penalty"
+        entry = self._make_registry_entry(disabled_id, "cfg_1", disabled=True)
 
         mock_registry = MagicMock()
         mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
@@ -1548,7 +1616,9 @@ class TestCheckOrphanedOwnedEntities:
         ):
             result = validator.check_orphaned_owned_entities("cfg_1")
 
-        assert result[orphan_id]["disabled"] is True
+        assert disabled_id not in result, (
+            f"User-disabled entry {disabled_id!r} was falsely flagged as orphan"
+        )
 
     def test_multiple_orphans(
         self, mock_hass: MagicMock
