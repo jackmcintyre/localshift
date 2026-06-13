@@ -334,6 +334,29 @@ class TestSolarAccuracyTracker:
         assert len(tracker._period_records) == 1
         assert tracker._metrics.sample_count == 1
 
+    def test_backfill_matches_across_record_utc_vs_backfill_local(self, tracker):
+        """#881: the record side keys off an Amber UTC-offset timestamp while
+        the backfill side keys off a LOCAL-time tick for the SAME instant. The
+        two isoformat strings differ ('...T03:00:00+00:00' vs
+        '...T13:00:00+10:00'), so before the UTC-normalization fix the dict
+        lookup always missed and sample_count stayed 0 even with pendings."""
+        local_tz = timezone(timedelta(hours=10))
+        # Record: Amber slot timestamp, UTC offset, +1s quirk.
+        recorded_at = datetime(2026, 6, 13, 3, 0, 1, tzinfo=UTC)
+        # Backfill: same 30-min instant, but reconstructed in local time as the
+        # tick_scheduler does (start_local floored).
+        flushed_at = recorded_at.astimezone(local_tz).replace(
+            minute=0, second=0, microsecond=0
+        )
+        assert recorded_at.isoformat() != flushed_at.isoformat()
+
+        tracker.record_forecast(recorded_at, 2.5, "sunny")
+        tracker.backfill_actual(flushed_at, 2.0)
+
+        assert tracker._pending_forecasts == {}
+        assert len(tracker._period_records) == 1
+        assert tracker._metrics.sample_count == 1
+
     def test_backfill_matches_thirty_minute_boundary_with_seconds(self, tracker):
         """The :30 boundary floors the same way as :00."""
         tz = timezone(timedelta(hours=10))
@@ -845,6 +868,66 @@ class TestSolarAccuracyTracker:
         assert reloaded._period_records[0].forecast_kwh == 2.0
         assert reloaded._period_records[0].actual_kwh == 1.5
         assert reloaded.metrics.overall_bias == tracker.metrics.overall_bias
+
+    @pytest.mark.asyncio
+    async def test_pending_forecasts_survive_restart(self, mock_hass):
+        """#881: a forecast recorded but not yet backfilled must survive a
+        process restart, so a mid-day restart does not silently drop the
+        pending (which would strand the actual and lose the sample)."""
+        saved_payload = {}
+        store = MagicMock()
+
+        async def _save(data):
+            saved_payload.clear()
+            saved_payload.update(data)
+
+        async def _load():
+            return saved_payload or None
+
+        store.async_save = AsyncMock(side_effect=_save)
+        store.async_load = AsyncMock(side_effect=_load)
+
+        tracker = SolarAccuracyTracker(mock_hass, "test_entry")
+        tracker._store = store
+
+        # A future-dated pending (won't be evicted as stale on reload).
+        period_start = dt_util.now().replace(
+            minute=0, second=0, microsecond=0
+        ) + timedelta(hours=1)
+        tracker.record_forecast(period_start, 2.5, "sunny")
+        assert tracker._save_pending is True
+        await tracker.async_save()
+
+        # Fresh tracker on the same store == a restart.
+        reloaded = SolarAccuracyTracker(mock_hass, "test_entry")
+        reloaded._store = store
+        await reloaded.async_load()
+
+        assert len(reloaded._pending_forecasts) == 1
+        # The restored pending still converts when its actual arrives.
+        reloaded.backfill_actual(period_start, 2.0)
+        assert reloaded.metrics.sample_count == 1
+
+    def test_reported_accuracy_none_below_min_samples(self, tracker):
+        """#881: reported_accuracy() is None while under-sampled so the sensor
+        shows 'insufficient data' rather than a fabricated perfect 100%."""
+        # Empty tracker, then 19 samples (below the 20-sample threshold).
+        assert tracker.reported_accuracy() is None
+        for i in range(19):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 1.0)
+        assert tracker.reported_accuracy() is None
+
+    def test_reported_accuracy_value_at_or_above_min_samples(self, tracker):
+        """Once enough samples exist, reported_accuracy() mirrors metrics."""
+        for i in range(20):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 2.0)
+        reported = tracker.reported_accuracy()
+        assert reported is not None
+        assert reported == pytest.approx(tracker.metrics.accuracy)
 
 
 class TestGetTimeOfDay:

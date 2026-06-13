@@ -626,7 +626,7 @@ class LocalShiftCoordinator:
         ):
             self.data.solar_bias_metrics = self.solar_accuracy_tracker.get_status_dict()
             self.data.solar_forecast_accuracy = (
-                self.solar_accuracy_tracker.metrics.accuracy
+                self.solar_accuracy_tracker.reported_accuracy()
             )
 
         # Compute hybrid accuracy combining LocalShift tracker + Solcast MAPE (Issue #778 Phase 2)
@@ -662,6 +662,12 @@ class LocalShiftCoordinator:
 
         # Convert MAPE to accuracy
         solcast_accuracy = max(0, 100 - solcast_mape)
+
+        # No LocalShift accuracy yet (insufficient samples, #881): defer wholly
+        # to Solcast rather than blending against a fabricated 100%.
+        if localshift_accuracy is None:
+            self.data.hybrid_solar_accuracy = round(solcast_accuracy, 1)
+            return
 
         # Check LocalShift sample count for confidence weighting
         localshift_samples = 0

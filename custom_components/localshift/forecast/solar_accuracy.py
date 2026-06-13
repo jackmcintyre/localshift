@@ -12,7 +12,7 @@ import math
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.storage import Store
@@ -31,14 +31,28 @@ MIN_SOLAR_CORRECTION_SAMPLES = 20
 def _period_key(period_start: datetime) -> str:
     """Derive the pending-forecast dict key for a 30-min period.
 
-    Floors to the :00/:30 boundary (second/microsecond zeroed) so both sides
-    of the record/backfill handshake agree regardless of caller timestamp
-    quirks. Live Amber slot timestamps carry a +1-second offset (18:00:01),
-    while the coordinator's actuals integration floors to the exact boundary
-    (18:00:00) — keying on the raw isoformat made every backfill pop miss, so
-    no sample was ever recorded (2026-06-12 zero-samples incident: 50 pending,
-    0 samples after a full daytime).
+    Normalizes to UTC *before* flooring to the :00/:30 boundary (second/
+    microsecond zeroed) so both sides of the record/backfill handshake agree
+    regardless of caller timezone or timestamp quirks.
+
+    Two failure modes this guards against (#881):
+
+    1. Timezone asymmetry. The record side (optimizer_facade) parses Amber slot
+       timestamps in their UTC offset ('2026-06-13T03:00:00+00:00'), while the
+       backfill side (tick_scheduler) keys off a LOCAL-time tick
+       ('2026-06-13T13:00:00+10:00'). The SAME instant serialized to two
+       different isoformat strings, so the dict lookup always missed (0 samples
+       even with 80+ pending). Casting both to UTC first makes the key the
+       canonical instant.
+    2. Sub-minute offset. Live Amber slot timestamps carry a +1-second offset
+       (18:00:01) while the actuals integration floors to the exact boundary
+       (18:00:00). Flooring second/microsecond reconciles those.
+
+    Naive datetimes (no tzinfo) are assumed to already be UTC.
     """
+    if period_start.tzinfo is None:
+        period_start = period_start.replace(tzinfo=UTC)
+    period_start = period_start.astimezone(UTC)
     return period_start.replace(
         minute=(period_start.minute // 30) * 30, second=0, microsecond=0
     ).isoformat()
@@ -244,14 +258,29 @@ class SolarAccuracyTracker:
                 except Exception as err:
                     _LOGGER.warning("Failed to load solar period record: %s", err)
 
+            # Restore in-flight pending forecasts (#881): a mid-day restart must
+            # not silently drop periods whose forecast was recorded but whose
+            # actual had not yet been backfilled. Re-key through _period_key so a
+            # tz-format change can never strand a restored pending.
+            pending_data = data.get("pending_forecasts", [])
+            for record_data in pending_data:
+                try:
+                    record = SolarPeriodRecord.from_dict(record_data)
+                    self._pending_forecasts[_period_key(record.period_start)] = record
+                except Exception as err:
+                    _LOGGER.warning("Failed to load pending solar forecast: %s", err)
+            # Drop any pending that is already too old to ever receive an actual.
+            self.evict_stale_pendings()
+
             if self._period_records:
                 self._recompute_metrics()
             elif "metrics" in data:
                 self._metrics = SolarBiasMetrics.from_dict(data["metrics"])
 
             _LOGGER.info(
-                "Loaded solar accuracy data: %d records, bias=%.2f, samples=%d",
+                "Loaded solar accuracy data: %d records, %d pending, bias=%.2f, samples=%d",
                 len(self._period_records),
+                len(self._pending_forecasts),
                 self._metrics.overall_bias,
                 self._metrics.sample_count,
             )
@@ -266,6 +295,9 @@ class SolarAccuracyTracker:
         try:
             data = {
                 "period_records": [r.to_dict() for r in self._period_records],
+                "pending_forecasts": [
+                    r.to_dict() for r in self._pending_forecasts.values()
+                ],
                 "metrics": self._metrics.to_dict(),
             }
             await self._store.async_save(data)
@@ -300,6 +332,7 @@ class SolarAccuracyTracker:
             is_boost_period=is_boost,
         )
         self._pending_forecasts[key] = record
+        self._save_pending = True
         _LOGGER.debug(
             "Recorded solar forecast for %s: %.3f kWh, weather=%s, time=%s, season=%s",
             period_start.strftime("%H:%M"),
@@ -547,6 +580,18 @@ class SolarAccuracyTracker:
             return "foggy"
         else:
             return "unknown"
+
+    def reported_accuracy(self) -> float | None:
+        """Realized accuracy percentage, or None while under-sampled (#881).
+
+        Returns None until MIN_SOLAR_CORRECTION_SAMPLES periods are recorded so
+        the sensor reports 'insufficient data' rather than a fabricated perfect
+        100% (the SolarBiasMetrics.accuracy default). Once enough samples exist
+        it returns the measured accuracy.
+        """
+        if not self.has_sufficient_samples():
+            return None
+        return self._metrics.accuracy
 
     def has_sufficient_samples(self) -> bool:
         """Check if we have enough samples for bias correction.

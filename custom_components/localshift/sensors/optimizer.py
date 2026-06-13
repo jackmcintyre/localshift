@@ -166,8 +166,10 @@ class SolarForecastAccuracySensor(LocalShiftSensorBase):
     _attr_icon = "mdi:solar-power-variant"
 
     def _update_from_coordinator(self) -> None:
+        # None until enough samples are collected (#881) — surfaces as
+        # 'unknown'/'insufficient data' rather than a fabricated perfect 100%.
         self._attr_native_value = getattr(
-            self.coordinator.data, "solar_forecast_accuracy", 100.0
+            self.coordinator.data, "solar_forecast_accuracy", None
         )
 
     @property
