@@ -701,7 +701,7 @@ async def test_handle_medium_tick_with_solar_tracker(coordinator):
         return_value={"bias": 0.1, "correction_active": False}
     )
     coordinator.solar_accuracy_tracker.metrics = MagicMock()
-    coordinator.solar_accuracy_tracker.metrics.accuracy = 0.95
+    coordinator.solar_accuracy_tracker.reported_accuracy = MagicMock(return_value=0.95)
 
     coordinator.data = MagicMock()
     coordinator.data.solar_bias_metrics = None

@@ -185,7 +185,7 @@ class TickScheduler:
                 self._coordinator.solar_accuracy_tracker.get_status_dict()
             )
             self._coordinator.data.solar_forecast_accuracy = (
-                self._coordinator.solar_accuracy_tracker.metrics.accuracy
+                self._coordinator.solar_accuracy_tracker.reported_accuracy()
             )
 
         # Learn from current temperature/load for weather correlation

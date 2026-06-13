@@ -372,7 +372,7 @@ class TestSolarForecastAccuracySensor:
     """Tests for SolarForecastAccuracySensor."""
 
     def test_native_value_default(self):
-        """Test native_value defaults to 100.0 when no attribute."""
+        """Default is None (insufficient data), not a fabricated 100% (#881)."""
         mock_coordinator, data = create_mock_coordinator_with_data()
         # Don't set solar_forecast_accuracy
         mock_entry = MagicMock()
@@ -380,7 +380,7 @@ class TestSolarForecastAccuracySensor:
         sensor = SolarForecastAccuracySensor(mock_coordinator, mock_entry)
         sensor._update_from_coordinator()
 
-        assert sensor._attr_native_value == 100.0
+        assert sensor._attr_native_value is None
 
     def test_native_value_set(self):
         """Test native_value reads from coordinator data."""
