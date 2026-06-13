@@ -1,27 +1,102 @@
 # LocalShift
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![HA](https://img.shields.io/badge/Home%20Assistant-2025.6+-blue.svg)](https://www.home-assistant.io/)
+[![HA](https://img.shields.io/badge/Home%20Assistant-Custom%20Integration-blue.svg)](https://www.home-assistant.io/)
 
-Automated Tesla Powerwall battery control based on Amber Electric spot pricing, Solcast solar forecasts, and configurable thresholds.
+LocalShift is a forecast-driven optimizer for a Tesla Powerwall. Every few
+minutes it computes the cost-optimal 24-hour charge/discharge plan from Amber
+Electric spot prices, Solcast solar forecasts, and learned household
+consumption — then drives the Powerwall to follow that plan.
 
-A state machine replaces 18 YAML automations with a single priority-based evaluation that runs every minute and on every relevant state change. No more "stuck state" bugs.
+The plan is produced by a **dynamic-programming (DP) optimizer**, not a pile of
+threshold rules. Replacing the original 18 hand-written YAML automations with a
+single planning model eliminates "stuck state" bugs and makes every decision
+testable, observable, and explainable: the forecast *is* the plan, and the
+control logic simply executes it.
+
+## How it works
+
+LocalShift runs as four cooperating layers. The deeper design lives in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
+[`docs/PLANNING_MODEL.md`](docs/PLANNING_MODEL.md); this is the short version.
+
+```
+ prices ┐
+ solar  ├─▶ forecast pipeline ─▶ DP optimizer ─▶ plan ─▶ state machine ─▶ Powerwall
+ load   ┘    (24h of slots)      (engine/)     (per-slot   (state/)        (Teslemetry)
+                                                 action)         │
+                                                                 ▼
+                                            measured outcomes ─▶ learning (learning/)
+                                                                 (adapts parameters)
+```
+
+1. **Forecast pipeline** (`forecast/`) builds 24 hours of *hybrid slots* — 5-minute
+   resolution for roughly the first hour (matching Amber's 5-minute pricing) and
+   30-minute resolution further out (matching Solcast) — each carrying a price,
+   solar forecast, and load forecast.
+
+2. **DP optimizer** (`engine/`) searches that horizon for the cheapest feasible plan
+   using a three-layer model:
+   - `feasible_actions()` — **hard constraints**: SOC floor/ceiling, demand-window
+     grid-charge block, price/solar/export gates, and an anti-cycling
+     *minimum-cycle-saving* gate that refuses to cycle the battery for a thin margin.
+   - `stage_cost()` — **soft economic penalties**: grid-import cost, export revenue,
+     a switching penalty that damps mode flapping, and a solar-opportunity penalty.
+   - `terminal_cost()` — **the deadline**: a penalty for missing the demand-window
+     SOC target.
+
+   The output is the optimal action for each slot (hold, grid-charge, boost-charge,
+   pre-charge, export, spike-discharge).
+
+3. **State machine** (`state/`) *executes* the current slot's action by mapping it to
+   a Powerwall mode, applying context-dependent debounce and honoring manual and
+   Tesla (Storm Watch / Grid Event / VPP) overrides. It follows the plan — it does
+   not decide it.
+
+4. **Learning system** (`learning/`) measures the outcome of each decision and slowly
+   adapts the optimizer's parameters to reduce cost over time. It is **off by default**
+   and moves through *observing → tuning → optimizing* phases with safety rails. See
+   [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md).
+
+### Optimization modes
+
+The objective is selectable at runtime via `select.localshift_optimization_mode`:
+
+- **`self_consumption`** (default) — retain stored energy for household load; export
+  only when the sale beats the value of keeping that energy. Low overnight SOC is
+  expected, not a bug.
+- **`arbitrage`** — maximize buy-low / sell-high margin, exporting proactively
+  whenever the spread clears the thresholds.
+
+Changes take effect on the next recompute cycle.
 
 ## Features
 
-- **7 battery modes** — Self Consumption, Grid Charging, Boost Charging, Spike Discharge, Proactive Export, Demand Block, Manual
-- **Dynamic pricing thresholds** — Urgency-based cheap price calculation that factors in time-to-demand-window, SOC, and solar forecast
-- **Solcast solar forecast** — SOC projection to demand window, target-by-DW calculation, boost charge detection
-- **Solar export hold** — Holds battery when surplus solar can cover demand window deficit, maximising feed-in revenue
-- **Adaptive learning system** — Continuously optimizes decision parameters based on measured outcomes to minimize electricity costs
-- **Price spike discharge** — Automatically exports battery during Amber price spikes
-- **Demand window blocking** — Prevents grid charging during peak periods (configurable)
-- **Weather-aware consumption prediction** — Learns temperature/load correlation for more accurate forecasts during hot/cold days
-- **Day-of-week consumption profiles** — Separate weekday and weekend profiles for households with different daily patterns
-- **Cost tracking** — Accumulates grid import cost, export revenue, battery savings, and charge cost per day
-- **Daily summary notification** — Sends energy and cost summary at demand window end
-- **Dry-run mode** — Logs what the state machine would do without sending commands to the Powerwall
-- **Included dashboard** — Ready-to-use Lovelace YAML dashboard
+- **8 battery modes** — Self Consumption, Grid Charging, Boost Charging, Spike
+  Discharge, Proactive Export, Demand Block, Hold, Manual
+- **DP-optimized 24-hour plan** — global cost minimization over hybrid 5-/30-minute
+  slots, recomputed whenever the decision context changes
+- **Dynamic pricing thresholds** — urgency-based cheap-price calculation that factors
+  in time-to-demand-window, SOC, and solar forecast
+- **Solcast solar forecast** — SOC projection to the demand window, target-by-DW
+  calculation, and 3.3 kW-vs-5 kW boost-charge detection
+- **Solar export hold** — holds the battery when surplus solar can cover the
+  demand-window deficit, maximising feed-in revenue
+- **Price spike discharge** — exports during Amber price spikes
+- **Demand window blocking** — prevents grid charging during peak periods (configurable)
+- **Anti-cycling gate** — a minimum-cycle-saving feasibility gate that blocks marginal
+  overnight arbitrage while preserving genuine pre-charge and spike capture
+- **Adaptive learning** — continuously tunes decision parameters from measured outcomes
+- **Counterfactual advantage tracking** — quantifies how much the optimizer saved vs a
+  baseline strategy
+- **Weather-aware consumption prediction** — learns temperature/load correlation for
+  more accurate forecasts on hot/cold days
+- **Day-of-week consumption profiles** — separate weekday and weekend load profiles
+- **Cost tracking** — accumulates grid import cost, export revenue, battery savings,
+  and charge cost per day
+- **Daily summary notification** — energy and cost summary at demand-window end
+- **Dry-run mode** — logs what the optimizer would do without sending commands
+- **Included dashboard** — ready-to-use Lovelace dashboard built on bundled custom cards
 
 ## Prerequisites
 
@@ -60,7 +135,7 @@ The following integrations must be installed and configured in Home Assistant:
 
 Default entity IDs are pre-filled based on standard Teslemetry/Amber/Solcast naming.
 
-### Options (Thresholds)
+### Options
 
 After setup, click **Configure** on the integration to adjust:
 
@@ -69,66 +144,80 @@ After setup, click **Configure** on the integration to adjust:
 | Cheap Price Percentile | 25% | Percentile of near-term forecast prices used as the base cheap-price trigger |
 | Max Pre-charge Price | $0.20/kWh | Maximum price for pre-DW charging when SOC is low |
 | Price Deadband | $0.03/kWh | Hysteresis band to prevent rapid charge/stop cycling |
+| Min Cycle Saving | $0.25/kWh | Minimum saving over holding required to justify cycling the battery |
 | Forecast Lookahead | 2 hours | How far ahead to scan for spikes and expensive periods |
-| Pre-charge Battery Threshold | 50% | SOC below which pre-charging is considered |
-| Battery Target | 100% | Target SOC for demand window |
+| Battery Target | 100% | Target SOC for the demand window |
+| Minimum Target SOC | 20% | Minimum SOC retained during discharge modes |
+| Target Shortfall Penalty | $0.015/%-pt | Optimizer cost per %-point below the demand-window target |
 | Demand Window Start | 15:00 | Start of peak/demand period |
 | Demand Window End | 21:00 | End of peak/demand period |
 
-These are also available as number entities on the dashboard for quick adjustment.
+Many of these — plus extra optimizer knobs (Switching Penalty, Stale-Solar
+Confidence Ceiling) — are also exposed as number entities on the dashboard for
+quick adjustment without reopening the Configure dialog.
 
 ## Entities
 
-All entities are grouped under a single **LocalShift** device in Settings → Devices & Services.
+All entities are grouped under a single **LocalShift** device in Settings →
+Devices & Services. Full canonical reference:
+[`docs/ENTITY_REFERENCE.md`](docs/ENTITY_REFERENCE.md).
 
-### Sensors (27)
+### Sensors (34)
 
 | Entity ID | Description |
 |---|---|
-| `sensor.localshift_price_cheap_effective` | Dynamic cheap price threshold (factors in urgency, SOC, solar) |
-| `sensor.localshift_price_cheap_charge_stop` | Effective cheap price + deadband |
-| `sensor.localshift_solar_weighted_avg_fit` | Solcast × Amber weighted average feed-in tariff |
-| `sensor.localshift_battery_mode` | Current battery mode from the state machine |
-| `sensor.localshift_forecast_battery` | SOC projection with detailed attributes |
-| `sensor.localshift_cost_electricity_net` | Net cost with import/export/savings/charge cost attributes |
-| `sensor.localshift_decision_log` | Mode change history with reasons |
-| `sensor.localshift_forecast_history` | Historical forecast predictions for comparison |
-| `sensor.localshift_forecast_daily` | Core 24-hour forecast with SOC, solar, and consumption data |
-| `sensor.localshift_forecast_prices` | Price forecast data for history collection |
-| `sensor.localshift_forecast_grid` | Grid interaction forecast data for history collection |
-| `sensor.localshift_forecast_diagnostics` | Diagnostic and debug data for the forecast system |
+| `sensor.localshift_price_cheap_effective` | Dynamic cheap-price threshold (factors in urgency, SOC, solar) |
+| `sensor.localshift_price_cheap_charge_stop` | Effective cheap price + deadband (charge-stop hysteresis) |
+| `sensor.localshift_solar_weighted_avg_fit` | Solcast × Amber weighted-average feed-in tariff |
+| `sensor.localshift_comparison_result` | Optimizer-vs-baseline comparison result |
+| `sensor.localshift_price_delta` | Price-delta metrics for the comparison harness |
+| `sensor.localshift_forecast_battery` | SOC projection to the demand window, with detailed attributes |
+| `sensor.localshift_cost_electricity_net` | Net daily cost (import/export/savings/charge-cost attributes) |
+| `sensor.localshift_decision_log` | Mode-change history with reasons |
+| `sensor.localshift_forecast_history` | Historical forecast predictions for accuracy comparison |
+| `sensor.localshift_optimizer_plan` | Core 24-hour plan with SOC, solar, and consumption per slot |
+| `sensor.localshift_forecast_prices` | Price-forecast series for history collection |
+| `sensor.localshift_optimizer_plan_grid` | Grid-interaction forecast series |
+| `sensor.localshift_load_deviation` | Live load vs forecast deviation |
+| `sensor.localshift_forecast_diagnostics` | Diagnostic/debug data for the forecast system |
 | `sensor.localshift_target_soc_minimum` | Minimum target SOC for discharge modes |
-| `sensor.localshift_excess_solar` | Forecasted excess solar for load shifting |
+| `sensor.localshift_excess_solar` | Forecasted excess solar available for load shifting |
 | `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
 | `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |
-| `sensor.localshift_integration_status` | Overall integration health status (ok/degraded/error) |
-| `sensor.localshift_entity_health` | Detailed health status for all tracked entities |
-| `sensor.localshift_daily_thermal_mode` | Current daily thermal mode (HEAT/COOL/DRY/OFF) |
-| `sensor.localshift_baseline_load_profile` | Non-HVAC baseline load profile by hour |
-| `sensor.localshift_hvac_load_profile` | HVAC load profile by hour |
-| `sensor.localshift_learning_status` | Learning system status (observing/tuning/optimizing) |
-| `sensor.localshift_decision_quality` | Today's average decision quality score (%) |
-| `sensor.localshift_learning_decision_history` | Recent mode decisions with outcomes |
-| `sensor.localshift_average_room_temp` | Average room temperature from climate entities |
-| `sensor.localshift_realtime_thermal_status` | Real-time thermal control status (active/inactive) |
+| `sensor.localshift_integration_status` | Overall integration health (ok/degraded/error) |
+| `sensor.localshift_entity_health` | Per-entity health detail for all tracked entities |
+| `sensor.localshift_learning_status` | Learning-system phase (observing/tuning/optimizing) |
+| `sensor.localshift_decision_quality` | Today's average decision-quality score (%) |
+| `sensor.localshift_learning_decision_history` | Recent mode decisions with measured outcomes |
+| `sensor.localshift_optimizer_advantage` | Counterfactual advantage of the optimizer vs baseline |
+| `sensor.localshift_decision_lag` | Decision-to-implementation lag |
+| `sensor.localshift_forecast_status` | Forecast freshness/readiness status |
+| `sensor.localshift_automation_ready` | Whether automation has everything it needs to act |
+| `sensor.localshift_optimizer_plan_detailed` | Full slot-by-slot DP plan (drives the Debug view) |
+| `sensor.localshift_optimizer_summary` | Plan summary metrics (cost, shortfall, charge window) |
+| `sensor.localshift_solar_forecast_accuracy` | Measured solar-forecast accuracy |
+| `sensor.localshift_cloud_event` | Tesla cloud event (Storm Watch / Grid Event / VPP) |
+| `sensor.localshift_solcast_confidence_today` | Solcast forecast confidence for today |
+| `sensor.localshift_solcast_confidence_tomorrow` | Solcast forecast confidence for tomorrow |
+| `sensor.localshift_forecast_accuracy_comparison` | Forecast-accuracy comparison across sources |
 
-### Binary Sensors (10)
+### Binary Sensors (11)
 
 | Entity ID | Description |
 |---|---|
 | `binary_sensor.localshift_demand_window` | Whether current time is within the demand window |
 | `binary_sensor.localshift_price_spike_coming` | Price spike forecast within lookahead (with `max_forecast_price` attribute) |
 | `binary_sensor.localshift_price_expensive_coming` | Expensive period forecast within lookahead |
-| `binary_sensor.localshift_discharge_forced` | Powerwall is currently force discharging |
-| `binary_sensor.localshift_charge_forced` | Powerwall is currently force charging |
-| `binary_sensor.localshift_charge_boost` | Powerwall is currently boost charging (5kW) |
-| `binary_sensor.localshift_solar_can_reach_target` | Solar forecast can reach battery target before DW |
-| `binary_sensor.localshift_charge_boost_needed` | 5kW boost needed to reach target (3.3kW insufficient) |
+| `binary_sensor.localshift_discharge_forced` | Powerwall is currently force-discharging |
+| `binary_sensor.localshift_charge_forced` | Powerwall is currently force-charging |
+| `binary_sensor.localshift_charge_boost` | Powerwall is currently boost-charging (5 kW) |
+| `binary_sensor.localshift_solar_can_reach_target` | Solar forecast can reach the battery target before the DW |
+| `binary_sensor.localshift_charge_boost_needed` | 5 kW boost needed to reach target (3.3 kW insufficient) |
 | `binary_sensor.localshift_excess_solar_available` | Excess solar available for load shifting |
-| `binary_sensor.localshift_tesla_override_active` | Whether Tesla has taken control (Storm Watch, Grid Event, VPP) |
-| `binary_sensor.localshift_forecast_expensive_period` | Whether expensive period is forecast within lookahead |
+| `binary_sensor.localshift_tesla_override_active` | Tesla has taken control (Storm Watch, Grid Event, VPP) |
+| `binary_sensor.localshift_amber_demand_window` | Amber Express demand-window signal active |
 
-### Switches (8)
+### Switches (9)
 
 | Entity ID | Default | Description |
 |---|---|---|
@@ -136,37 +225,44 @@ All entities are grouped under a single **LocalShift** device in Settings → De
 | `switch.localshift_spike_discharge_enabled` | ON | Allow discharge during price spikes |
 | `switch.localshift_spike_discharge_conservative` | OFF | Conservative spike discharge with dynamic reserve |
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
-| `switch.localshift_demand_window_block` | ON | Block grid charging during demand window |
+| `switch.localshift_demand_window_block` | ON | Block grid charging during the demand window |
 | `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
+| `switch.localshift_stale_solar_conservative` | ON | Cap solar confidence when Solcast is stale/absent |
 | `switch.localshift_notifications_enabled` | ON | Enable all notifications (transitions, summaries, manual actions, alerts) |
-| `switch.localshift_enable_learning` | OFF | Enable learning system parameter optimization |
+| `switch.localshift_enable_learning` | OFF | Enable learning-system parameter optimization |
 
-### Numbers (4)
+### Numbers (8)
 
 | Entity ID | Description |
 |---|---|
-| `number.localshift_cheap_price_percentile` | Forecast price percentile used for cheap-charge baseline (%) |
+| `number.localshift_cheap_price_percentile` | Forecast price percentile used for the cheap-charge baseline (%) |
 | `number.localshift_max_pre_charge_price` | Maximum pre-charge price ($/kWh) |
-| `number.localshift_battery_target` | Battery target SOC (%) |
-| `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes |
+| `number.localshift_min_cycle_saving` | Minimum saving over holding to justify a battery cycle ($/kWh) |
+| `number.localshift_battery_target` | Battery target SOC for the demand window (%) |
+| `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes (%) |
+| `number.localshift_target_shortfall_penalty` | Optimizer cost per %-point of demand-window shortfall ($) |
+| `number.localshift_stale_solar_confidence_ceiling` | Solar-confidence cap applied when Solcast is stale/absent |
+| `number.localshift_switching_penalty` | Per-switch disincentive that damps mode flapping ($) |
 
 ### Selects (2)
 
 | Entity ID | Description |
 |---|---|
-| `select.localshift_battery_mode` | Select battery operating mode (self_consumption, grid_charging, boost_charging, spike_discharge, proactive_export). Changing this disables automation and applies manual control. |
-| `select.localshift_optimization_mode` | Select optimizer objective mode (`self_consumption` or `arbitrage`). Changes take effect on the next recompute cycle. |
+| `select.localshift_battery_mode` | Battery operating mode (`automatic`, `self_consumption`, `grid_charging`, `boost_charging`, `spike_discharge`, `proactive_export`). Selecting a manual mode disables automation and applies that command; `automatic` hands control back to the optimizer. |
+| `select.localshift_optimization_mode` | Optimizer objective (`self_consumption` or `arbitrage`). Takes effect on the next recompute cycle. |
 
 ### Buttons (2)
 
 | Entity ID | Description |
 |---|---|
-| `button.localshift_update_forecast` | Force forecast update and clear historical load cache |
-| `button.localshift_reset_learning` | Reset learning system data and restart observation |
+| `button.localshift_update_forecast` | Force a forecast update and clear the historical-load cache |
+| `button.localshift_reset_learning` | Reset learning-system data and restart observation |
 
 ## Dashboard
 
-A ready-to-use Lovelace dashboard is included at `dashboards/localshift.yaml`. All entities used by the dashboard are created automatically by the integration — no additional YAML configuration required.
+A ready-to-use Lovelace dashboard ships with the integration at
+`custom_components/localshift/dashboard.yaml`. All entities it uses are created
+automatically by the integration — no extra YAML configuration required.
 
 ### Installation
 
@@ -194,8 +290,10 @@ optimizer plan).
 ### Prerequisites
 
 The Overview is built on LocalShift's own Lovelace cards — **no HACS cards
-required**. The card bundle ships with the integration at
-`custom_components/localshift/www/localshift-cards.js`. Install it once:
+required**. The bundle ships with the integration at
+`custom_components/localshift/www/localshift-cards.js` and defines three card
+types: `localshift-command-card`, `localshift-decisions-card`, and
+`localshift-money-card`. Install it once:
 
 1. Copy `custom_components/localshift/www/localshift-cards.js` to
    `<your-ha-config>/www/localshift/localshift-cards.js`
@@ -211,73 +309,14 @@ Adjust entity IDs to match your setup if different — each card accepts an
 `entities:` map, and the command card takes `dw_start` / `dw_end` for your
 peak (demand-window) hours.
 
-## State Machine
-
-The state machine evaluates the full priority chain on every state change and every 1-minute tick:
-
-```
-1. Automation disabled?     → MANUAL (no commands sent)
-2. Demand window active?    → DEMAND_BLOCK (self consumption)
-3. Price spike + enabled?   → SPIKE_DISCHARGE (force discharge)
-4. Manual override active?  → MANUAL (preserve user command)
-5. Solar export hold?       → SOLAR_EXPORT_HOLD (hold battery)
-6. Price < cheap threshold? → GRID_CHARGING (force charge / boost)
-7. Price < stop threshold?  → HOLD (deadband — keep current state)
-8. Spike forecast?          → HOLDING_FOR_SPIKE (hold battery)
-9. None of the above?       → SELF_CONSUMPTION (default)
-```
-
-Context-dependent debounce prevents rapid mode switching:
-- **0 seconds**: Spike discharge, demand window, manual actions (immediate)
-- **2 minutes**: Solar export hold entry/exit
-- **5 minutes**: Price-driven transitions (grid charging, hold, self consumption)
-
-## Migration from amber_powerwall (Rebranding)
-
-**If you previously had the `amber_powerwall` integration installed:**
-
-The integration has been rebranded from `amber_powerwall` to `localshift`. You need to manually migrate:
-
-1. **Remove the old integration:**
-   - Go to **Settings → Devices & Services**
-   - Find the old "Amber Powerwall" integration
-   - Click the three dots → **Delete** (this removes the config entry and all old entities)
-
-2. **Clean up stale entities (if any remain):**
-   - Go to **Developer Tools → States**
-   - Search for `amber_powerwall` - if any entities remain, note them down
-   - Go to **Settings → Devices & Services → Entities**
-   - Find and delete any orphaned `amber_powerwall_*` entities
-
-3. **Restart Home Assistant** (important for clean entity registration)
-
-4. **Set up the new integration:**
-   - Go to **Settings → Devices & Services → Add Integration**
-   - Search for "LocalShift"
-   - Configure as described in the Configuration section above
-
-5. **Update your dashboard:**
-   - The dashboard at `dashboards/localshift.yaml` already uses the new entity IDs
-   - If you have a custom dashboard, update entity references:
-     - `amber_powerwall_*` → `localshift_*`
-
-## Migration from YAML Package
-
-If you're migrating from the `amber_powerwall.yaml` or `localshift.yaml` package:
-
-1. Install the custom component and configure it
-2. Run both side-by-side with the component's **Dry Run** switch ON
-3. Compare the component's `sensor.localshift_battery_mode` against YAML automation actions in the logbook
-4. When satisfied, turn **Dry Run** OFF and disable YAML automations (`input_boolean.battery_automation_enabled` → OFF)
-5. Enable the component's automation switch
-6. Monitor for 24 hours
-7. Remove the YAML package from `packages/`
-
 ## Troubleshooting
+
+See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for optimizer- and
+state-machine-specific issues. For entity/registration problems:
 
 ### Buttons not working / Entities missing
 
-If button entities show as "missing or not currently available":
+If entities show as "missing or not currently available":
 
 1. **Check if the integration is loaded:**
    - Go to **Settings → Devices & Services**
@@ -285,7 +324,8 @@ If button entities show as "missing or not currently available":
    - If it shows an error, click **Reload**
 
 2. **Check for old domain conflicts:**
-   - If you previously had `amber_powerwall` installed, follow the migration steps above
+   - If you previously ran another battery-automation integration, delete it and
+     any orphaned entities it left behind
    - Old entity registry entries can prevent new entities from registering
 
 3. **Check the logs:**
@@ -296,6 +336,19 @@ If button entities show as "missing or not currently available":
 4. **Full restart:**
    - Sometimes Home Assistant needs a full restart to register new entities
    - Restart Home Assistant and check again
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [`docs/INDEX.md`](docs/INDEX.md) | Documentation index — **start here** |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, components, and data flow |
+| [`docs/PLANNING_MODEL.md`](docs/PLANNING_MODEL.md) | The DP model: feasible actions, stage cost, terminal cost |
+| [`docs/FORECAST_DRIVEN_CONTROL.md`](docs/FORECAST_DRIVEN_CONTROL.md) | "The forecast IS the plan" — single source of truth |
+| [`docs/ENTITY_REFERENCE.md`](docs/ENTITY_REFERENCE.md) | Complete entity catalog |
+| [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md) | Adaptive learning: phases, parameters, safety rails |
+| [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) | Setup, project structure, extension patterns |
+| [`VISION.md`](VISION.md) | Mission, goals, constraints, success metrics |
 
 ## License
 
