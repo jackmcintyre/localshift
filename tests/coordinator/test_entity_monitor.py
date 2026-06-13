@@ -98,9 +98,12 @@ class TestCheckEntityHealth:
         mock_validator.check_all_localshift_entities.return_value = {
             "sensor.localshift_soc": "available"
         }
+        mock_validator.check_orphaned_owned_entities.return_value = {}
 
         mock_coordinator._entity_validator = mock_validator
+        mock_coordinator.entry.entry_id = "cfg_abc"
         mock_data = MagicMock()
+        mock_data.entity_warnings = []
         mock_coordinator.data = mock_data
         monitor = EntityMonitor(mock_coordinator)
 
@@ -113,6 +116,7 @@ class TestCheckEntityHealth:
         mock_validator.get_required_entities_status.assert_called_once()
         mock_validator.get_health_summary.assert_called_once()
         mock_validator.check_all_localshift_entities.assert_called_once()
+        mock_validator.check_orphaned_owned_entities.assert_called_once_with("cfg_abc")
 
         # ASSERT - data updated correctly
         assert mock_data.integration_status == "healthy"
@@ -125,6 +129,7 @@ class TestCheckEntityHealth:
         assert mock_data.localshift_entity_health == {
             "sensor.localshift_soc": "available"
         }
+        assert mock_data.orphaned_localshift_entities == {}
 
     def test_check_entity_health_with_errors(self) -> None:
         """Test check_entity_health logs errors when present."""
@@ -166,6 +171,7 @@ class TestCheckEntityHealth:
         # ARRANGE
         mock_coordinator = MagicMock()
         mock_coordinator.hass = MagicMock()
+        mock_coordinator.entry.entry_id = "cfg_warn"
         mock_validator = MagicMock()
         mock_validator.status.value = "healthy"
         mock_validator.errors = []
@@ -182,9 +188,11 @@ class TestCheckEntityHealth:
             "last_check": "2024-01-01T00:00:00",
         }
         mock_validator.check_all_localshift_entities.return_value = {}
+        mock_validator.check_orphaned_owned_entities.return_value = {}
 
         mock_coordinator._entity_validator = mock_validator
         mock_data = MagicMock()
+        mock_data.entity_warnings = []
         mock_coordinator.data = mock_data
         monitor = EntityMonitor(mock_coordinator)
 
@@ -231,6 +239,149 @@ class TestCheckEntityHealth:
 
         # ASSERT
         assert mock_data.required_entities_healthy is False
+
+
+class TestOrphanDetection:
+    """Test orphan detection in check_entity_health (Issue #880)."""
+
+    def _build_mock_coordinator(
+        self,
+        orphans: dict | None = None,
+        warnings: list | None = None,
+    ) -> MagicMock:
+        """Build a mock coordinator that returns the given orphan map."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.hass = MagicMock()
+        mock_coordinator.entry.entry_id = "test_config_entry_id"
+
+        mock_validator = MagicMock()
+        mock_validator.status.value = "ok"
+        mock_validator.errors = []
+        mock_validator.warnings = warnings if warnings is not None else []
+        mock_validator.get_user_friendly_message.return_value = "All systems operational"
+        mock_validator.get_required_entities_status.return_value = {}
+        mock_validator.get_health_summary.return_value = {
+            "entities": {},
+            "last_check": "2024-01-01T00:00:00",
+        }
+        mock_validator.check_all_localshift_entities.return_value = {}
+        mock_validator.check_orphaned_owned_entities.return_value = (
+            orphans if orphans is not None else {}
+        )
+        mock_coordinator._entity_validator = mock_validator
+
+        mock_data = MagicMock()
+        mock_data.entity_warnings = []
+        mock_coordinator.data = mock_data
+        return mock_coordinator
+
+    def test_orphans_populate_data_field(self) -> None:
+        """check_entity_health populates orphaned_localshift_entities on data."""
+        orphans = {
+            "number.localshift_cycle_penalty": {
+                "state": "unavailable",
+                "disabled": False,
+                "restored": True,
+            }
+        }
+        mock_coordinator = self._build_mock_coordinator(orphans=orphans)
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        assert mock_coordinator.data.orphaned_localshift_entities == orphans
+
+    def test_orphans_append_warning_message(self) -> None:
+        """When orphans exist, a warning is appended to entity_warnings."""
+        orphans = {
+            "number.localshift_cycle_penalty": {
+                "state": "unavailable",
+                "disabled": False,
+                "restored": True,
+            }
+        }
+        mock_coordinator = self._build_mock_coordinator(orphans=orphans)
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        # The warning should mention the orphan entity_id
+        warnings_set = mock_coordinator.data.entity_warnings
+        assert any("number.localshift_cycle_penalty" in w for w in warnings_set)
+        assert any("orphaned" in w for w in warnings_set)
+
+    def test_orphan_singular_grammar(self) -> None:
+        """Single orphan uses 'entity' (singular) in the warning."""
+        orphans = {"number.localshift_cycle_penalty": {"state": "unavailable"}}
+        mock_coordinator = self._build_mock_coordinator(orphans=orphans)
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        warning = next(
+            (w for w in mock_coordinator.data.entity_warnings if "orphaned" in w),
+            None,
+        )
+        assert warning is not None
+        assert "1 orphaned localshift entity" in warning
+
+    def test_orphan_plural_grammar(self) -> None:
+        """Multiple orphans use 'entities' (plural) in the warning."""
+        orphans = {
+            "number.localshift_cycle_penalty": {"state": "unavailable"},
+            "number.localshift_demand_window_import_penalty": {"state": "unavailable"},
+        }
+        mock_coordinator = self._build_mock_coordinator(orphans=orphans)
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        warning = next(
+            (w for w in mock_coordinator.data.entity_warnings if "orphaned" in w),
+            None,
+        )
+        assert warning is not None
+        assert "2 orphaned localshift entities" in warning
+
+    def test_no_orphans_no_extra_warnings(self) -> None:
+        """When no orphans exist, no orphan warning is added."""
+        mock_coordinator = self._build_mock_coordinator(orphans={})
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        assert mock_coordinator.data.orphaned_localshift_entities == {}
+        orphan_warnings = [
+            w for w in mock_coordinator.data.entity_warnings if "orphaned" in w
+        ]
+        assert orphan_warnings == []
+
+    def test_orphan_warning_preserves_existing_warnings(self) -> None:
+        """Orphan warning is appended to existing warnings, not replacing them."""
+        existing_warnings = ["Solar sensor data is stale"]
+        orphans = {"number.localshift_cycle_penalty": {"state": "unavailable"}}
+        mock_coordinator = self._build_mock_coordinator(
+            orphans=orphans, warnings=existing_warnings
+        )
+        mock_coordinator.data.entity_warnings = list(existing_warnings)
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        # data.entity_warnings gets reset by validator.warnings first, then orphan appended
+        # The orphan warning must be present
+        assert any("orphaned" in w for w in mock_coordinator.data.entity_warnings)
+
+    def test_check_orphaned_owned_entities_called_with_config_entry_id(self) -> None:
+        """check_orphaned_owned_entities is called with the coordinator's entry_id."""
+        mock_coordinator = self._build_mock_coordinator()
+        monitor = EntityMonitor(mock_coordinator)
+
+        monitor.check_entity_health()
+
+        mock_coordinator._entity_validator.check_orphaned_owned_entities.assert_called_once_with(
+            "test_config_entry_id"
+        )
 
 
 class TestResetEntityTrackingOnOptionsChange:

@@ -1415,3 +1415,188 @@ class TestEdgeCases:
         health.status = EntityStatus.STALE
         msg = validator._format_health_error_message(health, "Battery SOC")
         assert "stale" in msg
+
+
+# =============================================================================
+# Orphan Detection Tests (Issue #880)
+# =============================================================================
+
+
+class TestCheckOrphanedOwnedEntities:
+    """Tests for EntityValidator.check_orphaned_owned_entities."""
+
+    def _make_registry_entry(
+        self,
+        entity_id: str,
+        config_entry_id: str,
+        disabled: bool = False,
+    ) -> MagicMock:
+        """Create a mock RegistryEntry."""
+        entry = MagicMock()
+        entry.entity_id = entity_id
+        entry.config_entry_id = config_entry_id
+        entry.disabled_by = "user" if disabled else None
+        return entry
+
+    def test_no_orphans_when_registry_empty(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """No orphans when the config entry owns no registry entries."""
+        validator = _create_validator(mock_hass)
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = []
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("config_entry_abc")
+
+        assert result == {}
+
+    def test_no_orphans_when_all_owned_entities_in_config(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """No orphans when all owned registry entries are in LOCALSHIFT_ENTITY_CONFIG."""
+        # Use a known entry from LOCALSHIFT_ENTITY_CONFIG
+        known_entity = "sensor.localshift_price_cheap_effective"
+        entry = self._make_registry_entry(known_entity, "cfg_1")
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert result == {}
+
+    def test_orphan_detected_for_unknown_entity(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Registry entry absent from LOCALSHIFT_ENTITY_CONFIG is reported as orphan."""
+        orphan_id = "number.localshift_cycle_penalty"
+        entry = self._make_registry_entry(orphan_id, "cfg_1")
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
+
+        # Orphan has no live state (restored ghost)
+        mock_hass.states.get = lambda eid: None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert orphan_id in result
+        orphan = result[orphan_id]
+        assert orphan["state"] == "unavailable"
+        assert orphan["restored"] is True
+
+    def test_orphan_with_live_state(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Orphan with a live state reports state value and restored=False."""
+        orphan_id = "number.localshift_demand_window_import_penalty"
+        entry = self._make_registry_entry(orphan_id, "cfg_1")
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
+
+        live_state = MagicMock()
+        live_state.state = "0.08"
+        mock_hass.states.get = lambda eid: live_state if eid == orphan_id else None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert orphan_id in result
+        orphan = result[orphan_id]
+        assert orphan["state"] == "0.08"
+        assert orphan["restored"] is False
+
+    def test_orphan_disabled_flag(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Disabled orphan entry sets disabled=True."""
+        orphan_id = "number.localshift_cycle_penalty"
+        entry = self._make_registry_entry(orphan_id, "cfg_1", disabled=True)
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = [entry]
+        mock_hass.states.get = lambda eid: None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert result[orphan_id]["disabled"] is True
+
+    def test_multiple_orphans(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Multiple orphans are all returned in the dict."""
+        orphan_ids = [
+            "number.localshift_cycle_penalty",
+            "number.localshift_demand_window_import_penalty",
+        ]
+        entries = [self._make_registry_entry(eid, "cfg_1") for eid in orphan_ids]
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = entries
+        mock_hass.states.get = lambda eid: None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert set(result.keys()) == set(orphan_ids)
+
+    def test_mix_of_known_and_orphaned(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Known entities are filtered out; only orphans are returned."""
+        known_id = "sensor.localshift_price_cheap_effective"
+        orphan_id = "number.localshift_cycle_penalty"
+
+        entries = [
+            self._make_registry_entry(known_id, "cfg_1"),
+            self._make_registry_entry(orphan_id, "cfg_1"),
+        ]
+
+        mock_registry = MagicMock()
+        mock_registry.entities.get_entries_for_config_entry_id.return_value = entries
+        mock_hass.states.get = lambda eid: None
+
+        validator = _create_validator(mock_hass)
+
+        with patch(
+            "custom_components.localshift.utils.validation.er.async_get",
+            return_value=mock_registry,
+        ):
+            result = validator.check_orphaned_owned_entities("cfg_1")
+
+        assert known_id not in result
+        assert orphan_id in result

@@ -81,6 +81,7 @@ class TestEntityHealthSensor:
             EntityHealthSensor,
             entity_health=dep_health,
             localshift_entity_health=ls_health,
+            orphaned_localshift_entities={},
             entity_errors=[],
             entity_warnings=[],
         )
@@ -89,6 +90,7 @@ class TestEntityHealthSensor:
         assert "summary" in attrs
         assert attrs["summary"]["dependencies"]["total"] == 1
         assert attrs["summary"]["localshift"]["healthy"] == 1
+        assert attrs["summary"]["orphaned_count"] == 0
 
     def test_unrecorded_attributes_excludes_large_dicts(self):
         """Test that large entity dicts are excluded from recorder.
@@ -96,15 +98,56 @@ class TestEntityHealthSensor:
         Issue #467: Entity health dicts can exceed 16KB limit.
         """
         sensor = _sensor(
-            EntityHealthSensor, entity_health={}, localshift_entity_health={}
+            EntityHealthSensor,
+            entity_health={},
+            localshift_entity_health={},
+            orphaned_localshift_entities={},
         )
 
         assert hasattr(sensor, "_unrecorded_attributes")
         assert "entities" in sensor._unrecorded_attributes
         assert "dependencies" in sensor._unrecorded_attributes
         assert "localshift_entities" in sensor._unrecorded_attributes
+        assert "orphaned_entities" in sensor._unrecorded_attributes
         assert "errors" in sensor._unrecorded_attributes
         assert "warnings" in sensor._unrecorded_attributes
+
+    def test_orphaned_entities_exposed_in_attributes(self):
+        """Orphaned registry entries are surfaced in orphaned_entities attribute."""
+        orphans = {
+            "number.localshift_cycle_penalty": {
+                "state": "unavailable",
+                "disabled": False,
+                "restored": True,
+            }
+        }
+        sensor = _sensor(
+            EntityHealthSensor,
+            entity_health={},
+            localshift_entity_health={},
+            orphaned_localshift_entities=orphans,
+            entity_errors=[],
+            entity_warnings=[
+                "1 orphaned localshift entity: number.localshift_cycle_penalty"
+            ],
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["orphaned_entities"] == orphans
+        assert attrs["summary"]["orphaned_count"] == 1
+
+    def test_no_orphans_yields_empty_orphaned_entities(self):
+        """When no orphans exist, orphaned_entities is empty and count is 0."""
+        sensor = _sensor(
+            EntityHealthSensor,
+            entity_health={"sensor.a": {"status": "ok"}},
+            localshift_entity_health={},
+            orphaned_localshift_entities={},
+            entity_errors=[],
+            entity_warnings=[],
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["orphaned_entities"] == {}
+        assert attrs["summary"]["orphaned_count"] == 0
 
 
 class TestForecastAccuracySensor:
