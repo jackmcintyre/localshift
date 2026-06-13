@@ -414,6 +414,9 @@ class CoordinatorData:
     localshift_entity_health: dict[str, Any] = field(
         default_factory=dict
     )  # Health status for LocalShift internal entities
+    orphaned_localshift_entities: dict[str, Any] = field(
+        default_factory=dict
+    )  # Owned registry entries absent from LOCALSHIFT_ENTITY_CONFIG (Issue #880)
 
     # --- Learning system (Issue #170 Phase 1) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)

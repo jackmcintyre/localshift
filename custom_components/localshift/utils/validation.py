@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -479,6 +480,35 @@ class EntityValidator:
         summary = self._serialize_localshift_health(results)
         self._localshift_entity_health = results
         return summary
+
+    def check_orphaned_owned_entities(
+        self, config_entry_id: str
+    ) -> dict[str, dict[str, Any]]:
+        """Return registry entries owned by this config entry that are not in LOCALSHIFT_ENTITY_CONFIG.
+
+        An "orphaned" entity is one that was previously created by the localshift
+        integration (config_entry_id matches) but no longer appears in
+        LOCALSHIFT_ENTITY_CONFIG — typically a number/switch/sensor that has been
+        removed or renamed in a newer version while the registry entry persists.
+
+        Args:
+            config_entry_id: The config entry id for this localshift instance.
+
+        Returns:
+            Dict mapping entity_id -> {state, disabled, restored} for each orphan.
+        """
+        registry = er.async_get(self.hass)
+        orphans: dict[str, dict[str, Any]] = {}
+        for entry in registry.entities.get_entries_for_config_entry_id(config_entry_id):
+            if entry.entity_id in LOCALSHIFT_ENTITY_CONFIG:
+                continue
+            state = self.hass.states.get(entry.entity_id)
+            orphans[entry.entity_id] = {
+                "state": state.state if state is not None else "unavailable",
+                "disabled": entry.disabled_by is not None,
+                "restored": state is None,
+            }
+        return orphans
 
     def _check_single_localshift_entity(
         self, entity_id: str, config: dict, now: datetime

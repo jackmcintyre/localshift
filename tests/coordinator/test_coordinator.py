@@ -999,6 +999,7 @@ class TestCoordinatorHealthAndValidation:
             "last_check": "2026-03-16T12:00:00",
         }
         mock_validator.check_all_localshift_entities.return_value = {}
+        mock_validator.check_orphaned_owned_entities.return_value = {}
 
         coordinator._entity_validator = mock_validator
 

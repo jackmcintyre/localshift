@@ -50,6 +50,7 @@ class EntityHealthSensor(LocalShiftSensorBase):
         "entities",
         "dependencies",
         "localshift_entities",
+        "orphaned_entities",
         "errors",
         "warnings",
     })
@@ -66,10 +67,12 @@ class EntityHealthSensor(LocalShiftSensorBase):
     def extra_state_attributes(self) -> dict[str, Any]:
         dep_health = self.coordinator.data.entity_health
         ls_health = self.coordinator.data.localshift_entity_health
+        orphans = self.coordinator.data.orphaned_localshift_entities
         return {
             "entities": dep_health,
             "dependencies": dep_health,
             "localshift_entities": ls_health,
+            "orphaned_entities": orphans,
             "errors": self.coordinator.data.entity_errors,
             "warnings": self.coordinator.data.entity_warnings,
             "summary": {
@@ -99,6 +102,7 @@ class EntityHealthSensor(LocalShiftSensorBase):
                         ),
                     },
                 },
+                "orphaned_count": len(orphans),
             },
         }
 
