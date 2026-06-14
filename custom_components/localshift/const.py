@@ -247,7 +247,7 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
-DEFAULT_TARGET_PENALTY = 0.015  # $/%-point demand window urgency
+DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0.015 -> 0.03 so the soft lever can at least exceed typical charge prices)
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
 )
@@ -347,7 +347,7 @@ THRESHOLD_RANGES = {
     },
     CONF_TARGET_PENALTY: {
         "min": 0.000,
-        "max": 0.100,
+        "max": 0.200,
         "step": 0.005,
         "unit": "$/%-point",
         "icon": "mdi:target",

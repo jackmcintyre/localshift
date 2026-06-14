@@ -186,7 +186,25 @@ def feasible_actions(
                     and soc_pct + config.max_normal_gain_pct_to_terminal[slot_idx]
                     < config.demand_window_target_soc_pct
                 )
-                if price_is_very_cheap or normal_cannot_reach_target:
+                # Hard DW-target feasibility gate (issue #885): while strictly below the
+                # hard floor in a pre-DW slot, unlock boost so the DP actually HAS a
+                # fast-enough path to clear the floor. Without this, normal-rate charging
+                # can arrive at the DW under target (the live "boost downshifted to grid"
+                # failure) and the terminal pruning would have no feasible action to route
+                # through. The ``slot_idx < terminal_penalty_idx`` guard (shared with the
+                # floor's own scope) confines this to pre-DW slots — a post-DW low SOC can
+                # never unlock overnight boost (#800 protection).
+                hard_floor_needs_boost = (
+                    config.hard_target_floor is not None
+                    and terminal_penalty_idx is not None
+                    and slot_idx < terminal_penalty_idx
+                    and soc_pct < config.hard_target_floor
+                )
+                if (
+                    price_is_very_cheap
+                    or normal_cannot_reach_target
+                    or hard_floor_needs_boost
+                ):
                     actions.append(PlannerAction.CHARGE_GRID_BOOST)
         else:
             actions.append(PlannerAction.CHARGE_GRID_NORMAL)
@@ -518,6 +536,91 @@ def compute_max_normal_gain_pct_to_terminal(
                 )
         gains[j] = cumulative
     return gains
+
+
+def compute_max_feasible_terminal_soc(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int | None,
+    initial_soc_pct: float,
+) -> float | None:
+    """Highest SOC the DW-entry slot can physically reach via eligible pre-DW charging.
+
+    Hard DW-target feasibility gate (issue #885). The soft shortfall penalty is
+    structurally capped below grid-charge prices, so the DP pays through it and the
+    battery enters the demand window under target with no backstop. To make target a
+    HARD constraint without forcing charging through ineligible (expensive) or
+    post-DW slots, the solver needs to know what SOC is actually *reachable* at the
+    DW-entry slot — the floor it can prune below.
+
+    This forward-simulates the most optimistic eligible trajectory to the DW entry:
+    every pre-DW, non-DW slot whose price is at/below its per-slot eligibility
+    threshold (``cheap_threshold_for_slot`` — the same #870 water-level / urgency-ramp
+    gate ``feasible_actions`` uses, so this NEVER admits a slot the DP could not itself
+    charge in) contributes a boost-rate charge; every other slot evolves on solar/load
+    only. The result is clamped to the charge ceiling (target in self-consumption mode).
+
+    The simulation is measured at the SOC ENTERING the DW-entry slot (before that slot's
+    own consumption drift) — matching how the DP applies the terminal penalty in
+    ``_backward_induction`` (to ``dp[terminal_penalty_idx][bin]``, keyed by the SOC at the
+    START of the entry slot). Measuring post-entry-decay instead would understate the
+    reachable floor by one slot's load and make a physically-reachable target look unmet.
+
+    Because charging is the most this trajectory ever does, the returned SOC is an upper
+    bound on what any feasible plan can reach at the DW entry. The solver uses
+    ``min(target, this)`` as the hard floor: when target is reachable the floor IS the
+    target; when it is physically unreachable (too little time/rate/eligible-cheap
+    energy) the floor degrades gracefully to the max feasible SOC, so the DP still
+    produces a non-empty plan that charges as far as it can rather than an infeasible one.
+
+    Returns ``None`` (gate inert) when there is no demand window, the mode is not
+    self-consumption, or the entry is slot 0 (nothing earlier to charge in).
+    """
+    if (
+        terminal_penalty_idx is None
+        or terminal_penalty_idx <= 0
+        or config.optimization_mode != "self_consumption"
+        or not slots
+        or terminal_penalty_idx >= len(slots)
+    ):
+        return None
+
+    charge_ceiling = config.demand_window_target_soc_pct
+    soc = initial_soc_pct
+    # Iterate only the pre-DW slots: the floor is the SOC ENTERING the DW-entry slot.
+    for i in range(terminal_penalty_idx):
+        slot = slots[i]
+        slot_hours = slot.slot_interval_minutes / 60.0
+        # Solar/load drift first (mirrors the solar-only simulation shape).
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        max_solar_transfer = config.solar_charge_rate_kw * slot_hours
+        if net_kwh >= 0:
+            soc += (
+                min(net_kwh, max_solar_transfer)
+                * config.charge_efficiency
+                / config.battery_capacity_kwh
+                * 100.0
+            )
+        else:
+            soc += (
+                max(net_kwh, -max_solar_transfer)
+                / config.discharge_efficiency
+                / config.battery_capacity_kwh
+                * 100.0
+            )
+        # Then the most optimistic eligible grid charge (boost) in this pre-DW slot.
+        if not slot.is_demand_window_slot and soc < charge_ceiling:
+            threshold = cheap_threshold_for_slot(config, i, terminal_penalty_idx)
+            if slot.buy_price <= threshold:
+                soc += (
+                    config.boost_charge_rate_kw
+                    * slot_hours
+                    * config.charge_efficiency
+                    / config.battery_capacity_kwh
+                    * 100.0
+                )
+        soc = max(config.min_soc_pct, min(charge_ceiling, soc))
+    return soc
 
 
 def check_global_solar_sufficiency(

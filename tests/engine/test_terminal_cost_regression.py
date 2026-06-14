@@ -328,12 +328,16 @@ class TestIssue816DiagnosticsAfterFix:
         assert result.success
 
         if result.dw_entry_soc_pct is not None:
-            # Find the DW entry decision (slot_index >= n_pre_dw_slots=6)
-            dw_entry_decisions = [d for d in result.decisions if d.slot_index >= 6]
-            if dw_entry_decisions:
-                actual_dw_soc = dw_entry_decisions[0].predicted_soc_pct
+            # dw_entry_soc_pct is the SOC ENTERING the demand window — the SOC at the START
+            # of the DW-entry slot (= the end-of-slot SOC of the slot just before it),
+            # which is what the DP applies the terminal penalty / #885 hard floor to.
+            # Compare against that trajectory point (slot index 5, the last pre-DW slot):
+            # a large gap there would indicate the diagnostic is fictitiously inflated.
+            pre_entry_decisions = [d for d in result.decisions if d.slot_index == 5]
+            if pre_entry_decisions:
+                actual_dw_soc = pre_entry_decisions[0].predicted_soc_pct
                 assert abs(result.dw_entry_soc_pct - actual_dw_soc) < 2.0, (
                     f"dw_entry_soc_pct={result.dw_entry_soc_pct:.2f}% must be close to "
-                    f"actual DW entry SOC={actual_dw_soc:.2f}% in decisions. "
+                    f"the SOC entering the DW={actual_dw_soc:.2f}% in decisions. "
                     f"Large gap indicates solar inflation is still present."
                 )

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from custom_components.localshift.engine.constraints import (
+    check_global_solar_sufficiency,
+    compute_max_feasible_terminal_soc,
     compute_max_normal_gain_pct_to_terminal,
     compute_pre_dw_charge_thresholds,
 )
@@ -453,6 +455,7 @@ class DPPlanner:
         # and its inert early-returns never write the water level.
         config.pre_dw_charge_thresholds = None
         config.pre_dw_funding_water_level = None
+        config.hard_target_floor = None
         config.pre_dw_charge_thresholds = compute_pre_dw_charge_thresholds(
             slots, config, terminal_penalty_idx, inputs.initial_soc_pct
         )
@@ -468,8 +471,28 @@ class DPPlanner:
             compute_max_normal_gain_pct_to_terminal(slots, config, terminal_penalty_idx)
         )
 
+        # Hard DW-target feasibility gate (issue #885). In strict mode
+        # (allow_dw_entry_under_target=False, self-consumption) the soft shortfall penalty
+        # is structurally capped below grid-charge prices, so the DP holds and enters the
+        # demand window under target. Compute the HARD floor the terminal-penalty slot
+        # must clear: min(target, max physically/eligibly reachable SOC). Below-floor
+        # terminal states are pruned (effectively infinite penalty) in
+        # _initialize_dp_tables, so backward induction routes through the CHEAPEST eligible
+        # pre-DW slots. The floor degrades to the max feasible SOC when target is
+        # unreachable (no infeasible/empty plan), is None when solar alone reaches target
+        # (don't fight #816/#849), and is None outside strict self-consumption (legacy).
+        config.hard_target_floor = self._compute_hard_target_floor(
+            slots, config, terminal_penalty_idx, inputs, solar_capable
+        )
+
         dp, terminal_penalty_by_bin = self._initialize_dp_tables(
-            n_slots, soc_grid, config, terminal_penalty_idx, solar_capable, inputs
+            n_slots,
+            soc_grid,
+            config,
+            terminal_penalty_idx,
+            solar_capable,
+            inputs,
+            config.hard_target_floor,
         )
 
         # Issue #719: Derive negative-FIT avoidance context before backward induction
@@ -702,6 +725,49 @@ class DPPlanner:
                 return i
         return terminal_penalty_idx
 
+    def _compute_hard_target_floor(
+        self,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        inputs: OptimizerInputs,
+        solar_capable: bool,
+    ) -> float | None:
+        """Hard SOC floor the DW-entry slot must clear (issue #885), or None when inert.
+
+        Returns ``min(target, max_feasible_terminal_soc)`` so the gate forces charging up
+        to — but never beyond — the target, routing the DP through the cheapest eligible
+        pre-DW slots. Returns ``None`` (gate dormant, legacy soft-penalty behaviour) when:
+
+        - ``allow_dw_entry_under_target`` is True (target may be met mid-DW via solar — the
+          penalty stays at the horizon boundary and pre-charge must not be forced), or
+        - the mode is not self-consumption / there is no demand window / the entry is slot
+          0 (``compute_max_feasible_terminal_soc`` returns None), or
+        - solar alone is projected to reach the target by the DW entry — either at the DW
+          entry slot (``check_global_solar_sufficiency`` from the current SOC) or anywhere
+          during the DW (``solar_capable``). Forcing grid charge then would fight the
+          stale-solar / over-optimistic-solar protections (#816/#849).
+
+        The floor is the SOC the battery must reach ENTERING the demand window (the SOC at
+        the START of ``terminal_penalty_idx``), matching where the DP applies the terminal
+        penalty (``dp[terminal_penalty_idx][bin]``) and how the shortfall is measured.
+        """
+        if config.allow_dw_entry_under_target:
+            return None
+        if solar_capable:
+            return None
+        # Solar alone reaches target by the DW entry: don't force grid charge (#816/#849).
+        if check_global_solar_sufficiency(
+            inputs.initial_soc_pct, 0, slots, config, terminal_penalty_idx
+        ):
+            return None
+        max_feasible = compute_max_feasible_terminal_soc(
+            slots, config, terminal_penalty_idx, inputs.initial_soc_pct
+        )
+        if max_feasible is None:
+            return None
+        return min(config.demand_window_target_soc_pct, max_feasible)
+
     def _initialize_dp_tables(
         self,
         n_slots: int,
@@ -710,6 +776,7 @@ class DPPlanner:
         terminal_penalty_idx: int | None,
         solar_can_reach_target: bool,
         inputs: OptimizerInputs,
+        hard_target_floor: float | None = None,
     ) -> tuple[
         list[dict[int, tuple[float, PlannerAction, int, float, float, float]]],
         dict[int, float],
@@ -824,7 +891,18 @@ class DPPlanner:
             for bin_idx, soc in enumerate(soc_grid):
                 effective_soc = soc + future_solar_gain_pct
 
-                if use_hard_constraint and effective_soc < target:
+                # Hard DW-target feasibility gate (issue #885). When a hard floor is set
+                # (strict mode, solar insufficient), DW-entry states below the floor are
+                # pruned with the effectively-infinite penalty so backward induction MUST
+                # route a charging path that clears it. The floor is min(target, max
+                # feasible), so an unreachable target degrades gracefully — every bin up to
+                # the max feasible SOC is admitted and the DP charges as far as it can.
+                # The penalty is monotonic in the gap, so among below-floor states the DP
+                # still prefers the highest reachable SOC (no infeasible/empty plan).
+                if hard_target_floor is not None and effective_soc < hard_target_floor:
+                    shortfall = hard_target_floor - effective_soc
+                    shortfall_penalty = shortfall * hard_constraint_penalty
+                elif use_hard_constraint and effective_soc < target:
                     shortfall = target - effective_soc
                     shortfall_penalty = shortfall * hard_constraint_penalty
                 else:
@@ -879,8 +957,14 @@ class DPPlanner:
 
         dw_entry_soc = None
 
-        if terminal_penalty_idx is not None and decisions:
-            dw_entry_soc = decisions[terminal_penalty_idx].predicted_soc_pct
+        if (
+            terminal_penalty_idx is not None
+            and decisions
+            and terminal_penalty_idx < len(decisions)
+        ):
+            # SOC entering the window (start of the entry slot) — consistent with the
+            # terminal penalty / #885 hard floor and with _compute_terminal_shortfall.
+            dw_entry_soc = self._dw_entry_soc(decisions, terminal_penalty_idx)
 
         return {
             "accuracy_discount_factor": round(accuracy_discount, 2),
@@ -1246,11 +1330,33 @@ class DPPlanner:
             return max(0.0, target - max_soc_in_dw)
 
         if terminal_penalty_idx < len(decisions):
-            terminal_soc = decisions[terminal_penalty_idx].predicted_soc_pct
+            terminal_soc = self._dw_entry_soc(decisions, terminal_penalty_idx)
 
             return max(0.0, target - terminal_soc)
 
         return 0.0
+
+    @staticmethod
+    def _dw_entry_soc(
+        decisions: list[PlannedSlotDecision], terminal_penalty_idx: int
+    ) -> float:
+        """SOC entering the demand window — the SOC at the START of the DW-entry slot.
+
+        The DP applies the target/shortfall penalty and the #885 hard floor to
+        ``dp[terminal_penalty_idx][bin]``, which is keyed by the SOC at the START of the
+        entry slot (= the end-of-slot SOC of ``terminal_penalty_idx - 1``), NOT the SOC
+        after the entry slot's own consumption has drained it. Measuring the shortfall at
+        that same point keeps the reported ``terminal_shortfall_pct`` / ``dw_entry_soc_pct``
+        consistent with what the optimizer actually controls; measuring post-decay instead
+        booked a phantom ~1 slot of load as an unavoidable shortfall even when the battery
+        entered the window exactly at target (issue #885).
+
+        Falls back to the entry slot's own predicted SOC when the entry is slot 0 (nothing
+        precedes it — the in-progress-DW edge handled by ``_find_demand_window_bounds``).
+        """
+        if terminal_penalty_idx <= 0:
+            return decisions[terminal_penalty_idx].predicted_soc_pct
+        return decisions[terminal_penalty_idx - 1].predicted_soc_pct
 
     # ------------------------------------------------------------------
 
