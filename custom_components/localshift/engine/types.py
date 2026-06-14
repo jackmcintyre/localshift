@@ -276,6 +276,26 @@ class OptimizerConfig:
     ``base_cheap_price`` — the #800 overnight-sawtooth protection is untouched).
     None ⇒ legacy behaviour."""
 
+    hard_target_floor: float | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): the hard DW-target feasibility floor
+    (issue #885) — ``min(target, max feasible/eligible SOC at DW entry)``.
+
+    When set (strict mode: ``allow_dw_entry_under_target=False``, self-consumption, a
+    demand window exists, and solar alone does not reach target), two things happen:
+
+    - ``_initialize_dp_tables`` prunes DW-entry states below this floor with an effectively
+      infinite penalty, so backward induction MUST route a charging path that clears it
+      (through the cheapest eligible pre-DW slots), rather than paying through the soft
+      shortfall penalty and holding under target, and
+    - ``feasible_actions`` unlocks boost charging in eligible pre-DW slots while
+      ``soc_pct < hard_target_floor``, so the DP actually HAS a fast-enough path to the
+      floor when normal-rate charging would arrive at the DW under target (the live
+      "boost downshifted to grid" failure).
+
+    Strictly bounded to pre-DW slots (``slot_idx < terminal_penalty_idx``); never forces
+    charging inside/after the DW or overnight (guards the #800 sawtooth). None ⇒ gate
+    dormant (legacy soft-penalty behaviour) for unit tests and direct callers."""
+
     pre_dw_funding_water_level: float | None = None
     """Solver-derived (set by ``DPPlanner._solve`` via ``compute_pre_dw_charge_thresholds``):
     the raw target-funding water level — the marginal buy price of the cheapest set of

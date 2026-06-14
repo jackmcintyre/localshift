@@ -209,8 +209,8 @@ class TestBuildOptimizerConfig:
     ):
         """target_shortfall_penalty_per_pct defaults when not in options."""
         config = _build_optimizer_config(mock_coordinator_data, {})
-        # Default is 0.015 (DEFAULT_TARGET_PENALTY)
-        assert config.target_shortfall_penalty_per_pct == 0.015
+        # Default is 0.03 (DEFAULT_TARGET_PENALTY; #885 raised 0.015 -> 0.03)
+        assert config.target_shortfall_penalty_per_pct == 0.03
 
     def test_config_uses_default_allow_dw_entry_under_target(
         self, mock_coordinator_data
