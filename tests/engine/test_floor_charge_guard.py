@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.types import (
+    ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
@@ -29,6 +30,24 @@ from custom_components.localshift.engine.types import (
 )
 
 _CHARGE = (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+
+
+def _restore_406_double_credit(monkeypatch):
+    """Re-inject the #406 self-consumption double-credit removed from net_cost.
+
+    The marginal overnight floor charge these tests A/B was driven by the #406 distortion
+    (discharge-to-load credited at retail on TOP of the avoided import already in
+    import_cost). With that credit removed at source (2026-06-29), the charge no longer
+    appears in scenarios that relied on it, so the "guard is dormant above the buffer"
+    property needs the credit re-injected to have a charge to observe at all. The source
+    fix is covered by tests/engine/test_sawtooth_406_double_credit.py.
+    """
+    orig = ObjectiveTerms.net_cost.fget
+    monkeypatch.setattr(
+        ObjectiveTerms,
+        "net_cost",
+        property(lambda self: orig(self) - self.self_consumption_value),
+    )
 _INTERVAL = 5  # 5-min slots: a normal grid charge gains <2% SOC per slot at the floor
 _START = datetime(2026, 6, 8, 1, 0)  # 1am — deep overnight, far from any demand window
 
@@ -117,8 +136,13 @@ class TestFloorChargeGuard:
             f"charges at {[c.timestamp_iso for c in charges]}"
         )
 
-    def test_guard_dormant_above_floor_buffer(self):
-        """Starting above the buffer, charging is unaffected — the guard only acts at the floor."""
+    def test_guard_dormant_above_floor_buffer(self, monkeypatch):
+        """Starting above the buffer, charging is unaffected — the guard only acts at the floor.
+
+        Needs the #406 double-credit (the charge's driver in this scenario) present to have
+        a charge to observe — see ``_restore_406_double_credit``.
+        """
+        _restore_406_double_credit(monkeypatch)
         guarded = [d for d in _plan(2.0, soc0=15.0).decisions if d.action in _CHARGE]
         unguarded = [d for d in _plan(0.0, soc0=15.0).decisions if d.action in _CHARGE]
         assert guarded and unguarded, (

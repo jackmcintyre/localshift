@@ -400,7 +400,20 @@ class ObjectiveTerms:
     """Terminal penalty applied at demand window boundary (only for terminal slots)."""
 
     self_consumption_value: float = 0.0
-    """Value of battery energy used for household load (benefit, subtracted from cost)."""
+    """Diagnostic only: value of battery energy used for household load, at retail
+    (``battery_for_load * buy_price``). NOT subtracted from ``net_cost``.
+
+    Issue #406 / #800 overnight sawtooth (root-caused 2026-06-29): subtracting this
+    DOUBLE-COUNTED the self-consumption benefit. When the battery serves load,
+    ``_transition_hold_deficit`` already reduces ``grid_import_kwh`` by the battery's
+    contribution (``transitions.py``: ``grid_import = max(0, load_deficit - battery_to_load)``),
+    so the avoided import is already reflected in a lower ``import_cost``. Crediting it
+    again here valued stored energy at ~2x retail, which made thin overnight
+    charge-and-drain cycling look profitable (~5c/kWh apparent profit on a ~2c/kWh
+    round-trip loss) and is why every soft anti-cycling penalty got "paid through".
+    A deterministic replay of the 2026-06-29 live plan confirmed removing this credit
+    eliminates the overnight sawtooth (11.3 -> 0.0 kWh) while the demand-window
+    pre-charge and target are preserved. Kept as a serialized field for diagnostics."""
 
     switching_penalty: float = 0.0
     """Penalty applied if the action involves a mode switch."""
@@ -417,11 +430,16 @@ class ObjectiveTerms:
 
     @property
     def net_cost(self) -> float:
-        """Net slot cost = import - revenue - self_consumption_value + penalties."""
+        """Net slot cost = import - revenue + penalties.
+
+        ``self_consumption_value`` is deliberately NOT subtracted: the avoided import
+        is already captured by a reduced ``import_cost`` (see the field docstring and
+        ``transitions._transition_hold_deficit``). Subtracting it double-counted the
+        benefit and drove the #406 / #800 overnight sawtooth.
+        """
         return (
             self.import_cost
             - self.export_revenue
-            - self.self_consumption_value
             + self.shortfall_penalty
             + self.uncertainty_penalty
             + self.switching_penalty
