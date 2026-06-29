@@ -29,6 +29,7 @@ from custom_components.localshift.engine.constraints import (
 )
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.types import (
+    ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
@@ -36,6 +37,24 @@ from custom_components.localshift.engine.types import (
 )
 
 INTERVAL = 30
+
+
+def _restore_406_double_credit(monkeypatch):
+    """Re-inject the #406 self-consumption double-credit removed from net_cost.
+
+    The post-DW overnight sawtooth this base-gating guard blocks was driven by the #406
+    distortion (discharge-to-load credited at retail on TOP of the avoided import already
+    in import_cost). That credit was removed at source on 2026-06-29, so the sawtooth no
+    longer appears even unguarded. These tests re-inject it to exercise the base-gating
+    guard against the distortion it defends against; the source fix is covered by
+    tests/engine/test_sawtooth_406_double_credit.py.
+    """
+    orig = ObjectiveTerms.net_cost.fget
+    monkeypatch.setattr(
+        ObjectiveTerms,
+        "net_cost",
+        property(lambda self: orig(self) - self.self_consumption_value),
+    )
 _START = datetime(2026, 6, 3, 12, 0)  # day-1 noon
 
 # Price bands ($/kWh)
@@ -143,12 +162,14 @@ def _post_dw_overnight_charges(result):
 class TestSawtoothGate:
     """End-to-end DP behaviour for the overnight sawtooth."""
 
-    def test_inflated_threshold_reproduces_sawtooth_when_unguarded(self):
+    def test_inflated_threshold_reproduces_sawtooth_when_unguarded(self, monkeypatch):
         """Without base gating (base_cheap_price=None) the inflated threshold leaks.
 
         Documents the bug: post-DW overnight slots (price > base, <= inflated) get
-        charged then drained — the sawtooth.
+        charged then drained — the sawtooth. Requires the #406 double-credit (its driver)
+        to be present — see ``_restore_406_double_credit``.
         """
+        _restore_406_double_credit(monkeypatch)
         result = _plan(base_cheap_price=None)
         charges = _post_dw_overnight_charges(result)
         assert charges, (
@@ -158,8 +179,13 @@ class TestSawtoothGate:
         # All such charges are classed CHEAP_IMPORT_WINDOW, matching the field report.
         assert any(c.reason_code.value == "CHEAP_IMPORT_WINDOW" for c in charges)
 
-    def test_base_gating_eliminates_sawtooth(self):
-        """With base gating, no post-DW overnight charge above the real base occurs."""
+    def test_base_gating_eliminates_sawtooth(self, monkeypatch):
+        """With base gating, no post-DW overnight charge above the real base occurs.
+
+        Exercised with the #406 double-credit present (so the sawtooth would otherwise
+        appear), proving the base-gating guard blocks it — not merely the source fix.
+        """
+        _restore_406_double_credit(monkeypatch)
         result = _plan(base_cheap_price=_BASE_CHEAP)
         charges = _post_dw_overnight_charges(result)
         assert charges == [], (

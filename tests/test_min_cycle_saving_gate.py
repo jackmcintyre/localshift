@@ -21,11 +21,30 @@ from custom_components.localshift.engine.optimizer_dp import (
     PlannerAction,
     SlotContext,
 )
+from custom_components.localshift.engine.types import ObjectiveTerms
 
 CHARGE_ACTIONS = {
     PlannerAction.CHARGE_GRID_NORMAL,
     PlannerAction.CHARGE_GRID_BOOST,
 }
+
+
+def _restore_406_double_credit(monkeypatch):
+    """Re-inject the #406 self-consumption double-credit removed from net_cost.
+
+    The micro-overnight arbitrage this gate was built to block was driven by the #406
+    distortion (discharge-to-load credited at retail on TOP of the avoided import, which
+    is already in import_cost). That credit was removed at source on 2026-06-29, so the
+    micro-arbitrage no longer appears at all (even with the gate disabled). These gate
+    tests re-inject it so the gate itself is exercised against the distortion it defends
+    against; the source fix is covered by tests/engine/test_sawtooth_406_double_credit.py.
+    """
+    orig = ObjectiveTerms.net_cost.fget
+    monkeypatch.setattr(
+        ObjectiveTerms,
+        "net_cost",
+        property(lambda self: orig(self) - self.self_consumption_value),
+    )
 
 PROD_DEFAULT = 0.25  # production DEFAULT_MIN_CYCLE_SAVING
 
@@ -138,16 +157,26 @@ def _plan_live(min_saving, rows=None):
     return DPPlanner().plan(inputs)
 
 
-def test_gate_disabled_reproduces_micro_arbitrage():
-    """min_cycle_saving=0 (disabled) -> the live overnight charge happens."""
+def test_gate_disabled_reproduces_micro_arbitrage(monkeypatch):
+    """min_cycle_saving=0 (disabled) -> the live overnight charge happens.
+
+    Requires the #406 double-credit (its driver) to be present — see
+    ``_restore_406_double_credit``.
+    """
+    _restore_406_double_credit(monkeypatch)
     charges = _charge_slots(_plan_live(0.0))
     assert 23 in charges and 24 in charges, (
         f"baseline should reproduce the live 01:00/01:30 charge, got {charges}"
     )
 
 
-def test_gate_blocks_micro_overnight_arbitrage():
-    """At 25c, tonight's ~1c/kWh arbitrage isn't worth a cycle -> removed entirely."""
+def test_gate_blocks_micro_overnight_arbitrage(monkeypatch):
+    """At 25c, tonight's ~1c/kWh arbitrage isn't worth a cycle -> removed entirely.
+
+    Exercised with the #406 double-credit present (so a charge would otherwise appear),
+    proving the gate itself blocks it — not merely the source fix.
+    """
+    _restore_406_double_credit(monkeypatch)
     charges = _charge_slots(_plan_live(PROD_DEFAULT))
     assert charges == [], (
         f"min-cycle-saving gate should block the micro arbitrage, got {charges}"
