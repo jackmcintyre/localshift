@@ -215,6 +215,11 @@ class CoordinatorData:
     solar_can_reach_target_in_dw: bool = False
     boost_charge_needed: bool = False
     demand_window_active: bool = False
+    # Loud guardrail for the silent pre-charge miss (2026-06-30): set True when a
+    # demand window is active but the real SOC is far below target, i.e. pre-charge
+    # appears to have been missed. A diagnostics sensor / coordinator notification
+    # can surface this so the failure is never silent again.
+    optimizer_soc_underprepared: bool = False
 
     # Battery preservation (Issue #350)
     preserve_soc: float | None = None  # SOC to preserve when charging needed

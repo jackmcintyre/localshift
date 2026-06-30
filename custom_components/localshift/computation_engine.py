@@ -389,6 +389,41 @@ class ComputationEngine:
         else:
             data.forecast_profile_selected = data.consumption_profile_type
 
+    def _refresh_soc_for_optimizer(self, data: CoordinatorData) -> None:
+        """Overwrite data.soc with a fresh live read just before the DP optimizer.
+
+        Guards against planning from a stale cached SOC. Logs the divergence when
+        the fresh read differs from the cached value by >=1 point so the
+        stale-SOC hypothesis is observable in the log.
+        """
+        fresh_soc = self._read_fresh_soc()
+        if fresh_soc is None:
+            return
+        if abs(fresh_soc - data.soc) >= 1.0:
+            _LOGGER.info(
+                "Optimizer SOC refresh: cached=%.1f%% -> fresh=%.1f%% (delta %.1f)",
+                data.soc,
+                fresh_soc,
+                fresh_soc - data.soc,
+            )
+        data.soc = fresh_soc
+
+    def _read_fresh_soc(self) -> float | None:
+        """Read the latest SOC directly from the HA state machine (cache bypass).
+
+        Mirrors BatteryController.read_fresh_soc (integration/controller.py:86).
+        """
+        from .const import CONF_TESLEMETRY_SOC
+
+        try:
+            soc_entity_id = self._get_entity_id(CONF_TESLEMETRY_SOC)
+            state = self.hass.states.get(soc_entity_id)
+            if state and state.state not in (None, "unknown", "unavailable"):
+                return float(state.state)
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return None
+
     def _read_boost_from_plan(self, data: CoordinatorData) -> None:
         """---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
 
@@ -536,6 +571,12 @@ class ComputationEngine:
         # ---- Step DP: Inline DP optimizer (Phase 4, #441) ----
         # Runs before effective_cheap_price final update so solar_can_reach_target
         # is populated from DP result (not legacy solar-only simulation).
+        # Refresh SOC from the live state immediately before planning. The
+        # optimizer must not plan from a stale cached SOC: on 2026-06-30 the
+        # planner used a high SOC while the pack had drained to ~10%, scheduled
+        # no pre-charge, and the battery entered the demand window empty. Mirrors
+        # the controller's read_fresh_soc() (integration/controller.py:86, #559).
+        self._refresh_soc_for_optimizer(data)
         config_options = self._build_optimizer_config_options()
         self._optimizer_facade.run_inline(
             data=data, now_dt=ctx.now_dt, config_options=config_options

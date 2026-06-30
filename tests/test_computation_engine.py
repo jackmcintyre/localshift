@@ -982,3 +982,46 @@ def test_cheap_charge_stop_price_uses_final_effective_threshold(
 
 
 # =============================================================================
+
+
+# =============================================================================
+# Fresh-SOC refresh before the optimizer (2026-06-30 silent pre-charge miss)
+# =============================================================================
+
+
+def test_refresh_soc_for_optimizer_uses_fresh_read(
+    computation_engine, coordinator_data
+):
+    """The optimizer must plan from a fresh live SOC, not a stale cached value.
+
+    Regression for the 2026-06-30 incident: a high cached SOC while the pack had
+    drained to ~10% caused the planner to skip pre-charge.
+    """
+    from types import SimpleNamespace
+
+    from custom_components.localshift.const import CONF_TESLEMETRY_SOC
+
+    coordinator_data.soc = 95.0  # stale, cached high
+    soc_entity = computation_engine._get_entity_id(CONF_TESLEMETRY_SOC)
+    computation_engine.hass.states = {soc_entity: SimpleNamespace(state="10.0")}
+
+    computation_engine._refresh_soc_for_optimizer(coordinator_data)
+
+    assert coordinator_data.soc == 10.0
+
+
+def test_refresh_soc_keeps_cached_when_unavailable(
+    computation_engine, coordinator_data
+):
+    """An unavailable SOC entity must not clobber the cached value with garbage."""
+    from types import SimpleNamespace
+
+    from custom_components.localshift.const import CONF_TESLEMETRY_SOC
+
+    coordinator_data.soc = 42.0
+    soc_entity = computation_engine._get_entity_id(CONF_TESLEMETRY_SOC)
+    computation_engine.hass.states = {soc_entity: SimpleNamespace(state="unavailable")}
+
+    computation_engine._refresh_soc_for_optimizer(coordinator_data)
+
+    assert coordinator_data.soc == 42.0

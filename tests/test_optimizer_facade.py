@@ -113,6 +113,96 @@ def test_facade_wires_solar_can_reach_target_in_dw_correctly():
     )
 
 
+def _summary_mock_result() -> MagicMock:
+    """A planner result with the numeric fields _build_summary/_log need."""
+    result = MagicMock()
+    result.success = True
+    result.decisions = []
+    result.planner_version = "test"
+    result.total_slots = 0
+    result.solve_time_seconds = 0.0
+    result.projected_net_cost = 0.0
+    result.projected_import_kwh = 0.0
+    result.projected_export_kwh = 0.0
+    result.terminal_shortfall_pct = 0.0
+    result.reason_code_histogram = {}
+    result.error_message = None
+    result.forecast_accuracy = 1.0
+    result.accuracy_discount_factor = 1.0
+    result.peak_soc_pct = 95.0
+    result.dw_entry_soc_pct = 95.0
+    result.can_solar_reach_target = True
+    result.can_solar_reach_target_in_dw = True
+    return result
+
+
+def _run_inline_with(result: MagicMock, data: CoordinatorData, config_options: dict):
+    metadata = MagicMock()
+    metadata.horizon_hours = 24
+    metadata.to_parity_dict.return_value = {}
+
+    class _StubSlotBuilderWithSlots:
+        def __init__(self, **_kwargs):
+            pass
+
+        def build_slots(self, _data, _adaptive_params, now_dt=None):
+            return [MagicMock()], metadata
+
+    with patch(
+        "custom_components.localshift.engine.optimizer_facade.DPPlanner"
+    ) as MockPlanner:
+        MockPlanner.return_value.plan.return_value = result
+        facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilderWithSlots)
+        facade.run_inline(
+            data=data,
+            now_dt=datetime(2026, 1, 3, 10, 0, tzinfo=UTC),
+            config_options=config_options,
+        )
+
+
+def test_run_inline_populates_initial_soc_pct():
+    """Regression: the live path dropped initial_soc_pct (read null next to a set
+    dw_entry_soc_pct). The facade must thread soc_info into the summary."""
+    data = CoordinatorData()
+    data.soc = 50.0
+    _run_inline_with(
+        _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+    )
+
+    assert data.optimizer_summary["initial_soc_pct"] == 50.0, (
+        "initial_soc_pct must be populated from the normalized SOC, not null"
+    )
+
+
+def test_run_inline_trips_soc_underprepared_guardrail(caplog):
+    """A live demand window with the pack far below target must trip the loud
+    guardrail flag (the 2026-06-30 silent-failure mode)."""
+    import logging
+
+    data = CoordinatorData()
+    data.soc = 10.0
+    data.demand_window_active = True
+    with caplog.at_level(logging.WARNING):
+        _run_inline_with(
+            _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+        )
+
+    assert data.optimizer_soc_underprepared is True
+    assert "SOC UNDERPREPARED" in caplog.text
+
+
+def test_run_inline_no_underprepared_when_charged():
+    """Healthy SOC in the demand window must NOT trip the guardrail."""
+    data = CoordinatorData()
+    data.soc = 96.0
+    data.demand_window_active = True
+    _run_inline_with(
+        _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+    )
+
+    assert data.optimizer_soc_underprepared is False
+
+
 def test_apply_bias_correction_to_slots_uses_tracker_combined_correction():
     tracker = MagicMock()
     tracker.apply_bias_correction.side_effect = [0.5, 0.0]

@@ -232,8 +232,10 @@ class OptimizerFacade:
             )
             result = self._planner.plan(inputs)
 
+            self._log_precharge_decision(data, result, initial_soc, optimizer_config)
+
             self._write_optimizer_fields(
-                data, result, slot_metadata, config_options, cycle_id
+                data, result, slot_metadata, config_options, cycle_id, soc_info
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
@@ -254,6 +256,7 @@ class OptimizerFacade:
         slot_metadata: Any,
         config_options: dict[str, Any],
         cycle_id: str,
+        initial_soc_info: dict[str, Any] | None = None,
     ) -> None:
         """Write optimizer results to coordinator data fields.
 
@@ -263,6 +266,10 @@ class OptimizerFacade:
             slot_metadata: Metadata about the time slots.
             config_options: Configuration options dictionary.
             cycle_id: Unique identifier for this optimization cycle.
+            initial_soc_info: SOC-normalization diagnostics from
+                ``_normalize_initial_soc``. Threaded through so the summary's
+                ``initial_soc_pct`` is populated on the live path (previously
+                dropped — it read null while ``dw_entry_soc_pct`` was set).
 
         """
         data.optimizer_result = _serialize_result(result)
@@ -273,6 +280,7 @@ class OptimizerFacade:
             cycle_timestamp_iso=dt_util.utcnow().isoformat(),
             parity_info=slot_metadata.to_parity_dict(),
             config_options=config_options,
+            initial_soc_info=initial_soc_info,
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours
@@ -282,6 +290,79 @@ class OptimizerFacade:
         data.solar_can_reach_target_in_dw = (
             result.can_solar_reach_target_in_dw if allow_dw_under_target else False
         )
+
+    def _log_precharge_decision(
+        self,
+        data: CoordinatorData,
+        result: Any,
+        initial_soc: float,
+        optimizer_config: Any,
+    ) -> None:
+        """Emit one diagnostic line per cycle describing the pre-charge decision.
+
+        Restores observability after the 2026-06-30 silent miss (battery entered
+        the demand window at ~10% while the summary reported a healthy DW-entry
+        SOC). Logs the SOC the planner actually used, the target, the planned
+        DW-entry/peak SOC, and whether/when a grid charge is scheduled — so a
+        future miss is diagnosable from the log alone. Never raises.
+        """
+        try:
+            decisions = getattr(result, "decisions", None) or []
+            charge_decisions = [
+                d for d in decisions if getattr(d, "grid_charge", False)
+            ]
+            first_charge = charge_decisions[0] if charge_decisions else None
+            target_soc = getattr(
+                optimizer_config, "demand_window_target_soc_pct", None
+            )
+            dw_entry = getattr(result, "dw_entry_soc_pct", None)
+            shortfall = getattr(result, "terminal_shortfall_pct", None)
+            peak = getattr(result, "peak_soc_pct", None)
+            _LOGGER.info(
+                "Pre-charge decision: initial_soc=%.1f%% target=%s dw_entry_soc=%s "
+                "peak_soc=%s shortfall=%s dw_active=%s charge_slots=%d "
+                "first_charge=%s",
+                initial_soc,
+                f"{target_soc:.0f}%" if target_soc is not None else "n/a",
+                f"{dw_entry:.1f}%" if dw_entry is not None else "n/a",
+                f"{peak:.1f}%" if peak is not None else "n/a",
+                f"{shortfall:.1f}%" if shortfall is not None else "n/a",
+                getattr(data, "demand_window_active", False),
+                len(charge_decisions),
+                getattr(first_charge, "timestamp_iso", None),
+            )
+            self._warn_soc_divergence(data, initial_soc, dw_entry, target_soc)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Pre-charge decision log failed (non-fatal): %s", exc)
+
+    def _warn_soc_divergence(
+        self,
+        data: CoordinatorData,
+        initial_soc: float,
+        dw_entry: float | None,
+        target_soc: float | None,
+    ) -> None:
+        """Loudly flag the silent-failure mode and set a coordinator flag.
+
+        Trips when a demand window is active but the real SOC is far below target
+        — i.e. pre-charge appears to have been missed. Sets
+        ``data.optimizer_soc_underprepared`` (a sensor / coordinator notification
+        can surface it) and emits a WARNING so the failure is never silent again.
+        """
+        threshold = target_soc if target_soc is not None else 95.0
+        in_dw = getattr(data, "demand_window_active", False)
+        # Materially short = more than 20 points below target while the DW is live.
+        underprepared = bool(in_dw and initial_soc < (threshold - 20.0))
+        data.optimizer_soc_underprepared = underprepared
+        if underprepared:
+            _LOGGER.warning(
+                "SOC UNDERPREPARED: demand window active but battery at %.1f%% "
+                "(target %.0f%%, planned DW-entry %s). Pre-charge appears to have "
+                "been missed — verify the optimizer scheduled a charge.",
+                initial_soc,
+                threshold,
+                f"{dw_entry:.1f}%" if dw_entry is not None else "n/a",
+            )
 
     def _assign_active_mode(
         self,
