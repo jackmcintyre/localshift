@@ -312,9 +312,7 @@ class OptimizerFacade:
                 d for d in decisions if getattr(d, "grid_charge", False)
             ]
             first_charge = charge_decisions[0] if charge_decisions else None
-            target_soc = getattr(
-                optimizer_config, "demand_window_target_soc_pct", None
-            )
+            target_soc = getattr(optimizer_config, "demand_window_target_soc_pct", None)
             dw_entry = getattr(result, "dw_entry_soc_pct", None)
             shortfall = getattr(result, "terminal_shortfall_pct", None)
             peak = getattr(result, "peak_soc_pct", None)
