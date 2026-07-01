@@ -13,7 +13,7 @@ by simulating real HA behavior rather than using oversimplified mocks.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 
@@ -542,9 +542,11 @@ def create_sample_solcast_forecast(
         else:
             pv_estimate = 0.0
 
-        period_start = base_date.replace(hour=hour % 24)
-        if hour >= 24:
-            period_start = period_start.replace(day=period_start.day + 1)
+        # Roll the date forward with timedelta so this stays valid on the last
+        # day of a month (replace(day=day+1) overflowed on the 30th/31st).
+        period_start = base_date.replace(hour=hour % 24) + timedelta(
+            days=hour // 24
+        )
 
         forecasts.append({
             "period_start": period_start.isoformat(),

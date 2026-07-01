@@ -1,6 +1,6 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
