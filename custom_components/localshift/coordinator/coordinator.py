@@ -263,7 +263,11 @@ class LocalShiftCoordinator:
             self.hass, self.entry, self._entity_validator, _pricing_provider
         )
         self._cost_tracker = CostTracker(self.hass)
-        self._battery_controller = BatteryController(self.hass, self.get_entity_id)
+        # Pass get_option so the controller reads minimum_target_soc correctly
+        # (it's a config_entry OPTION, not a data entity — Issue #894).
+        self._battery_controller = BatteryController(
+            self.hass, self.get_entity_id, get_option_func=self.get_option
+        )
         self._notification_service = NotificationService(
             self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )
