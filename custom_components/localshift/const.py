@@ -104,6 +104,9 @@ CONF_TESLEMETRY_SOLAR_POWER = "teslemetry_solar_power"
 CONF_TESLEMETRY_LOAD_POWER = "teslemetry_load_power"
 CONF_TESLEMETRY_ALLOW_EXPORT = "teslemetry_allow_export"
 CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID = "teslemetry_allow_charging_from_grid"
+# Corroboration signals for Tesla override detection (Storm Watch / Grid Event / VPP)
+CONF_TESLEMETRY_GRID_SERVICES = "teslemetry_grid_services"
+CONF_TESLEMETRY_STORM_WATCH = "teslemetry_storm_watch"
 
 CONF_TESLEMETRY_SOLAR_ENERGY = "teslemetry_solar_energy"
 
@@ -169,6 +172,8 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_LOAD_POWER: "sensor.my_home_load_power",
     CONF_TESLEMETRY_ALLOW_EXPORT: "select.my_home_allow_export",
     CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID: "switch.my_home_allow_charging_from_grid",
+    CONF_TESLEMETRY_GRID_SERVICES: "binary_sensor.my_home_grid_services_enabled",
+    CONF_TESLEMETRY_STORM_WATCH: "binary_sensor.my_home_storm_watch_active",
     CONF_TESLEMETRY_SOLAR_ENERGY: "sensor.my_home_solar_energy",
     CONF_PRICING_GENERAL_PRICE: "",  # Empty - discovered during config flow
     CONF_PRICING_FEED_IN_PRICE: "",  # Empty - discovered during config flow
@@ -573,6 +578,14 @@ STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
 # Coalesce entity state changes before running expensive reevaluation.
 STATE_CHANGE_COALESCE_SECONDS = 15
 
+# Post-acceptance reserve settle-verify (Tesla-override freeze fix).
+# After a transition is accepted, Tesla can silently revert a backup-reserve
+# write a few seconds later (the write races the still-settling op-mode change).
+# Re-read the reserve after this delay and, if it reverted, re-issue the write
+# once and poll for it to stick before declaring the transition successful.
+VALIDATION_RESERVE_SETTLE_SECONDS = 10
+VALIDATION_RESERVE_RETRY_TIMEOUT_SECONDS = 10
+
 # -----------------------------------------------------------------------------
 # Proactive Export Constants
 # -----------------------------------------------------------------------------
@@ -608,3 +621,19 @@ NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
 # external API commands until the event ends.
 TESLA_OVERRIDE_RESERVE_PERCENT = 80.0
 TESLA_OVERRIDE_TOLERANCE_PERCENT = 1.0
+
+# The reserve≈80 + self_consumption signature is also reachable by LocalShift's
+# own daily force-charge clamp (Tesla firmware resets 81-99 -> 80). When Tesla's
+# grid-services / storm-watch signals are unavailable, suppress override
+# detection if LocalShift itself commanded a matching state within this window.
+TESLA_OVERRIDE_SELF_COMMAND_GRACE_MINUTES = 15
+
+# While yielding to an *uncorroborated* override (signature present but grid
+# services / storm watch unknown), re-issue the commanded mode on this cadence
+# to test whether control has returned. Bounds a false-positive yield instead
+# of yielding indefinitely.
+TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES = 30
+
+# After Tesla releases control (signature clears on its own), wait this long
+# before resuming health-check corrections so a genuinely-ending event settles.
+TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES = 30

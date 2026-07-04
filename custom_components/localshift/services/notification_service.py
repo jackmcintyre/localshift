@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from ..const import (
@@ -472,6 +473,66 @@ class NotificationService:
         )
 
         await self.send_notification(title, message)
+
+    async def send_tesla_override_notification(
+        self,
+        data: CoordinatorData,
+        detected: bool,
+        corroborated: bool,
+        duration: timedelta | None = None,
+        release_reason: str | None = None,
+    ) -> None:
+        """Notify when Tesla takes or releases control of the Powerwall.
+
+        Args:
+            data: Current coordinator data
+            detected: True on first detection, False on release
+            corroborated: Whether a Tesla signal (grid services / storm watch)
+                confirmed the event; when False, detection/yield was heuristic
+            duration: How long the override lasted (release only)
+            release_reason: Why the override ended (release only)
+
+        """
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping Tesla override")
+            return
+
+        dry_run_prefix = self._get_dry_run_prefix()
+
+        if detected:
+            corroboration = (
+                "Confirmed by Tesla grid services / storm watch."
+                if corroborated
+                else "Tesla signals unavailable — detected heuristically; "
+                "will re-probe every 30 min."
+            )
+            title = f"{dry_run_prefix}{NOTIFICATION_PREFIX}Tesla Override Detected"
+            message = (
+                f"Tesla has taken control of the Powerwall "
+                f"(op={data.operation_mode}, reserve={data.backup_reserve:.0f}%). "
+                f"{corroboration} Yielding control. Battery at {data.soc:.0f}%."
+            )
+        else:
+            duration_str = self._format_duration(duration)
+            reason = f" ({release_reason})" if release_reason else ""
+            title = f"{dry_run_prefix}{NOTIFICATION_PREFIX}Tesla Override Released"
+            message = (
+                f"Tesla override ended after {duration_str}{reason}. "
+                f"Resuming automation. Battery at {data.soc:.0f}%."
+            )
+
+        await self.send_notification(title, message)
+
+    @staticmethod
+    def _format_duration(duration: timedelta | None) -> str:
+        """Format a timedelta as a compact 'Nh Nm' string."""
+        if duration is None:
+            return "an unknown period"
+        total_minutes = int(duration.total_seconds() // 60)
+        hours, minutes = divmod(total_minutes, 60)
+        if hours:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
 
     async def send_manual_action_notification(
         self, action: str, data: CoordinatorData

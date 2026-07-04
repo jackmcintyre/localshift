@@ -22,10 +22,12 @@ from ..const import (
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
+    CONF_TESLEMETRY_GRID_SERVICES,
     CONF_TESLEMETRY_LOAD_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_TESLEMETRY_STORM_WATCH,
     CONF_WEATHER_ENTITY,
 )
 
@@ -86,6 +88,16 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": str,
         "valid_values": ["pv_only", "battery_ok"],
         "description": "Export mode",
+    },
+    CONF_TESLEMETRY_GRID_SERVICES: {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": bool,
+        "description": "Grid services / VPP event active (Tesla override corroboration)",
+    },
+    CONF_TESLEMETRY_STORM_WATCH: {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": bool,
+        "description": "Storm Watch active (Tesla override corroboration)",
     },
     CONF_PRICING_GENERAL_PRICE: {
         "category": EntityCategory.REQUIRED,

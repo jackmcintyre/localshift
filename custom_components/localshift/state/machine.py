@@ -22,7 +22,10 @@ from ..const import (
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
+    TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
+    TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES,
     TESLA_OVERRIDE_RESERVE_PERCENT,
+    TESLA_OVERRIDE_SELF_COMMAND_GRACE_MINUTES,
     TESLA_OVERRIDE_TOLERANCE_PERCENT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
@@ -40,8 +43,6 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
-
-TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)
 
 
 class StateMachine:
@@ -114,21 +115,35 @@ class StateMachine:
         self._tesla_override_released_at: datetime | None = (
             None  # Track when Tesla released control
         )
+        # True when detection was corroborated by a real Tesla signal
+        # (grid services / storm watch ON); False when yielding purely on the
+        # uncorroborated heuristic (both signals unavailable). Drives the
+        # re-probe decision below.
+        self._tesla_override_corroborated: bool = False
+        # Last time an uncorroborated override was re-probed (commanded mode
+        # re-issued to test whether control returned).
+        self._tesla_override_last_probe_at: datetime | None = None
+        # Suppression window: if LocalShift itself commanded a reserve≈80
+        # self_consumption state within this window, treat a matching signature
+        # as our own leftovers rather than a Tesla override.
+        self._SELF_COMMAND_GRACE = timedelta(
+            minutes=TESLA_OVERRIDE_SELF_COMMAND_GRACE_MINUTES
+        )
+        self._REPROBE_INTERVAL = timedelta(
+            minutes=TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES
+        )
+        self._RELEASE_COOLDOWN = timedelta(
+            minutes=TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES
+        )
 
-    def _detect_tesla_override(self, data: CoordinatorData) -> bool:
-        """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
+    def _matches_override_signature(self, data: CoordinatorData) -> bool:
+        """Return True if hardware shows the Tesla-override signature.
 
-        Indicators: operation_mode=self_consumption, backup_reserve≈80%
-
-        Args:
-            data: Coordinator data with current hardware state
-
-        Returns:
-            True if Tesla override is detected, False otherwise.
-
+        Signature: operation_mode=self_consumption with backup_reserve≈80%.
+        Tesla sets this during Storm Watch, Grid Events, and VPP — but
+        LocalShift's own daily force-charge clamp (81-99 -> 80) can reach the
+        same state, so a signature match alone is not proof of an override.
         """
-        # Tesla override signature: self_consumption mode with 80% reserve
-        # This combination is set by Tesla during Storm Watch, Grid Events, VPP
         if data.operation_mode == "self_consumption":
             reserve = data.backup_reserve
             if (
@@ -139,6 +154,68 @@ class StateMachine:
                 return True
         return False
 
+    def _is_signature_self_inflicted(self, now: datetime) -> bool:
+        """Return True if LocalShift itself explains the reserve≈80 signature.
+
+        Used only when Tesla's corroboration signals are unavailable. Two ways
+        the signature can be our own doing:
+          (i) the mode LocalShift currently commands expects a self_consumption
+              reserve ≈80 (e.g. HOLD preserving an ~80% SOC), or
+          (ii) LocalShift completed a transition recently and a reserve write
+               may still be settling or was reverted by Tesla just after
+               acceptance (the incident's revert-after-validation race).
+        """
+        expected_op, expected_reserve, _, _ = self._get_expected_state_for_mode(
+            self._commanded_mode
+        )
+        if (
+            expected_op == "self_consumption"
+            and abs(expected_reserve - TESLA_OVERRIDE_RESERVE_PERCENT)
+            < TESLA_OVERRIDE_TOLERANCE_PERCENT
+        ):
+            return True
+        return (
+            self._last_successful_transition is not None
+            and now - self._last_successful_transition < self._SELF_COMMAND_GRACE
+        )
+
+    def _detect_tesla_override(self, data: CoordinatorData, now: datetime) -> bool:
+        """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
+
+        Corroborates the hardware signature against Tesla's grid-services and
+        storm-watch signals, falling back to self-awareness heuristics only when
+        those signals are unavailable:
+
+        - signature absent                      -> no override
+        - either signal ON                      -> override (real event, yield)
+        - both signals known-OFF                -> no override (drift, not event)
+        - signals unavailable + self-inflicted  -> no override (our own leftovers)
+        - signals unavailable + not self-caused -> override (legacy heuristic)
+
+        Args:
+            data: Coordinator data with current hardware state and signals.
+            now: Current time, for the self-command suppression window.
+
+        Returns:
+            True if a Tesla override is detected, False otherwise.
+
+        """
+        if not self._matches_override_signature(data):
+            return False
+
+        signals = (data.grid_services_active, data.storm_watch_active)
+        if any(signal is True for signal in signals):
+            # A real Tesla event is active — genuinely yield control.
+            return True
+        if all(signal is False for signal in signals):
+            # Both signals explicitly report no event: the signature is drift
+            # (e.g. a reverted reserve write), not a Tesla override.
+            return False
+
+        # At least one signal is unavailable and none reports an active event.
+        # Fall back to self-awareness: suppress if this is our own doing.
+        return not self._is_signature_self_inflicted(now)
+
     def is_tesla_override_active(self) -> bool:
         """Check if Tesla override is currently active.
 
@@ -147,6 +224,16 @@ class StateMachine:
 
         """
         return self._tesla_override_detected
+
+    def get_tesla_override_info(self) -> dict[str, Any]:
+        """Return Tesla override state for observability (binary sensor attrs)."""
+        return {
+            "active": self._tesla_override_detected,
+            "detected_at": self._tesla_override_detected_at,
+            "corroborated": self._tesla_override_corroborated,
+            "last_probe_at": self._tesla_override_last_probe_at,
+            "released_at": self._tesla_override_released_at,
+        }
 
     def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
         """Generate the discrete decision-context fingerprint.
@@ -987,39 +1074,107 @@ class StateMachine:
         else:  # MANUAL or unknown
             return ("", -1, "", False)
 
-    def _handle_tesla_override_state(
+    async def _handle_tesla_override_state(
         self, data: CoordinatorData, now: datetime
     ) -> bool:
-        """Handle Tesla override detection and cooldown.
+        """Handle Tesla override detection, bounded yield, and cooldown.
 
         Returns True if health checks should be skipped.
         """
         # --- Tesla Override Detection ---
         # Check if Tesla has taken control (Storm Watch, Grid Event, VPP)
-        if self._detect_tesla_override(data):
+        if self._detect_tesla_override(data, now):
+            corroborated_now = (
+                data.grid_services_active is True or data.storm_watch_active is True
+            )
             if not self._tesla_override_detected:
                 # First time detecting Tesla override
                 self._tesla_override_detected = True
                 self._tesla_override_detected_at = now
+                self._tesla_override_corroborated = corroborated_now
+                self._tesla_override_last_probe_at = now
                 _LOGGER.warning(
                     "[TESLA OVERRIDE] Detected Tesla has taken control of Powerwall "
-                    "(Storm Watch, Grid Event, or VPP active). Hardware state: "
-                    "op=%s, reserve=%.1f%%. Yielding control until event ends.",
+                    "(Storm Watch, Grid Event, or VPP). Hardware state: "
+                    "op=%s, reserve=%.1f%%, corroborated=%s. Yielding control.",
                     data.operation_mode,
                     data.backup_reserve,
+                    corroborated_now,
                 )
-            else:
-                # Already in Tesla override mode - check if we should log status
-                if self._tesla_override_detected_at is not None:
-                    duration = now - self._tesla_override_detected_at
+                await self._notification_service.send_tesla_override_notification(
+                    data, detected=True, corroborated=corroborated_now
+                )
+                return True
+
+            # Already in override — refresh corroboration (an initially
+            # uncorroborated detection can become corroborated later).
+            self._tesla_override_corroborated = (
+                self._tesla_override_corroborated or corroborated_now
+            )
+            duration = (
+                now - self._tesla_override_detected_at
+                if self._tesla_override_detected_at
+                else timedelta(0)
+            )
+
+            if corroborated_now:
+                # Real event: never fight it. Keep yielding, hold the probe timer.
+                self._tesla_override_last_probe_at = now
+                _LOGGER.info(
+                    "[TESLA OVERRIDE] Still active (corroborated) for %s. "
+                    "Skipping health check corrections.",
+                    duration,
+                )
+                return True
+
+            # Uncorroborated yield: periodically re-probe to bound a false
+            # positive instead of yielding indefinitely.
+            last_probe = (
+                self._tesla_override_last_probe_at or self._tesla_override_detected_at
+            )
+            if last_probe is not None and now - last_probe >= self._REPROBE_INTERVAL:
+                self._tesla_override_last_probe_at = now
+                _LOGGER.warning(
+                    "[TESLA OVERRIDE] Re-probing after %s: re-issuing commanded mode "
+                    "%s to test whether control has returned.",
+                    duration,
+                    self._commanded_mode.value,
+                )
+                probe_success = await self._execute_mode_transition(
+                    data, self._commanded_mode
+                )
+                if probe_success:
                     _LOGGER.info(
-                        "[TESLA OVERRIDE] Still active for %s. Skipping health check corrections.",
+                        "[TESLA OVERRIDE] Re-probe succeeded after %s — control "
+                        "restored, resuming health checks.",
                         duration,
                     )
-            # Skip all health check corrections while Tesla has control
+                    self._tesla_override_detected = False
+                    self._tesla_override_detected_at = None
+                    self._tesla_override_corroborated = False
+                    self._tesla_override_last_probe_at = None
+                    # Hardware just validated under our command — no cooldown.
+                    self._tesla_override_released_at = None
+                    await self._notification_service.send_tesla_override_notification(
+                        data,
+                        detected=False,
+                        corroborated=False,
+                        duration=duration,
+                        release_reason="re-probe succeeded",
+                    )
+                    return False
+                _LOGGER.warning(
+                    "[TESLA OVERRIDE] Re-probe failed — still yielding control."
+                )
+                return True
+
+            _LOGGER.info(
+                "[TESLA OVERRIDE] Still active for %s. Skipping health check corrections.",
+                duration,
+            )
             return True
 
-        # Tesla override has ended
+        # Tesla override has ended (signature cleared on its own)
         if self._tesla_override_detected:
             duration = (
                 now - self._tesla_override_detected_at
@@ -1030,11 +1185,21 @@ class StateMachine:
                 "[TESLA OVERRIDE] Tesla has released control after %s. "
                 "Applying %s cooldown before resuming health checks.",
                 duration,
-                TESLA_OVERRIDE_COOLDOWN,
+                self._RELEASE_COOLDOWN,
             )
+            was_corroborated = self._tesla_override_corroborated
             self._tesla_override_detected = False
             self._tesla_override_released_at = now
             self._tesla_override_detected_at = None
+            self._tesla_override_corroborated = False
+            self._tesla_override_last_probe_at = None
+            await self._notification_service.send_tesla_override_notification(
+                data,
+                detected=False,
+                corroborated=was_corroborated,
+                duration=duration,
+                release_reason="hardware released",
+            )
 
         # --- Tesla Override Cooldown ---
         # After Tesla releases control, wait for cooldown period before resuming
@@ -1042,8 +1207,8 @@ class StateMachine:
             return False
 
         time_since_release = now - self._tesla_override_released_at
-        if time_since_release < TESLA_OVERRIDE_COOLDOWN:
-            remaining = (TESLA_OVERRIDE_COOLDOWN - time_since_release).total_seconds()
+        if time_since_release < self._RELEASE_COOLDOWN:
+            remaining = (self._RELEASE_COOLDOWN - time_since_release).total_seconds()
             _LOGGER.debug(
                 "[HEALTH CHECK] Skipping - in Tesla override cooldown (%.0fs remaining)",
                 remaining,
@@ -1075,14 +1240,16 @@ class StateMachine:
         )
         return True
 
-    def _should_skip_health_check(self, data: CoordinatorData, now: datetime) -> bool:
+    async def _should_skip_health_check(
+        self, data: CoordinatorData, now: datetime
+    ) -> bool:
         """Check if health check should be skipped."""
         # Skip health check during manual override - user is in control
         if data.manual_override:
             _LOGGER.debug("[HEALTH CHECK] Skipping - manual override active")
             return True
 
-        if self._handle_tesla_override_state(data, now):
+        if await self._handle_tesla_override_state(data, now):
             return True
 
         if self._should_skip_transition_grace(now):
@@ -1104,7 +1271,7 @@ class StateMachine:
         health checks would fight against their manual commands.
         """
         now = dt_util.now()
-        if self._should_skip_health_check(data, now):
+        if await self._should_skip_health_check(data, now):
             return
 
         expected_op, expected_reserve, expected_export, expected_grid_charging = (

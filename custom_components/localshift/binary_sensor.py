@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import LocalShiftCoordinator
@@ -270,11 +271,35 @@ class TeslaOverrideActiveSensor(LocalShiftBinarySensorBase):
         else:
             description = "Tesla is not overriding control"
 
-        return {
+        attributes: dict[str, Any] = {
             "operation_mode": self.coordinator.data.operation_mode,
             "backup_reserve": self.coordinator.data.backup_reserve,
+            "grid_services_active": self.coordinator.data.grid_services_active,
+            "storm_watch_active": self.coordinator.data.storm_watch_active,
             "description": description,
         }
+
+        state_machine = self.coordinator._state_machine
+        if state_machine is not None:
+            info = state_machine.get_tesla_override_info()
+            detected_at = info.get("detected_at")
+            duration_minutes = None
+            if self._attr_is_on and detected_at is not None:
+                duration_minutes = round(
+                    (dt_util.now() - detected_at).total_seconds() / 60.0, 1
+                )
+            attributes.update({
+                "detected_at": detected_at.isoformat() if detected_at else None,
+                "duration_minutes": duration_minutes,
+                "corroborated": info.get("corroborated"),
+                "last_probe_at": (
+                    info["last_probe_at"].isoformat()
+                    if info.get("last_probe_at")
+                    else None
+                ),
+            })
+
+        return attributes
 
 
 # ---------------------------------------------------------------------------
