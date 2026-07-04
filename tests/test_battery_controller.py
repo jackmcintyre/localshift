@@ -685,7 +685,12 @@ class TestSetProactiveExport:
     async def test_set_proactive_export_minimum_reserve(
         self, battery_controller, coordinator_data, mock_hass
     ):
-        """Test that proactive export respects minimum reserve of 4%."""
+        """Test that proactive export respects the configured minimum reserve.
+
+        Issue #895: reserve is floored at minimum_target_soc (default 20), not
+        the old hardcoded 4.0. With SOC=5 and minimum_target_soc=20, the dynamic
+        formula (5-5=0) is raised to the floor (20).
+        """
         mock_hass.services.async_call.return_value = None
         coordinator_data.soc = 5.0  # Low SOC
 
@@ -696,7 +701,8 @@ class TestSetProactiveExport:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "4"  # Minimum 4
+                # Reserve must be ≥ DEFAULT_MINIMUM_TARGET_SOC (20), not 4.
+                state.state = str(DEFAULT_MINIMUM_TARGET_SOC)
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
             return state
@@ -705,7 +711,7 @@ class TestSetProactiveExport:
 
         await battery_controller.set_proactive_export(coordinator_data)
 
-        # Check that set_value was called with minimum 4
+        # Reserve must be floored at minimum_target_soc (20), not the old 4.0.
         calls = mock_hass.services.async_call.call_args_list
         reserve_call = None
         for call in calls:
@@ -713,7 +719,7 @@ class TestSetProactiveExport:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[0][2]["value"] == 4  # max(4, 5-5) = max(4, 0) = 4
+        assert reserve_call[0][2]["value"] == DEFAULT_MINIMUM_TARGET_SOC
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("mock_battery_sleep")
@@ -750,6 +756,92 @@ class TestSetProactiveExport:
                     break
         assert export_call is not None
         assert export_call[0][2]["option"] == TESLEMETRY_EXPORT_BATTERY_OK
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_set_proactive_export_soc_zero_floors_at_minimum_target(
+        self, mock_hass, mock_get_entity_id, coordinator_data
+    ):
+        """Issue #895: SOC=0 must not drain below minimum_target_soc.
+
+        Pre-fix: ``reserve = max(4.0, current_soc - 5.0)`` → ``max(4.0, -5.0)
+        = 4.0``, ignoring the user's configured minimum. A user who set
+        minimum_target_soc=30 to protect reserve would still see the battery
+        drained to 4% during proactive export when SOC reads 0 (unavailable
+        entity, startup, or genuinely empty).
+
+        Post-fix: reserve is floored at the configured minimum_target_soc.
+        """
+        mock_hass.services.async_call.return_value = None
+        coordinator_data.soc = 0.0  # Unavailable / empty
+
+        options = {CONF_MINIMUM_TARGET_SOC: 30.0}
+
+        def get_option(key, default=None):
+            return options.get(key, default)
+
+        controller = BatteryController(
+            mock_hass, mock_get_entity_id, get_option_func=get_option
+        )
+
+        def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "autonomous"
+            elif "backup_reserve" in entity_id:
+                # Reserve must be ≥ 30 (the configured minimum), never 4.
+                state.state = "30"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "on"
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        result = await controller.set_proactive_export(coordinator_data)
+
+        assert result is True
+        # The reserve sent to the API must be ≥ minimum_target_soc (30), not 4.
+        calls = mock_hass.services.async_call.call_args_list
+        reserve_call = None
+        for call in calls:
+            if call[0][0] == "number" and call[0][1] == "set_value":
+                reserve_call = call
+                break
+        assert reserve_call is not None
+        assert reserve_call[0][2]["value"] >= 30.0
+
+    @pytest.mark.asyncio
+    async def test_set_proactive_export_soc_zero_dry_run_floors_at_minimum(
+        self, mock_hass, mock_get_entity_id, coordinator_data, caplog
+    ):
+        """Issue #895: dry-run path also floors reserve + warns on SOC=0."""
+        import logging
+
+        coordinator_data.soc = 0.0
+        options = {CONF_MINIMUM_TARGET_SOC: 25.0}
+
+        def get_option(key, default=None):
+            return options.get(key, default)
+
+        controller = BatteryController(
+            mock_hass, mock_get_entity_id, get_option_func=get_option
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await controller.set_proactive_export(
+                coordinator_data, dry_run=True
+            )
+
+        assert result is True
+        # Must warn that SOC is unavailable so the SOC=0 case is diagnosable.
+        assert any(
+            "SOC" in rec.message and ("0" in rec.message or "unavailable" in rec.message.lower())
+            for rec in caplog.records
+        )
 
 
 # =============================================================================

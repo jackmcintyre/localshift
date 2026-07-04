@@ -635,9 +635,28 @@ class BatteryController:
         # Note: manual_override is managed by button handlers and state machine
         # This method is only called automatically (via state machine)
 
-        # Dynamic reserve for throttling: SOC - 5%, minimum 4%
         current_soc = data.soc
-        reserve = max(4.0, current_soc - 5.0)
+        minimum_target = self._get_minimum_target_soc()
+
+        # Issue #895: when SOC is 0 (unavailable entity, startup, or genuinely
+        # empty), the old ``max(4.0, soc - 5.0)`` formula yielded reserve=4.0,
+        # draining the battery to 4% — well below the user's configured
+        # minimum_target_soc. Floor the reserve at minimum_target_soc so the
+        # configured protection always holds, and warn so the SOC=0 case is
+        # diagnosable (it usually means the SOC entity isn't populated).
+        if current_soc <= 0.0:
+            _LOGGER.warning(
+                "Proactive export requested with SOC=%.1f%% (entity unavailable "
+                "or empty); flooring reserve at minimum_target_soc=%.1f%% "
+                "instead of the dynamic SOC-5 formula.",
+                current_soc,
+                minimum_target,
+            )
+            reserve = minimum_target
+        else:
+            # Dynamic reserve for throttling: SOC - 5%, but never below the
+            # configured minimum_target_soc.
+            reserve = max(minimum_target, current_soc - 5.0)
 
         if dry_run:
             _LOGGER.info(
