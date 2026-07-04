@@ -168,6 +168,12 @@ class CoordinatorData:
     soc: float = 0.0
     operation_mode: str = ""
     backup_reserve: float = 0.0
+    # Tesla override corroboration signals (Storm Watch / Grid Event / VPP).
+    # Tri-state: True/False when the entity reports on/off, None when the entity
+    # is unavailable/unknown/unconfigured. None must NOT be coerced to False —
+    # override detection distinguishes "no event" from "signal unavailable".
+    grid_services_active: bool | None = None
+    storm_watch_active: bool | None = None
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False

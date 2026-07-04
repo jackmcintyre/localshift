@@ -5,7 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
+
+from ..const import (
+    VALIDATION_RESERVE_RETRY_TIMEOUT_SECONDS,
+    VALIDATION_RESERVE_SETTLE_SECONDS,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -73,6 +79,7 @@ class TransitionValidator:
         expected_export_mode: str | None = None,
         expected_grid_charging_allowed: bool | None = None,
         timeout: int = 10,
+        retry_reserve_write: Callable[[float | int], Awaitable[bool]] | None = None,
     ) -> bool:
         """Validate that hardware state matches expected values after transition.
 
@@ -82,6 +89,10 @@ class TransitionValidator:
             expected_export_mode: Optional expected allow_export mode
             expected_grid_charging_allowed: Optional expected grid charging switch state
             timeout: Maximum seconds to wait for validation (default: 10)
+            retry_reserve_write: Optional callback to re-issue the backup-reserve
+                write if Tesla reverts it shortly after acceptance (the
+                revert-after-validation race). When None, a reverted reserve is
+                logged but still accepted (lenient bare-wrapper behavior).
 
         Returns:
             True if validation passes, False otherwise.
@@ -170,7 +181,11 @@ class TransitionValidator:
                     attempt + 1,
                     timeout,
                 )
-                return True
+                return await self._settle_verify_reserve(
+                    backup_reserve_entity,
+                    expected_backup_reserve,
+                    retry_reserve_write,
+                )
 
             # Log failure only once (first failure) to avoid log flooding
             if not first_failure_logged:
@@ -221,7 +236,11 @@ class TransitionValidator:
                     "[VALIDATION] ACCEPTED via operation_mode + grid_charging match after %.1fs (reserve/export may lag)",
                     elapsed,
                 )
-                return True
+                return await self._settle_verify_reserve(
+                    backup_reserve_entity,
+                    expected_backup_reserve,
+                    retry_reserve_write,
+                )
 
             # Operation mode matches but grid_charging doesn't - this is a FAILURE
             # Grid charging control is critical for preventing unwanted grid charging
@@ -247,6 +266,72 @@ class TransitionValidator:
             expected_grid_charging_allowed,
             final_operation_mode,
             final_grid_charging,
+        )
+        return False
+
+    async def _settle_verify_reserve(
+        self,
+        backup_reserve_entity: str,
+        expected_backup_reserve: float | int,
+        retry_reserve_write: Callable[[float | int], Awaitable[bool]] | None,
+    ) -> bool:
+        """Re-verify the backup reserve after a transition is accepted.
+
+        Tesla can silently revert a reserve write a few seconds after the
+        transition validates (the write races the still-settling op-mode
+        change). Wait for the reserve to settle, and if it reverted, re-issue
+        the write once and poll for it to stick.
+
+        Returns:
+            True if the reserve holds (or no retry callback is available),
+            False if it stays reverted after the retry.
+
+        """
+        await asyncio.sleep(VALIDATION_RESERVE_SETTLE_SECONDS)
+
+        current = self.read_float(backup_reserve_entity, -1)
+        if abs(current - expected_backup_reserve) < 1:
+            _LOGGER.info(
+                "[VALIDATION] Reserve settle-verified at %s%% (expected %s%%)",
+                current,
+                expected_backup_reserve,
+            )
+            return True
+
+        if retry_reserve_write is None:
+            _LOGGER.warning(
+                "[VALIDATION] Reserve reverted after acceptance "
+                "(expected=%s, actual=%s), no retry callback — accepting",
+                expected_backup_reserve,
+                current,
+            )
+            return True
+
+        _LOGGER.warning(
+            "[VALIDATION] Reserve reverted after acceptance "
+            "(expected=%s, actual=%s) — retrying write once",
+            expected_backup_reserve,
+            current,
+        )
+        if not await retry_reserve_write(expected_backup_reserve):
+            _LOGGER.error("[VALIDATION] Reserve retry write failed")
+            return False
+
+        for _ in range(VALIDATION_RESERVE_RETRY_TIMEOUT_SECONDS):
+            await asyncio.sleep(1)
+            current = self.read_float(backup_reserve_entity, -1)
+            if abs(current - expected_backup_reserve) < 1:
+                _LOGGER.info(
+                    "[VALIDATION] Reserve settle-verified after retry at %s%%",
+                    current,
+                )
+                return True
+
+        _LOGGER.error(
+            "[VALIDATION] Reserve still reverted after retry "
+            "(expected=%s, actual=%s) — failing transition",
+            expected_backup_reserve,
+            current,
         )
         return False
 

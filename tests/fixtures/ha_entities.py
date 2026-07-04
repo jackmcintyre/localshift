@@ -381,6 +381,8 @@ def create_default_entity_states(
     feed_in_price: float = 0.08,
     price_spike: bool = False,
     allow_export: str = "pv_only",
+    grid_services_active: bool = False,
+    storm_watch_active: bool = False,
 ) -> dict[str, MockState]:
     """Create a complete set of entity states for LocalShift testing.
 
@@ -458,6 +460,14 @@ def create_default_entity_states(
                 "friendly_name": "Allow Export",
                 "options": ["pv_only", "battery_ok"],
             },
+        ),
+        "binary_sensor.my_home_grid_services_enabled": create_binary_sensor_state(
+            "binary_sensor.my_home_grid_services_enabled",
+            grid_services_active,
+        ),
+        "binary_sensor.my_home_storm_watch_active": create_binary_sensor_state(
+            "binary_sensor.my_home_storm_watch_active",
+            storm_watch_active,
         ),
         # Pricing entities (generic naming - discovered during config flow)
         "sensor.general_price": create_price_state(
@@ -544,9 +554,7 @@ def create_sample_solcast_forecast(
 
         # Roll the date forward with timedelta so this stays valid on the last
         # day of a month (replace(day=day+1) overflowed on the 30th/31st).
-        period_start = base_date.replace(hour=hour % 24) + timedelta(
-            days=hour // 24
-        )
+        period_start = base_date.replace(hour=hour % 24) + timedelta(days=hour // 24)
 
         forecasts.append({
             "period_start": period_start.isoformat(),

@@ -48,9 +48,18 @@ def mock_coordinator():
     coordinator.data.safe_additional_load_kw = 3.0
     coordinator.data.operation_mode = "autonomous"
     coordinator.data.backup_reserve = 20
+    coordinator.data.grid_services_active = None
+    coordinator.data.storm_watch_active = None
     coordinator.data.recent_decision_log = []
     coordinator._state_machine = MagicMock()
     coordinator._state_machine.is_tesla_override_active.return_value = False
+    coordinator._state_machine.get_tesla_override_info.return_value = {
+        "active": False,
+        "detected_at": None,
+        "corroborated": False,
+        "last_probe_at": None,
+        "released_at": None,
+    }
     return coordinator
 
 
@@ -403,6 +412,35 @@ class TestTeslaOverrideActiveSensor:
         assert attrs["operation_mode"] == "autonomous"
         assert attrs["backup_reserve"] == 20
         assert "Tesla is not overriding control" in attrs["description"]
+
+    def test_extra_state_attributes_include_override_info(
+        self, mock_coordinator, mock_entry
+    ):
+        """Override info + corroboration signals surface as attributes."""
+        from datetime import datetime, timedelta, timezone
+
+        detected_at = datetime(2026, 7, 3, 15, 0, tzinfo=timezone(timedelta(hours=10)))
+        mock_coordinator._state_machine.is_tesla_override_active.return_value = True
+        mock_coordinator._state_machine.get_tesla_override_info.return_value = {
+            "active": True,
+            "detected_at": detected_at,
+            "corroborated": True,
+            "last_probe_at": None,
+            "released_at": None,
+        }
+        mock_coordinator.data.grid_services_active = True
+        mock_coordinator.data.storm_watch_active = False
+        sensor = TeslaOverrideActiveSensor(mock_coordinator, mock_entry)
+        sensor._attr_is_on = True
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["corroborated"] is True
+        assert attrs["grid_services_active"] is True
+        assert attrs["storm_watch_active"] is False
+        assert attrs["detected_at"] == detected_at.isoformat()
+        assert attrs["duration_minutes"] is not None
+        assert attrs["last_probe_at"] is None
 
 
 class TestAsyncSetupEntry:

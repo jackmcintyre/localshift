@@ -50,17 +50,21 @@ class TestTeslaOverrideDetection:
         """Test Tesla override not detected when not in override state."""
         coordinator_data.operation_mode = "self_consumption"
         coordinator_data.backup_reserve = 10
-        result = state_machine._detect_tesla_override(coordinator_data)
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+        result = state_machine._detect_tesla_override(coordinator_data, now)
         assert result is False
 
     @pytest.mark.asyncio
     async def test_detect_tesla_override_detected(
         self, state_machine, coordinator_data
     ):
-        """Test Tesla override detected with 80% reserve."""
+        """Signature + signals unavailable + not self-inflicted -> override."""
         coordinator_data.operation_mode = "self_consumption"
         coordinator_data.backup_reserve = 80
-        result = state_machine._detect_tesla_override(coordinator_data)
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+        result = state_machine._detect_tesla_override(coordinator_data, now)
         assert result is True
 
     @pytest.mark.asyncio
@@ -70,8 +74,92 @@ class TestTeslaOverrideDetection:
         """Test Tesla override detection within tolerance."""
         coordinator_data.operation_mode = "self_consumption"
         coordinator_data.backup_reserve = 80.5
-        result = state_machine._detect_tesla_override(coordinator_data)
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+        result = state_machine._detect_tesla_override(coordinator_data, now)
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_grid_services_on(
+        self, state_machine, coordinator_data
+    ):
+        """Signature + grid services ON -> override even if self-inflicted."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80
+        coordinator_data.grid_services_active = True
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+        # Recent own transition would otherwise mark this self-inflicted.
+        state_machine._last_successful_transition = now - timedelta(seconds=10)
+        assert state_machine._detect_tesla_override(coordinator_data, now) is True
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_storm_watch_on(
+        self, state_machine, coordinator_data
+    ):
+        """Signature + storm watch ON (grid services off) -> override."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = True
+        now = dt_aware(2026, 3, 1, 10, 0, 0)
+        assert state_machine._detect_tesla_override(coordinator_data, now) is True
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_signals_off_is_drift(
+        self, state_machine, coordinator_data
+    ):
+        """Incident regression: signature + both signals OFF + recent own
+        transition -> NOT an override (reverted reserve write, not a Tesla event)."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = False
+        now = dt_aware(2026, 3, 1, 15, 0, 0)
+        state_machine._last_successful_transition = now - timedelta(seconds=10)
+        assert state_machine._detect_tesla_override(coordinator_data, now) is False
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_unknown_recent_self_command(
+        self, state_machine, coordinator_data
+    ):
+        """Signals unavailable + own transition within grace -> self-inflicted -> no override."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        now = dt_aware(2026, 3, 1, 15, 0, 0)
+        state_machine._last_successful_transition = now - timedelta(minutes=5)
+        assert state_machine._detect_tesla_override(coordinator_data, now) is False
+        # ...but once the grace window passes, the legacy heuristic fires.
+        state_machine._last_successful_transition = now - timedelta(minutes=20)
+        assert state_machine._detect_tesla_override(coordinator_data, now) is True
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_unknown_hold_reserve_self_inflicted(
+        self, state_machine, coordinator_data
+    ):
+        """Signals unavailable + commanded mode expects reserve≈80 -> no override."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        now = dt_aware(2026, 3, 1, 15, 0, 0)
+        state_machine._commanded_mode = BatteryMode.HOLD
+        state_machine._self_consumption_reserve = 80.0
+        assert state_machine._detect_tesla_override(coordinator_data, now) is False
+
+    @pytest.mark.asyncio
+    async def test_detect_tesla_override_no_signature(
+        self, state_machine, coordinator_data
+    ):
+        """Grid-charging (op=backup, reserve=80) never matches the signature."""
+        coordinator_data.operation_mode = "backup"
+        coordinator_data.backup_reserve = 80
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        now = dt_aware(2026, 3, 1, 15, 0, 0)
+        assert state_machine._detect_tesla_override(coordinator_data, now) is False
 
     @pytest.mark.asyncio
     async def test_is_tesla_override_active(self, state_machine):
@@ -137,6 +225,7 @@ def mock_notification_service():
     service.send_health_correction_notification = AsyncMock()
     service.send_manual_override_timeout_notification = AsyncMock()
     service.send_automation_disabled_notification = AsyncMock()
+    service.send_tesla_override_notification = AsyncMock()
     return service
 
 
@@ -991,11 +1080,15 @@ class TestStateMachineInternalBranches:
         coordinator_data.backup_reserve = 80.0
         now = dt_aware(2026, 3, 1, 10, 0, 0)
 
-        should_skip = state_machine._handle_tesla_override_state(coordinator_data, now)
+        should_skip = asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, now)
+        )
 
         assert should_skip is True
         assert state_machine._tesla_override_detected is True
         assert state_machine._tesla_override_detected_at == now
+        # First detection notifies exactly once.
+        state_machine._notification_service.send_tesla_override_notification.assert_awaited_once()
 
     def test_tesla_override_cooldown_blocks_then_expires(
         self, state_machine, coordinator_data
@@ -1005,14 +1098,16 @@ class TestStateMachineInternalBranches:
         coordinator_data.backup_reserve = 80.0
         detected_at = dt_aware(2026, 3, 1, 10, 0, 0)
 
-        state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+        )
 
         coordinator_data.operation_mode = "autonomous"
         coordinator_data.backup_reserve = 20.0
 
         released_at = dt_aware(2026, 3, 1, 10, 5, 0)
-        should_skip_during_cooldown = state_machine._handle_tesla_override_state(
-            coordinator_data, released_at
+        should_skip_during_cooldown = asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, released_at)
         )
 
         assert should_skip_during_cooldown is True
@@ -1020,12 +1115,126 @@ class TestStateMachineInternalBranches:
         assert state_machine._tesla_override_released_at == released_at
 
         after_cooldown = released_at + timedelta(minutes=31)
-        should_skip_after_cooldown = state_machine._handle_tesla_override_state(
-            coordinator_data, after_cooldown
+        should_skip_after_cooldown = asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, after_cooldown)
         )
 
         assert should_skip_after_cooldown is False
         assert state_machine._tesla_override_released_at is None
+
+    def test_tesla_override_corroborated_never_reprobes(
+        self, state_machine, coordinator_data
+    ):
+        """A corroborated override (grid services ON) must never re-probe."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.0
+        coordinator_data.grid_services_active = True
+        state_machine._execute_mode_transition = AsyncMock(return_value=True)
+
+        detected_at = dt_aware(2026, 3, 1, 10, 0, 0)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+        )
+        assert state_machine._tesla_override_corroborated is True
+
+        # 31 minutes later — well past the probe interval — still no probe.
+        later = detected_at + timedelta(minutes=31)
+        should_skip = asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, later)
+        )
+        assert should_skip is True
+        state_machine._execute_mode_transition.assert_not_awaited()
+
+    def test_tesla_override_uncorroborated_reprobes_and_releases(
+        self, state_machine, coordinator_data
+    ):
+        """Uncorroborated override re-probes at the interval; success releases
+        without cooldown."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.0
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        state_machine._execute_mode_transition = AsyncMock(return_value=True)
+
+        detected_at = dt_aware(2026, 3, 1, 10, 0, 0)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+        )
+        assert state_machine._tesla_override_corroborated is False
+
+        # Before the interval: no probe.
+        before = detected_at + timedelta(minutes=15)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, before)
+        )
+        state_machine._execute_mode_transition.assert_not_awaited()
+
+        # At the interval: probe fires, succeeds, override released, no cooldown.
+        at_interval = detected_at + timedelta(minutes=31)
+        should_skip = asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, at_interval)
+        )
+        state_machine._execute_mode_transition.assert_awaited_once()
+        assert should_skip is False
+        assert state_machine._tesla_override_detected is False
+        assert state_machine._tesla_override_released_at is None
+
+    def test_tesla_override_reprobe_failure_stays_yielded(
+        self, state_machine, coordinator_data
+    ):
+        """A failed re-probe keeps yielding and resets the probe timer."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.0
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+        state_machine._execute_mode_transition = AsyncMock(return_value=False)
+
+        detected_at = dt_aware(2026, 3, 1, 10, 0, 0)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+        )
+
+        at_interval = detected_at + timedelta(minutes=31)
+        should_skip = asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, at_interval)
+        )
+        assert should_skip is True
+        assert state_machine._tesla_override_detected is True
+        state_machine._execute_mode_transition.assert_awaited_once()
+
+        # Timer reset: the very next minute must not probe again.
+        one_min_later = at_interval + timedelta(minutes=1)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, one_min_later)
+        )
+        state_machine._execute_mode_transition.assert_awaited_once()
+
+    def test_tesla_override_corroboration_upgrades(
+        self, state_machine, coordinator_data
+    ):
+        """An initially-uncorroborated override becomes corroborated when a
+        signal later turns ON."""
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 80.0
+        coordinator_data.grid_services_active = None
+        coordinator_data.storm_watch_active = None
+
+        detected_at = dt_aware(2026, 3, 1, 10, 0, 0)
+        asyncio.run(
+            state_machine._handle_tesla_override_state(coordinator_data, detected_at)
+        )
+        assert state_machine._tesla_override_corroborated is False
+
+        coordinator_data.storm_watch_active = True
+        asyncio.run(
+            state_machine._handle_tesla_override_state(
+                coordinator_data, detected_at + timedelta(minutes=1)
+            )
+        )
+        assert state_machine._tesla_override_corroborated is True
+        info = state_machine.get_tesla_override_info()
+        assert info["active"] is True
+        assert info["corroborated"] is True
 
     def test_handle_debounce_timing_clears_stale_and_starts_timer(self, state_machine):
         """Debounce helper should clear stale timers and start desired timer."""
@@ -1104,8 +1313,10 @@ class TestStateMachineInternalBranches:
         """Health check skip helper should skip during manual override."""
         coordinator_data.manual_override = True
 
-        should_skip = state_machine._should_skip_health_check(
-            coordinator_data, dt_aware(2026, 3, 1, 10, 0, 0)
+        should_skip = asyncio.run(
+            state_machine._should_skip_health_check(
+                coordinator_data, dt_aware(2026, 3, 1, 10, 0, 0)
+            )
         )
 
         assert should_skip is True
@@ -1743,16 +1954,27 @@ class TestDecisionTokenInvariant:
 
         # 4 price intervals, ~6 evals each (tick + coalesce cadence). Each eval
         # the plan oscillates between two immediate modes.
-        prices = [0.25, 0.25, 0.25, 0.30, 0.30, 0.30, 0.20, 0.20, 0.20, 0.40, 0.40, 0.40]
+        prices = [
+            0.25,
+            0.25,
+            0.25,
+            0.30,
+            0.30,
+            0.30,
+            0.20,
+            0.20,
+            0.20,
+            0.40,
+            0.40,
+            0.40,
+        ]
         oscillate = [BatteryMode.GRID_CHARGING, BatteryMode.SPIKE_DISCHARGE]
         distinct_fps = set()
         for i, price in enumerate(prices):
             coordinator_data.general_price = price
             coordinator_data.price_spike = False
             engine.plan_mode = oscillate[i % 2]
-            distinct_fps.add(
-                state_machine._get_decision_fingerprint(coordinator_data)
-            )
+            distinct_fps.add(state_machine._get_decision_fingerprint(coordinator_data))
             self._run(state_machine, coordinator_data, engine)
 
         # The crown jewel: at most one transition per distinct decision context.
@@ -1808,8 +2030,7 @@ class TestDecisionTokenInvariant:
         assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
         assert coordinator_data.decision_timestamp is None
         assert (
-            coordinator_data.debug_plan_mode_pending
-            == BatteryMode.GRID_CHARGING.value
+            coordinator_data.debug_plan_mode_pending == BatteryMode.GRID_CHARGING.value
         )
 
     def test_frozen_eval_pins_mode_no_decision_timestamp(
@@ -1833,7 +2054,9 @@ class TestDecisionTokenInvariant:
 
         assert coordinator_data.active_mode == BatteryMode.SELF_CONSUMPTION
         assert coordinator_data.decision_timestamp is None
-        assert coordinator_data.debug_plan_mode_pending == BatteryMode.GRID_CHARGING.value
+        assert (
+            coordinator_data.debug_plan_mode_pending == BatteryMode.GRID_CHARGING.value
+        )
         mock_battery_controller.set_force_charge.assert_not_called()
 
     def test_deferred_token_kill(
@@ -1895,9 +2118,7 @@ class TestDecisionTokenInvariant:
         assert coordinator_data.active_mode == BatteryMode.GRID_CHARGING
         mock_battery_controller.set_force_charge.assert_called_once()
 
-    def test_spike_onset_grants_one_decision(
-        self, state_machine, coordinator_data
-    ):
+    def test_spike_onset_grants_one_decision(self, state_machine, coordinator_data):
         """price_spike False→True is a context change → one decision."""
         coordinator_data.general_price = 0.25
         coordinator_data.price_spike = False
@@ -1912,9 +2133,7 @@ class TestDecisionTokenInvariant:
         self._run(state_machine, coordinator_data, engine)
         assert engine.last_decision_allowed is False
 
-    def test_dw_active_flip_grants_one_decision(
-        self, state_machine, coordinator_data
-    ):
+    def test_dw_active_flip_grants_one_decision(self, state_machine, coordinator_data):
         """demand_window_active flip is a context change → one decision."""
         coordinator_data.general_price = 0.25
         coordinator_data.demand_window_active = False
@@ -2018,7 +2237,11 @@ class TestConvergeWhileFrozen:
         assert state_machine._commanded_mode == BatteryMode.GRID_CHARGING
 
     def test_validator_blocked_then_unblocked_retries_without_fresh_token(
-        self, state_machine, coordinator_data, mock_battery_controller, mock_entity_validator
+        self,
+        state_machine,
+        coordinator_data,
+        mock_battery_controller,
+        mock_entity_validator,
     ):
         """A validator-blocked transition retries on a later frozen eval once the
         validator allows it — and a DIFFERENT desired mode while frozen does NOT
@@ -2052,9 +2275,7 @@ class TestConvergeWhileFrozen:
 class TestInvalidateDecisionFingerprint:
     """Deliberate re-decision points (#622 gate replacement)."""
 
-    def test_invalidate_grants_next_decision(
-        self, state_machine, coordinator_data
-    ):
+    def test_invalidate_grants_next_decision(self, state_machine, coordinator_data):
         """After invalidate_decision_fingerprint, the next eval decides even with
         an unchanged price."""
         coordinator_data.general_price = 0.25
