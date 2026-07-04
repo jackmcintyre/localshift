@@ -717,3 +717,152 @@ class TestProcessSingleSlot:
 
         assert ctx.is_demand_window_entry is True
         assert ctx.is_demand_window_slot is True
+
+
+class TestDemandWindowCrossMidnight:
+    """Tests for overnight (cross-midnight) demand windows.
+
+    Issue #896: when ``demand_window_end <= demand_window_start`` (e.g.
+    start=22:00, end=06:00 for an overnight peak), the naive comparison
+    ``dw_start_time <= slot_time < dw_end_time`` is FALSE for every slot of
+    the day — silently disabling the entire feature with no error.
+
+    The fix handles the wrap: a slot is in the DW if its time is >= start OR
+    < end.
+    """
+
+    @pytest.fixture
+    def overnight_builder(self):
+        """Builder configured for an overnight window 22:00 -> 06:00."""
+        return SlotBuilder(
+            config_options={
+                "demand_window_start": "22:00:00",
+                "demand_window_end": "06:00:00",
+            },
+            ha_timezone="UTC",
+        )
+
+    def _make_slot(self, hour: int, minute: int = 0):
+        """Build a minimal slot dict at the given UTC time today."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc).replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        return {
+            "start": now,
+            "interval_minutes": 30,
+            "price": 0.10,
+            "price_source": "30min",
+        }
+
+    def _make_data(self):
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+        return data
+
+    def test_slot_inside_overnight_window_late_evening(self, overnight_builder):
+        """A 23:00 slot must be flagged in the DW (>= 22:00)."""
+        from zoneinfo import ZoneInfo
+
+        slot = self._make_slot(23, 0)
+        ctx, _, in_dw = overnight_builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=self._make_data(),
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=slot["start"],
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(22, 0),
+            dw_end_time=time(6, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert in_dw is True
+        assert ctx.is_demand_window_slot is True
+
+    def test_slot_inside_overnight_window_early_morning(self, overnight_builder):
+        """A 02:00 slot must be flagged in the DW (< 06:00)."""
+        from zoneinfo import ZoneInfo
+
+        slot = self._make_slot(2, 0)
+        ctx, _, in_dw = overnight_builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=self._make_data(),
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=slot["start"],
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(22, 0),
+            dw_end_time=time(6, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert in_dw is True
+        assert ctx.is_demand_window_slot is True
+
+    def test_slot_outside_overnight_window_daytime(self, overnight_builder):
+        """A 12:00 slot must NOT be flagged in the DW."""
+        from zoneinfo import ZoneInfo
+
+        slot = self._make_slot(12, 0)
+        ctx, _, in_dw = overnight_builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=self._make_data(),
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=slot["start"],
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(22, 0),
+            dw_end_time=time(6, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert in_dw is False
+        assert ctx.is_demand_window_slot is False
+
+    def test_overnight_window_entry_at_start_boundary(self, overnight_builder):
+        """The 22:00 slot is the DW entry (in DW, prev not in DW)."""
+        from zoneinfo import ZoneInfo
+
+        slot = self._make_slot(22, 0)
+        ctx, _, in_dw = overnight_builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=self._make_data(),
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=slot["start"],
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(22, 0),
+            dw_end_time=time(6, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert in_dw is True
+        assert ctx.is_demand_window_entry is True
+
+    def test_overnight_window_exit_at_end_boundary(self, overnight_builder):
+        """The 06:00 slot is OUTSIDE the DW (end is exclusive)."""
+        from zoneinfo import ZoneInfo
+
+        slot = self._make_slot(6, 0)
+        ctx, _, in_dw = overnight_builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=self._make_data(),
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=slot["start"],
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(22, 0),
+            dw_end_time=time(6, 0),
+            prev_in_demand_window=True,
+        )
+
+        assert in_dw is False
+        assert ctx.is_demand_window_slot is False
