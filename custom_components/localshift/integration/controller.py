@@ -6,10 +6,12 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
+    CONF_MINIMUM_TARGET_SOC,
+    DEFAULT_MINIMUM_TARGET_SOC,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
@@ -70,16 +72,22 @@ class BatteryController:
         self,
         hass: HomeAssistant,
         get_entity_id_func: callable,
+        get_option_func: Callable[[str, Any], Any] | None = None,
     ) -> None:
         """Initialize the battery controller.
 
         Args:
             hass: Home Assistant instance
             get_entity_id_func: Function to get entity IDs by config key
+            get_option_func: Optional function to read config_entry options by
+                key (mirrors the state machine's ``_get_option``). Used to read
+                ``minimum_target_soc`` correctly — it's an option, not a data
+                entity, so the entity-id lookup always returned "" (Issue #894).
 
         """
         self.hass = hass
         self._get_entity_id = get_entity_id_func
+        self._get_option = get_option_func
         self._service_client = PowerwallServiceClient(hass, get_entity_id_func)
         self._validator = TransitionValidator(hass, get_entity_id_func)
 
@@ -484,14 +492,31 @@ class BatteryController:
         return True
 
     def _get_minimum_target_soc(self) -> float:
-        """Read the minimum target SOC from the configured entity.
+        """Read the minimum target SOC from the configured option.
+
+        Issue #894: previously looked up an entity id for ``minimum_target_soc``
+        and read it as a state, but that key is NOT in DEFAULT_ENTITY_IDS — it's
+        a config_entry OPTION, not a data entity. ``_get_entity_id`` returned ""
+        and ``read_float("")`` silently fell back to a hardcoded 10.0, ignoring
+        the user's configured slider value during SPIKE_DISCHARGE.
+
+        Now reads via the ``get_option_func`` (mirrors the state machine's
+        ``_get_option``), falling back to DEFAULT_MINIMUM_TARGET_SOC (20, not
+        the buggy 10) when the function isn't wired or the option is unset.
 
         Returns:
-            Minimum target SOC percentage (default 10 if entity unavailable).
+            Minimum target SOC percentage.
 
         """
-        entity_id = self._get_entity_id("minimum_target_soc")
-        return self._validator.read_float(entity_id, default=10.0)
+        if self._get_option is not None:
+            try:
+                value = self._get_option(
+                    CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
+                )
+                return float(value)
+            except (TypeError, ValueError):
+                return float(DEFAULT_MINIMUM_TARGET_SOC)
+        return float(DEFAULT_MINIMUM_TARGET_SOC)
 
     async def set_force_discharge(
         self,

@@ -4,11 +4,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.integration.controller import BatteryController
 from custom_components.localshift.const import (
+    CONF_MINIMUM_TARGET_SOC,
+    DEFAULT_MINIMUM_TARGET_SOC,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
+from custom_components.localshift.integration.controller import BatteryController
 
 
 @pytest.fixture
@@ -33,7 +35,9 @@ def mock_get_entity_id():
             "teslemetry_allow_export": "select.tesla_powerwall_allow_export",
             "teslemetry_grid_power": "sensor.tesla_powerwall_grid_power",
             "teslemetry_allow_charging_from_grid": "switch.tesla_powerwall_allow_charging_from_grid",
-            "minimum_target_soc": "number.minimum_target_soc",
+            # NOTE: minimum_target_soc is NOT here — it's a config_entry OPTION,
+            # not a data entity. The controller reads it via get_option_func
+            # (Issue #894). Mapping it here masked the production bug for months.
         }
         return entity_map.get(key)
 
@@ -42,8 +46,20 @@ def mock_get_entity_id():
 
 @pytest.fixture
 def battery_controller(mock_hass, mock_get_entity_id):
-    """Create a BatteryController instance."""
-    return BatteryController(mock_hass, mock_get_entity_id)
+    """Create a BatteryController instance.
+
+    Wired with a get_option_func so minimum_target_soc reads work (Issue #894).
+    Individual tests can override the options dict by mutating the controller's
+    _get_option closure, or by constructing their own controller.
+    """
+    options = {CONF_MINIMUM_TARGET_SOC: DEFAULT_MINIMUM_TARGET_SOC}
+
+    def get_option(key, default=None):
+        return options.get(key, default)
+
+    return BatteryController(
+        mock_hass, mock_get_entity_id, get_option_func=get_option
+    )
 
 
 @pytest.fixture
@@ -346,11 +362,11 @@ class TestSetForceDischarge:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "10"
+                # Must match the option-derived minimum_target_soc (20, the
+                # fixture default) so validation passes (Issue #894).
+                state.state = str(DEFAULT_MINIMUM_TARGET_SOC)
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
-            elif "minimum_target_soc" in entity_id:
-                state.state = "10"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -415,10 +431,26 @@ class TestSetForceDischarge:
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_discharge_uses_minimum_target_soc(
-        self, battery_controller, coordinator_data, mock_hass
+        self, mock_hass, mock_get_entity_id, coordinator_data
     ):
-        """Test that force discharge uses minimum_target_soc when no override."""
+        """Test that force discharge uses the configured minimum_target_soc.
+
+        Issue #894: previously the controller tried to read minimum_target_soc
+        as a data ENTITY (which doesn't exist in DEFAULT_ENTITY_IDS), silently
+        falling back to 10.0. Now reads via get_option_func (config_entry
+        option), so the user's configured slider value flows through.
+        """
         mock_hass.services.async_call.return_value = None
+
+        # Configure minimum_target_soc=15 via the option path (production wiring).
+        options = {CONF_MINIMUM_TARGET_SOC: 15.0}
+
+        def get_option(key, default=None):
+            return options.get(key, default)
+
+        controller = BatteryController(
+            mock_hass, mock_get_entity_id, get_option_func=get_option
+        )
 
         def mock_get_state(entity_id):
             if entity_id is None:
@@ -430,13 +462,11 @@ class TestSetForceDischarge:
                 state.state = "15"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
-            elif "minimum_target_soc" in entity_id:
-                state.state = "15"
             return state
 
         mock_hass.states.get = mock_get_state
 
-        result = await battery_controller.set_force_discharge(coordinator_data)
+        result = await controller.set_force_discharge(coordinator_data)
 
         assert result is True
         # Should have used minimum_target_soc (15) for reserve
@@ -487,6 +517,82 @@ class TestSetForceDischarge:
                     break
         assert export_call is not None
         assert export_call[0][2]["option"] == TESLEMETRY_EXPORT_BATTERY_OK
+
+
+# =============================================================================
+# MINIMUM_TARGET_SOC READ TESTS (Issue #894)
+# =============================================================================
+
+
+class TestMinimumTargetSocRead:
+    """Tests that the controller reads the configured minimum_target_soc.
+
+    Issue #894: ``_get_minimum_target_soc`` looked up an entity id for
+    ``minimum_target_soc``, but that key is NOT in DEFAULT_ENTITY_IDS — it's a
+    config_entry OPTION, not a data entity. So ``_get_entity_id`` returned "" and
+    ``read_float("")`` returned the hardcoded default (10.0), silently ignoring
+    the user's configured slider value during SPIKE_DISCHARGE.
+
+    The pre-existing test ``test_set_force_discharge_uses_minimum_target_soc``
+    masked this for months because its ``mock_get_entity_id`` fixture provided a
+    ``minimum_target_soc`` → entity_id mapping that production never sets up.
+    These tests model the REAL production wiring (option-based, not entity-based).
+    """
+
+    @pytest.fixture
+    def battery_controller_with_options(self, mock_hass, mock_get_entity_id):
+        """Controller wired with a get_option_func like the state machine.
+
+        Production coordinator passes ``self.get_option`` (reads config_entry
+        options). The controller needs this to read minimum_target_soc correctly.
+        """
+        options = {CONF_MINIMUM_TARGET_SOC: 25.0}
+
+        def get_option(key, default=None):
+            return options.get(key, default)
+
+        return BatteryController(
+            mock_hass, mock_get_entity_id, get_option_func=get_option
+        )
+
+    def test_get_minimum_target_soc_reads_configured_value(
+        self, battery_controller_with_options
+    ):
+        """Configured minimum_target_soc (25.0) must flow through, not 10.0."""
+        assert (
+            battery_controller_with_options._get_minimum_target_soc() == 25.0
+        )
+
+    def test_get_minimum_target_soc_falls_back_to_default_when_unset(
+        self, mock_hass, mock_get_entity_id
+    ):
+        """When the option isn't set, fall back to DEFAULT_MINIMUM_TARGET_SOC.
+
+        Note: the const default is 20, NOT the 10.0 that was hardcoded in the
+        buggy version — that was a second bug (default mismatch).
+        """
+        options = {}
+
+        def get_option(key, default=None):
+            return options.get(key, default)
+
+        controller = BatteryController(
+            mock_hass, mock_get_entity_id, get_option_func=get_option
+        )
+
+        assert controller._get_minimum_target_soc() == DEFAULT_MINIMUM_TARGET_SOC
+
+    def test_get_minimum_target_soc_no_option_func(
+        self, mock_hass, mock_get_entity_id
+    ):
+        """Backward compat: no get_option_func → fall back to default.
+
+        Older callers that don't pass get_option_func still work; they get the
+        const default rather than crashing.
+        """
+        controller = BatteryController(mock_hass, mock_get_entity_id)
+
+        assert controller._get_minimum_target_soc() == DEFAULT_MINIMUM_TARGET_SOC
 
 
 # =============================================================================
@@ -1117,23 +1223,35 @@ class TestHelperMethods:
 
         assert result == "default"
 
-    def test_get_minimum_target_soc(self, battery_controller, mock_hass):
-        """Test _get_minimum_target_soc reads from entity."""
-        state = MagicMock()
-        state.state = "15"
-        mock_hass.states.get = MagicMock(return_value=state)
+    def test_get_minimum_target_soc(self, mock_hass, mock_get_entity_id):
+        """Test _get_minimum_target_soc reads from config option.
 
-        result = battery_controller._get_minimum_target_soc()
+        Issue #894: minimum_target_soc is a config_entry OPTION, not a data
+        entity. The controller reads it via get_option_func (mirrors the state
+        machine), not via entity-id lookup.
+        """
+        options = {CONF_MINIMUM_TARGET_SOC: 15.0}
+
+        def get_option(key, default=None):
+            return options.get(key, default)
+
+        controller = BatteryController(
+            mock_hass, mock_get_entity_id, get_option_func=get_option
+        )
+
+        result = controller._get_minimum_target_soc()
 
         assert result == 15.0
 
     def test_get_minimum_target_soc_default(self, battery_controller, mock_hass):
-        """Test _get_minimum_target_soc returns default when unavailable."""
-        mock_hass.states.get = MagicMock(return_value=None)
+        """Test _get_minimum_target_soc returns DEFAULT_MINIMUM_TARGET_SOC when unset.
 
+        The fixture wires get_option_func with the option unset, so the default
+        from const.py (20) applies — NOT the old hardcoded 10.0 (Issue #894).
+        """
         result = battery_controller._get_minimum_target_soc()
 
-        assert result == 10.0
+        assert result == float(DEFAULT_MINIMUM_TARGET_SOC)
 
     def test_read_fresh_soc_success(self, battery_controller, mock_hass):
         """Issue #559 Phase 4: test read_fresh_soc() returns float on valid state."""
