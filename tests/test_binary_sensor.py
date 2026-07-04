@@ -18,6 +18,7 @@ from custom_components.localshift.binary_sensor import (
     ForecastExpensivePeriodSensor,
     ForecastSpikeWithinWindowSensor,
     LocalShiftBinarySensorBase,
+    OptimizerSocUnderpreparedSensor,
     SolarCanReachTargetSensor,
     TeslaOverrideActiveSensor,
     async_setup_entry,
@@ -50,6 +51,7 @@ def mock_coordinator():
     coordinator.data.backup_reserve = 20
     coordinator.data.grid_services_active = None
     coordinator.data.storm_watch_active = None
+    coordinator.data.optimizer_soc_underprepared = False
     coordinator.data.recent_decision_log = []
     coordinator._state_machine = MagicMock()
     coordinator._state_machine.is_tesla_override_active.return_value = False
@@ -459,7 +461,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 11
+        assert len(added_entities) == 12
 
         sensor_classes = [type(s) for s in added_entities]
         assert ForecastSpikeWithinWindowSensor in sensor_classes
@@ -473,6 +475,7 @@ class TestAsyncSetupEntry:
         assert ExcessSolarAvailableSensor in sensor_classes
         assert TeslaOverrideActiveSensor in sensor_classes
         assert AmberExpressDemandWindowSensor in sensor_classes
+        assert OptimizerSocUnderpreparedSensor in sensor_classes
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_passes_coordinator(
@@ -490,3 +493,69 @@ class TestAsyncSetupEntry:
         for sensor in added_entities:
             assert sensor.coordinator == mock_coordinator
             assert sensor._entry == mock_entry
+
+
+# ---------------------------------------------------------------------------
+# OptimizerSocUnderpreparedSensor (Issue #891)
+# ---------------------------------------------------------------------------
+
+
+class TestOptimizerSocUnderpreparedSensor:
+    """Tests for OptimizerSocUnderpreparedSensor.
+
+    Surfaces data.optimizer_soc_underprepared so the 2026-06-30 silent-failure
+    mode (battery entered the demand window far below target while the summary
+    reported healthy) is visible without tailing logs.
+    """
+
+    def test_sensor_initialization(self, mock_coordinator, mock_entry):
+        """Test sensor initializes with correct attributes."""
+        sensor = OptimizerSocUnderpreparedSensor(mock_coordinator, mock_entry)
+
+        assert sensor._attr_unique_id == "localshift_optimizer_soc_underprepared"
+        assert sensor._attr_name == "Optimizer SOC Underprepared"
+
+    def test_sensor_state_off_when_flag_false(self, mock_coordinator, mock_entry):
+        """Test sensor reports off when the underprepared flag is False."""
+        mock_coordinator.data.optimizer_soc_underprepared = False
+        sensor = OptimizerSocUnderpreparedSensor(mock_coordinator, mock_entry)
+
+        sensor._update_from_coordinator()
+
+        assert sensor._attr_is_on is False
+
+    def test_sensor_state_on_when_flag_true(self, mock_coordinator, mock_entry):
+        """Test sensor reports on when the underprepared flag is True."""
+        mock_coordinator.data.optimizer_soc_underprepared = True
+        sensor = OptimizerSocUnderpreparedSensor(mock_coordinator, mock_entry)
+
+        sensor._update_from_coordinator()
+
+        assert sensor._attr_is_on is True
+
+    def test_sensor_state_off_when_flag_missing(self, mock_coordinator, mock_entry):
+        """Test sensor defaults to off when the flag attribute is missing.
+
+        Defensive: on a fresh coordinator data (before the first optimizer
+        cycle) the attribute may not be populated yet.
+        """
+        del mock_coordinator.data.optimizer_soc_underprepared
+        sensor = OptimizerSocUnderpreparedSensor(mock_coordinator, mock_entry)
+
+        sensor._update_from_coordinator()
+
+        assert sensor._attr_is_on is False
+
+    def test_icon_when_on(self, mock_coordinator, mock_entry):
+        """Test icon changes to alert when sensor is on."""
+        sensor = OptimizerSocUnderpreparedSensor(mock_coordinator, mock_entry)
+        sensor._attr_is_on = True
+
+        assert sensor.icon == "mdi:alert"
+
+    def test_icon_when_off(self, mock_coordinator, mock_entry):
+        """Test icon is checked when sensor is off."""
+        sensor = OptimizerSocUnderpreparedSensor(mock_coordinator, mock_entry)
+        sensor._attr_is_on = False
+
+        assert sensor.icon == "mdi:check-circle"

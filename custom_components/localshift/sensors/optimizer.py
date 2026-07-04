@@ -136,6 +136,11 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
             "adjusted_solar_gain_pct": summary.get("adjusted_solar_gain_pct"),
             "effective_soc_at_terminal": summary.get("effective_soc_at_terminal"),
+            # Issue #891: surface the underprepared flag so the post-6/30
+            # silent-failure mode is visible to dashboards/alerts, not just logs.
+            "optimizer_soc_underprepared": bool(
+                getattr(d, "optimizer_soc_underprepared", False)
+            ),
             "solar_confidence_avg": avg_confidence,
             "solar_confidence_regime": (
                 "high"

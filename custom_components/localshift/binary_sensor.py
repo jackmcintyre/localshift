@@ -38,6 +38,8 @@ async def async_setup_entry(
         TeslaOverrideActiveSensor(coordinator, entry),
         # Amber Express demand window (Issue #300)
         AmberExpressDemandWindowSensor(coordinator, entry),
+        # Optimizer SOC underprepared (Issue #891)
+        OptimizerSocUnderpreparedSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -321,3 +323,38 @@ class AmberExpressDemandWindowSensor(LocalShiftBinarySensorBase):
     def _update_from_coordinator(self) -> None:
         """Update state from coordinator data."""
         self._attr_is_on = self.coordinator.data.demand_window_amber
+
+
+# ---------------------------------------------------------------------------
+# Optimizer SOC Underprepared Binary Sensor (Issue #891)
+# ---------------------------------------------------------------------------
+
+
+class OptimizerSocUnderpreparedSensor(LocalShiftBinarySensorBase):
+    """Whether the battery entered the demand window far below target.
+
+    Surfaces ``data.optimizer_soc_underprepared`` (set by
+    ``OptimizerFacade._warn_soc_divergence`` when a demand window is active
+    but the live SOC is more than 20 points below target). The 2026-06-30
+    silent miss saw the battery enter the DW at ~10% while the summary
+    reported a healthy DW-entry SOC; this sensor makes that failure mode
+    visible to dashboards and automations without tailing logs.
+    """
+
+    _attr_unique_id = "localshift_optimizer_soc_underprepared"
+    _attr_name = "Optimizer SOC Underprepared"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on state."""
+        return "mdi:alert" if self._attr_is_on else "mdi:check-circle"
+
+    def _update_from_coordinator(self) -> None:
+        """Update state from coordinator data.
+
+        Defaults to False when the flag is not yet populated (e.g. before the
+        first optimizer cycle has run).
+        """
+        self._attr_is_on = bool(
+            getattr(self.coordinator.data, "optimizer_soc_underprepared", False)
+        )

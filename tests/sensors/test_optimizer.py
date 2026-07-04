@@ -331,6 +331,41 @@ class TestOptimizerSummarySensor:
         assert attrs["terminal_shortfall_pct"] == 0.0
         assert attrs["initial_soc_pct"] == 50.0
 
+    def test_extra_state_attributes_surfaces_optimizer_soc_underprepared(self):
+        """Issue #891: the underprepared flag must be visible on the summary.
+
+        The 2026-06-30 silent miss saw the battery enter the demand window at
+        ~10% while the summary reported a healthy DW-entry SOC. The flag exists
+        on CoordinatorData but was never surfaced — only a WARNING log line.
+        Assert it appears as a summary attribute so dashboards/alerts can see it.
+        """
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+            optimizer_soc_underprepared=True,
+        )
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["optimizer_soc_underprepared"] is True
+
+    def test_extra_state_attributes_optimizer_soc_underprepared_defaults_false(
+        self,
+    ):
+        """Issue #891: missing flag attribute defaults to False, not None."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+        )
+        # Fresh CoordinatorData — optimizer_soc_underprepared not yet set
+        assert hasattr(data, "optimizer_soc_underprepared") is False or getattr(
+            data, "optimizer_soc_underprepared", False
+        ) is False
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["optimizer_soc_underprepared"] is False
+
     def test_icon_success(self):
         """Test icon for success state."""
         mock_coordinator, data = create_mock_coordinator_with_data(

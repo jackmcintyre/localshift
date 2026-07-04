@@ -114,4 +114,4 @@ uv run pytest
 ```
 
 ## Entity Counts
-Sensors 35 | Binary Sensors 11 | Switches 8 | Numbers 7 | Selects 2 | Buttons 2 (Total 65)
+Sensors 35 | Binary Sensors 12 | Switches 8 | Numbers 7 | Selects 2 | Buttons 2 (Total 66)

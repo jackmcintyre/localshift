@@ -9,7 +9,7 @@ The integration creates **63 entities** grouped under a single "LocalShift" devi
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 35 | `sensor` |
-| Binary Sensors | 11 | `binary_sensor` |
+| Binary Sensors | 12 | `binary_sensor` |
 | Switches | 8 | `switch` |
 | Numbers | 5 | `number` |
 | Selects | 2 | `select` |
@@ -1091,6 +1091,29 @@ State: on
 ```
 
 **Icon:** Dynamic (clock-alert when on, clock-check when off)
+
+---
+
+### 12. binary_sensor.localshift_optimizer_soc_underprepared (Issue #891)
+
+**Purpose:** Surfaces whether the battery entered the demand window far below target.
+
+Added in Issue #891. The 2026-06-30 silent miss saw the battery enter the demand
+window at ~10% while the optimizer summary reported a healthy DW-entry SOC. The
+underprepared flag (`data.optimizer_soc_underprepared`) is set by
+`OptimizerFacade._warn_soc_divergence` when a demand window is active but the
+live SOC is more than 20 points below target — this sensor makes that failure
+mode visible to dashboards and automations without tailing logs. The flag is also
+exposed as an attribute on `sensor.localshift_optimizer_summary`.
+
+**State:** `on` when the optimizer detects the battery is materially under target during an active demand window, `off` otherwise
+
+**Example Data:**
+```
+State: off
+```
+
+**Icon:** Dynamic (alert when on, check-circle when off)
 
 ---
 
