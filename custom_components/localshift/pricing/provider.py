@@ -132,7 +132,7 @@ class AmberProvider(_ProviderMixin):
         self, hass: HomeAssistant, price_entity_id: str
     ) -> list[ForecastSlot]:
         """Read forecasts from separate forecast entity."""
-        forecast_entity = price_entity_id.replace("_price", "_forecast")
+        forecast_entity = price_entity_id.replace("_price", "_forecast", 1)
         raw_forecasts = self._read_attribute(hass, forecast_entity, "forecasts", [])
 
         if not raw_forecasts:
@@ -183,7 +183,7 @@ class AmberExpressProvider(_ProviderMixin):
             )
             price_entity_id = corrected
 
-        detailed_entity = price_entity_id.replace("_price", "_price_detailed")
+        detailed_entity = price_entity_id.replace("_price", "_price_detailed", 1)
         raw_forecasts = self._read_attribute(hass, detailed_entity, "forecasts", [])
 
         if not raw_forecasts:

@@ -2239,3 +2239,55 @@ def test_read_shadow_prices_fallback_without_provider(mock_hass, mock_entry):
     # Should have fallback data (empty lists since mocked hass returns None)
     assert isinstance(shadow["general_forecast_shadow"], list)
     assert isinstance(shadow["feed_in_forecast_shadow"], list)
+
+
+class TestEntityIdDerivationCount:
+    """Issue #900: entity-id derivation must replace only the FIRST occurrence.
+
+    The codebase derives forecast/detailed/demand_window entity ids from price
+    entity ids via str.replace. Unbounded replace() swaps EVERY occurrence,
+    which corrupts ids containing the substring more than once (rare but
+    possible with custom renames). The correct pattern is replace(..., 1).
+    """
+
+    def test_read_legacy_forecasts_replaces_only_first_price_substring(
+        self, mock_hass
+    ):
+        """_read_legacy_forecasts derives _price_detailed from _price; only first.
+
+        An entity id like 'sensor.amber_price_price' must become
+        'sensor.amber_price_detailed_price', NOT
+        'sensor.amber_price_detailed_price_detailed'.
+        """
+        from custom_components.localshift.const import PRICING_SOURCE_AMBER_EXPRESS
+
+        entry = MagicMock()
+        entry.data = {}
+        validator = MagicMock()
+        validator.should_allow_automation = MagicMock(return_value=True)
+
+        reader = StateReader(mock_hass, entry, validator, pricing_provider=None)
+
+        # Capture which entity ids _read_attribute is called with.
+        requested_ids: list[str] = []
+        mock_hass.states.get = MagicMock(
+            side_effect=lambda eid: requested_ids.append(eid) or None
+        )
+
+        # Double '_price' substring in the input entity id.
+        reader._read_legacy_forecasts(
+            data=CoordinatorData(),
+            general_price_entity="sensor.amber_price_price",
+            feed_in_price_entity="sensor.amber_feed_in_price_price",
+            pricing_source=PRICING_SOURCE_AMBER_EXPRESS,
+        )
+
+        # The detailed derivation must replace only the FIRST '_price'.
+        assert "sensor.amber_price_detailed_price" in requested_ids
+        assert "sensor.amber_feed_in_price_detailed_price" in requested_ids
+        # And NOT produce the double-replaced form.
+        assert "sensor.amber_price_detailed_price_detailed" not in requested_ids
+        assert (
+            "sensor.amber_feed_in_price_detailed_price_detailed"
+            not in requested_ids
+        )

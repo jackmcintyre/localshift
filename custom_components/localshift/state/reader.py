@@ -242,10 +242,10 @@ class StateReader:
         else:
             # For amber, need separate forecast entities - try to derive them
             shadow_general_forecast = self._read_attribute(
-                shadow_general_entity.replace("_price", "_forecast"), "forecasts", []
+                shadow_general_entity.replace("_price", "_forecast", 1), "forecasts", []
             )
             shadow_feed_in_forecast = self._read_attribute(
-                shadow_feed_in_entity.replace("_price", "_forecast"), "forecasts", []
+                shadow_feed_in_entity.replace("_price", "_forecast", 1), "forecasts", []
             )
 
         return {
@@ -464,8 +464,8 @@ class StateReader:
         Handles both Amber Express (detailed entities) and standard forecast sensors.
         """
         if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
-            general_detailed = general_price_entity.replace("_price", "_price_detailed")
-            feed_in_detailed = feed_in_price_entity.replace("_price", "_price_detailed")
+            general_detailed = general_price_entity.replace("_price", "_price_detailed", 1)
+            feed_in_detailed = feed_in_price_entity.replace("_price", "_price_detailed", 1)
 
             general_forecast = self._read_attribute(general_detailed, "forecasts", [])
             feed_in_forecast = self._read_attribute(feed_in_detailed, "forecasts", [])
@@ -831,7 +831,7 @@ class StateReader:
             if price_spike_entity:
                 # Replace "price_spike" with "demand_window" to get the entity
                 demand_window_entity = price_spike_entity.replace(
-                    "price_spike", "demand_window"
+                    "price_spike", "demand_window", 1
                 )
                 data.demand_window_amber = self._read_bool(demand_window_entity)
                 _LOGGER.debug(
