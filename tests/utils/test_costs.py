@@ -344,3 +344,73 @@ class TestAccumulateEnergyKwh:
         assert data.grid_to_battery_kwh_today == 0.0
         assert data.soc_gain_during_grid_charge_kwh_today == 0.0
         assert data.export_while_battery_not_full_kwh_today == 0.0
+
+    def test_reset_daily_accumulators_clears_last_soc_pct(self, cost_tracker):
+        """Issue #899: reset must clear _last_soc_pct to avoid cross-day smear.
+
+        Without this, a grid charge spanning midnight leaves _last_soc_pct at
+        the pre-midnight value (e.g. 40%). The first accumulate_costs after
+        midnight then computes soc_delta = (current - 40)% and attributes the
+        entire overnight gain to the new day's soc_gain_during_grid_charge_kwh,
+        corrupting grid_charge_efficiency.
+        """
+        data = self._make_data()
+        data.soc = 40.0
+        data.charging_from_grid = True
+        # Prime _last_soc_pct via a real accumulation.
+        cost_tracker.accumulate_costs(data)
+        assert cost_tracker._last_soc_pct == 40.0
+
+        cost_tracker.reset_daily_accumulators(data)
+
+        assert cost_tracker._last_soc_pct is None
+
+    def test_no_phantom_soc_gain_after_midnight_reset(self, cost_tracker):
+        """Issue #899 end-to-end: post-midnight sample must not attribute the
+        overnight SOC delta to the new day.
+
+        Steps:
+        1. Pre-midnight grid charge: SOC 40 -> 50 over the sample.
+        2. Midnight reset.
+        3. Post-midnight sample at SOC 51 (only +1 since reset).
+        Without the fix, step 3 sees soc_delta = 51 - 50 (last_soc_pct not
+        cleared) ... wait, the bug is that _last_soc_pct is NOT cleared, so
+        step 3 computes 51 - 50 = 1 (correct only if last_soc_pct was 50).
+
+        Actually the real bug: if the LAST pre-midnight sample left
+        _last_soc_pct at 50, and the next grid-charge sample after reset is
+        at 51, that's correct. The bug is when there's NO accumulation between
+        reset and the post-midnight charge — _last_soc_pct stays at the
+        pre-reset value and the first new sample computes delta from there.
+
+        Simulate: pre-midnight SOC ends at 50 (last_soc_pct=50). Reset.
+        Post-midnight: SOC jumps to 80 (battery charged by solar, not grid,
+        between samples). Now grid charge sample at SOC 81.
+        Without fix: delta = 81 - 50 = 31% attributed to grid charge (wrong).
+        With fix: delta = 81 - 81... no, _last_soc_pct=None so first sample
+        establishes baseline at 81, no phantom gain.
+        """
+        data = self._make_data()
+
+        # Pre-midnight grid charge: SOC rises 40 -> 50.
+        data.soc = 40.0
+        data.charging_from_grid = True
+        cost_tracker.accumulate_costs(data)
+        data.soc = 50.0
+        cost_tracker.accumulate_costs(data)
+        assert cost_tracker._last_soc_pct == 50.0
+
+        # Midnight reset.
+        cost_tracker.reset_daily_accumulators(data)
+        assert cost_tracker._last_soc_pct is None
+
+        # Post-midnight: SOC jumped to 80 (solar, not grid, between samples).
+        # First grid-charge sample of the new day at SOC 81.
+        data.soc = 81.0
+        gain_before = data.soc_gain_during_grid_charge_kwh_today
+        cost_tracker.accumulate_costs(data)
+
+        # First post-reset sample must establish a NEW baseline (_last_soc_pct
+        # = 81), not attribute any gain. The phantom 31% delta must NOT appear.
+        assert data.soc_gain_during_grid_charge_kwh_today == gain_before
+        assert cost_tracker._last_soc_pct == 81.0

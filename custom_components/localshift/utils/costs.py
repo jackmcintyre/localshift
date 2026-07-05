@@ -118,6 +118,13 @@ class CostTracker:
         """Reset daily cost and energy accumulators and the target flag.
 
         Replaces YAML A12 (localshift_reset_target_reached).
+
+        Issue #899: also clears ``_last_soc_pct`` so the first grid-charge
+        sample after midnight establishes a fresh baseline. Without this, a
+        grid charge spanning midnight leaves the baseline at the pre-midnight
+        SOC, and the next sample attributes the entire overnight gain to the
+        new day's ``soc_gain_during_grid_charge_kwh_today`` — corrupting
+        ``grid_charge_efficiency``.
         """
         data.grid_import_cost = 0.0
         data.grid_export_revenue = 0.0
@@ -125,6 +132,7 @@ class CostTracker:
         data.battery_charge_cost = 0.0
         data.target_reached_today = False
         self._reset_energy_accumulators(data)
+        self._last_soc_pct = None
 
     def _reset_energy_accumulators(self, data: CoordinatorData) -> None:
         """Reset the Issue #868 daily energy accumulators."""

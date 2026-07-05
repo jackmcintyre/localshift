@@ -248,20 +248,30 @@ class TickScheduler:
         accumulators (battery_savings, battery_charge_cost, solar_yield_value,
         grid_export_revenue) and the target_reached flag.
 
+        Issue #899: delegates to ``CostTracker.reset_daily_accumulators`` so the
+        SOC baseline (``_last_soc_pct``) is also cleared — preventing the first
+        post-midnight grid-charge sample from attributing the overnight SOC
+        delta to the new day. Falls back to inline zeroing if no cost_tracker
+        (defensive — should always be present post-init).
+
         Notifies listeners and logs the reset for debugging.
         """
-        self._coordinator.data.grid_import_cost = 0.0
-        self._coordinator.data.grid_export_revenue = 0.0
-        self._coordinator.data.battery_savings = 0.0
-        self._coordinator.data.battery_charge_cost = 0.0
-        self._coordinator.data.target_reached_today = False
-        # Issue #868: reset the daily energy accumulators alongside the cost
-        # accumulators so the performance-metric ratios start fresh each day.
-        self._coordinator.data.grid_import_kwh_today = 0.0
-        self._coordinator.data.grid_export_kwh_today = 0.0
-        self._coordinator.data.grid_to_battery_kwh_today = 0.0
-        self._coordinator.data.soc_gain_during_grid_charge_kwh_today = 0.0
-        self._coordinator.data.export_while_battery_not_full_kwh_today = 0.0
+        if self._coordinator.cost_tracker is not None:
+            self._coordinator.cost_tracker.reset_daily_accumulators(
+                self._coordinator.data
+            )
+        else:
+            # Defensive fallback — should never happen post-init.
+            self._coordinator.data.grid_import_cost = 0.0
+            self._coordinator.data.grid_export_revenue = 0.0
+            self._coordinator.data.battery_savings = 0.0
+            self._coordinator.data.battery_charge_cost = 0.0
+            self._coordinator.data.target_reached_today = False
+            self._coordinator.data.grid_import_kwh_today = 0.0
+            self._coordinator.data.grid_export_kwh_today = 0.0
+            self._coordinator.data.grid_to_battery_kwh_today = 0.0
+            self._coordinator.data.soc_gain_during_grid_charge_kwh_today = 0.0
+            self._coordinator.data.export_while_battery_not_full_kwh_today = 0.0
 
         if self._coordinator.learning_orchestrator is not None:
             self._coordinator.learning_orchestrator.handle_midnight_reset(
