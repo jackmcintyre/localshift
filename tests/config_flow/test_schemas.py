@@ -84,3 +84,49 @@ class TestBuildSolcastSchema:
             include_notify=False,
         )
         assert isinstance(result, vol.Schema)
+
+
+class TestAdvancedSchemaBounds:
+    """Tests that the advanced-options slider bounds match THRESHOLD_RANGES.
+
+    Issue #898: the options-flow NumberSelector for target_penalty capped at
+    0.100 while THRESHOLD_RANGES (used by the NumberEntity) allowed 0.200. A
+    user who set 0.15 via the number entity would be silently clamped to 0.100
+    on re-opening the options flow. Assert every advanced-schema selector's max
+    matches the corresponding THRESHOLD_RANGES entry so this drift can't recur.
+    """
+
+    @pytest.mark.parametrize(
+        "conf_key",
+        [
+            "cheap_price_percentile",
+            "max_pre_charge_price",
+            "battery_target",
+            "minimum_target_soc",
+            "target_penalty",
+            "min_cycle_saving",
+        ],
+    )
+    def test_advanced_schema_selector_max_matches_threshold_ranges(
+        self, conf_key: str
+    ):
+        from custom_components.localshift.config_flow import LocalShiftOptionsFlow
+        from custom_components.localshift.const import THRESHOLD_RANGES
+
+        flow = LocalShiftOptionsFlow()
+        schema = flow._build_advanced_schema({})
+
+        # Find the selector for this conf_key and compare its max to const.
+        expected_max = THRESHOLD_RANGES[conf_key]["max"]
+        for field, selector_obj in schema.schema.items():
+            # voluptuous Required/Optional markers expose the key via .schema
+            field_key = getattr(field, "schema", field)
+            if field_key == conf_key:
+                # selector_obj.config is the NumberSelectorConfig dict
+                actual_max = selector_obj.config["max"]
+                assert actual_max == expected_max, (
+                    f"{conf_key}: options-flow max ({actual_max}) != "
+                    f"THRESHOLD_RANGES max ({expected_max})"
+                )
+                return
+        pytest.fail(f"{conf_key} not found in advanced schema")

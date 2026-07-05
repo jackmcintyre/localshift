@@ -775,7 +775,9 @@ class LocalShiftOptionsFlow(OptionsFlow):
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.000,
-                    max=0.100,
+                    # Issue #898: must match THRESHOLD_RANGES max (0.200). Was
+                    # 0.100, silently clamping values the NumberEntity allows.
+                    max=0.200,
                     step=0.005,
                     unit_of_measurement="$/%-point",
                     mode=selector.NumberSelectorMode.SLIDER,
