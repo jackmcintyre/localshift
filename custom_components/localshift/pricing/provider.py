@@ -72,10 +72,15 @@ class _ProviderMixin:
         duration = raw.get("duration")
         if duration is None:
             duration = self._infer_duration_minutes(raw)
+        # Issue #897: coerce per_kwh to float. HA state attributes aren't
+        # guaranteed numeric — Amber/Amber Express slots can arrive with
+        # per_kwh as a JSON string ("0.25") or int (0). The surrounding
+        # read_forecasts already catches ValueError/TypeError raised by a
+        # totally-uncoercible value.
         return ForecastSlot(
             start_time=self._parse_timestamp(raw["start_time"]),
             duration=int(duration),
-            per_kwh=raw["per_kwh"],
+            per_kwh=float(raw["per_kwh"]),
             is_spike=self.is_spike(raw),  # type: ignore[attr-defined]
             source_type=self.name,  # type: ignore[attr-defined]
         )
