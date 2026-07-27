@@ -344,7 +344,11 @@ class StateMachine:
             and data.soc < battery_target
         )
 
-        if qualifies and pending not in self._plan_charge_granted:
+        if (
+            qualifies
+            and pending is not None
+            and pending not in self._plan_charge_granted
+        ):
             self._plan_charge_granted.add(pending)
             self._plan_charge_epoch += 1
             _LOGGER.debug(
