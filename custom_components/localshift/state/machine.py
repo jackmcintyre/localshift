@@ -44,6 +44,15 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Plan-disagreement trigger (2026-07-27 pre-charge incident): the modes whose
+# *start* the plan may ask for while the decision is frozen. The trigger is
+# deliberately ONE-DIRECTIONAL — only a wanted START of charging may grant a
+# token; a wanted STOP never does. Charging late costs money; charging one
+# extra interval does not, and the asymmetry is what makes the trigger
+# flap-free (see _update_plan_charge_epoch).
+_CHARGE_MODES = (BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING)
+_CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
+
 
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
@@ -96,6 +105,30 @@ class StateMachine:
         # (not by a transition), which kills the old deferred-redemption bug
         # where a stale token was redeemed minutes later by a non-price input.
         self._last_evaluated_fingerprint: str | None = None
+        # The price/spike/DW/floor half of the fingerprint from the last granted
+        # evaluation, kept separately so a grant can be attributed: same base +
+        # different epoch ⇒ the grant came from the plan alone.
+        self._last_evaluated_base: str | None = None
+        # Plan-disagreement trigger (2026-07-27 pre-charge incident): the plan is
+        # itself a decision input. ``_plan_charge_epoch`` is a MONOTONE counter
+        # incremented on the rising edge of "the plan wants to START charging while
+        # the decision is frozen", and is the 6th fingerprint component.
+        #
+        # The bound is enforced by BUDGET, not by edge memory. An earlier revision
+        # tracked only the last qualifying pending value; because a granted
+        # evaluation clears ``debug_plan_mode_pending``, that memory reset itself on
+        # the very next tick and the "rising edge" re-armed every 2 ticks —
+        # commit → pending clears → pending re-set → fresh rising edge, forever,
+        # inside one unchanged price context (measured: 11 grants over 21 ticks).
+        # ``_plan_charge_context`` + ``_plan_charge_granted`` instead spend at most
+        # one grant per (price context × wanted-charge mode) and refuse to re-grant
+        # until the price/spike/DW/floor context genuinely changes.
+        self._plan_charge_context: str | None = None
+        self._plan_charge_granted: set[str] = set()
+        self._plan_charge_epoch: int = 0
+        # One-shot suppression for callers that explicitly must not grant a mode
+        # change (async_recompute_and_evaluate(invalidate_decision=False)).
+        self._suppress_plan_charge_grant: bool = False
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -235,6 +268,92 @@ class StateMachine:
             "released_at": self._tesla_override_released_at,
         }
 
+    def _update_plan_charge_epoch(
+        self, data: CoordinatorData, context: str | None = None
+    ) -> None:
+        """Advance the plan-disagreement epoch (2026-07-27 pre-charge incident).
+
+        The original fingerprint enumerated price/spike/DW/floor as the only
+        legitimate re-decision triggers, silently assuming the plan is stable
+        between them. It is not: the DP's slot-0 action oscillates hold↔charge on
+        every replan because ``first_charge`` chases the cheapest slot forward.
+        The token therefore sampled the plan on a ~5-min stride and, on
+        2026-07-27, nearly every sample landed on a hold-phase plan — the wanted
+        charge was recorded in ``debug_plan_mode_pending`` dozens of times and
+        never committed (DW entered at 64% against a 95% target).
+
+        ``debug_plan_mode_pending`` is the value written by the *previous* tick's
+        facade run — the same documented 1-tick-lag pattern already used for
+        ``dw_active``/``soc_floor_breached`` (all are read pre-refresh).
+
+        Three gates decide whether a pending value qualifies:
+
+        1. it names a CHARGE mode — asymmetry gate #1, only a wanted *start*;
+        2. the committed mode is not already charging — asymmetry gate #2, which
+           is what makes a wanted *stop* ungrantable (a stop waits for the next
+           natural fingerprint change, ≤1 Amber tick);
+        3. SOC is below the battery target — nothing to grant at/above target.
+
+        The bound is a per-context BUDGET, not an edge detector. Edge detection
+        does not work here: a granted evaluation clears
+        ``debug_plan_mode_pending`` (``_commit_or_hold_mode``), so any memory of
+        "the last pending value" is reset by the very grant it is meant to gate,
+        the next frozen tick re-sets the pending value, and the tick after that
+        looks like a fresh rising edge. That re-arms every 2 ticks and re-grants
+        forever inside one unchanged price context — the #622 flap, restored.
+
+        Instead: each (price context × wanted-charge mode) pair may spend the
+        epoch exactly once. ``_plan_charge_granted`` records which charge modes
+        have already been granted in ``_plan_charge_context``, and is cleared only
+        when the price/spike/DW/floor context genuinely changes.
+
+        ⇒ at most ONE extra decision per (price context × wanted-charge mode) —
+        two charge modes exist, so at most two per context — and it can only start
+        charging. No charge→hold→charge cycle is reachable inside a single price
+        context, and no unbounded re-grant loop is either.
+
+        Args:
+            data: Coordinator data (read-only here).
+            context: The price/spike/DW/floor half of the decision fingerprint.
+                None (price sensor unavailable) resets the budget: we are frozen
+                anyway, and the next real context must not inherit a spent budget.
+
+        """
+        if self._suppress_plan_charge_grant:
+            # Explicit "may update the plan but must NOT grant a mode change"
+            # caller. Still re-baseline the context so the next real evaluation
+            # is not judged against a stale one.
+            self._plan_charge_context = context
+            self._plan_charge_granted.clear()
+            return
+
+        if context != self._plan_charge_context:
+            self._plan_charge_context = context
+            self._plan_charge_granted.clear()
+
+        pending = data.debug_plan_mode_pending
+        battery_target = float(
+            self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+
+        qualifies = (
+            context is not None
+            and pending in _CHARGE_MODE_VALUES
+            and data.active_mode not in _CHARGE_MODES
+            and data.soc is not None
+            and data.soc < battery_target
+        )
+
+        if qualifies and pending not in self._plan_charge_granted:
+            self._plan_charge_granted.add(pending)
+            self._plan_charge_epoch += 1
+            _LOGGER.debug(
+                "Plan-charge disagreement epoch %d (plan wants %s, committed %s)",
+                self._plan_charge_epoch,
+                pending,
+                data.active_mode.value,
+            )
+
     def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
         """Generate the discrete decision-context fingerprint.
 
@@ -247,6 +366,9 @@ class StateMachine:
         - spike: price-spike onset
         - dw_active: demand-window boundary crossing
         - soc_floor_breached: SOC dropped below the optimizer's minimum target
+        - plan_charge_epoch: the optimizer plan wants to START charging while the
+          committed decision is frozen (one-directional; see
+          _update_plan_charge_epoch)
 
         ``dw_active`` and ``soc_floor_breached`` are read from ``data`` *before*
         compute_derived_values refreshes them this tick. The resulting 1-tick
@@ -255,6 +377,17 @@ class StateMachine:
         snapshot as the decision context keeps the fingerprint consistent with
         the prices read at the same instant.
 
+        The same 1-tick lag applies to the plan-charge epoch: the pending plan
+        mode it is derived from was written by the previous tick's facade run.
+        Only the rising edge of a wanted charge is visible in the fingerprint —
+        the falling edge (the disagreement resolving) is deliberately invisible,
+        which is what makes the trigger flap-free.
+
+        This method is side-effect-free: it *reads* ``_plan_charge_epoch`` and
+        never updates it (``_apply_decision_token`` calls
+        ``_update_plan_charge_epoch`` first). Tests call it out-of-band to
+        enumerate distinct contexts; a mutating fingerprint would corrupt them.
+
         Args:
             data: Coordinator data with current prices and state.
 
@@ -262,6 +395,20 @@ class StateMachine:
             Fingerprint string or None if prices are unavailable. None must NOT
             count as a context change (the caller freezes on None).
 
+        """
+        base = self._get_decision_context(data)
+        if base is None:
+            return None
+        return f"{base}|{self._plan_charge_epoch}"
+
+    def _get_decision_context(self, data: CoordinatorData) -> str | None:
+        """The price/spike/DW/floor half of the fingerprint, without the epoch.
+
+        Split out so two things can be said precisely: which grants came from the
+        plan alone (same context, different epoch — see
+        ``mode_decision_plan_charge_only``), and when the plan-charge budget
+        should be refilled (``_update_plan_charge_epoch``). Both would be circular
+        if they had to read the full fingerprint, which contains the epoch.
         """
         buy = data.general_price
         sell = data.feed_in_price
@@ -650,19 +797,26 @@ class StateMachine:
             # to decide whether it may re-select active_mode this tick.
             self._apply_decision_token(data)
 
-            computation_engine.compute_derived_values(data)
-
             try:
+                # Inside the try: compute_derived_values runs the optimizer facade,
+                # and an exception from any post-facade step used to escape with
+                # mode_decision_allowed / mode_backstop_allowed still True — leaving
+                # the out-of-lock recompute armed to force a charge.
+                computation_engine.compute_derived_values(data)
                 await self._evaluate_core(data, computation_engine)
             finally:
                 # #622 gate replacement (transience guarantee): the decision
-                # token is valid ONLY within this in-lock window, from
-                # _apply_decision_token above to here. Resetting it (even on
-                # exception) guarantees the flag is never True for the
-                # OUT-OF-LOCK compute_derived_values call at the top of
+                # token — and the pre-charge backstop permission that rides the
+                # same window — are valid ONLY within this in-lock window, from
+                # _apply_decision_token above to here. Resetting both (even on
+                # exception) guarantees neither flag is True for the OUT-OF-LOCK
+                # compute_derived_values call at the top of
                 # coordinator.async_recompute_and_evaluate — so a load-deviation
-                # or solar reoptimize can never commit an ungated mode decision.
+                # or solar reoptimize can never commit an ungated mode decision
+                # nor force one through the backstop.
                 data.mode_decision_allowed = False
+                data.mode_decision_plan_charge_only = False
+                data.mode_backstop_allowed = False
                 if notify_func is not None:
                     notify_func()
 
@@ -678,17 +832,49 @@ class StateMachine:
         A None fingerprint (price sensor unavailable) never grants a decision and
         never overwrites the stored fingerprint: we stay frozen on the last known
         context until a genuinely new value arrives.
+
+        A plan-disagreement grant (the plan wants to start charging while frozen)
+        behaves identically: it is consumed by the evaluation that observes it
+        and does NOT create a deferrable credit for a later tick. It is also
+        *attributed*: when the price/spike/DW/floor context is unchanged and only
+        the epoch moved, ``mode_decision_plan_charge_only`` tells the facade this
+        grant may commit a charge mode and nothing else.
         """
-        fingerprint = self._get_decision_fingerprint(data)
+        # Plan-disagreement trigger: fold the plan into the decision context
+        # BEFORE fingerprinting, so the fingerprint computed here reflects the
+        # epoch this grant is based on. The context is passed in so the epoch's
+        # per-context budget and the fingerprint agree on what "context" means.
+        context = self._get_decision_context(data)
+        self._update_plan_charge_epoch(data, context)
+        self._suppress_plan_charge_grant = False
+
+        fingerprint = (
+            None if context is None else f"{context}|{self._plan_charge_epoch}"
+        )
         decision_allowed = (
             fingerprint is not None and fingerprint != self._last_evaluated_fingerprint
         )
+        # Same price/spike/DW/floor context as the last grant ⇒ the epoch is the
+        # only thing that moved ⇒ the plan alone granted this.
+        plan_charge_only = decision_allowed and context == self._last_evaluated_base
         if decision_allowed:
             # Consume immediately: the evaluation, not the transition, spends the
             # token. Covers every downstream path (including debounce-in-progress).
             self._last_evaluated_fingerprint = fingerprint
-            _LOGGER.debug("Decision token granted (fingerprint=%s)", fingerprint)
+            self._last_evaluated_base = context
+            _LOGGER.debug(
+                "Decision token granted (fingerprint=%s, plan_charge_only=%s)",
+                fingerprint,
+                plan_charge_only,
+            )
         data.mode_decision_allowed = decision_allowed
+        data.mode_decision_plan_charge_only = plan_charge_only
+        # The pre-charge execution backstop is NOT a decision token, but it is
+        # confined to the same in-lock window: opening it here (and closing it in
+        # the evaluate finally block) guarantees the out-of-lock
+        # compute_derived_values in coordinator.async_recompute_and_evaluate can
+        # never trip it.
+        data.mode_backstop_allowed = True
 
     async def _evaluate_core(
         self, data: CoordinatorData, computation_engine: ComputationEngine
@@ -1420,6 +1606,24 @@ class StateMachine:
         """
         _LOGGER.info("Decision fingerprint invalidated: %s", reason)
         self._last_evaluated_fingerprint = None
+        # Cleared with it, or the next grant would be misattributed to the plan
+        # ("same base as last time") and restricted to charge modes only.
+        self._last_evaluated_base = None
+
+    def suppress_next_plan_charge_grant(self, reason: str) -> None:
+        """Bar the NEXT evaluation from granting on the plan-charge trigger.
+
+        The contract of ``async_recompute_and_evaluate(invalidate_decision=False)``
+        is "may update the plan but must NOT grant a mode change". That path runs
+        ``compute_derived_values`` OUT OF LOCK immediately before evaluating, so
+        the frozen facade writes ``debug_plan_mode_pending`` and the evaluation
+        that follows would read it back with zero lag and grant — a mode change
+        caused by a load-deviation reoptimize, which is exactly what the flag
+        exists to prevent. The suppression is one-shot and is cleared by the
+        evaluation it applies to.
+        """
+        _LOGGER.debug("Plan-charge grant suppressed for next evaluation: %s", reason)
+        self._suppress_plan_charge_grant = True
 
     @property
     def in_mode_transition(self) -> bool:

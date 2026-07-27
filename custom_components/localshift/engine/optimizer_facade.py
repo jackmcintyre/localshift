@@ -27,6 +27,18 @@ from .slots import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
 
+# Projected DW-entry shortfall (%-points) above which the execution backstop takes
+# over from the token-gated commit path (2026-07-27 incident). Deliberately NOT a
+# config entity: this is a failure detector, not a tuning knob — it only fires when
+# the plan already wants a pre-DW charge that the decision token never sampled.
+PRECHARGE_BACKSTOP_SHORTFALL_PCT = 5.0
+
+# Modes that constitute "the battery is being charged from the grid". Mirrors
+# ``state.machine._CHARGE_MODES``; a decision token granted purely because the plan
+# wanted to START charging may commit one of these and nothing else.
+_CHARGE_MODES = (_BatteryMode.GRID_CHARGING, _BatteryMode.BOOST_CHARGING)
+_CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
+
 
 class OptimizerFacade:
     """Facade that runs the DP optimizer and writes results to CoordinatorData."""
@@ -46,6 +58,13 @@ class OptimizerFacade:
         self._planner = planner or DPPlanner()
         self._slot_builder_cls = slot_builder_cls
         self._solar_accuracy_tracker: Any = None
+        # True while a forced BOOST from the pre-charge execution backstop is the
+        # committed mode. The backstop commits OUTSIDE a fingerprint change, which
+        # breaks the property every other commit has — that a change of mode implies
+        # the decision context just moved, so another change is imminent. Without
+        # this latch a forced boost can outlive its own conditions indefinitely on a
+        # flat-price stretch or a stuck price sensor. See _release_backstop_hold.
+        self._backstop_holding: bool = False
 
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction."""
@@ -232,13 +251,18 @@ class OptimizerFacade:
             )
             result = self._planner.plan(inputs)
 
-            self._log_precharge_decision(data, result, initial_soc, optimizer_config)
-
             self._write_optimizer_fields(
                 data, result, slot_metadata, config_options, cycle_id, soc_info
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
+
+            # Logged AFTER _assign_active_mode, not before: the line reports
+            # optimizer_precharge_backstop_active, which _assign_active_mode is what
+            # sets. Logging first reported the PREVIOUS cycle's backstop state on
+            # every line — in a change whose whole purpose is making the next miss
+            # reconstructable from the log alone.
+            self._log_precharge_decision(data, result, initial_soc, optimizer_config)
 
             # Run shadow optimizer for comparison if enabled
             self._run_shadow_comparison(data, now_dt, config_options, slot_metadata)
@@ -283,6 +307,31 @@ class OptimizerFacade:
             initial_soc_info=initial_soc_info,
         )
 
+        # Actual DW-entry telemetry (2026-07-27). Injected here rather than inside
+        # ``_build_summary`` because that is a pure result→dict function shared with
+        # the batch/test path and has no coordinator handle. The CoordinatorData
+        # fields remain the single source of truth; the summary only mirrors them so
+        # the projected and actual DW-entry SOC sit side by side in one payload.
+        dw_entry_actual_at = getattr(data, "dw_entry_actual_at", None)
+        dw_entry_actual_date = getattr(data, "dw_entry_actual_date", None)
+        data.optimizer_summary["dw_entry_actual_soc_pct"] = getattr(
+            data, "dw_entry_actual_soc_pct", None
+        )
+        data.optimizer_summary["dw_entry_actual_at"] = (
+            dw_entry_actual_at.isoformat() if dw_entry_actual_at is not None else None
+        )
+        data.optimizer_summary["dw_entry_actual_shortfall_pct"] = getattr(
+            data, "dw_entry_actual_shortfall_pct", None
+        )
+        data.optimizer_summary["dw_entry_actual_target_pct"] = getattr(
+            data, "dw_entry_actual_target_pct", None
+        )
+        data.optimizer_summary["dw_entry_actual_date"] = (
+            dw_entry_actual_date.isoformat()
+            if dw_entry_actual_date is not None
+            else None
+        )
+
         data.forecast_horizon_hours = slot_metadata.horizon_hours
 
         data.solar_can_reach_target = result.can_solar_reach_target
@@ -305,6 +354,10 @@ class OptimizerFacade:
         SOC). Logs the SOC the planner actually used, the target, the planned
         DW-entry/peak SOC, and whether/when a grid charge is scheduled — so a
         future miss is diagnosable from the log alone. Never raises.
+
+        Carries ``dw_entry_actual`` (2026-07-27) alongside the projection: the
+        projected ``dw_entry_soc_pct`` rolls over to tomorrow's window the instant
+        today's DW starts, which is what erased the 64%-vs-95% miss from the log.
         """
         try:
             decisions = getattr(result, "decisions", None) or []
@@ -319,7 +372,7 @@ class OptimizerFacade:
             _LOGGER.info(
                 "Pre-charge decision: initial_soc=%.1f%% target=%s dw_entry_soc=%s "
                 "peak_soc=%s shortfall=%s dw_active=%s charge_slots=%d "
-                "first_charge=%s",
+                "first_charge=%s dw_entry_actual=%s backstop=%s",
                 initial_soc,
                 f"{target_soc:.0f}%" if target_soc is not None else "n/a",
                 f"{dw_entry:.1f}%" if dw_entry is not None else "n/a",
@@ -328,10 +381,26 @@ class OptimizerFacade:
                 getattr(data, "demand_window_active", False),
                 len(charge_decisions),
                 getattr(first_charge, "timestamp_iso", None),
+                self._format_dw_entry_actual(data),
+                getattr(data, "optimizer_precharge_backstop_active", False),
             )
             self._warn_soc_divergence(data, initial_soc, dw_entry, target_soc)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Pre-charge decision log failed (non-fatal): %s", exc)
+
+    @staticmethod
+    def _format_dw_entry_actual(data: CoordinatorData) -> str:
+        """Render today's captured DW-entry actual as ``64.0%@15:00``, or ``n/a``.
+
+        ``getattr`` guarded because the capture is a coordinator-side concern: a
+        cycle that runs before the first capture of the day (or a bare
+        ``CoordinatorData`` in a unit test) simply reads ``n/a``.
+        """
+        soc = getattr(data, "dw_entry_actual_soc_pct", None)
+        at = getattr(data, "dw_entry_actual_at", None)
+        if soc is None or at is None:
+            return "n/a"
+        return f"{soc:.1f}%@{at:%H:%M}"
 
     def _warn_soc_divergence(
         self,
@@ -346,6 +415,10 @@ class OptimizerFacade:
         — i.e. pre-charge appears to have been missed. Sets
         ``data.optimizer_soc_underprepared`` (a sensor / coordinator notification
         can surface it) and emits a WARNING so the failure is never silent again.
+
+        The message carries the *captured* DW-entry actual as well as the live SOC
+        (2026-07-27): by the time this trips, the battery may have recovered some
+        charge inside the window, so the live number understates the miss.
         """
         threshold = target_soc if target_soc is not None else 95.0
         in_dw = getattr(data, "demand_window_active", False)
@@ -355,11 +428,13 @@ class OptimizerFacade:
         if underprepared:
             _LOGGER.warning(
                 "SOC UNDERPREPARED: demand window active but battery at %.1f%% "
-                "(target %.0f%%, planned DW-entry %s). Pre-charge appears to have "
-                "been missed — verify the optimizer scheduled a charge.",
+                "(target %.0f%%, planned DW-entry %s, entered at %s). Pre-charge "
+                "appears to have been missed — verify the optimizer scheduled a "
+                "charge.",
                 initial_soc,
                 threshold,
                 f"{dw_entry:.1f}%" if dw_entry is not None else "n/a",
+                self._format_dw_entry_actual(data),
             )
 
     def _assign_active_mode(
@@ -394,6 +469,11 @@ class OptimizerFacade:
         data.debug_forecast_slot_time = slot_hhmm
         data.debug_first_forecast_slot_time = first_hhmm
         data.debug_time_gap_seconds = gap_seconds
+
+        # Cleared up-front so the flag can never go stale on any branch below (the
+        # safety-block return and the invalid-mode fallback both exit without
+        # reaching the backstop check).
+        data.optimizer_precharge_backstop_active = False
 
         # #622 gate replacement: the mode may be (re-)decided only on an allowed
         # evaluation. When frozen, every branch below records its block-status /
@@ -434,15 +514,53 @@ class OptimizerFacade:
             new_mode = _BatteryMode(battery_mode_str)
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
-            self._commit_or_hold_mode(
-                data, new_mode, decision_allowed, mode_source="optimizer"
-            )
+
+            # A token granted purely by the plan-charge trigger is one-directional in
+            # what committed it, so it must be one-directional in what it commits.
+            # Otherwise a grant raised because the plan wanted to START charging is
+            # spent on whatever slot-0 has drifted to by the time the facade re-plans
+            # — including a discharge. Fall back to frozen: the wanted charge stays
+            # visible on debug_plan_mode_pending and the execution backstop (below)
+            # remains the deterministic path.
+            if (
+                decision_allowed
+                and getattr(data, "mode_decision_plan_charge_only", False)
+                and new_mode not in _CHARGE_MODES
+            ):
+                _LOGGER.debug(
+                    "Plan-charge grant not spent: fresh plan selected %s, "
+                    "not a charge mode — holding",
+                    battery_mode_str,
+                )
+                decision_allowed = False
+
             _LOGGER.info(
                 "DP optimizer: selected %s (action=%s, slot=%d, decision_allowed=%s)",
                 battery_mode_str,
                 apply_plan.get("action"),
                 current_slot_idx,
                 decision_allowed,
+            )
+            # Execution backstop (2026-07-27): strictly after the safety gate, so a
+            # blocked cycle can never reach it. Force-commits the pre-charge the plan
+            # already contains when the token has starved it out.
+            backstop_mode = self._precharge_backstop_mode(
+                data, result, optimizer_config, current_slot_idx
+            )
+            data.optimizer_precharge_backstop_active = backstop_mode is not None
+            if backstop_mode is not None:
+                self._backstop_holding = True
+                self._commit_or_hold_mode(
+                    data, backstop_mode, True, mode_source="precharge_backstop"
+                )
+                return
+            if self._release_backstop_hold(data):
+                self._commit_or_hold_mode(
+                    data, new_mode, True, mode_source="precharge_backstop_release"
+                )
+                return
+            self._commit_or_hold_mode(
+                data, new_mode, decision_allowed, mode_source="optimizer"
             )
         except ValueError:
             _LOGGER.warning(
@@ -457,6 +575,212 @@ class OptimizerFacade:
                 decision_allowed,
                 mode_source="fallback",
             )
+
+    def _release_backstop_hold(self, data: CoordinatorData) -> bool:
+        """Return True when a forced BOOST must be released this cycle.
+
+        The backstop is the only path that commits a mode WITHOUT a decision-context
+        change. Every other commit carries an implicit guarantee — the fingerprint
+        just moved, so it will move again shortly and the mode will be revisited.
+        A forced BOOST has no such guarantee: once its conditions clear
+        (``soc >= hard_target_floor``, typically) the backstop simply returns None
+        and the ordinary frozen path PINS the boost. On a flat-price stretch or a
+        stuck price sensor the fingerprint never changes, the plan-charge trigger is
+        one-directional and will not grant a wanted STOP, and the battery keeps
+        force-charging at full import price until the demand window flips.
+
+        So the release is made symmetric with the force: the same latch that opened
+        an ungated commit closes it with one.
+        """
+        if not self._backstop_holding:
+            return False
+        # Confined to the same in-lock window as the force. The release is an ungated
+        # commit too, so the out-of-lock compute_derived_values in
+        # ``coordinator.async_recompute_and_evaluate`` — where the backstop returns
+        # None purely because permission is closed, not because its conditions
+        # cleared — must not consume the latch or command hardware.
+        if not getattr(data, "mode_backstop_allowed", False):
+            return False
+        self._backstop_holding = False
+        # Only an ungated release is needed while the forced boost is still what is
+        # committed. If an ordinary grant already moved the mode on, there is nothing
+        # to release — drop the latch and let the normal path decide.
+        return data.active_mode in _CHARGE_MODES
+
+    def _precharge_backstop_mode(
+        self,
+        data: CoordinatorData,
+        result: Any,
+        optimizer_config: Any,
+        current_slot_idx: int,
+    ) -> Any | None:
+        """Return BOOST_CHARGING when the pre-charge execution backstop must fire.
+
+        2026-07-27 incident: the demand window was entered at 64% against a 95%
+        target. The DP planned the pre-charge correctly — ``first_charge=NOW`` on
+        plan after plan — but the #622 decision token only grants on a
+        price/spike/DW/floor change, and at every grant instant the freshly-computed
+        plan's slot-0 action happened to be "hold" (the cheapest first-charge slot
+        drifts forward on every replan). The wanted charge was recorded dozens of
+        times in ``debug_plan_mode_pending`` and never committed.
+
+        This is the executor-side backstop for that class of failure: when the plan
+        *already contains* a pre-DW grid charge, the live SOC is below the #885 hard
+        DW-target floor, we are inside the urgency window and the projected shortfall
+        is material, the mode is force-committed regardless of the token. Every gate
+        reuses an existing engine decision — notably ``hard_target_floor``, which is
+        already dormant whenever pre-charge is not required (``allow_dw_entry_under_
+        target``, solar alone reaches target, no demand window, non-self-consumption)
+        — so this never invents charge intent it only executes intent the DP
+        expressed. BOOST is the right mode because ``constraints.feasible_actions``
+        unlocks boost under exactly this predicate (``soc_pct < hard_target_floor``
+        in a pre-DW slot).
+
+        Never raises (mirrors ``_log_precharge_decision``): a failing backstop check
+        must never take down the optimizer cycle.
+        """
+        try:
+            if not self._backstop_context_permits(data):
+                return None
+
+            # Primary reuse: the #885/#886 hard DW-target feasibility floor. None ⇒
+            # pre-charge is not required today; the backstop is dormant with it.
+            hard_floor = getattr(optimizer_config, "hard_target_floor", None)
+            if hard_floor is None:
+                return None
+
+            soc = getattr(data, "soc", None)
+            if soc is None or soc >= hard_floor:
+                return None
+
+            window = self._backstop_urgency_window(optimizer_config, current_slot_idx)
+            if window is None:
+                return None
+            urgency_start_idx, terminal_penalty_idx = window
+
+            shortfall = self._projected_shortfall_pct(result, optimizer_config)
+            if shortfall <= PRECHARGE_BACKSTOP_SHORTFALL_PCT:
+                return None
+
+            pre_dw_charge_slots = self._count_pre_dw_charge_slots(
+                data.optimizer_decisions, terminal_penalty_idx
+            )
+            if pre_dw_charge_slots == 0:
+                return None
+
+            if self._price_above_precharge_ceiling(data, optimizer_config):
+                return None
+
+            _LOGGER.warning(
+                "PRE-CHARGE BACKSTOP: forcing BOOST_CHARGING — soc=%.1f%% "
+                "hard_floor=%.1f%% projected shortfall=%.1f%% slot=%d "
+                "(urgency window %d..%d), plan has %d pre-DW charge slot(s) but the "
+                "decision token never committed one.",
+                soc,
+                hard_floor,
+                shortfall,
+                current_slot_idx,
+                urgency_start_idx,
+                terminal_penalty_idx,
+                pre_dw_charge_slots,
+            )
+            return _BatteryMode.BOOST_CHARGING
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Pre-charge backstop check failed (non-fatal): %s", exc)
+            return None
+
+    @staticmethod
+    def _backstop_context_permits(data: CoordinatorData) -> bool:
+        """The three gates that depend only on coordinator state, not on the plan."""
+        # In-lock only. Set by the state machine alongside the decision token and
+        # cleared in its finally block, so the out-of-lock recompute in
+        # ``coordinator.async_recompute_and_evaluate`` can never command hardware.
+        if not getattr(data, "mode_backstop_allowed", False):
+            return False
+
+        # Issue #330: an unavailable price entity reads as general_price = 0.0, not
+        # None, so the pre-charge price ceiling would wave the backstop through at a
+        # completely unknown real price — potentially straight through a spike.
+        # "Grid charging decisions will be deferred" applies to a forced charge most
+        # of all.
+        if not getattr(data, "prices_available", True):
+            return False
+
+        # Pre-DW only — once the DW is live the pre-charge is moot and forcing a
+        # charge would fight the demand-block behaviour.
+        return not getattr(data, "demand_window_active", False)
+
+    @staticmethod
+    def _backstop_urgency_window(
+        optimizer_config: Any, current_slot_idx: int
+    ) -> tuple[int, int] | None:
+        """Return ``(urgency_start_idx, terminal_penalty_idx)`` when the current slot
+        sits inside the urgency pre-charge window, else None.
+
+        Same window the urgency-inflated pre-charge price is legitimate in, and
+        strictly before the DW-entry slot — the scope
+        ``constraints.hard_floor_needs_boost`` already uses at DP level. Either index
+        being None ⇒ no demand window in the horizon (or a direct unit-test caller),
+        so the backstop stays dormant.
+        """
+        urgency_start_idx = getattr(optimizer_config, "urgency_window_start_idx", None)
+        terminal_penalty_idx = getattr(optimizer_config, "terminal_penalty_idx", None)
+        if urgency_start_idx is None or terminal_penalty_idx is None:
+            return None
+        if not urgency_start_idx <= current_slot_idx < terminal_penalty_idx:
+            return None
+        return urgency_start_idx, terminal_penalty_idx
+
+    @staticmethod
+    def _projected_shortfall_pct(result: Any, optimizer_config: Any) -> float:
+        """Worst of the two published DW-entry shortfall measures (%-points).
+
+        The 2026-07-27 log carried both ``terminal_shortfall_pct`` and a
+        ``target - dw_entry_soc_pct`` gap and they can diverge, so the backstop takes
+        the max rather than trusting either alone.
+        """
+        shortfall = float(getattr(result, "terminal_shortfall_pct", None) or 0.0)
+        target = getattr(optimizer_config, "demand_window_target_soc_pct", None)
+        dw_entry = getattr(result, "dw_entry_soc_pct", None)
+        if target is not None and dw_entry is not None:
+            shortfall = max(shortfall, float(target) - float(dw_entry))
+        return shortfall
+
+    @staticmethod
+    def _count_pre_dw_charge_slots(
+        decisions: list[Any] | None, terminal_penalty_idx: int
+    ) -> int:
+        """Count charge slots the plan schedules before the demand-window entry.
+
+        Reads the *serialized* decisions off ``data`` — ``_write_optimizer_fields``
+        runs before ``_assign_active_mode``, so these are this cycle's plan. This is
+        what keeps the backstop honest: it never invents charge intent, it only
+        executes intent the DP already expressed but the token never sampled.
+
+        A decision with no ``slot_index`` is NOT counted. Defaulting it to 0 would
+        make a malformed decision read as a pre-DW charge and arm a forced boost off
+        a plan that never located itself in time.
+        """
+        return sum(
+            1
+            for d in (decisions or [])
+            if d.get("grid_charge")
+            and isinstance(d.get("slot_index"), int)
+            and d["slot_index"] < terminal_penalty_idx
+        )
+
+    @staticmethod
+    def _price_above_precharge_ceiling(
+        data: CoordinatorData, optimizer_config: Any
+    ) -> bool:
+        """True when the live price exceeds the operator's pre-charge ceiling.
+
+        Reuses ``CONF_MAX_PRECHARGE_PRICE`` (already on the config) rather than
+        introducing a backstop-specific price knob.
+        """
+        ceiling = getattr(optimizer_config, "max_precharge_price", None)
+        price = getattr(data, "general_price", None)
+        return ceiling is not None and price is not None and price > ceiling
 
     @staticmethod
     def _commit_or_hold_mode(
@@ -473,6 +797,10 @@ class OptimizerFacade:
         / ``decision_mode`` untouched and records the would-be mode in
         ``debug_plan_mode_pending`` so the dashboard can show "plan wants X,
         decision held at Y".
+
+        ``decision_allowed=True`` is also passed by the pre-charge execution
+        backstop, which is not a token grant but an in-lock override — see
+        ``_precharge_backstop_mode``.
         """
         if not decision_allowed:
             # Frozen: pin the previously-decided mode, surface the pending plan.
@@ -502,10 +830,26 @@ class OptimizerFacade:
 
         Called from run_inline early exits so the debug_* fields never go stale
         when the optimizer did not produce a decision this tick.
+
+        ``debug_plan_mode_pending`` is cleared with them: a stale pending left by an
+        earlier tick would otherwise feed the state machine's plan-charge epoch on a
+        tick where the optimizer produced no decision at all — a phantom grant.
         """
+        if data.debug_plan_mode_pending in _CHARGE_MODE_VALUES:
+            # Dropping a legitimately-pending charge is the correct conservative
+            # call — a token must never be granted off a plan that does not exist —
+            # but it costs the plan-charge trigger one cycle, so say so rather than
+            # discarding it silently.
+            _LOGGER.info(
+                "Pending plan charge (%s) discarded: this cycle produced no "
+                "optimizer decision. The trigger re-arms on the next good plan.",
+                data.debug_plan_mode_pending,
+            )
         data.debug_mode_source = "fallback"
         data.debug_forecast_slot_found = False
         data.debug_forecast_slot_time = ""
+        data.debug_plan_mode_pending = None
+        data.optimizer_precharge_backstop_active = False
 
     def _run_shadow_comparison(
         self,

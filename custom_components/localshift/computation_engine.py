@@ -61,7 +61,10 @@ from .engine import (
 )
 from .engine.excess_solar import ExcessSolarEngine
 from .engine.optimizer_dp import DPPlanner
-from .engine.optimizer_facade import OptimizerFacade
+from .engine.optimizer_facade import (
+    PRECHARGE_BACKSTOP_SHORTFALL_PCT,
+    OptimizerFacade,
+)
 from .engine.optimizer_runner import _find_current_slot_index
 from .engine.price_signal_engine import PriceSignalEngine
 from .engine.slot_schedule import TOTAL_SLOTS
@@ -294,6 +297,69 @@ class ComputationEngine:
         if data.last_target_reset_date != today:
             data.target_reached_today = False
             data.last_target_reset_date = today
+            # The DW-entry actual (2026-07-27) is a once-per-day capture and shares
+            # this latch: clearing it here re-arms tomorrow's capture.
+            data.dw_entry_actual_soc_pct = None
+            data.dw_entry_actual_at = None
+            data.dw_entry_actual_target_pct = None
+            data.dw_entry_actual_shortfall_pct = None
+            data.dw_entry_actual_date = None
+
+    def _capture_dw_entry_actual(
+        self, data: CoordinatorData, ctx: _DerivedValuesContext
+    ) -> None:
+        """Record the SOC the battery ACTUALLY entered today's demand window at.
+
+        2026-07-27 incident: the window was entered at 64.0% against a 95% target,
+        and the log could not show it afterwards. The optimizer's *projected*
+        ``dw_entry_soc_pct`` legitimately rolls over to tomorrow's window the instant
+        today's window starts — the 15:00 line reported 98.5% / shortfall 0.0 /
+        ``first_charge=2026-07-28T13:00`` — so by the time anyone looked, the miss had
+        been overwritten by a projection about a different day.
+
+        Captured once per day, on the first evaluation with the window live, and held
+        untouched for the rest of the day (later ticks inside the window must not
+        overwrite it with a recovered SOC). A ``None`` SOC at the exact boundary defers
+        rather than recording a null: the next evaluation is ≤1 min away.
+
+        Runs BEFORE the manual-override early return — this is telemetry about the
+        battery, not about the optimizer, and the miss matters just as much when the
+        user has taken manual control.
+        """
+        if not data.demand_window_active:
+            return
+        if data.dw_entry_actual_date == ctx.today:
+            return
+        soc = data.soc
+        if soc is None:
+            return
+
+        target = float(ctx.target_pct)
+        shortfall = max(0.0, target - float(soc))
+
+        data.dw_entry_actual_soc_pct = float(soc)
+        data.dw_entry_actual_at = ctx.now_dt
+        data.dw_entry_actual_target_pct = target
+        data.dw_entry_actual_shortfall_pct = shortfall
+        data.dw_entry_actual_date = ctx.today
+
+        # Same threshold the execution backstop fires on — one number, not two.
+        if shortfall > PRECHARGE_BACKSTOP_SHORTFALL_PCT:
+            _LOGGER.warning(
+                "DEMAND WINDOW ENTERED UNDER TARGET: %.1f%% against a %.0f%% target "
+                "(%.1f points short) at %s. Pre-charge did not execute.",
+                soc,
+                target,
+                shortfall,
+                ctx.now_dt.isoformat(),
+            )
+        else:
+            _LOGGER.info(
+                "Demand window entered at %.1f%% (target %.0f%%, shortfall %.1f).",
+                soc,
+                target,
+                shortfall,
+            )
 
     def _detect_hardware_modes(self, data: CoordinatorData) -> None:
         """---- Step 2: Mode detection from Teslemetry state ----"""
@@ -338,6 +404,12 @@ class ComputationEngine:
         data.debug_forecast_slot_time = ""
         data.debug_first_forecast_slot_time = ""
         data.debug_time_gap_seconds = 0.0
+        # The facade never runs on this path, so a pending plan mode left by an
+        # earlier tick would go stale here and still feed the state machine's
+        # plan-charge epoch — a phantom grant off a plan that is arbitrarily old.
+        # Same reasoning as _mark_mode_debug_fallback's clear.
+        data.debug_plan_mode_pending = None
+        data.optimizer_precharge_backstop_active = False
         return True
 
     def _bridge_history_results(self, data: CoordinatorData, now_dt: datetime) -> None:
@@ -524,6 +596,11 @@ class ComputationEngine:
 
         # ---- Step 3: demand_window_active ----
         self._compute_demand_window_active(data, ctx)
+
+        # ---- Step 3b: actual DW-entry capture (2026-07-27) ----
+        # Immediately after the boundary is computed and before any early return, so
+        # the number survives manual override and a failed optimizer cycle alike.
+        self._capture_dw_entry_actual(data, ctx)
 
         # ---- Manual override check ----
         if self._enter_manual_override(data):

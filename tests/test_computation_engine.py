@@ -1025,3 +1025,23 @@ def test_refresh_soc_keeps_cached_when_unavailable(
     computation_engine._refresh_soc_for_optimizer(coordinator_data)
 
     assert coordinator_data.soc == 42.0
+
+
+def test_manual_override_clears_a_stale_pending_plan_mode(
+    computation_engine, coordinator_data
+):
+    """The manual-override early return skips the optimizer facade entirely, so a
+    ``debug_plan_mode_pending`` left by an earlier tick was never refreshed or
+    cleared. The state machine's plan-charge trigger keeps reading that frozen value
+    and can grant a token off a plan that is arbitrarily old — the phantom grant
+    ``_mark_mode_debug_fallback`` claims to have closed on the other early-exit
+    paths."""
+    coordinator_data.manual_override = True
+    coordinator_data.debug_plan_mode_pending = BatteryMode.GRID_CHARGING.value
+    coordinator_data.optimizer_precharge_backstop_active = True
+
+    computation_engine.compute_derived_values(coordinator_data)
+
+    assert coordinator_data.active_mode == BatteryMode.MANUAL
+    assert coordinator_data.debug_plan_mode_pending is None
+    assert coordinator_data.optimizer_precharge_backstop_active is False

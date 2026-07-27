@@ -223,6 +223,18 @@ class OptimizerConfig:
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
 
+    terminal_penalty_idx: int | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): index of the demand-window ENTRY slot,
+    i.e. the slot the terminal shortfall penalty is applied at. None ⇒ no demand window in
+    the rolling horizon.
+
+    Published alongside ``urgency_window_start_idx`` (which is meaningless without it) so
+    consumers outside the solver can express "before the demand window" without
+    re-deriving the window bounds. The pre-charge execution backstop
+    (``OptimizerFacade._backstop_urgency_window``) is the first such consumer: before this
+    field existed it read ``getattr(config, "terminal_penalty_idx", None)``, which was
+    always None, and the backstop was unreachable in production."""
+
     urgency_window_start_idx: int | None = None
     """Solver-derived (set by ``DPPlanner._solve``): index of the first slot within the
     urgency window before the demand-window entry (Issue #800 follow-up). The window width is

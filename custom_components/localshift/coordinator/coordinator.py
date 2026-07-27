@@ -762,10 +762,19 @@ class LocalShiftCoordinator:
                 they may update the plan but must NOT grant a mode change.
 
         """
-        if invalidate_decision and self._state_machine is not None:
-            self._state_machine.invalidate_decision_fingerprint(
-                "async_recompute_and_evaluate (config change)"
-            )
+        if self._state_machine is not None:
+            if invalidate_decision:
+                self._state_machine.invalidate_decision_fingerprint(
+                    "async_recompute_and_evaluate (config change)"
+                )
+            else:
+                # Honour "must NOT grant a mode change" against the plan-charge
+                # trigger too: _compute_derived_values below runs the facade out of
+                # lock and writes debug_plan_mode_pending, which the evaluation
+                # that follows would otherwise read back with zero lag and grant on.
+                self._state_machine.suppress_next_plan_charge_grant(
+                    "async_recompute_and_evaluate (reoptimize)"
+                )
         self._compute_derived_values()
         self.notify_listeners()
         await self.async_evaluate_state_machine()
