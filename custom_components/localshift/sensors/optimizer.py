@@ -12,6 +12,22 @@ if TYPE_CHECKING:
     pass
 
 
+def _resolve_optional(
+    summary: dict[str, Any], data: Any, key: str, default: Any
+) -> Any:
+    """Read ``key`` from the optimizer summary, falling back to coordinator data.
+
+    Optional telemetry only. A key present in the summary but null (the engine ran
+    and had nothing to report) wins over the fallback only when the summary carries
+    it at all; otherwise the coordinator attribute is tried, and ``default`` is
+    returned when neither source has it. Keeps the sensor inert on an older engine
+    that publishes neither, rather than raising.
+    """
+    if key in summary:
+        return summary[key]
+    return getattr(data, key, default)
+
+
 class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan_detailed"
     _attr_name = "Optimizer Plan Detailed"
@@ -152,6 +168,18 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             ),
             "precharge_backstop_active": getattr(
                 d, "optimizer_precharge_backstop_active", False
+            ),
+            # Runway telemetry for the pre-charge backstop (2026-07-28). Both are
+            # solver-derived OptimizerConfig fields, so the summary is their natural
+            # home (same as terminal_shortfall_pct / effective_soc_at_terminal); the
+            # coordinator-data fallback keeps them visible if the engine publishes
+            # them alongside precharge_backstop_active instead, and both resolve to
+            # the dormant default when neither carries them.
+            "precharge_runway_slack_min": _resolve_optional(
+                summary, d, "precharge_runway_slack_min", None
+            ),
+            "hard_floor_suppressed_by_solar": _resolve_optional(
+                summary, d, "hard_floor_suppressed_by_solar", False
             ),
             "projected_solar_gain_pct": summary.get("projected_solar_gain_pct"),
             "forecast_accuracy": summary.get("forecast_accuracy"),

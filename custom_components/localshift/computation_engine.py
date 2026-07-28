@@ -22,6 +22,7 @@ from .const import (
     CONF_MIN_CYCLE_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
+    CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
     CONF_PRICING_DATA_SOURCE,
     CONF_STALE_SOLAR_CONFIDENCE_CEILING,
     CONF_STALE_SOLAR_CONSERVATIVE,
@@ -39,6 +40,7 @@ from .const import (
     DEFAULT_MIN_CYCLE_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
     DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
     DEFAULT_SWITCHING_PENALTY,
@@ -836,6 +838,12 @@ class ComputationEngine:
             ),
             CONF_MIN_CYCLE_SAVING: self.entry.options.get(
                 CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
+            ),
+            # Runway backstop margin. Must be forwarded here or the number entity is
+            # decorative: this dict — not entry.options — is what reaches
+            # _build_optimizer_config on the live path.
+            CONF_PRECHARGE_RUNWAY_MARGIN_MIN: self.entry.options.get(
+                CONF_PRECHARGE_RUNWAY_MARGIN_MIN, DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
             ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE

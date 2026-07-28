@@ -43,6 +43,7 @@ from custom_components.localshift.engine.solar import (
     get_forecast_accuracy,
     projected_solcast_gain_pct,
 )
+from custom_components.localshift.engine.transitions import _tapered_stored_kwh
 from custom_components.localshift.engine.transitions import transition as _transition
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
@@ -463,6 +464,12 @@ class DPPlanner:
         config.pre_dw_charge_thresholds = None
         config.pre_dw_funding_water_level = None
         config.hard_target_floor = None
+        # Same reset discipline as the fields above: the config object is reused across
+        # planning cycles, so stale runway telemetry from a previous cycle must never
+        # survive into one whose early-return path never recomputes it.
+        config.hard_floor_suppressed_by_solar = False
+        config.precharge_runway_slack_min = None
+        config.precharge_runway_quantum_min = 0.0
         config.pre_dw_charge_thresholds = compute_pre_dw_charge_thresholds(
             slots, config, terminal_penalty_idx, inputs.initial_soc_pct
         )
@@ -489,6 +496,16 @@ class DPPlanner:
         # unreachable (no infeasible/empty plan), is None when solar alone reaches target
         # (don't fight #816/#849), and is None outside strict self-consumption (legacy).
         config.hard_target_floor = self._compute_hard_target_floor(
+            slots, config, terminal_penalty_idx, inputs, solar_capable
+        )
+
+        # Pre-charge runway telemetry (fast-follow to #901). Purely additive: publishes
+        # WHY the hard floor is dormant and how much physical runway is left, without
+        # touching the floor itself or anything the DP reads. Deliberately a separate
+        # call rather than an extra return value from _compute_hard_target_floor — that
+        # function feeds _initialize_dp_tables and feasible_actions, and this codebase's
+        # DP-core regression history (#800/#804/#816) says not to reshape it for telemetry.
+        self._publish_precharge_runway_telemetry(
             slots, config, terminal_penalty_idx, inputs, solar_capable
         )
 
@@ -774,6 +791,187 @@ class DPPlanner:
         if max_feasible is None:
             return None
         return min(config.demand_window_target_soc_pct, max_feasible)
+
+    def _publish_precharge_runway_telemetry(
+        self,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        inputs: OptimizerInputs,
+        solar_capable: bool,
+    ) -> None:
+        """Publish ``hard_floor_suppressed_by_solar`` / ``precharge_runway_slack_min``.
+
+        Fast-follow to #901. The pre-charge execution backstop is gated on
+        ``hard_target_floor``, which ``_compute_hard_target_floor`` deliberately returns
+        None from on any day solar looks sufficient (don't fight #816/#849) — so the
+        backstop is fully dormant exactly on the days a late cloud event can strand the
+        battery. These two fields give an out-of-solver consumer what it needs to
+        distinguish "dormant because pre-charge genuinely is not required" from "dormant
+        only because a solar forecast said so", and to measure the physical runway left.
+
+        Pure telemetry: writes only the two config fields, reads only functions the solve
+        already called, and MUST NOT be allowed to change any plan. Call it AFTER
+        ``config.hard_target_floor`` has been assigned — the suppression flag is defined
+        relative to that value.
+        """
+        config.hard_floor_suppressed_by_solar = self._hard_floor_suppressed_by_solar(
+            slots, config, terminal_penalty_idx, inputs, solar_capable
+        )
+        config.precharge_runway_slack_min = self._precharge_runway_slack_min(
+            slots, config, terminal_penalty_idx, inputs
+        )
+        # The slack reading is quantized to slot 0's width (the DP has no clock, so the
+        # time term can only step at slot boundaries while the SOC gap closes
+        # continuously). Publishing the quantum lets the consumer size its hysteresis
+        # band against the sawtooth instead of against a hardcoded constant that happens
+        # to clear a 5-minute slot and not a 30-minute one.
+        config.precharge_runway_quantum_min = (
+            float(slots[0].slot_interval_minutes) if slots else 0.0
+        )
+
+    def _hard_floor_suppressed_by_solar(
+        self,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        inputs: OptimizerInputs,
+        solar_capable: bool,
+    ) -> bool:
+        """True when the hard floor is dormant ONLY because solar looked sufficient.
+
+        Mirrors ``_compute_hard_target_floor``'s early-return ladder in the same order, so
+        the two can never disagree about which branch fired:
+
+        1. floor is set        -> not suppressed (the gate is live)
+        2. allow_dw_entry_under_target -> policy dormancy, NOT solar
+        3. neither solar check fired   -> dormant for some other reason
+        4. max feasible is None        -> structural dormancy (no DW / slot-0 entry /
+           non-self-consumption), NOT solar
+
+        Only a case that survives all four is a genuine solar suppression.
+        """
+        if config.hard_target_floor is not None:
+            return False
+        if config.allow_dw_entry_under_target:
+            return False
+        if not solar_capable and not check_global_solar_sufficiency(
+            inputs.initial_soc_pct, 0, slots, config, terminal_penalty_idx
+        ):
+            return False
+        return (
+            compute_max_feasible_terminal_soc(
+                slots, config, terminal_penalty_idx, inputs.initial_soc_pct
+            )
+            is not None
+        )
+
+    def _precharge_runway_slack_min(
+        self,
+        slots: list[SlotContext],
+        config: OptimizerConfig,
+        terminal_penalty_idx: int | None,
+        inputs: OptimizerInputs,
+    ) -> float | None:
+        """Spare minutes between now and the last moment boost could still reach target.
+
+        ``minutes_to_dw_entry - minutes_of_boost_needed_to_close_the_gap``.
+
+        Both terms are deliberately biased to under-report slack, because the only safe
+        error direction for a guardrail is "fires slightly early":
+
+        * **Time.** The DP is clock-free by construction (deterministic and replayable),
+          so the only anchor available is a slot boundary — and
+          ``_ensure_current_slot_coverage`` guarantees ``slots[0].start <= now``, which
+          means measuring from slot 0's *start* over-reports the real runway by however
+          much of that slot has already elapsed (up to a full 30 minutes when the horizon
+          opens on a 30-minute slot). The anchor is therefore the *end* of slot 0, the
+          only bound that is never later than ``now``.
+        * **Rate.** Minutes-needed is integrated through ``transitions._tapered_stored_kwh``
+          — the same CV-taper charge model the DP's own transitions use — rather than a
+          flat ``rate x efficiency``. Above ``charge_taper_start_pct`` (80% by default) the
+          Powerwall derates toward ``charge_taper_min_factor``, and *every* pre-charge to a
+          95% target crosses that knee. The flat form understated the 2026-07-28 live case
+          (59.1% -> 95%) by 15 minutes — larger than the whole default margin, and enough
+          to keep the arm shut on the very incident it was written for.
+
+        Returns None when the quantity is not interpretable rather than guessing.
+        """
+        if (
+            terminal_penalty_idx is None
+            or terminal_penalty_idx <= 0
+            or not slots
+            or terminal_penalty_idx >= len(slots)
+        ):
+            return None
+        try:
+            dw_time = datetime.fromisoformat(slots[terminal_penalty_idx].timestamp_iso)
+            start_time = datetime.fromisoformat(slots[0].timestamp_iso)
+        except (ValueError, TypeError):
+            return None
+        # Anchor at the END of slot 0 — see the docstring: slot 0 already contains ``now``,
+        # so its start would credit runway that has already been spent.
+        minutes_to_dw = (dw_time - start_time).total_seconds() / 60.0 - float(
+            slots[0].slot_interval_minutes
+        )
+
+        gap_pct = config.demand_window_target_soc_pct - inputs.initial_soc_pct
+        if gap_pct <= 0.0:
+            # Already at/above target: the whole remaining runway is slack.
+            return minutes_to_dw
+        minutes_needed = self._boost_minutes_to_close_gap(
+            config, inputs.initial_soc_pct
+        )
+        if minutes_needed is None:
+            return None
+        return minutes_to_dw - minutes_needed
+
+    @staticmethod
+    def _boost_minutes_to_close_gap(
+        config: OptimizerConfig, initial_soc_pct: float
+    ) -> float | None:
+        """Minutes of boost charging needed to lift SOC to target, taper included.
+
+        Steps the engine's own charge model (``transitions._tapered_stored_kwh``) at
+        one-minute resolution so the answer cannot disagree with the transition function
+        that actually moves SOC inside the DP. A closed-form ``gap / (rate * eff)``
+        cannot express the CV taper, and the taper is not a rounding error: it is worth
+        ~15 minutes on a realistic pre-charge to a 95% target.
+
+        Returns None on degenerate constants (zero capacity/rate/efficiency) or when the
+        target is unreachable at any duration, which is never the same thing as zero.
+        """
+        target = config.demand_window_target_soc_pct
+        if config.battery_capacity_kwh <= 0.0:
+            return None
+        if config.boost_charge_rate_kw <= 0.0 or config.charge_efficiency <= 0.0:
+            return None
+
+        soc = initial_soc_pct
+        minutes = 0.0
+        # Ceiling: the untapered traversal of the whole SOC range can never take longer
+        # than this many minutes divided by the taper's own worst-case factor, so it
+        # bounds the loop without capping a legitimate answer.
+        untapered_full_range_min = 100.0 / (
+            config.boost_charge_rate_kw
+            * config.charge_efficiency
+            / config.battery_capacity_kwh
+            * 100.0
+            / 60.0
+        )
+        limit = untapered_full_range_min / max(1e-3, config.charge_taper_min_factor)
+        while soc < target and minutes < limit:
+            stored_kwh = _tapered_stored_kwh(
+                soc, config.boost_charge_rate_kw, 1.0 / 60.0, config
+            )
+            delta = stored_kwh / config.battery_capacity_kwh * 100.0
+            if delta <= 1e-9:
+                return None
+            soc += delta
+            minutes += 1.0
+        if soc < target:
+            return None
+        return minutes
 
     def _initialize_dp_tables(
         self,

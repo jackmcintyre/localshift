@@ -204,6 +204,7 @@ CONF_MIN_CYCLE_SAVING = "min_cycle_saving"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
+CONF_PRECHARGE_RUNWAY_MARGIN_MIN = "precharge_runway_margin_min"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
@@ -245,6 +246,11 @@ DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
 )
 DEFAULT_STALE_SOLAR_CONSERVATIVE = True
 DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING = 0.3
+# Minutes of spare pre-charge runway below which the runway backstop arms (fast-follow
+# to #901). Runway slack = minutes to DW entry MINUS minutes boost charging needs to
+# close the SOC gap, so this is "how much more runway may be lost before the target
+# becomes physically unreachable". 0 disables the arm entirely (kill switch).
+DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN = 15.0  # minutes
 DEFAULT_ABSENT_SOLAR_CONFIDENCE = 0.3
 DEFAULT_SPIKE_PRICE_PERCENTILE = 75  # Only export at top 25% of spike prices
 DEFAULT_EXPORT_PRICE_MARGIN = (
@@ -363,6 +369,13 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "",
         "icon": "mdi:weather-sunny-off",
+    },
+    CONF_PRECHARGE_RUNWAY_MARGIN_MIN: {
+        "min": 0.0,
+        "max": 60.0,
+        "step": 5.0,
+        "unit": "min",
+        "icon": "mdi:timer-alert-outline",
     },
 }
 
