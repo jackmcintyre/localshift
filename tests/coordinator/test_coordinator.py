@@ -1399,3 +1399,41 @@ class TestCoordinatorDailySummary:
         await coordinator._tick_scheduler._send_daily_summary()
 
         # Verify it completes without error (no assertion needed, just check no exception)
+
+
+class TestRecomputeDecisionContract:
+    """`invalidate_decision=False` means "may update the plan, must NOT grant"."""
+
+    @pytest.mark.asyncio
+    async def test_reoptimize_suppresses_the_plan_charge_grant(self, coordinator):
+        """The reoptimize path runs compute_derived_values OUT OF LOCK before
+        evaluating, so the frozen facade writes debug_plan_mode_pending and the
+        evaluation that follows reads it back with zero lag. Without suppression the
+        plan-charge trigger grants there — a mode change caused by a load-deviation
+        reoptimize, which is exactly what the flag forbids."""
+        state_machine = MagicMock()
+        coordinator._state_machine = state_machine
+        coordinator._compute_derived_values = MagicMock()
+        coordinator.notify_listeners = MagicMock()
+        coordinator.async_evaluate_state_machine = AsyncMock()
+
+        await coordinator.async_recompute_and_evaluate(invalidate_decision=False)
+
+        state_machine.suppress_next_plan_charge_grant.assert_called_once()
+        state_machine.invalidate_decision_fingerprint.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_config_change_still_invalidates_and_does_not_suppress(
+        self, coordinator
+    ):
+        """The deliberate re-decision path is unchanged."""
+        state_machine = MagicMock()
+        coordinator._state_machine = state_machine
+        coordinator._compute_derived_values = MagicMock()
+        coordinator.notify_listeners = MagicMock()
+        coordinator.async_evaluate_state_machine = AsyncMock()
+
+        await coordinator.async_recompute_and_evaluate()
+
+        state_machine.invalidate_decision_fingerprint.assert_called_once()
+        state_machine.suppress_next_plan_charge_grant.assert_not_called()

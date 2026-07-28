@@ -1668,8 +1668,10 @@ class TestDecisionFingerprint:
 
         assert fp1 == fp2
         # #622 gate replacement: fingerprint now enumerates the full discrete
-        # decision context: buy|sell|spike|dw_active|soc_floor_breached.
-        assert fp1 == "0.2500|0.0800|False|False|False"
+        # decision context: buy|sell|spike|dw_active|soc_floor_breached, plus the
+        # plan-charge epoch (2026-07-27 pre-charge incident — the plan is itself a
+        # decision input; the epoch is 0 until a wanted charge is starved).
+        assert fp1 == "0.2500|0.0800|False|False|False|0"
 
 
 class TestModeTransitionGating:
@@ -1974,13 +1976,23 @@ class TestDecisionTokenInvariant:
             coordinator_data.general_price = price
             coordinator_data.price_spike = False
             engine.plan_mode = oscillate[i % 2]
-            distinct_fps.add(state_machine._get_decision_fingerprint(coordinator_data))
             self._run(state_machine, coordinator_data, engine)
+            # Collect the fingerprint the machine actually SPENT a token on
+            # (post-eval), not a pre-eval sample: the plan-charge epoch is
+            # advanced inside _apply_decision_token, so a pre-eval sample would
+            # read the context one update early.
+            distinct_fps.add(state_machine._last_evaluated_fingerprint)
 
         # The crown jewel: at most one transition per distinct decision context.
         assert len(transitions) <= len(distinct_fps)
-        # And concretely: 4 distinct prices → ≤ 4 transitions, not ~12.
-        assert len(distinct_fps) == 4
+        # And concretely: 4 distinct prices plus the 2 plan-charge rising edges
+        # they starve → 6 contexts, so ≤ 6 transitions across 12 evals, not ~12.
+        # The 2 extra contexts are the plan-change trigger doing its job: on two
+        # frozen ticks the plan wanted to START grid charging while a non-charge
+        # mode was committed and SOC was below target (2026-07-27 incident). The
+        # trigger is one-directional and its epoch is monotone, so it can add at
+        # most one context per (price context × new wanted-charge mode).
+        assert len(distinct_fps) == 6
         # Guard against a vacuous pass: the knife-edge MUST have driven some
         # transitions (otherwise the invariant is trivially satisfied).
         assert len(transitions) >= 1
@@ -2085,8 +2097,8 @@ class TestDecisionTokenInvariant:
     def test_none_price_never_grants_transition(
         self, state_machine, coordinator_data, mock_battery_controller
     ):
-        """price → None → same price restores → still frozen; new price → one
-        decision. None must never grant a transition."""
+        """price → None must never grant. The restored price then grants exactly
+        one decision, because the plan's starved charge advanced the epoch."""
         coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
         state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
         coordinator_data.general_price = 0.25
@@ -2097,7 +2109,8 @@ class TestDecisionTokenInvariant:
         stored_fp = state_machine._last_evaluated_fingerprint
 
         # Tick 2: price unavailable (None) + plan flips. None must freeze and must
-        # NOT overwrite the stored fingerprint.
+        # NOT overwrite the stored fingerprint — this is the assertion the test
+        # exists for and it is unchanged by the plan-change trigger.
         coordinator_data.general_price = None
         engine.plan_mode = BatteryMode.GRID_CHARGING
         self._run(state_machine, coordinator_data, engine)
@@ -2105,18 +2118,57 @@ class TestDecisionTokenInvariant:
         assert state_machine._last_evaluated_fingerprint == stored_fp
         mock_battery_controller.set_force_charge.assert_not_called()
 
+        # Tick 3: the price returns unchanged, but tick 2 left a starved charge
+        # pending (debug_plan_mode_pending=grid_charging). FIX 1: that is a
+        # genuine context change, so this tick grants EXACTLY ONE decision and
+        # the plan's charge finally commits (2026-07-27 incident).
+        coordinator_data.general_price = 0.25
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is True
+        assert coordinator_data.active_mode == BatteryMode.GRID_CHARGING
+        mock_battery_controller.set_force_charge.assert_called_once()
+
+        # Tick 4: same price, disagreement resolved → frozen again (the epoch is
+        # monotone, so the resolution does not grant a second decision).
+        self._run(state_machine, coordinator_data, engine)
+        assert engine.last_decision_allowed is False
+        mock_battery_controller.set_force_charge.assert_called_once()
+
+    def test_none_price_never_grants_transition_non_charge_plan(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Sibling of the above with a NON-charge pending mode: the plan-change
+        trigger is one-directional, so the restored price stays frozen — the
+        original 'None never grants' behaviour, preserved verbatim."""
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.general_price = 0.25
+        engine = FakeFacadeEngine(BatteryMode.SELF_CONSUMPTION)
+
+        # Tick 1: establish context, plan stable.
+        self._run(state_machine, coordinator_data, engine)
+        stored_fp = state_machine._last_evaluated_fingerprint
+
+        # Tick 2: price unavailable (None) + plan flips to a non-charge mode.
+        coordinator_data.general_price = None
+        engine.plan_mode = BatteryMode.SPIKE_DISCHARGE
+        self._run(state_machine, coordinator_data, engine)
+        assert coordinator_data.mode_decision_allowed is False
+        assert state_machine._last_evaluated_fingerprint == stored_fp
+        mock_battery_controller.set_force_discharge.assert_not_called()
+
         # Tick 3: same price returns — still frozen (no context change).
         coordinator_data.general_price = 0.25
         self._run(state_machine, coordinator_data, engine)
-        assert coordinator_data.mode_decision_allowed is False
-        mock_battery_controller.set_force_charge.assert_not_called()
+        assert engine.last_decision_allowed is False
+        mock_battery_controller.set_force_discharge.assert_not_called()
 
         # Tick 4: genuinely new price — exactly one decision.
         coordinator_data.general_price = 0.40
         self._run(state_machine, coordinator_data, engine)
         assert engine.last_decision_allowed is True
-        assert coordinator_data.active_mode == BatteryMode.GRID_CHARGING
-        mock_battery_controller.set_force_charge.assert_called_once()
+        assert coordinator_data.active_mode == BatteryMode.SPIKE_DISCHARGE
+        mock_battery_controller.set_force_discharge.assert_called_once()
 
     def test_spike_onset_grants_one_decision(self, state_machine, coordinator_data):
         """price_spike False→True is a context change → one decision."""

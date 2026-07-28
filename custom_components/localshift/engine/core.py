@@ -428,6 +428,13 @@ class DPPlanner:
             config, demand_bounds
         )
 
+        # Publish the DW-entry slot index on the config alongside its siblings below.
+        # urgency_window_start_idx is only interpretable against this bound, and
+        # out-of-solver consumers (the pre-charge execution backstop) need "before the
+        # demand window" without re-deriving the window. Must be assigned, not merely
+        # local: the backstop reads it off the config after the plan returns.
+        config.terminal_penalty_idx = terminal_penalty_idx
+
         # Issue #800 follow-up: the urgency-inflated effective_cheap_price is only valid
         # near the demand window. Record where the urgency window begins so the cheap-price
         # gate uses the inflated value only there and the un-inflated base elsewhere

@@ -866,3 +866,147 @@ def test_log_comparison_mismatch_trims_decision_log_to_50_entries():
     assert len(data.decision_log) == 50
     assert data.decision_log[-1]["old_mode"] == "self_consumption"
     assert data.decision_log[-1]["new_mode"] == "grid_charging"
+
+
+# =============================================================================
+# FIX 3 (2026-07-27) — the DW-entry actual, on the log line and in the summary
+# =============================================================================
+#
+# The projected dw_entry_soc_pct rolls over to *tomorrow's* window the instant
+# today's demand window starts. On 2026-07-27 that rollover meant the 15:00 log
+# line and every sensor read a healthy 98.5% / shortfall 0.0 while the battery
+# had actually entered the window at 64% against a 95% target. The captured
+# actual is a separate, per-day field the rollover cannot touch; the facade's
+# job is only to surface it.
+
+
+def _with_dw_entry_actual(data: CoordinatorData) -> CoordinatorData:
+    """Stamp the live 2026-07-27 capture onto ``data``."""
+    data.dw_entry_actual_soc_pct = 64.0
+    data.dw_entry_actual_at = datetime(2026, 7, 27, 15, 0, tzinfo=UTC)
+    data.dw_entry_actual_date = datetime(2026, 7, 27, 15, 0, tzinfo=UTC).date()
+    data.dw_entry_actual_target_pct = 95.0
+    data.dw_entry_actual_shortfall_pct = 31.0
+    return data
+
+
+def test_summary_carries_dw_entry_actual_alongside_the_projection():
+    """Projected and actual must sit in the same payload and be allowed to
+    disagree — that disagreement is the whole diagnostic."""
+    data = _with_dw_entry_actual(CoordinatorData())
+    data.soc = 64.0
+    result = _summary_mock_result()
+    result.dw_entry_soc_pct = 98.5  # tomorrow's window, post-rollover
+
+    _run_inline_with(result, data, {"demand_window_target_soc_pct": 95.0})
+
+    summary = data.optimizer_summary
+    assert summary["dw_entry_soc_pct"] == 98.5
+    assert summary["dw_entry_actual_soc_pct"] == 64.0
+    assert summary["dw_entry_actual_shortfall_pct"] == 31.0
+    assert summary["dw_entry_actual_target_pct"] == 95.0
+    assert summary["dw_entry_actual_at"] == "2026-07-27T15:00:00+00:00"
+    assert summary["dw_entry_actual_date"] == "2026-07-27"
+
+
+def test_summary_dw_entry_actual_keys_present_before_any_capture():
+    """Before the first capture of the day the keys exist and read null — a
+    missing key would render as 'unknown' rather than 'not yet'."""
+    data = CoordinatorData()
+    data.soc = 50.0
+
+    _run_inline_with(
+        _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+    )
+
+    summary = data.optimizer_summary
+    assert summary["dw_entry_actual_soc_pct"] is None
+    assert summary["dw_entry_actual_at"] is None
+    assert summary["dw_entry_actual_date"] is None
+
+
+def test_precharge_decision_log_carries_actual_and_backstop(caplog):
+    """One line, diagnosable on its own: projected next to actual, plus whether
+    the execution backstop had to fire."""
+    import logging
+
+    data = _with_dw_entry_actual(CoordinatorData())
+    data.soc = 64.0
+    data.optimizer_precharge_backstop_active = True
+
+    with caplog.at_level(logging.INFO):
+        _log = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)._log_precharge_decision
+        _log(data, _summary_mock_result(), 64.0, SimpleNamespace())
+
+    assert "dw_entry_actual=64.0%@15:00" in caplog.text
+    assert "backstop=True" in caplog.text
+
+
+def test_precharge_decision_log_reports_this_cycle_not_the_last(caplog):
+    """The line is logged AFTER _assign_active_mode, so backstop= is this cycle's
+    state. It used to be logged before, and reported the PREVIOUS cycle's flag on
+    every line — the exact confusion the line exists to remove."""
+    import logging
+
+    data = _with_dw_entry_actual(CoordinatorData())
+    data.soc = 64.0
+    # Stale True left by an earlier cycle. This cycle's safety gate blocks, so the
+    # backstop cannot have fired and the line must not claim it did.
+    data.optimizer_precharge_backstop_active = True
+
+    with caplog.at_level(logging.INFO):
+        _run_inline_with(
+            _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+        )
+
+    assert "dw_entry_actual=64.0%@15:00" in caplog.text
+    assert "backstop=False" in caplog.text
+    assert "backstop=True" not in caplog.text
+
+
+def test_precharge_decision_log_reads_na_without_a_capture(caplog):
+    import logging
+
+    data = CoordinatorData()
+    data.soc = 50.0
+
+    with caplog.at_level(logging.INFO):
+        _run_inline_with(
+            _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+        )
+
+    assert "dw_entry_actual=n/a" in caplog.text
+    assert "backstop=False" in caplog.text
+
+
+def test_underprepared_warning_carries_the_captured_entry_soc(caplog):
+    """#889's guardrail line must quote the real entry SOC, not only the live
+    one — by the time it trips the pack may have partly recovered."""
+    import logging
+
+    data = _with_dw_entry_actual(CoordinatorData())
+    data.soc = 70.0
+    data.demand_window_active = True
+
+    with caplog.at_level(logging.WARNING):
+        _run_inline_with(
+            _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+        )
+
+    assert data.optimizer_soc_underprepared is True
+    assert "SOC UNDERPREPARED" in caplog.text
+    assert "entered at 64.0%@15:00" in caplog.text
+
+
+def test_mark_mode_debug_fallback_clears_stale_plan_pending():
+    """A pending left by an earlier tick must not survive a cycle that produced
+    no decision at all — it would feed the state machine a phantom grant."""
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    data = CoordinatorData()
+    data.debug_plan_mode_pending = BatteryMode.GRID_CHARGING.value
+
+    facade._mark_mode_debug_fallback(data)
+
+    assert data.debug_plan_mode_pending is None
+    assert data.debug_mode_source == "fallback"
+    assert data.optimizer_precharge_backstop_active is False

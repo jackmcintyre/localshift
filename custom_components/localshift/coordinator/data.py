@@ -576,6 +576,51 @@ class CoordinatorData:
     """True only on evaluations where the decision context changed (one decision
     per price/spike/DW-boundary/SOC-floor change). Transient; not persisted."""
 
+    mode_decision_plan_charge_only: bool = False
+    """True when this evaluation's decision token was granted *solely* because the
+    plan wants to START charging while frozen (the plan-charge epoch advanced but
+    the price/spike/DW/floor context did not).
+
+    Such a grant may only commit a CHARGE mode. Without this the trigger is
+    one-directional in what ARMS it but not in what it COMMITS: a charge-wanted
+    epoch would hand the facade a generic re-decision, and a plan whose slot-0 had
+    wandered to spike_discharge would force-discharge the battery on a token
+    granted because the plan wanted to charge. Transient; not persisted."""
+
+    mode_backstop_allowed: bool = False
+    """Transient in-lock permission for the pre-charge execution backstop. Opened by
+    ``StateMachine._apply_decision_token`` and closed in the evaluate finally block,
+    so the OUT-OF-LOCK compute_derived_values in
+    ``coordinator.async_recompute_and_evaluate`` can never force a charge. Default
+    False so any path that forgets to set it stays inert."""
+
+    optimizer_precharge_backstop_active: bool = False
+    """True while the pre-charge execution backstop is force-committing BOOST_CHARGING
+    this cycle. Surfaced on the optimizer summary sensor."""
+
     debug_plan_mode_pending: str | None = None
     """When the decision is frozen, the mode the plan would have selected
     ("plan wants X, decision held at Y"). None when no decision is pending."""
+
+    # ---------------------------------------------------------------------------
+    # --- Actual demand-window entry (2026-07-27 pre-charge incident) ---
+    # ---------------------------------------------------------------------------
+    # The optimizer's PROJECTED dw_entry_soc_pct rolls over to tomorrow's window the
+    # instant today's window starts, which is what erased the 64%-vs-95% miss from the
+    # log. These five record what actually happened, captured once at the DW boundary
+    # and held for the rest of the day. Reset by _reset_daily_precharge_latch.
+
+    dw_entry_actual_soc_pct: float | None = None
+    """SOC (%) observed at the first evaluation inside today's demand window."""
+
+    dw_entry_actual_at: datetime | None = None
+    """Timestamp of that capture. None before the window opens."""
+
+    dw_entry_actual_target_pct: float | None = None
+    """The battery target the capture is measured against."""
+
+    dw_entry_actual_shortfall_pct: float | None = None
+    """max(0, target - actual) in %-points. 0.0 when the target was met."""
+
+    dw_entry_actual_date: date | None = None
+    """Date the capture belongs to — the once-per-day latch."""
