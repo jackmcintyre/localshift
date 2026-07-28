@@ -33,6 +33,19 @@ _LOGGER = logging.getLogger(__name__)
 # the plan already wants a pre-DW charge that the decision token never sampled.
 PRECHARGE_BACKSTOP_SHORTFALL_PCT = 5.0
 
+# FLOOR on the extra runway slack (minutes) required to RELEASE the runway backstop once
+# it is holding, on top of ``precharge_runway_margin_min``. Without a band the arm sits
+# exactly on its own threshold: boost charging holds slack roughly constant (the gap
+# closes at the same rate the runway shortens), so slack hovers at the margin and the arm
+# chatters on/off every cycle.
+#
+# A floor, not the band itself: the published slack is quantized to slot 0's width, so the
+# effective band is ``max(this, precharge_runway_quantum_min)`` — see
+# ``_runway_slack_below_margin``. 10 minutes clears a 5-minute slot 0; nothing about it
+# clears a 30-minute one, which is what the horizon opens with when there is no 5-minute
+# Amber data.
+PRECHARGE_RUNWAY_HYSTERESIS_MIN = 10.0
+
 # Modes that constitute "the battery is being charged from the grid". Mirrors
 # ``state.machine._CHARGE_MODES``; a decision token granted purely because the plan
 # wanted to START charging may commit one of these and nothing else.
@@ -64,7 +77,19 @@ class OptimizerFacade:
         # the decision context just moved, so another change is imminent. Without
         # this latch a forced boost can outlive its own conditions indefinitely on a
         # flat-price stretch or a stuck price sensor. See _release_backstop_hold.
+        # Shared by both forcing arms (#901's floor-gated backstop and the runway arm)
+        # — one latch, one MODE-release path (see _release_backstop_hold).
         self._backstop_holding: bool = False
+        # The runway arm's OWN hold state, deliberately NOT the shared latch. Hysteresis
+        # is release hysteresis: it may only widen the threshold of an arm that is
+        # already holding. Reading _backstop_holding here would let a hold opened by
+        # #901 widen the runway arm's *arming* threshold by
+        # PRECHARGE_RUNWAY_HYSTERESIS_MIN, so a cycle in which #901 fired first would
+        # force a grid charge at a slack this arm's own threshold says to ignore.
+        # It also survives a transient block (price ceiling, unavailable prices, the
+        # other arm's eligibility flag flickering) so a one-cycle blip cannot silently
+        # reset the band to narrow — the failure the band exists to prevent.
+        self._runway_holding: bool = False
 
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction."""
@@ -252,7 +277,13 @@ class OptimizerFacade:
             result = self._planner.plan(inputs)
 
             self._write_optimizer_fields(
-                data, result, slot_metadata, config_options, cycle_id, soc_info
+                data,
+                result,
+                slot_metadata,
+                config_options,
+                cycle_id,
+                soc_info,
+                optimizer_config,
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
@@ -281,6 +312,7 @@ class OptimizerFacade:
         config_options: dict[str, Any],
         cycle_id: str,
         initial_soc_info: dict[str, Any] | None = None,
+        optimizer_config: Any | None = None,
     ) -> None:
         """Write optimizer results to coordinator data fields.
 
@@ -294,6 +326,10 @@ class OptimizerFacade:
                 ``_normalize_initial_soc``. Threaded through so the summary's
                 ``initial_soc_pct`` is populated on the live path (previously
                 dropped — it read null while ``dw_entry_soc_pct`` was set).
+            optimizer_config: The solved ``OptimizerConfig``. Threaded through for the
+                same reason: the runway telemetry the DP writes onto it has no other
+                route to the summary sensor. Optional so the batch/test callers that
+                only need the result-derived fields are unaffected.
 
         """
         data.optimizer_result = _serialize_result(result)
@@ -330,6 +366,24 @@ class OptimizerFacade:
             dw_entry_actual_date.isoformat()
             if dw_entry_actual_date is not None
             else None
+        )
+
+        # Runway telemetry (2026-07-28). Injected here for the same reason as the block
+        # above: these are solver-derived OptimizerConfig fields and ``_build_summary``
+        # is a pure result→dict function with no config handle, so without this the
+        # sensor's ``precharge_runway_slack_min`` / ``hard_floor_suppressed_by_solar``
+        # attributes read null/false forever — including on the cycle the runway arm
+        # force-commits BOOST and logs the slack as its reason. The operator needs to be
+        # able to watch slack degrade toward the margin; that is the whole point of
+        # publishing it.
+        data.optimizer_summary["precharge_runway_slack_min"] = getattr(
+            optimizer_config, "precharge_runway_slack_min", None
+        )
+        data.optimizer_summary["hard_floor_suppressed_by_solar"] = bool(
+            getattr(optimizer_config, "hard_floor_suppressed_by_solar", False)
+        )
+        data.optimizer_summary["precharge_runway_margin_min"] = getattr(
+            optimizer_config, "precharge_runway_margin_min", None
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours
@@ -547,11 +601,22 @@ class OptimizerFacade:
             backstop_mode = self._precharge_backstop_mode(
                 data, result, optimizer_config, current_slot_idx
             )
+            backstop_source = "precharge_backstop"
+            if backstop_mode is None:
+                # #901's arm is gated on hard_target_floor, which the solver suppresses
+                # on any day solar looks sufficient — so its None here is "no floor to
+                # measure against", not "nothing to worry about". The runway arm covers
+                # exactly that blind spot, keyed on physical slack instead of a floor.
+                backstop_mode = self._runway_backstop_mode(
+                    data, optimizer_config, current_slot_idx
+                )
+                if backstop_mode is not None:
+                    backstop_source = "runway_backstop"
             data.optimizer_precharge_backstop_active = backstop_mode is not None
             if backstop_mode is not None:
                 self._backstop_holding = True
                 self._commit_or_hold_mode(
-                    data, backstop_mode, True, mode_source="precharge_backstop"
+                    data, backstop_mode, True, mode_source=backstop_source
                 )
                 return
             if self._release_backstop_hold(data):
@@ -688,6 +753,196 @@ class OptimizerFacade:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Pre-charge backstop check failed (non-fatal): %s", exc)
             return None
+
+    def _runway_backstop_mode(
+        self,
+        data: CoordinatorData,
+        optimizer_config: Any,
+        current_slot_idx: int,
+    ) -> Any | None:
+        """Return BOOST_CHARGING when the runway-insurance arm must fire.
+
+        Fast-follow to #901 (found live 2026-07-28). The #901 backstop is gated on
+        ``hard_target_floor``, and ``_compute_hard_target_floor`` deliberately returns
+        None on any day the solar-sufficiency check passes — don't fight #816/#849. So
+        the backstop built to prevent a repeat of 2026-07-27 is FULLY DORMANT on exactly
+        the days that look fine in the morning, with nothing to catch an afternoon cloud
+        event that craters solar with too little runway left to close the gap at the PW3
+        boost rate. Observed live: 59.1% SOC against a 95% target with 82 minutes to the
+        demand window — recoverable only via a manual ``boost_charging`` override.
+
+        The armed quantity is deliberately runway SLACK
+        (``precharge_runway_slack_min``: minutes to DW entry minus minutes of boost
+        charging needed to close the gap), NOT solar confidence — 2026-07-27 proved
+        confidence unreliable (a blended "high" 0.87 against a 52% Solcast day
+        confidence).
+
+        Slack is a WORST-CASE question — "if solar stopped right now, could grid still
+        reach target in time?" — and it is not self-limiting on a sunny day: the gap it
+        measures is the LIVE gap, which projected solar has not yet closed. A low-SOC
+        morning under a strong forecast therefore reads a small slack and can arm this
+        arm even though solar alone would have reached target. That false-fire is the
+        deliberate insurance premium of the design, and ``precharge_runway_margin_min``
+        (0 ⇒ off) is the operator's control over how much of it to pay. Do not "fix" it
+        by crediting projected solar into the gap: that reinstates exactly the forecast
+        trust the arm exists to survive, and would have left 2026-07-28 uncovered.
+
+        Every gate is shared with #901 except two deliberate differences:
+
+        - ``_count_pre_dw_charge_slots`` is NOT checked. #901 requires a planned pre-DW
+          grid charge so it "never invents intent" — but on a solar-sufficient day the
+          plan contains no grid-charge slot at all. That absence IS the gap this arm
+          exists to cover, so requiring the slot would make it as dormant as #901.
+        - the shortfall is the LIVE gap (``target - soc``), not the plan's
+          ``terminal_shortfall_pct``, which reads 0 on a solar-sufficient day — the same
+          blind spot one level down.
+
+        The gates are ordered in two deliberate groups. The first group is the arm's OWN
+        conditions: when one of them clears, the hold is genuinely over and
+        ``_runway_holding`` drops. The second group is transient blocks — a price tick
+        above the ceiling, an unavailable price sensor, the other arm's eligibility flag
+        flickering as ``check_global_solar_sufficiency`` chatters on a marginal-solar
+        afternoon. Those must stop the forced charge but MUST NOT clear the latch: doing
+        so resets the hysteresis band to narrow, and the arm re-fires on the very next
+        tick at a slack it was already holding through. That is the mode-flap this
+        ordering exists to prevent.
+
+        Never raises: a failing arm must degrade to "no backstop", never take down the
+        optimizer cycle.
+        """
+        try:
+            # Out-of-lock recomputes must observe without mutating: the latch is hold
+            # state for the in-lock path only (mirrors _release_backstop_hold).
+            if not getattr(data, "mode_backstop_allowed", False):
+                return None
+
+            # --- Group 1: the arm's own conditions. Clearing one ends the hold. ---
+            gap = self._live_target_gap_pct(data, optimizer_config)
+            if gap is None or gap <= PRECHARGE_BACKSTOP_SHORTFALL_PCT:
+                self._runway_holding = False
+                return None
+
+            armed = self._runway_slack_below_margin(optimizer_config)
+            if armed is None:
+                # Slack recovered past the band, is uninterpretable, or the margin knob
+                # disabled the arm — all genuine ends to the hold.
+                self._runway_holding = False
+                return None
+            slack, threshold = armed
+
+            # --- Group 2: transient blocks. They suppress, they do not release. ---
+            if not self._backstop_context_permits(data):
+                return None
+
+            # A hold already opened by THIS arm survives the hard floor going live: #901
+            # only fires on a material *projected* shortfall, so when the floor flickers
+            # on it routinely declines too, and releasing here would drop the forced
+            # boost for exactly one cycle before re-arming.
+            if not (
+                self._floor_suppressed_by_solar(optimizer_config)
+                or self._runway_holding
+            ):
+                return None
+
+            window = self._backstop_urgency_window(optimizer_config, current_slot_idx)
+            if window is None:
+                return None
+            urgency_start_idx, terminal_penalty_idx = window
+
+            if self._price_above_precharge_ceiling(data, optimizer_config):
+                return None
+
+            self._runway_holding = True
+            _LOGGER.warning(
+                "RUNWAY BACKSTOP: forcing BOOST_CHARGING — soc=%.1f%% target=%.1f%% "
+                "gap=%.1f%% runway slack=%.1f min < %.1f min slot=%d (urgency window "
+                "%d..%d). The hard DW-target floor is suppressed because solar was "
+                "projected sufficient, so the pre-charge backstop is dormant; there is "
+                "no longer enough runway to reach target at boost rate if solar fails.",
+                float(getattr(data, "soc", 0.0)),
+                float(getattr(optimizer_config, "demand_window_target_soc_pct", 0.0)),
+                gap,
+                slack,
+                threshold,
+                current_slot_idx,
+                urgency_start_idx,
+                terminal_penalty_idx,
+            )
+            return _BatteryMode.BOOST_CHARGING
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Runway backstop check failed (non-fatal): %s", exc)
+            return None
+
+    @staticmethod
+    def _floor_suppressed_by_solar(optimizer_config: Any) -> bool:
+        """True only when the hard floor is dormant BECAUSE solar looked sufficient.
+
+        Strictly the complement of #901: a live floor means that arm owns the cycle and
+        this one stays out of the way. And the solar suppression is the ONLY None-reason
+        this arm may act on — ``allow_dw_entry_under_target``, no demand window, a
+        non-self-consumption mode and a legacy config without the field are policy or
+        structural decisions that must stay exactly as dormant as they are under #901.
+        """
+        if getattr(optimizer_config, "hard_target_floor", None) is not None:
+            return False
+        return bool(getattr(optimizer_config, "hard_floor_suppressed_by_solar", False))
+
+    @staticmethod
+    def _live_target_gap_pct(
+        data: CoordinatorData, optimizer_config: Any
+    ) -> float | None:
+        """%-points between the live SOC and the DW target, or None if unreadable.
+
+        Deliberately NOT ``result.terminal_shortfall_pct``: on a solar-sufficient day the
+        plan believes solar closes the gap and publishes a shortfall of 0, which is the
+        same blind spot that makes the hard floor dormant in the first place.
+        """
+        soc = getattr(data, "soc", None)
+        target = getattr(optimizer_config, "demand_window_target_soc_pct", None)
+        if soc is None or target is None:
+            return None
+        return float(target) - float(soc)
+
+    def _runway_slack_below_margin(
+        self, optimizer_config: Any
+    ) -> tuple[float, float] | None:
+        """Return ``(slack, threshold)`` when runway slack has fallen under the margin.
+
+        ``precharge_runway_slack_min`` is None when the quantity is not interpretable (no
+        demand window, unparseable timestamps, degenerate battery constants) — which is
+        never the same thing as zero slack, so the arm stays dormant.
+
+        The widening reads ``_runway_holding``, this arm's own latch, NOT the shared
+        ``_backstop_holding``: release hysteresis may only widen the threshold of an arm
+        that is already holding, and inheriting #901's latch would widen this arm's
+        *arming* threshold on a cycle it never opened.
+
+        The band is ``max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, precharge_runway_quantum_min)``
+        because the published slack carries a sawtooth of one slot-0 width: the DP has no
+        clock, so the time term steps at slot boundaries while the SOC gap closes
+        continuously. A fixed 10-minute band clears a 5-minute slot 0 and not a 30-minute
+        one, which would re-arm the arm at every boundary for the whole pre-charge window.
+
+        Applied only AFTER the kill switch: a margin of 0 disables the arm outright rather
+        than leaving a hysteresis-wide band armed.
+        """
+        slack = getattr(optimizer_config, "precharge_runway_slack_min", None)
+        if slack is None:
+            return None
+        margin = float(
+            getattr(optimizer_config, "precharge_runway_margin_min", 0.0) or 0.0
+        )
+        if margin <= 0.0:
+            return None
+        threshold = margin
+        if self._runway_holding:
+            quantum = float(
+                getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
+            )
+            threshold += max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
+        if float(slack) >= threshold:
+            return None
+        return float(slack), threshold
 
     @staticmethod
     def _backstop_context_permits(data: CoordinatorData) -> bool:

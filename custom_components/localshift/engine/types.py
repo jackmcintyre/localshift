@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+# const.py is dependency-free (stdlib only) and imports nothing from the engine, so this
+# cannot cycle. Imported so the runway-margin dataclass default and the live number
+# entity's default are literally the same object rather than two literals that drift.
+from ..const import DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+
 if TYPE_CHECKING:
     from custom_components.localshift.forecast.solar_accuracy import (
         SolarAccuracyTracker,
@@ -307,6 +312,106 @@ class OptimizerConfig:
     Strictly bounded to pre-DW slots (``slot_idx < terminal_penalty_idx``); never forces
     charging inside/after the DW or overnight (guards the #800 sawtooth). None ⇒ gate
     dormant (legacy soft-penalty behaviour) for unit tests and direct callers."""
+
+    hard_floor_suppressed_by_solar: bool = False
+    """Solver-derived (set by ``DPPlanner._solve``): True when ``hard_target_floor`` is
+    None *specifically because solar alone was projected to reach the target*, and the
+    gate would otherwise have been live.
+
+    ``hard_target_floor`` goes None for several structurally different reasons, and the
+    pre-charge execution backstop (#901) — which is gated on that floor — must be able to
+    tell them apart. This flag is True only when ALL of the following hold:
+
+    - the strict-mode policy preconditions are met (``allow_dw_entry_under_target`` is
+      False), AND
+    - the solar-sufficiency branch fired: either ``can_solar_reach_target`` (solar reaches
+      target anywhere during the DW) or ``check_global_solar_sufficiency`` (solar reaches
+      target by the DW entry from the current SOC), AND
+    - ``compute_max_feasible_terminal_soc`` is non-None, i.e. the gate is structurally
+      applicable (self-consumption, a demand window exists, the entry is not slot 0).
+
+    False for every OTHER None reason — ``allow_dw_entry_under_target``, no demand window,
+    non-self-consumption, DW entry at slot 0 — so backstops keyed on this flag stay exactly
+    as dormant as they are today in those cases.
+
+    Motivation (2026-07-28): the #901 backstop returns None whenever ``hard_target_floor``
+    is None, and the floor is deliberately suppressed on any day solar *looks* sufficient
+    (don't fight #816/#849). A mid-afternoon cloud event then leaves no backstop at all.
+    The 2026-07-27 incident also proved solar confidence unreliable (a blended "high" 0.87
+    against a 52% Solcast day-confidence), so this flag is deliberately only an
+    *eligibility* signal — it says "the only thing standing between us and a hard floor is
+    a solar forecast" — and must be paired with ``precharge_runway_slack_min`` before it
+    authorizes anything."""
+
+    precharge_runway_slack_min: float | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): spare minutes of pre-charge runway —
+    minutes from the plan's start to the demand-window entry, MINUS the minutes boost
+    charging would need to close the SOC gap to target.
+
+    Formally ``minutes_to_dw_entry - minutes_of_boost_needed``, where minutes-needed is
+    integrated through ``transitions._tapered_stored_kwh`` — the SAME CV-taper charge model
+    the DP's own transitions use — rather than a flat ``gap / (rate × efficiency)``. The
+    taper is not a rounding error: above ``charge_taper_start_pct`` the Powerwall derates
+    toward ``charge_taper_min_factor``, and every pre-charge to a 95% target crosses that
+    knee. On the 2026-07-28 live case (59.1% → 95%) the flat form claimed 63 minutes where
+    the engine's own model needs 78 — a 15-minute overstatement, larger than the whole
+    default margin. Negative ⇒ the target is already physically unreachable at boost rate.
+
+    Both terms are biased to UNDER-report slack, the only safe error direction for a
+    guardrail: the time term is anchored at the END of slot 0 (the DP is clock-free, and
+    slot 0 already contains ``now``, so its start would credit runway already spent).
+
+    This — not solar confidence — is the quantity that matters for the "cloud event with no
+    runway left" failure the #901 backstop was built for. Two honest caveats, both measured
+    rather than assumed:
+
+    - It is NOT self-limiting on a sunny day. ``gap_pp`` is the LIVE gap, which projected
+      solar has not yet closed, so a low-SOC morning under a strong forecast can read a
+      small slack and arm the guardrail even though solar alone would have reached target.
+      That is the deliberate insurance premium of the design — the arm asks "if solar
+      stopped RIGHT NOW, could grid still get there?" — and
+      ``precharge_runway_margin_min`` (0 ⇒ off) is the operator's control over how much of
+      that premium to pay.
+    - While boost charging runs at the modelled rate it holds roughly constant (the gap
+      closes at the rate the runway shortens), so the hold ends via the closing-gap gate,
+      not via slack recovery. It is quantized to ``precharge_runway_quantum_min``.
+
+    None when it is not interpretable: no demand window, the DW entry is slot 0, timestamps
+    are unparseable, or degenerate battery capacity/rate/efficiency. A non-positive gap
+    yields the full remaining runway (nothing to charge ⇒ all slack)."""
+
+    precharge_runway_quantum_min: float = 0.0
+    """Solver-derived (set by ``DPPlanner._solve``): the width of slot 0, in minutes.
+
+    ``precharge_runway_slack_min``'s time term can only step at slot boundaries — the DP is
+    clock-free, so there is no continuous ``now`` to measure from — while its SOC-gap term
+    moves continuously. The published slack therefore carries a sawtooth of exactly this
+    amplitude: it drifts up across a slot and drops by one slot width at each boundary.
+
+    Consumers must size any hysteresis band against this value rather than a hardcoded
+    constant. A 10-minute band clears a 5-minute slot 0 but not a 30-minute one, and slot 0
+    IS 30 minutes whenever the hybrid schedule has no 5-minute Amber data — precisely the
+    degraded conditions in which the arm is most likely to be live."""
+
+    precharge_runway_margin_min: float = DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+    """Operator-tunable slack threshold (minutes) for the runway-gated pre-charge arm.
+
+    Declared here so the engine carries the knob alongside the two solver-derived fields
+    above; the arming logic that reads it lives outside the DP core — it is
+    ``OptimizerFacade._runway_backstop_mode`` that compares it against
+    ``precharge_runway_slack_min``. The arm fires when the slack falls below this margin —
+    i.e. when losing this many more minutes of runway would make the target physically
+    unreachable at boost rate. Non-positive ⇒ the arm is disabled outright (kill switch).
+
+    Default tracks ``const.DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN`` (15.0) so the dataclass and
+    the live ``number.localshift_precharge_runway_margin_min`` slider cannot drift apart.
+    Calibration: the 2026-07-28 live observation (59.1% SOC, 95% target, 82 min to DW) sits
+    at ~4 minutes of slack against the engine's own tapered charge model — well under the
+    margin, so the arm fires, which is the whole point (that state was recovered by a MANUAL
+    ``boost_charging`` override). An earlier flat-rate formula scored the same state at
+    ~19 minutes and would have stayed shut. Raising the margin buys more insurance at the
+    cost of more grid charging on days solar would have sufficed; 0 disables the arm. The DP
+    itself never reads this value — it cannot change a plan."""
 
     pre_dw_funding_water_level: float | None = None
     """Solver-derived (set by ``DPPlanner._solve`` via ``compute_pre_dw_charge_thresholds``):

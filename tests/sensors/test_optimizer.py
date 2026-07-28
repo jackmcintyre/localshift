@@ -392,6 +392,74 @@ class TestOptimizerSummarySensor:
         assert attrs["dw_entry_actual_shortfall_pct"] is None
         assert attrs["precharge_backstop_active"] is False
 
+    def test_precharge_runway_telemetry_from_summary(self):
+        """The two runway fields are solver-derived OptimizerConfig telemetry, so
+        the summary is their primary source (2026-07-28: the #901 backstop is
+        dormant whenever the hard floor is suppressed by a solar forecast, and
+        slack is the quantity that says how much runway is left to notice)."""
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_summary={
+                "enabled": True,
+                "success": True,
+                "precharge_runway_slack_min": 23.8,
+                "hard_floor_suppressed_by_solar": True,
+            },
+        )
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] == 23.8
+        assert attrs["hard_floor_suppressed_by_solar"] is True
+
+    def test_precharge_runway_telemetry_from_coordinator_data(self):
+        """Fallback source: if the engine publishes the pair on coordinator data
+        (alongside precharge_backstop_active) rather than into the summary, the
+        sensor still surfaces it."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+        )
+        data.precharge_runway_slack_min = -4.0
+        data.hard_floor_suppressed_by_solar = True
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] == -4.0
+        assert attrs["hard_floor_suppressed_by_solar"] is True
+
+    def test_precharge_runway_telemetry_null_when_unpublished(self):
+        """Absent from both sources: keys are still present, at their dormant
+        defaults — never missing, never raising."""
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+        )
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] is None
+        assert attrs["hard_floor_suppressed_by_solar"] is False
+
+    def test_precharge_runway_telemetry_null_slack_on_a_failed_cycle(self):
+        """A cycle that published a null slack (no demand window, unparseable
+        timestamps) reads null rather than falling through to a stale value."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={
+                "enabled": True,
+                "success": False,
+                "precharge_runway_slack_min": None,
+                "hard_floor_suppressed_by_solar": False,
+            },
+        )
+        data.precharge_runway_slack_min = 99.0
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] is None
+        assert attrs["hard_floor_suppressed_by_solar"] is False
+
     def test_icon_success(self):
         """Test icon for success state."""
         mock_coordinator, data = create_mock_coordinator_with_data(

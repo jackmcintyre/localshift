@@ -251,6 +251,7 @@ def _build_optimizer_config(
         CONF_MIN_CYCLE_SAVING,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
+        CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
@@ -262,6 +263,7 @@ def _build_optimizer_config(
         DEFAULT_MIN_CYCLE_SAVING,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
+        DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
         DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
         DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
@@ -289,6 +291,15 @@ def _build_optimizer_config(
     stale_solar_confidence_ceiling = float(
         config_options.get(
             CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
+        )
+    )
+
+    # Runway backstop margin (fast-follow to #901). Read like every other live knob so
+    # the slider takes effect on the next evaluation. 0 is a genuine kill switch — the
+    # arm treats a non-positive margin as "disabled", not as "fire only at zero slack".
+    precharge_runway_margin_min = float(
+        config_options.get(
+            CONF_PRECHARGE_RUNWAY_MARGIN_MIN, DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
         )
     )
 
@@ -378,6 +389,7 @@ def _build_optimizer_config(
         allow_dw_entry_under_target=allow_dw_entry_under_target,
         stale_solar_conservative=stale_solar_conservative,
         stale_solar_confidence_ceiling=stale_solar_confidence_ceiling,
+        precharge_runway_margin_min=precharge_runway_margin_min,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
