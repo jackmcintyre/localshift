@@ -352,11 +352,19 @@ def _expected_slack(config: OptimizerConfig, dw_entry_idx: int, soc: float) -> f
 # Captured from the code BEFORE the telemetry fields were added. Stage A is purely
 # additive; if any of these move, the DP's own input changed and the change is not
 # additive after all.
+#
+# The ``unreachable`` baseline was deliberately re-captured for #903 (34.697855750487335
+# -> 37.03703703703704). That fixture's single pre-DW slot is a CHARGE slot with negative
+# net load, and ``compute_max_feasible_terminal_soc`` used to subtract the slot's load
+# drift on top of the boost credit — double-counting a deficit the DP's own charge
+# transition imports from the grid. The new value is `20.0 + one untapered boost slot`,
+# with no drift. Every other baseline is unchanged, which is the point: the correction is
+# scoped to charge slots on a negative-net-load runway.
 _FLOOR_BASELINES = [
     # (case name, slots factory, initial SOC, config overrides, expected floor)
     ("repro", _repro_slots, 66.0, {}, 95.0),
     ("solar_sufficient", _solar_sufficient_slots, 66.0, {}, None),
-    ("unreachable", _unreachable_slots, 20.0, {}, 34.697855750487335),
+    ("unreachable", _unreachable_slots, 20.0, {}, 37.03703703703704),
     (
         "allow_under_target",
         _repro_slots,

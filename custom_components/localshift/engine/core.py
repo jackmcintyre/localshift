@@ -1105,8 +1105,19 @@ class DPPlanner:
                 # The penalty is monotonic in the gap, so among below-floor states the DP
                 # still prefers the highest reachable SOC (no infeasible/empty plan).
                 if hard_target_floor is not None and effective_soc < hard_target_floor:
-                    shortfall = hard_target_floor - effective_soc
-                    shortfall_penalty = shortfall * hard_constraint_penalty
+                    # Issue #903: measure the gap to TARGET, then ADD the floor breach —
+                    # never the gap to the floor alone. The floor is min(target, max
+                    # feasible), so when it degrades below target a gap-to-floor penalty
+                    # is SMALLER than the gap-to-target penalty applied just above the
+                    # floor: the schedule stepped UP at the boundary (measured $3.24 just
+                    # below vs $615.60 just above) and made the degraded floor an
+                    # attractor the DP deliberately parked under, forgoing reachable cheap
+                    # SOC. Summing keeps the penalty non-increasing in SOC across the
+                    # whole below-target range and continuous at the floor (the breach
+                    # term vanishes there), while still making a breach strictly worse.
+                    shortfall = target - effective_soc
+                    breach = hard_target_floor - effective_soc
+                    shortfall_penalty = (shortfall + breach) * hard_constraint_penalty
                 elif use_hard_constraint and effective_soc < target:
                     shortfall = target - effective_soc
                     shortfall_penalty = shortfall * hard_constraint_penalty
