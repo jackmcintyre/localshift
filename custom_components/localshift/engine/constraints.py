@@ -560,6 +560,12 @@ def compute_max_feasible_terminal_soc(
     charge in) contributes a boost-rate charge; every other slot evolves on solar/load
     only. The result is clamped to the charge ceiling (target in self-consumption mode).
 
+    A charge slot is simulated the way ``_transition_charge_grid`` actually moves SOC
+    (issue #903): the house load is served from the grid during a grid charge, so the
+    battery does not drain and the net-load drift MUST NOT be applied on top of the boost
+    credit. Applying both under-reported the reachable SOC by the whole pre-DW load on any
+    negative-net-load runway, which degraded the hard floor below a reachable target.
+
     The simulation is measured at the SOC ENTERING the DW-entry slot (before that slot's
     own consumption drift) — matching how the DP applies the terminal penalty in
     ``_backward_induction`` (to ``dp[terminal_penalty_idx][bin]``, keyed by the SOC at the
@@ -591,31 +597,59 @@ def compute_max_feasible_terminal_soc(
     for i in range(terminal_penalty_idx):
         slot = slots[i]
         slot_hours = slot.slot_interval_minutes / 60.0
-        # Solar/load drift first (mirrors the solar-only simulation shape).
         net_kwh = slot.solar_kwh - slot.consumption_kwh
-        max_solar_transfer = config.solar_charge_rate_kw * slot_hours
-        if net_kwh >= 0:
+        # No ``soc < charge_ceiling`` guard: the clamp below already refuses to credit
+        # anything above the ceiling, and gating on it made the trajectory oscillate —
+        # a slot that arrived AT the ceiling took the drift branch and fell back under
+        # it, so a HIGHER initial SOC could report a LOWER max feasible (67.15 -> 95.0
+        # but 69.77 -> 93.88). A plan that has reached the ceiling can always keep
+        # trickling to hold there, so the optimistic trajectory must be sticky at it.
+        charging = (
+            not slot.is_demand_window_slot
+            and slot.buy_price
+            <= cheap_threshold_for_slot(config, i, terminal_penalty_idx)
+        )
+        if charging:
+            # Issue #903: a charge slot must be simulated the way the DP's own charge
+            # transition moves SOC, not as "drift, then charge". While the battery is
+            # grid-charging, a load deficit is imported from the grid rather than drawn
+            # from the battery (``_charge_grid_with_deficit`` in transitions.py), so SOC
+            # does NOT drain in a charge slot. Subtracting the net-load drift here AND
+            # crediting the boost double-counted the deficit, under-reporting the
+            # reachable SOC on every negative-net-load pre-DW runway (live 2026-07-29:
+            # 88.67 reported vs 95.0 actually reachable) and degrading the hard floor
+            # below a target that was physically attainable.
             soc += (
-                min(net_kwh, max_solar_transfer)
+                config.boost_charge_rate_kw
+                * slot_hours
                 * config.charge_efficiency
                 / config.battery_capacity_kwh
                 * 100.0
             )
-        else:
-            soc += (
-                max(net_kwh, -max_solar_transfer)
-                / config.discharge_efficiency
-                / config.battery_capacity_kwh
-                * 100.0
-            )
-        # Then the most optimistic eligible grid charge (boost) in this pre-DW slot.
-        if not slot.is_demand_window_slot and soc < charge_ceiling:
-            threshold = cheap_threshold_for_slot(config, i, terminal_penalty_idx)
-            if slot.buy_price <= threshold:
+            if net_kwh > 0:
+                # Solar surplus stacks on top of the grid charge, exactly as
+                # ``_charge_grid_with_solar`` does (uncapped by solar_charge_rate_kw —
+                # that cap governs the solar-only path, not a grid-charge slot).
                 soc += (
-                    config.boost_charge_rate_kw
-                    * slot_hours
+                    net_kwh
                     * config.charge_efficiency
+                    / config.battery_capacity_kwh
+                    * 100.0
+                )
+        else:
+            # No eligible grid charge: evolve on solar/load only.
+            max_solar_transfer = config.solar_charge_rate_kw * slot_hours
+            if net_kwh >= 0:
+                soc += (
+                    min(net_kwh, max_solar_transfer)
+                    * config.charge_efficiency
+                    / config.battery_capacity_kwh
+                    * 100.0
+                )
+            else:
+                soc += (
+                    max(net_kwh, -max_solar_transfer)
+                    / config.discharge_efficiency
                     / config.battery_capacity_kwh
                     * 100.0
                 )
