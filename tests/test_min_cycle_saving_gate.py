@@ -14,6 +14,8 @@ Runs ENTIRELY OFFLINE. Two worlds:
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     OptimizerConfig,
@@ -45,6 +47,7 @@ def _restore_406_double_credit(monkeypatch):
         "net_cost",
         property(lambda self: orig(self) - self.self_consumption_value),
     )
+
 
 PROD_DEFAULT = 0.25  # production DEFAULT_MIN_CYCLE_SAVING
 
@@ -186,17 +189,28 @@ def test_gate_blocks_micro_overnight_arbitrage(monkeypatch):
 def test_gate_preserves_spike_capture():
     """A forecast morning spike saves far more than 25c/kWh -> charging returns.
 
-    With the spike the optimizer charges in the run-up to it (just-in-time, to minimise
-    drain) rather than at the far-overnight trough — both capture the spike; what matters
-    is that the gate does NOT suppress it (cf. test_gate_blocks_micro, same threshold and
-    no spike -> no charge at all).
+    What matters is that the gate does NOT suppress the capture (cf.
+    test_gate_blocks_micro, same threshold and no spike -> no charge at all), and that
+    the battery — not the grid — serves the spike slot.
+
+    This deliberately does NOT pin which slot charges. It used to assert a 30-35 window,
+    on the reasoning that the optimizer charges just-in-time to minimise drain. Spike
+    funding legitimately moves it earlier (measured: charges [34] -> [8, 27], projected
+    net cost $0.6297 -> $0.5703), and that plan is only ever adopted because
+    ``_solve_guarded`` proved it cheaper. Pinning the window tested an implementation
+    detail the docstring already disclaimed; the properties below are the real contract.
     """
     rows = list(_LIVE_ROWS)
     rows[35] = (2.00, 1.90, 0.012, 0.821, 30)  # $2/kWh spike at 07:00
-    charges = _charge_slots(_plan_live(PROD_DEFAULT, rows=rows))
+    result = _plan_live(PROD_DEFAULT, rows=rows)
+    charges = _charge_slots(result)
     assert charges, "a $2 spike (huge saving) must still be captured"
-    assert any(30 <= c <= 35 for c in charges), (
-        f"charge should be positioned to reach the 07:00 spike, got {charges}"
+    assert all(c < 35 for c in charges), (
+        f"charging must precede the 07:00 spike to be able to serve it, got {charges}"
+    )
+    spike_import = result.decisions[35].objective_terms.import_cost
+    assert spike_import == pytest.approx(0.0, abs=1e-6), (
+        f"the battery, not the grid, must serve the $2 spike slot (import ${spike_import})"
     )
 
 

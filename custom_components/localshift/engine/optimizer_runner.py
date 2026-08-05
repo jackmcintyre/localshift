@@ -639,6 +639,17 @@ def _build_summary(
     summary["peak_soc_pct"] = result.peak_soc_pct
     summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
 
+    # Spike-event pre-charge funding. Read the count and the delta together: a zero
+    # count means nothing qualified (the ordinary day), while a non-zero count with
+    # accepted=False is USUALLY a benign tie (delta == 0), not a guard rejection
+    # (delta < 0). Without the delta the two are indistinguishable and a normal ~40%
+    # tie rate reads as a 40% failure rate.
+    summary["spike_funding_slot_count"] = result.spike_funding_slot_count
+    summary["spike_funding_accepted"] = result.spike_funding_accepted
+    summary["spike_funding_net_cost_delta"] = round(
+        result.spike_funding_net_cost_delta, 4
+    )
+
     return summary
 
 
