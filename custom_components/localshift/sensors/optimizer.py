@@ -149,6 +149,12 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "initial_soc_pct": summary.get("initial_soc_pct"),
             "peak_soc_pct": summary.get("peak_soc_pct"),
             "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+            # Spike-event pre-charge. slot_count == 0 is the ordinary day (nothing
+            # qualified); a non-zero count with accepted False is usually a benign
+            # tie — the delta is what separates that from a real guard rejection.
+            "spike_funding_slot_count": summary.get("spike_funding_slot_count"),
+            "spike_funding_accepted": summary.get("spike_funding_accepted"),
+            "spike_funding_net_cost_delta": summary.get("spike_funding_net_cost_delta"),
             # Projected (above) and actual (below) sit together deliberately. These
             # five read from `d`, not `summary`: the summary is rebuilt every cycle
             # and is empty on a failed cycle — precisely when the real entry SOC
