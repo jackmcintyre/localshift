@@ -293,6 +293,35 @@ class OptimizerConfig:
     ``base_cheap_price`` — the #800 overnight-sawtooth protection is untouched).
     None ⇒ legacy behaviour."""
 
+    spike_precharge_enabled: bool = True
+    """Operator kill switch for spike-event pre-charge funding.
+
+    False ⇒ ``DPPlanner.plan`` never computes funding slots and the planner behaves
+    exactly as it did before the feature existed."""
+
+    spike_funding_slots: frozenset[int] | None = None
+    """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to
+    the feasible set so it can fund a later expensive interval outside the demand window.
+
+    Computed by ``spike_event.find_funding_slots``. Without this, a forecast price spike
+    has no funder at all: ``cheap_threshold_for_slot`` only ever widens for the
+    demand-window target, so an overnight trough two cents above ``base_cheap_price``
+    blocks arbitrage worth dollars per kWh (2026-08-05: a $1.65 print met at the 10% floor).
+
+    Consumed in exactly two places, both of which must agree:
+      - ``constraints.feasible_actions`` — admits CHARGE_GRID_NORMAL for these slots.
+      - ``core._is_urgency_precharge`` — exempts them from the min-cycle-saving gate,
+        which they have already been proven to clear by construction (qualification uses
+        ``min_cycle_saving`` as its bar). Re-applying it is redundant AND harmful: that
+        gate is non-monotone and can reject a strictly better plan when the feasible set
+        grows.
+
+    Deliberately NOT routed through ``cheap_threshold_for_slot``: that function also feeds
+    the futile-cycling penalty and the floor-routing helpers, so changing its return value
+    would mutate the objective function rather than only the choice set.
+
+    None ⇒ feature inert (legacy behaviour)."""
+
     hard_target_floor: float | None = None
     """Solver-derived (set by ``DPPlanner._solve``): the hard DW-target feasibility floor
     (issue #885) — ``min(target, max feasible/eligible SOC at DW entry)``.
@@ -681,6 +710,30 @@ class OptimizerResult:
 
     terminal_shortfall_pct: float = 0.0
     """Residual SOC shortfall (%) at demand window entry, if any."""
+
+    spike_funding_slot_count: int = 0
+    """How many slots qualified as spike-event pre-charge funding this cycle.
+
+    0 means nothing qualified — the common case on an ordinary day, and the signal
+    that the feature stayed fully inert."""
+
+    spike_funding_accepted: bool = False
+    """True when the spike-funded plan beat the baseline and was kept.
+
+    Read this together with ``spike_funding_net_cost_delta`` — False alone does NOT
+    mean the guard caught a bad plan. Measured over a 200-scenario sweep, ~40% of
+    cycles that qualify end in a dead tie (the DP simply declines the extra option),
+    and those are indistinguishable from genuine rejections on this flag alone."""
+
+    spike_funding_net_cost_delta: float = 0.0
+    """Baseline minus spike-funded projected net cost ($), when funding slots existed.
+
+    > 0  the widening saved money and was adopted.
+    == 0 it qualified but changed nothing — the common, benign case.
+    < 0  the guard REJECTED it as worse. A persistent run of these means the
+         qualification rule is too permissive and should be tightened; an occasional
+         one is expected, because the min-cycle-saving gate makes this DP
+         non-monotone."""
 
     can_solar_reach_target: bool = False
     """True if solar alone can reach DW target (no grid charge, no export). Phase 4, #441."""

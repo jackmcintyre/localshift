@@ -167,6 +167,21 @@ def feasible_actions(
                 slot.buy_price <= cheap_threshold * VERY_CHEAP_PRICE_FACTOR
             )
 
+            # Spike-event funding: a slot that pays for a materially dearer future
+            # interval is admitted even when it is above the cheap threshold. Without
+            # this the charge is not merely discouraged, it is ABSENT from the feasible
+            # set, so no penalty or bonus anywhere in the DP can buy it — the failure
+            # behind the 2026-08-05 incident, where a $1.65 spike was met at the floor
+            # because the overnight trough sat two cents above base_cheap_price.
+            # Only the normal rate is unlocked: boost stays gated on the existing
+            # very-cheap/target logic so this can never become #800 in a new costume.
+            if (
+                config.spike_funding_slots is not None
+                and slot_idx in config.spike_funding_slots
+                and not price_is_cheap
+            ):
+                actions.append(PlannerAction.CHARGE_GRID_NORMAL)
+
             if price_is_cheap:
                 actions.append(PlannerAction.CHARGE_GRID_NORMAL)
                 # Shortfall-aware boost (2026-06-11 incident): boost is normally reserved

@@ -43,6 +43,7 @@ from custom_components.localshift.engine.solar import (
     get_forecast_accuracy,
     projected_solcast_gain_pct,
 )
+from custom_components.localshift.engine.spike_event import find_funding_slots
 from custom_components.localshift.engine.transitions import _tapered_stored_kwh
 from custom_components.localshift.engine.transitions import transition as _transition
 from custom_components.localshift.engine.types import (
@@ -225,6 +226,21 @@ def _is_urgency_precharge(
 
     """
 
+    # Spike-event funding exemption. A funding slot has ALREADY been proven to clear
+    # min_cycle_saving — that spread IS its qualification test in
+    # spike_event.find_funding_slots — so applying the gate again is redundant. It is
+    # also actively harmful: the gate is non-monotone, and leaving it on let a strictly
+    # larger feasible set produce a strictly WORSE plan on the DP's own objective
+    # (measured: projected net cost 1.2242 -> 1.5089 purely by declaring a second event;
+    # ablation confirms min_cycle_saving is the cause and switching_penalty is not).
+    # Unlike the DW branches below this is not scoped to pre-DW slots: the whole point is
+    # to fund an interval the demand window does not cover.
+    if (
+        config.spike_funding_slots is not None
+        and slot_idx in config.spike_funding_slots
+    ):
+        return True
+
     return (
         terminal_penalty_idx is not None
         and slot_idx < terminal_penalty_idx
@@ -374,7 +390,7 @@ class DPPlanner:
         start = time.monotonic()
 
         try:
-            result = self._solve(inputs)
+            result = self._solve_guarded(inputs)
 
         except Exception as exc:  # noqa: BLE001
             _LOGGER.error(
@@ -391,6 +407,94 @@ class DPPlanner:
         result.solve_time_seconds = time.monotonic() - start
 
         return result
+
+    def _solve_guarded(self, inputs: OptimizerInputs) -> OptimizerResult:
+        """Solve with and without spike funding, keeping the cheaper plan.
+
+        WHY A GUARD RATHER THAN A BETTER GATE
+        -------------------------------------
+        This DP is approximate: the min-cycle-saving gate prunes actions using a
+        comparison that is not part of the (slot, soc_bin) state, so enlarging the
+        feasible set is NOT guaranteed to improve the optimum. A 200-scenario sweep
+        of the qualification rule on its own found ~4% of firing scenarios came out
+        WORSE than the unmodified planner (worst case $0.49) — the same shape as the
+        long tail of anti-cycling regressions (#800/#804/#816).
+
+        Rather than chase monotonicity in an approximate solver, dominate it: solve
+        both ways and keep the winner on projected net cost. Harm becomes impossible
+        by construction, and the sweep's no-harm and monotonicity properties both go
+        from FAIL to PASS. Cost is one extra solve (~0.04 s live) and it is only paid
+        on days where something actually qualifies.
+
+        Falls back to the baseline plan on any failure in the spike path, so a bug
+        here can degrade the feature but never the planner.
+        """
+        baseline = self._solve(inputs)
+
+        config = inputs.config
+        if not getattr(config, "spike_precharge_enabled", True):
+            return baseline
+
+        try:
+            funding = find_funding_slots(inputs.slots, config)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Spike funding detection failed, using baseline: %s", exc)
+            return baseline
+
+        if not funding:
+            return baseline
+
+        try:
+            config.spike_funding_slots = funding
+            candidate = self._solve(inputs)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Spike-funded solve failed, using baseline: %s", exc)
+            return baseline
+        finally:
+            config.spike_funding_slots = None
+
+        if not candidate.success:
+            return baseline
+
+        # Positive => the widening would save money. Recorded either way: the common
+        # outcome is a dead-on tie (qualification fires, the DP declines to use the
+        # extra option, plans are identical), and lumping ties in with genuine
+        # rejections makes a benign 40%-of-firing-cycles look like a 40% failure rate.
+        delta = baseline.projected_net_cost - candidate.projected_net_cost
+
+        # Strictly cheaper only — ties keep the baseline so the plan never churns
+        # for nothing.
+        if delta > 0:
+            _LOGGER.info(
+                "SPIKE PRECHARGE: %d funding slot(s) accepted, "
+                "projected net cost $%.4f -> $%.4f (saves $%.4f)",
+                len(funding),
+                baseline.projected_net_cost,
+                candidate.projected_net_cost,
+                delta,
+            )
+            candidate.spike_funding_slot_count = len(funding)
+            candidate.spike_funding_accepted = True
+            candidate.spike_funding_net_cost_delta = delta
+            return candidate
+
+        if delta < 0:
+            _LOGGER.debug(
+                "SPIKE PRECHARGE: %d funding slot(s) REJECTED by guard — "
+                "$%.4f would have been worse than $%.4f",
+                len(funding),
+                candidate.projected_net_cost,
+                baseline.projected_net_cost,
+            )
+        else:
+            _LOGGER.debug(
+                "SPIKE PRECHARGE: %d funding slot(s) qualified but changed nothing",
+                len(funding),
+            )
+        baseline.spike_funding_slot_count = len(funding)
+        baseline.spike_funding_accepted = False
+        baseline.spike_funding_net_cost_delta = delta
+        return baseline
 
     # ------------------------------------------------------------------
 
