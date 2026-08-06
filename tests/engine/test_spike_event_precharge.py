@@ -277,7 +277,13 @@ def test_spike_funding_serves_the_spike_from_the_battery():
     assert enabled.decisions[SPIKE_IDX].objective_terms.import_cost == pytest.approx(
         0.0, abs=1e-6
     )
-    assert _block_import(enabled) < _block_import(baseline) / 2
+    # Was ``/ 2`` when funding slots were exempt from the min-cycle-saving gate. That
+    # exemption is gone (see ``core._is_urgency_precharge``): the gate now screens these
+    # charges like any other, and its per-slot deferral bias moves the buy from 05:30 to
+    # 06:00 — a dearer slot, so ~$0.28 less of the spike is captured. The load-bearing
+    # properties are unchanged: the spike slot itself is served entirely from the battery
+    # and the morning block is still roughly halved.
+    assert _block_import(enabled) < _block_import(baseline) * 0.55
 
 
 def test_spike_funding_adds_minimal_charging():
