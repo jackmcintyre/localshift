@@ -308,13 +308,12 @@ class OptimizerConfig:
     demand-window target, so an overnight trough two cents above ``base_cheap_price``
     blocks arbitrage worth dollars per kWh (2026-08-05: a $1.65 print met at the 10% floor).
 
-    Consumed in exactly two places, both of which must agree:
-      - ``constraints.feasible_actions`` — admits CHARGE_GRID_NORMAL for these slots.
-      - ``core._is_urgency_precharge`` — exempts them from the min-cycle-saving gate,
-        which they have already been proven to clear by construction (qualification uses
-        ``min_cycle_saving`` as its bar). Re-applying it is redundant AND harmful: that
-        gate is non-monotone and can reject a strictly better plan when the feasible set
-        grows.
+    Consumed in exactly one place: ``constraints.feasible_actions``, which admits
+    CHARGE_GRID_NORMAL for these slots. It widens the CHOICE SET only — every other
+    screen still applies, in particular the min-cycle-saving gate. #908 also exempted
+    these slots from that gate; that disarmed the only hard anti-cycling protection
+    wherever qualification fired and reopened the #800 sawtooth, so the exemption is
+    gone (see ``core._is_urgency_precharge``).
 
     Deliberately NOT routed through ``cheap_threshold_for_slot``: that function also feeds
     the futile-cycling penalty and the floor-routing helpers, so changing its return value

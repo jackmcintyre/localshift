@@ -226,20 +226,32 @@ def _is_urgency_precharge(
 
     """
 
-    # Spike-event funding exemption. A funding slot has ALREADY been proven to clear
-    # min_cycle_saving — that spread IS its qualification test in
-    # spike_event.find_funding_slots — so applying the gate again is redundant. It is
-    # also actively harmful: the gate is non-monotone, and leaving it on let a strictly
-    # larger feasible set produce a strictly WORSE plan on the DP's own objective
-    # (measured: projected net cost 1.2242 -> 1.5089 purely by declaring a second event;
-    # ablation confirms min_cycle_saving is the cause and switching_penalty is not).
-    # Unlike the DW branches below this is not scoped to pre-DW slots: the whole point is
-    # to fund an interval the demand window does not cover.
-    if (
-        config.spike_funding_slots is not None
-        and slot_idx in config.spike_funding_slots
-    ):
-        return True
+    # NOTE: spike-event funding slots are deliberately NOT exempted here.
+    #
+    # #908 exempted them, reasoning that qualification already uses min_cycle_saving as
+    # its bar so the gate is redundant. It is not: the two compare different quantities.
+    # ``spike_event.find_funding_slots`` compares SLOT PRICES
+    # (``slots[i].buy_price - slots[j].buy_price >= spread``); this gate compares the DP's
+    # REAL COSTS (``hold_total_cost - charge_total_cost >= min_cycle_saving * charge_kwh``),
+    # which nets off round-trip losses, the switching penalty, solar that would have filled
+    # the battery for free anyway, and — decisively — whether the stored energy actually
+    # survives to the dear slot instead of bleeding into overnight load first. A slot can
+    # pass the price-spread test and still fail the real economics, and exempting it left
+    # the codebase's ONLY hard anti-cycling gate switched off across up to half the horizon
+    # (measured: qualification fires on 55% of ordinary days). That is the #800 sawtooth's
+    # entry point, and ``_solve_guarded`` cannot catch it — it selects on the DP objective,
+    # which is exactly the metric this gate exists to correct.
+    #
+    # The anti-procrastination rationale borrowed from the demand-window branches below
+    # does not transfer either. Those exist because deferring a pre-charge can miss a
+    # DEADLINE (the DW target, with its terminal penalty). A price spike has no deadline:
+    # charging one slot later still captures it. Measured on the live 2026-08-05 fixture,
+    # keeping the gate on still serves the $1.65 slot entirely from the battery
+    # (spike-slot import $0.00) and still halves the morning block; it costs $0.28 of
+    # capture by charging at 06:00 rather than 05:30. That is the gate doing its job.
+    #
+    # Non-monotonicity — the other reason #908 gave — is already dominated by
+    # ``_solve_guarded``, which keeps whichever plan is cheaper.
 
     return (
         terminal_penalty_idx is not None
@@ -464,6 +476,18 @@ class DPPlanner:
 
         # Strictly cheaper only — ties keep the baseline so the plan never churns
         # for nothing.
+        #
+        # A strict comparison is a knife edge, and this planner re-solves every few
+        # minutes against a revised forecast, so a near-tie flips sign under ordinary
+        # jitter and takes the committed action with it. That is survivable only because
+        # qualification is now scoped to genuine spikes: an ordinary day produces no
+        # funding slots at all, so there is no near-tie to flip (measured: 0 of 400
+        # ordinary-day scenarios qualify, and the committed action no longer flaps in any
+        # of them). Adding a margin HERE was tried and rejected — the per-slot
+        # min-cycle-saving gate already charges the operator's cycle bar against this
+        # same energy, so charging it a second time at plan level left just $0.06 of
+        # headroom on the live 2026-08-05 spike, i.e. it made the incident fix fragile
+        # while protecting against a case qualification no longer admits.
         if delta > 0:
             _LOGGER.info(
                 "SPIKE PRECHARGE: %d funding slot(s) accepted, "
