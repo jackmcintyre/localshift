@@ -34,13 +34,23 @@ def _determine_export_actions(
 
     Issue #719: Recoverability-based negative-FIT avoidance.
 
-    Allows proactive export at positive FIT before the risk window when:
-    - SOC is above the recoverability floor + buffer
-    - The slot is before the risk window starts
+    Allows proactive export at positive FIT through the *end* of the risk window
+    when:
+    - The slot is at or before ``risk_window_end_idx`` (the window spans
+      first-to-last bad-FIT slot, so it may contain positive-FIT slots, and those
+      are exactly the chances to make room before the rest of the spill)
     - The slot has positive sell price
+    - The projected landing SOC — what a full-rate export could leave, floored by
+      the transition's own ``min_soc_pct`` clamp — still clears the
+      recoverability floor
+
+    Slots past the window revert to normal mode rules; exporting after the spill
+    has passed does nothing for avoidance.
 
     The recoverability floor ensures we only discharge energy that can be
     recovered via future solar before the deadline, avoiding later grid import.
+    Bounding the *landing* SOC rather than the entry SOC is what makes that
+    guarantee hold across a chain of exports.
     """
     from custom_components.localshift.engine.types import PlannerAction
 
