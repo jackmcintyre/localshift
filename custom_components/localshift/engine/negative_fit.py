@@ -9,25 +9,35 @@ from custom_components.localshift.engine.types import (
 )
 
 
-def find_risk_window(slots: list) -> tuple[int | None, int | None]:
-    """Find the spill-risk window (first bad-FIT through end of bad window)."""
+def find_risk_window(
+    slots: list, limit_idx: int | None = None
+) -> tuple[int | None, int | None]:
+    """Find the spill-risk window (first through last bad-FIT slot in the horizon).
+
+    The window spans the whole bad-price period rather than only its first
+    contiguous run. Real horizons interleave short positive blips through a
+    negative middle — a single afternoon can flip sign a dozen times — and a
+    first-run-only scan sizes the window off one slot, under-reading the day's
+    spill by an order of magnitude and leaving ``required_headroom_kwh`` far too
+    small to justify any pre-discharge.
+
+    Positive slots inside the span are export *opportunities*, not window
+    terminators; ``_determine_export_actions`` is what decides which of them are
+    usable, gated on the recoverability floor.
+
+    ``limit_idx`` bounds the scan (inclusive), so the window ends on the last bad
+    slot at or before the recovery deadline rather than on the deadline itself —
+    which would otherwise pull trailing positive slots into the headroom sum.
+    """
     risk_start_idx = None
-    n_slots = len(slots)
+    risk_end_idx = None
+    last_idx = len(slots) - 1 if limit_idx is None else min(limit_idx, len(slots) - 1)
 
-    for idx, slot in enumerate(slots):
-        if slot.sell_price <= 0:
-            risk_start_idx = idx
-            break
-
-    if risk_start_idx is None:
-        return None, None
-
-    risk_end_idx = risk_start_idx
-    for idx in range(risk_start_idx, n_slots):
+    for idx in range(last_idx + 1):
         if slots[idx].sell_price <= 0:
+            if risk_start_idx is None:
+                risk_start_idx = idx
             risk_end_idx = idx
-        else:
-            break
 
     return risk_start_idx, risk_end_idx
 
@@ -76,24 +86,32 @@ def compute_recovery_by_slot(
 
 def compute_floor_by_slot(
     n_slots: int,
-    current_kwh: float,
     target_kwh: float,
     min_floor_kwh: float,
     battery_capacity_kwh: float,
     recovery_by_slot: list[float],
 ) -> list[float]:
-    """Precompute recoverability floor for each slot."""
+    """Precompute the recoverability floor for each slot.
+
+    The floor is the lowest level from which conservative future solar still
+    reaches *target* by the deadline: ``target - recoverable``, never below the
+    configured minimum SOC.
+
+    It is deliberately anchored on the target rather than on present SOC. Asking
+    "how far can I discharge and get back to where I am now" is the wrong
+    question whenever current SOC is below target — which is most of a pre-demand
+    -window day — and on a weak-solar day with a low starting SOC it collapses
+    the floor onto ``min_soc_pct`` and lets the planner sell down to it, arriving
+    at the demand window tens of points short.
+
+    Because the answer depends only on the recovery available from each slot, it
+    is the same for every SOC the DP explores and can safely be precomputed.
+    """
     floor_by_slot = []
     for slot_idx in range(n_slots):
         recoverable_kwh = recovery_by_slot[slot_idx]
 
-        max_discharge_kwh = min(
-            current_kwh - min_floor_kwh,
-            recoverable_kwh,
-        )
-        max_discharge_kwh = max(max_discharge_kwh, 0.0)
-
-        floor_kwh = current_kwh - max_discharge_kwh
+        floor_kwh = target_kwh - recoverable_kwh
         floor_kwh = max(floor_kwh, min_floor_kwh)
         floor_kwh = min(floor_kwh, target_kwh)
 
@@ -113,7 +131,8 @@ def derive_negative_fit_avoidance_context(
 
     Returns None if any of:
     - No negative-FIT window within horizon
-    - No earlier positive-FIT slots
+    - No bad-FIT slot at or before the recovery deadline
+    - No positive-FIT slot to sell into at or before the window ends
     - No recovery path to target (cannot safely pre-discharge)
     """
     slots = inputs.slots
@@ -124,12 +143,32 @@ def derive_negative_fit_avoidance_context(
     if n_slots == 0:
         return None
 
-    risk_start_idx, risk_end_idx = find_risk_window(slots)
+    recovery_deadline_idx = None
+    for idx, slot in enumerate(slots):
+        if slot.is_demand_window_slot:
+            recovery_deadline_idx = idx
+            break
+    if recovery_deadline_idx is None:
+        recovery_deadline_idx = n_slots - 1
+
+    # Bound the scan at the recovery deadline. A 24h+ horizon usually carries
+    # tomorrow's negative middle as well, and sizing today's pre-discharge off a
+    # spill that lands after the battery has to be back at target overstates the
+    # headroom needed and stretches the window past anything this mechanism can
+    # act on.
+    risk_start_idx, risk_end_idx = find_risk_window(slots, recovery_deadline_idx)
     if risk_start_idx is None or risk_end_idx is None:
         return None
 
-    has_positive_before = any(s.sell_price > 0 for s in slots[:risk_start_idx])
-    if not has_positive_before:
+    # An export opportunity is any positive-FIT slot at or before the end of the
+    # risk window. Requiring one strictly *before* ``risk_start_idx`` made the
+    # feature disable itself in exactly the situation it exists for: once slot 0
+    # is already negative, ``risk_start_idx`` is 0, the "before" slice is empty,
+    # and the planner loses its export action for the whole horizon. On a
+    # scattered-negative afternoon the usable slots are the positive blips
+    # *inside* the window, so scan through ``risk_end_idx`` instead.
+    has_export_opportunity = any(s.sell_price > 0 for s in slots[: risk_end_idx + 1])
+    if not has_export_opportunity:
         return None
 
     min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
@@ -152,21 +191,12 @@ def derive_negative_fit_avoidance_context(
     if existing_headroom_kwh >= required_headroom_kwh:
         return None
 
-    recovery_deadline_idx = None
-    for idx, slot in enumerate(slots):
-        if slot.is_demand_window_slot:
-            recovery_deadline_idx = idx
-            break
-    if recovery_deadline_idx is None:
-        recovery_deadline_idx = n_slots - 1
-
     recovery_by_slot = compute_recovery_by_slot(
         slots, recovery_deadline_idx, config.charge_efficiency
     )
 
     floor_by_slot = compute_floor_by_slot(
         n_slots,
-        current_kwh,
         target_kwh,
         min_floor_kwh,
         battery_capacity_kwh,
@@ -185,17 +215,18 @@ def derive_negative_fit_avoidance_context(
 
 def compute_recoverability_floor_pct(
     *,
-    current_soc_pct: float,
     slot_idx: int,
     context: NegativeFitAvoidanceContext,
     config: OptimizerConfig,
-    inputs: OptimizerInputs,
 ) -> float:
     """Compute the minimum SOC that still allows recovery to target.
 
     The recoverability floor is how low SOC can go now while still being
     able to recover to demand_window_target_soc_pct by the deadline using
     conservative future solar estimates.
+
+    Kept in step with ``compute_floor_by_slot`` — same ``target - recoverable``
+    anchor — so the scalar and precomputed forms cannot disagree.
 
     This is the planner-side guardrail. The Tesla-side PROACTIVE_EXPORT
     throttling (SOC - 5%, min 4%) remains the actuator guardrail.
@@ -204,20 +235,12 @@ def compute_recoverability_floor_pct(
     target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
     min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
 
-    current_kwh = current_soc_pct / 100.0 * battery_capacity_kwh
-
     if slot_idx >= len(context.conservative_recovery_kwh_by_slot):
         return config.demand_window_target_soc_pct
 
     recoverable_kwh = context.conservative_recovery_kwh_by_slot[slot_idx]
 
-    max_discharge_kwh = min(
-        current_kwh - min_floor_kwh,
-        recoverable_kwh,
-    )
-    max_discharge_kwh = max(max_discharge_kwh, 0.0)
-
-    floor_kwh = current_kwh - max_discharge_kwh
+    floor_kwh = target_kwh - recoverable_kwh
     floor_kwh = max(floor_kwh, min_floor_kwh)
     floor_kwh = min(floor_kwh, target_kwh)
 

@@ -120,15 +120,36 @@ def test_feasible_actions_recoverability_floor_enforced(default_config):
     assert PlannerAction.EXPORT_PROACTIVE not in actions
 
 
-def test_feasible_actions_normal_rules_during_risk_window(default_config):
-    """Uses normal rules for slots during risk window (at/after risk start)."""
+def test_feasible_actions_positive_fit_inside_risk_window(default_config):
+    """Allows EXPORT_PROACTIVE at a positive-FIT blip inside the risk window.
+
+    The window spans first-to-last bad-FIT slot and may contain positive slots.
+    Those are the chances to make room before the rest of the spill, so avoidance
+    applies to them rather than falling back to the (unreachable) mode rules.
+    """
     slot = _make_test_slot(sell_price=0.08)
-    context = _make_context(risk_start=2)
+    context = _make_context(risk_start=2, risk_end=10)
     actions = feasible_actions(
         soc_pct=90.0,
         slot=slot,
         config=default_config,
-        slot_idx=2,
+        slot_idx=5,
+        slots=None,
+        terminal_penalty_idx=None,
+        negative_fit_avoidance_context=context,
+    )
+    assert PlannerAction.EXPORT_PROACTIVE in actions
+
+
+def test_feasible_actions_normal_rules_after_risk_window(default_config):
+    """Uses normal mode rules for slots past the end of the risk window."""
+    slot = _make_test_slot(sell_price=0.08)
+    context = _make_context(risk_start=2, risk_end=10)
+    actions = feasible_actions(
+        soc_pct=90.0,
+        slot=slot,
+        config=default_config,
+        slot_idx=11,
         slots=None,
         terminal_penalty_idx=None,
         negative_fit_avoidance_context=context,
