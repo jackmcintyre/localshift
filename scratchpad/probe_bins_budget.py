@@ -6,6 +6,11 @@ import sys
 import time
 
 sys.path.insert(0, ".")
+
+# Mirrors tests/test_optimizer_scaffold.py::RUNTIME_BUDGET_S. Imported by value
+# rather than by import: the tests package pulls in conftest fixtures this probe
+# has no use for.
+RUNTIME_BUDGET_S = 0.500
 with contextlib.redirect_stdout(io.StringIO()):
     from scratchpad.deferral_replay import INITIAL_SOC, build_config, build_slots
 from custom_components.localshift.engine.core import DPPlanner
@@ -43,7 +48,17 @@ for bins in (50, 60, 70, 75, 80, 90, 100):
         ),
         None,
     )
-    ok = "OK " if r.terminal_shortfall_pct == 0.0 and fc == 0 else "BAD"
+    # The docstring promises "fixes the defect AND stays inside the runtime budget", so
+    # score both. NOTE the timing here is LOCAL: GitHub's shared runners measured ~5x
+    # slower on this workload (74ms local vs 350ms CI at 100 bins), so a row that clears
+    # the budget locally can still fail CI. Treat this column as a relative ranking
+    # between bin counts, not as a pass/fail against CI.
+    within_budget = p95 <= RUNTIME_BUDGET_S
+    ok = (
+        "OK "
+        if r.terminal_shortfall_pct == 0.0 and fc == 0 and within_budget
+        else "BAD"
+    )
     print(
         f"{bins:>5} {90.0 / (bins - 1):>6.2f}pp {r.dw_entry_soc_pct:>9.2f} "
         f"{r.terminal_shortfall_pct:>10.2f} {'slot ' + str(fc):>13} {p95 * 1000:>8.1f}ms  {ok}"
