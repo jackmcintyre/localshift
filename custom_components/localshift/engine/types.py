@@ -211,8 +211,32 @@ class OptimizerConfig:
     """
 
     # --- SOC discretization ---
-    soc_bins: int = 50
-    """Number of SOC bins for DP state space (higher = more precise, slower)."""
+    soc_bins: int = 100
+    """Number of SOC bins for DP state space (higher = more precise, slower).
+
+    Raised 50 -> 100 on 2026-08-25. At 50 bins each bin spans 1.84 SOC points (~0.25 kWh)
+    while a single 5-minute boost slot moves ~2.84 points — 1.5 bins. The value function
+    could not resolve "charge now" from "charge in 15 minutes", so the DP deferred the
+    head of a demand-window pre-charge; and because backward induction transitions from
+    BIN CENTRES while ``_forward_reconstruct`` transitions from the CONTINUOUS soc, the
+    residual accumulated downward across the pre-charge run (measured: the realised
+    trajectory left the DP's own assumed successor bin at 7 of the first 16 steps, always
+    downward through the charging region, ~9 SOC points in total).
+
+    The result was a plan that entered the demand window under target while its own
+    terminal table priced that outcome at $677 — the DP was not paying through a penalty,
+    it could not see the state that avoided it. Live 2026-08-25: 91.41% against a 95%
+    target, first charge deferred to 12:45; at 100 bins the same horizon starts charging
+    at 12:30 and reaches 95.56% with zero shortfall, for $0.09 more.
+
+    100 is the knee, not a guess: 100/200/400/900 bins all converge on the same plan
+    (95.1-95.6%, shortfall 0, first charge at slot 0) and only the solve time changes
+    (0.071s / 0.201s / 0.667s / 3.061s against 0.029s at 50). 100 buys the whole
+    correction for ~40ms on a cycle that runs every 5 minutes.
+
+    See scratchpad/probe_bins.py for the sweep and scratchpad/probe_recon_drift.py for the
+    bin-drift measurement.
+    """
 
     # --- Optimization mode (Issue #406) ---
     optimization_mode: str = "self_consumption"
