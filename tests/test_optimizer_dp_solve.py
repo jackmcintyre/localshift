@@ -426,15 +426,31 @@ def test_dp_planner_determinism_replay(default_config, multi_slots):
 RUNTIME_BUDGET_S = 0.500
 
 
-def test_dp_planner_runtime_budget(default_config, multi_slots):
-    """Phase C acceptance: p95 solve time <= 200ms on 48-slot fixture."""
+def test_dp_planner_runtime_budget(multi_slots):
+    """Phase C acceptance: p95 solve time within RUNTIME_BUDGET_S on the 48-slot fixture."""
     import time
+
+    # Deliberately NOT the `default_config` fixture. In test_optimizer_dp_solve.py that
+    # fixture pins soc_bins=20 "for faster tests", so this budget guarded a 20-bin solve
+    # while production ships 100 — a regression that only appears at the shipped
+    # resolution could pass here unnoticed. (It did: when soc_bins went 50 -> 100 only
+    # the scaffold copy failed CI, because tests/engine/test_core.py star-imports both
+    # files and the later import wins the name.) Build from the shipped default so this
+    # measures what actually runs, and assert that it is the shipped default so the two
+    # cannot drift apart silently.
+    runtime_config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+    )
+    assert runtime_config.soc_bins == OptimizerConfig().soc_bins, (
+        "runtime budget must be measured at the shipped soc_bins"
+    )
 
     inputs = OptimizerInputs(
         cycle_id="timing-test",
         initial_soc_pct=50.0,
         slots=multi_slots,
-        config=default_config,
+        config=runtime_config,
     )
     planner = DPPlanner()
 

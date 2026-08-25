@@ -6,7 +6,6 @@ plan: hold/hold/hold then charge from slot 3, dw_entry 90.84%, terminal shortfal
 """
 
 import sys
-from types import SimpleNamespace
 
 sys.path.insert(0, ".")
 
@@ -19,40 +18,69 @@ from custom_components.localshift.engine.types import (
 
 # slot_idx, hh:mm, interval_min, buy, sell, solar_kwh, consumption_kwh
 RAW = [
-    (0,"12:30",5,0.16,0.07,0.035,0.127),(1,"12:35",5,0.16,0.07,0.036,0.127),
-    (2,"12:40",5,0.16,0.07,0.036,0.127),(3,"12:45",5,0.16,0.07,0.036,0.127),
-    (4,"12:50",5,0.16,0.07,0.036,0.127),(5,"12:55",5,0.16,0.07,0.037,0.127),
-    (6,"13:00",5,0.15,0.07,0.043,0.127),(7,"13:05",5,0.15,0.07,0.114,0.127),
-    (8,"13:10",5,0.15,0.07,0.114,0.127),(9,"13:15",5,0.15,0.07,0.114,0.127),
-    (10,"13:20",5,0.15,0.0667,0.114,0.127),(11,"13:25",5,0.15,0.065,0.116,0.127),
-    (12,"13:30",30,0.15,0.06,0.638,0.766),(13,"14:00",30,0.16,0.07,0.552,0.740),
-    (14,"14:30",30,0.16,0.07,0.501,0.721),(15,"15:00",30,0.15,0.08,0.428,0.609),
-    (16,"15:30",30,0.16,0.09,0.295,0.570),(17,"16:00",30,0.16,0.12,0.132,0.590),
-    (18,"16:30",30,0.16,0.12,0.041,0.449),(19,"17:00",30,0.17,0.14,0.008,0.749),
-    (20,"17:30",30,0.18,0.15,0.0,0.749),(21,"18:00",30,0.18,0.15,0.0,0.751),
-    (22,"18:30",30,0.19,0.16,0.0,0.751),(23,"19:00",30,0.19,0.15,0.0,0.650),
-    (24,"19:30",30,0.18,0.14,0.0,0.650),(25,"20:00",30,0.19,0.16,0.0,0.649),
-    (26,"20:30",30,0.20,0.16,0.0,0.649),(27,"21:00",30,0.19,0.12,0.0,0.732),
-    (28,"21:30",30,0.19,0.11,0.0,0.732),(29,"22:00",30,0.18,0.10,0.0,0.497),
-    (30,"22:30",30,0.17,0.09,0.0,0.497),(31,"23:00",30,0.16,0.09,0.0,0.343),
-    (32,"23:30",30,0.15,0.08,0.0,0.343),(33,"00:00",30,0.15,0.08,0.0,0.253),
-    (34,"00:30",30,0.15,0.08,0.0,0.253),(35,"01:00",30,0.16,0.09,0.0,0.242),
-    (36,"01:30",30,0.16,0.09,0.0,0.242),(37,"02:00",30,0.16,0.09,0.0,0.241),
-    (38,"02:30",30,0.17,0.09,0.0,0.242),(39,"03:00",30,0.17,0.09,0.0,0.439),
-    (40,"03:30",30,0.17,0.09,0.0,0.439),(41,"04:00",30,0.20,0.20,0.0,0.381),
-    (42,"04:30",30,0.20,0.20,0.0,0.381),(43,"05:00",30,0.20,0.20,0.0,0.376),
-    (44,"05:30",30,0.20,0.20,0.0,0.375),(45,"06:00",30,0.20,0.20,0.0,0.339),
-    (46,"06:30",30,0.20,0.20,0.022,0.339),(47,"07:00",30,0.20,0.20,0.086,0.733),
-    (48,"07:30",30,0.20,0.20,0.233,0.732),(49,"08:00",30,0.20,0.20,0.417,0.574),
-    (50,"08:30",30,0.20,0.20,0.561,0.574),(51,"09:00",30,0.20,0.20,0.619,0.654),
-    (52,"09:30",30,0.20,0.20,0.673,0.655),(53,"10:00",30,0.20,0.20,0.668,0.884),
-    (54,"10:30",30,0.20,0.20,0.544,0.885),(55,"11:00",30,0.20,0.20,0.489,1.048),
-    (56,"11:30",30,0.20,0.20,0.515,1.047),(57,"12:00",30,0.20,0.20,0.525,1.015),
-    (58,"12:30",30,0.20,0.20,0.523,0.0),
+    (0, "12:30", 5, 0.16, 0.07, 0.035, 0.127),
+    (1, "12:35", 5, 0.16, 0.07, 0.036, 0.127),
+    (2, "12:40", 5, 0.16, 0.07, 0.036, 0.127),
+    (3, "12:45", 5, 0.16, 0.07, 0.036, 0.127),
+    (4, "12:50", 5, 0.16, 0.07, 0.036, 0.127),
+    (5, "12:55", 5, 0.16, 0.07, 0.037, 0.127),
+    (6, "13:00", 5, 0.15, 0.07, 0.043, 0.127),
+    (7, "13:05", 5, 0.15, 0.07, 0.114, 0.127),
+    (8, "13:10", 5, 0.15, 0.07, 0.114, 0.127),
+    (9, "13:15", 5, 0.15, 0.07, 0.114, 0.127),
+    (10, "13:20", 5, 0.15, 0.0667, 0.114, 0.127),
+    (11, "13:25", 5, 0.15, 0.065, 0.116, 0.127),
+    (12, "13:30", 30, 0.15, 0.06, 0.638, 0.766),
+    (13, "14:00", 30, 0.16, 0.07, 0.552, 0.740),
+    (14, "14:30", 30, 0.16, 0.07, 0.501, 0.721),
+    (15, "15:00", 30, 0.15, 0.08, 0.428, 0.609),
+    (16, "15:30", 30, 0.16, 0.09, 0.295, 0.570),
+    (17, "16:00", 30, 0.16, 0.12, 0.132, 0.590),
+    (18, "16:30", 30, 0.16, 0.12, 0.041, 0.449),
+    (19, "17:00", 30, 0.17, 0.14, 0.008, 0.749),
+    (20, "17:30", 30, 0.18, 0.15, 0.0, 0.749),
+    (21, "18:00", 30, 0.18, 0.15, 0.0, 0.751),
+    (22, "18:30", 30, 0.19, 0.16, 0.0, 0.751),
+    (23, "19:00", 30, 0.19, 0.15, 0.0, 0.650),
+    (24, "19:30", 30, 0.18, 0.14, 0.0, 0.650),
+    (25, "20:00", 30, 0.19, 0.16, 0.0, 0.649),
+    (26, "20:30", 30, 0.20, 0.16, 0.0, 0.649),
+    (27, "21:00", 30, 0.19, 0.12, 0.0, 0.732),
+    (28, "21:30", 30, 0.19, 0.11, 0.0, 0.732),
+    (29, "22:00", 30, 0.18, 0.10, 0.0, 0.497),
+    (30, "22:30", 30, 0.17, 0.09, 0.0, 0.497),
+    (31, "23:00", 30, 0.16, 0.09, 0.0, 0.343),
+    (32, "23:30", 30, 0.15, 0.08, 0.0, 0.343),
+    (33, "00:00", 30, 0.15, 0.08, 0.0, 0.253),
+    (34, "00:30", 30, 0.15, 0.08, 0.0, 0.253),
+    (35, "01:00", 30, 0.16, 0.09, 0.0, 0.242),
+    (36, "01:30", 30, 0.16, 0.09, 0.0, 0.242),
+    (37, "02:00", 30, 0.16, 0.09, 0.0, 0.241),
+    (38, "02:30", 30, 0.17, 0.09, 0.0, 0.242),
+    (39, "03:00", 30, 0.17, 0.09, 0.0, 0.439),
+    (40, "03:30", 30, 0.17, 0.09, 0.0, 0.439),
+    (41, "04:00", 30, 0.20, 0.20, 0.0, 0.381),
+    (42, "04:30", 30, 0.20, 0.20, 0.0, 0.381),
+    (43, "05:00", 30, 0.20, 0.20, 0.0, 0.376),
+    (44, "05:30", 30, 0.20, 0.20, 0.0, 0.375),
+    (45, "06:00", 30, 0.20, 0.20, 0.0, 0.339),
+    (46, "06:30", 30, 0.20, 0.20, 0.022, 0.339),
+    (47, "07:00", 30, 0.20, 0.20, 0.086, 0.733),
+    (48, "07:30", 30, 0.20, 0.20, 0.233, 0.732),
+    (49, "08:00", 30, 0.20, 0.20, 0.417, 0.574),
+    (50, "08:30", 30, 0.20, 0.20, 0.561, 0.574),
+    (51, "09:00", 30, 0.20, 0.20, 0.619, 0.654),
+    (52, "09:30", 30, 0.20, 0.20, 0.673, 0.655),
+    (53, "10:00", 30, 0.20, 0.20, 0.668, 0.884),
+    (54, "10:30", 30, 0.20, 0.20, 0.544, 0.885),
+    (55, "11:00", 30, 0.20, 0.20, 0.489, 1.048),
+    (56, "11:30", 30, 0.20, 0.20, 0.515, 1.047),
+    (57, "12:00", 30, 0.20, 0.20, 0.525, 1.015),
+    (58, "12:30", 30, 0.20, 0.20, 0.523, 0.0),
 ]
 
-DW_ENTRY_IDX = 15          # 15:00 — the demand-window entry boundary
-DW_END_IDX = 27            # 21:00 — first slot past the window
+DW_ENTRY_IDX = 15  # 15:00 — the demand-window entry boundary
+DW_END_IDX = 27  # 21:00 — first slot past the window
 INITIAL_SOC = 21.986
 
 
@@ -109,7 +137,9 @@ def run(label, config):
     fc_time = RAW[fc_idx][1] if fc_idx is not None else "never"
     dw = getattr(result, "dw_entry_soc_pct", None)
     sf = getattr(result, "terminal_shortfall_pct", None)
-    n_charge = sum(1 for d in decisions if "charge_grid" in str(getattr(d, "action", "")))
+    n_charge = sum(
+        1 for d in decisions if "charge_grid" in str(getattr(d, "action", ""))
+    )
     print(
         f"{label:28s} first_charge={fc_time:>6s} (slot {str(fc_idx):>4s})  "
         f"dw_entry={dw if dw is None else round(dw, 2):>6}  "
@@ -119,7 +149,7 @@ def run(label, config):
     return result
 
 
-print("initial_soc=%.3f%%  target=95%%  DW entry=15:00 (slot 15)\n" % INITIAL_SOC)
+print(f"initial_soc={INITIAL_SOC:.3f}%  target=95%  DW entry=15:00 (slot 15)\n")
 print("--- baseline: reproduce the live 12:32 plan ---")
 run("live-as-shipped", build_config())
 
@@ -129,7 +159,6 @@ run("live-as-shipped", build_config())
 # --------------------------------------------------------------------------
 from unittest.mock import patch
 
-import custom_components.localshift.engine.core as core_mod
 import custom_components.localshift.engine.penalties as pen_mod
 
 FUTILE = "custom_components.localshift.engine.core.get_futile_cycling_penalty_factor"
@@ -159,8 +188,15 @@ print("\n--- proposed fix: futile OFF only for urgency-window pre-charge ---")
 _real_futile = pen_mod.get_futile_cycling_penalty_factor
 
 
-def scoped_futile(action, slot_idx, slots, config, soc_after_charge_pct,
-                  charge_kwh, terminal_penalty_idx=None):
+def scoped_futile(
+    action,
+    slot_idx,
+    slots,
+    config,
+    soc_after_charge_pct,
+    charge_kwh,
+    terminal_penalty_idx=None,
+):
     """Exempt a charge that is funding the DW target, exactly as #860 did for min-cycle."""
     if (
         terminal_penalty_idx is not None
@@ -168,8 +204,15 @@ def scoped_futile(action, slot_idx, slots, config, soc_after_charge_pct,
         and soc_after_charge_pct <= config.demand_window_target_soc_pct
     ):
         return 0.0
-    return _real_futile(action, slot_idx, slots, config, soc_after_charge_pct,
-                        charge_kwh, terminal_penalty_idx)
+    return _real_futile(
+        action,
+        slot_idx,
+        slots,
+        config,
+        soc_after_charge_pct,
+        charge_kwh,
+        terminal_penalty_idx,
+    )
 
 
 with patch(FUTILE, side_effect=scoped_futile):
@@ -177,12 +220,20 @@ with patch(FUTILE, side_effect=scoped_futile):
 
 print("\n--- #800 sawtooth control: overnight grid charge (slots 21:00-06:00) ---")
 base = run("baseline", build_config())
-print(f"  baseline                    overnight grid charge = {overnight_charge_kwh(base):.3f} kWh")
-print(f"  futile-off-everywhere       overnight grid charge = {overnight_charge_kwh(a):.3f} kWh")
-print(f"  futile-off-in-urgency-window overnight grid charge = {overnight_charge_kwh(c):.3f} kWh")
+print(
+    f"  baseline                    overnight grid charge = {overnight_charge_kwh(base):.3f} kWh"
+)
+print(
+    f"  futile-off-everywhere       overnight grid charge = {overnight_charge_kwh(a):.3f} kWh"
+)
+print(
+    f"  futile-off-in-urgency-window overnight grid charge = {overnight_charge_kwh(c):.3f} kWh"
+)
 
 
-print("\n--- probe: is 91.4% the PHYSICAL ceiling, or is the DP leaving charge on the table? ---")
+print(
+    "\n--- probe: is 91.4% the PHYSICAL ceiling, or is the DP leaving charge on the table? ---"
+)
 from custom_components.localshift.engine.core import DPPlanner as _DP
 from custom_components.localshift.engine.types import OptimizerConfig as _OC
 

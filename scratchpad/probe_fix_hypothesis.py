@@ -1,9 +1,14 @@
 """If reconstruction follows the DP's stored successor bin, does the plan hit target?"""
-import sys, io, contextlib
+
+import contextlib
+import io
+import sys
+
 sys.path.insert(0, ".")
 from unittest.mock import patch
+
 with contextlib.redirect_stdout(io.StringIO()):
-    from scratchpad.deferral_replay import build_slots, build_config, INITIAL_SOC
+    from scratchpad.deferral_replay import INITIAL_SOC, build_config, build_slots
 import custom_components.localshift.engine.core as core_mod
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.types import OptimizerInputs
@@ -33,15 +38,24 @@ def run(label, follow_policy):
     with contextlib.ExitStack() as st:
         for p in patches:
             st.enter_context(p)
-        r = DPPlanner().plan(OptimizerInputs(cycle_id=label, initial_soc_pct=INITIAL_SOC,
-                                             slots=build_slots(), config=cfg))
-    print(f"{label:34s} dw_entry={r.dw_entry_soc_pct:6.2f}  shortfall={r.terminal_shortfall_pct:5.2f}  "
-          f"net_cost={r.projected_net_cost:.4f}")
+        r = DPPlanner().plan(
+            OptimizerInputs(
+                cycle_id=label,
+                initial_soc_pct=INITIAL_SOC,
+                slots=build_slots(),
+                config=cfg,
+            )
+        )
+    print(
+        f"{label:34s} dw_entry={r.dw_entry_soc_pct:6.2f}  shortfall={r.terminal_shortfall_pct:5.2f}  "
+        f"net_cost={r.projected_net_cost:.4f}"
+    )
     return r
 
 
 print("how does _map_soc_to_bin round?")
 import inspect
+
 print(inspect.getsource(_real_map))
 
 run("as-shipped", False)
