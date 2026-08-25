@@ -2860,3 +2860,94 @@ def test_negative_fit_context_computes_floor(default_config):
     assert all(
         f >= default_config.min_soc_pct for f in ctx.recoverability_floor_pct_by_slot
     )
+
+
+def test_negative_fit_window_spans_scattered_negatives(default_config):
+    """Window spans first-to-last bad slot, not just the first contiguous run.
+
+    A real spill afternoon flips sign repeatedly. Scanning only the first run
+    sized the window at one slot and under-read the spill.
+    """
+    default_config.demand_window_target_soc_pct = 80.0
+    sells = [0.08, 0.08, -0.01, 0.02, -0.01, 0.01, -0.02, -0.02, 0.03, 0.06]
+    slots = [
+        _make_slot_for_neg_fit(i, sell_price=s, solar_kwh=3.0, consumption_kwh=0.5)
+        for i, s in enumerate(sells)
+    ]
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=95.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = derive_negative_fit_avoidance_context(inputs)
+    assert ctx is not None
+    assert ctx.risk_window_start_idx == 2
+    assert ctx.risk_window_end_idx == 7
+
+
+def test_negative_fit_context_survives_horizon_opening_mid_spill(default_config):
+    """Context is still derived when slot 0 is already at negative FIT.
+
+    Previously the "positive slot before the window" test emptied its slice and
+    returned None, so a horizon recomputed mid-spill lost its export action for
+    the entire day — the exact condition the feature exists to handle.
+    """
+    default_config.demand_window_target_soc_pct = 80.0
+    sells = [-0.01, 0.02, -0.01, 0.03, -0.02, -0.01, 0.05, 0.08, 0.08, 0.08]
+    slots = [
+        _make_slot_for_neg_fit(i, sell_price=s, solar_kwh=3.0, consumption_kwh=0.5)
+        for i, s in enumerate(sells)
+    ]
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=95.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = derive_negative_fit_avoidance_context(inputs)
+    assert ctx is not None
+    assert ctx.risk_window_start_idx == 0
+    assert ctx.risk_window_end_idx == 5
+    assert ctx.required_headroom_kwh > 0
+
+
+def test_negative_fit_window_bounded_by_recovery_deadline(default_config):
+    """Window stops at the recovery deadline, ignoring tomorrow's negative middle."""
+    default_config.demand_window_target_soc_pct = 80.0
+    sells = [0.08, -0.01, 0.02, -0.01, 0.06, 0.06, -0.05, -0.05, -0.05, -0.05]
+    slots = [
+        _make_slot_for_neg_fit(i, sell_price=s, solar_kwh=3.0, consumption_kwh=0.5)
+        for i, s in enumerate(sells)
+    ]
+    # Demand window opens at slot 5; the negatives from slot 6 are past the
+    # deadline and must not size today's pre-discharge.
+    slots[5].is_demand_window_slot = True
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=95.0,
+        slots=slots,
+        config=default_config,
+    )
+    ctx = derive_negative_fit_avoidance_context(inputs)
+    assert ctx is not None
+    assert ctx.risk_window_start_idx == 1
+    assert ctx.risk_window_end_idx == 3
+    assert ctx.recovery_deadline_idx == 5
+
+
+def test_negative_fit_context_none_when_no_positive_slot_in_window(default_config):
+    """Still returns None when the window offers no positive-FIT slot to sell into."""
+    default_config.demand_window_target_soc_pct = 80.0
+    sells = [-0.01, -0.02, -0.01, -0.03, 0.08, 0.08]
+    slots = [
+        _make_slot_for_neg_fit(i, sell_price=s, solar_kwh=3.0, consumption_kwh=0.5)
+        for i, s in enumerate(sells)
+    ]
+    inputs = OptimizerInputs(
+        cycle_id="test",
+        initial_soc_pct=95.0,
+        slots=slots,
+        config=default_config,
+    )
+    assert derive_negative_fit_avoidance_context(inputs) is None

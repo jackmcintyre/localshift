@@ -34,13 +34,23 @@ def _determine_export_actions(
 
     Issue #719: Recoverability-based negative-FIT avoidance.
 
-    Allows proactive export at positive FIT before the risk window when:
-    - SOC is above the recoverability floor + buffer
-    - The slot is before the risk window starts
+    Allows proactive export at positive FIT through the *end* of the risk window
+    when:
+    - The slot is at or before ``risk_window_end_idx`` (the window spans
+      first-to-last bad-FIT slot, so it may contain positive-FIT slots, and those
+      are exactly the chances to make room before the rest of the spill)
     - The slot has positive sell price
+    - The projected landing SOC — what a full-rate export could leave, floored by
+      the transition's own ``min_soc_pct`` clamp — still clears the
+      recoverability floor
+
+    Slots past the window revert to normal mode rules; exporting after the spill
+    has passed does nothing for avoidance.
 
     The recoverability floor ensures we only discharge energy that can be
     recovered via future solar before the deadline, avoiding later grid import.
+    Bounding the *landing* SOC rather than the entry SOC is what makes that
+    guarantee hold across a chain of exports.
     """
     from custom_components.localshift.engine.types import PlannerAction
 
@@ -50,9 +60,15 @@ def _determine_export_actions(
     if not can_discharge:
         return actions
 
+    # Avoidance applies through the *end* of the risk window, not just ahead of
+    # its start. The spill runs for the whole window, so a positive-FIT slot
+    # inside it is still a chance to make room; restricting to slots before the
+    # start meant a horizon that opens mid-spill (slot 0 already negative) had no
+    # avoidance slots at all. Slots past the window revert to normal mode rules —
+    # exporting after the spill has passed does nothing for avoidance.
     use_avoidance = (
         negative_fit_avoidance_context is not None
-        and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
+        and slot_idx <= negative_fit_avoidance_context.risk_window_end_idx
     )
 
     if use_avoidance and negative_fit_avoidance_context is not None:
@@ -69,7 +85,32 @@ def _determine_export_actions(
             floor_pct = negative_fit_avoidance_context.recoverability_floor_pct_by_slot[
                 slot_idx
             ]
-            if soc_pct > floor_pct + 2.0:
+            # The floor has to bound the OUTCOME, not just admission. Testing
+            # ``soc_pct > floor + 2`` only asks whether we start the slot above
+            # the floor; a full-rate export slot moves SOC far further than that
+            # margin, so the planner could clear the check at 51.5% and land at
+            # 32.3% — sixteen points under its own floor — and repeat it next
+            # slot.
+            #
+            # Bound the landing point instead. A slot can shed at most
+            # ``discharge_rate_kw`` worth of SOC and the transition clamps at
+            # ``min_soc_pct``, so the worst case the DP can reach is the larger
+            # of the two; that is what has to clear the floor. Deriving the
+            # first term from the discharge rate keeps the guarantee true at any
+            # slot length or pack size, and honouring the clamp keeps the test
+            # from double-counting a floor the transitions already enforce —
+            # without it, export is refused whenever SOC sits within one slot's
+            # discharge of the floor, which silently forbids the *chain* of
+            # small exports that a spill day is made of.
+            slot_hours = slot.slot_interval_minutes / 60.0
+            max_export_pp = (
+                config.discharge_rate_kw
+                * slot_hours
+                / config.battery_capacity_kwh
+                * 100.0
+            )
+            landing_soc_pct = max(soc_pct - max_export_pp, config.min_soc_pct)
+            if landing_soc_pct >= floor_pct:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)
     else:
         if config.optimization_mode == "self_consumption":

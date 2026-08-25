@@ -314,11 +314,9 @@ class TestNegativeFitAvoidanceContext:
         ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
         floor_pct = compute_recoverability_floor_pct(
-            current_soc_pct=58.0,
             slot_idx=5,
             context=ctx,
             config=config,
-            inputs=inputs,
         )
         assert floor_pct < config.demand_window_target_soc_pct
         assert floor_pct >= config.min_soc_pct
@@ -348,11 +346,9 @@ class TestNegativeFitAvoidanceContext:
         ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is not None
         floor_pct = compute_recoverability_floor_pct(
-            current_soc_pct=95.0,
             slot_idx=5,
             context=ctx,
             config=config,
-            inputs=inputs,
         )
         assert floor_pct >= 80.0
 

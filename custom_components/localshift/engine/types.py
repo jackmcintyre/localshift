@@ -778,7 +778,14 @@ class NegativeFitAvoidanceContext:
     """Index of the first slot in the spill-risk window (first sell_price <= 0)."""
 
     risk_window_end_idx: int
-    """Index of the last slot in the spill-risk window (inclusive)."""
+    """Index of the last non-positive-FIT slot at or before the recovery deadline
+    (inclusive).
+
+    The window spans first-to-last bad-FIT slot within that bound, so it may
+    contain positive-FIT slots; those are the export opportunities the avoidance
+    branch acts on. Bounding at the deadline keeps a 24h+ horizon from sizing
+    today's pre-discharge off tomorrow's negative middle.
+    """
 
     required_headroom_kwh: float
     """Estimated storage space (kWh) needed to absorb spill during risk window."""

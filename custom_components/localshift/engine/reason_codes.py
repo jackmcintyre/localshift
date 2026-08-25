@@ -136,10 +136,13 @@ def classify_export_reason(
     negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
 ) -> PlannerReasonCode:
     """Classify EXPORT action reason."""
+    # Mirrors the ``use_avoidance`` window in ``_determine_export_actions`` — the
+    # two must agree or an export chosen for avoidance reasons gets reported under
+    # the wrong reason code.
     if (
         negative_fit_avoidance_context is not None
         and slot_idx is not None
-        and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
+        and slot_idx <= negative_fit_avoidance_context.risk_window_end_idx
     ):
         return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
 
