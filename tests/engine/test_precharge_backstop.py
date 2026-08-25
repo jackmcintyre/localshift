@@ -698,8 +698,16 @@ class TestRunwayBackstop:
             is None
         )
 
-    def test_stays_out_of_the_way_when_the_hard_floor_is_live(self) -> None:
-        """Strictly complementary to #901 — one arm per cycle, never both."""
+    def test_a_live_hard_floor_no_longer_silences_this_arm(self) -> None:
+        """Inverted 2026-08-25. It used to assert "one arm per cycle, never both".
+
+        The exclusion was real but keyed on the wrong quantity. ``_assign_active_mode``
+        only calls this arm after ``_precharge_backstop_mode`` has returned None, so one
+        arm per cycle is already guaranteed by the call site — and standing down a second
+        time on floor LIVENESS turned "#901 declined" into "nobody acts", which is the
+        band 2026-08-25 fell into. Ordering is asserted end-to-end instead, in
+        ``TestBackstopDeadZone.test_901_still_owns_the_cycle_when_it_qualifies``.
+        """
         facade = OptimizerFacade()
         config = _runway_config(
             hard_target_floor=95.0, precharge_runway_slack_min=-30.0
@@ -707,7 +715,7 @@ class TestRunwayBackstop:
 
         assert (
             facade._runway_backstop_mode(_runway_data(), config, CURRENT_SLOT_IDX)
-            is None
+            is BatteryMode.BOOST_CHARGING
         )
 
     def test_dormant_without_a_slack_reading(self) -> None:
@@ -1136,3 +1144,168 @@ class TestRunwayTelemetryReachesTheSummary:
 
         assert summary["precharge_runway_slack_min"] is None
         assert summary["hard_floor_suppressed_by_solar"] is False
+
+
+# ---------------------------------------------------------------------------
+# The dead zone between the two arms — 2026-08-25
+# ---------------------------------------------------------------------------
+
+# 12:26–12:36 on 2026-08-25, from the live optimizer_facade log:
+#   initial_soc=22.0% target=95% dw_entry_soc=90.8% shortfall=4.2%
+#   charge_slots=12 first_charge=12:45 backstop=False
+#   DP optimizer: selected self_consumption (action=hold, slot=0, decision_allowed=False)
+# The published runway slack was 2.02 minutes against a 15-minute margin.
+DEADZONE_SOC_PCT = 22.0
+DEADZONE_SHORTFALL_PCT = 4.2
+DEADZONE_DW_ENTRY_PCT = 90.8
+DEADZONE_RUNWAY_SLACK_MIN = 2.02
+
+
+def _deadzone_config(**overrides: Any) -> OptimizerConfig:
+    """A day where pre-charge IS required: the hard floor is LIVE, not suppressed."""
+    config = _config(
+        demand_window_target_soc_pct=LIVE_TARGET_PCT,
+        hard_floor_suppressed_by_solar=False,
+        precharge_runway_slack_min=DEADZONE_RUNWAY_SLACK_MIN,
+        precharge_runway_margin_min=RUNWAY_MARGIN_MIN,
+    )
+    for key, value in overrides.items():
+        setattr(config, key, value)
+    return config
+
+
+def _deadzone_result() -> Any:
+    """A projected shortfall that sits UNDER #901's deadband — 4.2 against 5.0."""
+    return SimpleNamespace(
+        terminal_shortfall_pct=DEADZONE_SHORTFALL_PCT,
+        dw_entry_soc_pct=DEADZONE_DW_ENTRY_PCT,
+    )
+
+
+class TestBackstopDeadZone:
+    """Neither arm covered a live floor with a sub-deadband projected shortfall.
+
+    Found live 2026-08-25. #901 declined because 4.2% <= PRECHARGE_BACKSTOP_SHORTFALL_PCT
+    (5.0), and the runway arm stood down because its own gate required the floor to be
+    SUPPRESSED BY SOLAR — but the floor was live. Both off for half an hour at 22% SOC
+    against a 95% target with 2.0 minutes of runway slack, while the DP re-planned every
+    5 minutes and pushed ``first_charge`` back each time. Recovered by a manual override.
+
+    A deferral drift is precisely the shape a shortfall deadband cannot see: it adds
+    ~1.5 points per replan and never steps past 5.0 in a single cycle until the runway
+    has already gone.
+    """
+
+    def test_the_901_arm_declines_on_a_sub_deadband_shortfall(self) -> None:
+        """The first half of the gap, asserted directly rather than implied."""
+        facade = OptimizerFacade()
+
+        assert DEADZONE_SHORTFALL_PCT <= PRECHARGE_BACKSTOP_SHORTFALL_PCT
+        assert (
+            facade._precharge_backstop_mode(
+                _data(soc=DEADZONE_SOC_PCT),
+                _deadzone_result(),
+                _deadzone_config(),
+                CURRENT_SLOT_IDX,
+            )
+            is None
+        )
+
+    def test_runway_arm_covers_the_live_floor_sub_deadband_band(self, caplog) -> None:
+        """The money case: #901 has passed, so the slack-scored arm must speak."""
+        facade = OptimizerFacade()
+        data = _data(soc=DEADZONE_SOC_PCT)
+
+        with caplog.at_level("WARNING"):
+            _run(facade, data, _deadzone_config(), _deadzone_result())
+
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert data.debug_mode_source == "runway_backstop"
+        assert data.optimizer_precharge_backstop_active is True
+        assert "RUNWAY BACKSTOP" in caplog.text
+        assert "PRE-CHARGE BACKSTOP" not in caplog.text
+
+    def test_a_live_floor_with_runway_to_spare_is_still_left_alone(self) -> None:
+        """The fix widens WHEN the arm may speak, not WHETHER slack still gates it.
+
+        Same live floor, same sub-deadband shortfall — but the runway is intact, so
+        nothing should fire. Without this the change reads as "arm on every strict day".
+        """
+        facade = OptimizerFacade()
+        data = _data(soc=DEADZONE_SOC_PCT)
+
+        _run(
+            facade,
+            data,
+            _deadzone_config(
+                precharge_runway_slack_min=RUNWAY_MARGIN_MIN + 10.0,
+            ),
+            _deadzone_result(),
+        )
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.optimizer_precharge_backstop_active is False
+
+    def test_901_still_owns_the_cycle_when_it_qualifies(self, caplog) -> None:
+        """Ordering is unchanged: a material shortfall is still #901's, not this arm's.
+
+        The call site only reaches the runway arm after #901 returns None, so widening
+        this arm must not relabel a cycle #901 would have taken.
+        """
+        facade = OptimizerFacade()
+        data = _data()
+
+        with caplog.at_level("WARNING"):
+            _run(facade, data, _deadzone_config(), _result())
+
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert data.debug_mode_source == "precharge_backstop"
+        assert "PRE-CHARGE BACKSTOP" in caplog.text
+        assert "RUNWAY BACKSTOP" not in caplog.text
+
+    def test_margin_zero_still_kills_the_widened_arm(self) -> None:
+        """The operator's off switch outranks the widening."""
+        facade = OptimizerFacade()
+        data = _data(soc=DEADZONE_SOC_PCT)
+
+        _run(
+            facade,
+            data,
+            _deadzone_config(
+                precharge_runway_margin_min=0.0,
+                precharge_runway_slack_min=-120.0,
+            ),
+            _deadzone_result(),
+        )
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.optimizer_precharge_backstop_active is False
+
+    def test_price_ceiling_still_blocks_the_widened_arm(self) -> None:
+        """A live floor is not a licence to force-charge through a spike."""
+        facade = OptimizerFacade()
+        data = _data(soc=DEADZONE_SOC_PCT, general_price=0.85)
+
+        _run(facade, data, _deadzone_config(), _deadzone_result())
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.optimizer_precharge_backstop_active is False
+
+    def test_allow_dw_entry_under_target_stays_dormant(self) -> None:
+        """The policy opt-out nulls the floor, and a null floor is not "required today".
+
+        This is the assertion that keeps ``_precharge_required_today`` honest: it may
+        only read a LIVE floor as intent, never the absence of one.
+        """
+        facade = OptimizerFacade()
+        data = _data(soc=DEADZONE_SOC_PCT)
+
+        _run(
+            facade,
+            data,
+            _deadzone_config(hard_target_floor=None),
+            _deadzone_result(),
+        )
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.optimizer_precharge_backstop_active is False
