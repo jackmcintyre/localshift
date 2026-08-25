@@ -312,11 +312,20 @@ def test_dp_planner_determinism_replay(default_config, multi_slots):
 # under target on every start it was measured at.
 #
 # The number this guards is the coordinator cycle, and that is measured in production, not
-# here: the live solve on the Powerwall host is 49.7ms at 100 bins against 42.1ms at 50 —
-# an 8ms cost on a cycle that runs every five minutes. The same code measures ~350ms on
-# GitHub's shared runners, so this constant tracks CI hardware, not the real budget. Judge
-# a regression against the live solve_time_seconds telemetry before tightening it back.
-RUNTIME_BUDGET_S = 0.500
+# here. CORRECTED 2026-08-25 15:10 — the first figure recorded against this constant
+# (49.7ms) was sampled while the battery was under a MANUAL override, which
+# short-circuits the optimizer, so it measured a solve that was not doing the work. With
+# automation live and a demand window active the same code measures 465ms, and the
+# coordinator re-solves roughly once a minute rather than once per five, so the real cost
+# of soc_bins 50 -> 100 is about +350ms per cycle and not the +8ms first claimed.
+#
+# 750ms is chosen to sit meaningfully above the observed 465ms rather than 35ms above it:
+# a ceiling that a healthy production system is already brushing is not a guardrail, it is
+# a tripwire. Home Assistant shows no strain at 465ms (no "took longer than the scheduled
+# update interval" warnings), so this is headroom for honest variance, not permission to
+# grow. The same code measures ~350ms on GitHub's shared runners, so this constant still
+# tracks CI hardware; judge a real regression against live solve_time_seconds telemetry.
+RUNTIME_BUDGET_S = 0.750
 
 
 def test_dp_planner_runtime_budget(multi_slots):

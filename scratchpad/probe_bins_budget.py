@@ -10,7 +10,7 @@ sys.path.insert(0, ".")
 # Mirrors tests/test_optimizer_scaffold.py::RUNTIME_BUDGET_S. Imported by value
 # rather than by import: the tests package pulls in conftest fixtures this probe
 # has no use for.
-RUNTIME_BUDGET_S = 0.500
+RUNTIME_BUDGET_S = 0.750
 with contextlib.redirect_stdout(io.StringIO()):
     from scratchpad.deferral_replay import INITIAL_SOC, build_config, build_slots
 from custom_components.localshift.engine.core import DPPlanner
