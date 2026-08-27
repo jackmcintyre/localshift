@@ -125,6 +125,12 @@ class CostTracker:
         data.battery_charge_cost = 0.0
         data.target_reached_today = False
         self._reset_energy_accumulators(data)
+        # Issue #899: also clear the SOC baseline so the first grid-charge
+        # sample after midnight establishes a fresh baseline. Without this, a
+        # grid charge spanning midnight leaves _last_soc_pct at the
+        # pre-midnight value, and the next sample attributes the entire
+        # overnight gain to the new day's grid-charge-efficiency metric.
+        self._last_soc_pct = None
 
     def _reset_energy_accumulators(self, data: CoordinatorData) -> None:
         """Reset the Issue #868 daily energy accumulators."""

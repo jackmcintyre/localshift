@@ -6,12 +6,14 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
+    CONF_MINIMUM_TARGET_SOC,
+    DEFAULT_MINIMUM_TARGET_SOC,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
@@ -72,16 +74,22 @@ class BatteryController:
         self,
         hass: HomeAssistant,
         get_entity_id_func: callable,
+        get_option_func: Callable[[str, Any], Any] | None = None,
     ) -> None:
         """Initialize the battery controller.
 
         Args:
             hass: Home Assistant instance
             get_entity_id_func: Function to get entity IDs by config key
+            get_option_func: Optional function to read config_entry options by
+                key (mirrors the state machine's ``_get_option``). Used to read
+                ``minimum_target_soc`` correctly — it is an option, not a data
+                entity, so the entity-id lookup always returned "" (Issue #894).
 
         """
         self.hass = hass
         self._get_entity_id = get_entity_id_func
+        self._get_option = get_option_func
         self._service_client = PowerwallServiceClient(hass, get_entity_id_func)
         self._validator = TransitionValidator(hass, get_entity_id_func)
 
@@ -494,14 +502,28 @@ class BatteryController:
         return True
 
     def _get_minimum_target_soc(self) -> float:
-        """Read the minimum target SOC from the configured entity.
+        """Read the minimum target SOC from the configured option.
+
+        Issue #894: ``minimum_target_soc`` is a config_entry OPTION, not a data
+        entity. The old entity-id lookup always returned "" and read_float
+        silently fell back to a hardcoded 10.0, ignoring the user's configured
+        slider value during SPIKE_DISCHARGE. Read it via the option function
+        instead, falling back to DEFAULT_MINIMUM_TARGET_SOC (20).
 
         Returns:
-            Minimum target SOC percentage (default 10 if entity unavailable).
+            Minimum target SOC percentage.
 
         """
-        entity_id = self._get_entity_id("minimum_target_soc")
-        return self._validator.read_float(entity_id, default=10.0)
+        if self._get_option is not None:
+            try:
+                return float(
+                    self._get_option(
+                        CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
+                    )
+                )
+            except (TypeError, ValueError):
+                return float(DEFAULT_MINIMUM_TARGET_SOC)
+        return float(DEFAULT_MINIMUM_TARGET_SOC)
 
     async def set_force_discharge(
         self,
@@ -622,7 +644,25 @@ class BatteryController:
 
         # Dynamic reserve for throttling: SOC - 5%, minimum 4%
         current_soc = data.soc
-        reserve = max(4.0, current_soc - 5.0)
+        minimum_target = self._get_minimum_target_soc()
+
+        # Issue #895: when SOC is 0 (unavailable entity, startup, or genuinely
+        # empty), the old ``max(4.0, soc - 5.0)`` formula yielded reserve=4.0,
+        # draining the battery to 4% — well below the configured
+        # minimum_target_soc. Floor the reserve at minimum_target_soc so the
+        # configured protection holds, and warn so the SOC=0 case is
+        # diagnosable (it usually means the SOC entity is not populated).
+        if current_soc <= 0.0:
+            _LOGGER.warning(
+                "Proactive export requested with SOC=%.1f%% (entity unavailable "
+                "or empty); flooring reserve at minimum_target_soc=%.1f%% "
+                "instead of the dynamic SOC-5 formula.",
+                current_soc,
+                minimum_target,
+            )
+            reserve = minimum_target
+        else:
+            reserve = max(4.0, current_soc - 5.0)
 
         if dry_run:
             _LOGGER.info(

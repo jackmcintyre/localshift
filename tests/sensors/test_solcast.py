@@ -238,3 +238,47 @@ class TestForecastAccuracyComparisonSensor:
 
         sensor = ForecastAccuracyComparisonSensor(coordinator_with_analysis, Mock())
         assert sensor.entity_category == EntityCategory.DIAGNOSTIC
+
+    def test_zero_accuracy_is_not_treated_as_missing(self):
+        """Issue #892: accuracy of exactly 0.0 must NOT be collapsed to None.
+
+        ``if localshift_accuracy:`` treats 0.0 the same as None (unavailable),
+        so a genuinely-0% accuracy (terrible forecast, all samples wrong) is
+        misreported as the Solcast-only value or None. Use ``is not None``.
+        """
+        coordinator = Mock()
+        coordinator.data = Mock()
+        coordinator.data.solar_forecast_accuracy = 0.0  # Genuinely 0%
+        coordinator.data.solcast_mape = None
+        coordinator.data.low_confidence_periods = []
+
+        sensor = ForecastAccuracyComparisonSensor(coordinator, Mock())
+        sensor._update_from_coordinator()
+
+        # Must report 0.0 (the LocalShift value), NOT None or a Solcast fallback.
+        assert sensor.native_value == 0.0
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["localshift_accuracy_pct"] == 0.0
+
+    def test_zero_accuracy_blended_with_solcast(self):
+        """Issue #892: 0.0 LocalShift + Solcast MAPE blends correctly.
+
+        Pre-fix the 0.0 was truthy-false so the blend branch was skipped and
+        only Solcast was reported. Post-fix both contribute.
+        """
+        coordinator = Mock()
+        coordinator.data = Mock()
+        coordinator.data.solar_forecast_accuracy = 0.0
+        coordinator.data.solcast_mape = 10.0  # 90% accuracy
+        coordinator.data.low_confidence_periods = []
+
+        sensor = ForecastAccuracyComparisonSensor(coordinator, Mock())
+        sensor._update_from_coordinator()
+
+        # Combined = (0.0 + 90.0) / 2 = 45.0
+        assert sensor.native_value == 45.0
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["localshift_accuracy_pct"] == 0.0
+        assert attrs["divergence_pct"] == 90.0  # |0 - 90|

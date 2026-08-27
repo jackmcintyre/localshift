@@ -780,7 +780,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.000,
-                    max=0.100,
+                    max=0.200,
                     step=0.005,
                     unit_of_measurement="$/%-point",
                     mode=selector.NumberSelectorMode.SLIDER,
