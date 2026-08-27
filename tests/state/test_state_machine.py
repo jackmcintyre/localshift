@@ -1047,22 +1047,48 @@ class TestHealthCheck:
 class TestGridChargingListener:
     """Tests for the reactive grid_charging state-change listener (#491)."""
 
+    _MACHINE_TRACK = (
+        "custom_components.localshift.state.machine.async_track_state_change_event"
+    )
+
+    def _patch_track(self, monkeypatch):
+        """Patch async_track_state_change_event, capturing entity_ids + callback."""
+        captured = {}
+
+        def _fake_track(hass, entity_ids, callback):
+            captured["entity_ids"] = entity_ids
+            captured["callback"] = callback
+            return MagicMock()
+
+        monkeypatch.setattr(self._MACHINE_TRACK, _fake_track)
+        return captured
+
+    def _make_event(self, state):
+        """Build a fake state-change Event whose data carries new_state/old_state."""
+        event = MagicMock()
+        event.data = {
+            "new_state": MagicMock(state=state),
+            "old_state": MagicMock(state="off" if state == "on" else "on"),
+        }
+        return event
+
     def test_start_listener_registers_callback(
-        self, state_machine, mock_hass
+        self, state_machine, mock_hass, monkeypatch
     ):
-        """start_grid_charging_listener should register an async_listen_state call."""
-        mock_hass.async_listen_state.return_value = MagicMock()
+        """start_grid_charging_listener should register a state-change listener."""
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
-        mock_hass.async_listen_state.assert_called_once()
+        assert "callback" in captured
+        assert len(captured["entity_ids"]) == 1
 
     def test_start_listener_is_idempotent(
-        self, state_machine, mock_hass
+        self, state_machine, mock_hass, monkeypatch
     ):
         """Calling start twice should only register once."""
-        mock_hass.async_listen_state.return_value = MagicMock()
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
         state_machine.start_grid_charging_listener(mock_hass)
-        assert mock_hass.async_listen_state.call_count == 1
+        assert "callback" in captured
 
     def test_stop_listener_calls_unsubscribe(
         self, state_machine, mock_hass
@@ -1083,7 +1109,7 @@ class TestGridChargingListener:
 
     @pytest.mark.asyncio
     async def test_reactive_correction_turns_off_grid_charging(
-        self, state_machine, mock_hass, mock_battery_controller
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
     ):
         """Listener should turn off grid_charging when it flips to on in self_consumption."""
         from custom_components.localshift.const import BatteryMode
@@ -1094,16 +1120,12 @@ class TestGridChargingListener:
         )
 
         mock_hass.services.async_call = AsyncMock(return_value=True)
-        mock_hass.async_listen_state.return_value = MagicMock()
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
 
         # Fire the listener callback manually
-        listener = mock_hass.async_listen_state.call_args[0][0]
-        event = {
-            "new_state": MagicMock(state="on"),
-            "old_state": MagicMock(state="off"),
-        }
-        listener(mock_hass, None, None, event)
+        captured["callback"](self._make_event("on"))
 
         # Give the task a tick to complete
         await asyncio.sleep(0)
@@ -1117,7 +1139,7 @@ class TestGridChargingListener:
 
     @pytest.mark.asyncio
     async def test_reactive_correction_respects_cooldown(
-        self, state_machine, mock_hass, mock_battery_controller
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
     ):
         """Listener should skip correction when health-check cooldown is active."""
         from datetime import datetime, timedelta
@@ -1133,19 +1155,18 @@ class TestGridChargingListener:
         state_machine._last_health_correction = now - timedelta(minutes=1)
 
         mock_hass.services.async_call = AsyncMock(return_value=True)
-        mock_hass.async_listen_state.return_value = MagicMock()
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
 
-        listener = mock_hass.async_listen_state.call_args[0][0]
-        event = {"new_state": MagicMock(state="on"), "old_state": MagicMock(state="off")}
-        listener(mock_hass, None, None, event)
+        captured["callback"](self._make_event("on"))
         await asyncio.sleep(0)
 
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reactive_correction_skips_when_tesla_override_active(
-        self, state_machine, mock_hass, mock_battery_controller
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
     ):
         """Listener should skip correction when Tesla override is active."""
         from custom_components.localshift.const import BatteryMode
@@ -1157,19 +1178,18 @@ class TestGridChargingListener:
         )
 
         mock_hass.services.async_call = AsyncMock(return_value=True)
-        mock_hass.async_listen_state.return_value = MagicMock()
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
 
-        listener = mock_hass.async_listen_state.call_args[0][0]
-        event = {"new_state": MagicMock(state="on"), "old_state": MagicMock(state="off")}
-        listener(mock_hass, None, None, event)
+        captured["callback"](self._make_event("on"))
         await asyncio.sleep(0)
 
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reactive_correction_skips_in_grid_charging_mode(
-        self, state_machine, mock_hass, mock_battery_controller
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
     ):
         """Listener should do nothing when commanded mode is GRID_CHARGING."""
         from custom_components.localshift.const import BatteryMode
@@ -1180,19 +1200,18 @@ class TestGridChargingListener:
         )
 
         mock_hass.services.async_call = AsyncMock(return_value=True)
-        mock_hass.async_listen_state.return_value = MagicMock()
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
 
-        listener = mock_hass.async_listen_state.call_args[0][0]
-        event = {"new_state": MagicMock(state="on"), "old_state": MagicMock(state="off")}
-        listener(mock_hass, None, None, event)
+        captured["callback"](self._make_event("on"))
         await asyncio.sleep(0)
 
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reactive_correction_noop_when_switch_turns_off(
-        self, state_machine, mock_hass, mock_battery_controller
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
     ):
         """Listener should not act when the switch turns off (only on)."""
         from custom_components.localshift.const import BatteryMode
@@ -1203,12 +1222,11 @@ class TestGridChargingListener:
         )
 
         mock_hass.services.async_call = AsyncMock(return_value=True)
-        mock_hass.async_listen_state.return_value = MagicMock()
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
 
-        listener = mock_hass.async_listen_state.call_args[0][0]
-        event = {"new_state": MagicMock(state="off"), "old_state": MagicMock(state="on")}
-        listener(mock_hass, None, None, event)
+        captured["callback"](self._make_event("off"))
         await asyncio.sleep(0)
 
         mock_hass.services.async_call.assert_not_called()

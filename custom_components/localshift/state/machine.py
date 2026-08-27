@@ -8,6 +8,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from homeassistant.core import Event, callback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -1720,22 +1722,20 @@ class StateMachine:
             "teslemetry_allow_charging_from_grid"
         )
 
-        def _on_grid_charging_state_change(  # type: ignore[empty-body]
-            _hass: Any,
-            _listener_id: Any,
-            _target: Any,
-            event: Any,
-        ) -> None:
-            new_state = event["new_state"]
+        @callback
+        def _on_grid_charging_state_change(event: Event) -> None:
+            new_state = event.data.get("new_state")
             if new_state is None or new_state.state not in ("on", "off"):
                 return
             # Only react to the switch turning ON (reversion)
             if new_state.state != "on":
                 return
-            asyncio.create_task(self._reactive_correct_grid_charging(hass, entity_id))
+            hass.async_create_task(
+                self._reactive_correct_grid_charging(hass, entity_id)
+            )
 
-        self._grid_charging_listener = hass.async_listen_state(
-            _on_grid_charging_state_change, entity_id
+        self._grid_charging_listener = async_track_state_change_event(
+            hass, [entity_id], _on_grid_charging_state_change
         )
         _LOGGER.debug("Registered grid_charging state listener on %s (#491)", entity_id)
 
