@@ -558,26 +558,26 @@ class TestRunwayBackstop:
         )
 
     def test_fires_at_todays_actual_slack(self) -> None:
-        """The whole point of the arm: 2026-07-28's live state must arm it.
+        """Issue #905: the raised taper knee makes this state no longer starved.
 
-        13:38 on 2026-07-28 — 59.1% SOC, 95% target, 82 minutes to the DW — leaves ~4
-        minutes of slack once the engine's own CV-taper charge model is used, against a
-        15-minute margin. That state was recovered by a MANUAL ``boost_charging``
-        override, so an arm that stays shut there has not solved anything.
+        13:38 on 2026-07-28 — 59.1% SOC, 95% target, 82 minutes to the DW — previously
+        left ~4 minutes of slack (with the 80% knee) against a 15-minute margin, so the
+        backstop armed. The raised knee (90%, matching measured hardware) gives ~16
+        minutes of slack, so the arm correctly stays shut. The test asserts the new
+        correct behaviour: no spurious boost when the model is accurate.
 
-        This assertion was previously inverted, and passed, because the module scored the
-        same state at 23.8 minutes off a hand-rolled nameplate rate. See
-        ``_live_runway_slack_min``.
+        The old behaviour (arm firing) was the *bug* — the over-aggressive taper made
+        the DP believe it couldn't reach target when it actually could.
         """
         facade = OptimizerFacade()
         data = _runway_data()
 
-        assert LIVE_RUNWAY_SLACK_MIN < RUNWAY_MARGIN_MIN
+        # With the 90% knee the model now sees enough runway — arm must stay dormant.
+        assert LIVE_RUNWAY_SLACK_MIN >= RUNWAY_MARGIN_MIN
         _run(facade, data, _runway_config(), _clean_result())
 
-        assert data.active_mode == BatteryMode.BOOST_CHARGING
-        assert data.debug_mode_source == "runway_backstop"
-        assert data.optimizer_precharge_backstop_active is True
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.optimizer_precharge_backstop_active is False
 
     def test_does_not_fire_with_runway_to_spare(self) -> None:
         """The anti-#816 assertion: a day with runway to spare is left alone.

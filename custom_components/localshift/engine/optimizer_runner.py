@@ -246,6 +246,8 @@ def _build_optimizer_config(
         CHARGE_RATE_SOLAR_KW,
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
+        CONF_CHARGE_TAPER_MIN_FACTOR,
+        CONF_CHARGE_TAPER_START_PCT,
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MAX_PRECHARGE_PRICE,
         CONF_MIN_CYCLE_SAVING,
@@ -258,6 +260,8 @@ def _build_optimizer_config(
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_CHARGE_TAPER_MIN_FACTOR,
+        DEFAULT_CHARGE_TAPER_START_PCT,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MAX_PRECHARGE_PRICE,
         DEFAULT_MIN_CYCLE_SAVING,
@@ -330,6 +334,14 @@ def _build_optimizer_config(
         config_options.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING)
     )
 
+    # Charge taper curve (Issue #905: raised from 80% to 90% to match measured hardware).
+    charge_taper_start_pct = float(
+        config_options.get(CONF_CHARGE_TAPER_START_PCT, DEFAULT_CHARGE_TAPER_START_PCT)
+    )
+    charge_taper_min_factor = float(
+        config_options.get(CONF_CHARGE_TAPER_MIN_FACTOR, DEFAULT_CHARGE_TAPER_MIN_FACTOR)
+    )
+
     # Target-first eligibility (2026-06-12): the operator's pre-charge price ceiling.
     # Already governs the live urgency ramp in price_calculator; plumbed into the engine
     # so compute_pre_dw_charge_thresholds can size the pre-DW charge gate to the target.
@@ -394,6 +406,9 @@ def _build_optimizer_config(
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
+        # --- Charge curve (Issue #905: configurable to match hardware) ---
+        charge_taper_start_pct=charge_taper_start_pct,
+        charge_taper_min_factor=charge_taper_min_factor,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---

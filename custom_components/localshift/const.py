@@ -210,6 +210,8 @@ CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
 CONF_TARGET_PENALTY = "target_penalty"
+CONF_CHARGE_TAPER_START_PCT = "charge_taper_start_pct"
+CONF_CHARGE_TAPER_MIN_FACTOR = "charge_taper_min_factor"
 
 # Optimization mode options
 OPTIMIZATION_MODE_SELF_CONSUMPTION = "self_consumption"
@@ -262,6 +264,8 @@ DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
 )
+DEFAULT_CHARGE_TAPER_START_PCT = 90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
+DEFAULT_CHARGE_TAPER_MIN_FACTOR = 0.2  # Floor fraction at 100% SOC (unvalidated above ~88%)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -376,6 +380,20 @@ THRESHOLD_RANGES = {
         "step": 5.0,
         "unit": "min",
         "icon": "mdi:timer-alert-outline",
+    },
+    CONF_CHARGE_TAPER_START_PCT: {
+        "min": 50.0,
+        "max": 99.0,
+        "step": 1.0,
+        "unit": "%",
+        "icon": "mdi:battery-heart-variant",
+    },
+    CONF_CHARGE_TAPER_MIN_FACTOR: {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "",
+        "icon": "mdi:battery-architect",
     },
 }
 
