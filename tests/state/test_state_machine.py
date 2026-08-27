@@ -5,7 +5,7 @@ and error handling as specified in backlog-crit-002.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1040,6 +1040,181 @@ class TestHealthCheck:
 
 
 # =============================================================================
+# REACTIVE GRID CHARGING LISTENER TESTS (Issue #491)
+# =============================================================================
+
+
+class TestGridChargingListener:
+    """Tests for the reactive grid_charging state-change listener (#491)."""
+
+    def test_start_listener_registers_callback(
+        self, state_machine, mock_hass
+    ):
+        """start_grid_charging_listener should register an async_listen_state call."""
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+        mock_hass.async_listen_state.assert_called_once()
+
+    def test_start_listener_is_idempotent(
+        self, state_machine, mock_hass
+    ):
+        """Calling start twice should only register once."""
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+        state_machine.start_grid_charging_listener(mock_hass)
+        assert mock_hass.async_listen_state.call_count == 1
+
+    def test_stop_listener_calls_unsubscribe(
+        self, state_machine, mock_hass
+    ):
+        """stop_grid_charging_listener should call the listener handle."""
+        handle = MagicMock()
+        state_machine._grid_charging_listener = handle
+        state_machine.stop_grid_charging_listener()
+        handle.assert_called_once()
+        assert state_machine._grid_charging_listener is None
+
+    def test_stop_listener_noop_when_none(
+        self, state_machine
+    ):
+        """stop_grid_charging_listener should not error when no listener is active."""
+        state_machine._grid_charging_listener = None
+        state_machine.stop_grid_charging_listener()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_turns_off_grid_charging(
+        self, state_machine, mock_hass, mock_battery_controller
+    ):
+        """Listener should turn off grid_charging when it flips to on in self_consumption."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        # Fire the listener callback manually
+        listener = mock_hass.async_listen_state.call_args[0][0]
+        event = {
+            "new_state": MagicMock(state="on"),
+            "old_state": MagicMock(state="off"),
+        }
+        listener(mock_hass, None, None, event)
+
+        # Give the task a tick to complete
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_called_once_with(
+            "switch",
+            "turn_off",
+            {"entity_id": "switch.my_home_allow_charging_from_grid"},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_respects_cooldown(
+        self, state_machine, mock_hass, mock_battery_controller
+    ):
+        """Listener should skip correction when health-check cooldown is active."""
+        from datetime import datetime, timedelta
+
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+        # Set last correction to 1 minute ago (within 5-min cooldown)
+        now = datetime.now(UTC)
+        state_machine._last_health_correction = now - timedelta(minutes=1)
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        listener = mock_hass.async_listen_state.call_args[0][0]
+        event = {"new_state": MagicMock(state="on"), "old_state": MagicMock(state="off")}
+        listener(mock_hass, None, None, event)
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_skips_when_tesla_override_active(
+        self, state_machine, mock_hass, mock_battery_controller
+    ):
+        """Listener should skip correction when Tesla override is active."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._tesla_override_detected = True
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        listener = mock_hass.async_listen_state.call_args[0][0]
+        event = {"new_state": MagicMock(state="on"), "old_state": MagicMock(state="off")}
+        listener(mock_hass, None, None, event)
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_skips_in_grid_charging_mode(
+        self, state_machine, mock_hass, mock_battery_controller
+    ):
+        """Listener should do nothing when commanded mode is GRID_CHARGING."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        listener = mock_hass.async_listen_state.call_args[0][0]
+        event = {"new_state": MagicMock(state="on"), "old_state": MagicMock(state="off")}
+        listener(mock_hass, None, None, event)
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_noop_when_switch_turns_off(
+        self, state_machine, mock_hass, mock_battery_controller
+    ):
+        """Listener should not act when the switch turns off (only on)."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_listen_state.return_value = MagicMock()
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        listener = mock_hass.async_listen_state.call_args[0][0]
+        event = {"new_state": MagicMock(state="off"), "old_state": MagicMock(state="on")}
+        listener(mock_hass, None, None, event)
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+
+# =============================================================================
 # MANUAL OVERRIDE TESTS
 # =============================================================================
 
@@ -1830,7 +2005,7 @@ class TestModeTransitionGating:
         once debounce is satisfied.
         """
         import asyncio
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         # Set up data with prices
         coordinator_data.general_price = 0.25
