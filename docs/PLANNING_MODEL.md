@@ -160,6 +160,16 @@ Encodes requirements and goal states that must be achieved by a specific point.
 | Requirement | Formula | Applied At | Code Location |
 |-------------|---------|------------|---------------|
 | Demand window target | `max(0, target - SOC) × $0.03/%` | DW entry slot | L1818-1829 |
+| Residual energy salvage (Issue #811) | `usable_kwh × min(cheapest_buy × 0.5, $0.05/kWh)` as a *credit* | Horizon boundary (`dp[n_slots]`) | `cost.terminal_salvage_value` |
+
+The salvage credit prices residual battery energy at the horizon end at a bounded
+fraction of the cheapest observed buy price, instead of zero. Zero-pricing made the
+planner willing to dump value near the horizon cutoff — the rolling horizon keeps
+advancing, so that energy genuinely displaces a future import. The bounds (half the
+cheapest buy, absolute $0.05/kWh cap, floor energy excluded) keep it subordinate:
+charging purely to harvest the credit always loses at least half the outlay, so it
+cannot regress into overnight reserve-holding. It never touches the strict-mode
+DW-entry penalty rows. Disable via `OptimizerConfig.terminal_salvage_enabled=False`.
 
 ### Why Terminal Cost Works
 

@@ -159,3 +159,54 @@ def terminal_cost(
     """
     shortfall = max(0.0, target_soc_pct - final_soc_pct)
     return shortfall * config.target_shortfall_penalty_per_pct
+
+
+def terminal_salvage_value(
+    final_soc_pct: float,
+    config: OptimizerConfig,
+    future_buy_price: float,
+) -> float:
+    """Bounded salvage value of residual battery energy at the horizon end.
+
+    Residual energy above the floor displaces a post-horizon grid import once
+    the rolling horizon advances, so pricing it at zero made the planner too
+    willing to dump value near the end of the modeled horizon (Issue #811).
+    The credit is deliberately bounded so it can never become a reserve-seeking
+    incentive:
+
+    - Only SOC above ``min_soc_pct`` is credited (floor energy is unusable).
+    - Per-kWh value is ``min(future_buy_price * TERMINAL_SALVAGE_DISCOUNT,
+      TERMINAL_SALVAGE_MAX_PER_KWH)`` — at most half the cheapest observed
+      buy price, so charging to harvest the credit always loses at least half
+      the outlay, and an absolute cap keeps pathological tariffs harmless.
+
+    Args:
+        final_soc_pct: Battery SOC at the horizon boundary (%).
+        config: Optimizer configuration (capacity, efficiencies, floors).
+        future_buy_price: Cheapest buy price observed in the horizon ($/kWh),
+            used as the proxy for the post-horizon import the residual
+            displaces.
+
+    Returns:
+        Non-negative salvage credit in currency units; subtract from terminal
+        cost. Zero when there is no usable residual energy or no future price.
+    """
+    from custom_components.localshift.const import (
+        TERMINAL_SALVAGE_DISCOUNT,
+        TERMINAL_SALVAGE_MAX_PER_KWH,
+    )
+
+    if future_buy_price <= 0.0:
+        return 0.0
+
+    usable_kwh = max(0.0, final_soc_pct - config.min_soc_pct) / 100.0 * (
+        config.battery_capacity_kwh * config.discharge_efficiency
+    )
+    if usable_kwh <= 0.0:
+        return 0.0
+
+    per_kwh = min(
+        future_buy_price * TERMINAL_SALVAGE_DISCOUNT,
+        TERMINAL_SALVAGE_MAX_PER_KWH,
+    )
+    return usable_kwh * per_kwh

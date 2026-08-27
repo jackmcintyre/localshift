@@ -626,6 +626,19 @@ NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
 NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
 
 # -----------------------------------------------------------------------------
+# Terminal Salvage Value Constants (Issue #811)
+# -----------------------------------------------------------------------------
+
+# Fraction of the cheapest observed buy price credited per kWh of residual
+# energy at the horizon boundary. Kept below 1.0 so charging purely to harvest
+# the credit always loses at least (1 - fraction) of the outlay.
+TERMINAL_SALVAGE_DISCOUNT: Final[float] = 0.5
+
+# Absolute ceiling on the per-kWh salvage credit ($/kWh), so pathological
+# tariffs cannot turn residual energy into a reserve-seeking incentive.
+TERMINAL_SALVAGE_MAX_PER_KWH: Final[float] = 0.05
+
+# -----------------------------------------------------------------------------
 # Tesla Override Detection Constants
 # -----------------------------------------------------------------------------
 
