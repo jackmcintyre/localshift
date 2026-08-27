@@ -213,6 +213,22 @@ class EntityValidator:
             return (EntityStatus.UNKNOWN, f"Entity '{entity_id}' has unknown state")
         return None
 
+    def _is_expected_warmup(
+        self, config: dict[str, Any], status: EntityStatus, state: Any
+    ) -> bool:
+        """Return True when an UNKNOWN state is configured, expected warmup.
+
+        Configured via ``warmup_unknown`` in LOCALSHIFT_ENTITY_CONFIG (Issue #917):
+        the solar accuracy sensor legitimately reads 'unknown' until the
+        tracker has gathered enough samples, and advertises
+        ``samples_until_active`` > 0 in its attributes for exactly that
+        window. Unknown without that evidence is still treated as a failure.
+        """
+        if not config.get("warmup_unknown") or status is not EntityStatus.UNKNOWN:
+            return False
+        attributes = getattr(state, "attributes", None) or {}
+        return attributes.get("samples_until_active", 0) > 0
+
     def _check_entity_staleness(
         self, entity_id: str, config_key: str, state: Any
     ) -> str | None:
@@ -554,6 +570,17 @@ class EntityValidator:
             )
 
         failure_result = self._check_entity_state(entity_id, state)
+        if failure_result and self._is_expected_warmup(
+            config, failure_result[0], state
+        ):
+            # Issue #917: 'unknown' during the configured warmup window is
+            # expected behaviour, not a failure. Treat as healthy so the
+            # consecutive-failure gate cannot mark the entity BROKEN.
+            health.status = EntityStatus.OK
+            health.error_message = ""
+            health.consecutive_failures = 0
+            health.is_broken = False
+            return health
         if failure_result:
             health.status = failure_result[0]
             health.error_message = failure_result[1]

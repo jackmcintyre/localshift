@@ -32,12 +32,16 @@ class TickScheduler:
     # intervals, else it is discarded rather than recorded as a full actual.
     # Guards the restart case: the baseline re-establishes mid-period, so that
     # period only accumulates partial energy (Issue: partial-coverage poisoning).
-    _MIN_COVERAGE_FRACTION = 0.9
+    # 70% (Issue #893) tolerates one missing 5-min medium tick (~83% covered)
+    # while still discarding the worst partial periods after a restart.
+    _MIN_COVERAGE_FRACTION = 0.7
     # Intervals longer than this (e.g. an event-loop stall or a long gap) are
     # not integrated — one giant trapezoid prorated across many periods would
     # produce several plausible-looking but garbage samples. We re-baseline and
     # skip integration; the spanned periods fall below the coverage gate.
-    _MAX_INTEGRATION_SECONDS = 900.0  # 15 min
+    # 30 min (Issue #893): a single ~20-min stall no longer discards the whole
+    # period — the interval integrates and attributes to the correct period.
+    _MAX_INTEGRATION_SECONDS = 1800.0  # 30 min
 
     def __init__(
         self,
@@ -331,11 +335,12 @@ class TickScheduler:
         record is meaningful is decided at flush time by the tracker.
 
         Two robustness guards keep partial/garbage samples out of the (now
-        persisted) learning store: a period must be >=90% covered by integration
+        persisted) learning store: a period must be >=70% covered by integration
         intervals to be recorded (else it is discarded — handles the restart
-        re-baseline mid-period), and intervals longer than 15 min are not
-        integrated at all (an event-loop stall would otherwise smear one
-        trapezoid across many periods as plausible-looking garbage).
+        re-baseline mid-period; one missing 5-min tick still records, Issue
+        #893), and intervals longer than 30 min are not integrated at all (an
+        event-loop stall would otherwise smear one trapezoid across many
+        periods as plausible-looking garbage).
         """
         tracker = getattr(self._coordinator, "solar_accuracy_tracker", None)
         if tracker is None:

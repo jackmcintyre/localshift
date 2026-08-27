@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.localshift.coordinator.tick_scheduler import TickScheduler
+from custom_components.localshift.forecast.solar_accuracy import SolarAccuracyTracker
 
 
 async def test_tick_scheduler_initialization(coordinator):
@@ -519,6 +520,20 @@ def _setup_tracker(coordinator, *, power=5.0, boost=False):
     return tracker
 
 
+def _setup_real_tracker(coordinator, *, power=5.0):
+    """Wire a REAL solar accuracy tracker onto the coordinator.
+
+    The tracker's HA Store is only touched by async_load/async_save, so a
+    MagicMock hass suffices (established pattern in test_solar_accuracy.py).
+    """
+    tracker = SolarAccuracyTracker(MagicMock(), "issue_893")
+    coordinator.solar_accuracy_tracker = tracker
+    coordinator.data = MagicMock()
+    coordinator.data.solar_power_kw = power
+    coordinator.data.boost_charge_active = False
+    return tracker
+
+
 def _drive(scheduler, coordinator, ticks):
     """Drive _backfill_solar_actual across a sequence of (time, power[, boost]) ticks.
 
@@ -651,22 +666,81 @@ async def test_backfill_zero_power_still_flushes(coordinator):
 
 
 @pytest.mark.asyncio
+async def test_pending_forecast_converts_to_sample_despite_stall_gap(coordinator):
+    """End-to-end (Issue #893): a pending forecast lands despite a stall gap.
+
+    The scheduler records forecasts as pendings via the tracker, but nothing
+    ever converted them to samples: a single ~20-min gap (event-loop stall,
+    restart) re-baselined the whole interval under the 15-min integration
+    cap, dropping coverage below the 90% gate. The accuracy sensor therefore
+    sat 'unknown' forever. With the relaxed guards the gap integrates, the
+    09:30 period flushes, and the pending converts to a real sample.
+    """
+    scheduler = TickScheduler(coordinator)
+    tracker = _setup_real_tracker(coordinator, power=5.0)
+
+    tracker.record_forecast(_t(9, 30), 2.0, "sunny")
+
+    # Baseline 09:30, two normal ticks, then a 20-min gap to 10:00.
+    _drive(
+        scheduler,
+        coordinator,
+        [(_t(9, 30), 5.0), (_t(9, 35), 5.0), (_t(9, 40), 5.0), (_t(10, 0), 5.0)],
+    )
+
+    assert tracker.metrics.sample_count == 1
+    assert len(tracker._pending_forecasts) == 0
+    record = tracker._period_records[-1]
+    assert record.forecast_kwh == 2.0
+    assert record.actual_kwh == pytest.approx(2.5, rel=1e-3)  # 5 kW x 0.5 h
+
+
+@pytest.mark.asyncio
+async def test_pending_forecast_converts_with_partial_coverage(coordinator):
+    """End-to-end (Issue #893): one missing 5-min tick still records a sample.
+
+    Ticks 09:30-09:55 cover 25 of 30 min (83%); a 35-min gap follows so the
+    tail is never integrated. The old 90% coverage gate discarded the period;
+    70% accepts it, attributing the 25 observed minutes to the 09:30 period.
+    """
+    scheduler = TickScheduler(coordinator)
+    tracker = _setup_real_tracker(coordinator, power=5.0)
+
+    tracker.record_forecast(_t(9, 30), 2.0, "sunny")
+
+    # 5-min ticks 09:30-09:55, then a 35-min gap (never integrated under any cap).
+    _drive(
+        scheduler,
+        coordinator,
+        _five_min_ticks(9, 30, 9, 55, 5.0) + [(_t(10, 30), 5.0)],
+    )
+
+    assert tracker.metrics.sample_count == 1
+    assert len(tracker._pending_forecasts) == 0
+    record = tracker._period_records[-1]
+    # 5 kW for 25 min = 25/12 kWh observed across the covered span.
+    assert record.actual_kwh == pytest.approx(5.0 * 25 / 60, rel=1e-3)
+
+
+@pytest.mark.asyncio
 async def test_backfill_long_interval_rebaselines_without_integrating(coordinator):
-    """An interval longer than the cap (15 min) re-baselines without integrating.
+    """An interval longer than the cap (30 min) re-baselines without integrating.
 
     Guards against an event-loop stall smearing one trapezoid across many periods.
+    (A ~20-min stall now integrates by design — Issue #893 — so this must exceed
+    the cap.)
     """
     scheduler = TickScheduler(coordinator)
     tracker = _setup_tracker(coordinator, power=5.0)
     scheduler._last_solar_power_timestamp = _t(10, 0)
     scheduler._last_solar_power_kw = 5.0
 
-    _drive(scheduler, coordinator, [(_t(10, 20), 5.0)])  # 20-min gap > 15-min cap
+    _drive(scheduler, coordinator, [(_t(10, 35), 5.0)])  # 35-min gap > 30-min cap
 
     tracker.backfill_actual.assert_not_called()
     assert scheduler._period_energy_accum == {}
     # Baseline is advanced so the next normal interval integrates cleanly.
-    assert scheduler._last_solar_power_timestamp == _t(10, 20)
+    assert scheduler._last_solar_power_timestamp == _t(10, 35)
 
 
 @pytest.mark.asyncio
