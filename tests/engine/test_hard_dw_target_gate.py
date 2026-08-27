@@ -475,10 +475,11 @@ def test_runway_slack_matches_the_documented_formula():
 def test_runway_slack_accounts_for_the_cv_charge_taper():
     """The gap term must use the taper the DP's own transitions apply, not a flat rate.
 
-    Every pre-charge to a 95% target crosses ``charge_taper_start_pct`` (80%), where the
-    Powerwall derates toward ``charge_taper_min_factor``. A flat ``gap / (rate * eff)``
-    reads the battery as faster than the transition function will actually move it, and
-    the error is one-sided: it over-reports slack, i.e. it keeps a guardrail shut.
+    Every pre-charge to a 95% target crosses ``charge_taper_start_pct`` (90% after
+    Issue #905), where the Powerwall derates toward ``charge_taper_min_factor``.
+    A flat ``gap / (rate * eff)`` reads the battery as faster than the transition
+    function will actually move it, and the error is one-sided: it over-reports
+    slack, i.e. it keeps a guardrail shut.
     """
     config = _config()
     flat_min = (95.0 - 59.1) / (
@@ -490,8 +491,8 @@ def test_runway_slack_accounts_for_the_cv_charge_taper():
     )
     tapered_min = DPPlanner._boost_minutes_to_close_gap(config, 59.1)
     assert tapered_min is not None
-    # Not a rounding difference — larger than the whole default 15-minute margin.
-    assert tapered_min - flat_min > 14.0
+    # The taper adds measurable time even with the raised 90% knee.
+    assert tapered_min - flat_min > 1.0
 
 
 def test_runway_slack_is_measured_from_the_end_of_slot_0():

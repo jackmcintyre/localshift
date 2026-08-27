@@ -14,6 +14,8 @@ infinitely-slow final approach (the ``charge_taper_min_factor`` floor).
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.localshift.engine.transitions import transition
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
@@ -33,7 +35,7 @@ def _config(**overrides) -> OptimizerConfig:
         charge_rate_kw=3.3,
         min_soc_pct=10.0,
         max_soc_pct=100.0,
-        charge_taper_start_pct=80.0,
+        charge_taper_start_pct=90.0,  # Issue #905: hardware holds 5 kW flat through 88% SOC
         charge_taper_min_factor=0.2,
     )
     base.update(overrides)
@@ -75,9 +77,21 @@ class TestTaperBelowKnee:
 
     def test_charge_ending_just_below_knee_unchanged(self):
         config = _config()
-        # 60% + (5kW boost, 30min) flat would land ~77% — still under the 80% knee.
+        # 60% + (5kW boost, 30min) flat would land ~77% — still under the 90% knee.
         next_soc, _, _ = _charge(60.0, config)
         assert next_soc == _flat_next_soc(60.0, 5.0, 30, config)
+        assert next_soc < config.charge_taper_start_pct
+
+    def test_measured_no_derate_band_is_preserved(self):
+        """Issue #905: hardware holds 5 kW flat from 80% through 88% SOC.
+
+        A 5-minute boost from 82% ends at ~87.7% — fully within the measured
+        no-derate band and below the 90% knee. Must match the flat model exactly.
+        """
+        config = _config()
+        next_soc, _, _ = _charge(82.0, config, minutes=5)
+        flat = _flat_next_soc(82.0, 5.0, 5, config)
+        assert next_soc == pytest.approx(flat, abs=1e-9)
         assert next_soc < config.charge_taper_start_pct
 
 
@@ -86,20 +100,20 @@ class TestTaperAboveKnee:
 
     def test_crossing_knee_is_more_conservative(self):
         config = _config()
-        # The live morning slot: 73.8% -> the flat model predicted ~90.8%.
-        tapered, _, _ = _charge(73.8, config)
-        flat = _flat_next_soc(73.8, 5.0, 30, config)
-        assert tapered < flat - 1.0  # at least a full SOC point lower
-        assert tapered > 73.8  # but it still charges
+        # With the 90% knee, a charge from 78% crosses the knee (ends ~94.4%).
+        tapered, _, _ = _charge(78.0, config)
+        flat = _flat_next_soc(78.0, 5.0, 30, config)
+        assert tapered < flat - 0.05  # measurably more conservative
+        assert tapered > 78.0  # but it still charges
 
     def test_deeper_into_taper_derates_harder(self):
         config = _config()
         # Higher starting SOC sits deeper in the CV region -> larger shortfall vs flat.
-        gap_low, _, _ = _charge(78.0, config)
-        gap_high, _, _ = _charge(90.0, config)
-        shortfall_low = _flat_next_soc(78.0, 5.0, 30, config) - gap_low
-        # flat from 90% clips at 100; compare against the uncapped flat projection.
-        shortfall_high = _flat_next_soc(90.0, 5.0, 30, config) - gap_high
+        gap_low, _, _ = _charge(86.0, config)
+        gap_high, _, _ = _charge(92.0, config)
+        shortfall_low = _flat_next_soc(86.0, 5.0, 30, config) - gap_low
+        # flat from 92% clips at 100; compare against the uncapped flat projection.
+        shortfall_high = _flat_next_soc(92.0, 5.0, 30, config) - gap_high
         assert shortfall_high > shortfall_low
 
     def test_grid_import_tracks_reduced_charge(self):

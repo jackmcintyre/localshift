@@ -16,6 +16,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     CONF_BATTERY_TARGET,
+    CONF_CHARGE_TAPER_MIN_FACTOR,
+    CONF_CHARGE_TAPER_START_PCT,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MIN_CYCLE_SAVING,
@@ -25,6 +27,8 @@ from .const import (
     CONF_SWITCHING_PENALTY,
     CONF_TARGET_PENALTY,
     DEFAULT_BATTERY_TARGET,
+    DEFAULT_CHARGE_TAPER_MIN_FACTOR,
+    DEFAULT_CHARGE_TAPER_START_PCT,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MIN_CYCLE_SAVING,
@@ -69,6 +73,16 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
         "Pre-charge Runway Margin",
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
+    ),
+    (
+        CONF_CHARGE_TAPER_START_PCT,
+        "Charge Taper Start",
+        DEFAULT_CHARGE_TAPER_START_PCT,
+    ),
+    (
+        CONF_CHARGE_TAPER_MIN_FACTOR,
+        "Charge Taper Min Factor",
+        DEFAULT_CHARGE_TAPER_MIN_FACTOR,
     ),
 ]
 

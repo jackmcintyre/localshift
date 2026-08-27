@@ -524,7 +524,7 @@ class OptimizerConfig:
     """
 
     # --- Charge curve modeling ---
-    charge_taper_start_pct: float = 80.0
+    charge_taper_start_pct: float = 90.0
     """SOC percentage above which charge rate begins tapering.
 
     A lithium battery (and the Powerwall inverter) holds near-constant power up to a
@@ -533,14 +533,26 @@ class OptimizerConfig:
     above it the rate is linearly derated toward ``charge_taper_min_factor`` at 100%.
     Modelling this stops the planner from believing it can add the last ~15-20% as fast as
     the bulk-charge region, which previously produced over-optimistic last-minute top-ups
-    that fell short of target (the rate is lower than expected as the battery fills)."""
+    that fell short of target (the rate is lower than expected as the battery fills).
+
+    Default raised from 80% to 90% (Issue #905): live measurement on 2026-07-29 showed
+    the Powerwall held a flat 5.0 kW from 80% through 88% SOC with no derating
+    whatsoever, while the old 80% knee was already derating to 3.3 kW by 88%. The 90%
+    knee keeps the model accurate across the measured no-derate band; the portion above
+    88% remains unvalidated (see ``charge_taper_min_factor``)."""
 
     charge_taper_min_factor: float = 0.2
     """Fraction of nominal charge rate still available at 100% SOC (end of the taper).
 
     The taper ramps the rate linearly from 1.0 at ``charge_taper_start_pct`` down to this
     floor at ``max_soc_pct``. Kept > 0 so the model never predicts an infinitely-slow
-    final approach (which would make the target unreachable in finite slots)."""
+    final approach (which would make the target unreachable in finite slots).
+
+    Unvalidated above ~88% SOC (Issue #905): the live measurement that drove the knee
+    raise was supply-limited by solar surplus and never reached full-rate grid charge
+    above 88%. Published reports suggest the floor is closer to 0.66-0.70x for some
+    firmware versions; pinning the floor requires a deliberate full-rate overnight
+    charge test."""
 
     # --- Anti-sawtooth protection ---
     min_soc_floor_buffer_pct: float = 1.0
