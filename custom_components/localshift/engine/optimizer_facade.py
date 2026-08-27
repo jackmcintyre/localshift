@@ -644,9 +644,8 @@ class OptimizerFacade:
             # committed charge: the slot-0 sawtooth that flapped charge_forced 11x
             # in 124 min on 2026-07-30 is suppressed here without touching the
             # runway arm's own hysteresis (that path is above this check).
-            if (
-                decision_allowed
-                and self._should_hold_charge_dwell(data, new_mode, optimizer_config)
+            if decision_allowed and self._should_hold_charge_dwell(
+                data, new_mode, optimizer_config
             ):
                 data.debug_plan_mode_pending = new_mode.value
                 return
@@ -1143,9 +1142,7 @@ class OptimizerFacade:
         except TypeError:
             # Naive/aware timestamp mismatch: fail open rather than propagate.
             return False
-        quantum = (
-            getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
-        )
+        quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
         band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
         return elapsed < band
 
