@@ -27,10 +27,12 @@ from ..const import (
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
+    CONF_TESLEMETRY_GRID_SERVICES,
     CONF_TESLEMETRY_LOAD_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_TESLEMETRY_STORM_WATCH,
     CONF_WEATHER_ENTITY,
     DEFAULT_COMPARISON_MODE,
     DEFAULT_ENTITY_IDS,
@@ -147,6 +149,17 @@ class StateReader:
     def _read_bool(self, entity_id: str) -> bool:
         """Read a boolean value from an entity's state (on/off)."""
         return self._read_state(entity_id) == "on"
+
+    def _read_bool_optional(self, entity_id: str) -> bool | None:
+        """Read a boolean, returning None when the entity is unavailable.
+
+        Used for the Tesla-override corroboration signals where we must
+        distinguish "event not active" (off) from "signal unavailable" (None).
+        """
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        return state.state == "on"
 
     def _read_attribute(self, entity_id: str, attr: str, default: Any = None) -> Any:
         """Read an attribute from an entity."""
@@ -570,13 +583,18 @@ class StateReader:
 
         """
         from ..forecast.solcast_analysis import extract_analysis_from_entity
+        from ..utils.entity_configs import STALENESS_THRESHOLDS
 
         # Extract analysis from forecast entities
         data.solcast_analysis_today = extract_analysis_from_entity(
-            self.hass, today_entity
+            self.hass,
+            today_entity,
+            stale_threshold=STALENESS_THRESHOLDS.get(CONF_SOLCAST_FORECAST_TODAY),
         )
         data.solcast_analysis_tomorrow = extract_analysis_from_entity(
-            self.hass, tomorrow_entity
+            self.hass,
+            tomorrow_entity,
+            stale_threshold=STALENESS_THRESHOLDS.get(CONF_SOLCAST_FORECAST_TOMORROW),
         )
 
         # Read Solcast MAPE accuracy sensor if available
@@ -673,6 +691,13 @@ class StateReader:
         )
         data.allow_export = self._read_state(
             self._get_entity_id(CONF_TESLEMETRY_ALLOW_EXPORT)
+        )
+        # Tesla override corroboration signals (tri-state; None when unavailable)
+        data.grid_services_active = self._read_bool_optional(
+            self._get_entity_id(CONF_TESLEMETRY_GRID_SERVICES)
+        )
+        data.storm_watch_active = self._read_bool_optional(
+            self._get_entity_id(CONF_TESLEMETRY_STORM_WATCH)
         )
 
         # Pricing - read prices with unavailable detection

@@ -5,7 +5,6 @@ import pytest
 
 from custom_components.localshift.forecast.accuracy_store import AccuracyMetricsStore
 from custom_components.localshift.coordinator.data import CoordinatorData
-from custom_components.localshift.forecast.accuracy import ExtendedAccuracyMetrics
 
 
 @pytest.fixture
@@ -106,7 +105,6 @@ class TestAsyncLoad:
                 "forecast_error_buy_price_1h": 0.02,
                 "forecast_error_sell_price_1h": 0.03,
                 "forecast_comparisons_made": 42,
-                "extended_accuracy_metrics": {},
             }
         )
 
@@ -123,60 +121,26 @@ class TestAsyncLoad:
         assert data.forecast_comparisons_made == 42
 
     @pytest.mark.asyncio
-    async def test_load_restores_extended_metrics(self, store, data):
-        """extended_accuracy_metrics restored via ExtendedAccuracyMetrics.from_dict."""
-        extended_dict = {"some_key": "some_value"}
+    async def test_load_legacy_extended_key_is_harmless(self, store, data):
+        """Issue #868: legacy blobs still carry the removed extended_accuracy_metrics
+        key — async_load is .get()-based and must ignore it without error."""
         store._store = MagicMock()
         store._store.async_load = AsyncMock(
             return_value={
-                "forecast_error_soc_15min": 0.0,
-                "forecast_error_soc_1h": 0.0,
-                "forecast_error_soc_4h": 0.0,
-                "forecast_accuracy_soc_15min": None,
-                "forecast_accuracy_soc_1h": None,
-                "forecast_accuracy_soc_4h": None,
-                "forecast_error_buy_price_1h": 0.0,
-                "forecast_error_sell_price_1h": 0.0,
-                "forecast_comparisons_made": 0,
-                "extended_accuracy_metrics": extended_dict,
+                "forecast_error_soc_15min": 1.5,
+                "forecast_comparisons_made": 7,
+                # Stale key from the removed Issue #270 stack — must be ignored.
+                "extended_accuracy_metrics": {"accuracy_24h": 95.0},
             }
         )
-
-        with patch.object(
-            ExtendedAccuracyMetrics,
-            "from_dict",
-            return_value=ExtendedAccuracyMetrics(),
-        ) as mock_from_dict:
-            await store.async_load(data)
-            mock_from_dict.assert_called_once_with(extended_dict)
-
-    @pytest.mark.asyncio
-    async def test_load_malformed_extended_metrics(self, store, data):
-        """Non-dict extended_accuracy_metrics → warning + default ExtendedAccuracyMetrics()."""
-        store._store = MagicMock()
-        store._store.async_load = AsyncMock(
-            return_value={
-                "forecast_error_soc_15min": 0.0,
-                "forecast_error_soc_1h": 0.0,
-                "forecast_error_soc_4h": 0.0,
-                "forecast_accuracy_soc_15min": None,
-                "forecast_accuracy_soc_1h": None,
-                "forecast_accuracy_soc_4h": None,
-                "forecast_error_buy_price_1h": 0.0,
-                "forecast_error_sell_price_1h": 0.0,
-                "forecast_comparisons_made": 0,
-                "extended_accuracy_metrics": "not-a-dict",
-            }
-        )
-
-        # Capture the default instance BEFORE the load call
-        original_extended = data.extended_accuracy_metrics
 
         await store.async_load(data)
 
-        # Should have left extended_accuracy_metrics untouched (no assignment on malformed input)
-        assert data.extended_accuracy_metrics is original_extended
-        assert isinstance(data.extended_accuracy_metrics, ExtendedAccuracyMetrics)
+        # The live scalar fields still load; the stale key does not raise or set
+        # any attribute.
+        assert data.forecast_error_soc_15min == 1.5
+        assert data.forecast_comparisons_made == 7
+        assert not hasattr(data, "extended_accuracy_metrics")
 
     @pytest.mark.asyncio
     async def test_load_missing_keys_use_defaults(self, store, data):
@@ -253,21 +217,15 @@ class TestAsyncSave:
         assert saved["forecast_comparisons_made"] == 42
 
     @pytest.mark.asyncio
-    async def test_save_serializes_extended_metrics(self, store, data):
-        """extended_accuracy_metrics.to_dict() is called and stored."""
+    async def test_save_omits_extended_metrics_key(self, store, data):
+        """Issue #868: the removed extended_accuracy_metrics key is no longer written."""
         store._store = MagicMock()
         store._store.async_save = AsyncMock()
 
-        expected_dict = {"serialized": "metrics"}
-        mock_extended = MagicMock(spec=ExtendedAccuracyMetrics)
-        mock_extended.to_dict.return_value = expected_dict
-        data.extended_accuracy_metrics = mock_extended
-
         await store.async_save(data)
 
-        mock_extended.to_dict.assert_called_once()
         saved = store._store.async_save.call_args[0][0]
-        assert saved["extended_accuracy_metrics"] == expected_dict
+        assert "extended_accuracy_metrics" not in saved
 
     @pytest.mark.asyncio
     async def test_save_exception(self, store, data):

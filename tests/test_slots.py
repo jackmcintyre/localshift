@@ -463,6 +463,10 @@ class TestBuildSlotsIntegration:
         data.adaptive_params = AdaptiveParameters(
             values={"solar_confidence_factor": 1.0}
         )
+        # Set solcast_analysis attributes to None so getattr returns None
+        # instead of MagicMock objects
+        data.solcast_analysis_today = None
+        data.solcast_analysis_tomorrow = None
 
         return data
 

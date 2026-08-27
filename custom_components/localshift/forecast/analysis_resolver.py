@@ -25,9 +25,11 @@ class ConfidenceResolver:
         self,
         analysis_today: Any | None,
         analysis_tomorrow: Any | None,
+        absent_confidence: float = 1.0,
     ) -> None:
         self._today = analysis_today
         self._tomorrow = analysis_tomorrow
+        self._absent_confidence = absent_confidence
 
     def get_confidence(self, period_start: datetime) -> float:
         """Get confidence for a specific period, selecting the right analysis by date."""
@@ -37,20 +39,32 @@ class ConfidenceResolver:
         if self._today and self._today.intervals:
             for interval in self._today.intervals:
                 if interval.period_start.date() == slot_date:
-                    return get_confidence_for_period(self._today, period_start)
+                    return get_confidence_for_period(
+                        self._today,
+                        period_start,
+                        absent_confidence=self._absent_confidence,
+                    )
 
         # Check tomorrow's analysis
         if self._tomorrow and self._tomorrow.intervals:
             for interval in self._tomorrow.intervals:
                 if interval.period_start.date() == slot_date:
-                    return get_confidence_for_period(self._tomorrow, period_start)
+                    return get_confidence_for_period(
+                        self._tomorrow,
+                        period_start,
+                        absent_confidence=self._absent_confidence,
+                    )
 
-        # Fallback: try today's day_confidence, then tomorrow's, then 1.0
+        # Fallback: try today's day_confidence, then tomorrow's, then absent_confidence
         if self._today:
-            return get_confidence_for_period(self._today, period_start)
+            return get_confidence_for_period(
+                self._today, period_start, absent_confidence=self._absent_confidence
+            )
         if self._tomorrow:
-            return get_confidence_for_period(self._tomorrow, period_start)
-        return 1.0
+            return get_confidence_for_period(
+                self._tomorrow, period_start, absent_confidence=self._absent_confidence
+            )
+        return self._absent_confidence
 
     def get_analysis_for_period(self, period_start: datetime) -> Any | None:
         """Return the SolcastAnalysis object that covers the given period."""

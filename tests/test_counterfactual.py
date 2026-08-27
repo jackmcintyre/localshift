@@ -353,6 +353,27 @@ class TestCounterfactualEvaluator:
         assert updated.optimizer_advantage_daily == 2.0
         assert updated.optimizer_advantage_percent == 20.0
 
+    def test_update_preserves_energy_metrics(self):
+        """Issue #868: the three energy metrics must survive the counterfactual pass.
+
+        update_performance_metrics only mutates its own counterfactual fields, so the
+        grid_charge_efficiency / export_loss_ratio / unnecessary_grid_charge_kwh values
+        computed upstream in get_daily_summary must be left untouched
+        (orchestrator.py runs this pass right after computing them).
+        """
+        evaluator = CounterfactualEvaluator()
+        metrics = PerformanceMetrics(
+            grid_charge_efficiency=0.8,
+            export_loss_ratio=0.25,
+            unnecessary_grid_charge_kwh=1.5,
+        )
+
+        updated = evaluator.update_performance_metrics(metrics, daily_result=None)
+
+        assert updated.grid_charge_efficiency == pytest.approx(0.8)
+        assert updated.export_loss_ratio == pytest.approx(0.25)
+        assert updated.unnecessary_grid_charge_kwh == pytest.approx(1.5)
+
 
 class TestCounterfactualScoreIntegrator:
     """Test CounterfactualScoreIntegrator."""

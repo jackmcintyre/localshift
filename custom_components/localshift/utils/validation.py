@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -479,6 +480,51 @@ class EntityValidator:
         summary = self._serialize_localshift_health(results)
         self._localshift_entity_health = results
         return summary
+
+    def check_orphaned_owned_entities(
+        self, config_entry_id: str
+    ) -> dict[str, dict[str, Any]]:
+        """Return registry entries owned by this config entry that are genuinely unprovided.
+
+        A genuine orphan is a registry entry that the integration no longer provides:
+        its live state is either missing (None) or HA reports it as 'unavailable'.
+        This typically occurs for entities (numbers, switches, sensors) that have been
+        removed or renamed in a newer code version while the registry entry persists
+        (e.g. number.localshift_cycle_penalty after the slider was removed).
+
+        Entries that are NOT considered orphans:
+        - Entries in LOCALSHIFT_ENTITY_CONFIG (health-tracked; already handled elsewhere).
+        - User-disabled entries (entry.disabled_by is not None) — a disabled entity
+          is intentionally inactive, not a code-removed ghost.
+        - Entries whose live state is any real value including 'unknown' — the entity
+          is still being provided by the integration (insufficient data, startup, etc.).
+
+        Args:
+            config_entry_id: The config entry id for this localshift instance.
+
+        Returns:
+            Dict mapping entity_id -> {state, disabled, restored} for each orphan,
+            where restored=True indicates the state was absent (None) rather than
+            'unavailable'.
+        """
+        registry = er.async_get(self.hass)
+        orphans: dict[str, dict[str, Any]] = {}
+        for entry in registry.entities.get_entries_for_config_entry_id(config_entry_id):
+            if entry.entity_id in LOCALSHIFT_ENTITY_CONFIG:
+                continue
+            # User-disabled entries are intentionally inactive — not ghosts
+            if entry.disabled_by is not None:
+                continue
+            state = self.hass.states.get(entry.entity_id)
+            # Only flag when the integration genuinely no longer provides the entity
+            if state is not None and state.state != "unavailable":
+                continue
+            orphans[entry.entity_id] = {
+                "state": "unavailable",
+                "disabled": False,
+                "restored": state is None,
+            }
+        return orphans
 
     def _check_single_localshift_entity(
         self, entity_id: str, config: dict, now: datetime

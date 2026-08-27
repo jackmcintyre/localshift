@@ -331,6 +331,135 @@ class TestOptimizerSummarySensor:
         assert attrs["terminal_shortfall_pct"] == 0.0
         assert attrs["initial_soc_pct"] == 50.0
 
+    def test_dw_entry_actual_reads_from_coordinator_not_summary(self):
+        """2026-07-27: the projected dw_entry_soc_pct rolls over to tomorrow's
+        window the instant today's DW starts (98.5% / shortfall 0.0 reported
+        while the battery had entered at 64%). The actual is a per-day capture on
+        the coordinator, so the two sit side by side and disagree."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={
+                "enabled": True,
+                "success": True,
+                "dw_entry_soc_pct": 98.5,
+                "terminal_shortfall_pct": 0.0,
+            },
+        )
+        data.dw_entry_actual_soc_pct = 64.0
+        data.dw_entry_actual_at = datetime(2026, 7, 27, 15, 0, tzinfo=timezone.utc)
+        data.dw_entry_actual_target_pct = 95.0
+        data.dw_entry_actual_shortfall_pct = 31.0
+        data.optimizer_precharge_backstop_active = True
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["dw_entry_soc_pct"] == 98.5
+        assert attrs["dw_entry_actual_soc_pct"] == 64.0
+        assert attrs["dw_entry_actual_target_pct"] == 95.0
+        assert attrs["dw_entry_actual_shortfall_pct"] == 31.0
+        assert attrs["dw_entry_actual_at"] == "2026-07-27T15:00:00+00:00"
+        assert attrs["precharge_backstop_active"] is True
+
+    def test_dw_entry_actual_survives_a_failed_cycle(self):
+        """The summary is rebuilt every cycle and is empty on a failed one —
+        precisely when the real entry SOC matters most. Reading from the
+        coordinator (not the summary) is what keeps it visible."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": False},
+        )
+        data.dw_entry_actual_soc_pct = 64.0
+        data.dw_entry_actual_at = datetime(2026, 7, 27, 15, 0, tzinfo=timezone.utc)
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["dw_entry_soc_pct"] is None
+        assert attrs["dw_entry_actual_soc_pct"] == 64.0
+        assert attrs["dw_entry_actual_at"] == "2026-07-27T15:00:00+00:00"
+
+    def test_dw_entry_actual_null_before_capture(self):
+        """Before the first capture of the day every key is present and null."""
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+        )
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["dw_entry_actual_soc_pct"] is None
+        assert attrs["dw_entry_actual_at"] is None
+        assert attrs["dw_entry_actual_target_pct"] is None
+        assert attrs["dw_entry_actual_shortfall_pct"] is None
+        assert attrs["precharge_backstop_active"] is False
+
+    def test_precharge_runway_telemetry_from_summary(self):
+        """The two runway fields are solver-derived OptimizerConfig telemetry, so
+        the summary is their primary source (2026-07-28: the #901 backstop is
+        dormant whenever the hard floor is suppressed by a solar forecast, and
+        slack is the quantity that says how much runway is left to notice)."""
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_summary={
+                "enabled": True,
+                "success": True,
+                "precharge_runway_slack_min": 23.8,
+                "hard_floor_suppressed_by_solar": True,
+            },
+        )
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] == 23.8
+        assert attrs["hard_floor_suppressed_by_solar"] is True
+
+    def test_precharge_runway_telemetry_from_coordinator_data(self):
+        """Fallback source: if the engine publishes the pair on coordinator data
+        (alongside precharge_backstop_active) rather than into the summary, the
+        sensor still surfaces it."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+        )
+        data.precharge_runway_slack_min = -4.0
+        data.hard_floor_suppressed_by_solar = True
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] == -4.0
+        assert attrs["hard_floor_suppressed_by_solar"] is True
+
+    def test_precharge_runway_telemetry_null_when_unpublished(self):
+        """Absent from both sources: keys are still present, at their dormant
+        defaults — never missing, never raising."""
+        mock_coordinator, _ = create_mock_coordinator_with_data(
+            optimizer_summary={"enabled": True, "success": True},
+        )
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] is None
+        assert attrs["hard_floor_suppressed_by_solar"] is False
+
+    def test_precharge_runway_telemetry_null_slack_on_a_failed_cycle(self):
+        """A cycle that published a null slack (no demand window, unparseable
+        timestamps) reads null rather than falling through to a stale value."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            optimizer_summary={
+                "enabled": True,
+                "success": False,
+                "precharge_runway_slack_min": None,
+                "hard_floor_suppressed_by_solar": False,
+            },
+        )
+        data.precharge_runway_slack_min = 99.0
+
+        sensor = OptimizerSummarySensor(mock_coordinator, MagicMock())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["precharge_runway_slack_min"] is None
+        assert attrs["hard_floor_suppressed_by_solar"] is False
+
     def test_icon_success(self):
         """Test icon for success state."""
         mock_coordinator, data = create_mock_coordinator_with_data(
@@ -372,7 +501,7 @@ class TestSolarForecastAccuracySensor:
     """Tests for SolarForecastAccuracySensor."""
 
     def test_native_value_default(self):
-        """Test native_value defaults to 100.0 when no attribute."""
+        """Default is None (insufficient data), not a fabricated 100% (#881)."""
         mock_coordinator, data = create_mock_coordinator_with_data()
         # Don't set solar_forecast_accuracy
         mock_entry = MagicMock()
@@ -380,7 +509,7 @@ class TestSolarForecastAccuracySensor:
         sensor = SolarForecastAccuracySensor(mock_coordinator, mock_entry)
         sensor._update_from_coordinator()
 
-        assert sensor._attr_native_value == 100.0
+        assert sensor._attr_native_value is None
 
     def test_native_value_set(self):
         """Test native_value reads from coordinator data."""

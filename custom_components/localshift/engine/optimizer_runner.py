@@ -247,15 +247,25 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
         CONF_EXPORT_PRICE_MARGIN,
+        CONF_MAX_PRECHARGE_PRICE,
+        CONF_MIN_CYCLE_SAVING,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
+        CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
+        CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+        CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_EXPORT_PRICE_MARGIN,
+        DEFAULT_MAX_PRECHARGE_PRICE,
+        DEFAULT_MIN_CYCLE_SAVING,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
+        DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
+        DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+        DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_TARGET_PENALTY,
     )
@@ -271,6 +281,26 @@ def _build_optimizer_config(
     # Allow reaching target during DW via solar (instead of by DW start)
     allow_dw_entry_under_target = config_options.get(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
+    )
+
+    stale_solar_conservative = bool(
+        config_options.get(
+            CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE
+        )
+    )
+    stale_solar_confidence_ceiling = float(
+        config_options.get(
+            CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
+        )
+    )
+
+    # Runway backstop margin (fast-follow to #901). Read like every other live knob so
+    # the slider takes effect on the next evaluation. 0 is a genuine kill switch — the
+    # arm treats a non-positive margin as "disabled", not as "fire only at zero slack".
+    precharge_runway_margin_min = float(
+        config_options.get(
+            CONF_PRECHARGE_RUNWAY_MARGIN_MIN, DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+        )
     )
 
     optimization_mode = str(
@@ -294,6 +324,17 @@ def _build_optimizer_config(
 
     target_penalty = float(
         config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
+    )
+
+    min_cycle_saving = float(
+        config_options.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING)
+    )
+
+    # Target-first eligibility (2026-06-12): the operator's pre-charge price ceiling.
+    # Already governs the live urgency ramp in price_calculator; plumbed into the engine
+    # so compute_pre_dw_charge_thresholds can size the pre-DW charge gate to the target.
+    max_precharge_price = float(
+        config_options.get(CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE)
     )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
@@ -346,9 +387,13 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
+        stale_solar_conservative=stale_solar_conservative,
+        stale_solar_confidence_ceiling=stale_solar_confidence_ceiling,
+        precharge_runway_margin_min=precharge_runway_margin_min,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
+        min_cycle_saving=min_cycle_saving,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---
@@ -356,6 +401,7 @@ def _build_optimizer_config(
         self_consumption_value_per_kwh=self_consumption_value_per_kwh,
         effective_cheap_price=effective_cheap_price,
         base_cheap_price=base_cheap_price,
+        max_precharge_price=max_precharge_price,
         switching_penalty=switching_penalty,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
@@ -592,6 +638,17 @@ def _build_summary(
     summary["accuracy_discount_factor"] = result.accuracy_discount_factor
     summary["peak_soc_pct"] = result.peak_soc_pct
     summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
+
+    # Spike-event pre-charge funding. Read the count and the delta together: a zero
+    # count means nothing qualified (the ordinary day), while a non-zero count with
+    # accepted=False is USUALLY a benign tie (delta == 0), not a guard rejection
+    # (delta < 0). Without the delta the two are indistinguishable and a normal ~40%
+    # tie rate reads as a 40% failure rate.
+    summary["spike_funding_slot_count"] = result.spike_funding_slot_count
+    summary["spike_funding_accepted"] = result.spike_funding_accepted
+    summary["spike_funding_net_cost_delta"] = round(
+        result.spike_funding_net_cost_delta, 4
+    )
 
     return summary
 
@@ -849,6 +906,57 @@ def _derive_runtime_apply_plan(
     }
 
 
+def _current_slot_debug_info(
+    data: Any,
+) -> tuple[int, bool, str, str, float]:
+    """Locate the current optimizer slot and expose diagnostics about the match.
+
+    Returns:
+        (idx, found, matched_slot_hhmm, first_slot_hhmm, gap_seconds)
+
+        - idx: index of the matched slot, or 0 as fallback.
+        - found: True only on a real ``slot_time <= now < slot_end`` match;
+          False means the silent ``idx=0`` fallback is in effect (exactly what
+          the debug fields exist to surface).
+        - matched_slot_hhmm: HH:MM of the matched slot ("" when not found).
+        - first_slot_hhmm: HH:MM of the first parsable slot ("" when none).
+        - gap_seconds: now minus the first parsable slot timestamp (0.0 when
+          none parses).
+
+    """
+    now = datetime.now(UTC)
+
+    decisions = data.optimizer_decisions
+    if not decisions:
+        return 0, False, "", "", 0.0
+
+    first_slot_hhmm = ""
+    gap_seconds = 0.0
+
+    for idx, decision in enumerate(decisions):
+        timestamp_str = decision.get("timestamp_iso", "")
+        if not timestamp_str:
+            continue
+
+        try:
+            slot_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+
+        if not first_slot_hhmm:
+            first_slot_hhmm = slot_time.strftime("%H:%M")
+            gap_seconds = (now - slot_time).total_seconds()
+
+        slot_end = slot_time + timedelta(
+            minutes=decision.get("slot_interval_minutes", 30)
+        )
+        if slot_time <= now < slot_end:
+            return idx, True, slot_time.strftime("%H:%M"), first_slot_hhmm, gap_seconds
+
+    # No slot brackets now: fall back to the first slot (idx 0).
+    return 0, False, "", first_slot_hhmm, gap_seconds
+
+
 def _find_current_slot_index(data: Any) -> int:
     """
     Find the index of the current slot in the optimizer decisions.
@@ -860,28 +968,5 @@ def _find_current_slot_index(data: Any) -> int:
         Index of current slot, or 0 as fallback
 
     """
-    now = datetime.now(UTC)
-
-    decisions = data.optimizer_decisions
-    if not decisions:
-        return 0
-
-    # Find the first slot where timestamp_iso is >= now
-    for idx, decision in enumerate(decisions):
-        timestamp_str = decision.get("timestamp_iso", "")
-        if not timestamp_str:
-            continue
-
-        try:
-            slot_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            slot_end = slot_time + timedelta(
-                minutes=decision.get("slot_interval_minutes", 30)
-            )
-
-            if slot_time <= now < slot_end:
-                return idx
-        except (ValueError, TypeError):
-            continue
-
-    # Default: use first slot
-    return 0
+    idx, _found, _matched, _first, _gap = _current_slot_debug_info(data)
+    return idx

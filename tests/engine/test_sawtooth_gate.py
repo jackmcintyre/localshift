@@ -29,6 +29,7 @@ from custom_components.localshift.engine.constraints import (
 )
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.types import (
+    ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
@@ -36,6 +37,24 @@ from custom_components.localshift.engine.types import (
 )
 
 INTERVAL = 30
+
+
+def _restore_406_double_credit(monkeypatch):
+    """Re-inject the #406 self-consumption double-credit removed from net_cost.
+
+    The post-DW overnight sawtooth this base-gating guard blocks was driven by the #406
+    distortion (discharge-to-load credited at retail on TOP of the avoided import already
+    in import_cost). That credit was removed at source on 2026-06-29, so the sawtooth no
+    longer appears even unguarded. These tests re-inject it to exercise the base-gating
+    guard against the distortion it defends against; the source fix is covered by
+    tests/engine/test_sawtooth_406_double_credit.py.
+    """
+    orig = ObjectiveTerms.net_cost.fget
+    monkeypatch.setattr(
+        ObjectiveTerms,
+        "net_cost",
+        property(lambda self: orig(self) - self.self_consumption_value),
+    )
 _START = datetime(2026, 6, 3, 12, 0)  # day-1 noon
 
 # Price bands ($/kWh)
@@ -143,12 +162,14 @@ def _post_dw_overnight_charges(result):
 class TestSawtoothGate:
     """End-to-end DP behaviour for the overnight sawtooth."""
 
-    def test_inflated_threshold_reproduces_sawtooth_when_unguarded(self):
+    def test_inflated_threshold_reproduces_sawtooth_when_unguarded(self, monkeypatch):
         """Without base gating (base_cheap_price=None) the inflated threshold leaks.
 
         Documents the bug: post-DW overnight slots (price > base, <= inflated) get
-        charged then drained — the sawtooth.
+        charged then drained — the sawtooth. Requires the #406 double-credit (its driver)
+        to be present — see ``_restore_406_double_credit``.
         """
+        _restore_406_double_credit(monkeypatch)
         result = _plan(base_cheap_price=None)
         charges = _post_dw_overnight_charges(result)
         assert charges, (
@@ -158,8 +179,13 @@ class TestSawtoothGate:
         # All such charges are classed CHEAP_IMPORT_WINDOW, matching the field report.
         assert any(c.reason_code.value == "CHEAP_IMPORT_WINDOW" for c in charges)
 
-    def test_base_gating_eliminates_sawtooth(self):
-        """With base gating, no post-DW overnight charge above the real base occurs."""
+    def test_base_gating_eliminates_sawtooth(self, monkeypatch):
+        """With base gating, no post-DW overnight charge above the real base occurs.
+
+        Exercised with the #406 double-credit present (so the sawtooth would otherwise
+        appear), proving the base-gating guard blocks it — not merely the source fix.
+        """
+        _restore_406_double_credit(monkeypatch)
         result = _plan(base_cheap_price=_BASE_CHEAP)
         charges = _post_dw_overnight_charges(result)
         assert charges == [], (
@@ -414,6 +440,85 @@ class TestUrgencyWindowGate:
         assert overnight_charges == [], (
             "overnight slots before tomorrow's DW must gate on base, not the inflated "
             f"price; got charges at {[c.timestamp_iso for c in overnight_charges]}"
+        )
+
+    def test_deep_soc_overnight_still_base_gated(self):
+        """Deficit-aware window must not re-open the #800 overnight sawtooth.
+
+        2026-06-11 follow-up: the urgency window now widens with the SOC deficit. Even a deep
+        overnight SOC (12% -> 95% target) yields only a ~4.2h window (hard-capped at 8h), far
+        short of the 9h+ needed to reach tonight's overnight before tomorrow's 15:00 DW. So
+        the overnight stays base-gated and does not sawtooth-charge. (Regression guard for
+        #800 under the new deficit-aware window.)
+        """
+        start = datetime(2026, 6, 3, 18, 0)  # now: after today's DW
+
+        def price(t):
+            h = t.hour + t.minute / 60.0
+            if t.day == 4 and 15.0 <= h < 21.0:
+                return _DW_PEAK
+            if t.day == 4 and 0.0 <= h < 6.0:
+                return _OVERNIGHT  # cheap only by the inflated threshold
+            if t.day == 4 and 6.0 <= h < 8.0:
+                return _MORNING_PEAK
+            if t.day == 3:
+                return 0.13
+            return 0.12
+
+        def solar(t):
+            h = t.hour + t.minute / 60.0
+            return 0.5 if (t.day == 4 and 9.0 <= h < 15.0) else 0.0
+
+        n = int((datetime(2026, 6, 4, 16, 0) - start).total_seconds() / 60 / INTERVAL)
+        slots = []
+        for i in range(n):
+            t = start + timedelta(minutes=INTERVAL * i)
+            h = t.hour + t.minute / 60.0
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=t.isoformat(),
+                    slot_interval_minutes=INTERVAL,
+                    buy_price=price(t),
+                    sell_price=0.05,
+                    solar_kwh=solar(t),
+                    consumption_kwh=0.3,
+                    is_demand_window_entry=(t.day == 4 and abs(h - 15.0) < 1e-9),
+                    is_demand_window_slot=(t.day == 4 and 15.0 <= h < 21.0),
+                )
+            )
+        config = OptimizerConfig(
+            min_soc_pct=10.0,
+            max_soc_pct=100.0,
+            demand_window_target_soc_pct=95.0,
+            optimization_mode="self_consumption",
+            effective_cheap_price=_INFLATED_CHEAP,
+            base_cheap_price=_BASE_CHEAP,
+            target_shortfall_penalty_per_pct=0.03,
+            soc_bins=100,
+        )
+        result = DPPlanner(config).plan(
+            OptimizerInputs(
+                cycle_id="overnight-gap-deep-soc",
+                initial_soc_pct=12.0,  # deep deficit -> ~4.2h window, still well short
+                slots=slots,
+                config=config,
+                all_solcast=[],
+            )
+        )
+        # Tonight's overnight (day-4 00:00-06:00) is >9h before the 15:00 DW, far outside
+        # the ~4.2h deficit window (and the 8h cap): those slots stay base-gated.
+        overnight_charges = [
+            d
+            for d in result.decisions
+            if d.action in _CHARGE_ACTIONS
+            and datetime.fromisoformat(d.timestamp_iso).day == 4
+            and datetime.fromisoformat(d.timestamp_iso).hour < 6
+            and d.buy_price > _BASE_CHEAP
+        ]
+        assert overnight_charges == [], (
+            "deep-SOC deficit must not widen the urgency window into tonight's overnight; "
+            f"got charges at {[c.timestamp_iso for c in overnight_charges]}"
         )
 
 

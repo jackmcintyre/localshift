@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.util import dt as dt_util
 
@@ -14,55 +13,6 @@ if TYPE_CHECKING:
     from ..coordinator.data import CoordinatorData
 
 _LOGGER = logging.getLogger(__name__)
-
-
-@dataclass
-class ExtendedAccuracyMetrics:
-    """Extended forecast accuracy metrics for long-term tracking.
-
-    Issue #270: Multi-horizon forecast validation with bias detection.
-    """
-
-    accuracy_24h: float | None = None
-    accuracy_7d: float | None = None
-    accuracy_30d: float | None = None
-    bias: float = 0.0  # Systematic over/under prediction (percentage points)
-    mape: float = 0.0  # Mean Absolute Percentage Error
-    sample_count: int = 0
-    last_updated: datetime | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "accuracy_24h": self.accuracy_24h,
-            "accuracy_7d": self.accuracy_7d,
-            "accuracy_30d": self.accuracy_30d,
-            "bias": self.bias,
-            "mape": self.mape,
-            "sample_count": self.sample_count,
-            "last_updated": self.last_updated.isoformat()
-            if self.last_updated
-            else None,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ExtendedAccuracyMetrics:
-        """Create from dictionary (deserialization)."""
-        last_updated = None
-        if data.get("last_updated"):
-            try:
-                last_updated = datetime.fromisoformat(data["last_updated"])
-            except (ValueError, TypeError):
-                pass
-        return cls(
-            accuracy_24h=data.get("accuracy_24h", None),
-            accuracy_7d=data.get("accuracy_7d", None),
-            accuracy_30d=data.get("accuracy_30d", None),
-            bias=data.get("bias", 0.0),
-            mape=data.get("mape", 0.0),
-            sample_count=data.get("sample_count", 0),
-            last_updated=last_updated,
-        )
 
 
 class ForecastAccuracyEngine:
@@ -267,41 +217,3 @@ class ForecastAccuracyEngine:
             data.forecast_accuracy_soc_4h = max(0.0, min(100.0, 100.0 - abs(soc_error)))
             return True
         return False
-
-
-class ExtendedForecastAccuracyEngine:
-    """Extended forecast accuracy tracking with long-term metrics.
-
-    Issue #270: Multi-horizon validation with bias detection.
-    """
-
-    def __init__(self, storage_path: str | None = None) -> None:
-        """Initialize the extended accuracy engine.
-
-        Args:
-            storage_path: Path to store accuracy history (optional)
-
-        """
-        self.storage_path = storage_path
-        self._accuracy_history: list[dict[str, Any]] = []
-        self._metrics = ExtendedAccuracyMetrics()
-
-    @property
-    def metrics(self) -> ExtendedAccuracyMetrics:
-        """Return current accuracy metrics."""
-        return self._metrics
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize engine state."""
-        return {
-            "metrics": self._metrics.to_dict(),
-            "history_count": len(self._accuracy_history),
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ExtendedForecastAccuracyEngine:
-        """Deserialize engine state."""
-        engine = cls()
-        if "metrics" in data:
-            engine._metrics = ExtendedAccuracyMetrics.from_dict(data["metrics"])
-        return engine

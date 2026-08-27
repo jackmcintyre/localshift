@@ -55,13 +55,14 @@ def stage_cost(
 
     # Issue #610: horizon-aware solar opportunity cost
     # Penalizes grid import when significant solar is expected later in the horizon.
-    sc_value = (
-        max(0.0, slot.buy_price)
-        if config.optimization_mode == "self_consumption"
-        else 0.0
-    )
-    full_economic_benefit = import_cost + grid_import_kwh * sc_value
-    solar_opportunity_penalty = full_economic_benefit * solar_opportunity_penalty_factor
+    # The opportunity cost of grid-charging now (instead of waiting for free solar) is
+    # the grid import cost itself. This base was previously doubled by adding a
+    # self-consumption credit term (import_cost + grid_import * buy_price) to overcome
+    # the #406 self_consumption_value double-credit in net_cost. That credit is no
+    # longer subtracted (see ObjectiveTerms.net_cost), so the compensating doubling is
+    # removed too — otherwise the penalty over-suppresses genuine price-spike arbitrage
+    # (root-caused with the 2026-06-29 overnight sawtooth fix).
+    solar_opportunity_penalty = import_cost * solar_opportunity_penalty_factor
 
     # Issue #431: uncertainty penalty for grid charging when horizon is short.
     uncertainty_penalty = 0.0
@@ -73,9 +74,13 @@ def stage_cost(
             horizon_penalty_factor = (20.0 - config.forecast_horizon_hours) / 20.0
             uncertainty_penalty = 0.05 * horizon_penalty_factor * grid_import_kwh
 
-    # Calculate self-consumption value (Issue #406)
-    # Battery energy used to cover household load has value because it avoids
-    # buying from grid at retail price.
+    # Calculate self-consumption value (Issue #406) — DIAGNOSTIC ONLY.
+    # Battery energy used to cover household load avoids buying from grid at retail,
+    # but that avoided import is ALREADY reflected in a reduced grid_import_kwh (see
+    # transitions._transition_hold_deficit), hence a lower import_cost above. This
+    # value is therefore NOT subtracted from net_cost (ObjectiveTerms.net_cost);
+    # doing so double-counted the benefit and drove the #406/#800 overnight sawtooth
+    # (root-caused 2026-06-29). Retained as a serialized diagnostic field only.
     self_consumption_value = 0.0
     if config.optimization_mode == "self_consumption":
         net_load = slot.consumption_kwh - slot.solar_kwh

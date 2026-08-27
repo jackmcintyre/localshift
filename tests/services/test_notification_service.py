@@ -1,5 +1,6 @@
 """Unit tests for NotificationService."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -486,6 +487,65 @@ class TestAlertNotifications:
         assert "Manual Override Timeout" in title
         assert "4.0 hours" in message
         assert "Automation resuming" in message
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_detected_corroborated(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Detected notification names the confirming signal when corroborated."""
+        await notification_service.send_tesla_override_notification(
+            coordinator_data, detected=True, corroborated=True
+        )
+
+        data = mock_hass.services.async_call.call_args[0][2]
+        assert "Tesla Override Detected" in data["title"]
+        assert "Confirmed by Tesla" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_detected_heuristic(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Uncorroborated detection flags heuristic + re-probe in the message."""
+        await notification_service.send_tesla_override_notification(
+            coordinator_data, detected=True, corroborated=False
+        )
+
+        data = mock_hass.services.async_call.call_args[0][2]
+        assert "Tesla Override Detected" in data["title"]
+        assert "heuristically" in data["message"]
+        assert "re-probe" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_released(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Release notification reports the duration and reason."""
+        await notification_service.send_tesla_override_notification(
+            coordinator_data,
+            detected=False,
+            corroborated=False,
+            duration=timedelta(hours=17, minutes=48),
+            release_reason="re-probe succeeded",
+        )
+
+        data = mock_hass.services.async_call.call_args[0][2]
+        assert "Tesla Override Released" in data["title"]
+        assert "17h 48m" in data["message"]
+        assert "re-probe succeeded" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_notification_suppressed_when_disabled(
+        self, notification_service_with_switches, coordinator_data, mock_hass
+    ):
+        """No notification is sent when notifications are disabled."""
+        service, switch_states = notification_service_with_switches
+        switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
+
+        await service.send_tesla_override_notification(
+            coordinator_data, detected=True, corroborated=True
+        )
+
+        mock_hass.services.async_call.assert_not_called()
 
 
 # =============================================================================

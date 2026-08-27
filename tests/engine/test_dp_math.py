@@ -5,13 +5,76 @@ from datetime import datetime
 import pytest
 
 from custom_components.localshift.engine.dp_math import (
+    URGENCY_WINDOW_MAX_HOURS,
+    URGENCY_WINDOW_MIN_HOURS,
     _build_soc_grid,
     _interpolate_cost_to_soc,
     _map_soc_to_bin,
     _simulate_max_soc_in_demand_window,
     _simulate_solar_only_terminal_soc,
+    urgency_window_hours,
 )
 from custom_components.localshift.engine.types import OptimizerConfig, SlotContext
+
+
+class TestUrgencyWindowHours:
+    """Deficit-aware urgency window width (2026-06-11 incident)."""
+
+    def test_near_target_returns_floor(self):
+        """A small deficit collapses to the 4h floor (#559 anti-creep anchor)."""
+        hours = urgency_window_hours(
+            soc_pct=90.0,
+            target_pct=95.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            charge_efficiency=0.92,
+        )
+        assert hours == URGENCY_WINDOW_MIN_HOURS
+
+    def test_deep_deficit_widens_window(self):
+        """11% -> 95% needs ~4.23h of normal-rate runway (deficit/(rate·eff)+0.5)."""
+        hours = urgency_window_hours(
+            soc_pct=11.0,
+            target_pct=95.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            charge_efficiency=0.92,
+        )
+        assert abs(hours - 4.235) < 0.02
+        assert hours > URGENCY_WINDOW_MIN_HOURS
+
+    def test_pathological_deficit_clamped_to_cap(self):
+        """A tiny charge rate would need huge runway; the 8h cap binds."""
+        hours = urgency_window_hours(
+            soc_pct=10.0,
+            target_pct=100.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=0.5,
+            charge_efficiency=0.92,
+        )
+        assert hours == URGENCY_WINDOW_MAX_HOURS
+
+    def test_degenerate_rate_returns_floor(self):
+        """Zero charge rate cannot widen the window — fall back to the floor."""
+        hours = urgency_window_hours(
+            soc_pct=10.0,
+            target_pct=95.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=0.0,
+            charge_efficiency=0.92,
+        )
+        assert hours == URGENCY_WINDOW_MIN_HOURS
+
+    def test_already_at_target_returns_floor(self):
+        """No deficit (soc >= target) -> floor (degenerate deficit)."""
+        hours = urgency_window_hours(
+            soc_pct=95.0,
+            target_pct=95.0,
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            charge_efficiency=0.92,
+        )
+        assert hours == URGENCY_WINDOW_MIN_HOURS
 
 
 def test_build_soc_grid_defaults():

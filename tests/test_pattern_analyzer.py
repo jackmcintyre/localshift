@@ -354,6 +354,26 @@ class TestPatternAnalyzerStorage:
         await analyzer.async_load()
         assert analyzer._last_analysis_time is not None
 
+    @pytest.mark.asyncio
+    async def test_last_analysis_time_property_reflects_persisted_value(
+        self, analyzer
+    ):
+        """The read-only property exposes the persisted _last_analysis_time."""
+        assert analyzer.last_analysis_time is None
+
+        async def mock_async_load():
+            return {"last_analysis_time": "2026-06-03T09:30:00+00:00"}
+
+        mock_store = MagicMock()
+        mock_store.async_load = mock_async_load
+        analyzer._store = mock_store
+
+        await analyzer.async_load()
+
+        assert analyzer.last_analysis_time is analyzer._last_analysis_time
+        assert analyzer.last_analysis_time is not None
+        assert analyzer.last_analysis_time.isoformat() == "2026-06-03T09:30:00+00:00"
+
 
 class TestPatternAnalyzerComputeBucketStats:
     """Tests for _compute_bucket_stats method."""

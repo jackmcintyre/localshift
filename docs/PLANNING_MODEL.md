@@ -116,6 +116,8 @@ Note: `self_consumption_value` is subtracted because it's a credit (value provid
 
 **Anti-cycling:** Protection against wasteful cycling is handled by the `futile_cycling_penalty` term, which penalises grid charging when forward simulation shows the charged energy will drain through household load before reaching a useful period (solar surplus or demand window). The `switching_penalty` provides additional stability by discouraging frequent mode changes. There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
 
+**Minimum cycle saving (hard gate):** Separately from the soft penalties above, `_compute_best_action` drops a grid-charge action entirely when it beats the HOLD alternative by a positive but sub-threshold margin — specifically when `0 < (hold_total_cost - charge_total_cost) < config.min_cycle_saving × charge_kwh`. This rules out "micro" arbitrage (cycling the battery for a few c/kWh) while preserving genuine pre-charge and price-spike capture: because the margin is the DP's real cost difference, it already credits the demand-window target, evening-peak avoidance, and backup value via `future_cost`, and unlike a soft penalty it cannot be "paid through". Configured by `number.localshift_min_cycle_saving` (default $0.25/kWh; `0` disables).
+
 ### When to Add Soft Penalties
 
 Add to `stage_cost()` when:

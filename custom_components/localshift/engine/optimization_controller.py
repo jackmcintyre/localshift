@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from ..const import EXPORT_LEAK_PROTECTION_ENABLED
 from ..coordinator.data import AdaptiveParameters
 
 if TYPE_CHECKING:
@@ -263,8 +264,14 @@ class OptimizationController:
             )
 
         # Rule 2: Export Leak Detection
-        # If export_loss_ratio > 0.3 today, be more conservative about exporting
-        if data.performance_metrics.export_loss_ratio > 0.3:
+        # If export_loss_ratio > 0.3 today, be more conservative about exporting.
+        # Issue #868: gated behind EXPORT_LEAK_PROTECTION_ENABLED (default False) so
+        # that newly computing export_loss_ratio does not silently arm this
+        # behavioural adjustment on systems with the learning switch already on.
+        if (
+            EXPORT_LEAK_PROTECTION_ENABLED
+            and data.performance_metrics.export_loss_ratio > 0.3
+        ):
             adjustment = 1.0  # Increase export threshold adjustment
             current = params.get("export_threshold_adjustment", 0.0)
             params.values["export_threshold_adjustment"] = current + adjustment

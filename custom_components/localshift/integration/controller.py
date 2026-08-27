@@ -130,6 +130,7 @@ class BatteryController:
             expected_export_mode=recipe.expectation.export_mode,
             expected_grid_charging_allowed=recipe.expectation.grid_charging_allowed,
             timeout=recipe.expectation.timeout,
+            retry_reserve_write=self._service_client.set_backup_reserve,
         ):
             if recipe.on_validation_failure:
                 recipe.on_validation_failure()
@@ -710,6 +711,7 @@ class BatteryController:
         expected_export_mode: str | None = None,
         expected_grid_charging_allowed: bool | None = None,
         timeout: int = 10,
+        retry_reserve_write: Callable[[float | int], Awaitable[bool]] | None = None,
     ) -> bool:
         """Validate that hardware state matches expected values after transition."""
         return await self._validator.validate_transition(
@@ -718,6 +720,7 @@ class BatteryController:
             expected_export_mode=expected_export_mode,
             expected_grid_charging_allowed=expected_grid_charging_allowed,
             timeout=timeout,
+            retry_reserve_write=retry_reserve_write,
         )
 
     async def verify_current_state(

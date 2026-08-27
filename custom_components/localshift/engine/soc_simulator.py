@@ -117,22 +117,6 @@ class SocSimulator:
 
         return False
 
-    def _next_demand_window_start_dt(
-        self,
-        slot_start: datetime,
-        dw_start_time: time,
-    ) -> datetime:
-        """Get the next demand-window start datetime relative to slot_start."""
-        candidate = slot_start.replace(
-            hour=dw_start_time.hour,
-            minute=dw_start_time.minute,
-            second=dw_start_time.second,
-            microsecond=0,
-        )
-        if candidate <= slot_start:
-            candidate += timedelta(days=1)
-        return candidate
-
     def _find_battery_fill_point(
         self,
         start_soc: float,

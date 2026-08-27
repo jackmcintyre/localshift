@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from ..const import BatteryMode
 
 if TYPE_CHECKING:
-    from ..forecast.accuracy import ExtendedAccuracyMetrics
     from ..forecast.solcast_analysis import SolcastAnalysis
     from ..pricing.types import ForecastSlot
-
-
-def _default_extended_accuracy_metrics() -> Any:
-    """Factory for ExtendedAccuracyMetrics that avoids circular import at module load."""
-    from ..forecast.accuracy import ExtendedAccuracyMetrics
-
-    return ExtendedAccuracyMetrics()
 
 
 @dataclass
@@ -176,6 +168,12 @@ class CoordinatorData:
     soc: float = 0.0
     operation_mode: str = ""
     backup_reserve: float = 0.0
+    # Tesla override corroboration signals (Storm Watch / Grid Event / VPP).
+    # Tri-state: True/False when the entity reports on/off, None when the entity
+    # is unavailable/unknown/unconfigured. None must NOT be coerced to False —
+    # override detection distinguishes "no event" from "signal unavailable".
+    grid_services_active: bool | None = None
+    storm_watch_active: bool | None = None
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False
@@ -223,6 +221,11 @@ class CoordinatorData:
     solar_can_reach_target_in_dw: bool = False
     boost_charge_needed: bool = False
     demand_window_active: bool = False
+    # Loud guardrail for the silent pre-charge miss (2026-06-30): set True when a
+    # demand window is active but the real SOC is far below target, i.e. pre-charge
+    # appears to have been missed. A diagnostics sensor / coordinator notification
+    # can surface this so the failure is never silent again.
+    optimizer_soc_underprepared: bool = False
 
     # Battery preservation (Issue #350)
     preserve_soc: float | None = None  # SOC to preserve when charging needed
@@ -269,6 +272,7 @@ class CoordinatorData:
     weekend_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
     forecast_consumption_source_counts: dict[str, int] = field(default_factory=dict)
     recent_load_1hr_kw: float = 0.0
+    recent_load_short_kw: float = 0.0
     recent_load_1hr_statistic_id: str = ""
     recent_load_1hr_samples: int = 0
     recent_load_1hr_last_error: str = ""
@@ -283,6 +287,19 @@ class CoordinatorData:
     battery_savings: float = 0.0
     battery_charge_cost: float = 0.0
 
+    # Daily energy accumulators (Issue #868) — real per-minute kWh accounting used
+    # to compute grid_charge_efficiency / export_loss_ratio / unnecessary_grid_charge_kwh.
+    # In-memory only (no persistence), matching the daily cost accumulators above.
+    grid_import_kwh_today: float = 0.0  # Total grid energy imported today
+    grid_export_kwh_today: float = 0.0  # Total grid energy exported today
+    grid_to_battery_kwh_today: float = 0.0  # Grid energy charged into the battery
+    soc_gain_during_grid_charge_kwh_today: float = (
+        0.0  # Battery energy gained while charging from grid
+    )
+    export_while_battery_not_full_kwh_today: float = (
+        0.0  # Exported energy that could have charged a non-full battery
+    )
+
     # Forecast cost accumulators (rest of today)
     forecast_import_cost: float = 0.0  # Expected grid import cost
     forecast_export_revenue: float = 0.0  # Expected grid export revenue
@@ -293,9 +310,15 @@ class CoordinatorData:
     # Internal state flags (managed by state machine / buttons)
     manual_override: bool = False
     target_reached_today: bool = False
+    # Local date the target latch was last reset. Drives a date-change reset in the
+    # compute cycle that is immune to a missed midnight event (the latch's only other
+    # live reset), preventing a stuck latch from silently disabling pre-charge.
+    last_target_reset_date: date | None = None
     allow_dw_entry_under_target: bool = (
         False  # Allow DW entry when solar can reach target
     )
+    solar_absent_confidence: float = 1.0
+    """Confidence to use when Solcast analysis is absent; 0.3 when stale_solar_conservative=True."""
 
     # Shared charging decisions (computed once, used by both forecast and active_mode)
     forecast_charging_decisions: list[ChargingDecision] = field(default_factory=list)
@@ -316,7 +339,9 @@ class CoordinatorData:
     debug_forecast_slot_time: str = ""  # Time of matched forecast slot (HH:MM)
     debug_first_forecast_slot_time: str = ""  # Time of first forecast slot (HH:MM)
     debug_time_gap_seconds: float = 0.0  # Seconds between now and first forecast slot
-    debug_mode_source: str = "unknown"  # "forecast" or "fallback"
+    debug_mode_source: str = (
+        "unknown"  # "manual_override" | "optimizer" | "fallback" | "unknown"
+    )
     debug_dry_run: bool = False  # Dry run mode active
     debug_commanded_mode: str = ""  # State machine's commanded mode
     debug_pending_transition: str = ""  # Pending mode transition (if any)
@@ -365,6 +390,8 @@ class CoordinatorData:
     weather_avg_heating_slope: float = 0.0  # Average kW per °C below heating threshold
     weather_avg_r_squared: float = 0.0  # Average regression fit quality
     weather_sample_count: int = 0  # Number of samples used for learning
+    weather_usable_hours: int = 0  # Hours whose label is medium or high
+    weather_hours_with_data: int = 0  # Hours with any regression result
     weather_anomaly_weight: float = 1.0  # Issue #681: Weight for rollback evaluation
 
     # Forecast accuracy tracking fields (Issue #37 Phase 2)
@@ -398,6 +425,9 @@ class CoordinatorData:
     localshift_entity_health: dict[str, Any] = field(
         default_factory=dict
     )  # Health status for LocalShift internal entities
+    orphaned_localshift_entities: dict[str, Any] = field(
+        default_factory=dict
+    )  # Owned registry entries absent from LOCALSHIFT_ENTITY_CONFIG (Issue #880)
 
     # --- Learning system (Issue #170 Phase 1) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
@@ -417,10 +447,15 @@ class CoordinatorData:
     active_bias_corrections: list[dict[str, Any]] = field(
         default_factory=list
     )  # Currently active corrections
+    last_pattern_analysis: str | None = (
+        None  # ISO timestamp of the last pattern-analysis run
+    )
     solar_bias_metrics: dict[str, Any] = field(
         default_factory=dict
     )  # Solar forecast bias metrics and correction factors
-    solar_forecast_accuracy: float = 100.0  # Overall solar forecast accuracy percentage
+    solar_forecast_accuracy: float | None = (
+        None  # Overall solar forecast accuracy %; None until enough samples (#881)
+    )
     hybrid_solar_accuracy: float | None = (
         None  # Combined LocalShift + Solcast MAPE accuracy
     )
@@ -432,11 +467,6 @@ class CoordinatorData:
     contextual_adjustments_active: list[dict[str, Any]] = field(
         default_factory=list
     )  # Active contextual adjustments
-
-    # --- Extended forecast accuracy (Issue #270) ---
-    extended_accuracy_metrics: ExtendedAccuracyMetrics = field(
-        default_factory=_default_extended_accuracy_metrics
-    )
 
     # --- Hybrid timescale metadata (Issue #329) ---
     hybrid_slot_metadata: dict[str, Any] = field(
@@ -532,3 +562,65 @@ class CoordinatorData:
     Each entry: {from_mode, to_mode, lag_seconds, decision_time, implementation_time}.
     Max 50 entries.
     """
+
+    # ---------------------------------------------------------------------------
+    # --- Decision-token gating (#622 gate replacement) ---
+    # ---------------------------------------------------------------------------
+    # Transient per-evaluation flag set by the state machine BEFORE
+    # compute_derived_values runs. When False the optimizer facade must NOT
+    # re-decide active_mode (it pins the previously-decided mode); the would-be
+    # plan mode is surfaced via debug_plan_mode_pending instead. Default False so
+    # any code path that forgets to set it freezes rather than thrashes.
+
+    mode_decision_allowed: bool = False
+    """True only on evaluations where the decision context changed (one decision
+    per price/spike/DW-boundary/SOC-floor change). Transient; not persisted."""
+
+    mode_decision_plan_charge_only: bool = False
+    """True when this evaluation's decision token was granted *solely* because the
+    plan wants to START charging while frozen (the plan-charge epoch advanced but
+    the price/spike/DW/floor context did not).
+
+    Such a grant may only commit a CHARGE mode. Without this the trigger is
+    one-directional in what ARMS it but not in what it COMMITS: a charge-wanted
+    epoch would hand the facade a generic re-decision, and a plan whose slot-0 had
+    wandered to spike_discharge would force-discharge the battery on a token
+    granted because the plan wanted to charge. Transient; not persisted."""
+
+    mode_backstop_allowed: bool = False
+    """Transient in-lock permission for the pre-charge execution backstop. Opened by
+    ``StateMachine._apply_decision_token`` and closed in the evaluate finally block,
+    so the OUT-OF-LOCK compute_derived_values in
+    ``coordinator.async_recompute_and_evaluate`` can never force a charge. Default
+    False so any path that forgets to set it stays inert."""
+
+    optimizer_precharge_backstop_active: bool = False
+    """True while the pre-charge execution backstop is force-committing BOOST_CHARGING
+    this cycle. Surfaced on the optimizer summary sensor."""
+
+    debug_plan_mode_pending: str | None = None
+    """When the decision is frozen, the mode the plan would have selected
+    ("plan wants X, decision held at Y"). None when no decision is pending."""
+
+    # ---------------------------------------------------------------------------
+    # --- Actual demand-window entry (2026-07-27 pre-charge incident) ---
+    # ---------------------------------------------------------------------------
+    # The optimizer's PROJECTED dw_entry_soc_pct rolls over to tomorrow's window the
+    # instant today's window starts, which is what erased the 64%-vs-95% miss from the
+    # log. These five record what actually happened, captured once at the DW boundary
+    # and held for the rest of the day. Reset by _reset_daily_precharge_latch.
+
+    dw_entry_actual_soc_pct: float | None = None
+    """SOC (%) observed at the first evaluation inside today's demand window."""
+
+    dw_entry_actual_at: datetime | None = None
+    """Timestamp of that capture. None before the window opens."""
+
+    dw_entry_actual_target_pct: float | None = None
+    """The battery target the capture is measured against."""
+
+    dw_entry_actual_shortfall_pct: float | None = None
+    """max(0, target - actual) in %-points. 0.0 when the target was met."""
+
+    dw_entry_actual_date: date | None = None
+    """Date the capture belongs to — the once-per-day latch."""

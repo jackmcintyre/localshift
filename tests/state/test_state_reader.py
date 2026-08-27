@@ -242,6 +242,38 @@ class TestReadBool:
         assert result is False
 
 
+class TestReadBoolOptional:
+    """Tests for _read_bool_optional (tri-state) method."""
+
+    def test_on_returns_true(self, state_reader, mock_hass):
+        state = MagicMock()
+        state.state = "on"
+        mock_hass.states.get.return_value = state
+        assert state_reader._read_bool_optional("binary_sensor.test") is True
+
+    def test_off_returns_false(self, state_reader, mock_hass):
+        state = MagicMock()
+        state.state = "off"
+        mock_hass.states.get.return_value = state
+        assert state_reader._read_bool_optional("binary_sensor.test") is False
+
+    def test_unavailable_returns_none(self, state_reader, mock_hass):
+        state = MagicMock()
+        state.state = "unavailable"
+        mock_hass.states.get.return_value = state
+        assert state_reader._read_bool_optional("binary_sensor.test") is None
+
+    def test_unknown_returns_none(self, state_reader, mock_hass):
+        state = MagicMock()
+        state.state = "unknown"
+        mock_hass.states.get.return_value = state
+        assert state_reader._read_bool_optional("binary_sensor.test") is None
+
+    def test_missing_entity_returns_none(self, state_reader, mock_hass):
+        mock_hass.states.get.return_value = None
+        assert state_reader._read_bool_optional("binary_sensor.test") is None
+
+
 class TestReadAttribute:
     """Tests for _read_attribute method."""
 
@@ -499,6 +531,34 @@ class TestReadAllExternalState:
         assert coordinator_data.battery_power_kw == -1.5
         assert coordinator_data.solar_power_kw == 3.0
         assert coordinator_data.load_power_kw == 4.0
+
+    def test_read_all_external_state_corroboration_signals(
+        self, state_reader, mock_hass, coordinator_data
+    ):
+        """Grid services / storm watch ingest as tri-state (on/off/unavailable)."""
+
+        def make_reader(grid_services_state, storm_watch_state):
+            def mock_get_state(entity_id):
+                state = MagicMock()
+                if "grid_services_enabled" in entity_id:
+                    state.state = grid_services_state
+                elif "storm_watch_active" in entity_id:
+                    state.state = storm_watch_state
+                else:
+                    state.state = "0"
+                return state
+
+            return mock_get_state
+
+        mock_hass.states.get = make_reader("on", "off")
+        state_reader.read_all_external_state(coordinator_data)
+        assert coordinator_data.grid_services_active is True
+        assert coordinator_data.storm_watch_active is False
+
+        mock_hass.states.get = make_reader("unavailable", "unknown")
+        state_reader.read_all_external_state(coordinator_data)
+        assert coordinator_data.grid_services_active is None
+        assert coordinator_data.storm_watch_active is None
 
     def test_read_all_external_state_pricing(
         self, state_reader, mock_hass, coordinator_data

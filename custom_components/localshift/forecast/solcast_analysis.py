@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -76,6 +76,9 @@ class SolcastAnalysis:
     estimate10_kwh: float
     estimate90_kwh: float
     intervals: list[ConfidenceInterval] = field(default_factory=list)
+    is_stale: bool = False
+    age_seconds: float = 0.0
+    confidence_ceiling: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for storage/debugging."""
@@ -87,11 +90,12 @@ class SolcastAnalysis:
             "estimate10_kwh": self.estimate10_kwh,
             "estimate90_kwh": self.estimate90_kwh,
             "intervals": [iv.to_dict() for iv in self.intervals],
+            "confidence_ceiling": self.confidence_ceiling,
         }
 
 
 def extract_analysis_from_entity(
-    hass: HomeAssistant, entity_id: str
+    hass: HomeAssistant, entity_id: str, stale_threshold: timedelta | None = None
 ) -> SolcastAnalysis | None:
     """Extract Solcast analysis attribute from a forecast entity.
 
@@ -119,6 +123,7 @@ def extract_analysis_from_entity(
     try:
         # Extract day-level metrics
         day_confidence = float(analysis_attr.get("confidence", 1.0))
+        day_confidence = max(0.0, min(1.0, day_confidence))
         day_spread_kwh = float(analysis_attr.get("spread_kwh", 0.0))
         estimate10_kwh = float(analysis_attr.get("estimate10_kwh", 0.0))
         estimate90_kwh = float(analysis_attr.get("estimate90_kwh", 0.0))
@@ -144,11 +149,23 @@ def extract_analysis_from_entity(
                     ConfidenceInterval(
                         period_start=period_start,
                         spread_kwh=float(interval_data.get("spread_kwh", 0.0)),
-                        confidence=float(interval_data.get("confidence", 1.0)),
+                        confidence=max(
+                            0.0, min(1.0, float(interval_data.get("confidence", 1.0)))
+                        ),
                     )
                 )
 
         last_updated = state.last_updated or dt_util.utcnow()
+
+        # Prefer last_reported (mirrors validation._get_freshness_timestamp)
+        freshness_ts = getattr(state, "last_reported", None) or last_updated
+        try:
+            age = dt_util.utcnow() - freshness_ts
+            age_seconds = age.total_seconds()
+            is_stale = stale_threshold is not None and age > stale_threshold
+        except TypeError:
+            age_seconds = 0.0
+            is_stale = False
 
         return SolcastAnalysis(
             entity_id=entity_id,
@@ -158,6 +175,9 @@ def extract_analysis_from_entity(
             estimate10_kwh=estimate10_kwh,
             estimate90_kwh=estimate90_kwh,
             intervals=intervals,
+            is_stale=is_stale,
+            age_seconds=age_seconds,
+            # confidence_ceiling defaults to 1.0; stamped later by computation_engine
         )
 
     except (ValueError, TypeError, AttributeError) as err:
@@ -170,24 +190,27 @@ def extract_analysis_from_entity(
 
 
 def get_confidence_for_period(
-    analysis: SolcastAnalysis | None, period_start: datetime
+    analysis: SolcastAnalysis | None,
+    period_start: datetime,
+    absent_confidence: float = 1.0,
 ) -> float:
     """Get confidence score for a specific period.
 
     Args:
         analysis: SolcastAnalysis object (or None)
         period_start: Start time of the period to query
+        absent_confidence: Confidence to return when analysis is None
 
     Returns:
-        Confidence score (0-1), defaults to 1.0 if no data available
+        Confidence score (0-1), defaults to absent_confidence if no data available
 
     """
     if analysis is None:
-        return 1.0
+        return absent_confidence
 
     if not analysis.intervals:
         # No intervals available, return day-level confidence
-        return analysis.day_confidence
+        return min(analysis.day_confidence, analysis.confidence_ceiling)
 
     # Find matching interval (allow 5-minute tolerance for rounding)
     period_start_local = dt_util.as_local(period_start)
@@ -197,10 +220,10 @@ def get_confidence_for_period(
         time_diff = abs((period_start_local - interval_start_local).total_seconds())
 
         if time_diff <= 300:  # 5-minute tolerance
-            return interval.confidence
+            return min(interval.confidence, analysis.confidence_ceiling)
 
     # No exact match found, return day-level confidence as fallback
-    return analysis.day_confidence
+    return min(analysis.day_confidence, analysis.confidence_ceiling)
 
 
 def compute_weighted_confidence(

@@ -587,3 +587,195 @@ class TestParameterOptimizerEdgeCases:
     def test_apply_step_limit_exceeds_negative(self, optimizer):
         result = optimizer._apply_step_limit(0.0, 5.0, 1.0)
         assert result == 4.0
+
+
+def _tagged_decisions(
+    count: int, tag_value: float, outcome_score: float
+) -> list[DecisionRecord]:
+    """Decisions tagged with the adaptive param values in force at decision time."""
+    return [
+        DecisionRecord(
+            timestamp=datetime.now() - timedelta(hours=i),
+            mode_chosen=PlannerAction.HOLD,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.10,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=10.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.12,
+            battery_target_soc=80.0,
+            weather_condition="sunny",
+            day_of_week=0,
+            hour_of_day=12,
+            is_demand_window=False,
+            outcome_score=outcome_score,
+            adaptive_params_at_decision={"cheap_price_bias": tag_value},
+        )
+        for i in range(count)
+    ]
+
+
+def _deterministic_best_bin(bins, num_bins):
+    """Deterministic stand-in for Thompson sampling: pick highest-mean bin."""
+    best_bin = None
+    best_mean = -1.0
+    for idx in range(num_bins):
+        scores = bins.get(idx, [])
+        if not scores:
+            continue
+        mean = sum(scores) / len(scores)
+        if mean > best_mean:
+            best_bin = idx
+            best_mean = mean
+    return best_bin
+
+
+class TestAdaptiveParamTaggingIssue913:
+    """Issue #913: sampler must bin by the param value in force at decision time."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        hass = MagicMock()
+        hass.data = {}
+        hass.config_entries = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry_id"
+        entry.data = {}
+        hass.config_entries.async_get_entry.return_value = entry
+        store = AsyncMock()
+        store.async_load = AsyncMock(return_value=None)
+        store.async_save = AsyncMock()
+        with patch(
+            "custom_components.localshift.engine.parameters.Store", return_value=store
+        ):
+            yield hass
+
+    @pytest.fixture
+    def optimizer(self, mock_hass):
+        return ParameterOptimizer(mock_hass, "test_entry_id")
+
+    def test_sampler_moves_toward_tagged_high_score_bin(self, optimizer, monkeypatch):
+        """High scores tagged at -2.0 must pull the param below the current 0.0."""
+        monkeypatch.setattr(optimizer, "_select_best_bin", _deterministic_best_bin)
+        param_def = OPTIMIZABLE_PARAMS["cheap_price_bias"]
+        decisions = _tagged_decisions(10, -2.0, 0.9) + _tagged_decisions(10, 2.0, 0.1)
+
+        optimal, confidence = optimizer._optimize_single_param(
+            "cheap_price_bias", param_def, decisions
+        )
+
+        # Bin centre -2.0, one 0.5 step below current 0.0
+        assert optimal is not None
+        assert optimal == pytest.approx(-0.5)
+        assert confidence > 0.0
+
+    def test_untagged_decisions_fall_back_to_current_bin(self, optimizer, monkeypatch):
+        """Legacy untagged decisions keep old behaviour: current-value bin."""
+        monkeypatch.setattr(optimizer, "_select_best_bin", _deterministic_best_bin)
+        param_def = OPTIMIZABLE_PARAMS["cheap_price_bias"]
+        decisions = _make_decisions(20)
+
+        optimal, _ = optimizer._optimize_single_param(
+            "cheap_price_bias", param_def, decisions
+        )
+
+        assert optimal == pytest.approx(0.0)
+
+    def test_tagged_param_out_of_range_falls_back_to_current_bin(
+        self, optimizer, monkeypatch
+    ):
+        """Tags outside [min, max) must not crash and must bin by current value."""
+        monkeypatch.setattr(optimizer, "_select_best_bin", _deterministic_best_bin)
+        param_def = OPTIMIZABLE_PARAMS["cheap_price_bias"]
+        decisions = _tagged_decisions(20, 99.0, 0.9)
+
+        optimal, _ = optimizer._optimize_single_param(
+            "cheap_price_bias", param_def, decisions
+        )
+
+        assert optimal == pytest.approx(0.0)
+
+    def test_tagged_decision_round_trips_through_dict(self):
+        record = _tagged_decisions(1, -2.0, 0.9)[0]
+        as_dict = record.to_dict()
+        assert as_dict["adaptive_params_at_decision"] == {"cheap_price_bias": -2.0}
+        restored = DecisionRecord.from_dict(as_dict)
+        assert restored.adaptive_params_at_decision == {"cheap_price_bias": -2.0}
+
+    def test_legacy_record_without_tag_restores_none(self):
+        as_dict = _make_decisions(1)[0].to_dict()
+        assert "adaptive_params_at_decision" in as_dict
+        restored = DecisionRecord.from_dict(as_dict)
+        assert restored.adaptive_params_at_decision is None
+
+
+class TestPendingBiasCorrectionsIssue913:
+    """Issue #913: corrections stored via set_bias_corrections were never consumed."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        hass = MagicMock()
+        hass.data = {}
+        hass.config_entries = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry_id"
+        entry.data = {}
+        hass.config_entries.async_get_entry.return_value = entry
+        store = AsyncMock()
+        store.async_load = AsyncMock(return_value=None)
+        store.async_save = AsyncMock()
+        with patch(
+            "custom_components.localshift.engine.parameters.Store", return_value=store
+        ):
+            yield hass
+
+    @pytest.fixture
+    def optimizer(self, mock_hass):
+        return ParameterOptimizer(mock_hass, "test_entry_id")
+
+    @pytest.fixture
+    def corrections(self):
+        return [
+            BiasCorrection(
+                condition="high_forecast_error",
+                dimension="hour",
+                group_key="14",
+                param_name="cheap_price_bias",
+                adjustment=0.1,
+                confidence=0.9,
+                sample_count=50,
+                weeks_observed=8,
+            )
+        ]
+
+    def test_optimize_consumes_pending_bias_corrections(
+        self, optimizer, corrections
+    ):
+        optimizer.set_bias_corrections(corrections)
+
+        optimizer.optimize(_make_decisions(60), current_7d_score=0.75)
+
+        assert not optimizer._pending_bias_corrections
+
+    def test_pending_high_confidence_correction_applied(self, optimizer, corrections):
+        optimizer.set_bias_corrections(corrections)
+
+        result = optimizer.optimize(_make_decisions(60), current_7d_score=0.75)
+
+        # High-confidence correction applied as a direct offset: 0.0 + 0.1
+        assert result.values["cheap_price_bias"] == pytest.approx(0.1)
+
+    def test_explicit_arg_applies_once_and_consumes_pending(
+        self, optimizer, corrections
+    ):
+        optimizer.set_bias_corrections(corrections)
+
+        result = optimizer.optimize(
+            _make_decisions(60), current_7d_score=0.75, bias_corrections=corrections
+        )
+
+        # Applied exactly once (pre-fix this double-applied to 0.2)
+        assert result.values["cheap_price_bias"] == pytest.approx(0.1)
+        # ...and the pending store is consumed (not left to double-apply later)
+        assert not optimizer._pending_bias_corrections

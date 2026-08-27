@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.localshift.forecast.load import (
-    LoadForecaster,
-)
-from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
 from custom_components.localshift.const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+)
+from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
+from custom_components.localshift.forecast.load import (
+    LoadForecaster,
 )
 
 
@@ -283,11 +283,19 @@ class TestLoadForecasterExponentialDecay:
         assert kw == 0.75
 
     def test_weather_correlation_skipped_low_confidence(self, mock_weather_correlation):
-        """Test weather correlation skipped when confidence is low."""
+        """predict_load is the authority: a "low_confidence" result keeps base.
+
+        The pre-gate on the hour's max-of-zones label was removed (it was
+        strictly redundant with predict_load's per-zone gate and would wrongly
+        suppress a usable zone in a mixed hour). Here predict_load itself refuses
+        the adjustment by returning "low_confidence" even though it returned a
+        candidate value, so the blended-live base must be kept.
+        """
         mock_entry = _create_mock_entry()
         mock_weather_correlation.get_coefficients_for_hour.return_value = MagicMock(
             confidence="low"
         )
+        mock_weather_correlation.predict_load.return_value = (0.99, "low_confidence")
 
         forecaster = LoadForecaster(
             mock_entry, weather_correlation=mock_weather_correlation
@@ -542,6 +550,50 @@ class TestLoadForecasterExponentialDecay:
         assert source == "blended_live"
 
 
+class TestLoadForecasterOutputCeiling:
+    """Issue #826: data-driven output ceiling and no input clamp."""
+
+    def test_no_input_clamp_passes_current_through(self):
+        """Without the clamp, current_load_kw is passed directly; blend = 0.3*3.0 + 0.7*2.5 = 2.65."""
+        forecaster = _create_load_forecaster()
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 2.5},
+            slot_hour=12,
+            current_hour=12,
+            current_load_kw=3.0,
+            recent_load_kw=2.5,
+            hours_ahead=0.0,
+        )
+        # No clamp; data-driven ceiling = 2.5*3=7.5 > 2.65 so no ceiling hit either
+        assert kw == pytest.approx(2.65, abs=0.01)
+
+    def test_output_ceiling_is_data_driven(self):
+        """Per-slot ceiling = max(hourly_avg_kw)*3; low-peak home clamps, high-peak home does not."""
+        forecaster = _create_load_forecaster()
+
+        # Case 1: peak avg = 2.0 kW, ceiling = 6.0 kW; live-load path returns 50.0 → clamped
+        kw, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 2.0},
+            slot_hour=12,
+            current_hour=12,
+            current_load_kw=50.0,
+            recent_load_kw=0.0,
+            hours_ahead=0.0,
+        )
+        assert kw == pytest.approx(6.0)
+
+        # Case 2: peak avg = 10.0 kW, ceiling = 30.0 kW; 20.0 kW is below ceiling, not clamped
+        kw2, _ = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw={12: 10.0},
+            slot_hour=12,
+            current_hour=12,
+            current_load_kw=20.0,
+            recent_load_kw=0.0,
+            hours_ahead=0.0,
+        )
+        assert kw2 == pytest.approx(20.0)
+
+
 @pytest.fixture
 def mock_weather_correlation():
     """Mock WeatherCorrelation for testing."""
@@ -591,10 +643,13 @@ class TestWeatherAdjustmentTracking:
         assert forecaster.get_weather_adjustment_applied() is True
 
     def test_weather_adjustment_flag_not_set_for_low_confidence(self):
+        # Authority moved to predict_load: it refuses by returning a
+        # "low_confidence" source, so the flag stays unset even though a coef
+        # exists for the hour. (Previously a "low" hour label pre-gated this.)
         mock_entry = _create_mock_entry()
         weather = MagicMock()
         weather.get_coefficients_for_hour.return_value = MagicMock(confidence="low")
-        weather.predict_load.return_value = (1.5, "weather_adjusted")
+        weather.predict_load.return_value = (1.5, "low_confidence")
 
         forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
         forecaster.reset_weather_adjustment_applied()

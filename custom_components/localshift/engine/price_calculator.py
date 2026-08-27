@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
+    CHARGE_RATE_GRID_KW,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -19,7 +20,29 @@ from ..const import (
 )
 from ..coordinator.data import CoordinatorData
 from ..pricing.types import ForecastSlot
+from .dp_math import urgency_ramp_price, urgency_window_hours
 from .utils import parse_forecast_dt
+
+# A stale ``target_reached_today`` latch (e.g. from a missed midnight reset) must not
+# suppress demand-window pre-charge when the battery is actually well below target.
+# Honor the latch only within this SOC deadband of the target — wide enough to avoid
+# a re-charging sawtooth after legitimately reaching target, narrow enough to re-engage
+# urgency once the battery has clearly drained far below target before the DW.
+_STALE_TARGET_REACHED_SOC_DEADBAND_PCT = 20.0
+
+
+def _target_reached_blocks_urgency(data: CoordinatorData, target_pct: float) -> bool:
+    """Whether the daily target-reached latch should suppress urgency pre-charge.
+
+    Guards against a stale ``target_reached_today`` starving a battery that sits far
+    below target before the demand window. The latch's only live reset is a single
+    midnight event, so a missed reset would otherwise disable all pre-charge for ~24h.
+    """
+    if not data.target_reached_today:
+        return False
+    if target_pct <= 0.0:
+        return True  # No target context (legacy callers) — preserve prior behaviour.
+    return data.soc >= target_pct - _STALE_TARGET_REACHED_SOC_DEADBAND_PCT
 
 
 def _parse_price_entry(
@@ -316,6 +339,7 @@ class PriceCalculator:
         target_hour: int,
         base: float,
         max_price: float,
+        target_pct: float,
     ) -> float:
         """Calculate urgency-adjusted cheap price threshold.
 
@@ -337,12 +361,23 @@ class PriceCalculator:
         if target_dt <= now_dt:
             target_dt += timedelta(days=1)
         hours_left = max((target_dt - now_dt).total_seconds() / 3600, 0)
-        # Issue #559 Root Cause 2: shortened from 8h to 4h to reduce urgency creep.
-        # A wider window caused prices to be raised well before any real urgency,
-        # resulting in grid charging at e.g. $0.19 when the threshold was $0.18.
-        total_window = 4.0
-        urgency = max(min(1 - (hours_left / total_window), 1.0), 0.0)
-        urgency_price = base + (max_price - base) * urgency
+        # Issue #559 Root Cause 2: 4h is now the FLOOR (not a fixed value) — narrow enough to
+        # avoid urgency creep raising prices well before any real need (charging at $0.19 when
+        # the threshold is $0.18). 2026-06-11 incident: a deep SOC deficit needs more than 4h
+        # of charge runway, so the window widens (deficit-derived, capped 8h) only when the
+        # battery genuinely cannot reach target in 4h. Shared with the optimizer's urgency
+        # window via dp_math.urgency_window_hours.
+        total_window = urgency_window_hours(
+            data.soc,
+            target_pct,
+            BATTERY_CAPACITY_KWH,
+            CHARGE_RATE_GRID_KW,
+            0.92,
+        )
+        # Shared with the optimizer's per-slot pre-DW thresholds
+        # (constraints.compute_pre_dw_charge_thresholds) so the live "now" threshold and
+        # the value the DP assumes each future slot will be gated at cannot drift apart.
+        urgency_price = urgency_ramp_price(base, max_price, hours_left, total_window)
 
         min_forecast = max_price
         now_dt_local = dt_util.as_local(now_dt) if now_dt.tzinfo else now_dt
@@ -403,11 +438,15 @@ class PriceCalculator:
         preliminary_solar_can_reach = data.soc >= target_pct or net_solar >= deficit_kwh
         solar_gap = not preliminary_solar_can_reach
 
-        if not solar_gap or not before_dw or data.target_reached_today:
+        if (
+            not solar_gap
+            or not before_dw
+            or _target_reached_blocks_urgency(data, target_pct)
+        ):
             data.effective_cheap_price = base
         else:
             data.effective_cheap_price = self._calculate_urgency_adjusted_price(
-                data, now_dt, target_hour, base, max_price
+                data, now_dt, target_hour, base, max_price, target_pct
             )
 
     def _apply_threshold_hysteresis(self, raw_threshold: float) -> float:
@@ -463,6 +502,7 @@ class PriceCalculator:
         now_dt: datetime,
         before_dw: bool,
         target_hour: int,
+        target_pct: float = 0.0,
     ) -> None:
         """Compute final effective cheap price threshold.
 
@@ -480,11 +520,15 @@ class PriceCalculator:
 
         solar_gap = not data.solar_can_reach_target
 
-        if not solar_gap or not before_dw or data.target_reached_today:
+        if (
+            not solar_gap
+            or not before_dw
+            or _target_reached_blocks_urgency(data, target_pct)
+        ):
             raw_threshold = base
         else:
             raw_threshold = self._calculate_urgency_adjusted_price(
-                data, now_dt, target_hour, base, max_price
+                data, now_dt, target_hour, base, max_price, target_pct
             )
 
         # Apply hysteresis and smoothing (Issue #282)

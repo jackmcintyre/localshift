@@ -67,6 +67,15 @@ BOOST_CHARGE_MAX_SOC = 80.0
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
 
+# Issue #868: Export-leak protection gate (optimization_controller.py Rule 2).
+# When the daily export_loss_ratio metric exceeds 0.3, Rule 2 nudges the optimizer
+# to be more conservative about exporting. This flag keeps that behavioural rule
+# OFF by default so computing the metric (now real) does not silently arm the
+# adjustment on systems that already have the learning switch enabled. The metric
+# becomes visible on the dashboard first; an operator flips this constant ON in a
+# follow-up once real export_loss_ratio values have been observed.
+EXPORT_LEAK_PROTECTION_ENABLED = False
+
 # Force discharge time window (dummy tariff limitation)
 DISCHARGE_EARLIEST_HOUR = 6
 
@@ -95,6 +104,9 @@ CONF_TESLEMETRY_SOLAR_POWER = "teslemetry_solar_power"
 CONF_TESLEMETRY_LOAD_POWER = "teslemetry_load_power"
 CONF_TESLEMETRY_ALLOW_EXPORT = "teslemetry_allow_export"
 CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID = "teslemetry_allow_charging_from_grid"
+# Corroboration signals for Tesla override detection (Storm Watch / Grid Event / VPP)
+CONF_TESLEMETRY_GRID_SERVICES = "teslemetry_grid_services"
+CONF_TESLEMETRY_STORM_WATCH = "teslemetry_storm_watch"
 
 CONF_TESLEMETRY_SOLAR_ENERGY = "teslemetry_solar_energy"
 
@@ -160,6 +172,8 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_LOAD_POWER: "sensor.my_home_load_power",
     CONF_TESLEMETRY_ALLOW_EXPORT: "select.my_home_allow_export",
     CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID: "switch.my_home_allow_charging_from_grid",
+    CONF_TESLEMETRY_GRID_SERVICES: "binary_sensor.my_home_grid_services_enabled",
+    CONF_TESLEMETRY_STORM_WATCH: "binary_sensor.my_home_storm_watch_active",
     CONF_TESLEMETRY_SOLAR_ENERGY: "sensor.my_home_solar_energy",
     CONF_PRICING_GENERAL_PRICE: "",  # Empty - discovered during config flow
     CONF_PRICING_FEED_IN_PRICE: "",  # Empty - discovered during config flow
@@ -186,7 +200,11 @@ CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
+CONF_MIN_CYCLE_SAVING = "min_cycle_saving"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
+CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
+CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
+CONF_PRECHARGE_RUNWAY_MARGIN_MIN = "precharge_runway_margin_min"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
@@ -220,17 +238,30 @@ DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT = (
 DEFAULT_CURRENT_HOUR_RECENT_WEIGHT = (
     0.7  # 70% recent 1-hour average for current hour blend (Issue #728)
 )
+RECENT_LOAD_SHORT_WINDOW_SAMPLES = 3  # trailing 5-min stat means for the robust short-window median (~15 min) (Issue #826)
+LOAD_FORECAST_CEILING_FACTOR = 3.0  # per-slot forecast may not exceed this multiple of the home's historical peak hourly average (Issue #826)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
 )
+DEFAULT_STALE_SOLAR_CONSERVATIVE = True
+DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING = 0.3
+# Minutes of spare pre-charge runway below which the runway backstop arms (fast-follow
+# to #901). Runway slack = minutes to DW entry MINUS minutes boost charging needs to
+# close the SOC gap, so this is "how much more runway may be lost before the target
+# becomes physically unreachable". 0 disables the arm entirely (kill switch).
+DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN = 15.0  # minutes
+DEFAULT_ABSENT_SOLAR_CONFIDENCE = 0.3
 DEFAULT_SPIKE_PRICE_PERCENTILE = 75  # Only export at top 25% of spike prices
 DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
-DEFAULT_TARGET_PENALTY = 0.015  # $/%-point demand window urgency
+DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0.015 -> 0.03 so the soft lever can at least exceed typical charge prices)
+DEFAULT_MIN_CYCLE_SAVING = (
+    0.25  # $/kWh minimum saving over holding to justify cycling the battery
+)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -276,6 +307,13 @@ THRESHOLD_RANGES = {
         "unit": "$/kWh",
         "icon": "mdi:swap-horizontal",
     },
+    CONF_MIN_CYCLE_SAVING: {
+        "min": 0.00,
+        "max": 1.00,
+        "step": 0.05,
+        "unit": "$/kWh",
+        "icon": "mdi:battery-sync-outline",
+    },
     CONF_SPIKE_PRICE_PERCENTILE: {
         "min": 50,
         "max": 95,
@@ -320,10 +358,24 @@ THRESHOLD_RANGES = {
     },
     CONF_TARGET_PENALTY: {
         "min": 0.000,
-        "max": 0.100,
+        "max": 0.200,
         "step": 0.005,
         "unit": "$/%-point",
         "icon": "mdi:target",
+    },
+    CONF_STALE_SOLAR_CONFIDENCE_CEILING: {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "",
+        "icon": "mdi:weather-sunny-off",
+    },
+    CONF_PRECHARGE_RUNWAY_MARGIN_MIN: {
+        "min": 0.0,
+        "max": 60.0,
+        "step": 5.0,
+        "unit": "min",
+        "icon": "mdi:timer-alert-outline",
     },
 }
 
@@ -337,6 +389,7 @@ SWITCH_SPIKE_DISCHARGE_CONSERVATIVE = "spike_discharge_conservative"
 SWITCH_DRY_RUN = "dry_run"
 SWITCH_DEMAND_WINDOW_BLOCK = "demand_window_block"
 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
+SWITCH_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 
 # Consolidated notification switch (Issue #214)
 SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
@@ -351,6 +404,7 @@ SWITCH_DEFAULTS = {
     SWITCH_DRY_RUN: False,
     SWITCH_DEMAND_WINDOW_BLOCK: True,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
+    SWITCH_STALE_SOLAR_CONSERVATIVE: True,
     SWITCH_NOTIFICATIONS_ENABLED: True,  # Consolidated notification toggle
     SWITCH_ENABLE_LEARNING: False,  # Users must opt-in to active optimization
 }
@@ -362,6 +416,7 @@ SWITCH_ICONS = {
     SWITCH_DRY_RUN: "mdi:test-tube",
     SWITCH_DEMAND_WINDOW_BLOCK: "mdi:clock-alert-outline",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:transfer-down",
+    SWITCH_STALE_SOLAR_CONSERVATIVE: "mdi:weather-sunny-off",
     SWITCH_NOTIFICATIONS_ENABLED: "mdi:bell",
     SWITCH_ENABLE_LEARNING: "mdi:brain",
 }
@@ -373,6 +428,7 @@ SWITCH_NAMES = {
     SWITCH_DRY_RUN: "Dry Run",
     SWITCH_DEMAND_WINDOW_BLOCK: "Demand Window Block",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
+    SWITCH_STALE_SOLAR_CONSERVATIVE: "Stale Solar Conservative",
     SWITCH_NOTIFICATIONS_ENABLED: "Notifications Enabled",
     SWITCH_ENABLE_LEARNING: "Enable Learning",
 }
@@ -535,6 +591,14 @@ STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
 # Coalesce entity state changes before running expensive reevaluation.
 STATE_CHANGE_COALESCE_SECONDS = 15
 
+# Post-acceptance reserve settle-verify (Tesla-override freeze fix).
+# After a transition is accepted, Tesla can silently revert a backup-reserve
+# write a few seconds later (the write races the still-settling op-mode change).
+# Re-read the reserve after this delay and, if it reverted, re-issue the write
+# once and poll for it to stick before declaring the transition successful.
+VALIDATION_RESERVE_SETTLE_SECONDS = 10
+VALIDATION_RESERVE_RETRY_TIMEOUT_SECONDS = 10
+
 # -----------------------------------------------------------------------------
 # Proactive Export Constants
 # -----------------------------------------------------------------------------
@@ -570,3 +634,19 @@ NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
 # external API commands until the event ends.
 TESLA_OVERRIDE_RESERVE_PERCENT = 80.0
 TESLA_OVERRIDE_TOLERANCE_PERCENT = 1.0
+
+# The reserve≈80 + self_consumption signature is also reachable by LocalShift's
+# own daily force-charge clamp (Tesla firmware resets 81-99 -> 80). When Tesla's
+# grid-services / storm-watch signals are unavailable, suppress override
+# detection if LocalShift itself commanded a matching state within this window.
+TESLA_OVERRIDE_SELF_COMMAND_GRACE_MINUTES = 15
+
+# While yielding to an *uncorroborated* override (signature present but grid
+# services / storm watch unknown), re-issue the commanded mode on this cadence
+# to test whether control has returned. Bounds a false-positive yield instead
+# of yielding indefinitely.
+TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES = 30
+
+# After Tesla releases control (signature clears on its own), wait this long
+# before resuming health-check corrections so a genuinely-ending event settles.
+TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES = 30

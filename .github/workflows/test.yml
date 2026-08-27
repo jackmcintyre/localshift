@@ -36,6 +36,16 @@ jobs:
             echo "✅ Coverage above baseline"
           fi
 
+      # Hybrid dead-code guardrail (issue #837). NON-BLOCKING: warns but never
+      # fails the build. coverage.json from the step above feeds the runtime
+      # signal, so HIGH-confidence items here are "zero static refs AND 0%
+      # runtime coverage" -- the prioritised candidates for manual review.
+      - name: Hybrid dead-code detector (warn-only)
+        if: always()
+        run: |
+          uv run python scripts/hybrid_dead_code.py \
+            --coverage coverage.json --min-confidence high || true
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:

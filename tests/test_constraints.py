@@ -120,15 +120,91 @@ def test_feasible_actions_recoverability_floor_enforced(default_config):
     assert PlannerAction.EXPORT_PROACTIVE not in actions
 
 
-def test_feasible_actions_normal_rules_during_risk_window(default_config):
-    """Uses normal rules for slots during risk window (at/after risk start)."""
+def test_feasible_actions_positive_fit_inside_risk_window(default_config):
+    """Allows EXPORT_PROACTIVE at a positive-FIT blip inside the risk window.
+
+    The window spans first-to-last bad-FIT slot and may contain positive slots.
+    Those are the chances to make room before the rest of the spill, so avoidance
+    applies to them rather than falling back to the (unreachable) mode rules.
+    """
     slot = _make_test_slot(sell_price=0.08)
-    context = _make_context(risk_start=2)
+    context = _make_context(risk_start=2, risk_end=10)
     actions = feasible_actions(
         soc_pct=90.0,
         slot=slot,
         config=default_config,
-        slot_idx=2,
+        slot_idx=5,
+        slots=None,
+        terminal_penalty_idx=None,
+        negative_fit_avoidance_context=context,
+    )
+    assert PlannerAction.EXPORT_PROACTIVE in actions
+
+
+def _max_export_pp(config, slot) -> float:
+    """SOC a single full-rate export slot can shed, in percentage points."""
+    return (
+        config.discharge_rate_kw
+        * (slot.slot_interval_minutes / 60.0)
+        / config.battery_capacity_kwh
+        * 100.0
+    )
+
+
+def _export_offered(config, slot, soc_pct, context) -> bool:
+    return PlannerAction.EXPORT_PROACTIVE in feasible_actions(
+        soc_pct=soc_pct,
+        slot=slot,
+        config=config,
+        slot_idx=0,
+        slots=None,
+        terminal_penalty_idx=None,
+        negative_fit_avoidance_context=context,
+    )
+
+
+def test_feasible_actions_landing_soc_boundary(default_config):
+    """Export is admitted iff the projected LANDING SOC clears the floor.
+
+    Entry SOC is not the test — a full-rate export slot sheds far more than the
+    old fixed 2pp margin, so the boundary sits one slot's discharge above the
+    floor.
+    """
+    slot = _make_test_slot(sell_price=0.08)
+    floor = 40.0
+    context = _make_context(risk_start=0, risk_end=10, floor_by_slot=[floor] * 15)
+    shed = _max_export_pp(default_config, slot)
+
+    assert _export_offered(default_config, slot, floor + shed + 0.1, context)
+    assert not _export_offered(default_config, slot, floor + shed - 0.1, context)
+
+
+def test_feasible_actions_landing_soc_honours_min_soc_clamp(default_config):
+    """Below floor + one slot, export still stands when the floor is min_soc.
+
+    The transition clamps at ``min_soc_pct``, so when the recoverability floor has
+    collapsed onto that clamp the landing point cannot breach it and the chain of
+    small exports a spill day needs must stay available.
+    """
+    slot = _make_test_slot(sell_price=0.08)
+    floor = default_config.min_soc_pct
+    context = _make_context(risk_start=0, risk_end=10, floor_by_slot=[floor] * 15)
+    shed = _max_export_pp(default_config, slot)
+    soc = floor + shed - 0.1  # would fail a naive soc - shed >= floor test
+
+    assert soc > default_config.min_soc_pct
+    assert _export_offered(default_config, slot, soc, context)
+
+
+def test_feasible_actions_normal_rules_after_risk_window(default_config):
+    """Uses normal mode rules for slots past the end of the risk window."""
+    slot = _make_test_slot(sell_price=0.08)
+    context = _make_context(risk_start=2, risk_end=10)
+    actions = feasible_actions(
+        soc_pct=90.0,
+        slot=slot,
+        config=default_config,
+        slot_idx=11,
         slots=None,
         terminal_penalty_idx=None,
         negative_fit_avoidance_context=context,

@@ -1,9 +1,10 @@
 """Tests for forecast/solar_accuracy.py - Solar forecast accuracy tracking."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.forecast.solar_accuracy import (
     BIAS_HALF_LIFE_DAYS,
@@ -317,6 +318,70 @@ class TestSolarAccuracyTracker:
         # Should be no records
         assert len(tracker._period_records) == 0
 
+    def test_backfill_matches_offset_second_timestamps(self, tracker):
+        """Live Amber slot timestamps carry +1s (18:00:01); the actuals
+        integration floors to the boundary (18:00:00). The period key must
+        floor both sides or every backfill misses (2026-06-12 zero-samples
+        incident: 50 pending, 0 samples after a full daytime)."""
+        tz = timezone(timedelta(hours=10))
+        recorded_at = datetime(2026, 6, 12, 10, 0, 1, tzinfo=tz)
+        flushed_at = datetime(2026, 6, 12, 10, 0, 0, tzinfo=tz)
+
+        tracker.record_forecast(recorded_at, 2.5, "sunny")
+        tracker.backfill_actual(flushed_at, 2.0)
+
+        assert tracker._pending_forecasts == {}
+        assert len(tracker._period_records) == 1
+        assert tracker._metrics.sample_count == 1
+
+    def test_backfill_matches_across_record_utc_vs_backfill_local(self, tracker):
+        """#881: the record side keys off an Amber UTC-offset timestamp while
+        the backfill side keys off a LOCAL-time tick for the SAME instant. The
+        two isoformat strings differ ('...T03:00:00+00:00' vs
+        '...T13:00:00+10:00'), so before the UTC-normalization fix the dict
+        lookup always missed and sample_count stayed 0 even with pendings."""
+        local_tz = timezone(timedelta(hours=10))
+        # Record: Amber slot timestamp, UTC offset, +1s quirk.
+        recorded_at = datetime(2026, 6, 13, 3, 0, 1, tzinfo=UTC)
+        # Backfill: same 30-min instant, but reconstructed in local time as the
+        # tick_scheduler does (start_local floored).
+        flushed_at = recorded_at.astimezone(local_tz).replace(
+            minute=0, second=0, microsecond=0
+        )
+        assert recorded_at.isoformat() != flushed_at.isoformat()
+
+        tracker.record_forecast(recorded_at, 2.5, "sunny")
+        tracker.backfill_actual(flushed_at, 2.0)
+
+        assert tracker._pending_forecasts == {}
+        assert len(tracker._period_records) == 1
+        assert tracker._metrics.sample_count == 1
+
+    def test_backfill_matches_thirty_minute_boundary_with_seconds(self, tracker):
+        """The :30 boundary floors the same way as :00."""
+        tz = timezone(timedelta(hours=10))
+        tracker.record_forecast(
+            datetime(2026, 6, 12, 10, 30, 1, tzinfo=tz), 1.5, "sunny"
+        )
+        tracker.backfill_actual(datetime(2026, 6, 12, 10, 30, 0, tzinfo=tz), 1.2)
+
+        assert len(tracker._period_records) == 1
+
+    def test_rerecord_with_different_seconds_overwrites_single_pending(self, tracker):
+        """Re-recording the same period with a different second offset must
+        replace the pending, not create a duplicate key."""
+        tz = timezone(timedelta(hours=10))
+        tracker.record_forecast(
+            datetime(2026, 6, 12, 10, 0, 1, tzinfo=tz), 2.5, "sunny"
+        )
+        tracker.record_forecast(
+            datetime(2026, 6, 12, 10, 0, 0, tzinfo=tz), 3.0, "sunny"
+        )
+
+        assert len(tracker._pending_forecasts) == 1
+        (record,) = tracker._pending_forecasts.values()
+        assert record.forecast_kwh == 3.0
+
     def test_backfill_multiple_records(self, tracker):
         """Test multiple backfills."""
         # Record multiple forecasts
@@ -377,6 +442,70 @@ class TestSolarAccuracyTracker:
         assert len(tracker._period_records) == 2
         assert tracker._metrics.sample_count == 1
         assert tracker._period_records[-1].is_boost_period is True
+
+    def test_backfill_is_boost_override_true(self, tracker):
+        """is_boost=True at flush time overrides a non-boost pending."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny", is_boost=False)
+        tracker.backfill_actual(period_start, 1.0, is_boost=True)
+
+        assert tracker._period_records[-1].is_boost_period is True
+        # Boost records are excluded from metrics.
+        assert tracker._metrics.sample_count == 0
+
+    def test_backfill_is_boost_override_false(self, tracker):
+        """is_boost=False at flush time overrides a boost-tagged pending."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny", is_boost=True)
+        tracker.backfill_actual(period_start, 1.0, is_boost=False)
+
+        assert tracker._period_records[-1].is_boost_period is False
+        assert tracker._metrics.sample_count == 1
+
+    def test_backfill_is_boost_none_preserves_pending_flag(self, tracker):
+        """is_boost=None (default) preserves the pending's recorded flag."""
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny", is_boost=True)
+        tracker.backfill_actual(period_start, 1.0)  # no is_boost arg
+
+        assert tracker._period_records[-1].is_boost_period is True
+
+    def test_backfill_zero_forecast_zero_actual_dropped(self, tracker):
+        """Information-free overnight samples are dropped, not counted."""
+        period_start = datetime(2026, 1, 15, 2, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 0.0, "clear")
+        tracker.backfill_actual(period_start, 0.0)
+
+        # Pending consumed, but no record appended and sample_count unchanged.
+        assert period_start.isoformat() not in tracker._pending_forecasts
+        assert len(tracker._period_records) == 0
+        assert tracker._metrics.sample_count == 0
+
+    def test_backfill_dusk_forecast_positive_tiny_actual_kept(self, tracker):
+        """Dusk periods (forecast > 0, ~0 actual) ARE kept — that bias matters."""
+        period_start = datetime(2026, 1, 15, 19, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 0.5, "clear")
+        tracker.backfill_actual(period_start, 0.0)
+
+        assert len(tracker._period_records) == 1
+        assert tracker._metrics.sample_count == 1
+
+    def test_evict_stale_pendings_drops_past_keeps_future(self, tracker):
+        """Past-dated pendings are evicted; future horizon slots are retained."""
+        now = dt_util.now()
+        stale = (now - timedelta(hours=6)).replace(minute=0, second=0, microsecond=0)
+        recent = (now - timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        future = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+
+        tracker.record_forecast(stale, 2.0, "sunny")
+        tracker.record_forecast(recent, 2.0, "sunny")
+        tracker.record_forecast(future, 2.0, "sunny")
+
+        tracker.evict_stale_pendings(max_age_hours=4.0)
+
+        assert stale.isoformat() not in tracker._pending_forecasts
+        assert recent.isoformat() in tracker._pending_forecasts
+        assert future.isoformat() in tracker._pending_forecasts
 
     def test_get_bias_correction_no_data(self, tracker):
         """Test get_bias_correction with no historical data returns 1.0."""
@@ -440,6 +569,49 @@ class TestSolarAccuracyTracker:
             tracker.backfill_actual(period_start, 1.0)
 
         assert tracker.has_sufficient_samples() is True
+
+    def test_get_status_dict_below_threshold(self, tracker):
+        """get_status_dict reports progress toward activation while dormant."""
+        from custom_components.localshift.forecast.solar_accuracy import (
+            MIN_SOLAR_CORRECTION_SAMPLES,
+        )
+
+        for i in range(5):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 1.0)
+        # A still-pending forecast for a future slot.
+        tracker.record_forecast(datetime(2026, 2, 1, 10, 0, tzinfo=UTC), 2.0, "sunny")
+        # A boost record (excluded from sample_count). The boost flag is set at
+        # record time and preserved through backfill.
+        boost = datetime(2026, 1, 20, 14, 0, tzinfo=UTC)
+        tracker.record_forecast(boost, 5.0, "sunny", is_boost=True)
+        tracker.backfill_actual(boost, 1.0)
+
+        status = tracker.get_status_dict()
+
+        assert status["sample_count"] == 5
+        assert status["min_samples_required"] == MIN_SOLAR_CORRECTION_SAMPLES
+        assert status["samples_until_active"] == MIN_SOLAR_CORRECTION_SAMPLES - 5
+        assert status["correction_active"] is False
+        assert status["pending_forecasts"] == 1
+        assert status["boost_records_excluded"] == 1
+        # Still carries the underlying metrics fields.
+        assert "overall_bias" in status
+        assert "accuracy" in status
+
+    def test_get_status_dict_active_clamps_samples_until_active(self, tracker):
+        """Once enough samples exist, correction is active and the gap is 0."""
+        for i in range(20):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 1.0)
+
+        status = tracker.get_status_dict()
+
+        assert status["sample_count"] == 20
+        assert status["samples_until_active"] == 0
+        assert status["correction_active"] is True
 
     def test_get_bias_correction_with_data(self, tracker):
         """Test get_bias_correction with historical data."""
@@ -652,6 +824,111 @@ class TestSolarAccuracyTracker:
         # save_pending should be reset
         assert tracker._save_pending is False
 
+    @pytest.mark.asyncio
+    async def test_save_load_round_trip_survives_fresh_tracker(self, mock_hass):
+        """record_forecast -> backfill_actual -> async_save -> fresh tracker load.
+
+        Regression for root cause B: samples must survive a process restart.
+        """
+        # Use a single in-memory store shared between the two trackers to
+        # simulate the .storage file persisting across a restart.
+        saved_payload = {}
+
+        store = MagicMock()
+
+        async def _save(data):
+            saved_payload.clear()
+            saved_payload.update(data)
+
+        async def _load():
+            return saved_payload or None
+
+        store.async_save = AsyncMock(side_effect=_save)
+        store.async_load = AsyncMock(side_effect=_load)
+
+        tracker = SolarAccuracyTracker(mock_hass, "test_entry")
+        tracker._store = store
+
+        period_start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.0, "sunny")
+        tracker.backfill_actual(period_start, 1.5)
+
+        assert tracker._save_pending is True
+        await tracker.async_save()
+        store.async_save.assert_called_once()
+        assert tracker._save_pending is False
+
+        # Fresh tracker on the same store == a restart.
+        reloaded = SolarAccuracyTracker(mock_hass, "test_entry")
+        reloaded._store = store
+        await reloaded.async_load()
+
+        assert reloaded.metrics.sample_count == 1
+        assert len(reloaded._period_records) == 1
+        assert reloaded._period_records[0].forecast_kwh == 2.0
+        assert reloaded._period_records[0].actual_kwh == 1.5
+        assert reloaded.metrics.overall_bias == tracker.metrics.overall_bias
+
+    @pytest.mark.asyncio
+    async def test_pending_forecasts_survive_restart(self, mock_hass):
+        """#881: a forecast recorded but not yet backfilled must survive a
+        process restart, so a mid-day restart does not silently drop the
+        pending (which would strand the actual and lose the sample)."""
+        saved_payload = {}
+        store = MagicMock()
+
+        async def _save(data):
+            saved_payload.clear()
+            saved_payload.update(data)
+
+        async def _load():
+            return saved_payload or None
+
+        store.async_save = AsyncMock(side_effect=_save)
+        store.async_load = AsyncMock(side_effect=_load)
+
+        tracker = SolarAccuracyTracker(mock_hass, "test_entry")
+        tracker._store = store
+
+        # A future-dated pending (won't be evicted as stale on reload).
+        period_start = dt_util.now().replace(
+            minute=0, second=0, microsecond=0
+        ) + timedelta(hours=1)
+        tracker.record_forecast(period_start, 2.5, "sunny")
+        assert tracker._save_pending is True
+        await tracker.async_save()
+
+        # Fresh tracker on the same store == a restart.
+        reloaded = SolarAccuracyTracker(mock_hass, "test_entry")
+        reloaded._store = store
+        await reloaded.async_load()
+
+        assert len(reloaded._pending_forecasts) == 1
+        # The restored pending still converts when its actual arrives.
+        reloaded.backfill_actual(period_start, 2.0)
+        assert reloaded.metrics.sample_count == 1
+
+    def test_reported_accuracy_none_below_min_samples(self, tracker):
+        """#881: reported_accuracy() is None while under-sampled so the sensor
+        shows 'insufficient data' rather than a fabricated perfect 100%."""
+        # Empty tracker, then 19 samples (below the 20-sample threshold).
+        assert tracker.reported_accuracy() is None
+        for i in range(19):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 1.0)
+        assert tracker.reported_accuracy() is None
+
+    def test_reported_accuracy_value_at_or_above_min_samples(self, tracker):
+        """Once enough samples exist, reported_accuracy() mirrors metrics."""
+        for i in range(20):
+            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
+            tracker.record_forecast(period_start, 2.0, "sunny")
+            tracker.backfill_actual(period_start, 2.0)
+        reported = tracker.reported_accuracy()
+        assert reported is not None
+        assert reported == pytest.approx(tracker.metrics.accuracy)
+
 
 class TestGetTimeOfDay:
     """Tests for _get_time_of_day static method."""
@@ -752,6 +1029,16 @@ class TestNormalizeWeather:
         assert SolarAccuracyTracker._normalize_weather("blustery") == "unknown"
 
 
+def _fill_tracker_with_bias(tracker, forecast: float, actual: float, count: int):
+    """Helper: add `count` period records with given forecast/actual values."""
+    from datetime import datetime
+
+    for i in range(count):
+        period = datetime(2026, 1, 1, 6 + i // 2, (i % 2) * 30, tzinfo=UTC)
+        tracker.record_forecast(period, forecast, "sunny")
+        tracker.backfill_actual(period, actual)
+
+
 class TestComputeContextBias:
     """Tests for _compute_context_bias method."""
 
@@ -842,3 +1129,55 @@ class TestComputeContextBias:
         assert count == 2
         assert BIAS_HALF_LIFE_DAYS == 7.0
         assert weighted_bias == pytest.approx(expected, rel=0.01)
+
+
+# ─── accuracy_confidence_ceiling tests ─────────────────────────────────────
+
+
+class TestAccuracyConfidenceCeiling:
+    """Tests for accuracy_confidence_ceiling method."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        """Create mock HomeAssistant instance."""
+        hass = MagicMock()
+        hass.data = {}
+        return hass
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        """Create SolarAccuracyTracker instance."""
+        return SolarAccuracyTracker(mock_hass, "test_entry")
+
+    def test_accuracy_ceiling_dormant_below_sample_threshold(self, tracker):
+        """Returns 1.0 (no cap) when fewer than MIN_SOLAR_CORRECTION_SAMPLES records exist."""
+        # tracker fixture starts empty → 0 samples
+        assert tracker.accuracy_confidence_ceiling() == pytest.approx(1.0)
+        assert tracker.accuracy_confidence_ceiling(low=0.2, high=0.9) == pytest.approx(
+            1.0
+        )
+
+    def test_accuracy_ceiling_low_when_poor_accuracy(self, tracker):
+        """Returns 'low' param when accuracy is ≤ 50%."""
+        # Build 20 records with extreme over-forecasting (accuracy ≈ 0%)
+        _fill_tracker_with_bias(tracker, forecast=10.0, actual=0.1, count=20)
+        assert tracker.has_sufficient_samples()
+        ceiling = tracker.accuracy_confidence_ceiling(low=0.25, high=1.0)
+        assert ceiling == pytest.approx(0.25)
+
+    def test_accuracy_ceiling_high_when_good_accuracy(self, tracker):
+        """Returns 'high' param when accuracy is ≥ 85%."""
+        # Build 20 records with near-perfect forecasting
+        _fill_tracker_with_bias(tracker, forecast=1.0, actual=1.0, count=20)
+        assert tracker.has_sufficient_samples()
+        ceiling = tracker.accuracy_confidence_ceiling(low=0.3, high=1.0)
+        assert ceiling == pytest.approx(1.0)
+
+    def test_accuracy_ceiling_interpolates_midrange(self, tracker):
+        """Linear interpolation between low and high for 50% < accuracy < 85%."""
+        # accuracy ~67.5% (MAPE ~32.5%, actual = forecast * 0.675 → bias ≈ 32.5%)
+        _fill_tracker_with_bias(tracker, forecast=1.0, actual=0.675, count=20)
+        assert tracker.has_sufficient_samples()
+        ceiling = tracker.accuracy_confidence_ceiling(low=0.3, high=1.0)
+        # accuracy = 100 - 32.5 = 67.5 → interpolation at (67.5-50)/(85-50) = 0.5
+        assert 0.3 < ceiling < 1.0

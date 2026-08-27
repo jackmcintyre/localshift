@@ -704,19 +704,21 @@ class TestSelfConsumptionCreditFix:
 
 
 class TestSolarOpportunityPenaltyStrengthened:
-    """Fix B: solar opportunity penalty base includes downstream self-consumption credit.
+    """Solar opportunity penalty base is the grid import cost (#406 double-credit fix).
 
-    The penalty must overcome both the import cost AND the self-consumption credit
-    that the charged energy will generate. Previously penalty = import_cost * factor,
-    which capped the penalty below the self-consumption credit when credit > import_cost.
+    The penalty base was previously DOUBLED (import_cost + grid_import * buy_price) to
+    overcome the #406 self_consumption_value double-credit in net_cost. That credit is
+    no longer subtracted (root-caused with the 2026-06-29 overnight sawtooth), so the
+    compensating doubling is removed: the opportunity cost of grid-charging now instead
+    of waiting for free solar is simply the grid import cost. Leaving the doubling in
+    would over-suppress genuine price-spike arbitrage.
     """
 
-    def test_penalty_base_reflects_full_economic_benefit(self, default_config):
-        """Solar opportunity penalty should exceed import_cost × factor alone.
+    def test_penalty_base_is_import_cost(self, default_config):
+        """Solar opportunity penalty base == import_cost (no double-credit doubling).
 
-        When buy_price = $0.14 and self_consumption_value = $0.14 per kWh,
-        the full economic benefit of charging is $0.14 (import) + $0.14*RTE (future credit).
-        The penalty must overwhelm both, so its base should be > import_cost alone.
+        With factor=1.0 the penalty equals the grid import cost exactly. It must NOT be
+        inflated by a phantom self-consumption credit (the #406 distortion).
         """
         slot = make_slot(
             0,
@@ -742,12 +744,10 @@ class TestSolarOpportunityPenaltyStrengthened:
             solar_opportunity_penalty_factor=1.0,  # full penalty for test clarity
         )
 
-        # With factor=1.0, OLD penalty = import_cost = $0.07
-        # NEW penalty should be larger (includes self-consumption credit component)
-        # Expected: > $0.07 when self-consumption mode is active
-        assert terms.solar_opportunity_penalty > import_cost, (
-            f"Solar opportunity penalty ({terms.solar_opportunity_penalty:.4f}) should exceed "
-            f"import_cost ({import_cost:.4f}) alone — penalty base must include downstream credit"
+        # With factor=1.0 the penalty base is the honest import cost — no doubling.
+        assert terms.solar_opportunity_penalty == pytest.approx(import_cost), (
+            f"Solar opportunity penalty ({terms.solar_opportunity_penalty:.4f}) should equal "
+            f"import_cost ({import_cost:.4f}) — the #406 double-credit doubling is removed"
         )
 
 

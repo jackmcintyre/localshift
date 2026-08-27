@@ -1340,6 +1340,31 @@ State: 0.015
 
 ---
 
+### 6. number.localshift_min_cycle_saving
+
+**Purpose:** Minimum saving over holding ($/kWh charged) required to justify cycling the battery via a grid charge. Rules out "micro" arbitrage (charging cheap to shave a marginally higher later price for a few c/kWh) while preserving genuine pre-charge and price-spike capture.
+
+| Property | Value |
+|----------|-------|
+| Range | $0.00-$1.00/kWh |
+| Default | $0.25/kWh |
+| Unit | $/kWh |
+
+**How it works:** Applied as a hard feasibility skip in the DP action loop (`core._compute_best_action`). A grid charge is dropped when it beats simply holding by a positive but sub-threshold margin (`hold_total_cost - charge_total_cost < min_cycle_saving × charge_kwh`). Because the margin is the DP's real cost difference, it already credits evening-peak avoidance, the demand-window target, and backup readiness via `future_cost` — so target-seeking pre-charge and genuine spikes are unaffected, and (unlike a soft penalty) it cannot be "paid through".
+
+**Tuning Guide:**
+- **$0.00** disables the gate (legacy behaviour).
+- **~$0.10** blocks only the thinnest arbitrage; keeps ordinary evening pre-charge.
+- **~$0.25** (default) also skips marginal evening coverage; cycles only for clearly worthwhile savings and spikes.
+- **Higher** reserves cycling for large savings / genuine spikes only.
+
+**Example Data:**
+```
+State: 0.25
+```
+
+---
+
 ## Selects (Mode Control)
 
 ### 1. select.localshift_battery_mode

@@ -1,6 +1,6 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -982,3 +982,66 @@ def test_cheap_charge_stop_price_uses_final_effective_threshold(
 
 
 # =============================================================================
+
+
+# =============================================================================
+# Fresh-SOC refresh before the optimizer (2026-06-30 silent pre-charge miss)
+# =============================================================================
+
+
+def test_refresh_soc_for_optimizer_uses_fresh_read(
+    computation_engine, coordinator_data
+):
+    """The optimizer must plan from a fresh live SOC, not a stale cached value.
+
+    Regression for the 2026-06-30 incident: a high cached SOC while the pack had
+    drained to ~10% caused the planner to skip pre-charge.
+    """
+    from types import SimpleNamespace
+
+    from custom_components.localshift.const import CONF_TESLEMETRY_SOC
+
+    coordinator_data.soc = 95.0  # stale, cached high
+    soc_entity = computation_engine._get_entity_id(CONF_TESLEMETRY_SOC)
+    computation_engine.hass.states = {soc_entity: SimpleNamespace(state="10.0")}
+
+    computation_engine._refresh_soc_for_optimizer(coordinator_data)
+
+    assert coordinator_data.soc == 10.0
+
+
+def test_refresh_soc_keeps_cached_when_unavailable(
+    computation_engine, coordinator_data
+):
+    """An unavailable SOC entity must not clobber the cached value with garbage."""
+    from types import SimpleNamespace
+
+    from custom_components.localshift.const import CONF_TESLEMETRY_SOC
+
+    coordinator_data.soc = 42.0
+    soc_entity = computation_engine._get_entity_id(CONF_TESLEMETRY_SOC)
+    computation_engine.hass.states = {soc_entity: SimpleNamespace(state="unavailable")}
+
+    computation_engine._refresh_soc_for_optimizer(coordinator_data)
+
+    assert coordinator_data.soc == 42.0
+
+
+def test_manual_override_clears_a_stale_pending_plan_mode(
+    computation_engine, coordinator_data
+):
+    """The manual-override early return skips the optimizer facade entirely, so a
+    ``debug_plan_mode_pending`` left by an earlier tick was never refreshed or
+    cleared. The state machine's plan-charge trigger keeps reading that frozen value
+    and can grant a token off a plan that is arbitrarily old — the phantom grant
+    ``_mark_mode_debug_fallback`` claims to have closed on the other early-exit
+    paths."""
+    coordinator_data.manual_override = True
+    coordinator_data.debug_plan_mode_pending = BatteryMode.GRID_CHARGING.value
+    coordinator_data.optimizer_precharge_backstop_active = True
+
+    computation_engine.compute_derived_values(coordinator_data)
+
+    assert coordinator_data.active_mode == BatteryMode.MANUAL
+    assert coordinator_data.debug_plan_mode_pending is None
+    assert coordinator_data.optimizer_precharge_backstop_active is False

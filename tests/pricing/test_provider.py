@@ -176,8 +176,16 @@ def test_amber_express_entity_prefix():
     assert provider.name == "amber_express"
 
 
-def test_amber_express_provider_falls_back_to_simple_entity():
-    """Test AmberExpressProvider falls back to simple entity when detailed missing."""
+def test_amber_express_v2_reads_detailed_forecast_from_main_entity():
+    """Test AmberExpressProvider reads v2.0.0 ``detailedForecast`` attribute.
+
+    amber_express v2.0.0 (2026-06-25) removed the separate ``*_price_detailed``
+    entity and folded its rich forecast onto the main price entity as a
+    ``detailedForecast`` attribute. When the legacy detailed entity is absent,
+    the provider must read ``detailedForecast`` off the main price entity and
+    normalize those slots (start_time / per_kwh / duration, is_spike from
+    demand_window) exactly as it did the legacy ``forecasts``.
+    """
     from unittest.mock import MagicMock
 
     from custom_components.localshift.pricing.provider import AmberExpressProvider
@@ -185,25 +193,74 @@ def test_amber_express_provider_falls_back_to_simple_entity():
     provider = AmberExpressProvider()
 
     hass = MagicMock()
-    # Detailed entity returns None
-    simple_state = MagicMock()
-    simple_state.attributes = {
+    main_state = MagicMock()
+    main_state.attributes = {
+        # The simple HAEO list is also present on the real entity; it must be
+        # ignored in favour of detailedForecast.
         "forecast": [
+            {"time": "2026-03-16T12:00:00+11:00", "value": 0.20},
+            {"time": "2026-03-16T12:30:00+11:00", "value": 2.50},
+        ],
+        "detailedForecast": [
             {
                 "start_time": "2026-03-16T12:00:01+11:00",
                 "end_time": "2026-03-16T12:30:00+11:00",
                 "per_kwh": 0.20,
                 "demand_window": False,
             },
-        ]
+            {
+                "start_time": "2026-03-16T12:30:01+11:00",
+                "end_time": "2026-03-16T13:00:00+11:00",
+                "per_kwh": 2.50,
+                "demand_window": True,
+            },
+        ],
     }
+    # Legacy _price_detailed entity is gone in v2.0.0 → returns None.
     hass.states.get.side_effect = lambda eid: (
-        None if "detailed" in eid else simple_state
+        None if "detailed" in eid else main_state
     )
 
     slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
-    assert len(slots) == 1
+
+    assert len(slots) == 2
     assert slots[0].per_kwh == 0.20
+    assert slots[0].duration == 30
+    assert slots[0].is_spike is False
+    assert slots[1].per_kwh == 2.50
+    assert slots[1].duration == 30
+    assert slots[1].is_spike is True  # demand_window=True
+
+
+def test_amber_express_simple_forecast_only_yields_empty():
+    """Negative lock: a main entity exposing only the simple ``forecast`` list.
+
+    The simple ``forecast`` attribute ({time, value}, used by HAEO) lacks
+    start_time / per_kwh and cannot be normalized. The provider must NOT fall
+    back to it — doing so was the original bug, producing a KeyError per slot.
+    With the legacy detailed entity gone and no ``detailedForecast`` present,
+    the result must be an empty list (no crash, no KeyError leakage).
+    """
+    from unittest.mock import MagicMock
+
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+
+    hass = MagicMock()
+    main_state = MagicMock()
+    main_state.attributes = {
+        "forecast": [
+            {"time": "2026-03-16T12:00:00+11:00", "value": 0.20},
+            {"time": "2026-03-16T12:30:00+11:00", "value": 2.50},
+        ],
+    }
+    hass.states.get.side_effect = lambda eid: (
+        None if "detailed" in eid else main_state
+    )
+
+    slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
+    assert slots == []
 
 
 def test_amber_express_provider_returns_empty_when_no_forecasts():

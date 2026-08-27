@@ -13,6 +13,7 @@ from ..const import (
     DEFAULT_CURRENT_HOUR_RECENT_WEIGHT,
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+    LOAD_FORECAST_CEILING_FACTOR,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,7 +41,9 @@ class LoadForecaster:
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
         self._forecast_corrections: ForecastCorrectionProvider | None = None
-        self._weather_adjustment_applied = False  # Track if weather adjustment was used
+        # True if ≥1 slot was weather-adjusted in the most recent forecast run;
+        # reset every run at pipeline.py:53, published at pipeline.py:77-79.
+        self._weather_adjustment_applied = False
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -143,6 +146,17 @@ class LoadForecaster:
                 slot_hour,
                 season,
             )
+        if hourly_avg_kw:
+            ceiling = max(hourly_avg_kw.values()) * LOAD_FORECAST_CEILING_FACTOR
+            if ceiling > 0 and final_load_kw > ceiling:
+                _LOGGER.warning(
+                    "LOAD_FORECAST_CEILING (Issue #826): forecast %.3f kW for hour %d "
+                    "exceeds data-driven ceiling %.3f kW; clamping",
+                    final_load_kw,
+                    slot_hour,
+                    ceiling,
+                )
+                final_load_kw = ceiling
         return round(final_load_kw, 3), adjusted_source
 
     def _get_historical(self, hourly_avg_kw: dict[int, float], slot_hour: int) -> float:
@@ -351,7 +365,14 @@ class LoadForecaster:
             return adjusted_load_kw, adjusted_source
 
         coef = self._weather_correlation.get_coefficients_for_hour(slot_hour)
-        if coef is None or coef.confidence not in ("medium", "high"):
+        # No confidence pre-gate here: predict_load (correlation.py:507/520) is
+        # the authoritative per-zone gate, refusing the adjustment (returning
+        # "low_confidence") when the relevant zone fails samples/r². The old
+        # `confidence not in ("medium","high")` check was strictly redundant
+        # with that — the hour label is the max of zone confidences, so a passing
+        # zone always passed it — and reading the now-stricter hour label here
+        # would wrongly suppress a usable zone in a mixed hour. Behavior-neutral.
+        if coef is None:
             return adjusted_load_kw, adjusted_source
 
         weather_adjusted, adjustment_source = self._weather_correlation.predict_load(

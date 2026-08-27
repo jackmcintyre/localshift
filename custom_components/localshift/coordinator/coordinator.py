@@ -298,6 +298,11 @@ class LocalShiftCoordinator:
             self._learning_orchestrator.optimization_controller
         )
 
+        # Re-derive ephemeral learning state from persisted data before sensors
+        # first render: learning_status from the decision deque, and the last
+        # pattern report / bias corrections (which only lived in memory).
+        self._learning_orchestrator.restore_runtime_state(self.data)
+
         # Initialize solar forecast accuracy tracker (Issue #378)
         from ..forecast.solar_accuracy import SolarAccuracyTracker
 
@@ -477,15 +482,30 @@ class LocalShiftCoordinator:
         if self._learning_orchestrator is not None:
             await self._learning_orchestrator.async_save_all()
 
+        # Persist solar accuracy samples. The tracker is owned by the
+        # coordinator (not the orchestrator), so async_save_all() misses it.
+        # async_save() early-returns unless there are pending changes and
+        # swallows its own exceptions, so this is a cheap, safe no-op most
+        # ticks and cannot block the orchestrator save above (which runs first
+        # to preserve existing behavior). The getattr guard matters because the
+        # attribute is only created in async_start and this can run on a
+        # failed-startup teardown.
+        tracker = getattr(self, "solar_accuracy_tracker", None)
+        if tracker is not None:
+            await tracker.async_save()
+
     @callback
     def _handle_learning_save(self, now: datetime) -> None:
         """Periodic save of learning data to prevent data loss on restart.
 
         Fires every 5 minutes to ensure data is persisted even if HA
-        restarts unexpectedly.
+        restarts unexpectedly. Shares the same path as the shutdown save so
+        the solar accuracy tracker is covered by both.
         """
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.handle_periodic_save()
+        self.hass.async_create_task(
+            self._save_learning_data(),
+            "localshift_periodic_learning_save",
+        )
 
     # ------------------------------------------------------------------
     # Entity update subscription (for sensor/binary_sensor entities)
@@ -604,9 +624,9 @@ class LocalShiftCoordinator:
             hasattr(self, "solar_accuracy_tracker")
             and self.solar_accuracy_tracker is not None
         ):
-            self.data.solar_bias_metrics = self.solar_accuracy_tracker.metrics.to_dict()
+            self.data.solar_bias_metrics = self.solar_accuracy_tracker.get_status_dict()
             self.data.solar_forecast_accuracy = (
-                self.solar_accuracy_tracker.metrics.accuracy
+                self.solar_accuracy_tracker.reported_accuracy()
             )
 
         # Compute hybrid accuracy combining LocalShift tracker + Solcast MAPE (Issue #778 Phase 2)
@@ -642,6 +662,12 @@ class LocalShiftCoordinator:
 
         # Convert MAPE to accuracy
         solcast_accuracy = max(0, 100 - solcast_mape)
+
+        # No LocalShift accuracy yet (insufficient samples, #881): defer wholly
+        # to Solcast rather than blending against a fabricated 100%.
+        if localshift_accuracy is None:
+            self.data.hybrid_solar_accuracy = round(solcast_accuracy, 1)
+            return
 
         # Check LocalShift sample count for confidence weighting
         localshift_samples = 0
@@ -720,12 +746,35 @@ class LocalShiftCoordinator:
         """
         await self._evaluate_state_machine()
 
-    async def async_recompute_and_evaluate(self) -> None:
+    async def async_recompute_and_evaluate(
+        self, invalidate_decision: bool = True
+    ) -> None:
         """Public method for triggering recomputation and state evaluation.
 
         Called by switch and number platforms when configuration changes.
         Encapsulates the pattern: compute derived values → notify listeners → evaluate state machine.
+
+        Args:
+            invalidate_decision: When True (the default), force the next state
+                machine evaluation to be an allowed re-decision (#622 gate
+                replacement) — used for deliberate config-change re-decision
+                points. The load-deviation / solar-event reoptimizers pass False:
+                they may update the plan but must NOT grant a mode change.
+
         """
+        if self._state_machine is not None:
+            if invalidate_decision:
+                self._state_machine.invalidate_decision_fingerprint(
+                    "async_recompute_and_evaluate (config change)"
+                )
+            else:
+                # Honour "must NOT grant a mode change" against the plan-charge
+                # trigger too: _compute_derived_values below runs the facade out of
+                # lock and writes debug_plan_mode_pending, which the evaluation
+                # that follows would otherwise read back with zero lag and grant on.
+                self._state_machine.suppress_next_plan_charge_grant(
+                    "async_recompute_and_evaluate (reoptimize)"
+                )
         self._compute_derived_values()
         self.notify_listeners()
         await self.async_evaluate_state_machine()

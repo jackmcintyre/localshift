@@ -22,10 +22,12 @@ from ..const import (
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
+    CONF_TESLEMETRY_GRID_SERVICES,
     CONF_TESLEMETRY_LOAD_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_TESLEMETRY_STORM_WATCH,
     CONF_WEATHER_ENTITY,
 )
 
@@ -87,6 +89,16 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "valid_values": ["pv_only", "battery_ok"],
         "description": "Export mode",
     },
+    CONF_TESLEMETRY_GRID_SERVICES: {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": bool,
+        "description": "Grid services / VPP event active (Tesla override corroboration)",
+    },
+    CONF_TESLEMETRY_STORM_WATCH: {
+        "category": EntityCategory.OPTIONAL,
+        "expected_type": bool,
+        "description": "Storm Watch active (Tesla override corroboration)",
+    },
     CONF_PRICING_GENERAL_PRICE: {
         "category": EntityCategory.REQUIRED,
         "expected_type": (int, float),
@@ -133,7 +145,11 @@ STALENESS_THRESHOLDS: dict[str, timedelta] = {
     CONF_TESLEMETRY_OPERATION_MODE: timedelta(minutes=5),
     CONF_PRICING_GENERAL_PRICE: timedelta(minutes=10),
     CONF_PRICING_FEED_IN_PRICE: timedelta(minutes=10),
-    CONF_SOLCAST_FORECAST_TODAY: timedelta(hours=2),
+    # Solcast auto-polls 5x/day on a fixed 4.8h cadence (00:00, 04:48, 09:36,
+    # 14:24, 19:12 local); thresholds must exceed that interval or the entity
+    # is flagged stale for ~2.8h of every poll window, falsely degrading
+    # health and engaging the stale-solar confidence ceiling.
+    CONF_SOLCAST_FORECAST_TODAY: timedelta(hours=5),
     CONF_SOLCAST_FORECAST_TOMORROW: timedelta(hours=6),
 }
 
@@ -306,6 +322,11 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": bool,
         "staleness_minutes": None,
     },
+    "switch.localshift_stale_solar_conservative": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
     "switch.localshift_notifications_enabled": {
         "category": EntityCategory.REQUIRED,
         "expected_type": bool,
@@ -346,15 +367,15 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": float,
         "staleness_minutes": None,
     },
+    "number.localshift_stale_solar_confidence_ceiling": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": float,
+        "staleness_minutes": None,
+    },
     "sensor.localshift_forecast_accuracy": {
         "category": EntityCategory.OPTIONAL,
         "expected_type": float,
         "staleness_minutes": 60,
-    },
-    "sensor.localshift_extended_forecast_accuracy": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": float,
-        "staleness_minutes": 1440,
     },
     "sensor.localshift_solar_forecast_accuracy": {
         "category": EntityCategory.OPTIONAL,
@@ -365,11 +386,6 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "category": EntityCategory.OPTIONAL,
         "expected_type": float,
         "staleness_minutes": 15,
-    },
-    "sensor.localshift_cost_reconciliation": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": str,
-        "staleness_minutes": 1440,
     },
     "sensor.localshift_learning_status": {
         "category": EntityCategory.OPTIONAL,

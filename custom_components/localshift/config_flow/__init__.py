@@ -24,6 +24,7 @@ from ..const import (
     CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
+    CONF_MIN_CYCLE_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
@@ -55,6 +56,7 @@ from ..const import (
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
+    DEFAULT_MIN_CYCLE_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRICING_DATA_SOURCE,
@@ -695,6 +697,9 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_TARGET_PENALTY: current.get(
                     CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY
                 ),
+                CONF_MIN_CYCLE_SAVING: current.get(
+                    CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
+                ),
             }),
             description_placeholders={
                 "integration_name": "LocalShift",
@@ -773,6 +778,19 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     max=0.100,
                     step=0.005,
                     unit_of_measurement="$/%-point",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_MIN_CYCLE_SAVING,
+                default=values.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING),
+                description="Min saving per kWh cycled to grid-charge (0 disables)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=1.00,
+                    step=0.05,
+                    unit_of_measurement="$/kWh",
                     mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),

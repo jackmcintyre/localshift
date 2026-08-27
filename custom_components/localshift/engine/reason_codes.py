@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from custom_components.localshift.engine.constraints import (
+    VERY_CHEAP_PRICE_FACTOR,
     cheap_threshold_for_slot,
 )
 from custom_components.localshift.engine.penalties import (
@@ -135,10 +136,13 @@ def classify_export_reason(
     negative_fit_avoidance_context: NegativeFitAvoidanceContext | None = None,
 ) -> PlannerReasonCode:
     """Classify EXPORT action reason."""
+    # Mirrors the ``use_avoidance`` window in ``_determine_export_actions`` — the
+    # two must agree or an export chosen for avoidance reasons gets reported under
+    # the wrong reason code.
     if (
         negative_fit_avoidance_context is not None
         and slot_idx is not None
-        and slot_idx < negative_fit_avoidance_context.risk_window_start_idx
+        and slot_idx <= negative_fit_avoidance_context.risk_window_end_idx
     ):
         return PlannerReasonCode.NEGATIVE_FIT_AVOIDANCE
 
@@ -234,7 +238,7 @@ def _is_cheap_import_window(
     if slot.buy_price > threshold:
         return False
     is_blind = _is_blind_to_future_solar(terminal_penalty_idx, slots, inputs=inputs)
-    return not is_blind or slot.buy_price <= (threshold * 0.8)
+    return not is_blind or slot.buy_price <= (threshold * VERY_CHEAP_PRICE_FACTOR)
 
 
 def _is_blind_to_future_solar(

@@ -14,13 +14,18 @@ from ..const import (
     BACKUP_RESERVE_MAX_VALID,
     CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
+    CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
+    DEFAULT_MINIMUM_TARGET_SOC,
     PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
+    TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
+    TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES,
     TESLA_OVERRIDE_RESERVE_PERCENT,
+    TESLA_OVERRIDE_SELF_COMMAND_GRACE_MINUTES,
     TESLA_OVERRIDE_TOLERANCE_PERCENT,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
@@ -39,7 +44,14 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-TESLA_OVERRIDE_COOLDOWN = timedelta(minutes=30)
+# Plan-disagreement trigger (2026-07-27 pre-charge incident): the modes whose
+# *start* the plan may ask for while the decision is frozen. The trigger is
+# deliberately ONE-DIRECTIONAL — only a wanted START of charging may grant a
+# token; a wanted STOP never does. Charging late costs money; charging one
+# extra interval does not, and the asymmetry is what makes the trigger
+# flap-free (see _update_plan_charge_epoch).
+_CHARGE_MODES = (BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING)
+_CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
 
 
 class StateMachine:
@@ -87,8 +99,36 @@ class StateMachine:
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
-        # Issue #622: Fingerprint for gating mode transitions on price changes
-        self._last_decision_fingerprint: str | None = None
+        # Decision-token gating (#622 gate replacement): the mode may be
+        # re-decided at most once per discrete decision-context change. The
+        # fingerprint is consumed by the *evaluation* that observes the change
+        # (not by a transition), which kills the old deferred-redemption bug
+        # where a stale token was redeemed minutes later by a non-price input.
+        self._last_evaluated_fingerprint: str | None = None
+        # The price/spike/DW/floor half of the fingerprint from the last granted
+        # evaluation, kept separately so a grant can be attributed: same base +
+        # different epoch ⇒ the grant came from the plan alone.
+        self._last_evaluated_base: str | None = None
+        # Plan-disagreement trigger (2026-07-27 pre-charge incident): the plan is
+        # itself a decision input. ``_plan_charge_epoch`` is a MONOTONE counter
+        # incremented on the rising edge of "the plan wants to START charging while
+        # the decision is frozen", and is the 6th fingerprint component.
+        #
+        # The bound is enforced by BUDGET, not by edge memory. An earlier revision
+        # tracked only the last qualifying pending value; because a granted
+        # evaluation clears ``debug_plan_mode_pending``, that memory reset itself on
+        # the very next tick and the "rising edge" re-armed every 2 ticks —
+        # commit → pending clears → pending re-set → fresh rising edge, forever,
+        # inside one unchanged price context (measured: 11 grants over 21 ticks).
+        # ``_plan_charge_context`` + ``_plan_charge_granted`` instead spend at most
+        # one grant per (price context × wanted-charge mode) and refuse to re-grant
+        # until the price/spike/DW/floor context genuinely changes.
+        self._plan_charge_context: str | None = None
+        self._plan_charge_granted: set[str] = set()
+        self._plan_charge_epoch: int = 0
+        # One-shot suppression for callers that explicitly must not grant a mode
+        # change (async_recompute_and_evaluate(invalidate_decision=False)).
+        self._suppress_plan_charge_grant: bool = False
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -108,21 +148,35 @@ class StateMachine:
         self._tesla_override_released_at: datetime | None = (
             None  # Track when Tesla released control
         )
+        # True when detection was corroborated by a real Tesla signal
+        # (grid services / storm watch ON); False when yielding purely on the
+        # uncorroborated heuristic (both signals unavailable). Drives the
+        # re-probe decision below.
+        self._tesla_override_corroborated: bool = False
+        # Last time an uncorroborated override was re-probed (commanded mode
+        # re-issued to test whether control returned).
+        self._tesla_override_last_probe_at: datetime | None = None
+        # Suppression window: if LocalShift itself commanded a reserve≈80
+        # self_consumption state within this window, treat a matching signature
+        # as our own leftovers rather than a Tesla override.
+        self._SELF_COMMAND_GRACE = timedelta(
+            minutes=TESLA_OVERRIDE_SELF_COMMAND_GRACE_MINUTES
+        )
+        self._REPROBE_INTERVAL = timedelta(
+            minutes=TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES
+        )
+        self._RELEASE_COOLDOWN = timedelta(
+            minutes=TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES
+        )
 
-    def _detect_tesla_override(self, data: CoordinatorData) -> bool:
-        """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
+    def _matches_override_signature(self, data: CoordinatorData) -> bool:
+        """Return True if hardware shows the Tesla-override signature.
 
-        Indicators: operation_mode=self_consumption, backup_reserve≈80%
-
-        Args:
-            data: Coordinator data with current hardware state
-
-        Returns:
-            True if Tesla override is detected, False otherwise.
-
+        Signature: operation_mode=self_consumption with backup_reserve≈80%.
+        Tesla sets this during Storm Watch, Grid Events, and VPP — but
+        LocalShift's own daily force-charge clamp (81-99 -> 80) can reach the
+        same state, so a signature match alone is not proof of an override.
         """
-        # Tesla override signature: self_consumption mode with 80% reserve
-        # This combination is set by Tesla during Storm Watch, Grid Events, VPP
         if data.operation_mode == "self_consumption":
             reserve = data.backup_reserve
             if (
@@ -133,6 +187,68 @@ class StateMachine:
                 return True
         return False
 
+    def _is_signature_self_inflicted(self, now: datetime) -> bool:
+        """Return True if LocalShift itself explains the reserve≈80 signature.
+
+        Used only when Tesla's corroboration signals are unavailable. Two ways
+        the signature can be our own doing:
+          (i) the mode LocalShift currently commands expects a self_consumption
+              reserve ≈80 (e.g. HOLD preserving an ~80% SOC), or
+          (ii) LocalShift completed a transition recently and a reserve write
+               may still be settling or was reverted by Tesla just after
+               acceptance (the incident's revert-after-validation race).
+        """
+        expected_op, expected_reserve, _, _ = self._get_expected_state_for_mode(
+            self._commanded_mode
+        )
+        if (
+            expected_op == "self_consumption"
+            and abs(expected_reserve - TESLA_OVERRIDE_RESERVE_PERCENT)
+            < TESLA_OVERRIDE_TOLERANCE_PERCENT
+        ):
+            return True
+        return (
+            self._last_successful_transition is not None
+            and now - self._last_successful_transition < self._SELF_COMMAND_GRACE
+        )
+
+    def _detect_tesla_override(self, data: CoordinatorData, now: datetime) -> bool:
+        """Detect if Tesla has taken control (Storm Watch, Grid Event, VPP).
+
+        Corroborates the hardware signature against Tesla's grid-services and
+        storm-watch signals, falling back to self-awareness heuristics only when
+        those signals are unavailable:
+
+        - signature absent                      -> no override
+        - either signal ON                      -> override (real event, yield)
+        - both signals known-OFF                -> no override (drift, not event)
+        - signals unavailable + self-inflicted  -> no override (our own leftovers)
+        - signals unavailable + not self-caused -> override (legacy heuristic)
+
+        Args:
+            data: Coordinator data with current hardware state and signals.
+            now: Current time, for the self-command suppression window.
+
+        Returns:
+            True if a Tesla override is detected, False otherwise.
+
+        """
+        if not self._matches_override_signature(data):
+            return False
+
+        signals = (data.grid_services_active, data.storm_watch_active)
+        if any(signal is True for signal in signals):
+            # A real Tesla event is active — genuinely yield control.
+            return True
+        if all(signal is False for signal in signals):
+            # Both signals explicitly report no event: the signature is drift
+            # (e.g. a reverted reserve write), not a Tesla override.
+            return False
+
+        # At least one signal is unavailable and none reports an active event.
+        # Fall back to self-awareness: suppress if this is our own doing.
+        return not self._is_signature_self_inflicted(now)
+
     def is_tesla_override_active(self) -> bool:
         """Check if Tesla override is currently active.
 
@@ -142,18 +258,161 @@ class StateMachine:
         """
         return self._tesla_override_detected
 
-    def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
-        """Generate fingerprint from price data for gating mode transitions.
+    def get_tesla_override_info(self) -> dict[str, Any]:
+        """Return Tesla override state for observability (binary sensor attrs)."""
+        return {
+            "active": self._tesla_override_detected,
+            "detected_at": self._tesla_override_detected_at,
+            "corroborated": self._tesla_override_corroborated,
+            "last_probe_at": self._tesla_override_last_probe_at,
+            "released_at": self._tesla_override_released_at,
+        }
 
-        Issue #622: Mode transitions are gated on price changes. This fingerprint
-        captures the price state that affects mode decisions.
+    def _update_plan_charge_epoch(
+        self, data: CoordinatorData, context: str | None = None
+    ) -> None:
+        """Advance the plan-disagreement epoch (2026-07-27 pre-charge incident).
+
+        The original fingerprint enumerated price/spike/DW/floor as the only
+        legitimate re-decision triggers, silently assuming the plan is stable
+        between them. It is not: the DP's slot-0 action oscillates hold↔charge on
+        every replan because ``first_charge`` chases the cheapest slot forward.
+        The token therefore sampled the plan on a ~5-min stride and, on
+        2026-07-27, nearly every sample landed on a hold-phase plan — the wanted
+        charge was recorded in ``debug_plan_mode_pending`` dozens of times and
+        never committed (DW entered at 64% against a 95% target).
+
+        ``debug_plan_mode_pending`` is the value written by the *previous* tick's
+        facade run — the same documented 1-tick-lag pattern already used for
+        ``dw_active``/``soc_floor_breached`` (all are read pre-refresh).
+
+        Three gates decide whether a pending value qualifies:
+
+        1. it names a CHARGE mode — asymmetry gate #1, only a wanted *start*;
+        2. the committed mode is not already charging — asymmetry gate #2, which
+           is what makes a wanted *stop* ungrantable (a stop waits for the next
+           natural fingerprint change, ≤1 Amber tick);
+        3. SOC is below the battery target — nothing to grant at/above target.
+
+        The bound is a per-context BUDGET, not an edge detector. Edge detection
+        does not work here: a granted evaluation clears
+        ``debug_plan_mode_pending`` (``_commit_or_hold_mode``), so any memory of
+        "the last pending value" is reset by the very grant it is meant to gate,
+        the next frozen tick re-sets the pending value, and the tick after that
+        looks like a fresh rising edge. That re-arms every 2 ticks and re-grants
+        forever inside one unchanged price context — the #622 flap, restored.
+
+        Instead: each (price context × wanted-charge mode) pair may spend the
+        epoch exactly once. ``_plan_charge_granted`` records which charge modes
+        have already been granted in ``_plan_charge_context``, and is cleared only
+        when the price/spike/DW/floor context genuinely changes.
+
+        ⇒ at most ONE extra decision per (price context × wanted-charge mode) —
+        two charge modes exist, so at most two per context — and it can only start
+        charging. No charge→hold→charge cycle is reachable inside a single price
+        context, and no unbounded re-grant loop is either.
 
         Args:
-            data: Coordinator data with current prices.
+            data: Coordinator data (read-only here).
+            context: The price/spike/DW/floor half of the decision fingerprint.
+                None (price sensor unavailable) resets the budget: we are frozen
+                anyway, and the next real context must not inherit a spent budget.
+
+        """
+        if self._suppress_plan_charge_grant:
+            # Explicit "may update the plan but must NOT grant a mode change"
+            # caller. Still re-baseline the context so the next real evaluation
+            # is not judged against a stale one.
+            self._plan_charge_context = context
+            self._plan_charge_granted.clear()
+            return
+
+        if context != self._plan_charge_context:
+            self._plan_charge_context = context
+            self._plan_charge_granted.clear()
+
+        pending = data.debug_plan_mode_pending
+        battery_target = float(
+            self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        )
+
+        qualifies = (
+            context is not None
+            and pending in _CHARGE_MODE_VALUES
+            and data.active_mode not in _CHARGE_MODES
+            and data.soc is not None
+            and data.soc < battery_target
+        )
+
+        if (
+            qualifies
+            and pending is not None
+            and pending not in self._plan_charge_granted
+        ):
+            self._plan_charge_granted.add(pending)
+            self._plan_charge_epoch += 1
+            _LOGGER.debug(
+                "Plan-charge disagreement epoch %d (plan wants %s, committed %s)",
+                self._plan_charge_epoch,
+                pending,
+                data.active_mode.value,
+            )
+
+    def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
+        """Generate the discrete decision-context fingerprint.
+
+        #622 gate replacement: the mode may be re-decided only when the discrete
+        decision context changes. This fingerprint enumerates every legitimate
+        re-decision trigger so the once-per-context invariant holds by
+        construction — no timers, no dwell:
+
+        - buy/sell price (Amber's 5-min interval is the primary trigger)
+        - spike: price-spike onset
+        - dw_active: demand-window boundary crossing
+        - soc_floor_breached: SOC dropped below the optimizer's minimum target
+        - plan_charge_epoch: the optimizer plan wants to START charging while the
+          committed decision is frozen (one-directional; see
+          _update_plan_charge_epoch)
+
+        ``dw_active`` and ``soc_floor_breached`` are read from ``data`` *before*
+        compute_derived_values refreshes them this tick. The resulting 1-tick
+        detection lag is acceptable and intended: the very next evaluation (≤1
+        min away) carries the refreshed values, and treating the pre-refresh
+        snapshot as the decision context keeps the fingerprint consistent with
+        the prices read at the same instant.
+
+        The same 1-tick lag applies to the plan-charge epoch: the pending plan
+        mode it is derived from was written by the previous tick's facade run.
+        Only the rising edge of a wanted charge is visible in the fingerprint —
+        the falling edge (the disagreement resolving) is deliberately invisible,
+        which is what makes the trigger flap-free.
+
+        This method is side-effect-free: it *reads* ``_plan_charge_epoch`` and
+        never updates it (``_apply_decision_token`` calls
+        ``_update_plan_charge_epoch`` first). Tests call it out-of-band to
+        enumerate distinct contexts; a mutating fingerprint would corrupt them.
+
+        Args:
+            data: Coordinator data with current prices and state.
 
         Returns:
-            Fingerprint string "{buy}|{sell}|{spike}" or None if prices unavailable.
+            Fingerprint string or None if prices are unavailable. None must NOT
+            count as a context change (the caller freezes on None).
 
+        """
+        base = self._get_decision_context(data)
+        if base is None:
+            return None
+        return f"{base}|{self._plan_charge_epoch}"
+
+    def _get_decision_context(self, data: CoordinatorData) -> str | None:
+        """The price/spike/DW/floor half of the fingerprint, without the epoch.
+
+        Split out so two things can be said precisely: which grants came from the
+        plan alone (same context, different epoch — see
+        ``mode_decision_plan_charge_only``), and when the plan-charge budget
+        should be refilled (``_update_plan_charge_epoch``). Both would be circular
+        if they had to read the full fingerprint, which contains the epoch.
         """
         buy = data.general_price
         sell = data.feed_in_price
@@ -162,7 +421,13 @@ class StateMachine:
         if buy is None or sell is None:
             return None
 
-        return f"{buy:.4f}|{sell:.4f}|{spike}"
+        dw_active = data.demand_window_active
+        min_target_soc = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        soc_floor_breached = data.soc is not None and data.soc < min_target_soc
+
+        return f"{buy:.4f}|{sell:.4f}|{spike}|{dw_active}|{soc_floor_breached}"
 
     def _get_mode_config(
         self, target: BatteryMode, data: CoordinatorData
@@ -317,6 +582,15 @@ class StateMachine:
 
         self._startup_grace_until = None
 
+        # #622 gate replacement: grace-end is the startup-settle re-decision
+        # point (enumerated exception). A token may already have been burned by
+        # an evaluation during grace while the safety gate was still blocking
+        # (e.g. optimizer slots absent pre-Solcast), committing the SC fallback;
+        # without invalidation the first real decision would stay frozen until
+        # the next price change (~5 min). Invalidate so the first post-grace
+        # evaluation re-decides from the now-populated inputs.
+        self.invalidate_decision_fingerprint("startup grace ended")
+
         # Issue #349: Check if automation is ready before inferring mode
         # At startup, entities may not be populated, leading to incorrect mode inference
         if not data.automation_ready:
@@ -380,6 +654,12 @@ class StateMachine:
         )
         data.manual_override = False
         self._manual_override_set_at = None
+        # #622 gate replacement: the timeout is a deliberate re-decision point.
+        # Without invalidating the fingerprint the facade would keep pinning
+        # active_mode at MANUAL until the next genuine price change (up to ~5
+        # min away), because an unchanged decision context grants no token.
+        # Invalidate so the very next evaluation is decision-allowed.
+        self.invalidate_decision_fingerprint("manual override timeout")
         # Send notification about manual override timeout
         await self._notification_service.send_manual_override_timeout_notification(
             data, timeout_hours
@@ -388,7 +668,9 @@ class StateMachine:
         # A full recompute already ran at the top of this lock
         # (Item 5 fix).
         # desired remains MANUAL this cycle; the next periodic tick
-        # (at most 1 minute away) will recompute the correct mode.
+        # (at most 1 minute away) will recompute the correct mode — now that the
+        # fingerprint is invalidated, that tick is decision-allowed and the
+        # optimizer mode commits instead of staying pinned at MANUAL.
 
     async def _handle_soc_monitoring(self, data: CoordinatorData) -> bool:
         """Handle SOC-based charge target enforcement.
@@ -512,20 +794,97 @@ class StateMachine:
             if not data.automation_ready and check_automation_ready_func is not None:
                 in_grace = self._startup_grace_until is not None
                 check_automation_ready_func(data, suppress_warning=in_grace)
-            computation_engine.compute_derived_values(data)
+
+            # #622 gate replacement: consume the decision token at evaluation
+            # time, from fresh post-read_state data, BEFORE compute_derived_values
+            # runs the optimizer facade. The facade reads data.mode_decision_allowed
+            # to decide whether it may re-select active_mode this tick.
+            self._apply_decision_token(data)
 
             try:
+                # Inside the try: compute_derived_values runs the optimizer facade,
+                # and an exception from any post-facade step used to escape with
+                # mode_decision_allowed / mode_backstop_allowed still True — leaving
+                # the out-of-lock recompute armed to force a charge.
+                computation_engine.compute_derived_values(data)
                 await self._evaluate_core(data, computation_engine)
             finally:
+                # #622 gate replacement (transience guarantee): the decision
+                # token — and the pre-charge backstop permission that rides the
+                # same window — are valid ONLY within this in-lock window, from
+                # _apply_decision_token above to here. Resetting both (even on
+                # exception) guarantees neither flag is True for the OUT-OF-LOCK
+                # compute_derived_values call at the top of
+                # coordinator.async_recompute_and_evaluate — so a load-deviation
+                # or solar reoptimize can never commit an ungated mode decision
+                # nor force one through the backstop.
+                data.mode_decision_allowed = False
+                data.mode_decision_plan_charge_only = False
+                data.mode_backstop_allowed = False
                 if notify_func is not None:
                     notify_func()
+
+    def _apply_decision_token(self, data: CoordinatorData) -> None:
+        """Consume the decision token for this evaluation (#622 gate replacement).
+
+        Computes the discrete decision-context fingerprint from fresh data and
+        sets ``data.mode_decision_allowed`` accordingly. The token is consumed by
+        the evaluation that *observes* a context change — not by a later
+        transition — so a stale token can never be redeemed by a non-price input
+        on a subsequent tick (the original deferred-redemption bug).
+
+        A None fingerprint (price sensor unavailable) never grants a decision and
+        never overwrites the stored fingerprint: we stay frozen on the last known
+        context until a genuinely new value arrives.
+
+        A plan-disagreement grant (the plan wants to start charging while frozen)
+        behaves identically: it is consumed by the evaluation that observes it
+        and does NOT create a deferrable credit for a later tick. It is also
+        *attributed*: when the price/spike/DW/floor context is unchanged and only
+        the epoch moved, ``mode_decision_plan_charge_only`` tells the facade this
+        grant may commit a charge mode and nothing else.
+        """
+        # Plan-disagreement trigger: fold the plan into the decision context
+        # BEFORE fingerprinting, so the fingerprint computed here reflects the
+        # epoch this grant is based on. The context is passed in so the epoch's
+        # per-context budget and the fingerprint agree on what "context" means.
+        context = self._get_decision_context(data)
+        self._update_plan_charge_epoch(data, context)
+        self._suppress_plan_charge_grant = False
+
+        fingerprint = (
+            None if context is None else f"{context}|{self._plan_charge_epoch}"
+        )
+        decision_allowed = (
+            fingerprint is not None and fingerprint != self._last_evaluated_fingerprint
+        )
+        # Same price/spike/DW/floor context as the last grant ⇒ the epoch is the
+        # only thing that moved ⇒ the plan alone granted this.
+        plan_charge_only = decision_allowed and context == self._last_evaluated_base
+        if decision_allowed:
+            # Consume immediately: the evaluation, not the transition, spends the
+            # token. Covers every downstream path (including debounce-in-progress).
+            self._last_evaluated_fingerprint = fingerprint
+            self._last_evaluated_base = context
+            _LOGGER.debug(
+                "Decision token granted (fingerprint=%s, plan_charge_only=%s)",
+                fingerprint,
+                plan_charge_only,
+            )
+        data.mode_decision_allowed = decision_allowed
+        data.mode_decision_plan_charge_only = plan_charge_only
+        # The pre-charge execution backstop is NOT a decision token, but it is
+        # confined to the same in-lock window: opening it here (and closing it in
+        # the evaluate finally block) guarantees the out-of-lock
+        # compute_derived_values in coordinator.async_recompute_and_evaluate can
+        # never trip it.
+        data.mode_backstop_allowed = True
 
     async def _evaluate_core(
         self, data: CoordinatorData, computation_engine: ComputationEngine
     ) -> None:
         """Core evaluation logic extracted from evaluate_state_machine."""
         now = dt_util.now()
-        desired = data.active_mode
 
         if self._handle_startup_grace_period(data, now):
             return
@@ -533,6 +892,16 @@ class StateMachine:
             return
 
         await self._handle_manual_override_timeout(data, now)
+
+        # #622 gate replacement: the convergence-while-frozen guarantee rests on
+        # the optimizer facade (_commit_or_hold_mode), not on any local state
+        # here. While frozen the facade holds data.active_mode at the last
+        # committed decision, so ``desired`` below cannot name a new mode; a
+        # frozen evaluation can only converge hardware toward that held decision
+        # (debounce progression, failed/blocked-command retry, health checks).
+        # On an allowed evaluation the facade has just (re-)selected
+        # data.active_mode and the transition logic drives toward the new mode.
+        desired = data.active_mode
 
         if desired == self._commanded_mode:
             await self._handle_stable_mode(data)
@@ -559,8 +928,15 @@ class StateMachine:
         debounce = self._get_debounce_duration(desired)
         debounce_in_progress = desired in self._mode_desired_since
 
+        # #622 gate replacement: the "decide only on context change" gate now
+        # lives at the facade (active_mode is pinned when frozen), so this path
+        # is only reached when converging toward the already-decided mode —
+        # either a fresh decision this tick, or an in-flight debounce / retry.
+        # No price-fingerprint check here: starting/continuing the debounce and
+        # retrying a failed or validator-blocked command are convergence, not
+        # new decisions.
         if not debounce_in_progress:
-            if await self._handle_new_desired_mode(data, desired, now, debounce):
+            if self._start_debounce(desired, now, debounce):
                 return
 
         if not await self._check_debounce_and_transition(data, desired, now, debounce):
@@ -573,23 +949,6 @@ class StateMachine:
         for mode in list(self._mode_desired_since.keys()):
             if mode != desired:
                 self._mode_desired_since.pop(mode, None)
-
-    async def _handle_new_desired_mode(
-        self,
-        data: CoordinatorData,
-        desired: BatteryMode,
-        now: datetime,
-        debounce: timedelta,
-    ) -> bool:
-        """Handle new desired mode (debounce not in progress).
-
-        Returns True if caller should return, False to continue.
-        """
-        if self._should_skip_price_unchanged(data, desired):
-            if not self._get_switch_state("dry_run"):
-                await self._perform_health_check(data)
-            return True
-        return self._start_debounce(data, desired, now, debounce)
 
     async def _execute_transition_with_validation(
         self, data: CoordinatorData, desired: BatteryMode, now: datetime
@@ -646,29 +1005,8 @@ class StateMachine:
             old_mode, desired, data
         )
 
-    def _should_skip_price_unchanged(
-        self, data: CoordinatorData, desired: BatteryMode
-    ) -> bool:
-        """Check if transition should be skipped due to unchanged price."""
-        fingerprint = self._get_decision_fingerprint(data)
-        price_changed = (
-            fingerprint != self._last_decision_fingerprint
-            or self._last_decision_fingerprint is None
-        )
-
-        if not price_changed:
-            _LOGGER.debug(
-                "Price unchanged (fingerprint=%s), skipping new mode transition %s → %s",
-                fingerprint,
-                self._commanded_mode.value,
-                desired.value,
-            )
-            return True
-        return False
-
     def _start_debounce(
         self,
-        data: CoordinatorData,
         desired: BatteryMode,
         now: datetime,
         debounce: timedelta,
@@ -676,9 +1014,11 @@ class StateMachine:
         """Start debounce timer for new desired mode.
 
         Returns True if caller should return (wait for debounce), False if debounce is 0.
+
+        #622 gate replacement: the decision token is consumed in
+        _apply_decision_token at evaluation time, not here — a debounce start is
+        convergence toward the decided mode, never a fresh decision.
         """
-        fingerprint = self._get_decision_fingerprint(data)
-        self._last_decision_fingerprint = fingerprint
         self._mode_desired_since[desired] = now
         if debounce > timedelta(0):
             _LOGGER.info(
@@ -924,39 +1264,107 @@ class StateMachine:
         else:  # MANUAL or unknown
             return ("", -1, "", False)
 
-    def _handle_tesla_override_state(
+    async def _handle_tesla_override_state(
         self, data: CoordinatorData, now: datetime
     ) -> bool:
-        """Handle Tesla override detection and cooldown.
+        """Handle Tesla override detection, bounded yield, and cooldown.
 
         Returns True if health checks should be skipped.
         """
         # --- Tesla Override Detection ---
         # Check if Tesla has taken control (Storm Watch, Grid Event, VPP)
-        if self._detect_tesla_override(data):
+        if self._detect_tesla_override(data, now):
+            corroborated_now = (
+                data.grid_services_active is True or data.storm_watch_active is True
+            )
             if not self._tesla_override_detected:
                 # First time detecting Tesla override
                 self._tesla_override_detected = True
                 self._tesla_override_detected_at = now
+                self._tesla_override_corroborated = corroborated_now
+                self._tesla_override_last_probe_at = now
                 _LOGGER.warning(
                     "[TESLA OVERRIDE] Detected Tesla has taken control of Powerwall "
-                    "(Storm Watch, Grid Event, or VPP active). Hardware state: "
-                    "op=%s, reserve=%.1f%%. Yielding control until event ends.",
+                    "(Storm Watch, Grid Event, or VPP). Hardware state: "
+                    "op=%s, reserve=%.1f%%, corroborated=%s. Yielding control.",
                     data.operation_mode,
                     data.backup_reserve,
+                    corroborated_now,
                 )
-            else:
-                # Already in Tesla override mode - check if we should log status
-                if self._tesla_override_detected_at is not None:
-                    duration = now - self._tesla_override_detected_at
+                await self._notification_service.send_tesla_override_notification(
+                    data, detected=True, corroborated=corroborated_now
+                )
+                return True
+
+            # Already in override — refresh corroboration (an initially
+            # uncorroborated detection can become corroborated later).
+            self._tesla_override_corroborated = (
+                self._tesla_override_corroborated or corroborated_now
+            )
+            duration = (
+                now - self._tesla_override_detected_at
+                if self._tesla_override_detected_at
+                else timedelta(0)
+            )
+
+            if corroborated_now:
+                # Real event: never fight it. Keep yielding, hold the probe timer.
+                self._tesla_override_last_probe_at = now
+                _LOGGER.info(
+                    "[TESLA OVERRIDE] Still active (corroborated) for %s. "
+                    "Skipping health check corrections.",
+                    duration,
+                )
+                return True
+
+            # Uncorroborated yield: periodically re-probe to bound a false
+            # positive instead of yielding indefinitely.
+            last_probe = (
+                self._tesla_override_last_probe_at or self._tesla_override_detected_at
+            )
+            if last_probe is not None and now - last_probe >= self._REPROBE_INTERVAL:
+                self._tesla_override_last_probe_at = now
+                _LOGGER.warning(
+                    "[TESLA OVERRIDE] Re-probing after %s: re-issuing commanded mode "
+                    "%s to test whether control has returned.",
+                    duration,
+                    self._commanded_mode.value,
+                )
+                probe_success = await self._execute_mode_transition(
+                    data, self._commanded_mode
+                )
+                if probe_success:
                     _LOGGER.info(
-                        "[TESLA OVERRIDE] Still active for %s. Skipping health check corrections.",
+                        "[TESLA OVERRIDE] Re-probe succeeded after %s — control "
+                        "restored, resuming health checks.",
                         duration,
                     )
-            # Skip all health check corrections while Tesla has control
+                    self._tesla_override_detected = False
+                    self._tesla_override_detected_at = None
+                    self._tesla_override_corroborated = False
+                    self._tesla_override_last_probe_at = None
+                    # Hardware just validated under our command — no cooldown.
+                    self._tesla_override_released_at = None
+                    await self._notification_service.send_tesla_override_notification(
+                        data,
+                        detected=False,
+                        corroborated=False,
+                        duration=duration,
+                        release_reason="re-probe succeeded",
+                    )
+                    return False
+                _LOGGER.warning(
+                    "[TESLA OVERRIDE] Re-probe failed — still yielding control."
+                )
+                return True
+
+            _LOGGER.info(
+                "[TESLA OVERRIDE] Still active for %s. Skipping health check corrections.",
+                duration,
+            )
             return True
 
-        # Tesla override has ended
+        # Tesla override has ended (signature cleared on its own)
         if self._tesla_override_detected:
             duration = (
                 now - self._tesla_override_detected_at
@@ -967,11 +1375,21 @@ class StateMachine:
                 "[TESLA OVERRIDE] Tesla has released control after %s. "
                 "Applying %s cooldown before resuming health checks.",
                 duration,
-                TESLA_OVERRIDE_COOLDOWN,
+                self._RELEASE_COOLDOWN,
             )
+            was_corroborated = self._tesla_override_corroborated
             self._tesla_override_detected = False
             self._tesla_override_released_at = now
             self._tesla_override_detected_at = None
+            self._tesla_override_corroborated = False
+            self._tesla_override_last_probe_at = None
+            await self._notification_service.send_tesla_override_notification(
+                data,
+                detected=False,
+                corroborated=was_corroborated,
+                duration=duration,
+                release_reason="hardware released",
+            )
 
         # --- Tesla Override Cooldown ---
         # After Tesla releases control, wait for cooldown period before resuming
@@ -979,8 +1397,8 @@ class StateMachine:
             return False
 
         time_since_release = now - self._tesla_override_released_at
-        if time_since_release < TESLA_OVERRIDE_COOLDOWN:
-            remaining = (TESLA_OVERRIDE_COOLDOWN - time_since_release).total_seconds()
+        if time_since_release < self._RELEASE_COOLDOWN:
+            remaining = (self._RELEASE_COOLDOWN - time_since_release).total_seconds()
             _LOGGER.debug(
                 "[HEALTH CHECK] Skipping - in Tesla override cooldown (%.0fs remaining)",
                 remaining,
@@ -1012,14 +1430,16 @@ class StateMachine:
         )
         return True
 
-    def _should_skip_health_check(self, data: CoordinatorData, now: datetime) -> bool:
+    async def _should_skip_health_check(
+        self, data: CoordinatorData, now: datetime
+    ) -> bool:
         """Check if health check should be skipped."""
         # Skip health check during manual override - user is in control
         if data.manual_override:
             _LOGGER.debug("[HEALTH CHECK] Skipping - manual override active")
             return True
 
-        if self._handle_tesla_override_state(data, now):
+        if await self._handle_tesla_override_state(data, now):
             return True
 
         if self._should_skip_transition_grace(now):
@@ -1041,7 +1461,7 @@ class StateMachine:
         health checks would fight against their manual commands.
         """
         now = dt_util.now()
-        if self._should_skip_health_check(data, now):
+        if await self._should_skip_health_check(data, now):
             return
 
         expected_op, expected_reserve, expected_export, expected_grid_charging = (
@@ -1172,6 +1592,42 @@ class StateMachine:
             "Commanded mode set directly to %s (manual button press)",
             mode.value,
         )
+
+    def invalidate_decision_fingerprint(self, reason: str) -> None:
+        """Force the next evaluation to be an allowed decision (#622 gate replacement).
+
+        Clears the stored decision-context fingerprint so the next evaluation
+        sees a "changed" context and may re-select the mode. Used for deliberate
+        re-decision points (user config changes, automation re-enable) where the
+        plan genuinely needs to take effect now, independent of price movement.
+
+        NOT called by the load-deviation / solar-event reoptimizers: those may
+        update the plan but must not grant a mode change (the invariant holds).
+
+        Args:
+            reason: Human-readable reason for the invalidation (logged at INFO).
+
+        """
+        _LOGGER.info("Decision fingerprint invalidated: %s", reason)
+        self._last_evaluated_fingerprint = None
+        # Cleared with it, or the next grant would be misattributed to the plan
+        # ("same base as last time") and restricted to charge modes only.
+        self._last_evaluated_base = None
+
+    def suppress_next_plan_charge_grant(self, reason: str) -> None:
+        """Bar the NEXT evaluation from granting on the plan-charge trigger.
+
+        The contract of ``async_recompute_and_evaluate(invalidate_decision=False)``
+        is "may update the plan but must NOT grant a mode change". That path runs
+        ``compute_derived_values`` OUT OF LOCK immediately before evaluating, so
+        the frozen facade writes ``debug_plan_mode_pending`` and the evaluation
+        that follows would read it back with zero lag and grant — a mode change
+        caused by a load-deviation reoptimize, which is exactly what the flag
+        exists to prevent. The suppression is one-shot and is cleared by the
+        evaluation it applies to.
+        """
+        _LOGGER.debug("Plan-charge grant suppressed for next evaluation: %s", reason)
+        self._suppress_plan_charge_grant = True
 
     @property
     def in_mode_transition(self) -> bool:

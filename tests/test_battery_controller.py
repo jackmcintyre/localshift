@@ -188,7 +188,7 @@ class TestSetForceCharge:
             if "operation_mode" in entity_id:
                 state.state = "backup"
             elif "backup_reserve" in entity_id:
-                state.state = "80"  # Clamped for default target=100
+                state.state = "100"  # Default target=100 is not clamped
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_PV_ONLY
             elif "allow_charging_from_grid" in entity_id:
@@ -387,9 +387,9 @@ class TestSetForceDischarge:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "100"
+                state.state = "20"
             elif "allow_export" in entity_id:
-                state.state = TESLEMETRY_EXPORT_PV_ONLY
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
             elif "allow_charging_from_grid" in entity_id:
                 state.state = "on"
             return state
@@ -513,9 +513,9 @@ class TestSetProactiveExport:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "100"
+                state.state = "45"  # SOC (50) - 5% buffer
             elif "allow_export" in entity_id:
-                state.state = TESLEMETRY_EXPORT_PV_ONLY
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
             elif "allow_charging_from_grid" in entity_id:
                 state.state = "on"
             return state
@@ -768,7 +768,9 @@ class TestValidateTransition:
             timeout=2,
         )
 
-        # Should succeed because operation mode matches
+        # Should succeed because operation mode matches. With no
+        # retry_reserve_write callback the settle-verify stays lenient and
+        # accepts the lagging reserve (case a).
         assert result is True
 
     @pytest.mark.asyncio
@@ -796,6 +798,195 @@ class TestValidateTransition:
         )
 
         assert result is True
+
+
+# =============================================================================
+# RESERVE SETTLE-VERIFY TESTS (Tesla-override freeze fix, D1)
+# =============================================================================
+
+
+class TestReserveSettleVerify:
+    """Tests for the post-acceptance reserve settle-verify + retry."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_stable_reserve_no_retry(self, battery_controller, mock_hass):
+        """Reserve stable through the settle window -> True, retry not called."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "self_consumption"
+            elif "backup_reserve" in entity_id:
+                state.state = "10"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            return state
+
+        mock_hass.states.get = mock_get_state
+        retry = AsyncMock(return_value=True)
+
+        result = await battery_controller.validate_transition(
+            expected_operation_mode="self_consumption",
+            expected_backup_reserve=10,
+            expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            timeout=2,
+            retry_reserve_write=retry,
+        )
+
+        assert result is True
+        retry.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_full_match_revert_retry_converges(
+        self, battery_controller, mock_hass
+    ):
+        """In-loop match, reserve reverts at settle, retry converges -> True."""
+        reserve_reads = {"n": 0}
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "self_consumption"
+            elif "backup_reserve" in entity_id:
+                reserve_reads["n"] += 1
+                # read 1: loop match (10); read 2: settle sees Tesla revert (80);
+                # read 3+: retry converged (10)
+                state.state = "80" if reserve_reads["n"] == 2 else "10"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            return state
+
+        mock_hass.states.get = mock_get_state
+        retry = AsyncMock(return_value=True)
+
+        result = await battery_controller.validate_transition(
+            expected_operation_mode="self_consumption",
+            expected_backup_reserve=10,
+            expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            timeout=2,
+            retry_reserve_write=retry,
+        )
+
+        assert result is True
+        retry.assert_awaited_once_with(10)
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_fallback_accept_revert_retry_converges(
+        self, battery_controller, mock_hass
+    ):
+        """Fallback (op + grid_charging) acceptance also settle-verifies reserve."""
+        reserve = {"val": "80"}
+
+        async def _retry(_value):
+            reserve["val"] = "10"
+            return True
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "self_consumption"
+            elif "backup_reserve" in entity_id:
+                state.state = reserve["val"]
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "off"
+            return state
+
+        mock_hass.states.get = mock_get_state
+        retry = AsyncMock(side_effect=_retry)
+
+        # Reserve never matches in the loop (80 vs 10) -> op+grid fallback accept.
+        result = await battery_controller.validate_transition(
+            expected_operation_mode="self_consumption",
+            expected_backup_reserve=10,
+            expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            expected_grid_charging_allowed=False,
+            timeout=2,
+            retry_reserve_write=retry,
+        )
+
+        assert result is True
+        retry.assert_awaited_once_with(10)
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_retry_write_fails_returns_false(self, battery_controller, mock_hass):
+        """A failed retry write fails the transition."""
+        reserve_reads = {"n": 0}
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "self_consumption"
+            elif "backup_reserve" in entity_id:
+                reserve_reads["n"] += 1
+                state.state = "80" if reserve_reads["n"] == 2 else "10"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            return state
+
+        mock_hass.states.get = mock_get_state
+        retry = AsyncMock(return_value=False)
+
+        result = await battery_controller.validate_transition(
+            expected_operation_mode="self_consumption",
+            expected_backup_reserve=10,
+            expected_export_mode=TESLEMETRY_EXPORT_PV_ONLY,
+            timeout=2,
+            retry_reserve_write=retry,
+        )
+
+        assert result is False
+        retry.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_revert_after_validation_race_end_to_end(
+        self, battery_controller, mock_hass
+    ):
+        """The incident: set_self_consumption succeeds despite a reserve revert,
+        re-issuing the reserve write (number.set_value called twice)."""
+        mock_hass.services.async_call.return_value = None
+        reserve_reads = {"n": 0}
+
+        def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "self_consumption"
+            elif "backup_reserve" in entity_id:
+                reserve_reads["n"] += 1
+                # loop match (10) -> settle sees revert (80) -> retry converges (10)
+                state.state = "80" if reserve_reads["n"] == 2 else "10"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_PV_ONLY
+            elif "allow_charging_from_grid" in entity_id:
+                state.state = "off"
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        from custom_components.localshift.coordinator import CoordinatorData
+
+        data = CoordinatorData()
+        data.soc = 50.0
+        data.preserve_soc = None  # -> reserve 10
+
+        result = await battery_controller.set_self_consumption(data)
+
+        assert result is True
+        reserve_writes = [
+            call
+            for call in mock_hass.services.async_call.call_args_list
+            if call.args[:2] == ("number", "set_value")
+        ]
+        # Once in the transition recipe, once in the settle-verify retry.
+        assert len(reserve_writes) == 2
 
 
 # =============================================================================

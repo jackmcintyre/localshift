@@ -187,8 +187,22 @@ class AmberExpressProvider(_ProviderMixin):
         raw_forecasts = self._read_attribute(hass, detailed_entity, "forecasts", [])
 
         if not raw_forecasts:
-            _LOGGER.debug("%s has no forecasts, trying simple entity", detailed_entity)
-            raw_forecasts = self._read_attribute(hass, price_entity_id, "forecast", [])
+            # amber_express v2.0.0 (2026-06-25) removed the separate
+            # *_price_detailed entity and folded its forecast onto the main
+            # price entity as a `detailedForecast` attribute, replacing the old
+            # `forecasts` attribute. Slots retain start_time/end_time/duration/
+            # per_kwh/demand_window, so _normalize_slot handles them unchanged.
+            # NOTE: the simple `forecast` attribute ({time, value}, used by HAEO)
+            # is NOT usable here — it lacks start_time/per_kwh and cannot be
+            # normalized, which is what caused the KeyError-per-slot failure.
+            _LOGGER.debug(
+                "%s unavailable; reading detailedForecast from %s",
+                detailed_entity,
+                price_entity_id,
+            )
+            raw_forecasts = self._read_attribute(
+                hass, price_entity_id, "detailedForecast", []
+            )
 
         if not raw_forecasts:
             _LOGGER.warning("No forecasts found for %s", price_entity_id)

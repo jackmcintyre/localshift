@@ -74,6 +74,20 @@ class EntityMonitor:
         # Check LocalShift internal entities
         data.localshift_entity_health = validator.check_all_localshift_entities()
 
+        # Detect orphaned registry entries owned by this config entry (Issue #880)
+        config_entry_id = self._coordinator.entry.entry_id
+        data.orphaned_localshift_entities = validator.check_orphaned_owned_entities(
+            config_entry_id
+        )
+        if data.orphaned_localshift_entities:
+            orphan_ids = ", ".join(sorted(data.orphaned_localshift_entities))
+            count = len(data.orphaned_localshift_entities)
+            orphan_warning = (
+                f"{count} orphaned localshift "
+                f"{'entity' if count == 1 else 'entities'}: {orphan_ids}"
+            )
+            data.entity_warnings = list(data.entity_warnings) + [orphan_warning]
+
         # Log any new errors
         if data.entity_errors:
             for error in data.entity_errors:

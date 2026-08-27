@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -18,12 +19,17 @@ from .const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
+    CONF_MIN_CYCLE_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
+    CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
     CONF_PRICING_DATA_SOURCE,
+    CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+    CONF_STALE_SOLAR_CONSERVATIVE,
     CONF_SWITCHING_PENALTY,
     CONF_TARGET_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
+    DEFAULT_ABSENT_SOLAR_CONFIDENCE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_COMPARISON_MODE,
@@ -31,13 +37,17 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_MIN_CYCLE_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
+    DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
     DEFAULT_PRICING_DATA_SOURCE,
+    DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
     DEFAULT_SWITCHING_PENALTY,
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_STALE_SOLAR_CONSERVATIVE,
 )
 from .const import (
     BatteryMode as _BatteryMode,
@@ -53,7 +63,10 @@ from .engine import (
 )
 from .engine.excess_solar import ExcessSolarEngine
 from .engine.optimizer_dp import DPPlanner
-from .engine.optimizer_facade import OptimizerFacade
+from .engine.optimizer_facade import (
+    PRECHARGE_BACKSTOP_SHORTFALL_PCT,
+    OptimizerFacade,
+)
 from .engine.optimizer_runner import _find_current_slot_index
 from .engine.price_signal_engine import PriceSignalEngine
 from .engine.slot_schedule import TOTAL_SLOTS
@@ -75,6 +88,27 @@ from .pricing.types import ForecastSlot
 BatteryMode = _BatteryMode
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _DerivedValuesContext:
+    """Immutable bag of time/window values computed once per orchestrator tick.
+
+    ``target_pct`` is read from options here even though the manual-override
+    early return appears before this context is used in the orchestrator.
+    Hoisting the read is side-effect-free (it only reads a config key) and
+    avoids duplicating the options lookup across the helpers that need it.
+    """
+
+    now_dt: datetime
+    today: date
+    now_t: time
+    dw_start_time: time
+    dw_end_time: time
+    target_hour: int
+    before_dw: bool
+    after_dw: bool
+    target_pct: float
 
 
 class ComputationEngine:
@@ -178,33 +212,159 @@ class ComputationEngine:
         _LOGGER.info("Solar accuracy tracker connected to computation engine")
 
     # ========================================================================
+    # STALENESS CEILINGS
+    # ========================================================================
+
+    def _stamp_confidence_ceilings(self, data: CoordinatorData) -> None:
+        """Stamp resolved confidence_ceiling on each SolcastAnalysis and set solar_absent_confidence.
+
+        Called once per compute cycle, before the optimizer runs, so all
+        ConfidenceResolver sites see the cap without per-site threading.
+        """
+        conservative = self._get_switch_state(SWITCH_STALE_SOLAR_CONSERVATIVE)
+        ceiling = float(
+            self.entry.options.get(
+                CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+                DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+            )
+        )
+
+        # Accuracy ceiling from tracker (dormant today: returns 1.0 when < 20 samples)
+        tracker = getattr(self._optimizer_facade, "_solar_accuracy_tracker", None)
+        accuracy_ceiling = (
+            tracker.accuracy_confidence_ceiling(low=ceiling)
+            if tracker is not None
+            else 1.0
+        )
+
+        # Set absent confidence on data (used by all ConfidenceResolver sites)
+        data.solar_absent_confidence = (
+            DEFAULT_ABSENT_SOLAR_CONFIDENCE if conservative else 1.0
+        )
+
+        # Stamp ceiling on each analysis object
+        for analysis in (data.solcast_analysis_today, data.solcast_analysis_tomorrow):
+            if analysis is None:
+                continue
+            if conservative and analysis.is_stale:
+                resolved = min(ceiling, accuracy_ceiling)
+            else:
+                # Fresh data: only the accuracy ceiling applies (dormant today → 1.0)
+                resolved = min(1.0, accuracy_ceiling)
+            analysis.confidence_ceiling = resolved
+
+    # ========================================================================
     # MAIN ENTRY POINT
     # ========================================================================
 
-    def compute_derived_values(self, data: CoordinatorData) -> None:
-        """Compute all derived sensor/binary_sensor values from raw state.
+    def _build_step_context(self) -> _DerivedValuesContext:
+        """Build the immutable time/window context used across all orchestrator steps.
 
-        Ported from Jinja templates in YAML package. Steps are ordered
-        by dependency — later steps can reference earlier results.
+        ``target_pct`` is read from options here even though the manual-override
+        early return appears before the context is consumed by most helpers.
+        Hoisting the options-dict read is side-effect-free and avoids duplicating
+        the lookup across the step helpers that need it.
         """
         now_dt = dt_util.now()
-
-        # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
-        self._load_forecaster.set_adaptive_params(data.adaptive_params)
-
-        # Common time values used by multiple steps
         dw_start_time = self._parse_time_option(
             CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
         )
         dw_end_time = self._parse_time_option(
             CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
         )
-        target_hour = dw_start_time.hour
         now_t = now_dt.replace(microsecond=0).time()
-        before_dw = now_t < dw_start_time
-        after_dw = now_t >= dw_start_time
+        return _DerivedValuesContext(
+            now_dt=now_dt,
+            today=now_dt.date(),
+            now_t=now_t,
+            dw_start_time=dw_start_time,
+            dw_end_time=dw_end_time,
+            target_hour=dw_start_time.hour,
+            before_dw=now_t < dw_start_time,
+            after_dw=now_t >= dw_start_time,
+            target_pct=float(
+                self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+            ),
+        )
 
-        # ---- Step 2: Mode detection from Teslemetry state ----
+    def _reset_daily_precharge_latch(self, data: CoordinatorData, today: date) -> None:
+        """Reset the demand-window pre-charge latch on date change.
+
+        ``target_reached_today`` is otherwise only cleared by a single midnight
+        ``async_track_time_change`` event; if that event is ever missed
+        (restart/reload spanning local midnight, DST), the latch stays True for
+        up to 24 h and silently disables all pre-charge.  A date-change check
+        here is immune to missed events.
+        """
+        if data.last_target_reset_date != today:
+            data.target_reached_today = False
+            data.last_target_reset_date = today
+            # The DW-entry actual (2026-07-27) is a once-per-day capture and shares
+            # this latch: clearing it here re-arms tomorrow's capture.
+            data.dw_entry_actual_soc_pct = None
+            data.dw_entry_actual_at = None
+            data.dw_entry_actual_target_pct = None
+            data.dw_entry_actual_shortfall_pct = None
+            data.dw_entry_actual_date = None
+
+    def _capture_dw_entry_actual(
+        self, data: CoordinatorData, ctx: _DerivedValuesContext
+    ) -> None:
+        """Record the SOC the battery ACTUALLY entered today's demand window at.
+
+        2026-07-27 incident: the window was entered at 64.0% against a 95% target,
+        and the log could not show it afterwards. The optimizer's *projected*
+        ``dw_entry_soc_pct`` legitimately rolls over to tomorrow's window the instant
+        today's window starts — the 15:00 line reported 98.5% / shortfall 0.0 /
+        ``first_charge=2026-07-28T13:00`` — so by the time anyone looked, the miss had
+        been overwritten by a projection about a different day.
+
+        Captured once per day, on the first evaluation with the window live, and held
+        untouched for the rest of the day (later ticks inside the window must not
+        overwrite it with a recovered SOC). A ``None`` SOC at the exact boundary defers
+        rather than recording a null: the next evaluation is ≤1 min away.
+
+        Runs BEFORE the manual-override early return — this is telemetry about the
+        battery, not about the optimizer, and the miss matters just as much when the
+        user has taken manual control.
+        """
+        if not data.demand_window_active:
+            return
+        if data.dw_entry_actual_date == ctx.today:
+            return
+        soc = data.soc
+        if soc is None:
+            return
+
+        target = float(ctx.target_pct)
+        shortfall = max(0.0, target - float(soc))
+
+        data.dw_entry_actual_soc_pct = float(soc)
+        data.dw_entry_actual_at = ctx.now_dt
+        data.dw_entry_actual_target_pct = target
+        data.dw_entry_actual_shortfall_pct = shortfall
+        data.dw_entry_actual_date = ctx.today
+
+        # Same threshold the execution backstop fires on — one number, not two.
+        if shortfall > PRECHARGE_BACKSTOP_SHORTFALL_PCT:
+            _LOGGER.warning(
+                "DEMAND WINDOW ENTERED UNDER TARGET: %.1f%% against a %.0f%% target "
+                "(%.1f points short) at %s. Pre-charge did not execute.",
+                soc,
+                target,
+                shortfall,
+                ctx.now_dt.isoformat(),
+            )
+        else:
+            _LOGGER.info(
+                "Demand window entered at %.1f%% (target %.0f%%, shortfall %.1f).",
+                soc,
+                target,
+                shortfall,
+            )
+
+    def _detect_hardware_modes(self, data: CoordinatorData) -> None:
+        """---- Step 2: Mode detection from Teslemetry state ----"""
         data.force_discharge_active = (
             data.operation_mode == "autonomous" and data.backup_reserve < 11
         )
@@ -216,60 +376,52 @@ class ComputationEngine:
             data.operation_mode == "autonomous" and data.backup_reserve > 99
         )
 
-        # ---- Step 3: demand_window_active ----
+    def _compute_demand_window_active(
+        self, data: CoordinatorData, ctx: _DerivedValuesContext
+    ) -> None:
+        """---- Step 3: demand_window_active ----"""
         dw_block_enabled = self._get_switch_state("demand_window_block")
         data.demand_window_active = (
-            dw_block_enabled and now_t >= dw_start_time and now_t < dw_end_time
+            dw_block_enabled
+            and ctx.now_t >= ctx.dw_start_time
+            and ctx.now_t < ctx.dw_end_time
         )
 
-        # ---- Manual override check ----
-        # Always respect manual override first — user is in control
-        if data.manual_override:
-            data.active_mode = _BatteryMode.MANUAL
-            data.debug_mode_source = "manual_override"
-            # Skip DP optimizer and other mode decisions when in manual mode
-            return
+    def _enter_manual_override(self, data: CoordinatorData) -> bool:
+        """Handle manual override: set MANUAL mode, clear stale debug fields.
 
-        # Get target percentage for later use
-        target_pct = float(
-            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
+        Always respect manual override first — user is in control.
+        The optimizer's current-slot lookup never runs on the manual path
+        (the orchestrator returns immediately), so reset the slot fields to
+        avoid showing a stale match from a prior optimizer tick.
 
-        # ---- Step 7a: effective_cheap_price (BEFORE forecast to break circular dependency) ----
-        # Compute effective_cheap_price BEFORE forecast using preliminary solar estimate
-        # This breaks the circular dependency where forecast depends on effective_cheap_price
-        # which depends on solar_can_reach_target which depends on forecast
-        self._price_signals.compute_effective_cheap_price_preliminary(
-            data=data,
-            now_dt=now_dt,
-            before_dw=before_dw,
-            target_hour=target_hour,
-            target_pct=target_pct,
-        )
+        Returns True when manual override is active; the orchestrator then
+        performs the early ``return``.
+        """
+        if not data.manual_override:
+            return False
+        data.active_mode = _BatteryMode.MANUAL
+        data.debug_mode_source = "manual_override"
+        data.debug_forecast_slot_found = False
+        data.debug_forecast_slot_time = ""
+        data.debug_first_forecast_slot_time = ""
+        data.debug_time_gap_seconds = 0.0
+        # The facade never runs on this path, so a pending plan mode left by an
+        # earlier tick would go stale here and still feed the state machine's
+        # plan-charge epoch — a phantom grant off a plan that is arbitrarily old.
+        # Same reasoning as _mark_mode_debug_fallback's clear.
+        data.debug_plan_mode_pending = None
+        data.optimizer_precharge_backstop_active = False
+        return True
 
-        # Set allow_dw_entry_under_target flag on data for forecast_computer
-        # This allows grid charging decision to simulate to DW END instead of DW START
-        # when solar can reach target within the DW period
-        allow_dw_under_target = self._get_switch_state(
-            SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
-        )
-        data.allow_dw_entry_under_target = allow_dw_under_target and before_dw
+    def _bridge_history_results(self, data: CoordinatorData, now_dt: datetime) -> None:
+        """Bridge HistoryFetcher results to CoordinatorData (Issue #493).
 
-        # ---- Phase 1 (#441): Shared load forecast slots ----
-        # Builds data.load_forecast_slots for use by DP optimizer and other helpers.
-        load_entity_id = self._get_entity_id("teslemetry_load_power")
-        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
-        recent_load_kw = self._recent_load_1hr_kw
-        self._forecast_pipeline.compute_load_forecast_slots(
-            data=data,
-            now_dt=now_dt,
-            historical_avg_kw=hourly_avg_kw,
-            recent_load_kw=recent_load_kw,
-            total_slots=TOTAL_SLOTS,
-        )
-
-        # ---- Bridge HistoryFetcher results to CoordinatorData (Issue #493) ----
-        # These fields were never populated, causing diagnostic data to be stuck at defaults
+        These fields were never populated, causing diagnostic data to be stuck
+        at defaults.  Covers weekday/weekend profiles, combined-profile
+        backward-compat fields, recent-load fields, and forecast_profile_selected
+        derivation.
+        """
         (
             data.weekday_hourly_profile_kw,
             data.weekday_sample_counts,
@@ -294,6 +446,7 @@ class ComputationEngine:
 
         # Bridge recent load data
         data.recent_load_1hr_kw = self._history_fetcher._recent_load_1hr_kw
+        data.recent_load_short_kw = self._history_fetcher._recent_load_short_kw
         data.recent_load_1hr_statistic_id = (
             self._history_fetcher._recent_load_1hr_statistic_id
         )
@@ -310,16 +463,46 @@ class ComputationEngine:
         else:
             data.forecast_profile_selected = data.consumption_profile_type
 
-        # ---- Step DP: Inline DP optimizer (Phase 4, #441) ----
-        # Runs before effective_cheap_price final update so solar_can_reach_target
-        # is populated from DP result (not legacy solar-only simulation).
-        config_options = self._build_optimizer_config_options()
-        self._optimizer_facade.run_inline(
-            data=data, now_dt=now_dt, config_options=config_options
-        )
+    def _refresh_soc_for_optimizer(self, data: CoordinatorData) -> None:
+        """Overwrite data.soc with a fresh live read just before the DP optimizer.
 
-        # ---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
-        # Read from current-slot DP decision (not forecast_computer).
+        Guards against planning from a stale cached SOC. Logs the divergence when
+        the fresh read differs from the cached value by >=1 point so the
+        stale-SOC hypothesis is observable in the log.
+        """
+        fresh_soc = self._read_fresh_soc()
+        if fresh_soc is None:
+            return
+        if abs(fresh_soc - data.soc) >= 1.0:
+            _LOGGER.info(
+                "Optimizer SOC refresh: cached=%.1f%% -> fresh=%.1f%% (delta %.1f)",
+                data.soc,
+                fresh_soc,
+                fresh_soc - data.soc,
+            )
+        data.soc = fresh_soc
+
+    def _read_fresh_soc(self) -> float | None:
+        """Read the latest SOC directly from the HA state machine (cache bypass).
+
+        Mirrors BatteryController.read_fresh_soc (integration/controller.py:86).
+        """
+        from .const import CONF_TESLEMETRY_SOC
+
+        try:
+            soc_entity_id = self._get_entity_id(CONF_TESLEMETRY_SOC)
+            state = self.hass.states.get(soc_entity_id)
+            if state and state.state not in (None, "unknown", "unavailable"):
+                return float(state.state)
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return None
+
+    def _read_boost_from_plan(self, data: CoordinatorData) -> None:
+        """---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
+
+        Read from current-slot DP decision (not forecast_computer).
+        """
         current_slot_idx = _find_current_slot_index(data)
         decisions = data.optimizer_decisions or []
         if decisions and 0 <= current_slot_idx < len(decisions):
@@ -329,37 +512,13 @@ class ComputationEngine:
         else:
             data.boost_charge_needed = False
 
-        # ---- Step 7: effective_cheap_price (final update) ----
-        # Update effective_cheap_price with actual solar_can_reach_target from forecast
-        # IMPORTANT: Save the optimizer's threshold BEFORE Step 7 overwrites it.
-        # The optimizer ran with the preliminary threshold from Step 7a. Step 7 recomputes
-        # effective_cheap_price using the optimizer's solar_can_reach_target result.
-        # If the recomputed value differs from the preliminary, we track which was used
-        # so the plan and UI are consistent (Planner Threshold Reconciliation, Fix #xxx).
-        data.planner_threshold_used = data.effective_cheap_price
-        self._price_signals.compute_effective_cheap_price(
-            data=data,
-            now_dt=now_dt,
-            before_dw=before_dw,
-            target_hour=target_hour,
-        )
+    def _compute_spike_signals(self, data: CoordinatorData, now_dt: datetime) -> None:
+        """---- Steps 9, 10, 10b: spike/price window signals ----
 
-        # ---- Step 8: cheap_charge_stop_price ----
-        # Hardcoded deadband (Issue #214)
-        deadband = DEFAULT_CHEAP_PRICE_DEADBAND
-        data.cheap_charge_stop_price = round(data.effective_cheap_price + deadband, 2)
-
-        # ---- Step 4: solar_battery_forecast (legacy - for backwards compatibility) ----
-        # Kept for API compatibility, but values derived from detailed forecast
-        self._forecast_pipeline.compute_solar_battery_forecast(
-            data=data,
-            now_dt=now_dt,
-            target_hour=target_hour,
-            before_dw=before_dw,
-            after_dw=after_dw,
-            target_pct=target_pct,
-        )
-
+        Covers forecast_spike_within_window (Step 9), max_forecast_price (sell),
+        max_buy_forecast_price with its '(Fix #3)' comment, forecast_expensive_period_coming
+        (Step 10), and the conservative spike analysis (Step 10b).
+        """
         # ---- Step 9: forecast_spike_within_window ----
         # Hardcoded lookahead (Issue #214)
         lookahead = DEFAULT_FORECAST_LOOKAHEAD_HOURS
@@ -388,23 +547,26 @@ class ComputationEngine:
         # ---- Step 10b: spike analysis (conservative mode) ----
         self._price_signals.analyze_spike(data, now_dt)
 
-        # ---- Step 11: solar_weighted_avg_fit ----
-        self._forecast_pipeline.compute_solar_weighted_avg_fit(
-            data=data, now_dt=now_dt, target_hour=target_hour, after_dw=after_dw
-        )
+    def _maybe_log_decision(self, data: CoordinatorData, now_dt: datetime) -> None:
+        """---- Step 12: decision_log ----
 
-        # ---- Step 12: decision_log ----
-        # Phase 4 (#441): active_mode is set by the optimizer facade (Phase 3).
-        # _compute_active_mode is removed in Phase 4.
+        Phase 4 (#441): active_mode is set by the optimizer facade (Phase 3).
+        _compute_active_mode is removed in Phase 4.
 
-        # Add entry when mode changes OR periodically for status updates
+        Add entry when mode changes OR periodically for status updates.
+        Conditions are an elif chain — branch order is load-bearing:
+          1. startup-skip (no log time + zeroed sensors)
+          2. mode_changed
+          3. first evaluation after startup (no log time, data valid)
+          4. 5-minute periodic update
+        """
         mode_changed = (
             data.active_mode != self._previous_active_mode
             and self._previous_active_mode is not None
         )
 
-        # Only skip logging during initial startup when all data is zero
-        # Once we have valid data, always log mode changes and periodic updates
+        # Only skip logging during initial startup when all data is zero.
+        # Once we have valid data, always log mode changes and periodic updates.
         if self._last_decision_log_time is None and (
             data.general_price == 0 or data.feed_in_price == 0 or data.soc == 0
         ):
@@ -418,11 +580,142 @@ class ComputationEngine:
             # Periodic status update every 5 minutes
             self._add_to_decision_log(data, now_dt, mode_change=False)
 
+    def compute_derived_values(self, data: CoordinatorData) -> None:
+        """Compute all derived sensor/binary_sensor values from raw state.
+
+        Ported from Jinja templates in YAML package. Steps are ordered
+        by dependency — later steps can reference earlier results.
+        """
+        ctx = self._build_step_context()
+
+        self._reset_daily_precharge_latch(data, ctx.today)
+
+        # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
+        self._load_forecaster.set_adaptive_params(data.adaptive_params)
+
+        # ---- Step 2: Mode detection from Teslemetry state ----
+        self._detect_hardware_modes(data)
+
+        # ---- Step 3: demand_window_active ----
+        self._compute_demand_window_active(data, ctx)
+
+        # ---- Step 3b: actual DW-entry capture (2026-07-27) ----
+        # Immediately after the boundary is computed and before any early return, so
+        # the number survives manual override and a failed optimizer cycle alike.
+        self._capture_dw_entry_actual(data, ctx)
+
+        # ---- Manual override check ----
+        if self._enter_manual_override(data):
+            # Skip DP optimizer and other mode decisions when in manual mode
+            return
+
+        # ---- Step 7a: effective_cheap_price (BEFORE forecast to break circular dependency) ----
+        # Compute effective_cheap_price BEFORE forecast using preliminary solar estimate.
+        # This breaks the circular dependency where forecast depends on effective_cheap_price
+        # which depends on solar_can_reach_target which depends on forecast.
+        self._price_signals.compute_effective_cheap_price_preliminary(
+            data=data,
+            now_dt=ctx.now_dt,
+            before_dw=ctx.before_dw,
+            target_hour=ctx.target_hour,
+            target_pct=ctx.target_pct,
+        )
+
+        # Set allow_dw_entry_under_target flag on data for forecast_computer.
+        # This allows grid charging decision to simulate to DW END instead of DW START
+        # when solar can reach target within the DW period.
+        allow_dw_under_target = self._get_switch_state(
+            SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
+        )
+        data.allow_dw_entry_under_target = allow_dw_under_target and ctx.before_dw
+
+        # ---- Stamp staleness confidence ceilings on Solcast analysis objects ----
+        self._stamp_confidence_ceilings(data)
+
+        # ---- Phase 1 (#441): Shared load forecast slots ----
+        # Builds data.load_forecast_slots for use by DP optimizer and other helpers.
+        load_entity_id = self._get_entity_id("teslemetry_load_power")
+        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        recent_load_kw = self._recent_load_1hr_kw
+        self._forecast_pipeline.compute_load_forecast_slots(
+            data=data,
+            now_dt=ctx.now_dt,
+            historical_avg_kw=hourly_avg_kw,
+            recent_load_kw=recent_load_kw,
+            total_slots=TOTAL_SLOTS,
+        )
+
+        self._bridge_history_results(data, ctx.now_dt)
+
+        # ---- Step DP: Inline DP optimizer (Phase 4, #441) ----
+        # Runs before effective_cheap_price final update so solar_can_reach_target
+        # is populated from DP result (not legacy solar-only simulation).
+        # Refresh SOC from the live state immediately before planning. The
+        # optimizer must not plan from a stale cached SOC: on 2026-06-30 the
+        # planner used a high SOC while the pack had drained to ~10%, scheduled
+        # no pre-charge, and the battery entered the demand window empty. Mirrors
+        # the controller's read_fresh_soc() (integration/controller.py:86, #559).
+        self._refresh_soc_for_optimizer(data)
+        config_options = self._build_optimizer_config_options()
+        self._optimizer_facade.run_inline(
+            data=data, now_dt=ctx.now_dt, config_options=config_options
+        )
+
+        # ---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
+        self._read_boost_from_plan(data)
+
+        # ---- Step 7: effective_cheap_price (final update) ----
+        # Update effective_cheap_price with actual solar_can_reach_target from forecast.
+        # IMPORTANT: Save the optimizer's threshold BEFORE Step 7 overwrites it.
+        # The optimizer ran with the preliminary threshold from Step 7a. Step 7 recomputes
+        # effective_cheap_price using the optimizer's solar_can_reach_target result.
+        # If the recomputed value differs from the preliminary, we track which was used
+        # so the plan and UI are consistent (Planner Threshold Reconciliation, Fix #xxx).
+        data.planner_threshold_used = data.effective_cheap_price
+        self._price_signals.compute_effective_cheap_price(
+            data=data,
+            now_dt=ctx.now_dt,
+            before_dw=ctx.before_dw,
+            target_hour=ctx.target_hour,
+            target_pct=ctx.target_pct,
+        )
+
+        # ---- Step 8: cheap_charge_stop_price ----
+        # Hardcoded deadband (Issue #214)
+        data.cheap_charge_stop_price = round(
+            data.effective_cheap_price + DEFAULT_CHEAP_PRICE_DEADBAND, 2
+        )
+
+        # ---- Step 4: solar_battery_forecast (legacy - for backwards compatibility) ----
+        # Kept for API compatibility, but values derived from detailed forecast.
+        self._forecast_pipeline.compute_solar_battery_forecast(
+            data=data,
+            now_dt=ctx.now_dt,
+            target_hour=ctx.target_hour,
+            before_dw=ctx.before_dw,
+            after_dw=ctx.after_dw,
+            target_pct=ctx.target_pct,
+        )
+
+        # ---- Steps 9, 10, 10b: spike / price window signals ----
+        self._compute_spike_signals(data, ctx.now_dt)
+
+        # ---- Step 11: solar_weighted_avg_fit ----
+        self._forecast_pipeline.compute_solar_weighted_avg_fit(
+            data=data,
+            now_dt=ctx.now_dt,
+            target_hour=ctx.target_hour,
+            after_dw=ctx.after_dw,
+        )
+
+        # ---- Step 12: decision_log ----
+        self._maybe_log_decision(data, ctx.now_dt)
+
         # ---- Step 16: daily_forecast ----
         # (computed earlier; left intentionally blank)
 
         # ---- Step 17: excess_solar_signals (backlog-high-017) ----
-        self._forecast_pipeline.compute_excess_solar_signals(data, now_dt)
+        self._forecast_pipeline.compute_excess_solar_signals(data, ctx.now_dt)
 
         # ---- Step 18: weather correlation diagnostics (Issue #61) ----
         self._populate_weather_diagnostics(data)
@@ -496,35 +789,12 @@ class ComputationEngine:
             target_hour=target_hour,
         )
 
-    def _compute_solar_weighted_avg_fit(
-        self, data: CoordinatorData, now_dt: datetime, target_hour: int, after_dw: bool
-    ) -> None:
-        """Compute solar-weighted average feed-in tariff."""
-        self._forecast_pipeline.compute_solar_weighted_avg_fit(
-            data=data,
-            now_dt=now_dt,
-            target_hour=target_hour,
-            after_dw=after_dw,
-        )
-
     def _get_dp_decision_at_demand_window(
         self, data: CoordinatorData, target_hour: int
     ) -> dict | None:
         """Get the DP decision at or just after the demand window start time."""
         return self._forecast_pipeline._get_dp_decision_at_demand_window(
             data, target_hour
-        )
-
-    def _get_expected_load_kw_from_slots(
-        self, data: CoordinatorData, hours_to_target: float
-    ) -> float:
-        """Estimate average load kW until DW using data.load_forecast_slots (Phase 4, #441).
-
-        Averages slots from current slot to DW entry slot. Falls back to current
-        load if no forecast slots available.
-        """
-        return self._price_signals.get_expected_load_kw_from_slots(
-            data, hours_to_target
         )
 
     # ========================================================================
@@ -547,6 +817,13 @@ class ComputationEngine:
             CONF_ALLOW_DW_ENTRY_UNDER_TARGET: self._get_switch_state(
                 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
             ),
+            CONF_STALE_SOLAR_CONSERVATIVE: self._get_switch_state(
+                SWITCH_STALE_SOLAR_CONSERVATIVE
+            ),
+            CONF_STALE_SOLAR_CONFIDENCE_CEILING: self.entry.options.get(
+                CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+                DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+            ),
             CONF_OPTIMIZATION_MODE: self.entry.options.get(
                 CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE
             ),
@@ -558,6 +835,15 @@ class ComputationEngine:
             ),
             CONF_TARGET_PENALTY: self.entry.options.get(
                 CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY
+            ),
+            CONF_MIN_CYCLE_SAVING: self.entry.options.get(
+                CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
+            ),
+            # Runway backstop margin. Must be forwarded here or the number entity is
+            # decorative: this dict — not entry.options — is what reaches
+            # _build_optimizer_config on the live path.
+            CONF_PRECHARGE_RUNWAY_MARGIN_MIN: self.entry.options.get(
+                CONF_PRECHARGE_RUNWAY_MARGIN_MIN, DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
             ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
@@ -638,6 +924,11 @@ class ComputationEngine:
     def _recent_load_1hr_kw(self) -> float:
         """Get recent 1hr load from history fetcher."""
         return self._history_fetcher._recent_load_1hr_kw
+
+    @property
+    def _recent_load_short_kw(self) -> float:
+        """Get recent short-window load from history fetcher."""
+        return self._history_fetcher._recent_load_short_kw
 
     @property
     def _recent_load_1hr_statistic_id(self) -> str:

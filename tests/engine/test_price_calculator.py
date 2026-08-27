@@ -6,9 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.localshift.engine.price_calculator import (
+    _STALE_TARGET_REACHED_SOC_DEADBAND_PCT,
     _collect_prices_by_source,
     _compute_price_slot_data,
     _parse_price_entry,
+    _target_reached_blocks_urgency,
     get_price_for_slot,
     get_price_for_slot_or_none,
     get_price_for_slot_with_source,
@@ -19,6 +21,28 @@ from custom_components.localshift.engine.price_calculator import PriceCalculator
 def _make_utc_datetime(offset_minutes: int = 0) -> datetime:
     """Create a timezone-aware UTC datetime."""
     return datetime.now(timezone.utc) + timedelta(minutes=offset_minutes)
+
+
+def _make_price_calculator() -> PriceCalculator:
+    """Fresh PriceCalculator with deterministic base=0.10 and max_pre_charge_price=0.50."""
+
+    def parse_dt(val):
+        if val is None:
+            return None
+        try:
+            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    entry = MagicMock()
+    entry.options = {"max_pre_charge_price": 0.50}
+    return PriceCalculator(
+        entry=entry,
+        parse_forecast_dt=parse_dt,
+        percentile_func=lambda x, y: 0.10,
+        sum_solar_before_target=lambda x, y, z: 10.0,
+        get_expected_load_kw=lambda x, y: 1.0,
+    )
 
 
 class TestParsePriceEntry:
@@ -920,6 +944,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime()
         target_hour = (now + timedelta(hours=6)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = [
             {
                 "start_time": now.isoformat(),
@@ -928,7 +953,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         ]
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.10, max_price=0.50
+            data, now, target_hour, base=0.10, max_price=0.50, target_pct=0.0
         )
         assert result == 0.10
 
@@ -937,10 +962,11 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime().replace(minute=0, second=0, microsecond=0)
         target_hour = (now + timedelta(hours=1)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = []
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.10, max_price=0.50
+            data, now, target_hour, base=0.10, max_price=0.50, target_pct=0.0
         )
         assert result > 0.10
 
@@ -949,6 +975,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime().replace(minute=0, second=0, microsecond=0)
         target_hour = (now + timedelta(hours=1)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = [
             {
                 "start_time": now.isoformat(),
@@ -957,7 +984,7 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         ]
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.10, max_price=0.50
+            data, now, target_hour, base=0.10, max_price=0.50, target_pct=0.0
         )
         assert result >= 0.25
 
@@ -966,12 +993,43 @@ class TestPriceCalculatorUrgencyAdjustedPrice:
         now = _make_utc_datetime().replace(minute=0, second=0, microsecond=0)
         target_hour = (now + timedelta(minutes=30)).hour
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = []
 
         result = calculator._calculate_urgency_adjusted_price(
-            data, now, target_hour, base=0.40, max_price=0.50
+            data, now, target_hour, base=0.40, max_price=0.50, target_pct=0.0
         )
         assert result <= 0.50
+
+    def test_deep_deficit_widens_urgency_window(self, calculator):
+        """A deep SOC deficit engages urgency at 4.1h out, where a fixed 4h window cannot.
+
+        With a forecast floor pinned at the base price, urgency only lifts the threshold
+        when the deficit-derived window reaches past ``hours_left``. From 11% -> 95% the
+        window is ~4.235h, so at 4.1h out urgency is engaged (> base); the legacy 4h window
+        (target_pct=0) and a near-target deficit both leave the threshold at base.
+        """
+        # now 10:54, target 15:00 -> exactly 4.1h of runway.
+        now = datetime(2026, 6, 11, 10, 54, tzinfo=timezone.utc)
+        target_hour = 15
+        # Forecast floor == base so urgency_price is what drives the result, not the floor.
+        forecast = [{"start_time": now.isoformat(), "per_kwh": 0.10}]
+
+        def _call(soc, target_pct):
+            data = MagicMock()
+            data.soc = soc
+            data.general_forecast = forecast
+            return calculator._calculate_urgency_adjusted_price(
+                data, now, target_hour, base=0.10, max_price=0.50, target_pct=target_pct
+            )
+
+        deep = _call(soc=11.0, target_pct=95.0)
+        legacy = _call(soc=11.0, target_pct=0.0)
+        near_target = _call(soc=90.0, target_pct=95.0)
+
+        assert deep > 0.10, "deep deficit must engage urgency at 4.1h out"
+        assert legacy == 0.10, "legacy 4h window: no urgency beyond 4h out"
+        assert near_target == 0.10, "shallow deficit stays at the 4h floor"
 
 
 class TestComputeEffectiveCheapPricePreliminary:
@@ -1033,12 +1091,18 @@ class TestComputeEffectiveCheapPricePreliminary:
         assert data.effective_cheap_price is not None
 
     def test_base_price_when_target_reached(self, calculator):
-        """Test base price when target already reached today."""
+        """Base price when target reached today AND battery still near target.
+
+        The target-reached latch only suppresses urgency within a SOC deadband of the
+        target (a stale latch with a low SOC must NOT suppress pre-charge — see
+        TestComputeEffectiveCheapPriceStaleLatch). Here SOC is within the deadband, so
+        the latch is honored and the threshold stays at base.
+        """
         now = _make_utc_datetime()
         data = MagicMock()
         data.general_forecast = [{"start_time": now.isoformat(), "per_kwh": 0.15}]
         data.forecast_horizon_hours = 12.0
-        data.soc = 30.0
+        data.soc = 75.0  # within deadband of target_pct=80 (80 - 20 = 60)
         data.target_reached_today = True
         data.solcast_today = []
         data.solcast_tomorrow = []
@@ -1109,6 +1173,7 @@ class TestComputeEffectiveCheapPrice:
         """Test urgency price when solar cannot reach target."""
         now = _make_utc_datetime()
         data = MagicMock()
+        data.soc = 50.0
         data.general_forecast = [{"start_time": now.isoformat(), "per_kwh": 0.10}]
         data.forecast_horizon_hours = 12.0
         data.solar_can_reach_target = False
@@ -1132,6 +1197,95 @@ class TestComputeEffectiveCheapPrice:
             data, now, target_hour=18, before_dw=False
         )
         assert data.effective_cheap_price == 0.10
+
+
+class TestTargetReachedBlocksUrgency:
+    """Tests for the stale-latch SOC guard (_target_reached_blocks_urgency).
+
+    Regression for the demand-window pre-charge failure: target_reached_today is a daily
+    latch whose only live reset is a single midnight event. A stale latch must not suppress
+    urgency pre-charge while the battery sits far below target before the demand window.
+    """
+
+    def test_latch_clear_never_blocks(self):
+        data = MagicMock()
+        data.target_reached_today = False
+        data.soc = 12.0
+        assert _target_reached_blocks_urgency(data, target_pct=95.0) is False
+
+    def test_stale_latch_with_low_soc_does_not_block(self):
+        # The bug: latch True but battery far below target before the DW must NOT
+        # suppress urgency pre-charge.
+        data = MagicMock()
+        data.target_reached_today = True
+        data.soc = 12.0
+        assert _target_reached_blocks_urgency(data, target_pct=95.0) is False
+
+    def test_latch_honored_within_deadband(self):
+        # Near target: honor the latch so we don't re-charge (sawtooth avoidance).
+        data = MagicMock()
+        data.target_reached_today = True
+        data.soc = 95.0
+        assert _target_reached_blocks_urgency(data, target_pct=95.0) is True
+
+    def test_deadband_boundary(self):
+        data = MagicMock()
+        data.target_reached_today = True
+        boundary = 95.0 - _STALE_TARGET_REACHED_SOC_DEADBAND_PCT
+        data.soc = boundary
+        assert _target_reached_blocks_urgency(data, target_pct=95.0) is True
+        data.soc = boundary - 0.1
+        assert _target_reached_blocks_urgency(data, target_pct=95.0) is False
+
+    def test_no_target_context_preserves_legacy(self):
+        # target_pct<=0 (legacy callers) -> latch alone suppresses, as before.
+        data = MagicMock()
+        data.target_reached_today = True
+        data.soc = 12.0
+        assert _target_reached_blocks_urgency(data, target_pct=0.0) is True
+
+
+class TestComputeEffectiveCheapPriceStaleLatch:
+    """End-to-end: a stale latch + low SOC before the DW still funds pre-charge."""
+
+    def _data(self, now, soc, latched):
+        data = MagicMock()
+        data.general_forecast = [{"start_time": now.isoformat(), "per_kwh": 0.10}]
+        data.forecast_horizon_hours = 12.0
+        data.solar_can_reach_target = False  # solar_gap -> urgency eligible
+        data.target_reached_today = latched
+        data.soc = soc
+        return data
+
+    def test_stale_latch_low_soc_still_inflates_threshold(self):
+        # Fixed time 2h before target so the urgency path yields a value above base
+        # (urgency = 1 - 2/4 = 0.5 -> 0.10 + (0.50-0.10)*0.5 = 0.30).
+        now = datetime(2026, 6, 4, 16, 0, tzinfo=timezone.utc)
+
+        ref = _make_price_calculator()
+        d_ref = self._data(now, soc=12.0, latched=False)
+        ref.compute_effective_cheap_price(
+            d_ref, now, before_dw=True, target_hour=18, target_pct=95.0
+        )
+
+        stuck = _make_price_calculator()
+        d_stuck = self._data(now, soc=12.0, latched=True)
+        stuck.compute_effective_cheap_price(
+            d_stuck, now, before_dw=True, target_hour=18, target_pct=95.0
+        )
+
+        honored = _make_price_calculator()
+        d_hon = self._data(now, soc=95.0, latched=True)
+        honored.compute_effective_cheap_price(
+            d_hon, now, before_dw=True, target_hour=18, target_pct=95.0
+        )
+
+        # Urgency path produces a threshold strictly above base (test is meaningful).
+        assert d_ref.effective_cheap_price > 0.10
+        # Stuck latch + low SOC behaves like no latch at all -> pre-charge funded.
+        assert d_stuck.effective_cheap_price == d_ref.effective_cheap_price
+        # Latch honored only when SOC is within the deadband -> base, no pre-charge.
+        assert d_hon.effective_cheap_price == 0.10
 
 
 class TestGetFitPriceForPeriod:

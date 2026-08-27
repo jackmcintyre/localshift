@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+# const.py is dependency-free (stdlib only) and imports nothing from the engine, so this
+# cannot cycle. Imported so the runway-margin dataclass default and the live number
+# entity's default are literally the same object rather than two literals that drift.
+from ..const import DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+
 if TYPE_CHECKING:
     from custom_components.localshift.forecast.solar_accuracy import (
         SolarAccuracyTracker,
@@ -170,6 +175,22 @@ class OptimizerConfig:
     allow_dw_entry_under_target: bool = False
     """If True, allow reaching target during DW via solar (instead of by DW start)."""
 
+    stale_solar_conservative: bool = True
+    """If True, cap confidence when Solcast data is stale or absent."""
+
+    stale_solar_confidence_ceiling: float = 0.3
+    """Confidence ceiling applied when stale_solar_conservative and data is stale."""
+
+    solar_forecast_accuracy: float = 1.0
+    """Forecast accuracy (0-1) used to discount projected solar in the pre-charge
+    feasibility gate (``check_global_solar_sufficiency``).
+
+    Set per-plan from ``get_forecast_accuracy(inputs.solar_accuracy_tracker)`` so the
+    hard gate is no more optimistic than the shortfall cost model
+    (``reason_codes._is_target_shortfall_risk``), which already discounts projected
+    solar by the same accuracy. Default 1.0 (full trust) preserves legacy behavior
+    for unit tests and standalone use. See the 2026-06-09 DW undercharge / #816."""
+
     # --- Objective weights ---
     target_shortfall_penalty_per_pct: float = 0.030
     """Penalty applied per % SOC below target at demand-window entry ($/%-point).
@@ -207,18 +228,231 @@ class OptimizerConfig:
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
 
+    terminal_penalty_idx: int | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): index of the demand-window ENTRY slot,
+    i.e. the slot the terminal shortfall penalty is applied at. None ⇒ no demand window in
+    the rolling horizon.
+
+    Published alongside ``urgency_window_start_idx`` (which is meaningless without it) so
+    consumers outside the solver can express "before the demand window" without
+    re-deriving the window bounds. The pre-charge execution backstop
+    (``OptimizerFacade._backstop_urgency_window``) is the first such consumer: before this
+    field existed it read ``getattr(config, "terminal_penalty_idx", None)``, which was
+    always None, and the backstop was unreachable in production."""
+
     urgency_window_start_idx: int | None = None
     """Solver-derived (set by ``DPPlanner._solve``): index of the first slot within the
-    urgency window (~4h) before the demand-window entry (Issue #800 follow-up).
+    urgency window before the demand-window entry (Issue #800 follow-up). The window width is
+    deficit-derived (floor 4h, cap 8h) via ``dp_math.urgency_window_hours`` — a deep SOC
+    deficit needs more pre-charge runway than a fixed 4h allows (2026-06-11 incident).
 
     The urgency-inflated ``effective_cheap_price`` is a "now" value that is only legitimate
-    for slots close to the upcoming demand window (its urgency ramp is ~4h). When the plan
+    for slots close to the upcoming demand window (its urgency ramp tracks the same window).
+    When the plan
     recomputes after the day's demand window has begun, the first DW-entry in the rolling
     horizon is *tomorrow* evening, so tonight's overnight slots are technically "pre-DW" —
     but they are far outside the urgency window, so gating them on the inflated price
     re-introduces the overnight sawtooth. ``cheap_threshold_for_slot`` therefore applies the
     inflated price only to slots in ``[urgency_window_start_idx, terminal_penalty_idx)`` and
     gates everything else on the un-inflated base. None ⇒ legacy (base only post-DW)."""
+
+    max_normal_gain_pct_to_terminal: list[float] | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): per-slot upper bound on the SOC
+    %-points normal-rate grid charging could add from that slot to the demand-window entry
+    (2026-06-11 shortfall incident).
+
+    Computed by ``constraints.compute_max_normal_gain_pct_to_terminal``. The shortfall-aware
+    boost gate in ``feasible_actions`` compares ``soc_pct + gain[slot_idx]`` against the
+    demand-window target: when even this optimistic normal-rate ceiling falls short, boost is
+    unlocked so the DP keeps a feasible path to target rather than eating the terminal
+    shortfall penalty. None ⇒ legacy behavior (boost only at very-cheap prices) for existing
+    tests and direct callers."""
+
+    max_precharge_price: float | None = None
+    """Operator price ceiling for target-driven pre-charge ($/kWh), from
+    ``CONF_MAX_PRECHARGE_PRICE`` (default 0.20).
+
+    Target-first eligibility (2026-06-12): reaching the demand-window target is a
+    constraint the operator has authorized paying up to this price for — the same ceiling
+    the live urgency ramp in ``price_calculator`` already uses. Plumbed into the engine so
+    ``compute_pre_dw_charge_thresholds`` can size the pre-DW charge gate to the target
+    instead of leaving the target structurally unreachable on days with few cheap slots.
+    None ⇒ feature inert (legacy gate behaviour) for unit tests and direct callers."""
+
+    pre_dw_charge_thresholds: list[float] | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): per-slot charge-price threshold for
+    slots before the demand-window entry (target-first eligibility, 2026-06-12).
+
+    Computed by ``constraints.compute_pre_dw_charge_thresholds`` as the max of (a) the
+    legacy cheap threshold, (b) the urgency ramp evaluated at that slot's own time
+    (time-consistent — a morning plan sees the same unlocks afternoon re-plans will), and
+    (c) the "water level": the marginal price of the cheapest set of pre-DW slots whose
+    combined charge capacity closes the SOC deficit to target, clamped to
+    ``max_precharge_price``. ``cheap_threshold_for_slot`` returns these for pre-DW slots
+    when present; slots at/after the DW entry are unaffected (still gated on
+    ``base_cheap_price`` — the #800 overnight-sawtooth protection is untouched).
+    None ⇒ legacy behaviour."""
+
+    spike_precharge_enabled: bool = True
+    """Operator kill switch for spike-event pre-charge funding.
+
+    False ⇒ ``DPPlanner.plan`` never computes funding slots and the planner behaves
+    exactly as it did before the feature existed."""
+
+    spike_funding_slots: frozenset[int] | None = None
+    """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to
+    the feasible set so it can fund a later expensive interval outside the demand window.
+
+    Computed by ``spike_event.find_funding_slots``. Without this, a forecast price spike
+    has no funder at all: ``cheap_threshold_for_slot`` only ever widens for the
+    demand-window target, so an overnight trough two cents above ``base_cheap_price``
+    blocks arbitrage worth dollars per kWh (2026-08-05: a $1.65 print met at the 10% floor).
+
+    Consumed in exactly one place: ``constraints.feasible_actions``, which admits
+    CHARGE_GRID_NORMAL for these slots. It widens the CHOICE SET only — every other
+    screen still applies, in particular the min-cycle-saving gate. #908 also exempted
+    these slots from that gate; that disarmed the only hard anti-cycling protection
+    wherever qualification fired and reopened the #800 sawtooth, so the exemption is
+    gone (see ``core._is_urgency_precharge``).
+
+    Deliberately NOT routed through ``cheap_threshold_for_slot``: that function also feeds
+    the futile-cycling penalty and the floor-routing helpers, so changing its return value
+    would mutate the objective function rather than only the choice set.
+
+    None ⇒ feature inert (legacy behaviour)."""
+
+    hard_target_floor: float | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): the hard DW-target feasibility floor
+    (issue #885) — ``min(target, max feasible/eligible SOC at DW entry)``.
+
+    When set (strict mode: ``allow_dw_entry_under_target=False``, self-consumption, a
+    demand window exists, and solar alone does not reach target), two things happen:
+
+    - ``_initialize_dp_tables`` prunes DW-entry states below this floor with an effectively
+      infinite penalty, so backward induction MUST route a charging path that clears it
+      (through the cheapest eligible pre-DW slots), rather than paying through the soft
+      shortfall penalty and holding under target, and
+    - ``feasible_actions`` unlocks boost charging in eligible pre-DW slots while
+      ``soc_pct < hard_target_floor``, so the DP actually HAS a fast-enough path to the
+      floor when normal-rate charging would arrive at the DW under target (the live
+      "boost downshifted to grid" failure).
+
+    Strictly bounded to pre-DW slots (``slot_idx < terminal_penalty_idx``); never forces
+    charging inside/after the DW or overnight (guards the #800 sawtooth). None ⇒ gate
+    dormant (legacy soft-penalty behaviour) for unit tests and direct callers."""
+
+    hard_floor_suppressed_by_solar: bool = False
+    """Solver-derived (set by ``DPPlanner._solve``): True when ``hard_target_floor`` is
+    None *specifically because solar alone was projected to reach the target*, and the
+    gate would otherwise have been live.
+
+    ``hard_target_floor`` goes None for several structurally different reasons, and the
+    pre-charge execution backstop (#901) — which is gated on that floor — must be able to
+    tell them apart. This flag is True only when ALL of the following hold:
+
+    - the strict-mode policy preconditions are met (``allow_dw_entry_under_target`` is
+      False), AND
+    - the solar-sufficiency branch fired: either ``can_solar_reach_target`` (solar reaches
+      target anywhere during the DW) or ``check_global_solar_sufficiency`` (solar reaches
+      target by the DW entry from the current SOC), AND
+    - ``compute_max_feasible_terminal_soc`` is non-None, i.e. the gate is structurally
+      applicable (self-consumption, a demand window exists, the entry is not slot 0).
+
+    False for every OTHER None reason — ``allow_dw_entry_under_target``, no demand window,
+    non-self-consumption, DW entry at slot 0 — so backstops keyed on this flag stay exactly
+    as dormant as they are today in those cases.
+
+    Motivation (2026-07-28): the #901 backstop returns None whenever ``hard_target_floor``
+    is None, and the floor is deliberately suppressed on any day solar *looks* sufficient
+    (don't fight #816/#849). A mid-afternoon cloud event then leaves no backstop at all.
+    The 2026-07-27 incident also proved solar confidence unreliable (a blended "high" 0.87
+    against a 52% Solcast day-confidence), so this flag is deliberately only an
+    *eligibility* signal — it says "the only thing standing between us and a hard floor is
+    a solar forecast" — and must be paired with ``precharge_runway_slack_min`` before it
+    authorizes anything."""
+
+    precharge_runway_slack_min: float | None = None
+    """Solver-derived (set by ``DPPlanner._solve``): spare minutes of pre-charge runway —
+    minutes from the plan's start to the demand-window entry, MINUS the minutes boost
+    charging would need to close the SOC gap to target.
+
+    Formally ``minutes_to_dw_entry - minutes_of_boost_needed``, where minutes-needed is
+    integrated through ``transitions._tapered_stored_kwh`` — the SAME CV-taper charge model
+    the DP's own transitions use — rather than a flat ``gap / (rate × efficiency)``. The
+    taper is not a rounding error: above ``charge_taper_start_pct`` the Powerwall derates
+    toward ``charge_taper_min_factor``, and every pre-charge to a 95% target crosses that
+    knee. On the 2026-07-28 live case (59.1% → 95%) the flat form claimed 63 minutes where
+    the engine's own model needs 78 — a 15-minute overstatement, larger than the whole
+    default margin. Negative ⇒ the target is already physically unreachable at boost rate.
+
+    Both terms are biased to UNDER-report slack, the only safe error direction for a
+    guardrail: the time term is anchored at the END of slot 0 (the DP is clock-free, and
+    slot 0 already contains ``now``, so its start would credit runway already spent).
+
+    This — not solar confidence — is the quantity that matters for the "cloud event with no
+    runway left" failure the #901 backstop was built for. Two honest caveats, both measured
+    rather than assumed:
+
+    - It is NOT self-limiting on a sunny day. ``gap_pp`` is the LIVE gap, which projected
+      solar has not yet closed, so a low-SOC morning under a strong forecast can read a
+      small slack and arm the guardrail even though solar alone would have reached target.
+      That is the deliberate insurance premium of the design — the arm asks "if solar
+      stopped RIGHT NOW, could grid still get there?" — and
+      ``precharge_runway_margin_min`` (0 ⇒ off) is the operator's control over how much of
+      that premium to pay.
+    - While boost charging runs at the modelled rate it holds roughly constant (the gap
+      closes at the rate the runway shortens), so the hold ends via the closing-gap gate,
+      not via slack recovery. It is quantized to ``precharge_runway_quantum_min``.
+
+    None when it is not interpretable: no demand window, the DW entry is slot 0, timestamps
+    are unparseable, or degenerate battery capacity/rate/efficiency. A non-positive gap
+    yields the full remaining runway (nothing to charge ⇒ all slack)."""
+
+    precharge_runway_quantum_min: float = 0.0
+    """Solver-derived (set by ``DPPlanner._solve``): the width of slot 0, in minutes.
+
+    ``precharge_runway_slack_min``'s time term can only step at slot boundaries — the DP is
+    clock-free, so there is no continuous ``now`` to measure from — while its SOC-gap term
+    moves continuously. The published slack therefore carries a sawtooth of exactly this
+    amplitude: it drifts up across a slot and drops by one slot width at each boundary.
+
+    Consumers must size any hysteresis band against this value rather than a hardcoded
+    constant. A 10-minute band clears a 5-minute slot 0 but not a 30-minute one, and slot 0
+    IS 30 minutes whenever the hybrid schedule has no 5-minute Amber data — precisely the
+    degraded conditions in which the arm is most likely to be live."""
+
+    precharge_runway_margin_min: float = DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+    """Operator-tunable slack threshold (minutes) for the runway-gated pre-charge arm.
+
+    Declared here so the engine carries the knob alongside the two solver-derived fields
+    above; the arming logic that reads it lives outside the DP core — it is
+    ``OptimizerFacade._runway_backstop_mode`` that compares it against
+    ``precharge_runway_slack_min``. The arm fires when the slack falls below this margin —
+    i.e. when losing this many more minutes of runway would make the target physically
+    unreachable at boost rate. Non-positive ⇒ the arm is disabled outright (kill switch).
+
+    Default tracks ``const.DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN`` (15.0) so the dataclass and
+    the live ``number.localshift_precharge_runway_margin_min`` slider cannot drift apart.
+    Calibration: the 2026-07-28 live observation (59.1% SOC, 95% target, 82 min to DW) sits
+    at ~4 minutes of slack against the engine's own tapered charge model — well under the
+    margin, so the arm fires, which is the whole point (that state was recovered by a MANUAL
+    ``boost_charging`` override). An earlier flat-rate formula scored the same state at
+    ~19 minutes and would have stayed shut. Raising the margin buys more insurance at the
+    cost of more grid charging on days solar would have sufficed; 0 disables the arm. The DP
+    itself never reads this value — it cannot change a plan."""
+
+    pre_dw_funding_water_level: float | None = None
+    """Solver-derived (set by ``DPPlanner._solve`` via ``compute_pre_dw_charge_thresholds``):
+    the raw target-funding water level — the marginal buy price of the cheapest set of
+    pre-DW slots whose combined boost capacity closes the SOC deficit to the demand-window
+    target ($/kWh), clamped to ``max_precharge_price``. None when there is no deficit (or
+    the thresholds are inert).
+
+    Distinct from the (b)/(c) max in ``pre_dw_charge_thresholds``: this carries ONLY the
+    funding component, un-floored by the ramp base, so the min-cycle-saving exemption can
+    tell a genuinely target-funding charge (price ≤ water level, part of the
+    cheapest-sufficient set) from a merely legacy-cheap one whose energy drains to the SOC
+    floor before the demand window (the 2026-06-13 overnight sawtooth regression)."""
 
     base_cheap_price: float | None = None
     """Un-inflated "genuinely cheap" threshold (percentile-derived), $/kWh.
@@ -238,6 +472,19 @@ class OptimizerConfig:
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
 
+    min_cycle_saving: float = 0.0
+    """Minimum saving over holding ($/kWh charged) required to justify cycling the
+    battery via a grid charge. 0.0 disables the gate (legacy behaviour).
+
+    Applied in ``core._compute_best_action``: a grid charge is dropped when it beats the
+    HOLD alternative by a positive but sub-threshold margin. Because the margin is the
+    DP's real cost difference (``hold_total_cost - charge_total_cost``), it already
+    credits every value source — evening-peak avoidance, demand-window target, backup
+    readiness — so genuine pre-charge and spike capture are preserved while thin
+    speculative arbitrage is dropped. Dataclass default is 0.0 so unit tests are
+    unaffected; production sets it from ``CONF_MIN_CYCLE_SAVING`` (default 0.25) in
+    ``optimizer_runner``."""
+
     forecast_horizon_hours: float = 24.0
     """Actual hours of forecast available (Issue #431)."""
 
@@ -251,6 +498,32 @@ class OptimizerConfig:
     + ~$0.15 shadow value = $0.20).  This flag overrides that economic logic and
     treats HOLD as a hard constraint: "Do Not Discharge."
     """
+
+    # --- Charge curve modeling ---
+    charge_taper_start_pct: float = 80.0
+    """SOC percentage above which charge rate begins tapering.
+
+    A lithium battery (and the Powerwall inverter) holds near-constant power up to a
+    "knee", then enters the constant-voltage phase where charge power falls toward zero
+    as it approaches full. Below this SOC the configured charge rate is delivered in full;
+    above it the rate is linearly derated toward ``charge_taper_min_factor`` at 100%.
+    Modelling this stops the planner from believing it can add the last ~15-20% as fast as
+    the bulk-charge region, which previously produced over-optimistic last-minute top-ups
+    that fell short of target (the rate is lower than expected as the battery fills)."""
+
+    charge_taper_min_factor: float = 0.2
+    """Fraction of nominal charge rate still available at 100% SOC (end of the taper).
+
+    The taper ramps the rate linearly from 1.0 at ``charge_taper_start_pct`` down to this
+    floor at ``max_soc_pct``. Kept > 0 so the model never predicts an infinitely-slow
+    final approach (which would make the target unreachable in finite slots)."""
+
+    # --- Anti-sawtooth protection ---
+    min_soc_floor_buffer_pct: float = 1.0
+    """Buffer above min_soc_pct where anti-sawtooth protection applies."""
+
+    min_floor_charge_gain_pct: float = 2.0
+    """Minimum SOC gain required to justify charging within floor buffer."""
 
 
 # -----------------------------------------------------------------------------
@@ -272,7 +545,20 @@ class ObjectiveTerms:
     """Terminal penalty applied at demand window boundary (only for terminal slots)."""
 
     self_consumption_value: float = 0.0
-    """Value of battery energy used for household load (benefit, subtracted from cost)."""
+    """Diagnostic only: value of battery energy used for household load, at retail
+    (``battery_for_load * buy_price``). NOT subtracted from ``net_cost``.
+
+    Issue #406 / #800 overnight sawtooth (root-caused 2026-06-29): subtracting this
+    DOUBLE-COUNTED the self-consumption benefit. When the battery serves load,
+    ``_transition_hold_deficit`` already reduces ``grid_import_kwh`` by the battery's
+    contribution (``transitions.py``: ``grid_import = max(0, load_deficit - battery_to_load)``),
+    so the avoided import is already reflected in a lower ``import_cost``. Crediting it
+    again here valued stored energy at ~2x retail, which made thin overnight
+    charge-and-drain cycling look profitable (~5c/kWh apparent profit on a ~2c/kWh
+    round-trip loss) and is why every soft anti-cycling penalty got "paid through".
+    A deterministic replay of the 2026-06-29 live plan confirmed removing this credit
+    eliminates the overnight sawtooth (11.3 -> 0.0 kWh) while the demand-window
+    pre-charge and target are preserved. Kept as a serialized field for diagnostics."""
 
     switching_penalty: float = 0.0
     """Penalty applied if the action involves a mode switch."""
@@ -289,11 +575,16 @@ class ObjectiveTerms:
 
     @property
     def net_cost(self) -> float:
-        """Net slot cost = import - revenue - self_consumption_value + penalties."""
+        """Net slot cost = import - revenue + penalties.
+
+        ``self_consumption_value`` is deliberately NOT subtracted: the avoided import
+        is already captured by a reduced ``import_cost`` (see the field docstring and
+        ``transitions._transition_hold_deficit``). Subtracting it double-counted the
+        benefit and drove the #406 / #800 overnight sawtooth.
+        """
         return (
             self.import_cost
             - self.export_revenue
-            - self.self_consumption_value
             + self.shortfall_penalty
             + self.uncertainty_penalty
             + self.switching_penalty
@@ -419,6 +710,30 @@ class OptimizerResult:
     terminal_shortfall_pct: float = 0.0
     """Residual SOC shortfall (%) at demand window entry, if any."""
 
+    spike_funding_slot_count: int = 0
+    """How many slots qualified as spike-event pre-charge funding this cycle.
+
+    0 means nothing qualified — the common case on an ordinary day, and the signal
+    that the feature stayed fully inert."""
+
+    spike_funding_accepted: bool = False
+    """True when the spike-funded plan beat the baseline and was kept.
+
+    Read this together with ``spike_funding_net_cost_delta`` — False alone does NOT
+    mean the guard caught a bad plan. Measured over a 200-scenario sweep, ~40% of
+    cycles that qualify end in a dead tie (the DP simply declines the extra option),
+    and those are indistinguishable from genuine rejections on this flag alone."""
+
+    spike_funding_net_cost_delta: float = 0.0
+    """Baseline minus spike-funded projected net cost ($), when funding slots existed.
+
+    > 0  the widening saved money and was adopted.
+    == 0 it qualified but changed nothing — the common, benign case.
+    < 0  the guard REJECTED it as worse. A persistent run of these means the
+         qualification rule is too permissive and should be tightened; an occasional
+         one is expected, because the min-cycle-saving gate makes this DP
+         non-monotone."""
+
     can_solar_reach_target: bool = False
     """True if solar alone can reach DW target (no grid charge, no export). Phase 4, #441."""
 
@@ -463,7 +778,14 @@ class NegativeFitAvoidanceContext:
     """Index of the first slot in the spill-risk window (first sell_price <= 0)."""
 
     risk_window_end_idx: int
-    """Index of the last slot in the spill-risk window (inclusive)."""
+    """Index of the last non-positive-FIT slot at or before the recovery deadline
+    (inclusive).
+
+    The window spans first-to-last bad-FIT slot within that bound, so it may
+    contain positive-FIT slots; those are the export opportunities the avoidance
+    branch acts on. Bounding at the deadline keeps a 24h+ horizon from sizing
+    today's pre-discharge off tomorrow's negative middle.
+    """
 
     required_headroom_kwh: float
     """Estimated storage space (kWh) needed to absorb spill during risk window."""
@@ -515,6 +837,9 @@ class OptimizerInputs:
 
     solcast_analysis_tomorrow: Any | None = None
     """Solcast analysis for tomorrow with confidence data (Issue #794)."""
+
+    solar_absent_confidence: float = 1.0
+    """Absent-forecast confidence passed to ConfidenceResolver (issue stale-solar-fix)."""
 
     solar_accuracy_tracker: SolarAccuracyTracker | None = None
     """Tracker for forecast accuracy to apply discount to terminal cost (Issue #785)."""

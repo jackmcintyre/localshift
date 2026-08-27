@@ -170,16 +170,23 @@ class ParameterOptimizer:
         self._last_weighted_7d_score = weighted_score
         self._last_weather_anomaly_weight = weather_weight
 
-        # Issue #677: Multi-parameter optimization with prioritization
-        new_values, new_confidence = self._select_and_update_params(
-            decisions, bias_corrections
+        # Issue #913: consume corrections staged via set_bias_corrections()
+        # when no explicit list is passed (the orchestrator stages them this
+        # way). Explicit arguments take precedence. Corrections are applied
+        # exactly once — inside _select_and_update_params — and the pending
+        # store is cleared so nothing double-applies on a later run.
+        effective_corrections = (
+            bias_corrections
+            if bias_corrections is not None
+            else self._pending_bias_corrections
         )
 
-        # Apply bias corrections from pattern analysis (Issue #170 Phase 3)
-        if bias_corrections:
-            new_values, new_confidence = self._apply_bias_corrections(
-                new_values, new_confidence, bias_corrections
-            )
+        # Issue #677: Multi-parameter optimization with prioritization
+        new_values, new_confidence = self._select_and_update_params(
+            decisions, effective_corrections
+        )
+
+        self._pending_bias_corrections = []
 
         # Update the parameters
         self._current_params = AdaptiveParameters(
@@ -505,7 +512,19 @@ class ParameterOptimizer:
             if decision.outcome_score is None:
                 continue
 
-            bin_idx = int((current_value - param_def.min_val) / bin_width)
+            # Issue #913: bin by the param value in force when the decision
+            # was made, so scores reflect the value that produced them.
+            # Untagged (pre-Issue #913) or out-of-range tags fall back to the
+            # current value's bin, preserving legacy behaviour.
+            tagged_value = (decision.adaptive_params_at_decision or {}).get(
+                param_name
+            )
+            if tagged_value is None or not (
+                param_def.min_val <= tagged_value <= param_def.max_val
+            ):
+                tagged_value = current_value
+
+            bin_idx = int((tagged_value - param_def.min_val) / bin_width)
             bin_idx = max(0, min(num_bins - 1, bin_idx))
             bins[bin_idx].append(decision.outcome_score)
 
@@ -519,7 +538,7 @@ class ParameterOptimizer:
 
         bin_center = param_def.min_val + (best_bin + 0.5) * bin_width
 
-        current_val = self._current_params.values.get(param_name) or param_def.default
+        current_val = self._current_params.values.get(param_name, param_def.default)
         bin_center = self._apply_step_limit(bin_center, current_val, param_def.step)
 
         bin_center = max(param_def.min_val, min(param_def.max_val, bin_center))

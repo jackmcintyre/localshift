@@ -52,7 +52,14 @@ class ForecastPipeline:
 
         self._load_forecaster.reset_weather_adjustment_applied()
 
+        robust_current_kw = (
+            data.recent_load_short_kw
+            if data.recent_load_short_kw > 0
+            else data.load_power_kw
+        )
+
         slots: list[float] = []
+        source_counts: dict[str, int] = {}
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
@@ -60,11 +67,11 @@ class ForecastPipeline:
             season = SolarAccuracyTracker._get_season(slot_start)
             hours_ahead = i / 4.0
             temperature = data.weather_temperature_forecast.get(slot_hour)
-            load_kw, _ = self._load_forecaster.estimate_hourly_consumption_kw(
+            load_kw, source = self._load_forecaster.estimate_hourly_consumption_kw(
                 hourly_avg_kw=historical_avg_kw,
                 slot_hour=slot_hour,
                 current_hour=current_hour,
-                current_load_kw=data.load_power_kw,
+                current_load_kw=robust_current_kw,
                 recent_load_kw=recent_load_kw,
                 temperature=temperature,
                 hours_ahead=hours_ahead,
@@ -72,17 +79,20 @@ class ForecastPipeline:
                 season=season,
             )
             slots.append(load_kw)
+            source_counts[source] = source_counts.get(source, 0) + 1
 
         data.load_forecast_slots = slots
+        data.forecast_consumption_source_counts = source_counts
         data.weather_adjustment_applied = (
             self._load_forecaster.get_weather_adjustment_applied()
         )
         _LOGGER.info(
-            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f",
+            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f, robust_current=%.3f",
             len(slots),
             [round(slots[i], 3) for i in range(4, min(9, len(slots)))],
             recent_load_kw,
             historical_avg_kw.get(12, -1),
+            robust_current_kw,
         )
 
     def compute_solar_battery_forecast(
@@ -146,6 +156,7 @@ class ForecastPipeline:
             resolver = ConfidenceResolver(
                 getattr(data, "solcast_analysis_today", None),
                 getattr(data, "solcast_analysis_tomorrow", None),
+                absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
             )
             solar_kwh = sum_solar_before_target(
                 all_solcast, now_dt, target_hour, resolver=resolver
@@ -188,6 +199,7 @@ class ForecastPipeline:
             resolver = ConfidenceResolver(
                 getattr(data, "solcast_analysis_today", None),
                 getattr(data, "solcast_analysis_tomorrow", None),
+                absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
             )
             solar_kwh = sum_solar_before_target(
                 all_solcast, now_dt, target_hour, resolver=resolver

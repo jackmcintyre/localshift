@@ -12,6 +12,22 @@ if TYPE_CHECKING:
     pass
 
 
+def _resolve_optional(
+    summary: dict[str, Any], data: Any, key: str, default: Any
+) -> Any:
+    """Read ``key`` from the optimizer summary, falling back to coordinator data.
+
+    Optional telemetry only. A key present in the summary but null (the engine ran
+    and had nothing to report) wins over the fallback only when the summary carries
+    it at all; otherwise the coordinator attribute is tried, and ``default`` is
+    returned when neither source has it. Keeps the sensor inert on an older engine
+    that publishes neither, rather than raising.
+    """
+    if key in summary:
+        return summary[key]
+    return getattr(data, key, default)
+
+
 class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan_detailed"
     _attr_name = "Optimizer Plan Detailed"
@@ -39,6 +55,7 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
         resolver = ConfidenceResolver(
             getattr(d, "solcast_analysis_today", None),
             getattr(d, "solcast_analysis_tomorrow", None),
+            absent_confidence=getattr(d, "solar_absent_confidence", 1.0),
         )
         now = dt_util.now()
         confidences = [
@@ -102,12 +119,15 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
         resolver = ConfidenceResolver(
             getattr(d, "solcast_analysis_today", None),
             getattr(d, "solcast_analysis_tomorrow", None),
+            absent_confidence=getattr(d, "solar_absent_confidence", 1.0),
         )
         now = dt_util.now()
         confidences = [
             resolver.get_confidence(now + timedelta(hours=i)) for i in range(24)
         ]
         avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
+
+        dw_entry_actual_at = getattr(d, "dw_entry_actual_at", None)
 
         return {
             "enabled": summary.get("enabled", False),
@@ -129,6 +149,44 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "initial_soc_pct": summary.get("initial_soc_pct"),
             "peak_soc_pct": summary.get("peak_soc_pct"),
             "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+            # Spike-event pre-charge. slot_count == 0 is the ordinary day (nothing
+            # qualified); a non-zero count with accepted False is usually a benign
+            # tie — the delta is what separates that from a real guard rejection.
+            "spike_funding_slot_count": summary.get("spike_funding_slot_count"),
+            "spike_funding_accepted": summary.get("spike_funding_accepted"),
+            "spike_funding_net_cost_delta": summary.get("spike_funding_net_cost_delta"),
+            # Projected (above) and actual (below) sit together deliberately. These
+            # five read from `d`, not `summary`: the summary is rebuilt every cycle
+            # and is empty on a failed cycle — precisely when the real entry SOC
+            # matters most — and its dw_entry_soc_pct rolls over to tomorrow's window
+            # the instant today's DW starts, which erased the 2026-07-27 miss.
+            "dw_entry_actual_soc_pct": getattr(d, "dw_entry_actual_soc_pct", None),
+            "dw_entry_actual_at": (
+                dw_entry_actual_at.isoformat()
+                if dw_entry_actual_at is not None
+                else None
+            ),
+            "dw_entry_actual_shortfall_pct": getattr(
+                d, "dw_entry_actual_shortfall_pct", None
+            ),
+            "dw_entry_actual_target_pct": getattr(
+                d, "dw_entry_actual_target_pct", None
+            ),
+            "precharge_backstop_active": getattr(
+                d, "optimizer_precharge_backstop_active", False
+            ),
+            # Runway telemetry for the pre-charge backstop (2026-07-28). Both are
+            # solver-derived OptimizerConfig fields, so the summary is their natural
+            # home (same as terminal_shortfall_pct / effective_soc_at_terminal); the
+            # coordinator-data fallback keeps them visible if the engine publishes
+            # them alongside precharge_backstop_active instead, and both resolve to
+            # the dormant default when neither carries them.
+            "precharge_runway_slack_min": _resolve_optional(
+                summary, d, "precharge_runway_slack_min", None
+            ),
+            "hard_floor_suppressed_by_solar": _resolve_optional(
+                summary, d, "hard_floor_suppressed_by_solar", False
+            ),
             "projected_solar_gain_pct": summary.get("projected_solar_gain_pct"),
             "forecast_accuracy": summary.get("forecast_accuracy"),
             "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
@@ -164,8 +222,10 @@ class SolarForecastAccuracySensor(LocalShiftSensorBase):
     _attr_icon = "mdi:solar-power-variant"
 
     def _update_from_coordinator(self) -> None:
+        # None until enough samples are collected (#881) — surfaces as
+        # 'unknown'/'insufficient data' rather than a fabricated perfect 100%.
         self._attr_native_value = getattr(
-            self.coordinator.data, "solar_forecast_accuracy", 100.0
+            self.coordinator.data, "solar_forecast_accuracy", None
         )
 
     @property

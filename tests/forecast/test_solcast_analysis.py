@@ -461,3 +461,151 @@ def test_compute_weighted_confidence_no_overlap():
     confidence = compute_weighted_confidence(analysis, now, 1.0)
 
     assert confidence == 0.75  # Falls back to day confidence
+
+
+# ─── Staleness tests ───────────────────────────────────────────────────────
+
+
+def test_extract_analysis_stale_when_old(mock_hass, sample_analysis_attribute):
+    """is_stale=True when last_updated is older than stale_threshold."""
+    state = Mock(spec=State)
+    state.attributes = {"analysis": sample_analysis_attribute}
+    stale_time = dt_util.utcnow() - timedelta(hours=3)
+    state.last_updated = stale_time
+    state.last_reported = None  # so it falls back to last_updated
+    mock_hass.states.get.return_value = state
+
+    result = extract_analysis_from_entity(
+        mock_hass, "sensor.test", stale_threshold=timedelta(hours=2)
+    )
+    assert result is not None
+    assert result.is_stale is True
+    assert result.age_seconds >= 3 * 3600 - 5  # allow small timing delta
+
+
+def test_extract_analysis_fresh_when_recent(mock_hass, sample_analysis_attribute):
+    """is_stale=False when last_updated is within stale_threshold."""
+    state = Mock(spec=State)
+    state.attributes = {"analysis": sample_analysis_attribute}
+    state.last_updated = dt_util.utcnow() - timedelta(minutes=30)
+    state.last_reported = None
+    mock_hass.states.get.return_value = state
+
+    result = extract_analysis_from_entity(
+        mock_hass, "sensor.test", stale_threshold=timedelta(hours=2)
+    )
+    assert result is not None
+    assert result.is_stale is False
+
+
+def test_extract_analysis_prefers_last_reported(mock_hass, sample_analysis_attribute):
+    """last_reported is preferred over last_updated for staleness check."""
+    state = Mock(spec=State)
+    state.attributes = {"analysis": sample_analysis_attribute}
+    # last_updated is old (would flag stale), last_reported is fresh (should not flag stale)
+    state.last_updated = dt_util.utcnow() - timedelta(hours=5)
+    state.last_reported = dt_util.utcnow() - timedelta(minutes=20)
+    mock_hass.states.get.return_value = state
+
+    result = extract_analysis_from_entity(
+        mock_hass, "sensor.test", stale_threshold=timedelta(hours=2)
+    )
+    assert result is not None
+    assert result.is_stale is False  # last_reported is fresh
+
+
+def test_extract_analysis_no_threshold_never_stale(mock_hass, sample_analysis_attribute):
+    """When stale_threshold=None, is_stale is always False."""
+    state = Mock(spec=State)
+    state.attributes = {"analysis": sample_analysis_attribute}
+    state.last_updated = dt_util.utcnow() - timedelta(days=10)
+    state.last_reported = None
+    mock_hass.states.get.return_value = state
+
+    result = extract_analysis_from_entity(mock_hass, "sensor.test", stale_threshold=None)
+    assert result is not None
+    assert result.is_stale is False
+
+
+def test_extract_analysis_naive_datetime_failopen(mock_hass, sample_analysis_attribute):
+    """Naive datetime subtraction raises TypeError → fail-open (is_stale=False)."""
+    state = Mock(spec=State)
+    state.attributes = {"analysis": sample_analysis_attribute}
+    # Naive datetime (no tzinfo) will cause TypeError when subtracted from aware utcnow()
+    from datetime import datetime as dt_plain
+    state.last_updated = dt_plain(2020, 1, 1, 0, 0, 0)  # naive
+    state.last_reported = None
+    mock_hass.states.get.return_value = state
+
+    result = extract_analysis_from_entity(
+        mock_hass, "sensor.test", stale_threshold=timedelta(hours=2)
+    )
+    assert result is not None
+    assert result.is_stale is False  # fail-open
+
+
+# ─── Confidence ceiling cap tests ─────────────────────────────────────────
+
+
+def test_get_confidence_for_period_caps_to_ceiling():
+    """confidence_ceiling < 1.0 caps the returned confidence."""
+    now = dt_util.utcnow()
+    analysis = SolcastAnalysis(
+        entity_id="test",
+        last_updated=now,
+        day_confidence=0.9,
+        day_spread_kwh=0.5,
+        estimate10_kwh=3.0,
+        estimate90_kwh=9.0,
+        confidence_ceiling=0.3,
+    )
+    result = get_confidence_for_period(analysis, now + timedelta(hours=99))  # no interval match
+    assert result == pytest.approx(0.3)
+
+
+def test_get_confidence_for_period_interval_capped():
+    """Interval hit confidence is also capped by confidence_ceiling."""
+    now = dt_util.utcnow()
+    interval_start = now.replace(second=0, microsecond=0)
+    analysis = SolcastAnalysis(
+        entity_id="test",
+        last_updated=now,
+        day_confidence=0.5,
+        day_spread_kwh=0.5,
+        estimate10_kwh=3.0,
+        estimate90_kwh=9.0,
+        intervals=[ConfidenceInterval(period_start=interval_start, spread_kwh=0.2, confidence=0.85)],
+        confidence_ceiling=0.4,
+    )
+    result = get_confidence_for_period(analysis, interval_start)
+    assert result == pytest.approx(0.4)
+
+
+def test_get_confidence_for_period_absent_confidence_param():
+    """None analysis returns absent_confidence, not 1.0."""
+    result_default = get_confidence_for_period(None, dt_util.utcnow())
+    assert result_default == 1.0  # backward-compat default
+
+    result_custom = get_confidence_for_period(None, dt_util.utcnow(), absent_confidence=0.3)
+    assert result_custom == pytest.approx(0.3)
+
+
+def test_confidence_clamped_negative_estimate90(mock_hass):
+    """Zero/negative estimate90 → day_confidence clamped to [0, 1]."""
+    state = Mock(spec=State)
+    state.attributes = {
+        "analysis": {
+            "confidence": -0.5,  # invalid → clamped to 0.0
+            "spread_kwh": 0.0,
+            "estimate10_kwh": 5.0,
+            "estimate90_kwh": 0.0,
+            "intervals": [],
+        }
+    }
+    state.last_updated = dt_util.utcnow()
+    state.last_reported = None
+    mock_hass.states.get.return_value = state
+
+    result = extract_analysis_from_entity(mock_hass, "sensor.test")
+    assert result is not None
+    assert 0.0 <= result.day_confidence <= 1.0
