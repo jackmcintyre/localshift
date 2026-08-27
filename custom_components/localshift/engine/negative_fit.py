@@ -134,6 +134,7 @@ def derive_negative_fit_avoidance_context(
     - No bad-FIT slot at or before the recovery deadline
     - No positive-FIT slot to sell into at or before the window ends
     - No recovery path to target (cannot safely pre-discharge)
+    - Projected load drain already leaves room to absorb the spill
     """
     slots = inputs.slots
     config = inputs.config
@@ -185,8 +186,24 @@ def derive_negative_fit_avoidance_context(
         return None
 
     target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
-    current_kwh = inputs.initial_soc_pct / 100.0 * battery_capacity_kwh
-    existing_headroom_kwh = max(target_kwh - current_kwh, 0.0)
+
+    # Project SOC to the start of the risk window along the do-nothing
+    # trajectory: solar minus load, slot by slot, clamped to the SOC bounds.
+    # The static ``target - initial SOC`` headroom this replaces is blind to
+    # overnight load drain — on a heavy-load evening it counts headroom the
+    # house consumes before the spill window opens, admitting pre-discharge
+    # exports that only displace load-serving energy. Headroom is room to
+    # *full*, matching the ``capacity - floor`` cap on ``required`` above:
+    # spill charges the battery toward max SOC regardless of target.
+    soc_at_risk_pct = inputs.initial_soc_pct
+    for slot in slots[:risk_start_idx]:
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        stored_kwh = net_kwh * config.charge_efficiency if net_kwh > 0.0 else net_kwh
+        soc_at_risk_pct += stored_kwh / battery_capacity_kwh * 100.0
+    soc_at_risk_pct = min(max(soc_at_risk_pct, config.min_soc_pct), config.max_soc_pct)
+    existing_headroom_kwh = (
+        (config.max_soc_pct - soc_at_risk_pct) / 100.0 * battery_capacity_kwh
+    )
 
     if existing_headroom_kwh >= required_headroom_kwh:
         return None
