@@ -20,6 +20,7 @@ from .const import (
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MIN_CYCLE_SAVING,
+    CONF_MIN_HOLD_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
     CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MIN_CYCLE_SAVING,
+    DEFAULT_MIN_HOLD_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
@@ -853,6 +855,9 @@ class ComputationEngine:
             ),
             CONF_MIN_CYCLE_SAVING: self.entry.options.get(
                 CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
+            ),
+            CONF_MIN_HOLD_SAVING: self.entry.options.get(
+                CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING
             ),
             # Runway backstop margin. Must be forwarded here or the number entity is
             # decorative: this dict — not entry.options — is what reaches

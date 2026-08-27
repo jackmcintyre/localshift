@@ -249,6 +249,7 @@ def _build_optimizer_config(
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MAX_PRECHARGE_PRICE,
         CONF_MIN_CYCLE_SAVING,
+        CONF_MIN_HOLD_SAVING,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
@@ -262,6 +263,7 @@ def _build_optimizer_config(
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MAX_PRECHARGE_PRICE,
         DEFAULT_MIN_CYCLE_SAVING,
+        DEFAULT_MIN_HOLD_SAVING,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
@@ -338,6 +340,10 @@ def _build_optimizer_config(
         config_options.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING)
     )
 
+    min_hold_saving = float(
+        config_options.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING)
+    )
+
     # Target-first eligibility (2026-06-12): the operator's pre-charge price ceiling.
     # Already governs the live urgency ramp in price_calculator; plumbed into the engine
     # so compute_pre_dw_charge_thresholds can size the pre-DW charge gate to the target.
@@ -402,6 +408,7 @@ def _build_optimizer_config(
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
+        min_hold_saving=min_hold_saving,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---

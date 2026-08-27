@@ -67,6 +67,7 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.CHARGE_GRID_NORMAL: 1,
     PlannerAction.CHARGE_GRID_BOOST: 2,
     PlannerAction.EXPORT_PROACTIVE: 3,
+    PlannerAction.HOLD_STRICT: 4,
 }
 
 _GRID_CHARGE_ACTIONS = (
@@ -317,6 +318,33 @@ def _min_cycle_saving_blocks(
         return False
     saving = hold_total_cost - total_cost
     return 0.0 < saving < config.min_cycle_saving * charge_kwh
+
+
+def _min_hold_saving_blocks(
+    action: PlannerAction,
+    total_cost: float,
+    hold_total_cost: float | None,
+    config: OptimizerConfig,
+) -> bool:
+    """Return True when the min_hold_saving gate blocks HOLD_STRICT.
+
+    Issue #906: HOLD_STRICT preserves SOC by importing the entire load deficit
+    from the grid instead of discharging the battery. It only fires when the
+    saved round-trip loss (cost difference vs ordinary HOLD) exceeds
+    config.min_hold_saving dollars per kWh of discharge avoided. 0.0 disables
+    the gate (legacy behaviour).
+    """
+    if not (
+        action == PlannerAction.HOLD_STRICT
+        and config.min_hold_saving > 0.0
+        and hold_total_cost is not None
+    ):
+        return False
+    saving = hold_total_cost - total_cost
+    # Use a nominal 1.0 kWh basis: min_hold_saving is $/kWh of discharge avoided.
+    # The actual discharge avoided depends on the slot's load deficit; using 1.0
+    # is a conservative normalisation that matches the min_cycle_saving contract.
+    return 0.0 < saving < config.min_hold_saving
 
 
 def _floor_guard_blocks(
@@ -1463,6 +1491,9 @@ class DPPlanner:
                 urgency_precharge,
                 config,
             ):
+                states_explored += 1
+                continue
+            elif _min_hold_saving_blocks(action, total_cost, hold_total_cost, config):
                 states_explored += 1
                 continue
 

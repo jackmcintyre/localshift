@@ -39,6 +39,17 @@ class PlannerAction(StrEnum):
     EXPORT_PROACTIVE = "export_proactive"
     """Discharge battery to grid during high sell-price window."""
 
+    HOLD_STRICT = "hold_strict"
+    """Strict SOC hold: preserve SOC by meeting all load deficit from grid (zero discharge).
+
+    Issue #906: unlike ordinary HOLD which discharges to meet load, HOLD_STRICT
+    forbids battery discharge entirely — the deficit is imported from the grid.
+    Used to save SOC for a dearer period (e.g. morning price peak) when overnight
+    prices are flat/inverted and the round-trip loss of discharging+recharging is
+    wasteful. Gated by min_hold_saving threshold so it only fires when the saving
+    exceeds a configured dollar-per-kWh bar.
+    """
+
 
 # -----------------------------------------------------------------------------
 # Reason codes
@@ -529,6 +540,16 @@ class OptimizerConfig:
     speculative arbitrage is dropped. Dataclass default is 0.0 so unit tests are
     unaffected; production sets it from ``CONF_MIN_CYCLE_SAVING`` (default 0.25) in
     ``optimizer_runner``."""
+
+    min_hold_saving: float = 0.0
+    """Minimum saving over ordinary HOLD ($/kWh held) required to select HOLD_STRICT.
+
+    Issue #906: HOLD_STRICT preserves SOC by importing the entire load deficit from
+    the grid instead of discharging the battery. It only fires when the saved
+    round-trip loss (charged later at a dearer price) exceeds this threshold.
+    0.0 disables the action entirely (legacy behaviour). Production default is 0.0
+    as a kill switch for the first live night.
+    """
 
     forecast_horizon_hours: float = 24.0
     """Actual hours of forecast available (Issue #431)."""

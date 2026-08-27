@@ -838,3 +838,86 @@ class TestIsBlindToFutureSolar:
 
         result = is_blind_to_future_solar(slots, 3, None)
         assert result is True
+
+
+class TestHoldStrictFeasibleActions:
+    """Tests for HOLD_STRICT action in feasible_actions (Issue #906)."""
+
+    def _make_slot(self, is_dw=False, solar=0.0, consumption=0.5):
+        from custom_components.localshift.engine.types import SlotContext
+        return SlotContext(
+            slot_index=0,
+            slot_interval_minutes=30,
+            timestamp_iso="2024-01-01T00:00:00+00:00",
+            buy_price=0.15,
+            sell_price=0.07,
+            solar_kwh=solar,
+            consumption_kwh=consumption,
+            is_demand_window_slot=is_dw,
+        )
+
+    def test_hold_strict_disabled_by_default(self):
+        """HOLD_STRICT is absent when min_hold_saving is 0.0 (default)."""
+        from custom_components.localshift.engine.constraints import feasible_actions
+        from custom_components.localshift.engine.types import OptimizerConfig, PlannerAction
+
+        config = OptimizerConfig(min_hold_saving=0.0)
+        slot = self._make_slot()
+        actions = feasible_actions(50.0, slot, config)
+        assert PlannerAction.HOLD in actions
+        assert PlannerAction.HOLD_STRICT not in actions
+
+    def test_hold_strict_enabled_when_threshold_positive(self):
+        """HOLD_STRICT is present when min_hold_saving > 0."""
+        from custom_components.localshift.engine.constraints import feasible_actions
+        from custom_components.localshift.engine.types import OptimizerConfig, PlannerAction
+
+        config = OptimizerConfig(min_hold_saving=0.10)
+        slot = self._make_slot()
+        actions = feasible_actions(50.0, slot, config)
+        assert PlannerAction.HOLD in actions
+        assert PlannerAction.HOLD_STRICT in actions
+
+    def test_hold_strict_excluded_in_demand_window(self):
+        """HOLD_STRICT is excluded during demand window slots."""
+        from custom_components.localshift.engine.constraints import feasible_actions
+        from custom_components.localshift.engine.types import OptimizerConfig, PlannerAction
+
+        config = OptimizerConfig(min_hold_saving=0.10)
+        slot = self._make_slot(is_dw=True)
+        actions = feasible_actions(50.0, slot, config)
+        assert PlannerAction.HOLD in actions
+        assert PlannerAction.HOLD_STRICT not in actions
+
+    def test_hold_strict_present_outside_demand_window(self):
+        """HOLD_STRICT is available outside demand window."""
+        from custom_components.localshift.engine.constraints import feasible_actions
+        from custom_components.localshift.engine.types import OptimizerConfig, PlannerAction
+
+        config = OptimizerConfig(min_hold_saving=0.10)
+        slot = self._make_slot(is_dw=False)
+        actions = feasible_actions(50.0, slot, config)
+        assert PlannerAction.HOLD_STRICT in actions
+
+    def test_hold_strict_order_after_hold(self):
+        """HOLD_STRICT appears after HOLD in the actions list."""
+        from custom_components.localshift.engine.constraints import feasible_actions
+        from custom_components.localshift.engine.types import OptimizerConfig, PlannerAction
+
+        config = OptimizerConfig(min_hold_saving=0.10)
+        slot = self._make_slot()
+        actions = feasible_actions(50.0, slot, config)
+        hold_idx = actions.index(PlannerAction.HOLD)
+        hold_strict_idx = actions.index(PlannerAction.HOLD_STRICT)
+        assert hold_idx < hold_strict_idx
+
+    def test_hold_strict_with_solar_surplus(self):
+        """HOLD_STRICT absorbs solar surplus and still preserves SOC on deficit."""
+        from custom_components.localshift.engine.constraints import feasible_actions
+        from custom_components.localshift.engine.types import OptimizerConfig, PlannerAction
+
+        config = OptimizerConfig(min_hold_saving=0.10)
+        # Solar surplus: 0.8 kWh solar, 0.3 kWh load => net +0.5 kWh
+        slot = self._make_slot(solar=0.8, consumption=0.3)
+        actions = feasible_actions(50.0, slot, config)
+        assert PlannerAction.HOLD_STRICT in actions
