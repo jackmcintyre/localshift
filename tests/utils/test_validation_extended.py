@@ -569,6 +569,75 @@ class TestFailureThresholds:
 
         assert health.is_broken is True
 
+    def test_accuracy_sensor_warmup_unknown_not_broken(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Solar accuracy 'unknown' during warmup must never be marked BROKEN.
+
+        Issue #917 (accuracy half): the sensor legitimately reads 'unknown'
+        while the tracker gathers its first 20 samples, advertising
+        samples_until_active > 0 in its attributes. That is expected warmup,
+        not a validation failure — 10 warmup cycles must not trip the BROKEN
+        gate (a staleness-threshold bump is explicitly rejected by #917).
+        """
+        accuracy_id = "sensor.localshift_solar_forecast_accuracy"
+        now = dt_util.now()
+        states = MockStates({
+            accuracy_id: MockState(
+                entity_id=accuracy_id,
+                state="unknown",
+                attributes={"samples_until_active": 20, "correction_active": False},
+                last_changed=now - timedelta(minutes=5),
+                last_updated=now - timedelta(minutes=5),
+            )
+        })
+        mock_hass.states.get = states.get
+        validator = _create_validator(mock_hass)
+
+        for _ in range(FAILURE_THRESHOLD_ERROR + 2):
+            validator.check_all_localshift_entities()
+        health = validator._localshift_entity_health[accuracy_id]
+
+        assert health.is_broken is False
+        assert health.consecutive_failures == 0
+        assert health.status is EntityStatus.OK
+
+    def test_accuracy_sensor_unknown_without_warmup_still_broken(
+        self, mock_hass: MagicMock
+    ) -> None:
+        """Guard: 'unknown' with no warmup attributes is genuine breakage.
+
+        Also covers the non-warmup-config short-circuit: an unrelated
+        REQUIRED entity that is unavailable still fails normally.
+        """
+        accuracy_id = "sensor.localshift_solar_forecast_accuracy"
+        price_id = "sensor.localshift_price_cheap_effective"
+        now = dt_util.now()
+        states = MockStates({
+            accuracy_id: MockState(
+                entity_id=accuracy_id,
+                state="unknown",
+                attributes={},
+                last_changed=now - timedelta(minutes=5),
+                last_updated=now - timedelta(minutes=5),
+            ),
+            price_id: MockState(
+                entity_id=price_id,
+                state="unavailable",
+                attributes={},
+                last_changed=now - timedelta(minutes=5),
+                last_updated=now - timedelta(minutes=5),
+            ),
+        })
+        mock_hass.states.get = states.get
+        validator = _create_validator(mock_hass)
+
+        for _ in range(FAILURE_THRESHOLD_ERROR):
+            validator.check_all_localshift_entities()
+
+        assert validator._localshift_entity_health[accuracy_id].is_broken is True
+        assert validator._localshift_entity_health[price_id].is_broken is True
+
 
 # =============================================================================
 # Recovery Tests
@@ -1438,9 +1507,7 @@ class TestCheckOrphanedOwnedEntities:
         entry.disabled_by = "user" if disabled else None
         return entry
 
-    def test_no_orphans_when_registry_empty(
-        self, mock_hass: MagicMock
-    ) -> None:
+    def test_no_orphans_when_registry_empty(self, mock_hass: MagicMock) -> None:
         """No orphans when the config entry owns no registry entries."""
         validator = _create_validator(mock_hass)
 
@@ -1476,9 +1543,7 @@ class TestCheckOrphanedOwnedEntities:
 
         assert result == {}
 
-    def test_orphan_detected_for_unknown_entity(
-        self, mock_hass: MagicMock
-    ) -> None:
+    def test_orphan_detected_for_unknown_entity(self, mock_hass: MagicMock) -> None:
         """Registry entry absent from LOCALSHIFT_ENTITY_CONFIG is reported as orphan."""
         orphan_id = "number.localshift_cycle_penalty"
         entry = self._make_registry_entry(orphan_id, "cfg_1")
@@ -1578,7 +1643,9 @@ class TestCheckOrphanedOwnedEntities:
 
         unavailable_state = MagicMock()
         unavailable_state.state = "unavailable"
-        mock_hass.states.get = lambda eid: unavailable_state if eid == orphan_id else None
+        mock_hass.states.get = lambda eid: (
+            unavailable_state if eid == orphan_id else None
+        )
 
         validator = _create_validator(mock_hass)
 
@@ -1620,9 +1687,7 @@ class TestCheckOrphanedOwnedEntities:
             f"User-disabled entry {disabled_id!r} was falsely flagged as orphan"
         )
 
-    def test_multiple_orphans(
-        self, mock_hass: MagicMock
-    ) -> None:
+    def test_multiple_orphans(self, mock_hass: MagicMock) -> None:
         """Multiple orphans are all returned in the dict."""
         orphan_ids = [
             "number.localshift_cycle_penalty",
@@ -1644,9 +1709,7 @@ class TestCheckOrphanedOwnedEntities:
 
         assert set(result.keys()) == set(orphan_ids)
 
-    def test_mix_of_known_and_orphaned(
-        self, mock_hass: MagicMock
-    ) -> None:
+    def test_mix_of_known_and_orphaned(self, mock_hass: MagicMock) -> None:
         """Known entities are filtered out; only orphans are returned."""
         known_id = "sensor.localshift_price_cheap_effective"
         orphan_id = "number.localshift_cycle_penalty"

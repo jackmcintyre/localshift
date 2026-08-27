@@ -381,6 +381,11 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "category": EntityCategory.OPTIONAL,
         "expected_type": float,
         "staleness_minutes": 1440,
+        # Issue #917: 'unknown' during the tracker's 20-sample warmup is
+        # expected, not a failure. While samples_until_active > 0 the sensor
+        # is treated as healthy instead of accumulating consecutive failures
+        # toward BROKEN.
+        "warmup_unknown": True,
     },
     "sensor.localshift_decision_lag": {
         "category": EntityCategory.OPTIONAL,
