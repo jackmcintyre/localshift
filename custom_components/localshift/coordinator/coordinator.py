@@ -477,7 +477,8 @@ class LocalShiftCoordinator:
 
         # Issue #508: remove the temporary physical-response listener
         self._remove_battery_power_listener()
-        self._state_machine.stop_grid_charging_listener()
+        if self._state_machine is not None:
+            self._state_machine.stop_grid_charging_listener()
         # Save all learning data to storage before shutdown
         await self._save_learning_data()
 

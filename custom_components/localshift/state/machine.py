@@ -1732,16 +1732,12 @@ class StateMachine:
             # Only react to the switch turning ON (reversion)
             if new_state.state != "on":
                 return
-            asyncio.create_task(
-                self._reactive_correct_grid_charging(hass, entity_id)
-            )
+            asyncio.create_task(self._reactive_correct_grid_charging(hass, entity_id))
 
         self._grid_charging_listener = hass.async_listen_state(
             _on_grid_charging_state_change, entity_id
         )
-        _LOGGER.debug(
-            "Registered grid_charging state listener on %s (#491)", entity_id
-        )
+        _LOGGER.debug("Registered grid_charging state listener on %s (#491)", entity_id)
 
     def stop_grid_charging_listener(self) -> None:
         """Unregister the reactive grid_charging state listener."""
@@ -1750,9 +1746,7 @@ class StateMachine:
             self._grid_charging_listener = None
             _LOGGER.debug("Unregistered grid_charging state listener (#491)")
 
-    async def _reactive_correct_grid_charging(
-        self, hass: Any, entity_id: str
-    ) -> None:
+    async def _reactive_correct_grid_charging(self, hass: Any, entity_id: str) -> None:
         """Turn off grid_charging when it was re-enabled unexpectedly.
 
         Respects the same cooldown as the health check and skips when a
@@ -1763,14 +1757,10 @@ class StateMachine:
             self._last_health_correction is not None
             and now - self._last_health_correction < self._MIN_CORRECTION_INTERVAL
         ):
-            _LOGGER.debug(
-                "[GRID CHARGING LISTENER] Correction blocked by cooldown"
-            )
+            _LOGGER.debug("[GRID CHARGING LISTENER] Correction blocked by cooldown")
             return
         if self.is_tesla_override_active():
-            _LOGGER.debug(
-                "[GRID CHARGING LISTENER] Skipping — Tesla override active"
-            )
+            _LOGGER.debug("[GRID CHARGING LISTENER] Skipping — Tesla override active")
             return
         if self._commanded_mode not in (
             BatteryMode.SELF_CONSUMPTION,
