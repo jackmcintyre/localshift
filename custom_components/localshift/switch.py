@@ -101,9 +101,7 @@ class LocalShiftSwitch(SwitchEntity):
                 self.coordinator.optimization_controller.set_learning_enabled(
                     self._is_on
                 )
-                _LOGGER.debug(
-                    "Learning sync at switch load: learning=%s", self._is_on
-                )
+                _LOGGER.debug("Learning sync at switch load: learning=%s", self._is_on)
 
     @property
     def device_info(self) -> DeviceInfo:

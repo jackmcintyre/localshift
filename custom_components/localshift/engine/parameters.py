@@ -516,9 +516,7 @@ class ParameterOptimizer:
             # was made, so scores reflect the value that produced them.
             # Untagged (pre-Issue #913) or out-of-range tags fall back to the
             # current value's bin, preserving legacy behaviour.
-            tagged_value = (decision.adaptive_params_at_decision or {}).get(
-                param_name
-            )
+            tagged_value = (decision.adaptive_params_at_decision or {}).get(param_name)
             if tagged_value is None or not (
                 param_def.min_val <= tagged_value <= param_def.max_val
             ):
@@ -538,7 +536,9 @@ class ParameterOptimizer:
 
         bin_center = param_def.min_val + (best_bin + 0.5) * bin_width
 
-        current_val = self._current_params.values.get(param_name, param_def.default)
+        current_val = self._current_params.values.get(param_name)
+        if current_val is None:
+            current_val = param_def.default
         bin_center = self._apply_step_limit(bin_center, current_val, param_def.step)
 
         bin_center = max(param_def.min_val, min(param_def.max_val, bin_center))
