@@ -292,6 +292,7 @@ class LocalShiftCoordinator:
         # This prevents state machine evaluation during startup before entities populate
         # The grace period must be set before ANY computation that might trigger evaluation
         self._state_machine.set_startup_grace(30)
+        self._state_machine.start_grid_charging_listener(self.hass)
 
         self._learning_orchestrator = LearningOrchestrator(
             self.hass,
@@ -476,6 +477,7 @@ class LocalShiftCoordinator:
 
         # Issue #508: remove the temporary physical-response listener
         self._remove_battery_power_listener()
+        self._state_machine.stop_grid_charging_listener()
         # Save all learning data to storage before shutdown
         await self._save_learning_data()
 
