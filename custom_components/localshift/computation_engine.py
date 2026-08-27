@@ -237,9 +237,24 @@ class ComputationEngine:
             else 1.0
         )
 
-        # Set absent confidence on data (used by all ConfidenceResolver sites)
-        data.solar_absent_confidence = (
-            DEFAULT_ABSENT_SOLAR_CONFIDENCE if conservative else 1.0
+        # Learned over-forecast cap (issue #916): pulls the median→P10 blend
+        # toward P10 by the recent whole-day over-forecast ratio. 1.0 = dormant.
+        overforecast_cap_getter = (
+            getattr(tracker, "overforecast_confidence_cap", None)
+            if tracker is not None
+            else None
+        )
+        overforecast_cap = (
+            float(overforecast_cap_getter())
+            if overforecast_cap_getter is not None
+            else 1.0
+        )
+
+        # Set absent confidence on data (used by all ConfidenceResolver sites),
+        # bounded by the over-forecast cap.
+        data.solar_absent_confidence = min(
+            DEFAULT_ABSENT_SOLAR_CONFIDENCE if conservative else 1.0,
+            overforecast_cap,
         )
 
         # Stamp ceiling on each analysis object
@@ -247,10 +262,10 @@ class ComputationEngine:
             if analysis is None:
                 continue
             if conservative and analysis.is_stale:
-                resolved = min(ceiling, accuracy_ceiling)
+                resolved = min(ceiling, accuracy_ceiling, overforecast_cap)
             else:
-                # Fresh data: only the accuracy ceiling applies (dormant today → 1.0)
-                resolved = min(1.0, accuracy_ceiling)
+                # Fresh data: only the accuracy ceiling and over-forecast cap apply
+                resolved = min(1.0, accuracy_ceiling, overforecast_cap)
             analysis.confidence_ceiling = resolved
 
     # ========================================================================

@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import BatteryMode as _BatteryMode
 from ..coordinator.data import CoordinatorData
+from ..forecast.solar import get_solar_for_slot_by_interval
 from .optimizer_dp import DPPlanner, OptimizerInputs
 from .optimizer_runner import (
     OptimizerSafetyGate,
@@ -96,13 +97,19 @@ class OptimizerFacade:
         self._solar_accuracy_tracker = tracker
 
     def _record_forecasts_for_slots(
-        self, slots: list[Any], weather_condition: str, is_boost: bool = False
+        self,
+        slots: list[Any],
+        weather_condition: str,
+        is_boost: bool = False,
+        all_solcast: list[Any] | None = None,
     ) -> None:
         """Record solar forecasts for accuracy tracking.
 
         Args:
             slots: List of time slots with solar forecast data.
             weather_condition: Current weather condition for tracking.
+            all_solcast: Raw Solcast entries, used to capture the pure-P10
+                energy for each period (issue #916 over-forecast learning).
 
         """
         if self._solar_accuracy_tracker is None:
@@ -121,11 +128,19 @@ class OptimizerFacade:
             if not self._is_backfillable_period_start(period_start):
                 continue
 
+            forecast_p10_kwh = (
+                get_solar_for_slot_by_interval(
+                    all_solcast, period_start, 30, confidence=0.0
+                )
+                if all_solcast
+                else 0.0
+            )
             self._solar_accuracy_tracker.record_forecast(
                 period_start=period_start,
                 forecast_kwh=slot.solar_kwh,
                 weather_condition=weather_condition,
                 is_boost=is_boost,
+                forecast_p10_kwh=forecast_p10_kwh,
             )
             recorded += 1
 
@@ -241,6 +256,7 @@ class OptimizerFacade:
                 slots,
                 weather_condition,
                 is_boost=getattr(data, "boost_charge_active", False),
+                all_solcast=getattr(slot_metadata, "all_solcast", None),
             )
             self._apply_bias_correction_to_slots(slots, weather_condition)
             self._apply_cloud_scale_factor_to_slots(slots, data, now_dt)
