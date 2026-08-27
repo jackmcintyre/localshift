@@ -182,7 +182,7 @@ class SnapshotGenerator:
 ---"""
 
     def _current_state(self) -> str:
-        mode = self.state("sensor.localshift_battery_mode")
+        mode = self.state("select.localshift_battery_mode")
         soc = self.state("sensor.my_home_percentage_charged")
         battery_power = self.state("sensor.my_home_battery_power")
         grid_power = self.state("sensor.my_home_grid_power")
@@ -266,7 +266,7 @@ class SnapshotGenerator:
         max_buy = self.attr(
             "binary_sensor.localshift_price_spike_coming", "max_buy_forecast_price", 0
         )
-        mode = self.state("sensor.localshift_battery_mode")
+        mode = self.state("select.localshift_battery_mode")
         can_reach = self.state("binary_sensor.localshift_solar_can_reach_target")
         boost_needed = self.state("binary_sensor.localshift_charge_boost_needed")
 
