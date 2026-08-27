@@ -32,8 +32,8 @@ The learning system operates in the background, observing your battery's behavio
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Decision Made**: When the battery mode changes, the system records the context (SOC, prices, forecasts, weather)
-2. **Outcome Tracking**: After the decision period ends, actual costs and results are measured
+1. **Decision Made**: When the battery mode changes, the system records the context (SOC, prices, forecasts, weather) plus a snapshot of the grid meter accumulators (import/export kWh and cost/revenue, integrated from instantaneous power on every fast tick)
+2. **Outcome Tracking**: After the decision period ends (next mode change or 30 min), import/export/cost are attributed by differencing the meter snapshot over the exact decision window (Issue #915; daily-reset aware)
 3. **Parameter Optimization**: Parameters are adjusted to improve future decisions
 4. **Improved Decisions**: Next time, the system uses learned parameters
 
@@ -74,6 +74,16 @@ score = max(0.0, min(1.0, score))        # clamp to [0, 1]
 | Cycling Penalty | Additive | 0.0 or 0.10 | Rapid mode change penalty |
 
 **Note:** This is NOT a weighted average. The base+cost blend creates the foundation, then additive components adjust the score up or down.
+
+### Cost Attribution and Rate-Based Scoring (Issue #915)
+
+Energy and cost are attributed from real meters, not SOC estimates:
+
+- `actual_import_kwh` / `actual_export_kwh`: meter deltas over the decision window (never derived from SOC change)
+- `actual_cost_during_period`: net dollars — grid import cost minus export revenue (negative = the period earned money)
+- A daily accumulator reset falling inside the window is handled conservatively (post-reset accrual only, never negative)
+
+The cost score compares **average price per kWh actually paid/earned** against the cheap-price threshold (charge/hold) or the feed-in price at decision (export) — like-for-like, which keeps the score continuous instead of clamped onto band edges. Records persisted before Issue #915 (no metered energy) keep the legacy dollar-ratio scoring.
 
 ### Interpreting the Score
 

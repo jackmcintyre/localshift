@@ -14,9 +14,9 @@ from custom_components.localshift.engine.optimizer_dp import (
     PlannerAction,
 )
 from custom_components.localshift.engine.outcomes import (
+    MAX_DECISION_DURATION,
     DecisionOutcomeTracker,
     DecisionRecord,
-    MAX_DECISION_DURATION,
 )
 
 
@@ -481,7 +481,12 @@ class TestDecisionOutcomeTracker:
     def test_backfill_pending_decision_discharge_cost_zero(
         self, mock_hass, coordinator_data
     ):
-        """Discharging backfill should record zero cost and import-only energy."""
+        """Discharge backfill with no grid meter movement records zeroed energy.
+
+        Issue #915: the SOC drop must not be converted into a fabricated
+        import figure. With the grid meters idle, import/export/cost are all
+        0.0 (populated, not None).
+        """
         tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
         start = datetime(2026, 1, 1, 10, 0, 0)
         end = start + timedelta(minutes=5)
@@ -496,7 +501,7 @@ class TestDecisionOutcomeTracker:
                 BatteryMode.GRID_CHARGING,
             )
 
-        coordinator_data.soc = 45.0
+        coordinator_data.soc = 45.0  # discharged 5%, no grid flow
         tracker._backfill_pending_decision(
             coordinator_data,
             PlannerAction.HOLD,
@@ -506,8 +511,9 @@ class TestDecisionOutcomeTracker:
         assert tracker.pending_count == 0
         completed = tracker._completed_decisions[0]
         assert completed.actual_cost_during_period == 0.0
-        assert completed.actual_import_kwh > 0.0
+        assert completed.actual_import_kwh == 0.0
         assert completed.actual_export_kwh == 0.0
+        assert completed.actual_soc_change == -5.0
 
     def test_save_pending_flag_clears(self, mock_hass, coordinator_data):
         """save_pending should flip to False after clear_save_pending."""
@@ -823,6 +829,402 @@ class TestOutcomeScoringBranches:
         assert costs == {}
 
 
+class TestIssue915MeteredAttribution:
+    """Issue #915: import/cost attribution from real meter deltas.
+
+    The old backfill derived import/export/cost from the SOC delta with
+    inverted semantics (import tied to an SOC *drop*, "export" tied to an
+    SOC *rise*), so a successful charge decision recorded import 0.0 while
+    labelling the charge as export. These tests pin the new behaviour:
+    energy and cost come from the coordinator's fast-tick meter
+    accumulators, differenced over the exact decision window.
+    """
+
+    CHARGE = (BatteryMode.GRID_CHARGING, BatteryMode.SELF_CONSUMPTION)
+    EXPORT = (BatteryMode.PROACTIVE_EXPORT, BatteryMode.SELF_CONSUMPTION)
+
+    def _record(self, tracker, data, now, modes=CHARGE):
+        with patch(
+            "custom_components.localshift.engine.outcomes.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = now
+            tracker.record_decision(data, *modes)
+
+    def test_charge_with_soc_rise_records_import_and_cost(
+        self, mock_hass, coordinator_data
+    ):
+        """The issue's defect signature: SOC rise + real import must not be $0.00/0.0."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 6, 0, 0)
+        end = start + timedelta(minutes=15)
+
+        self._record(tracker, coordinator_data, start)
+
+        # Charging happened: SOC rose +8% and the meters advanced.
+        coordinator_data.soc = 58.0
+        coordinator_data.grid_import_kwh_today = 1.2
+        coordinator_data.grid_import_cost = 0.18
+
+        tracker._backfill_pending_decision(coordinator_data, PlannerAction.HOLD, end)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_import_kwh == pytest.approx(1.2)
+        assert completed.actual_cost_during_period == pytest.approx(0.18)
+        assert completed.actual_export_kwh == pytest.approx(0.0)
+        assert completed.actual_soc_change == pytest.approx(8.0)
+
+    def test_soc_change_alone_does_not_fabricate_energy(
+        self, mock_hass, coordinator_data
+    ):
+        """SOC movement without meter movement attributes zero energy (populated)."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 10, 0, 0)
+        end = start + timedelta(minutes=5)
+
+        self._record(
+            tracker,
+            coordinator_data,
+            start,
+            modes=(BatteryMode.SELF_CONSUMPTION, BatteryMode.GRID_CHARGING),
+        )
+
+        # Battery discharged 5% but no grid flow at all (solar-buffered home).
+        coordinator_data.soc = 45.0
+
+        tracker._backfill_pending_decision(coordinator_data, PlannerAction.HOLD, end)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_import_kwh == pytest.approx(0.0)
+        assert completed.actual_export_kwh == pytest.approx(0.0)
+        assert completed.actual_cost_during_period == pytest.approx(0.0)
+        assert completed.actual_soc_change == pytest.approx(-5.0)
+
+    def test_attribution_window_spans_exactly_decision_period(
+        self, mock_hass, coordinator_data
+    ):
+        """Energy is the meter delta between decision and backfill instants."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 14, 0, 0)
+        end = start + timedelta(minutes=30)
+
+        # Meters already carried earlier-day energy when the decision was made.
+        coordinator_data.grid_import_kwh_today = 4.0
+        coordinator_data.grid_export_kwh_today = 2.0
+        coordinator_data.grid_import_cost = 0.80
+        coordinator_data.grid_export_revenue = 0.10
+        self._record(tracker, coordinator_data, start)
+
+        # During the period: +1.5 kWh import, +0.5 kWh export.
+        coordinator_data.grid_import_kwh_today = 5.5
+        coordinator_data.grid_export_kwh_today = 2.5
+        coordinator_data.grid_import_cost = 1.10
+        coordinator_data.grid_export_revenue = 0.125
+
+        tracker._backfill_pending_decision(coordinator_data, PlannerAction.HOLD, end)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_import_kwh == pytest.approx(1.5)
+        assert completed.actual_export_kwh == pytest.approx(0.5)
+        # Net cost: import cost delta (0.30) minus export revenue delta (0.025).
+        assert completed.actual_cost_during_period == pytest.approx(0.275)
+
+    def test_meter_reset_mid_period_is_reset_aware(self, mock_hass, coordinator_data):
+        """A daily accumulator reset during the window must not zero attribution.
+
+        Snapshot at 23:58 with 5.0 kWh already imported today; midnight reset
+        zeroes the accumulator; backfill at 00:12 sees 0.8 kWh on the new day.
+        The period's import is the post-reset accrual (0.8), never a negative
+        delta and never the pre-midnight total.
+        """
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 23, 58, 0)
+        end = start + timedelta(minutes=14)
+
+        coordinator_data.grid_import_kwh_today = 5.0
+        coordinator_data.grid_import_cost = 1.00
+        self._record(tracker, coordinator_data, start)
+
+        # Midnight reset happened; the new day has accrued since.
+        coordinator_data.grid_import_kwh_today = 0.8
+        coordinator_data.grid_import_cost = 0.16
+
+        tracker._backfill_pending_decision(coordinator_data, PlannerAction.HOLD, end)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_import_kwh == pytest.approx(0.8)
+        assert completed.actual_cost_during_period == pytest.approx(0.16)
+
+    def test_export_decision_records_revenue_as_negative_cost(
+        self, mock_hass, coordinator_data
+    ):
+        """Export periods attribute export kWh and net-earn (negative) cost."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 18, 0, 0)
+        end = start + timedelta(minutes=15)
+
+        coordinator_data.grid_export_kwh_today = 5.0
+        coordinator_data.grid_export_revenue = 0.10
+        self._record(tracker, coordinator_data, start, modes=self.EXPORT)
+
+        coordinator_data.soc = 40.0  # battery drained into the export
+        coordinator_data.grid_export_kwh_today = 7.5
+        coordinator_data.grid_export_revenue = 0.35
+
+        tracker._backfill_pending_decision(coordinator_data, PlannerAction.HOLD, end)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_export_kwh == pytest.approx(2.5)
+        assert completed.actual_import_kwh == pytest.approx(0.0)
+        assert completed.actual_cost_during_period == pytest.approx(-0.25)
+
+    def test_timeout_backfill_uses_meters_too(self, mock_hass, coordinator_data):
+        """The 30-minute timeout path shares the metered attribution."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 6, 0, 0)
+        end = start + timedelta(minutes=31)
+
+        with patch(
+            "custom_components.localshift.engine.outcomes.dt_util.now"
+        ) as mock_now:
+            mock_now.side_effect = [start, end]
+            tracker.record_decision(
+                coordinator_data, BatteryMode.BOOST_CHARGING, BatteryMode.HOLD
+            )
+            coordinator_data.soc = 62.0
+            coordinator_data.grid_import_kwh_today = 1.7
+            coordinator_data.grid_import_cost = 0.85
+            tracker.backfill_outcomes(coordinator_data)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_import_kwh == pytest.approx(1.7)
+        assert completed.actual_cost_during_period == pytest.approx(0.85)
+        assert completed.actual_export_kwh == pytest.approx(0.0)
+
+    def test_snapshot_survives_serialization_roundtrip(
+        self, mock_hass, coordinator_data
+    ):
+        """The meter snapshot persists so restart-crossing decisions keep a baseline."""
+        coordinator_data.grid_import_kwh_today = 3.25
+        coordinator_data.grid_export_kwh_today = 1.5
+        coordinator_data.grid_import_cost = 0.65
+        coordinator_data.grid_export_revenue = 0.075
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        with patch(
+            "custom_components.localshift.engine.outcomes.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = now
+            tracker.record_decision(
+                coordinator_data, BatteryMode.GRID_CHARGING, BatteryMode.HOLD
+            )
+        pending = tracker._pending_decisions[0]
+
+        restored = DecisionRecord.from_dict(pending.to_dict())
+
+        assert restored.energy_at_decision == pending.energy_at_decision
+        assert restored.energy_at_decision is not None
+        assert restored.energy_at_decision["grid_import_kwh_today"] == pytest.approx(
+            3.25
+        )
+
+    def test_missing_snapshot_populates_zero_not_none(
+        self, mock_hass, coordinator_data
+    ):
+        """Pre-change pending records (no snapshot) still get populated outcomes."""
+        tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+        start = datetime(2026, 1, 1, 10, 0, 0)
+        end = start + timedelta(minutes=10)
+
+        self._record(tracker, coordinator_data, start)
+        tracker._pending_decisions[0].energy_at_decision = None  # legacy record
+
+        coordinator_data.soc = 55.0
+        coordinator_data.grid_import_kwh_today = 0.9  # no baseline to diff against
+
+        tracker._backfill_pending_decision(coordinator_data, PlannerAction.HOLD, end)
+
+        completed = tracker._completed_decisions[0]
+        assert completed.actual_cost_during_period is not None
+        assert completed.actual_import_kwh is not None
+        assert completed.actual_export_kwh is not None
+
+    @pytest.mark.asyncio
+    async def test_downtime_timeout_populates_cost(self, mock_hass):
+        """Records completed during HA downtime must not have missing cost.
+
+        Issue evidence: 2/500 completed decisions had cost missing entirely —
+        the async_load downtime path left outcome fields at None.
+        """
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        old_timestamp = now - timedelta(minutes=31)
+        pending_record = DecisionRecord(
+            timestamp=old_timestamp,
+            mode_chosen=PlannerAction.CHARGE_GRID_NORMAL,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=50.0,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.05,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.10,
+            battery_target_soc=80.0,
+            weather_condition="sunny",
+            day_of_week=2,
+            hour_of_day=12,
+            is_demand_window=False,
+        )
+
+        mock_store = MagicMock()
+        mock_store.async_load = AsyncMock(
+            return_value={"pending_decisions": [pending_record.to_dict()]}
+        )
+
+        with (
+            patch(
+                "custom_components.localshift.engine.outcomes.Store",
+                return_value=mock_store,
+            ),
+            patch(
+                "custom_components.localshift.engine.outcomes.dt_util.now"
+            ) as mock_now,
+        ):
+            mock_now.return_value = now
+            tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+            await tracker.async_load()
+
+        completed = tracker._completed_decisions[0]
+        assert completed.outcome_score is not None
+        assert completed.actual_cost_during_period is not None
+        assert completed.actual_import_kwh is not None
+        assert completed.actual_export_kwh is not None
+
+
+class TestIssue915ScoreSpread:
+    """Issue #915: outcome scores must discriminate decision quality.
+
+    With metered attribution the cost score compares the average price
+    actually paid per kWh against the cheap-price threshold (like-for-like),
+    not dollars against a price threshold (the old dimensional mismatch that
+    clamped every real cost onto a band edge).
+    """
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        return DecisionOutcomeTracker(mock_hass, "test_entry_id")
+
+    def _metered_record(
+        self,
+        tracker: DecisionOutcomeTracker,
+        mode: PlannerAction,
+        import_kwh: float,
+        export_kwh: float,
+        cost: float,
+        soc_at_decision: float = 50.0,
+        soc_change: float = 8.0,
+    ) -> DecisionRecord:
+        record = DecisionRecord(
+            timestamp=datetime.now(),
+            mode_chosen=mode,
+            previous_mode=PlannerAction.HOLD,
+            soc_at_decision=soc_at_decision,
+            general_price_at_decision=0.25,
+            feed_in_price_at_decision=0.10,
+            forecast_solar_remaining_kwh=5.0,
+            forecast_consumption_remaining_kwh=8.0,
+            cheap_price_threshold=0.15,
+            battery_target_soc=soc_at_decision + soc_change,  # on-target
+            weather_condition="sunny",
+            day_of_week=0,
+            hour_of_day=14,
+            is_demand_window=False,
+            actual_soc_change=soc_change,
+            actual_import_kwh=import_kwh,
+            actual_export_kwh=export_kwh,
+            actual_cost_during_period=cost,
+            duration_minutes=15.0,
+        )
+        return record
+
+    def test_charge_score_discriminates_price_levels(self, tracker):
+        """Same charge mode, different average prices -> strictly ordered scores."""
+        cheap = self._metered_record(
+            tracker, PlannerAction.CHARGE_GRID_NORMAL, 2.0, 0.0, 0.10
+        )  # avg 0.05 = 0.33x threshold
+        mid = self._metered_record(
+            tracker, PlannerAction.CHARGE_GRID_NORMAL, 2.0, 0.0, 0.30
+        )  # avg 0.15 = 1x threshold
+        pricey = self._metered_record(
+            tracker, PlannerAction.CHARGE_GRID_NORMAL, 2.0, 0.0, 0.60
+        )  # avg 0.30 = 2x threshold
+
+        score_cheap = tracker.compute_outcome_score(cheap)
+        score_mid = tracker.compute_outcome_score(mid)
+        score_pricey = tracker.compute_outcome_score(pricey)
+
+        assert score_cheap > score_mid > score_pricey
+
+    def test_charge_scores_not_quantised(self, tracker):
+        """A price sweep yields many distinct scores, not a handful of bands."""
+        scores = []
+        for avg_price in (0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.21, 0.24, 0.27, 0.30):
+            record = self._metered_record(
+                tracker,
+                PlannerAction.CHARGE_GRID_NORMAL,
+                2.0,
+                0.0,
+                round(avg_price * 2.0, 6),
+            )
+            scores.append(tracker.compute_outcome_score(record))
+
+        assert len(set(scores)) >= 8, f"scores collapsed to {sorted(set(scores))}"
+
+    def test_hold_import_penalised_versus_self_sufficient(self, tracker):
+        """A hold that imports at 2x threshold scores below a self-sufficient hold."""
+        importing = self._metered_record(
+            tracker, PlannerAction.HOLD, 1.5, 0.0, 0.45, soc_change=0.0
+        )  # avg 0.30 = 2x threshold
+        self_sufficient = self._metered_record(
+            tracker, PlannerAction.HOLD, 0.0, 0.0, 0.0, soc_change=0.0
+        )
+
+        assert tracker.compute_outcome_score(importing) < tracker.compute_outcome_score(
+            self_sufficient
+        )
+
+    def test_charge_cost_score_rate_based(self, tracker):
+        """Cost score uses avg price vs threshold, not dollars vs threshold."""
+        record = self._metered_record(
+            tracker, PlannerAction.CHARGE_GRID_NORMAL, 2.0, 0.0, 0.30
+        )
+        # avg price 0.15 == threshold 0.15 -> ratio 1.0 -> 1.0 - 0.4 = 0.6
+        assert tracker._compute_cost_score(record) == pytest.approx(0.6)
+
+    def test_free_import_charge_scores_high(self, tracker):
+        """Import at ~$0 (price-spike credit or free window) scores near the cap."""
+        record = self._metered_record(
+            tracker, PlannerAction.CHARGE_GRID_NORMAL, 2.0, 0.0, 0.0
+        )
+        # avg price 0 -> ratio 0 -> 0.9 (band cap)
+        assert tracker._compute_cost_score(record) == pytest.approx(0.9)
+
+    def test_export_revenue_rate_scored(self, tracker):
+        """Export scoring compares avg sell price captured vs feed-in at decision."""
+        at_fit = self._metered_record(
+            tracker, PlannerAction.EXPORT_PROACTIVE, 0.0, 2.0, -0.20, soc_change=-8.0
+        )  # avg sell 0.10 == FiT 0.10
+        spike = self._metered_record(
+            tracker, PlannerAction.EXPORT_PROACTIVE, 0.0, 2.0, -0.80, soc_change=-8.0
+        )  # avg sell 0.40 = 4x FiT
+
+        at_fit_score = tracker._compute_cost_score(at_fit)
+        spike_score = tracker._compute_cost_score(spike)
+
+        assert at_fit_score == pytest.approx(0.8)
+        assert spike_score == pytest.approx(0.95)
+        assert spike_score > at_fit_score
+
+
 class TestOutcomeScoringEdgeCases:
     """Additional coverage for scoring edge cases."""
 
@@ -959,9 +1361,7 @@ class TestEnergyPerformanceMetrics:
 
         assert summary.unnecessary_grid_charge_kwh == pytest.approx(2.35)
 
-    def test_metrics_present_when_decisions_exist(
-        self, mock_hass, coordinator_data
-    ):
+    def test_metrics_present_when_decisions_exist(self, mock_hass, coordinator_data):
         """Energy metrics are computed on the with-decisions return path too."""
         tracker = DecisionOutcomeTracker(mock_hass, "test_entry_id")
         tracker.record_decision(

@@ -5,6 +5,12 @@ a ground-truth dataset for optimization. This phase is observation-only —
 no behavioral changes.
 
 Issue #449 Phase 7: Updated to use DP-native PlannerAction instead of legacy BatteryMode.
+
+Issue #915: Outcome attribution is metered. Import/export/cost come from the
+CostTracker fast-tick accumulators differenced over the exact decision window
+(snapshot at decision time), replacing the old SOC-derived estimates that
+recorded import 0.0 for successful charges. The cost score is rate-based
+(average price per kWh vs the price threshold).
 """
 
 from __future__ import annotations
@@ -52,6 +58,34 @@ MAX_COMPLETED_DECISIONS = 500
 # Maximum duration for a decision period before it's considered complete
 MAX_DECISION_DURATION = timedelta(minutes=30)
 
+# Meter accumulators snapshotted at decision time and differenced at backfill
+# to attribute energy/cost to the exact decision window (Issue #915). These
+# run on CoordinatorData and are integrated from instantaneous power on every
+# fast tick by CostTracker.
+_ENERGY_METER_KEYS = (
+    "grid_import_kwh_today",
+    "grid_export_kwh_today",
+    "grid_import_cost",
+    "grid_export_revenue",
+)
+
+
+def _snapshot_energy_meters(data: CoordinatorData) -> dict[str, float]:
+    """Copy the current meter accumulator values (never live references)."""
+    return {key: float(getattr(data, key)) for key in _ENERGY_METER_KEYS}
+
+
+def _meter_delta(current: float, snapshot: float) -> float:
+    """Meter accrual over the decision window, daily-reset aware.
+
+    The accumulators reset to 0 at midnight. If a reset fell inside the
+    window, ``current`` is smaller than the snapshot and equals the energy
+    accrued since midnight — all of which lies inside the window. The
+    pre-midnight portion of the window is unknowable after the reset, so the
+    delta is conservative (never negative, never fabricated).
+    """
+    return current - snapshot if current >= snapshot else current
+
 
 @dataclass
 class DecisionRecord:
@@ -93,6 +127,12 @@ class DecisionRecord:
     # was actually applied. None on records persisted before Issue #913.
     adaptive_params_at_decision: dict[str, float] | None = None
 
+    # Issue #915: meter accumulator values copied at decision time, differenced
+    # at backfill to attribute import/export/cost to this decision's window.
+    # None on records persisted before Issue #915 (outcome fields are then
+    # populated with 0.0 rather than estimated from SOC).
+    energy_at_decision: dict[str, float] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -118,6 +158,7 @@ class DecisionRecord:
             "next_mode": self.next_mode.value if self.next_mode else None,
             "outcome_score": self.outcome_score,
             "adaptive_params_at_decision": self.adaptive_params_at_decision,
+            "energy_at_decision": self.energy_at_decision,
         }
 
     @classmethod
@@ -174,6 +215,7 @@ class DecisionRecord:
             else None,
             outcome_score=data.get("outcome_score"),
             adaptive_params_at_decision=data.get("adaptive_params_at_decision"),
+            energy_at_decision=data.get("energy_at_decision"),
         )
 
 
@@ -205,15 +247,6 @@ class DecisionOutcomeTracker:
         self._completed_decisions: deque[DecisionRecord] = deque(
             maxlen=MAX_COMPLETED_DECISIONS
         )
-
-        # Track SOC and energy at last decision for outcome computation
-        self._last_decision_soc: float | None = None
-        self._last_decision_time: datetime | None = None
-        self._energy_at_last_decision: dict[str, float] = {
-            "import_kwh": 0.0,
-            "export_kwh": 0.0,
-            "cost": 0.0,
-        }
 
         # Track if save is needed (after backfill)
         self._save_pending: bool = False
@@ -282,18 +315,10 @@ class DecisionOutcomeTracker:
             adaptive_params_at_decision=dict(adaptive.values)
             if adaptive is not None
             else None,
+            energy_at_decision=_snapshot_energy_meters(data),
         )
 
         self._pending_decisions.append(record)
-
-        # Track state for outcome computation
-        self._last_decision_soc = data.soc
-        self._last_decision_time = now
-        self._energy_at_last_decision = {
-            "import_kwh": 0.0,  # Reset for next period
-            "export_kwh": 0.0,
-            "cost": 0.0,
-        }
 
         _LOGGER.info(
             "Decision recorded: %s → %s at %s (SOC=%.1f%%, price=%.2f, weather=%s)",
@@ -304,6 +329,42 @@ class DecisionOutcomeTracker:
             data.general_price,
             data.weather_condition,
         )
+
+    @staticmethod
+    def _compute_period_energy(
+        pending: DecisionRecord, data: CoordinatorData
+    ) -> tuple[float, float, float]:
+        """Attribute grid energy and net cost to the decision window (Issue #915).
+
+        Diffs the fast-tick meter accumulators (integrated from instantaneous
+        power by CostTracker) between the snapshot taken at decision time and
+        the current values at backfill time. This replaces the old SOC-derived
+        estimates, which recorded import 0.0 for successful charges (import
+        was tied to an SOC *drop*) and fabricated "export" from SOC rises.
+
+        Returns:
+            (import_kwh, export_kwh, net_cost) where net_cost is import cost
+            minus export revenue (negative = the period earned money).
+
+        """
+        snapshot = pending.energy_at_decision
+        if snapshot is None:
+            # Record persisted before Issue #915 (no baseline). Populate with
+            # 0.0 rather than guessing from SOC — see issue evidence on
+            # fabricated attribution.
+            return 0.0, 0.0, 0.0
+
+        import_kwh = _meter_delta(
+            data.grid_import_kwh_today, snapshot["grid_import_kwh_today"]
+        )
+        export_kwh = _meter_delta(
+            data.grid_export_kwh_today, snapshot["grid_export_kwh_today"]
+        )
+        import_cost = _meter_delta(data.grid_import_cost, snapshot["grid_import_cost"])
+        export_revenue = _meter_delta(
+            data.grid_export_revenue, snapshot["grid_export_revenue"]
+        )
+        return import_kwh, export_kwh, import_cost - export_revenue
 
     def _backfill_pending_decision(
         self,
@@ -331,25 +392,8 @@ class DecisionOutcomeTracker:
         # Compute SOC change
         soc_change = data.soc - pending.soc_at_decision
 
-        # Estimate import/export during period (simplified for now)
-        # In Phase 2+, we'll integrate with cost_tracker for precise values
-        import_kwh = max(0.0, -soc_change / 100.0 * 13.5)  # Approximate from SOC change
-        export_kwh = max(0.0, soc_change / 100.0 * 13.5)
-
-        # Compute cost (simplified - will integrate with cost_tracker later)
-        # For now, use current prices as approximation
-        if soc_change < 0:  # Battery discharged
-            cost = 0.0  # Discharging is "free"
-        else:  # Battery charged
-            if pending.mode_chosen in (
-                PlannerAction.CHARGE_GRID_NORMAL,
-                PlannerAction.CHARGE_GRID_BOOST,
-            ):
-                cost = (
-                    -soc_change / 100.0 * 13.5 * pending.general_price_at_decision / 100
-                )
-            else:
-                cost = 0.0  # Solar charging
+        # Attribute energy/cost from meter deltas over the decision window
+        import_kwh, export_kwh, cost = self._compute_period_energy(pending, data)
 
         # Set outcome fields
         pending.actual_soc_change = soc_change
@@ -426,23 +470,8 @@ class DecisionOutcomeTracker:
         # Compute SOC change
         soc_change = data.soc - pending.soc_at_decision
 
-        # Estimate import/export during period (same logic as _backfill_pending_decision)
-        import_kwh = max(0.0, -soc_change / 100.0 * 13.5)
-        export_kwh = max(0.0, soc_change / 100.0 * 13.5)
-
-        # Compute cost (simplified - same logic as _backfill_pending_decision)
-        if soc_change < 0:
-            cost = 0.0
-        else:
-            if pending.mode_chosen in (
-                PlannerAction.CHARGE_GRID_NORMAL,
-                PlannerAction.CHARGE_GRID_BOOST,
-            ):
-                cost = (
-                    -soc_change / 100.0 * 13.5 * pending.general_price_at_decision / 100
-                )
-            else:
-                cost = 0.0
+        # Attribute energy/cost from meter deltas (same as the transition path)
+        import_kwh, export_kwh, cost = self._compute_period_energy(pending, data)
 
         # Set outcome fields
         pending.actual_soc_change = soc_change
@@ -478,32 +507,57 @@ class DecisionOutcomeTracker:
         mode-based scores. Scores higher when actual cost is well below
         the cheap price threshold for grid charges, and higher revenue
         for exports.
+
+        Issue #915: with metered attribution the score is rate-based — the
+        average price actually paid per imported kWh (or earned per exported
+        kWh) is compared against the price threshold, like-for-like. The old
+        formula divided a dollar total by a price threshold, which clamped
+        every real cost onto a band edge and quantised the scores. Records
+        without metered energy (pre-#915) keep the legacy dollar-ratio path.
         """
         if record.actual_cost_during_period is None:
             return None
 
         cost = record.actual_cost_during_period
         threshold = record.cheap_price_threshold or 0.10  # fallback
+        import_kwh = record.actual_import_kwh or 0.0
+        export_kwh = record.actual_export_kwh or 0.0
 
         mode = record.mode_chosen
 
         # Grid charge: score based on how cheap relative to threshold
         if mode in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST):
             if record.actual_export_kwh and record.actual_export_kwh > 0.5:
-                return 0.2  # charged then exported — still bad
-            # Excellent if cost < 50% of threshold, poor if cost > 150%
-            ratio = cost / max(threshold, 0.01)
+                return 0.2  # imported while exporting — still bad
+            if import_kwh > 0.05:
+                # Average price paid per kWh vs threshold (like-for-like)
+                avg_price = max(cost, 0.0) / import_kwh
+                ratio = avg_price / max(threshold, 0.01)
+            else:
+                # Legacy records: dollar total vs threshold
+                ratio = cost / max(threshold, 0.01)
             return max(0.2, min(0.9, 1.0 - ratio * 0.4))
 
         # Export: score based on revenue (negative cost = good)
         if mode == PlannerAction.EXPORT_PROACTIVE:
             if cost < 0:
-                # Earned money — scale by how much relative to threshold
-                revenue_ratio = abs(cost) / max(threshold, 0.01)
-                return min(0.95, 0.6 + revenue_ratio * 0.2)
+                if export_kwh > 0.05:
+                    # Average sell price captured vs feed-in price at decision
+                    avg_sell = abs(cost) / export_kwh
+                    ratio = avg_sell / max(record.feed_in_price_at_decision, 0.01)
+                else:
+                    # Legacy records: dollar total vs threshold
+                    ratio = abs(cost) / max(threshold, 0.01)
+                return min(0.95, 0.6 + ratio * 0.2)
             return 0.3  # exported but didn't earn — poor
 
         # Hold/Solar charge: mild score, slightly better if low cost
+        if import_kwh > 0.05:
+            # Imported to serve load while holding — penalise by avg price
+            avg_price = max(cost, 0.0) / import_kwh
+            ratio = avg_price / max(threshold, 0.01)
+            return max(0.35, min(0.75, 0.75 - ratio * 0.15))
+        # Self-sufficient hold (no grid import), or legacy dollar-ratio path
         ratio = cost / max(threshold, 0.01)
         return max(0.4, min(0.7, 0.65 - ratio * 0.1))
 
@@ -844,10 +898,16 @@ class DecisionOutcomeTracker:
                     self._pending_decisions.append(record)
                 else:
                     # Decision timed out while HA was down - mark as completed
-                    # with partial outcome (we don't have the actual data)
+                    # with partial outcome (we don't have the actual data).
+                    # Outcome fields are populated (0.0) rather than left
+                    # None so completed records always carry a cost (Issue
+                    # #915: 2/500 completed decisions had cost missing).
                     record.duration_minutes = (
                         MAX_DECISION_DURATION.total_seconds() / 60.0
                     )
+                    record.actual_cost_during_period = 0.0
+                    record.actual_import_kwh = 0.0
+                    record.actual_export_kwh = 0.0
                     record.outcome_score = 0.5  # Neutral score (unknown outcome)
                     self._completed_decisions.append(record)
                     _LOGGER.info(
