@@ -1,6 +1,6 @@
 """Tests for forecast/solar_accuracy.py - Solar forecast accuracy tracking."""
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1037,6 +1037,310 @@ def _fill_tracker_with_bias(tracker, forecast: float, actual: float, count: int)
         period = datetime(2026, 1, 1, 6 + i // 2, (i % 2) * 30, tzinfo=UTC)
         tracker.record_forecast(period, forecast, "sunny")
         tracker.backfill_actual(period, actual)
+
+
+# ─── forecast_p10_kwh recording (issue #916) ────────────────────────────────
+
+
+class TestForecastP10Recording:
+    """Tests for the forecast_p10_kwh field carried on period records."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        hass = MagicMock()
+        hass.data = {}
+        return hass
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        return SolarAccuracyTracker(mock_hass, "test_entry")
+
+    def test_record_forecast_stores_p10(self, tracker):
+        """record_forecast captures the P10 energy alongside the median."""
+        period_start = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(
+            period_start, 2.5, "cloudy", forecast_p10_kwh=1.25
+        )
+
+        record = tracker._pending_forecasts[period_start.isoformat()]
+        assert record.forecast_p10_kwh == pytest.approx(1.25)
+
+    def test_record_forecast_p10_defaults_to_zero(self, tracker):
+        """Omitting forecast_p10_kwh keeps old callers working (0.0)."""
+        period_start = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(period_start, 2.5, "cloudy")
+
+        record = tracker._pending_forecasts[period_start.isoformat()]
+        assert record.forecast_p10_kwh == 0.0
+
+    def test_backfill_preserves_p10(self, tracker):
+        """The P10 forecast survives the pending → record transition."""
+        period_start = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+        tracker.record_forecast(
+            period_start, 2.5, "cloudy", forecast_p10_kwh=1.25
+        )
+        tracker.backfill_actual(period_start, 1.6)
+
+        assert tracker._period_records[-1].forecast_p10_kwh == pytest.approx(1.25)
+
+    def test_p10_round_trips_through_storage(self):
+        """forecast_p10_kwh serializes and deserializes; missing field → 0.0."""
+        record = SolarPeriodRecord(
+            period_start=datetime(2026, 8, 26, 10, 0, tzinfo=UTC),
+            forecast_kwh=2.5,
+            actual_kwh=1.6,
+            weather_condition="cloudy",
+            time_of_day="morning",
+            season="winter",
+            forecast_p10_kwh=1.25,
+        )
+        data = record.to_dict()
+        assert data["forecast_p10_kwh"] == pytest.approx(1.25)
+
+        restored = SolarPeriodRecord.from_dict(data)
+        assert restored.forecast_p10_kwh == pytest.approx(1.25)
+
+        legacy = SolarPeriodRecord.from_dict(
+            {
+                "period_start": "2026-08-26T10:00:00+00:00",
+                "forecast_kwh": 2.5,
+                "actual_kwh": 1.6,
+            }
+        )
+        assert legacy.forecast_p10_kwh == 0.0
+
+
+# ─── overforecast_confidence_cap (issue #916) ───────────────────────────────
+
+
+def _seed_completed_day(
+    tracker,
+    day: date,
+    forecast_kwh: float,
+    actual_ratio: float,
+    p10_ratio: float,
+    periods: int = 4,
+    boost: bool = False,
+) -> None:
+    """Seed one completed local day of uniform 30-min records into the tracker.
+
+    Daily totals: F = periods * forecast_kwh, A = F * actual_ratio,
+    P = F * p10_ratio.
+    """
+    for i in range(periods):
+        tracker._period_records.append(
+            SolarPeriodRecord(
+                period_start=datetime(
+                    day.year,
+                    day.month,
+                    day.day,
+                    9 + i // 2,
+                    (i % 2) * 30,
+                    tzinfo=UTC,
+                ),
+                forecast_kwh=forecast_kwh,
+                actual_kwh=forecast_kwh * actual_ratio,
+                forecast_p10_kwh=forecast_kwh * p10_ratio,
+                weather_condition="cloudy",
+                time_of_day="morning",
+                season="winter",
+                is_boost_period=boost,
+            )
+        )
+
+
+@pytest.fixture
+def cap_now():
+    """Fixed 'now' so completed-day logic is deterministic (today = 2026-08-28)."""
+    return datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+
+
+class TestOverforecastConfidenceCap:
+    """Tests for overforecast_confidence_cap — issue #916 cloudy-day correction."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        hass = MagicMock()
+        hass.data = {}
+        return hass
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        return SolarAccuracyTracker(mock_hass, "test_entry")
+
+    def test_empty_tracker_returns_one(self, tracker, cap_now):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_single_day_returns_one(self, tracker, cap_now):
+        """Needs at least 2 qualifying completed days to correct."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.6, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_missing_p10_returns_one(self, tracker, cap_now):
+        """Legacy records without P10 data cannot express a blend correction."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.6, 0.0)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.6, 0.0)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_narrow_spread_returns_one(self, tracker, cap_now):
+        """Clear-sky-like days with almost no median/P10 spread are left alone."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.6, 0.97)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.6, 0.97)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_today_is_not_a_completed_day(self, tracker, cap_now):
+        """Only full days count — today's partial history must not feed the cap."""
+        _seed_completed_day(tracker, date(2026, 8, 28), 1.5, 0.6, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_days_beyond_lookback_excluded(self, tracker, cap_now):
+        """Days older than the lookback window carry no weight."""
+        _seed_completed_day(tracker, date(2026, 8, 18), 1.5, 0.6, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_low_energy_days_skipped(self, tracker, cap_now):
+        """Days under the minimum forecast energy are not qualifying days."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 0.2, 0.6, 0.5, periods=4)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.6, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_boost_days_excluded(self, tracker, cap_now):
+        """Boost periods are excluded from learning (same rule as metrics)."""
+        _seed_completed_day(
+            tracker, date(2026, 8, 27), 1.5, 0.6, 0.5, boost=True
+        )
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.6, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_underforecast_returns_one(self, tracker, cap_now):
+        """Never scales UP: actual above forecast → cap exactly 1.0."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 1.2, 0.5)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 1.3, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_clear_day_regression_returns_one(self, tracker, cap_now):
+        """THE clear-day acceptance: recent ratios ≈ 1.0 → cap exactly 1.0."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 1.02, 0.5)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 1.01, 0.5)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            assert tracker.overforecast_confidence_cap() == 1.0
+
+    def test_clear_day_within_ten_percent(self, tracker, cap_now):
+        """Clear days stay ±10%: slightly-under ratios produce a near-1 cap, so
+        the blended forecast on a narrow-spread (clear) day barely moves."""
+        from custom_components.localshift.forecast.solar import (
+            _blend_solar_estimate,
+        )
+
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.98, 0.95)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 1.02, 0.95)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            cap = tracker.overforecast_confidence_cap()
+            # Clear-day spread is narrow: P10 = 0.95 * median.
+            effective = _blend_solar_estimate(1.0, 0.95, cap)
+            assert abs(effective - 1.0) <= 0.10
+
+    def test_cloudy_days_track_actuals_within_20_percent(self, tracker, cap_now):
+        """THE cloudy-day acceptance: with recent ratios at the issue's observed
+        0.68/0.53/0.66, the blend through the cap must land within ±20% of the
+        realized actual/forecast ratio on a wide-spread (cloudy) day."""
+        from custom_components.localshift.forecast.solar import (
+            _blend_solar_estimate,
+        )
+
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.68, 0.50)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.53, 0.50)
+        _seed_completed_day(tracker, date(2026, 8, 25), 1.5, 0.66, 0.50)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            cap = tracker.overforecast_confidence_cap()
+
+        assert cap < 1.0
+        # Half-life 2 days: weights 0.7071 / 0.5 / 0.3536 over ratios above.
+        weights = [0.7071, 0.5, 0.3536]
+        ratios = [0.68, 0.53, 0.66]
+        expected_ratio = sum(w * r for w, r in zip(weights, ratios, strict=True)) / sum(weights)
+        # Cloudy-day spread: P10 = 0.5 * median.
+        effective = _blend_solar_estimate(1.0, 0.5, cap)
+        assert abs(effective - expected_ratio) / expected_ratio <= 0.20
+
+    def test_recent_days_dominate(self, tracker, cap_now):
+        """Half-life weighting: an old clear day barely dilutes a recent cloudy pair."""
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.60, 0.50)
+        _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.60, 0.50)
+        # 6 days old: weight 2^-3 = 0.125 vs 0.5/0.707 for the recent pair.
+        _seed_completed_day(tracker, date(2026, 8, 22), 1.5, 1.30, 0.50)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
+                lambda: cap_now,
+            )
+            cap = tracker.overforecast_confidence_cap()
+
+        assert cap < 1.0
+        # Weighted ratio stays well under 1.0 despite the clear old day.
+        weights = [0.7071, 0.5, 0.125]
+        ratios = [0.60, 0.60, 1.30]
+        expected_ratio = sum(w * r for w, r in zip(weights, ratios, strict=True)) / sum(weights)
+        assert expected_ratio < 0.85
 
 
 class TestComputeContextBias:

@@ -12,7 +12,7 @@ import math
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.storage import Store
@@ -26,6 +26,14 @@ _LOGGER = logging.getLogger(__name__)
 MAX_PERIOD_RECORDS = 1440
 BIAS_HALF_LIFE_DAYS = 7.0
 MIN_SOLAR_CORRECTION_SAMPLES = 20
+
+# Over-forecast cap (issue #916): learned day-level over-forecast ratio drives
+# the median→P10 confidence blend.
+OVERFORECAST_HALF_LIFE_DAYS = 2.0
+OVERFORECAST_LOOKBACK_DAYS = 7.0
+OVERFORECAST_MIN_DAY_FORECAST_KWH = 2.0
+OVERFORECAST_MIN_COMPLETED_DAYS = 2
+OVERFORECAST_MIN_SPREAD = 0.05
 
 
 def _period_key(period_start: datetime) -> str:
@@ -82,6 +90,7 @@ class SolarPeriodRecord:
     bias: float = 0.0
     additive_bias: float = 0.0
     is_boost_period: bool = False
+    forecast_p10_kwh: float = 0.0
 
     def __post_init__(self) -> None:
         """Calculate bias after initialization."""
@@ -108,6 +117,7 @@ class SolarPeriodRecord:
             "bias": self.bias,
             "additive_bias": self.additive_bias,
             "is_boost_period": self.is_boost_period,
+            "forecast_p10_kwh": self.forecast_p10_kwh,
         }
 
     @classmethod
@@ -132,6 +142,7 @@ class SolarPeriodRecord:
             bias=data.get("bias", 0.0),
             additive_bias=data.get("additive_bias", 0.0),
             is_boost_period=data.get("is_boost_period", False),
+            forecast_p10_kwh=data.get("forecast_p10_kwh", 0.0),
         )
 
 
@@ -312,6 +323,7 @@ class SolarAccuracyTracker:
         forecast_kwh: float,
         weather_condition: str,
         is_boost: bool = False,
+        forecast_p10_kwh: float = 0.0,
     ) -> None:
         """Record a solar forecast for a 30-min period.
 
@@ -330,6 +342,7 @@ class SolarAccuracyTracker:
             time_of_day=time_of_day,
             season=season,
             is_boost_period=is_boost,
+            forecast_p10_kwh=forecast_p10_kwh,
         )
         self._pending_forecasts[key] = record
         self._save_pending = True
@@ -639,6 +652,92 @@ class SolarAccuracyTracker:
             return high
         # Linear interpolation between (50, low) and (85, high)
         return low + (high - low) * (accuracy - 50.0) / 35.0
+
+    def _aggregate_completed_days(self, today: date) -> dict[date, dict[str, float]]:
+        """Group non-boost records into per-local-day forecast/actual/P10 totals.
+
+        Only completed days (date < today) are returned; today's partial
+        history must not feed the cap.
+        """
+        days: dict[date, dict[str, float]] = defaultdict(
+            lambda: {"forecast": 0.0, "actual": 0.0, "p10": 0.0}
+        )
+        for record in self._period_records:
+            if record.is_boost_period:
+                continue
+            day = record.period_start.date()
+            if day >= today:
+                continue
+            totals = days[day]
+            totals["forecast"] += record.forecast_kwh
+            totals["actual"] += record.actual_kwh
+            totals["p10"] += record.forecast_p10_kwh
+        return days
+
+    def overforecast_confidence_cap(self) -> float:
+        """Confidence cap learned from recent whole-day over-forecast ratios.
+
+        Issue #916: Solcast over-forecasts cloudy days (median high, P10
+        closer to reality). This measures the energy-weighted actual/forecast
+        ratio R over recent completed local days, plus the P10/forecast ratio
+        P̄, and returns a confidence cap ``1 - w`` where
+        ``w = clamp((1-R)/(1-P̄), 0, 1)``. Flowing ``1-w`` through the
+        existing median→P10 blend lands the blended forecast at ~R of median
+        on days whose spread matches the learned P̄ — while never scaling up
+        and leaving narrow-spread (clear) days untouched.
+
+        Guards (all return 1.0 — no correction): fewer than
+        OVERFORECAST_MIN_COMPLETED_DAYS qualifying days, no P10 data, spread
+        ``1-P̄`` below OVERFORECAST_MIN_SPREAD, or R ≥ 1.0 (no over-forecast).
+
+        Returns:
+            Confidence ceiling in [0, 1]; 1.0 means no correction.
+        """
+        now = dt_util.now()
+        today = now.date()
+
+        days = self._aggregate_completed_days(today)
+
+        weighted_forecast = 0.0
+        weighted_actual = 0.0
+        weighted_p10 = 0.0
+        qualifying_days = 0
+        for day, totals in days.items():
+            age_days = (today - day).days
+            if age_days > OVERFORECAST_LOOKBACK_DAYS:
+                continue
+            if totals["forecast"] < OVERFORECAST_MIN_DAY_FORECAST_KWH:
+                continue
+            weight = 0.5 ** (age_days / OVERFORECAST_HALF_LIFE_DAYS)
+            weighted_forecast += weight * totals["forecast"]
+            weighted_actual += weight * totals["actual"]
+            weighted_p10 += weight * totals["p10"]
+            qualifying_days += 1
+
+        if qualifying_days < OVERFORECAST_MIN_COMPLETED_DAYS:
+            return 1.0
+        if weighted_forecast <= 0.0 or weighted_p10 <= 0.0:
+            return 1.0
+
+        ratio = weighted_actual / weighted_forecast
+        p10_ratio = weighted_p10 / weighted_forecast
+        if ratio >= 1.0:
+            return 1.0
+        spread = 1.0 - p10_ratio
+        if spread < OVERFORECAST_MIN_SPREAD:
+            return 1.0
+
+        w_blend = (1.0 - ratio) / spread
+        w_blend = max(0.0, min(1.0, w_blend))
+        cap = 1.0 - w_blend
+        _LOGGER.debug(
+            "Over-forecast cap: ratio=%.3f, p10_ratio=%.3f, cap=%.3f (%d days)",
+            ratio,
+            p10_ratio,
+            cap,
+            qualifying_days,
+        )
+        return cap
 
     def get_bias_correction(
         self,

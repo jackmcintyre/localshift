@@ -1,6 +1,6 @@
 """Unit tests for OptimizerFacade."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -329,12 +329,14 @@ def test_record_forecasts_for_slots_records_only_backfillable_timestamps():
         forecast_kwh=0.0,
         weather_condition="sunny",
         is_boost=False,
+        forecast_p10_kwh=0.0,
     )
     tracker.record_forecast.assert_any_call(
         period_start=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
         forecast_kwh=0.2,
         weather_condition="sunny",
         is_boost=False,
+        forecast_p10_kwh=0.0,
     )
 
 
@@ -383,6 +385,38 @@ def test_record_forecasts_for_slots_passes_boost_flag():
         forecast_kwh=0.2,
         weather_condition="sunny",
         is_boost=True,
+        forecast_p10_kwh=0.0,
+    )
+
+
+def test_record_forecasts_for_slots_captures_p10_energy():
+    """Issue #916: with all_solcast provided, each recorded slot also carries
+    the pure-P10 energy (confidence=0.0 blend) so the tracker can learn the
+    median/P10 spread it needs for the over-forecast cap."""
+    tracker = MagicMock()
+    tz = timezone(timedelta(hours=11))
+    slots = [
+        SimpleNamespace(solar_kwh=0.5, timestamp_iso="2026-08-26T10:00:00+11:00"),
+    ]
+    all_solcast = [
+        {
+            "period_start": "2026-08-26T10:00:00+11:00",
+            "pv_estimate": 1.0,
+            "pv_estimate10": 0.4,
+        },
+    ]
+
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilder)
+    facade.set_solar_accuracy_tracker(tracker)
+    facade._record_forecasts_for_slots(slots, "cloudy", all_solcast=all_solcast)
+
+    tracker.record_forecast.assert_called_once_with(
+        period_start=datetime(2026, 8, 26, 10, 0, tzinfo=tz),
+        forecast_kwh=0.5,
+        weather_condition="cloudy",
+        is_boost=False,
+        # P10 = 0.4 kW over 30 min = 0.2 kWh.
+        forecast_p10_kwh=pytest.approx(0.2),
     )
 
 

@@ -1,12 +1,17 @@
 """Unit tests for ComputationEngine."""
 
 from datetime import datetime, time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.localshift.computation_engine import BatteryMode
-from custom_components.localshift.const import CONF_WEATHER_LEARNING_ENABLED
+from custom_components.localshift.const import (
+    CONF_STALE_SOLAR_CONFIDENCE_CEILING,
+    CONF_WEATHER_LEARNING_ENABLED,
+    SWITCH_STALE_SOLAR_CONSERVATIVE,
+)
 
 
 @pytest.mark.parametrize(
@@ -1045,3 +1050,111 @@ def test_manual_override_clears_a_stale_pending_plan_mode(
     assert coordinator_data.active_mode == BatteryMode.MANUAL
     assert coordinator_data.debug_plan_mode_pending is None
     assert coordinator_data.optimizer_precharge_backstop_active is False
+
+
+# ─── _stamp_confidence_ceilings: over-forecast cap (issue #916) ─────────────
+
+
+class TestStampConfidenceOverforecastCap:
+    """The learned over-forecast cap folds into every ceiling branch."""
+
+    @staticmethod
+    def _make_tracker(cap: float, accuracy_ceiling: float = 1.0) -> MagicMock:
+        tracker = MagicMock()
+        tracker.overforecast_confidence_cap.return_value = cap
+        tracker.accuracy_confidence_ceiling.return_value = accuracy_ceiling
+        return tracker
+
+    @staticmethod
+    def _make_analysis(is_stale: bool = False) -> SimpleNamespace:
+        return SimpleNamespace(is_stale=is_stale, confidence_ceiling=1.0)
+
+    def _stamp(self, computation_engine, coordinator_data, tracker) -> None:
+        computation_engine._optimizer_facade = SimpleNamespace(
+            _solar_accuracy_tracker=tracker
+        )
+        computation_engine._stamp_confidence_ceilings(coordinator_data)
+
+    def test_no_tracker_leaves_ceilings_uncapped(
+        self, computation_engine, coordinator_data
+    ):
+        analysis = self._make_analysis()
+        coordinator_data.solcast_analysis_today = analysis
+        coordinator_data.solcast_analysis_tomorrow = None
+
+        self._stamp(computation_engine, coordinator_data, tracker=None)
+
+        assert analysis.confidence_ceiling == 1.0
+        assert coordinator_data.solar_absent_confidence == 1.0
+
+    def test_cap_applies_to_fresh_analysis(
+        self, computation_engine, coordinator_data
+    ):
+        analysis = self._make_analysis(is_stale=False)
+        coordinator_data.solcast_analysis_today = analysis
+        coordinator_data.solcast_analysis_tomorrow = None
+
+        self._stamp(
+            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
+        )
+
+        assert analysis.confidence_ceiling == pytest.approx(0.24)
+
+    def test_cap_bounds_absent_confidence(
+        self, computation_engine, coordinator_data
+    ):
+        """No analysis at all → absent_confidence is THE confidence, so the cap
+        must bound it too (non-conservative default is 1.0)."""
+        coordinator_data.solcast_analysis_today = None
+        coordinator_data.solcast_analysis_tomorrow = None
+
+        self._stamp(
+            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
+        )
+
+        assert coordinator_data.solar_absent_confidence == pytest.approx(0.24)
+
+    def test_cap_composes_with_stale_conservative_knob(
+        self, computation_engine, coordinator_data
+    ):
+        """Stale + conservative: resolved = min(knob, accuracy, cap)."""
+        analysis = self._make_analysis(is_stale=True)
+        coordinator_data.solcast_analysis_today = analysis
+        coordinator_data.solcast_analysis_tomorrow = None
+        computation_engine._get_switch_state = lambda key: key == (
+            SWITCH_STALE_SOLAR_CONSERVATIVE
+        )
+        computation_engine.entry = SimpleNamespace(
+            options={CONF_STALE_SOLAR_CONFIDENCE_CEILING: 0.3}
+        )
+
+        # Cap tighter than the knob → cap wins.
+        self._stamp(
+            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
+        )
+        assert analysis.confidence_ceiling == pytest.approx(0.24)
+
+        # Cap dormant (1.0) → knob wins.
+        self._stamp(
+            computation_engine, coordinator_data, self._make_tracker(cap=1.0)
+        )
+        assert analysis.confidence_ceiling == pytest.approx(0.3)
+
+    def test_absent_confidence_conservative_floor_respected(
+        self, computation_engine, coordinator_data
+    ):
+        """Conservative switch on with no analysis: absent confidence takes the
+        conservative default, still bounded by the (tighter) cap."""
+        coordinator_data.solcast_analysis_today = None
+        coordinator_data.solcast_analysis_tomorrow = None
+        computation_engine._get_switch_state = lambda key: key == (
+            SWITCH_STALE_SOLAR_CONSERVATIVE
+        )
+
+        self._stamp(
+            computation_engine,
+            coordinator_data,
+            self._make_tracker(cap=0.24),
+        )
+
+        assert coordinator_data.solar_absent_confidence == pytest.approx(0.24)
