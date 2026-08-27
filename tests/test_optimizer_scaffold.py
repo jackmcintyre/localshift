@@ -304,19 +304,59 @@ def test_dp_planner_determinism_replay(default_config, multi_slots):
         )
 
 
-def test_dp_planner_runtime_budget(default_config, multi_slots):
-    """Phase A acceptance: p95 solve time <= 200ms on 48-slot fixture.
+# Ceiling for a single DP solve on the 48-slot fixture.
+#
+# Raised 0.200 -> 0.500 on 2026-08-25 alongside soc_bins 50 -> 100. Doubling the SOC grid
+# roughly quadruples the state-transition work, and the old 200ms ceiling was calibrated
+# when the planner was under-resolved badly enough to enter the demand window 1-4 points
+# under target on every start it was measured at.
+#
+# The number this guards is the coordinator cycle, and that is measured in production, not
+# here. CORRECTED 2026-08-25 15:10 — the first figure recorded against this constant
+# (49.7ms) was sampled while the battery was under a MANUAL override, which
+# short-circuits the optimizer, so it measured a solve that was not doing the work. With
+# automation live and a demand window active the same code measures 465ms, and the
+# coordinator re-solves roughly once a minute rather than once per five, so the real cost
+# of soc_bins 50 -> 100 is about +350ms per cycle and not the +8ms first claimed.
+#
+# 750ms is chosen to sit meaningfully above the observed 465ms rather than 35ms above it:
+# a ceiling that a healthy production system is already brushing is not a guardrail, it is
+# a tripwire. Home Assistant shows no strain at 465ms (no "took longer than the scheduled
+# update interval" warnings), so this is headroom for honest variance, not permission to
+# grow. The same code measures ~350ms on GitHub's shared runners, so this constant still
+# tracks CI hardware; judge a real regression against live solve_time_seconds telemetry.
+RUNTIME_BUDGET_S = 0.750
+
+
+def test_dp_planner_runtime_budget(multi_slots):
+    """Phase A acceptance: p95 solve time within RUNTIME_BUDGET_S on the 48-slot fixture.
 
     This ensures the optimizer stays within acceptable runtime bounds
     for the Home Assistant coordinator cycle.
     """
     import time
 
+    # Deliberately NOT the `default_config` fixture. In test_optimizer_dp_solve.py that
+    # fixture pins soc_bins=20 "for faster tests", so this budget guarded a 20-bin solve
+    # while production ships 100 — a regression that only appears at the shipped
+    # resolution could pass here unnoticed. (It did: when soc_bins went 50 -> 100 only
+    # the scaffold copy failed CI, because tests/engine/test_core.py star-imports both
+    # files and the later import wins the name.) Build from the shipped default so this
+    # measures what actually runs, and assert that it is the shipped default so the two
+    # cannot drift apart silently.
+    runtime_config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+    )
+    assert runtime_config.soc_bins == OptimizerConfig().soc_bins, (
+        "runtime budget must be measured at the shipped soc_bins"
+    )
+
     inputs = OptimizerInputs(
         cycle_id="timing-test",
         initial_soc_pct=50.0,
         slots=multi_slots,  # 48 slots
-        config=default_config,
+        config=runtime_config,
     )
     planner = DPPlanner()
 
@@ -327,10 +367,15 @@ def test_dp_planner_runtime_budget(default_config, multi_slots):
         planner.plan(inputs)
         times.append(time.monotonic() - start)
 
-    # Sort and check p95 (19th of 20 values)
+    # p95 of 20 samples is index 18. times[19] is the MAXIMUM — the original index
+    # asserted worst-of-20, which is far more sensitive to a single scheduling blip on a
+    # shared CI runner than the docstring's "p95" implies.
     times.sort()
-    p95 = times[19]  # 95th percentile index for 20 samples
-    assert p95 <= 0.200, f"p95 solve time {p95 * 1000:.1f}ms exceeds 200ms budget"
+    p95 = times[18]
+    assert p95 <= RUNTIME_BUDGET_S, (
+        f"p95 solve time {p95 * 1000:.1f}ms exceeds "
+        f"{RUNTIME_BUDGET_S * 1000:.0f}ms budget"
+    )
 
 
 def test_optimizer_no_actuation():

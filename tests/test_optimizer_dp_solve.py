@@ -411,15 +411,55 @@ def test_dp_planner_determinism_replay(default_config, multi_slots):
         )
 
 
-def test_dp_planner_runtime_budget(default_config, multi_slots):
-    """Phase C acceptance: p95 solve time <= 200ms on 48-slot fixture."""
+# Ceiling for a single DP solve on the 48-slot fixture.
+#
+# Raised 0.200 -> 0.500 on 2026-08-25 alongside soc_bins 50 -> 100. Doubling the SOC grid
+# roughly quadruples the state-transition work, and the old 200ms ceiling was calibrated
+# when the planner was under-resolved badly enough to enter the demand window 1-4 points
+# under target on every start it was measured at.
+#
+# The number this guards is the coordinator cycle, and that is measured in production, not
+# here. CORRECTED 2026-08-25 15:10 — the first figure recorded against this constant
+# (49.7ms) was sampled while the battery was under a MANUAL override, which
+# short-circuits the optimizer, so it measured a solve that was not doing the work. With
+# automation live and a demand window active the same code measures 465ms, and the
+# coordinator re-solves roughly once a minute rather than once per five, so the real cost
+# of soc_bins 50 -> 100 is about +350ms per cycle and not the +8ms first claimed.
+#
+# 750ms is chosen to sit meaningfully above the observed 465ms rather than 35ms above it:
+# a ceiling that a healthy production system is already brushing is not a guardrail, it is
+# a tripwire. Home Assistant shows no strain at 465ms (no "took longer than the scheduled
+# update interval" warnings), so this is headroom for honest variance, not permission to
+# grow. The same code measures ~350ms on GitHub's shared runners, so this constant still
+# tracks CI hardware; judge a real regression against live solve_time_seconds telemetry.
+RUNTIME_BUDGET_S = 0.750
+
+
+def test_dp_planner_runtime_budget(multi_slots):
+    """Phase C acceptance: p95 solve time within RUNTIME_BUDGET_S on the 48-slot fixture."""
     import time
+
+    # Deliberately NOT the `default_config` fixture. In test_optimizer_dp_solve.py that
+    # fixture pins soc_bins=20 "for faster tests", so this budget guarded a 20-bin solve
+    # while production ships 100 — a regression that only appears at the shipped
+    # resolution could pass here unnoticed. (It did: when soc_bins went 50 -> 100 only
+    # the scaffold copy failed CI, because tests/engine/test_core.py star-imports both
+    # files and the later import wins the name.) Build from the shipped default so this
+    # measures what actually runs, and assert that it is the shipped default so the two
+    # cannot drift apart silently.
+    runtime_config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        demand_window_target_soc_pct=80.0,
+    )
+    assert runtime_config.soc_bins == OptimizerConfig().soc_bins, (
+        "runtime budget must be measured at the shipped soc_bins"
+    )
 
     inputs = OptimizerInputs(
         cycle_id="timing-test",
         initial_soc_pct=50.0,
         slots=multi_slots,
-        config=default_config,
+        config=runtime_config,
     )
     planner = DPPlanner()
 
@@ -430,10 +470,15 @@ def test_dp_planner_runtime_budget(default_config, multi_slots):
         planner.plan(inputs)
         times.append(time.monotonic() - start)
 
-    # Sort and check p95 (19th of 20 values)
+    # p95 of 20 samples is index 18. times[19] is the MAXIMUM — the original index
+    # asserted worst-of-20, which is far more sensitive to a single scheduling blip on a
+    # shared CI runner than the docstring's "p95" implies.
     times.sort()
-    p95 = times[19]  # 95th percentile index for 20 samples
-    assert p95 <= 0.200, f"p95 solve time {p95 * 1000:.1f}ms exceeds 200ms budget"
+    p95 = times[18]
+    assert p95 <= RUNTIME_BUDGET_S, (
+        f"p95 solve time {p95 * 1000:.1f}ms exceeds "
+        f"{RUNTIME_BUDGET_S * 1000:.0f}ms budget"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +897,7 @@ def test_dp_planner_states_explored():
 
 def test_classify_reason_target_shortfall_uses_future_slots():
     """Grid charging before DW should be tagged shortfall risk when net future solar is insufficient."""
-    planner = DPPlanner()
+    DPPlanner()
     config = OptimizerConfig(
         battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
     )
@@ -908,7 +953,7 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
     Uses a very cheap price (≤ effective_cheap_price * 0.8) so the blind-horizon guard
     still allows the CHEAP_IMPORT_WINDOW classification (only 3 slots — horizon is short).
     """
-    planner = DPPlanner()
+    DPPlanner()
     config = OptimizerConfig(
         battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
     )
@@ -1371,10 +1416,18 @@ def test_optimizer_does_not_grid_charge_during_solar_peak_with_sufficient_solar(
             assert d.buy_price <= 0.10, (
                 f"Grid charging at slot {d.slot_index} uses expensive rate ${d.buy_price:.2f}"
             )
-        # Verify the final SOC is at or above the target (optimizer may charge beyond
-        # target if it's economically optimal, but must at least meet it)
-        assert final_decision.predicted_soc_pct >= 80.0, (
-            f"Grid charging occurred but didn't meet 80% target (got {final_decision.predicted_soc_pct:.1f}%)"
+        # Verify the DW-entry SOC is at or above the target (optimizer may charge beyond
+        # target if it's economically optimal, but must at least meet it).
+        #
+        # Was `final_decision`, which is not defined anywhere in this test — the binding
+        # made at the top of the function is `pre_dw_final_decision`. Because the branch
+        # is guarded by `if pre_dw_grid_charges:` the mistake never raised: on this
+        # fixture the DP reaches target from solar alone, so the list is empty, the branch
+        # never runs, and the cheap-price assertion above it has never executed either.
+        # A NameError here rather than an AssertionError would have been the tell.
+        assert pre_dw_final_decision.predicted_soc_pct >= 80.0, (
+            "Grid charging occurred but didn't meet 80% target "
+            f"(got {pre_dw_final_decision.predicted_soc_pct:.1f}%)"
         )
 
 
@@ -2433,7 +2486,7 @@ def test_interpolate_cost_to_soc_linear():
 
 def test_classify_export_reason_negative_fit():
     """Line 1484: EXPORT with sell_price <= 0 returns NEGATIVE_FIT_AVOIDANCE."""
-    planner = DPPlanner()
+    DPPlanner()
     slot = SlotContext(
         slot_index=0,
         timestamp_iso="2026-01-03T10:00:00",
@@ -2449,7 +2502,7 @@ def test_classify_export_reason_negative_fit():
 
 def test_classify_charge_reason_solar_opportunity_wait():
     """Line 1523: CHARGE with solar_opportunity_penalty > 0 returns SOLAR_OPPORTUNITY_WAIT."""
-    planner = DPPlanner()
+    DPPlanner()
     slot = SlotContext(
         slot_index=0,
         timestamp_iso="2026-01-03T10:00:00",
@@ -2485,7 +2538,7 @@ def test_classify_charge_reason_solar_opportunity_wait():
 
 def test_is_target_shortfall_risk_no_deficit():
     """Line 1543: Returns False when soc >= target (no deficit)."""
-    planner = DPPlanner()
+    DPPlanner()
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.0, consumption_kwh=0.3) for i in range(4)
     ]
@@ -2502,7 +2555,7 @@ def test_is_target_shortfall_risk_no_deficit():
 
 def test_is_target_shortfall_risk_with_solcast():
     """Lines 1555-1569: Solcast gain added when inputs.all_solcast present."""
-    planner = DPPlanner()
+    DPPlanner()
     slots = [
         SlotContext(
             slot_index=i,
@@ -2543,7 +2596,7 @@ def test_is_target_shortfall_risk_with_solcast():
 
 def test_is_cheap_import_window_expensive_price():
     """Line 1596: Returns False when buy_price > effective_cheap_price."""
-    planner = DPPlanner()
+    DPPlanner()
     slot = SlotContext(
         slot_index=0,
         timestamp_iso="2026-01-03T10:00:00",
@@ -2704,7 +2757,7 @@ def test_projected_solcast_gain_pct():
 
 def test_futile_cycling_battery_at_floor():
     """Line 1334: Futile cycling breaks when battery_used <= 0 (SOC at floor)."""
-    planner = DPPlanner()
+    DPPlanner()
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.0, consumption_kwh=1.0) for i in range(10)
     ]
@@ -2787,7 +2840,7 @@ def _make_slot_for_neg_fit(
 
 def test_negative_fit_context_no_window(default_config):
     """Returns None when no negative-FIT window in horizon."""
-    planner = DPPlanner(default_config)
+    DPPlanner(default_config)
     slots = [_make_slot_for_neg_fit(i, sell_price=0.08) for i in range(10)]
     inputs = OptimizerInputs(
         cycle_id="test",
@@ -2801,7 +2854,7 @@ def test_negative_fit_context_no_window(default_config):
 
 def test_negative_fit_context_no_overflow(default_config):
     """Returns None when no forecast overflow projected."""
-    planner = DPPlanner(default_config)
+    DPPlanner(default_config)
     slots = [
         _make_slot_for_neg_fit(i, sell_price=0.08 if i < 5 else -0.05)
         for i in range(10)
@@ -2818,7 +2871,7 @@ def test_negative_fit_context_no_overflow(default_config):
 
 def test_negative_fit_context_no_positive_slots(default_config):
     """Returns None when no earlier positive-FIT slots."""
-    planner = DPPlanner(default_config)
+    DPPlanner(default_config)
     slots = [
         _make_slot_for_neg_fit(i, sell_price=0.08 if i >= 5 else 0.0) for i in range(10)
     ]
@@ -2835,7 +2888,7 @@ def test_negative_fit_context_no_positive_slots(default_config):
 
 def test_negative_fit_context_computes_floor(default_config):
     """Computes correct recoverability_floor when all conditions met."""
-    planner = DPPlanner(default_config)
+    DPPlanner(default_config)
     default_config.demand_window_target_soc_pct = 80.0
     slots = []
     for i in range(10):

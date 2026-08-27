@@ -787,7 +787,7 @@ class OptimizerFacade:
         by crediting projected solar into the gap: that reinstates exactly the forecast
         trust the arm exists to survive, and would have left 2026-07-28 uncovered.
 
-        Every gate is shared with #901 except two deliberate differences:
+        Every gate is shared with #901 except three deliberate differences:
 
         - ``_count_pre_dw_charge_slots`` is NOT checked. #901 requires a planned pre-DW
           grid charge so it "never invents intent" — but on a solar-sufficient day the
@@ -796,6 +796,11 @@ class OptimizerFacade:
         - the shortfall is the LIVE gap (``target - soc``), not the plan's
           ``terminal_shortfall_pct``, which reads 0 on a solar-sufficient day — the same
           blind spot one level down.
+        - the arm runs whenever pre-charge is required today
+          (``_precharge_required_today``), not only when solar suppressed the floor. The
+          call site reaches this arm only after #901 has declined, so gating on floor
+          liveness left a live-floor / sub-deadband band uncovered. See that helper for
+          the 2026-08-25 incident.
 
         The gates are ordered in two deliberate groups. The first group is the arm's OWN
         conditions: when one of them clears, the hold is genuinely over and
@@ -839,8 +844,7 @@ class OptimizerFacade:
             # on it routinely declines too, and releasing here would drop the forced
             # boost for exactly one cycle before re-arming.
             if not (
-                self._floor_suppressed_by_solar(optimizer_config)
-                or self._runway_holding
+                self._precharge_required_today(optimizer_config) or self._runway_holding
             ):
                 return None
 
@@ -856,9 +860,11 @@ class OptimizerFacade:
             _LOGGER.warning(
                 "RUNWAY BACKSTOP: forcing BOOST_CHARGING — soc=%.1f%% target=%.1f%% "
                 "gap=%.1f%% runway slack=%.1f min < %.1f min slot=%d (urgency window "
-                "%d..%d). The hard DW-target floor is suppressed because solar was "
-                "projected sufficient, so the pre-charge backstop is dormant; there is "
-                "no longer enough runway to reach target at boost rate if solar fails.",
+                "%d..%d, hard_floor=%s). The #901 pre-charge backstop declined this "
+                "cycle — either the floor is suppressed because solar was projected "
+                "sufficient, or the projected shortfall sits under its %.1f-point "
+                "deadband — and there is no longer enough runway to reach target at "
+                "boost rate if solar fails.",
                 float(getattr(data, "soc", 0.0)),
                 float(getattr(optimizer_config, "demand_window_target_soc_pct", 0.0)),
                 gap,
@@ -867,6 +873,8 @@ class OptimizerFacade:
                 current_slot_idx,
                 urgency_start_idx,
                 terminal_penalty_idx,
+                getattr(optimizer_config, "hard_target_floor", None),
+                PRECHARGE_BACKSTOP_SHORTFALL_PCT,
             )
             return _BatteryMode.BOOST_CHARGING
         except Exception as exc:  # noqa: BLE001
@@ -877,14 +885,48 @@ class OptimizerFacade:
     def _floor_suppressed_by_solar(optimizer_config: Any) -> bool:
         """True only when the hard floor is dormant BECAUSE solar looked sufficient.
 
-        Strictly the complement of #901: a live floor means that arm owns the cycle and
-        this one stays out of the way. And the solar suppression is the ONLY None-reason
-        this arm may act on — ``allow_dw_entry_under_target``, no demand window, a
-        non-self-consumption mode and a legacy config without the field are policy or
-        structural decisions that must stay exactly as dormant as they are under #901.
+        The solar suppression is the ONLY None-reason either backstop may act on —
+        ``allow_dw_entry_under_target``, no demand window, a non-self-consumption mode
+        and a legacy config without the field are policy or structural decisions that
+        must stay exactly as dormant as they are under #901.
         """
         if getattr(optimizer_config, "hard_target_floor", None) is not None:
             return False
+        return bool(getattr(optimizer_config, "hard_floor_suppressed_by_solar", False))
+
+    @staticmethod
+    def _precharge_required_today(optimizer_config: Any) -> bool:
+        """True when today genuinely needs a pre-charge, by either engine signal.
+
+        Found live 2026-08-25. This predicate used to be ``_floor_suppressed_by_solar``
+        alone, on the reasoning that "a live floor means #901 owns the cycle and this arm
+        stays out of the way". That mutual exclusion was keyed on the wrong quantity. The
+        call site already reaches this arm ONLY when ``_precharge_backstop_mode`` returned
+        None, so by construction #901 has already declined by the time we get here —
+        standing down again on floor *liveness* turns "#901 declined" into "nobody acts".
+
+        That leaves an uncovered band, and it is not a narrow one: a LIVE hard floor, an
+        SOC far below it, and a projected shortfall under #901's
+        ``PRECHARGE_BACKSTOP_SHORTFALL_PCT`` deadband. On 2026-08-25 the system sat in it
+        for half an hour — 22% SOC against a 95% target, hard floor live, projected
+        shortfall 3.8–4.2% (under the 5.0 deadband, so #901 declined) and runway slack of
+        2.0 minutes against a 15-minute margin. Both arms off. The DP re-planned every 5
+        minutes and deferred ``first_charge`` each time (12:35 → 12:40 → 12:45) while the
+        achievable DW entry decayed 96.1% → 94.5% → 90.8%. Recovered by a manual override.
+
+        A deferral drift is exactly the shape the deadband cannot see: it adds ~1.5 points
+        per replan and never steps past 5.0 in one cycle until the runway is already gone.
+        The fix is NOT to lower the deadband — it exists to stop the mode flap — but to let
+        the arm that measures physical slack speak when the arm that measures projected
+        shortfall has passed.
+
+        A live floor is itself the engine's statement that pre-charge is required today,
+        so admitting it here cannot arm the backstop on a day pre-charge was not wanted:
+        every policy/structural None-reason still yields a None floor AND a False
+        suppression flag, and stays dormant.
+        """
+        if getattr(optimizer_config, "hard_target_floor", None) is not None:
+            return True
         return bool(getattr(optimizer_config, "hard_floor_suppressed_by_solar", False))
 
     @staticmethod
