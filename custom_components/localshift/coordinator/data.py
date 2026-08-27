@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..const import BatteryMode
 
@@ -154,6 +154,22 @@ class ChargingDecision:
     charge_amount_kwh: float = 0.0
     price_per_kwh: float = 0.0
     reason: str = ""
+
+
+@dataclass
+class PhysicalResponseWatch:
+    """Active watch for a physical battery response after a mode command.
+
+    Issue #508: created at decision time for modes with an observable power
+    direction; the coordinator watches battery power until it crosses the
+    mode-appropriate threshold or the watch times out.
+    """
+
+    decision_timestamp: datetime
+    expected_direction: Literal["charging", "discharging"]
+    baseline_power_kw: float
+    target_mode: BatteryMode
+    timeout_at: datetime
 
 
 @dataclass
@@ -541,9 +557,11 @@ class CoordinatorData:
     cloud_event_solar_scale_factor: float | None = None
 
     # ---------------------------------------------------------------------------
-    # --- Decision-to-Implementation Lag Tracking (Issue #501) ---
+    # --- Two-phase Decision Lag Tracking (Issues #501, #508) ---
     # ---------------------------------------------------------------------------
-    # Measures time from decision made to hardware validation passed.
+    # Phase 1 (command lag): decision -> control entity command completion.
+    # Phase 2 (physical lag): decision -> battery power physically crossing a
+    # mode-appropriate threshold (cloud propagation excluded).
 
     decision_timestamp: datetime | None = None
     """When active_mode was set to a new value (decision made)."""
@@ -551,17 +569,29 @@ class CoordinatorData:
     decision_mode: BatteryMode | None = None
     """The mode that was decided (for lag tracking)."""
 
-    implementation_timestamp: datetime | None = None
-    """When validation passed for the decision."""
+    command_completion_timestamp: datetime | None = None
+    """Issue #508 phase 1: when the last control entity command completed."""
 
     decision_lag_seconds: float | None = None
-    """Calculated lag from decision to implementation (seconds)."""
+    """Issue #508: command lag, decision -> command completion (seconds)."""
 
     decision_lag_history: list[dict[str, Any]] = field(default_factory=list)
-    """History of recent decision-to-implementation lag measurements.
-    Each entry: {from_mode, to_mode, lag_seconds, decision_time, implementation_time}.
-    Max 50 entries.
+    """History of two-phase lag measurements.
+    Each entry: {from_mode, to_mode, command_lag, physical_lag, decision_time,
+    command_time, observable, timed_out}. Max 50 entries.
     """
+
+    physical_response_watch: PhysicalResponseWatch | None = None
+    """Issue #508 phase 2: active physical-response watch, if any."""
+
+    physical_response_timestamp: datetime | None = None
+    """Issue #508: when the battery physically responded."""
+
+    physical_response_lag_seconds: float | None = None
+    """Issue #508: physical lag, decision -> physical response (seconds)."""
+
+    physical_response_timed_out: bool = False
+    """Issue #508: True when the last physical-response watch timed out."""
 
     # ---------------------------------------------------------------------------
     # --- Decision-token gating (#622 gate replacement) ---

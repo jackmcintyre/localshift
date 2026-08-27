@@ -283,50 +283,85 @@ class TestAutomationReadySensor:
 
 class TestDecisionLagSensor:
     def test_update_with_value(self):
-        sensor = _sensor(DecisionLagSensor, decision_lag_seconds=1.234)
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=1.234,
+            physical_response_lag_seconds=None,
+        )
         sensor._update_from_coordinator()
         assert sensor._attr_native_value == pytest.approx(1.23)
 
-    def test_update_with_none(self):
-        sensor = _sensor(DecisionLagSensor, decision_lag_seconds=None)
+    def test_update_with_none_reports_zero(self):
+        # Issue #917: never None — 'unknown' states tripped the validator's
+        # consecutive-failure counter and marked the entity broken.
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+        )
         sensor._update_from_coordinator()
-        assert sensor._attr_native_value is None
+        assert sensor._attr_native_value == 0.0
+
+    def test_update_prefers_physical_lag(self):
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=1.0,
+            physical_response_lag_seconds=9.5,
+        )
+        sensor._update_from_coordinator()
+        assert sensor._attr_native_value == pytest.approx(9.5)
 
     def test_extra_state_attributes_no_history(self):
         sensor = _sensor(
             DecisionLagSensor,
             decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
             decision_lag_history=[],
             decision_timestamp=None,
-            implementation_timestamp=None,
+            command_completion_timestamp=None,
         )
         attrs = sensor.extra_state_attributes
         assert attrs["avg_lag_24h"] is None
         assert attrs["max_lag_24h"] is None
         assert attrs["min_lag_24h"] is None
+        assert attrs["avg_physical_lag"] is None
         assert attrs["total_transitions"] == 0
         assert attrs["decision_timestamp"] is None
+        assert attrs["command_completion_timestamp"] is None
         assert attrs["current_lag"] is None
+        assert attrs["command_lag_seconds"] is None
+        assert attrs["physical_lag_seconds"] is None
+        assert attrs["physical_lag_observable"] is False
+        assert attrs["physical_response_timed_out"] is False
 
     def test_extra_state_attributes_with_history(self):
         now = datetime(2026, 3, 12, 12, 0, 0)
         history = [
-            {"lag_seconds": 1.0},
-            {"lag_seconds": 2.0},
-            {"lag_seconds": 3.0},
+            {"command_lag": 1.0, "physical_lag": 5.0},
+            {"command_lag": 2.0, "physical_lag": None},
+            {"command_lag": 3.0, "physical_lag": 7.0},
         ]
         sensor = _sensor(
             DecisionLagSensor,
             decision_lag_seconds=3.0,
+            physical_response_lag_seconds=7.0,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
             decision_lag_history=history,
             decision_timestamp=now,
-            implementation_timestamp=now,
+            command_completion_timestamp=now,
         )
         attrs = sensor.extra_state_attributes
         assert attrs["avg_lag_24h"] == pytest.approx(2.0)
         assert attrs["max_lag_24h"] == pytest.approx(3.0)
         assert attrs["min_lag_24h"] == pytest.approx(1.0)
+        assert attrs["avg_physical_lag"] == pytest.approx(6.0)
         assert attrs["total_transitions"] == 3
+        assert attrs["command_lag_seconds"] == pytest.approx(3.0)
+        assert attrs["physical_lag_seconds"] == pytest.approx(7.0)
+        assert attrs["command_completion_timestamp"] == now.isoformat()
 
     def test_icon_with_decision_timestamp(self):
         sensor = _sensor(DecisionLagSensor, decision_timestamp=MagicMock())

@@ -1275,8 +1275,10 @@ class TestStateMachineInternalBranches:
         coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
         coordinator_data.decision_mode = BatteryMode.GRID_CHARGING
         coordinator_data.decision_timestamp = base - timedelta(seconds=12)
+        coordinator_data.soc = 50.0
+        coordinator_data.battery_target_soc = 80.0
         coordinator_data.decision_lag_history = [
-            {"lag_seconds": float(i)} for i in range(60)
+            {"command_lag": float(i)} for i in range(60)
         ]
 
         with patch(
@@ -1290,11 +1292,16 @@ class TestStateMachineInternalBranches:
             )
 
         assert state_machine._last_successful_transition == base
-        assert coordinator_data.implementation_timestamp == base
+        # No command completion recorded — falls back to transition time
         assert coordinator_data.decision_lag_seconds == 12.0
         assert len(coordinator_data.decision_lag_history) == 50
         assert coordinator_data.decision_timestamp is None
         assert coordinator_data.decision_mode is None
+        # Issue #508: observable mode starts the physical response watch
+        watch = coordinator_data.physical_response_watch
+        assert watch is not None
+        assert watch.expected_direction == "charging"
+        assert watch.timeout_at == watch.decision_timestamp + timedelta(minutes=10)
 
     def test_set_commanded_mode_updates_mode_and_clears_timers(self, state_machine):
         """Direct commanded mode setter should clear pending desired timers."""

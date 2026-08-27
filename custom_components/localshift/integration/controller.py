@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from homeassistant.util import dt as dt_util
+
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
     TESLEMETRY_EXPORT_BATTERY_OK,
@@ -109,11 +111,16 @@ class BatteryController:
             pass
         return None
 
-    async def _run_transition(self, recipe: TransitionRecipe) -> bool:
+    async def _run_transition(
+        self, recipe: TransitionRecipe, data: CoordinatorData | None = None
+    ) -> bool:
         """Execute a transition recipe and validate the result.
 
         Args:
             recipe: Transition recipe containing steps and expectations.
+            data: Coordinator data; when given, records the command completion
+                timestamp after the last control command, before validation
+                (Issue #508 phase 1).
 
         Returns:
             True if transition succeeded and validated, False otherwise.
@@ -123,6 +130,9 @@ class BatteryController:
             if not await step.action():
                 _LOGGER.error(step.failure_message)
                 return False
+
+        if data is not None:
+            data.command_completion_timestamp = dt_util.now()
 
         if not await self._validator.validate_transition(
             expected_operation_mode=recipe.expectation.operation_mode,
@@ -236,7 +246,7 @@ class BatteryController:
             on_validation_failure=_log_validation_failure,
         )
 
-        if not await self._run_transition(recipe):
+        if not await self._run_transition(recipe, data):
             return False
 
         _LOGGER.info(
@@ -381,7 +391,7 @@ class BatteryController:
             on_validation_failure=_log_validation_failure,
         )
 
-        if not await self._run_transition(recipe):
+        if not await self._run_transition(recipe, data):
             return False
 
         elapsed = time.monotonic() - transition_start
@@ -476,7 +486,7 @@ class BatteryController:
             on_validation_failure=_log_validation_failure,
         )
 
-        if not await self._run_transition(recipe):
+        if not await self._run_transition(recipe, data):
             return False
 
         elapsed = time.monotonic() - transition_start
@@ -587,7 +597,7 @@ class BatteryController:
             on_validation_failure=_log_validation_failure,
         )
 
-        if not await self._run_transition(recipe):
+        if not await self._run_transition(recipe, data):
             return False
 
         elapsed = time.monotonic() - transition_start
@@ -681,7 +691,7 @@ class BatteryController:
             on_validation_failure=_log_validation_failure,
         )
 
-        if not await self._run_transition(recipe):
+        if not await self._run_transition(recipe, data):
             return False
 
         elapsed = time.monotonic() - transition_start
