@@ -183,6 +183,8 @@ class TestLocalShiftSwitch:
         mock_hass.config_entries.async_update_entry = MagicMock()
 
         switch = LocalShiftSwitch(mock_coordinator, mock_entry, "enable_learning")
+        # Discard the Issue #913 init sync so this test isolates turn_on behaviour
+        mock_coordinator.optimization_controller.set_learning_enabled.reset_mock()
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_enable_learning"
 
@@ -190,6 +192,51 @@ class TestLocalShiftSwitch:
             await switch.async_turn_on()
 
         mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(True)
+
+    def test_init_syncs_persisted_learning_state_to_controller(
+        self, mock_coordinator, mock_entry
+    ):
+        """Test persisted enable_learning=True syncs to controller on load (Issue #913)."""
+        option_key = f"{SWITCH_STATE_PREFIX}enable_learning"
+        mock_entry.options = {option_key: True}
+
+        LocalShiftSwitch(mock_coordinator, mock_entry, "enable_learning")
+
+        mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(True)
+
+    def test_init_syncs_learning_default_off_to_controller(
+        self, mock_coordinator, mock_entry
+    ):
+        """Test default enable_learning=False syncs to controller on load (Issue #913)."""
+        LocalShiftSwitch(mock_coordinator, mock_entry, "enable_learning")
+
+        mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(False)
+
+    def test_init_does_not_sync_other_switches_to_controller(
+        self, mock_coordinator, mock_entry
+    ):
+        """Test non-learning switches do not touch the optimization controller."""
+        LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+
+        mock_coordinator.optimization_controller.set_learning_enabled.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_turn_off_learning_disabled(self, mock_coordinator, mock_entry):
+        """Test turning off learning switch disables learning (Issue #913)."""
+        mock_hass = MagicMock()
+        mock_hass.config_entries = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock()
+
+        switch = LocalShiftSwitch(mock_coordinator, mock_entry, "enable_learning")
+        # Discard the Issue #913 init sync so this test isolates turn_off behaviour
+        mock_coordinator.optimization_controller.set_learning_enabled.reset_mock()
+        switch.hass = mock_hass
+        switch._attr_entity_id = "switch.localshift_enable_learning"
+
+        with patch.object(switch, "async_write_ha_state"):
+            await switch.async_turn_off()
+
+        mock_coordinator.optimization_controller.set_learning_enabled.assert_called_once_with(False)
 
 
 class TestSwitchKeys:
