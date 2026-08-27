@@ -209,6 +209,7 @@ CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
+CONF_SWITCHING_PENALTY_PER_KWH = "switching_penalty_per_kwh"
 CONF_TARGET_PENALTY = "target_penalty"
 
 # Optimization mode options
@@ -257,7 +258,10 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
-DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
+DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive (flat knob)
+DEFAULT_SWITCHING_PENALTY_PER_KWH = (
+    0.40  # $/kWh floor: scales the hurdle to slot energy, damps marginal jitter
+)
 DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0.015 -> 0.03 so the soft lever can at least exceed typical charge prices)
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
@@ -313,6 +317,13 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "$/kWh",
         "icon": "mdi:battery-sync-outline",
+    },
+    CONF_SWITCHING_PENALTY_PER_KWH: {
+        "min": 0.00,
+        "max": 1.00,
+        "step": 0.05,
+        "unit": "$/kWh",
+        "icon": "mdi:swap-horizontal-variant",
     },
     CONF_SPIKE_PRICE_PERCENTILE: {
         "min": 50,

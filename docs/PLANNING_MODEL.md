@@ -94,7 +94,7 @@ Encodes preferences, costs, and behavioral biases into a scalar cost.
 |---------|---------|---------|---------------|
 | `import_cost` | `grid_import × buy_price` | Direct cost of buying from grid | L1754 |
 | `export_revenue` | `grid_export × sell_price` | Revenue from selling (negative cost) | L1755 |
-| `switching_penalty` | `$0.02` if action ≠ current | Stability, hysteresis against flip-flopping | L1761 |
+| `switching_penalty` | `max(flat_knob, per_kWh_floor × rate_kw × slot_hours)` when action ≠ current | Stability, hysteresis against flip-flopping | `cost.py:52-64` |
 | `uncertainty_penalty` | Scales with horizon gap | Risk aversion when forecast is short | L1765-1774 |
 | `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportunity cost of exporting | L1779-1814 |
 | `solar_opportunity_penalty` | `grid_import × $0.03/kWh` when future solar available | Discourage grid charging when solar can charge for free | L1071-1160 |
@@ -114,7 +114,7 @@ net_cost = (
 
 Note: `self_consumption_value` is subtracted because it's a credit (value provided).
 
-**Anti-cycling:** Protection against wasteful cycling is handled by the `futile_cycling_penalty` term, which penalises grid charging when forward simulation shows the charged energy will drain through household load before reaching a useful period (solar surplus or demand window). The `switching_penalty` provides additional stability by discouraging frequent mode changes. There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
+**Anti-cycling:** Protection against wasteful cycling is handled by the `futile_cycling_penalty` term, which penalises grid charging when forward simulation shows the charged energy will drain through household load before reaching a useful period (solar surplus or demand window). The `switching_penalty` provides additional stability by discouraging frequent mode changes. Per Issue #919, the effective switching penalty is now the max of the flat knob `config.switching_penalty` and a slot-energy-scaled floor `config.switching_penalty_per_kwh × max(charge_rate_kw, discharge_rate_kw) × slot_hours`. The floor makes the hurdle price-scale-aware: a flat $0.08 knob is trivially paid through by Amber's 5-min price jitter (which produced 105 mode changes / 7 days in live data, median dwell 10 min), but a $0.40/kWh floor equals $0.50 per 15-min slot at 5 kW and suppresses the marginal SC↔X flips while preserving genuine spike capture and demand-window pre-charge (which carry dollar-scale value). There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
 
 **Minimum cycle saving (hard gate):** Separately from the soft penalties above, `_compute_best_action` drops a grid-charge action entirely when it beats the HOLD alternative by a positive but sub-threshold margin — specifically when `0 < (hold_total_cost - charge_total_cost) < config.min_cycle_saving × charge_kwh`. This rules out "micro" arbitrage (cycling the battery for a few c/kWh) while preserving genuine pre-charge and price-spike capture: because the margin is the DP's real cost difference, it already credits the demand-window target, evening-peak avoidance, and backup value via `future_cost`, and unlike a soft penalty it cannot be "paid through". Configured by `number.localshift_min_cycle_saving` (default $0.25/kWh; `0` disables).
 
@@ -269,7 +269,8 @@ All penalty rates are configurable via `OptimizerConfig`:
 class OptimizerConfig:
     # Penalty rates
     target_shortfall_penalty_per_pct: float = 0.030  # $/%-point
-    switching_penalty: float = 0.05                  # $ per mode switch
+    switching_penalty: float = 0.02                  # $ per mode switch (flat knob)
+    switching_penalty_per_kwh: float = 0.0           # $/kWh floor: scales hurdle to slot energy (0 disables; production default 0.40)
     self_consumption_value_per_kwh: float = 0.25     # $/kWh
     export_price_margin: float = 0.02                # $/kWh above self-consumption
 ```
@@ -278,6 +279,8 @@ Tuning guidelines:
 - **Increase penalty** → Stronger discouragement (e.g., higher switching penalty = fewer mode changes)
 - **Decrease penalty** → Weaker discouragement (e.g., lower export margin = more exports)
 - **Set to zero** → Disable penalty (use caution, may lead to undesired behavior)
+- **`switching_penalty` (flat knob)** — existing hard dollar hurdle; a per-switch cost the DP pays when slot-0 action differs from the commanded mode. The UI knob `number.localshift_switching_penalty` lets operators set a floor in dollars (default $0.02).
+- **`switching_penalty_per_kwh`** — per-kWh scale factor for the effective floor (`cost.py:52-64`). The effective penalty = `max(flat_knob, per_kwh × max(charge_rate, discharge_rate) × slot_hours)`. The per-kWh floor auto-scales the hurdle to slot duration so the Schmitt band is comparable across 5-min Amber slots (≈$0.17 at 5 kW, $0.50 at 15 min) and longer forecast slots. Default $0.40/kWh ≈ $0.50 per 15-min slot at 5 kW, which blocks the marginal SC↔X flips that caused the #919 thrash while preserving spike/DW value. Set to 0.0 to revert to legacy flat-knob-only behaviour.
 
 ## Testing New Features
 

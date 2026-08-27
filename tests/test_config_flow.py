@@ -23,6 +23,7 @@ from custom_components.localshift.const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -609,6 +610,12 @@ class TestStaticMethods:
         result = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
 
         assert isinstance(result, LocalShiftOptionsFlow)
+
+    def test_advanced_schema_contains_switching_penalty_per_kwh(self):
+        """Issue #919: the advanced schema must include the new per-kWh knob."""
+        flow = LocalShiftOptionsFlow()
+        schema = flow._build_advanced_schema({})
+        assert CONF_SWITCHING_PENALTY_PER_KWH in schema.schema
 
 
 # =============================================================================

@@ -491,7 +491,28 @@ class OptimizerConfig:
     ``effective_cheap_price`` when ``None`` (backward compatibility)."""
 
     switching_penalty: float = 0.02
-    """Penalty applied when switching away from the currently commanded action ($/switch)."""
+    """Penalty applied when switching away from the currently commanded action ($/switch).
+
+    The *effective* penalty is the max of this flat knob and the slot-energy-scaled
+    floor ``switching_penalty_per_kwh × max(charge_rate_kw, discharge_rate_kw) ×
+    slot_hours``. The floor makes the hurdle price-scale-aware (per #919): a flat
+    $0.08 knob is trivially paid through by Amber's 5-min price jitter, but a
+    $0.40/kWh floor equals $0.50 per 15-min slot at 5 kW and suppresses the
+    marginal SC↔X flips that caused 105 changes / 7 days in live data. Zero disables
+    the floor and restores legacy flat-knob-only behaviour (dataclass default = 0.0
+    so existing unit tests remain unaffected).
+    """
+
+    switching_penalty_per_kwh: float = 0.0
+    """Scale factor for the slot-energy-scaled floor on mode-switch penalty ($/kWh).
+
+    Effective penalty = max(flat_knob, this × max(charge_rate_kw, discharge_rate_kw)
+    × slot_hours). Product of the slot's kW rating × duration in hours is the
+    energy at stake in any mode switch, so the resulting $/switch hurdle is
+    comparable across slot granularities (5-min Amber, 15-min fixed). Default
+    0.40 → $0.50 per 15-min slot at 5 kW, sufficient to suppress sub-threshold
+    SC↔X churn while preserving spike / DW pre-charge value. 0.0 disables.
+    """
 
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
