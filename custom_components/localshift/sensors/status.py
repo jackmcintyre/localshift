@@ -215,42 +215,59 @@ class DecisionLagSensor(LocalShiftSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _update_from_coordinator(self) -> None:
-        lag = self.coordinator.data.decision_lag_seconds
-        if lag is not None:
-            self._attr_native_value = round(lag, 2)
+        d = self.coordinator.data
+        # Issue #917: native value is ALWAYS numeric. A None would render the
+        # HA state as "unknown", which the entity validator counts as a
+        # consecutive failure — 10 of them mark the entity broken during quiet
+        # periods. 0.0 means "never measured"; STALE (which does not count) is
+        # then the worst status the sensor can reach.
+        if d.physical_response_lag_seconds is not None:
+            self._attr_native_value = round(d.physical_response_lag_seconds, 2)
+        elif d.decision_lag_seconds is not None:
+            self._attr_native_value = round(d.decision_lag_seconds, 2)
         else:
-            self._attr_native_value = None
+            self._attr_native_value = 0.0
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         d = self.coordinator.data
         history = d.decision_lag_history or []
 
-        if history:
-            lag_values = [h["lag_seconds"] for h in history]
-            avg_lag = sum(lag_values) / len(lag_values)
-            max_lag = max(lag_values)
-            min_lag = min(lag_values)
-        else:
-            avg_lag = None
-            max_lag = None
-            min_lag = None
+        command_lags = [
+            h["command_lag"] for h in history if h.get("command_lag") is not None
+        ]
+        physical_lags = [
+            h["physical_lag"] for h in history if h.get("physical_lag") is not None
+        ]
+
+        def _round_or_none(values: list[float]) -> float | None:
+            return round(sum(values) / len(values), 2) if values else None
 
         return {
+            "command_lag_seconds": round(d.decision_lag_seconds, 2)
+            if d.decision_lag_seconds is not None
+            else None,
+            "physical_lag_seconds": round(d.physical_response_lag_seconds, 2)
+            if d.physical_response_lag_seconds is not None
+            else None,
+            "physical_lag_observable": d.physical_response_watch is not None
+            or bool(history and history[-1].get("observable")),
+            "physical_response_timed_out": d.physical_response_timed_out,
             "current_lag": round(d.decision_lag_seconds, 2)
             if d.decision_lag_seconds is not None
             else None,
             "last_transition": history[-1] if history else None,
             "history": history[-20:],
-            "avg_lag_24h": round(avg_lag, 2) if avg_lag is not None else None,
-            "max_lag_24h": round(max_lag, 2) if max_lag is not None else None,
-            "min_lag_24h": round(min_lag, 2) if min_lag is not None else None,
+            "avg_lag_24h": _round_or_none(command_lags),
+            "max_lag_24h": round(max(command_lags), 2) if command_lags else None,
+            "min_lag_24h": round(min(command_lags), 2) if command_lags else None,
+            "avg_physical_lag": _round_or_none(physical_lags),
             "total_transitions": len(history),
             "decision_timestamp": d.decision_timestamp.isoformat()
             if d.decision_timestamp
             else None,
-            "implementation_timestamp": d.implementation_timestamp.isoformat()
-            if d.implementation_timestamp
+            "command_completion_timestamp": d.command_completion_timestamp.isoformat()
+            if d.command_completion_timestamp
             else None,
         }
 

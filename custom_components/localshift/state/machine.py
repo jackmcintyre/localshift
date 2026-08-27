@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from homeassistant.util import dt as dt_util
 
@@ -31,7 +31,7 @@ from ..const import (
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
 )
-from ..coordinator.data import CoordinatorData
+from ..coordinator.data import CoordinatorData, PhysicalResponseWatch
 from .mode_configs import MODE_CONFIG_BUILDERS, MODE_EXECUTORS, ModeConfig
 
 if TYPE_CHECKING:
@@ -52,6 +52,21 @@ _LOGGER = logging.getLogger(__name__)
 # flap-free (see _update_plan_charge_epoch).
 _CHARGE_MODES = (BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING)
 _CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
+
+# Issue #508: modes whose physical battery response is observable in the
+# battery power sensor. Charging modes respond by drawing power (negative
+# battery power), discharging modes by exporting it (positive battery power).
+# Modes absent from this table (self-consumption family, HOLD, MANUAL) produce
+# no predictable power signature, so their physical lag is unobservable.
+PHYSICAL_RESPONSE_DIRECTIONS: dict[BatteryMode, Literal["charging", "discharging"]] = {
+    BatteryMode.GRID_CHARGING: "charging",
+    BatteryMode.BOOST_CHARGING: "charging",
+    BatteryMode.SPIKE_DISCHARGE: "discharging",
+    BatteryMode.PROACTIVE_EXPORT: "discharging",
+}
+
+# Issue #508: how long to wait for the physical response before giving up.
+PHYSICAL_RESPONSE_TIMEOUT = timedelta(minutes=10)
 
 
 class StateMachine:
@@ -1096,6 +1111,13 @@ class StateMachine:
         finally:
             _LOGGER.debug("Mode transition flag cleared, allowing re-evaluation")
             self._in_mode_transition = False
+            # Issue #508: a failed transition abandons the pending decision —
+            # clear lag tracking so a stale watch never fires. The coordinator
+            # removes its listener when it sees the watch cleared.
+            if not transition_success and data.decision_mode == target:
+                data.decision_timestamp = None
+                data.decision_mode = None
+                data.physical_response_watch = None
 
         if transition_success:
             self._record_transition_metrics(data, target, dry_run)
@@ -1174,32 +1196,49 @@ class StateMachine:
     def _record_transition_metrics(
         self, data: CoordinatorData, target: BatteryMode, dry_run: bool
     ) -> None:
-        """Record transition timing metrics for telemetry."""
+        """Record two-phase transition timing metrics (Issue #508).
+
+        Phase 1 (command lag): decision -> control command completion.
+        Phase 2 (physical lag): starts a watch here; the coordinator observes
+        the battery power crossing the mode-appropriate threshold.
+        """
         transition_time = dt_util.now()
         if not dry_run:
             self._last_successful_transition = transition_time
 
-        if data.decision_timestamp is not None and data.decision_mode == target:
-            data.implementation_timestamp = transition_time
-            lag_seconds = (transition_time - data.decision_timestamp).total_seconds()
-            data.decision_lag_seconds = lag_seconds
+        # Issue #508: dry runs execute no real commands and drive no physical
+        # change, so neither phase is recorded.
+        if (
+            not dry_run
+            and data.decision_timestamp is not None
+            and data.decision_mode == target
+        ):
+            command_end = data.command_completion_timestamp or transition_time
+            command_lag = (command_end - data.decision_timestamp).total_seconds()
+            data.decision_lag_seconds = command_lag
+
+            observable = self._start_physical_response_watch(data, target, dry_run)
 
             history_entry = {
                 "from_mode": data.active_mode.value if data.active_mode else "unknown",
                 "to_mode": target.value,
-                "lag_seconds": round(lag_seconds, 2),
+                "command_lag": round(command_lag, 2),
+                "physical_lag": None,
                 "decision_time": data.decision_timestamp.isoformat(),
-                "implementation_time": transition_time.isoformat(),
+                "command_time": command_end.isoformat(),
+                "observable": observable,
+                "timed_out": False,
             }
             data.decision_lag_history.append(history_entry)
             if len(data.decision_lag_history) > 50:
                 data.decision_lag_history = data.decision_lag_history[-50:]
 
             _LOGGER.info(
-                "Decision lag: %s → %s completed in %.2fs",
+                "Decision lag: %s → %s commanded in %.2fs (physical watch %s)",
                 data.decision_mode.value if data.decision_mode else "unknown",
                 target.value,
-                lag_seconds,
+                command_lag,
+                "started" if observable else "not started",
             )
             data.decision_timestamp = None
             data.decision_mode = None
@@ -1209,6 +1248,36 @@ class StateMachine:
             target.value,
             transition_time.strftime("%H:%M:%S"),
         )
+
+    def _start_physical_response_watch(
+        self, data: CoordinatorData, target: BatteryMode, dry_run: bool
+    ) -> bool:
+        """Start the phase-2 physical response watch for *target*.
+
+        Returns True when a watch was started (physical lag observable).
+        Skipped for dry runs, unobservable modes, and charging decisions made
+        when the battery is already at its target SOC (no power will flow).
+        """
+        direction = PHYSICAL_RESPONSE_DIRECTIONS.get(target)
+        decision = data.decision_timestamp
+        if dry_run or direction is None or decision is None:
+            return False
+        if direction == "charging" and data.soc >= data.battery_target_soc:
+            _LOGGER.debug(
+                "Physical watch skipped for %s: SOC %.1f%% already at target %.1f%%",
+                target.value,
+                data.soc,
+                data.battery_target_soc,
+            )
+            return False
+        data.physical_response_watch = PhysicalResponseWatch(
+            decision_timestamp=decision,
+            expected_direction=direction,
+            baseline_power_kw=data.battery_power_kw,
+            target_mode=target,
+            timeout_at=decision + PHYSICAL_RESPONSE_TIMEOUT,
+        )
+        return True
 
     def _get_expected_state_for_mode(
         self, mode: BatteryMode

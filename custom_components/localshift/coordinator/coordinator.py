@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_BATTERY_TARGET,
@@ -24,6 +26,7 @@ from ..const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_LOAD_POWER,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
@@ -72,6 +75,10 @@ SOLCAST_MAX_STARTUP_RETRIES = 3
 # If price sensor hasn't updated in this time, trigger state machine evaluation
 STALE_PRICE_THRESHOLD = timedelta(minutes=10)
 
+# Issue #508: battery power must cross this magnitude (kW) to count as a
+# physical response. Charging reads negative, discharging positive.
+PHYSICAL_RESPONSE_THRESHOLD_KW = 0.3
+
 
 class LocalShiftCoordinator:
     """Central coordinator: reads external entities, computes state, drives battery.
@@ -87,6 +94,8 @@ class LocalShiftCoordinator:
         self.data = CoordinatorData()
         self._listeners: list[CALLBACK_TYPE] = []
         self._update_callbacks: list[CALLBACK_TYPE] = []
+        # Issue #508: temporary battery-power listener for the active watch
+        self._unsub_battery_power_listener: CALLBACK_TYPE | None = None
 
         # Switch state bridge — switches read/write via these methods
         self._switch_states: dict[str, bool] = dict(SWITCH_DEFAULTS)
@@ -465,6 +474,8 @@ class LocalShiftCoordinator:
         if self._subscription_manager is not None:
             self._subscription_manager.stop()
 
+        # Issue #508: remove the temporary physical-response listener
+        self._remove_battery_power_listener()
         # Save all learning data to storage before shutdown
         await self._save_learning_data()
 
@@ -571,6 +582,8 @@ class LocalShiftCoordinator:
         """Handle FAST tier periodic tasks (1 minute)."""
         if self._tick_scheduler is not None:
             self._tick_scheduler.handle_fast_tick(now)
+        # Issue #508: enforce the physical-response watch timeout between events
+        self._check_physical_response_watch()
 
     @callback
     def _handle_medium_tick(self, now: datetime) -> None:  # pragma: no cover
@@ -811,6 +824,97 @@ class LocalShiftCoordinator:
                 if self._state_reader is not None
                 else None,
             )
+        # Issue #508: start the physical-response listener immediately after a
+        # transition may have set a watch (also enforces timeouts between events).
+        self._check_physical_response_watch()
+
+    # ------------------------------------------------------------------
+    # Physical response watch (Issue #508)
+    # ------------------------------------------------------------------
+
+    def _check_physical_response_watch(self) -> None:
+        """Maintain the temporary battery-power listener for the active watch.
+
+        No watch (including one cleared by a failed transition) removes any
+        lingering listener; an expired watch records the timeout.
+        """
+        watch = self.data.physical_response_watch
+        if watch is None:
+            self._remove_battery_power_listener()
+            return
+        if dt_util.now() >= watch.timeout_at:
+            self._record_physical_response(timed_out=True)
+        elif self._unsub_battery_power_listener is None:
+            self._unsub_battery_power_listener = async_track_state_change_event(
+                self.hass,
+                [self.get_entity_id(CONF_TESLEMETRY_BATTERY_POWER)],
+                self._on_battery_power_change,
+            )
+
+    def _remove_battery_power_listener(self) -> None:
+        """Remove the temporary battery-power listener, if any."""
+        if self._unsub_battery_power_listener is not None:
+            self._unsub_battery_power_listener()
+            self._unsub_battery_power_listener = None
+
+    @callback
+    def _on_battery_power_change(self, event: Event) -> None:
+        """Battery power changed — check for the physical response."""
+        watch = self.data.physical_response_watch
+        if watch is None:
+            return
+        new_state = event.data.get("new_state")
+        try:
+            power = float(new_state.state)
+        except (AttributeError, TypeError, ValueError):
+            return
+        now = dt_util.now()
+        if now >= watch.timeout_at:
+            self._record_physical_response(timed_out=True)
+            return
+        detected = (
+            power <= -PHYSICAL_RESPONSE_THRESHOLD_KW
+            if watch.expected_direction == "charging"
+            else power >= PHYSICAL_RESPONSE_THRESHOLD_KW
+        )
+        if detected:
+            self._record_physical_response(timed_out=False)
+
+    def _record_physical_response(self, *, timed_out: bool) -> None:
+        """Finalize the active watch as detected or timed out."""
+        watch = self.data.physical_response_watch
+        if watch is None:
+            return
+        now = dt_util.now()
+        lag_seconds: float | None = None
+        if timed_out:
+            self.data.physical_response_timed_out = True
+            _LOGGER.info(
+                "Physical response to %s timed out after %.0fs",
+                watch.target_mode.value,
+                (now - watch.decision_timestamp).total_seconds(),
+            )
+        else:
+            lag_seconds = (now - watch.decision_timestamp).total_seconds()
+            self.data.physical_response_timestamp = now
+            self.data.physical_response_lag_seconds = lag_seconds
+            self.data.physical_response_timed_out = False
+            _LOGGER.info(
+                "Physical response to %s observed in %.2fs",
+                watch.target_mode.value,
+                lag_seconds,
+            )
+        # Backfill the history entry this watch belongs to
+        if self.data.decision_lag_history:
+            last = self.data.decision_lag_history[-1]
+            if last.get("decision_time") == watch.decision_timestamp.isoformat():
+                last["timed_out"] = timed_out
+                last["physical_lag"] = (
+                    round(lag_seconds, 2) if lag_seconds is not None else None
+                )
+        self.data.physical_response_watch = None
+        self._remove_battery_power_listener()
+        self.notify_listeners()
 
     # ------------------------------------------------------------------
     # Battery mode control (for select entity - Issue #382)

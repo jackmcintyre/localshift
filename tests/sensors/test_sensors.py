@@ -206,10 +206,13 @@ class Fixtures:
         data.recent_decision_log = [{"time": "2024-01-01T10:00:00", "score": 0.9}]
         data.decision_lag_seconds = 2.5
         data.decision_lag_history = [
-            {"lag_seconds": 2.5, "timestamp": "2024-01-01T10:00:00"}
+            {"command_lag": 2.5, "timestamp": "2024-01-01T10:00:00"}
         ]
         data.decision_timestamp = None
-        data.implementation_timestamp = None
+        data.command_completion_timestamp = None
+        data.physical_response_lag_seconds = None
+        data.physical_response_watch = None
+        data.physical_response_timed_out = False
         data.forecast_status = "ready"
         data.forecast_ready = True
         data.solcast_today = [{"time": "2024-01-01T10:00:00"}] * 10
