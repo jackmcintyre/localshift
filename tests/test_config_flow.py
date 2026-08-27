@@ -24,6 +24,7 @@ from custom_components.localshift.const import (
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
     CONF_SWITCHING_PENALTY_PER_KWH,
+    CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
@@ -616,6 +617,27 @@ class TestStaticMethods:
         flow = LocalShiftOptionsFlow()
         schema = flow._build_advanced_schema({})
         assert CONF_SWITCHING_PENALTY_PER_KWH in schema.schema
+
+    def test_advanced_schema_target_penalty_max_matches_threshold_ranges(self):
+        """Issue #898: the target_penalty slider max must match THRESHOLD_RANGES.
+
+        The options-flow NumberSelector capped at 0.100 while THRESHOLD_RANGES
+        (used by the NumberEntity) allowed 0.200. A user who set 0.15 via the
+        number entity was silently clamped to 0.100 on re-opening the options
+        flow. Assert the selector max matches the const.
+        """
+        from custom_components.localshift.const import THRESHOLD_RANGES
+
+        flow = LocalShiftOptionsFlow()
+        schema = flow._build_advanced_schema({})
+
+        expected_max = THRESHOLD_RANGES[CONF_TARGET_PENALTY]["max"]
+        for field, selector_obj in schema.schema.items():
+            field_key = getattr(field, "schema", field)
+            if field_key == CONF_TARGET_PENALTY:
+                assert selector_obj.config["max"] == expected_max
+                return
+        pytest.fail("target_penalty not found in advanced schema")
 
 
 # =============================================================================

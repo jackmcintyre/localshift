@@ -717,3 +717,77 @@ class TestProcessSingleSlot:
 
         assert ctx.is_demand_window_entry is True
         assert ctx.is_demand_window_slot is True
+
+    def test_process_single_slot_cross_midnight_demand_window(self, builder):
+        """Issue #896: overnight (cross-midnight) demand windows must match.
+
+        With start=22:00, end=06:00 the naive ``start <= t < end`` comparison is
+        false for every slot of the day, silently disabling the entire feature.
+        A 23:00 slot must be flagged in the window (>= start wraps past midnight).
+        """
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc).replace(hour=23, minute=0)
+        slot = {
+            "start": now,
+            "interval_minutes": 30,
+            "price": 0.10,
+            "price_source": "30min",
+        }
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+
+        ctx, _, in_dw = builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(22, 0),
+            dw_end_time=time(6, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert in_dw is True
+        assert ctx.is_demand_window_slot is True
+
+    def test_process_single_slot_normal_window_unaffected(self, builder):
+        """Issue #896: a non-wrapping window (start < end) is unaffected.
+
+        23:00 is outside the 18:00->22:00 window and must NOT be flagged.
+        """
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(timezone.utc).replace(hour=23, minute=0)
+        slot = {
+            "start": now,
+            "interval_minutes": 30,
+            "price": 0.10,
+            "price_source": "30min",
+        }
+
+        data = MagicMock()
+        data.feed_in_forecast = []
+        data.load_forecast_slots = [0.5] * 96
+
+        ctx, _, in_dw = builder._process_single_slot(
+            i=0,
+            slot=slot,
+            data=data,
+            all_solcast=[],
+            solar_confidence_factor=1.0,
+            base_slot=now,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+            prev_in_demand_window=False,
+        )
+
+        assert in_dw is False
+        assert ctx.is_demand_window_slot is False

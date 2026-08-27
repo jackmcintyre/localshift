@@ -272,7 +272,9 @@ class LocalShiftCoordinator:
             self.hass, self.entry, self._entity_validator, _pricing_provider
         )
         self._cost_tracker = CostTracker(self.hass)
-        self._battery_controller = BatteryController(self.hass, self.get_entity_id)
+        self._battery_controller = BatteryController(
+            self.hass, self.get_entity_id, get_option_func=self.get_option
+        )
         self._notification_service = NotificationService(
             self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )

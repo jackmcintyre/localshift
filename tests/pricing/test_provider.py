@@ -517,3 +517,43 @@ def test_normalize_slot_negative_duration_defaults_to_5():
     }
     slot = provider._normalize_slot(raw)
     assert slot.duration == 5  # -30 min: abs diffs = |35|, |45|, |60|; 5 wins
+
+
+def test_normalize_slot_coerces_string_per_kwh_to_float():
+    """Issue #897: per_kwh arriving as a JSON string must be coerced to float.
+
+    Same bug family as #887 (which fixed the attribute NAME). HA state
+    attributes aren't guaranteed numeric — Amber/Amber Express slots can
+    arrive with per_kwh as "0.25" (string). Pre-fix the ForecastSlot held the
+    string verbatim, breaking downstream arithmetic and comparison.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:01+00:00",
+        "end_time": "2026-03-16T10:30:00+00:00",
+        "per_kwh": "0.25",  # string, not float
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+
+    assert isinstance(slot.per_kwh, float)
+    assert slot.per_kwh == 0.25
+
+
+def test_normalize_slot_integer_per_kwh_coerced_to_float():
+    """Issue #897: integer per_kwh (e.g. 0) also coerced to float for consistency."""
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-03-16T10:00:01+00:00",
+        "end_time": "2026-03-16T10:30:00+00:00",
+        "per_kwh": 0,  # int (e.g. negative-price slot clamped to 0)
+        "demand_window": False,
+    }
+    slot = provider._normalize_slot(raw)
+
+    assert isinstance(slot.per_kwh, float)
+    assert slot.per_kwh == 0.0

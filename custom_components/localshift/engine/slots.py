@@ -357,7 +357,15 @@ class SlotBuilder:
         if buy_price < 0.001 or sell_price < 0.001:
             counts["defaulted_price"] = 1
 
-        in_demand_window = dw_start_time <= slot_time < dw_end_time
+        # Issue #896: handle cross-midnight (overnight) demand windows where
+        # end <= start (e.g. 22:00 -> 06:00). The naive ``start <= t < end``
+        # comparison is false for every slot of the day in that case, silently
+        # disabling the entire feature. When end <= start, a slot is in the DW
+        # if its time is >= start OR < end (the window wraps past midnight).
+        if dw_end_time <= dw_start_time:
+            in_demand_window = slot_time >= dw_start_time or slot_time < dw_end_time
+        else:
+            in_demand_window = dw_start_time <= slot_time < dw_end_time
         is_demand_window_entry = in_demand_window and not prev_in_demand_window
 
         ctx = SlotContext(
