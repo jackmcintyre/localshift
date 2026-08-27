@@ -36,6 +36,7 @@ from ..const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
@@ -60,6 +61,7 @@ from ..const import (
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRICING_DATA_SOURCE,
+    DEFAULT_SWITCHING_PENALTY_PER_KWH,
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
@@ -700,6 +702,9 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MIN_CYCLE_SAVING: current.get(
                     CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
                 ),
+                CONF_SWITCHING_PENALTY_PER_KWH: current.get(
+                    CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+                ),
             }),
             description_placeholders={
                 "integration_name": "LocalShift",
@@ -785,6 +790,21 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MIN_CYCLE_SAVING,
                 default=values.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING),
                 description="Min saving per kWh cycled to grid-charge (0 disables)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=1.00,
+                    step=0.05,
+                    unit_of_measurement="$/kWh",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_SWITCHING_PENALTY_PER_KWH,
+                default=values.get(
+                    CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+                ),
+                description="Scale factor for slot-energy-scaled switching penalty ($/kWh of at-stake energy; 0 disables floor)",
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.00,

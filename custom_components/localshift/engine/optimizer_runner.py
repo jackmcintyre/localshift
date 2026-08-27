@@ -255,6 +255,7 @@ def _build_optimizer_config(
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
+        CONF_SWITCHING_PENALTY_PER_KWH,
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
@@ -267,6 +268,7 @@ def _build_optimizer_config(
         DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
         DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
+        DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
     )
 
@@ -320,6 +322,12 @@ def _build_optimizer_config(
 
     switching_penalty = float(
         config_options.get(CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY)
+    )
+
+    switching_penalty_per_kwh = float(
+        config_options.get(
+            CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+        )
     )
 
     target_penalty = float(
@@ -403,6 +411,7 @@ def _build_optimizer_config(
         base_cheap_price=base_cheap_price,
         max_precharge_price=max_precharge_price,
         switching_penalty=switching_penalty,
+        switching_penalty_per_kwh=switching_penalty_per_kwh,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )

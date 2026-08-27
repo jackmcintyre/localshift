@@ -49,9 +49,21 @@ def stage_cost(
     import_cost = grid_import_kwh * slot.buy_price
     export_revenue = grid_export_kwh * slot.sell_price
 
-    # Switching penalty (Issue #524)
+    # Switching penalty (Issue #524, Issue #919).
     # Adds a one-time cost hurdle to discourage frequent mode flip-flopping.
-    switching_penalty = config.switching_penalty if is_switch else 0.0
+    # The effective penalty is the max of the flat knob and a slot-energy-scaled
+    # floor (per #919): max(flat, per_kwh × max(charge_rate, discharge_rate) ×
+    # slot_hours). The floor makes the hurdle price-scale-aware so Amber's 5-min
+    # price jitter cannot trivially pay through; the flat knob still provides an
+    # additive floor override for operators who want a hard dollar amount.
+    slot_hours = (
+        slot.slot_interval_minutes / 60.0 if slot.slot_interval_minutes else 0.0
+    )
+    rate_kw = max(config.charge_rate_kw, config.discharge_rate_kw)
+    per_kwh_floor = config.switching_penalty_per_kwh * rate_kw * slot_hours
+    switching_penalty = (
+        max(config.switching_penalty, per_kwh_floor) if is_switch else 0.0
+    )
 
     # Issue #610: horizon-aware solar opportunity cost
     # Penalizes grid import when significant solar is expected later in the horizon.

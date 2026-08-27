@@ -1,5 +1,7 @@
 """Tests for ``cost.py`` stage_cost and terminal_cost."""
 
+import pytest
+
 from custom_components.localshift.engine.cost import stage_cost, terminal_cost
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
@@ -188,6 +190,142 @@ def test_stage_cost_switching_penalty_applied_on_switch():
         is_switch=True,
     )
     assert terms.switching_penalty == 0.123
+
+
+def test_stage_cost_switching_penalty_scale_aware_floor_dominates():
+    """When switching_penalty_per_kwh is set, the effective penalty is the max of
+    the flat knob and the slot-energy-scaled floor. Per #919: the flat $0.08
+    knob was too small relative to Amber price jitter to damp SC↔X flips."""
+    config = OptimizerConfig(
+        switching_penalty=0.08,
+        switching_penalty_per_kwh=0.40,
+        charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+    )
+    slot = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T12:00:00",
+        slot_interval_minutes=15,  # 0.25 h => 5.0 * 0.25 = 1.25 kWh
+        buy_price=0.10,
+        sell_price=0.06,
+        solar_kwh=0.0,
+        consumption_kwh=0.0,
+    )
+    terms = stage_cost(
+        action=PlannerAction.HOLD,
+        grid_import_kwh=0.0,
+        grid_export_kwh=0.0,
+        slot=slot,
+        config=config,
+        is_switch=True,
+    )
+    # 0.40 $/kWh * 5 kW * 0.25 h = $0.50 > flat $0.08 => floor wins.
+    assert terms.switching_penalty == pytest.approx(0.50)
+
+
+def test_stage_cost_switching_penalty_flat_dominates_when_per_kwh_off():
+    """When per-kWh floor is zero, existing flat-knob behaviour is preserved
+    exactly (regression guard for tests that set switching_penalty directly)."""
+    config = OptimizerConfig(
+        switching_penalty=0.123,
+        switching_penalty_per_kwh=0.0,
+    )
+    slot = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T10:00:00",
+        slot_interval_minutes=30,
+        buy_price=0.10,
+        sell_price=0.10,
+        solar_kwh=0.0,
+        consumption_kwh=0.0,
+    )
+    terms = stage_cost(
+        action=PlannerAction.HOLD,
+        grid_import_kwh=0.0,
+        grid_export_kwh=0.0,
+        slot=slot,
+        config=config,
+        is_switch=True,
+    )
+    assert terms.switching_penalty == pytest.approx(0.123)
+
+
+def test_stage_cost_switching_penalty_slot_duration_scales():
+    """Effective penalty scales with slot duration: same $/kWh floor but shorter
+    slot carries proportionally less hurdle (preserves the $/kWh semantics)."""
+    config = OptimizerConfig(
+        switching_penalty=0.08,
+        switching_penalty_per_kwh=0.40,
+        charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+    )
+    # 5-min Amber slot: 5.0 kW * (5/60) h = 0.4167 kWh => 0.40 * 0.4167 ≈ 0.1667
+    slot_5min = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T12:00:00",
+        slot_interval_minutes=5,
+        buy_price=0.10,
+        sell_price=0.06,
+        solar_kwh=0.0,
+        consumption_kwh=0.0,
+    )
+    terms_5 = stage_cost(
+        action=PlannerAction.HOLD,
+        grid_import_kwh=0.0,
+        grid_export_kwh=0.0,
+        slot=slot_5min,
+        config=config,
+        is_switch=True,
+    )
+    assert terms_5.switching_penalty == pytest.approx(0.40 * 5.0 * 5.0 / 60.0)
+
+    # 15-min slot should be exactly 3x the 5-min hurdle.
+    slot_15 = SlotContext(
+        slot_index=0,
+        timestamp_iso="2026-01-03T12:00:00",
+        slot_interval_minutes=15,
+        buy_price=0.10,
+        sell_price=0.06,
+        solar_kwh=0.0,
+        consumption_kwh=0.0,
+    )
+    terms_15 = stage_cost(
+        action=PlannerAction.HOLD,
+        grid_import_kwh=0.0,
+        grid_export_kwh=0.0,
+        slot=slot_15,
+        config=config,
+        is_switch=True,
+    )
+    assert terms_15.switching_penalty == pytest.approx(3.0 * terms_5.switching_penalty)
+
+
+def test_stage_cost_no_switch_ignores_floor():
+    """When is_switch=False the flat and per-kWh knobs are both ignored."""
+    config = OptimizerConfig(
+        switching_penalty=0.08,
+        switching_penalty_per_kwh=0.40,
+        charge_rate_kw=5.0,
+        discharge_rate_kw=5.0,
+    )
+    slot = SlotContext(
+        slot_index=1,
+        timestamp_iso="2026-01-03T12:15:00",
+        slot_interval_minutes=15,
+        buy_price=0.10,
+        sell_price=0.06,
+        solar_kwh=0.0,
+        consumption_kwh=0.0,
+    )
+    terms = stage_cost(
+        action=PlannerAction.CHARGE_GRID_NORMAL,
+        grid_import_kwh=1.0,
+        grid_export_kwh=0.0,
+        slot=slot,
+        config=config,
+        is_switch=False,
+    )
+    assert terms.switching_penalty == 0.0
 
 
 def test_terminal_cost_shortfall_and_no_shortfall():
