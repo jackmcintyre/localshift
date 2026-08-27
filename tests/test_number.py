@@ -200,9 +200,10 @@ class TestNumberDefinitions:
     """Tests for NUMBER_DEFINITIONS constant."""
 
     def test_number_definitions_count(self):
-        """Test that there are 10 number definitions (4 basic + 3 penalty + 1 solar
-        + 1 min-cycle-saving + 1 switching-penalty + 1 per-kwh floor + 1 runway margin)."""
-        assert len(NUMBER_DEFINITIONS) == 10
+        """Test that there are 11 number definitions (4 basic + 4 penalty + 1 solar
+        + 1 min-cycle-saving + 1 min-hold-saving + 1 switching-penalty + 1 per-kwh
+        floor + 1 runway margin)."""
+        assert len(NUMBER_DEFINITIONS) == 11
 
     def test_number_definitions_contains_cheap_price_percentile(self):
         """Test definitions contain cheap price percentile."""
@@ -242,7 +243,7 @@ class TestAsyncSetupEntry:
     async def test_async_setup_entry_creates_all_numbers(
         self, mock_coordinator, mock_entry
     ):
-        """Test that async_setup_entry creates all 10 number entities."""
+        """Test that async_setup_entry creates all 11 number entities."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
 
@@ -251,7 +252,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 10
+        assert len(added_entities) == 11
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_localshift_number_instances(

@@ -33,6 +33,8 @@ def transition(
         )
     if action == PlannerAction.EXPORT_PROACTIVE:
         return _transition_export(soc_pct, slot, config)
+    if action == PlannerAction.HOLD_STRICT:
+        return _transition_hold_strict(soc_pct, slot, config)
     return soc_pct, 0.0, 0.0
 
 
@@ -300,3 +302,44 @@ def _transition_export(
 
     grid_export_kwh = max(0.0, battery_discharge_kwh + net_kwh)
     return next_soc, 0.0, grid_export_kwh
+
+
+def _transition_hold_strict(
+    soc_pct: float, slot: SlotContext, config: OptimizerConfig
+) -> tuple[float, float, float]:
+    """Compute transition for HOLD_STRICT action.
+
+    Strict SOC hold: preserve SOC by meeting ALL load deficit from grid import
+    (zero battery discharge). Solar surplus is still absorbed as in ordinary HOLD.
+
+    Issue #906: unlike ordinary HOLD which discharges to meet load, HOLD_STRICT
+    forbids battery discharge entirely. The deficit is imported from the grid at
+    the slot's buy price. This avoids round-trip losses when holding SOC for a
+    dearer period is economically justified (gated by min_hold_saving in core).
+    """
+    slot_hours = slot.slot_interval_minutes / 60.0
+    net_kwh = slot.solar_kwh - slot.consumption_kwh
+    capacity_kwh = config.battery_capacity_kwh
+
+    if net_kwh >= 0:
+        # Solar surplus — absorb into battery (same as HOLD surplus path).
+        limit_kwh = config.solar_charge_rate_kw * slot_hours
+        solar_surplus_kwh = net_kwh
+        solar_by_rate_kwh = min(solar_surplus_kwh, limit_kwh)
+        headroom_kwh = max(0.0, (config.max_soc_pct - soc_pct) / 100.0 * capacity_kwh)
+
+        if config.charge_efficiency <= 0:
+            solar_to_battery_kwh = 0.0
+        else:
+            solar_by_soc_kwh = headroom_kwh / config.charge_efficiency
+            solar_to_battery_kwh = min(solar_by_rate_kwh, solar_by_soc_kwh)
+
+        stored_kwh = solar_to_battery_kwh * config.charge_efficiency
+        delta_soc = (stored_kwh / capacity_kwh) * 100.0
+        next_soc = soc_pct + delta_soc
+        grid_export_kwh = max(0.0, solar_surplus_kwh - solar_to_battery_kwh)
+        return next_soc, 0.0, grid_export_kwh
+
+    # Load deficit — meet entirely from grid, zero battery discharge.
+    load_deficit_kwh = -net_kwh
+    return soc_pct, load_deficit_kwh, 0.0

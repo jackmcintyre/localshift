@@ -25,6 +25,7 @@ from ..const import (
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MIN_CYCLE_SAVING,
+    CONF_MIN_HOLD_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
@@ -58,6 +59,7 @@ from ..const import (
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MIN_CYCLE_SAVING,
+    DEFAULT_MIN_HOLD_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRICING_DATA_SOURCE,
@@ -702,6 +704,9 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MIN_CYCLE_SAVING: current.get(
                     CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
                 ),
+                CONF_MIN_HOLD_SAVING: current.get(
+                    CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING
+                ),
                 CONF_SWITCHING_PENALTY_PER_KWH: current.get(
                     CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
                 ),
@@ -790,6 +795,19 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MIN_CYCLE_SAVING,
                 default=values.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING),
                 description="Min saving per kWh cycled to grid-charge (0 disables)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=1.00,
+                    step=0.05,
+                    unit_of_measurement="$/kWh",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_MIN_HOLD_SAVING,
+                default=values.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING),
+                description="Min saving per kWh held to activate strict SOC hold (0 disables)",
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.00,
