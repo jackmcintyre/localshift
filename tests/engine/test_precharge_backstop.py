@@ -34,9 +34,12 @@ arm, gated on physical runway slack instead of the floor.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.const import (
     DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
@@ -1309,3 +1312,279 @@ class TestBackstopDeadZone:
 
         assert data.active_mode == BatteryMode.SELF_CONSUMPTION
         assert data.optimizer_precharge_backstop_active is False
+
+
+# ---------------------------------------------------------------------------
+# Charge commit anti-chatter (2026-07-30 incident)
+# ---------------------------------------------------------------------------
+
+
+def _dwell_config(**overrides: Any) -> OptimizerConfig:
+    """Ordinary pre-charge day config: hard floor live, urgency window open."""
+    config = _config(
+        demand_window_target_soc_pct=LIVE_TARGET_PCT,
+    )
+    for key, value in overrides.items():
+        setattr(config, key, value)
+    return config
+
+
+def _commit_charge_data(
+    data: CoordinatorData, committed_at: datetime | None
+) -> CoordinatorData:
+    """Put the data into a 'charge committed at X' state."""
+    data.active_mode = BatteryMode.GRID_CHARGING
+    data.decision_mode = BatteryMode.GRID_CHARGING
+    data.decision_timestamp = committed_at
+    return data
+
+
+class TestChargeCommitDwell:
+    """A committed grid charge must stay on for at least one slot-0 width.
+
+    Found live 2026-07-30: on that demand window the binary sensor
+    ``charge_forced`` toggled eleven times in 124 minutes, including two on-pulses
+    of 45 and 46 seconds that produced real grid-import cycles on the Powerwall. The
+    runway arm's release has an anti-chatter band (`PRECHARGE_RUNWAY_HYSTERESIS_MIN`
+    widening the threshold while holding), but the ordinary token-gated commit path
+    that drives ``charge_forced`` had no equivalent damping — each grant committed
+    whatever slot-0 said, and slot-0's plan oscillated hold/charge on every replan
+    because the cheapest first-charge slot drifts forward and slack is quantised to
+    slot-0 width. The result is a sawtooth commit/release with no band at all.
+
+    The fix is a minimum on-duration on the ordinary commit path, sized like the
+    runway arm's band: ``max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)`` where
+    ``quantum = precharge_runway_quantum_min`` (slot-0's width in minutes). The
+    runway band and the dwell band are the same anti-sawtooth mechanism viewed
+    from two sides; they share the same floor constant so tuning one retunes both.
+    """
+
+    @staticmethod
+    def _run_for_commit_dwell(
+        facade: OptimizerFacade,
+        data: CoordinatorData,
+        config: OptimizerConfig,
+        plan_mode: BatteryMode,
+    ) -> None:
+        """Drive the ordinary commit path with the given plan mode and no backstop."""
+        with (
+            patch(
+                "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
+            ) as mock_gate,
+            patch(
+                "custom_components.localshift.engine.optimizer_facade._current_slot_debug_info",
+                return_value=(CURRENT_SLOT_IDX, True, "14:40", "13:00", 60.0),
+            ),
+            patch(
+                "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
+                return_value={
+                    "battery_mode": plan_mode.value,
+                    "action": "hold",
+                },
+            ),
+        ):
+            mock_gate.return_value.check_admission.return_value = SimpleNamespace(
+                allowed=True, block_reason=None
+            )
+            facade._assign_active_mode(data, _result(), config, {})
+
+    def test_sub_minute_pulse_is_held(self) -> None:
+        """The money case: the 45-second pulse observed on 2026-07-30 at 13:41.
+
+        active_mode was committed to GRID_CHARGING ~45 seconds ago, the plan now
+        wants hold, and the token is granted. Without a dwell band this releases
+        immediately; with it the mode must stay at GRID_CHARGING and the pending
+        plan surfaces on debug_plan_mode_pending.
+        """
+        facade = OptimizerFacade()
+        now = dt_util.now()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            now - timedelta(seconds=45),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
+        # The commit must NOT be recorded (decision_timestamp only updates on a
+        # committed mode change).
+        assert data.decision_timestamp == now - timedelta(seconds=45)
+
+    def test_dwell_expired_allows_release(self) -> None:
+        """Once the committed charge has lived past the band, the release commits."""
+        facade = OptimizerFacade()
+        now = dt_util.now()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            now - timedelta(minutes=11),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.debug_plan_mode_pending is None
+
+    def test_band_scales_with_slot_quantum(self) -> None:
+        """30-minute slot-0 widens the band to 30 min — the 11-minute pulse stays
+        held, as it would on the horizon that opens with no 5-minute Amber data."""
+        facade = OptimizerFacade()
+        now = dt_util.now()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            now - timedelta(minutes=11),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=30.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
+
+    def test_turn_on_is_not_damped(self) -> None:
+        """The fix damps releases, not commits. A wanted charge must still start
+        immediately — 2026-07-27 proved the cost of any delay on the charge turn-on
+        path."""
+        facade = OptimizerFacade()
+        data = _data(mode_backstop_allowed=False, mode_decision_allowed=True)
+        # Decision timestamp is None (freshly-started session).
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.GRID_CHARGING)
+
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.debug_plan_mode_pending is None
+
+    def test_demand_window_active_exempt(self) -> None:
+        """Once the DW is live the pre-charge is moot. The dwell must not drag a
+        committed grid charge into the demand window — that would fight demand-block
+        behaviour. Mirrors ``_backstop_context_permits``."""
+        facade = OptimizerFacade()
+        now = dt_util.now()
+        data = _commit_charge_data(
+            _data(
+                mode_backstop_allowed=False,
+                mode_decision_allowed=True,
+                demand_window_active=True,
+            ),
+            now - timedelta(minutes=1),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.debug_plan_mode_pending is None
+
+    def test_missing_decision_timestamp_fails_open(self) -> None:
+        """A committed-at-less-than-one-slot-ago that has lost its timestamp (crash
+        restart, stale data) must not hold the mode forever. Fail open: release
+        instead of pinning indefinitely."""
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            None,
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+
+    def test_naive_timestamp_fails_open(self) -> None:
+        """Mixed naive/aware timestamps raise TypeError on subtraction; the gate
+        must degrade to 'no hold' rather than propagate the exception."""
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            datetime.now(),  # naive — no tz
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+
+    def test_charge_to_charge_not_damped(self) -> None:
+        """GRID↔BOOST transitions while the battery is already charging are not the
+        pathology. A mode change within ``_CHARGE_MODES`` must still commit."""
+        facade = OptimizerFacade()
+        now = dt_util.now()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            now - timedelta(seconds=45),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.BOOST_CHARGING)
+
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert data.debug_plan_mode_pending is None
+
+    def test_safety_gate_fallback_not_damped(self) -> None:
+        """A safety-gate block must release immediately; the fallback path is above
+        the gate and may commit a non-charge mode even when a charge was committed
+        less than one slot ago. Safety first."""
+        facade = OptimizerFacade()
+        now = dt_util.now()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            now - timedelta(seconds=45),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        with (
+            patch(
+                "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
+            ) as mock_gate,
+            patch(
+                "custom_components.localshift.engine.optimizer_facade._current_slot_debug_info",
+                return_value=(CURRENT_SLOT_IDX, True, "14:40", "13:00", 60.0),
+            ),
+            patch(
+                "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
+                return_value={
+                    "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
+                    "action": "hold",
+                },
+            ),
+        ):
+            mock_gate.return_value.check_admission.return_value = SimpleNamespace(
+                allowed=False, block_reason="test block"
+            )
+            facade._assign_active_mode(data, _result(), config, {})
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.debug_mode_source == "fallback"
+
+    def test_runway_latch_behaviour_unchanged(self) -> None:
+        """NON-GOAL check: the runway arm's own hysteresis band is untouched."""
+        facade = OptimizerFacade()
+        data = _runway_data()
+        config = _runway_config(precharge_runway_slack_min=-5.0)
+
+        with (
+            patch(
+                "custom_components.localshift.engine.optimizer_facade.OptimizerSafetyGate"
+            ) as mock_gate,
+            patch(
+                "custom_components.localshift.engine.optimizer_facade._current_slot_debug_info",
+                return_value=(CURRENT_SLOT_IDX, True, "14:40", "13:00", 60.0),
+            ),
+            patch(
+                "custom_components.localshift.engine.optimizer_facade._derive_runtime_apply_plan",
+                return_value={
+                    "battery_mode": BatteryMode.SELF_CONSUMPTION.value,
+                    "action": "hold",
+                },
+            ),
+        ):
+            mock_gate.return_value.check_admission.return_value = SimpleNamespace(
+                allowed=True, block_reason=None
+            )
+            facade._assign_active_mode(data, _clean_result(), config, {})
+
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert data.debug_mode_source == "runway_backstop"

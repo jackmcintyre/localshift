@@ -640,6 +640,15 @@ class OptimizerFacade:
                     data, new_mode, True, mode_source="precharge_backstop_release"
                 )
                 return
+            # Ordinary optimizer commit path. Apply a dwell band to release of a
+            # committed charge: the slot-0 sawtooth that flapped charge_forced 11x
+            # in 124 min on 2026-07-30 is suppressed here without touching the
+            # runway arm's own hysteresis (that path is above this check).
+            if decision_allowed and self._should_hold_charge_dwell(
+                data, new_mode, optimizer_config
+            ):
+                data.debug_plan_mode_pending = new_mode.value
+                return
             self._commit_or_hold_mode(
                 data, new_mode, decision_allowed, mode_source="optimizer"
             )
@@ -1094,6 +1103,48 @@ class OptimizerFacade:
         ceiling = getattr(optimizer_config, "max_precharge_price", None)
         price = getattr(data, "general_price", None)
         return ceiling is not None and price is not None and price > ceiling
+
+    @staticmethod
+    def _should_hold_charge_dwell(
+        data: CoordinatorData,
+        new_mode: Any,
+        optimizer_config: Any,
+    ) -> bool:
+        """Return True when the ordinary commit path should hold a charge release.
+
+        Prevents the slot-0 sawtooth that flapped ``charge_forced`` 11 times in
+        124 minutes on 2026-07-30: the plan oscillates hold/charge every replan
+        because the cheapest first-charge slot drifts forward and slack is
+        quantised to slot-0 width. The runway arm already has an anti-chatter
+        band via ``PRECHARGE_RUNWAY_HYSTERESIS_MIN``; this is the equivalent
+        damping on the ordinary token-gated commit path.
+
+        The band is ``max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)`` where
+        ``quantum = precharge_runway_quantum_min`` (slot-0's width in minutes).
+        Tuning one side of the runway band retunes this one too, by construction.
+        """
+        # Only damp releases of a committed charge; commits and charge-to-charge
+        # transitions are not the pathology.
+        if data.active_mode not in _CHARGE_MODES:
+            return False
+        if new_mode in _CHARGE_MODES:
+            return False
+        # Demand-window active takes priority — never trap a charge into a DW.
+        if getattr(data, "demand_window_active", False):
+            return False
+        ts = getattr(data, "decision_timestamp", None)
+        if ts is None:
+            # Fresh session / no timestamp: fail open, commit immediately.
+            return False
+        now = dt_util.now()
+        try:
+            elapsed = (now - ts).total_seconds() / 60.0
+        except TypeError:
+            # Naive/aware timestamp mismatch: fail open rather than propagate.
+            return False
+        quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
+        band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
+        return elapsed < band
 
     @staticmethod
     def _commit_or_hold_mode(
