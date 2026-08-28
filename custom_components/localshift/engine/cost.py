@@ -199,8 +199,10 @@ def terminal_salvage_value(
     if future_buy_price <= 0.0:
         return 0.0
 
-    usable_kwh = max(0.0, final_soc_pct - config.min_soc_pct) / 100.0 * (
-        config.battery_capacity_kwh * config.discharge_efficiency
+    usable_kwh = (
+        max(0.0, final_soc_pct - config.min_soc_pct)
+        / 100.0
+        * (config.battery_capacity_kwh * config.discharge_efficiency)
     )
     if usable_kwh <= 0.0:
         return 0.0
