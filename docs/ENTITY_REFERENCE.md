@@ -610,7 +610,13 @@ Attributes:
   total_transitions: 15
   decision_timestamp: "2026-02-26T09:05:00"
   implementation_timestamp: "2026-02-26T09:05:45"
+  boundary_lag_seconds: 23.4
+  boundary_lag_history: [...last 20 boundary-lag measurements, tagged by grant_source...]
+  anticipated_transitions_today: 0
+  anticipation_corrections_today: 0
 ```
+
+Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `backstop`, `unknown`). `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
 
 ---
 

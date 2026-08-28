@@ -78,6 +78,7 @@ class _ProviderMixin:
             per_kwh=float(raw["per_kwh"]),
             is_spike=self.is_spike(raw),  # type: ignore[attr-defined]
             source_type=self.name,  # type: ignore[attr-defined]
+            estimate=raw.get("estimate"),
         )
 
     def _infer_duration_minutes(self, raw: dict[str, Any]) -> int:

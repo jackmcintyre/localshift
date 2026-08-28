@@ -23,6 +23,10 @@ class ForecastSlot:
     per_kwh: float
     is_spike: bool
     source_type: str
+    # Issue #510 Slice 2: Amber's settlement-estimate flag for this interval —
+    # True before the interval settles, False once actual. None when the
+    # source entry didn't carry one (e.g. synthetic/extended slots).
+    estimate: bool | None = None
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-compatible accessor for backward compatibility.
