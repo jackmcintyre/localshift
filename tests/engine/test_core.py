@@ -376,6 +376,84 @@ class TestNegativeFitAvoidanceContext:
         ctx = derive_negative_fit_avoidance_context(inputs)
         assert ctx is None or ctx.required_headroom_kwh <= 0.5
 
+    def test_heavy_overnight_load_returns_none(self):
+        """Heavy overnight load floors the battery before the risk window.
+
+        The do-nothing trajectory already drains the battery to min SOC well
+        before the spill window opens, so no pre-discharge is needed to make
+        room — the load is doing that job for free. Static headroom
+        (target minus initial SOC) misreads this as room left to create and
+        admits exports that only displace load-serving energy.
+        """
+        config = OptimizerConfig(
+            demand_window_target_soc_pct=95.0,
+            battery_capacity_kwh=13.5,
+        )
+        slots = []
+        for i in range(24):
+            if i < 12:
+                # 0.7 kWh per 30-min slot = 1.4 kW draw; 8.4 kWh total drains
+                # the 7.02 kWh available from 52% well before slot 12.
+                slots.append(self._make_slot(i, sell_price=0.10, consumption_kwh=0.7))
+            else:
+                slots.append(self._make_slot(i, sell_price=-0.02, solar_kwh=1.0))
+        inputs = OptimizerInputs(
+            cycle_id="test",
+            initial_soc_pct=52.0,
+            slots=slots,
+            config=config,
+        )
+        ctx = derive_negative_fit_avoidance_context(inputs)
+        assert ctx is None
+
+    def test_overnight_drain_above_floor_can_satisfy_headroom(self):
+        """Moderate overnight drain counts toward existing headroom.
+
+        Load that lowers SOC at the risk window without flooring it enlarges
+        the room above the battery, and when that room already covers the
+        required spill absorption the context should not be built.
+        """
+        config = OptimizerConfig(
+            demand_window_target_soc_pct=95.0,
+            battery_capacity_kwh=13.5,
+        )
+        slots = []
+        for i in range(24):
+            if i < 12:
+                slots.append(self._make_slot(i, sell_price=0.10, consumption_kwh=0.25))
+            else:
+                slots.append(self._make_slot(i, sell_price=-0.02, solar_kwh=0.3))
+        inputs = OptimizerInputs(
+            cycle_id="test",
+            initial_soc_pct=90.0,
+            slots=slots,
+            config=config,
+        )
+        ctx = derive_negative_fit_avoidance_context(inputs)
+        assert ctx is None
+
+    def test_light_overnight_load_still_builds_context(self):
+        """Light load leaves the battery high, so the feature still engages."""
+        config = OptimizerConfig(
+            demand_window_target_soc_pct=100.0,
+            battery_capacity_kwh=13.5,
+        )
+        slots = []
+        for i in range(24):
+            if i < 12:
+                slots.append(self._make_slot(i, sell_price=0.10, consumption_kwh=0.1))
+            else:
+                slots.append(self._make_slot(i, sell_price=-0.02, solar_kwh=2.5))
+        inputs = OptimizerInputs(
+            cycle_id="test",
+            initial_soc_pct=58.0,
+            slots=slots,
+            config=config,
+        )
+        ctx = derive_negative_fit_avoidance_context(inputs)
+        assert ctx is not None
+        assert ctx.required_headroom_kwh > 0
+
 
 class TestCoreRegressionCoverage:
     """Targeted regressions for core branches used by hooks."""
