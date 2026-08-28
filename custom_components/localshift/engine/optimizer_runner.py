@@ -353,7 +353,9 @@ def _build_optimizer_config(
         config_options.get(CONF_CHARGE_TAPER_START_PCT, DEFAULT_CHARGE_TAPER_START_PCT)
     )
     charge_taper_min_factor = float(
-        config_options.get(CONF_CHARGE_TAPER_MIN_FACTOR, DEFAULT_CHARGE_TAPER_MIN_FACTOR)
+        config_options.get(
+            CONF_CHARGE_TAPER_MIN_FACTOR, DEFAULT_CHARGE_TAPER_MIN_FACTOR
+        )
     )
 
     # Target-first eligibility (2026-06-12): the operator's pre-charge price ceiling.

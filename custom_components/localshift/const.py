@@ -269,9 +269,15 @@ DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
 )
-DEFAULT_MIN_HOLD_SAVING = 0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
-DEFAULT_CHARGE_TAPER_START_PCT = 90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
-DEFAULT_CHARGE_TAPER_MIN_FACTOR = 0.2  # Floor fraction at 100% SOC (unvalidated above ~88%)
+DEFAULT_MIN_HOLD_SAVING = (
+    0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
+)
+DEFAULT_CHARGE_TAPER_START_PCT = (
+    90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
+)
+DEFAULT_CHARGE_TAPER_MIN_FACTOR = (
+    0.2  # Floor fraction at 100% SOC (unvalidated above ~88%)
+)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
