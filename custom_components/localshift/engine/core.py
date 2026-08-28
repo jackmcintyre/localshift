@@ -36,6 +36,7 @@ from custom_components.localshift.engine.negative_fit import (
     derive_negative_fit_avoidance_context,
 )
 from custom_components.localshift.engine.penalties import (
+    cheap_recovery_charge_relief,
     get_futile_cycling_penalty_factor,
     get_solar_opportunity_penalty_factor,
 )
@@ -70,6 +71,7 @@ _ACTION_PRIORITY: dict[PlannerAction, int] = {
     PlannerAction.CHARGE_GRID_NORMAL: 1,
     PlannerAction.CHARGE_GRID_BOOST: 2,
     PlannerAction.EXPORT_PROACTIVE: 3,
+    PlannerAction.HOLD_STRICT: 4,
 }
 
 _GRID_CHARGE_ACTIONS = (
@@ -159,6 +161,19 @@ def _evaluate_action_cost(
         charge_kwh=charge_kwh,
         terminal_penalty_idx=terminal_penalty_idx,
     )
+    # Issue #918: on a recovery day (hard target floor active) with a genuinely
+    # distinct cheap window, charging at the day's minimum must not be pushed
+    # later by the futile-cycling penalty — that is exactly the mistiming the
+    # issue documents. Relief only fires inside the cheapest window of a day
+    # whose min is clearly below its median; flat-price days keep the full
+    # penalty (the #406 overnight-sawtooth guard).
+    if futile_factor > 0.0 and cheap_recovery_charge_relief(
+        slot_idx=slot_idx,
+        slots=slots,
+        config=config,
+        terminal_penalty_idx=terminal_penalty_idx,
+    ):
+        futile_factor = 0.0
 
     stage = _cost_stage_cost(
         action,
@@ -320,6 +335,33 @@ def _min_cycle_saving_blocks(
         return False
     saving = hold_total_cost - total_cost
     return 0.0 < saving < config.min_cycle_saving * charge_kwh
+
+
+def _min_hold_saving_blocks(
+    action: PlannerAction,
+    total_cost: float,
+    hold_total_cost: float | None,
+    config: OptimizerConfig,
+) -> bool:
+    """Return True when the min_hold_saving gate blocks HOLD_STRICT.
+
+    Issue #906: HOLD_STRICT preserves SOC by importing the entire load deficit
+    from the grid instead of discharging the battery. It only fires when the
+    saved round-trip loss (cost difference vs ordinary HOLD) exceeds
+    config.min_hold_saving dollars per kWh of discharge avoided. 0.0 disables
+    the gate (legacy behaviour).
+    """
+    if not (
+        action == PlannerAction.HOLD_STRICT
+        and config.min_hold_saving > 0.0
+        and hold_total_cost is not None
+    ):
+        return False
+    saving = hold_total_cost - total_cost
+    # Use a nominal 1.0 kWh basis: min_hold_saving is $/kWh of discharge avoided.
+    # The actual discharge avoided depends on the slot's load deficit; using 1.0
+    # is a conservative normalisation that matches the min_cycle_saving contract.
+    return 0.0 < saving < config.min_hold_saving
 
 
 def _floor_guard_blocks(
@@ -1497,6 +1539,9 @@ class DPPlanner:
             ):
                 states_explored += 1
                 continue
+            elif _min_hold_saving_blocks(action, total_cost, hold_total_cost, config):
+                states_explored += 1
+                continue
 
             if _floor_guard_blocks(
                 action, soc, next_soc, slot_idx, terminal_penalty_idx, config
@@ -1609,6 +1654,15 @@ class DPPlanner:
                 charge_kwh=recon_charge_kwh,
                 terminal_penalty_idx=terminal_penalty_idx,
             )
+            # Issue #918: mirror the DP-pass relief here so the reconstructed
+            # plan's stage costs agree with the value function that chose them.
+            if recon_futile_factor > 0.0 and cheap_recovery_charge_relief(
+                slot_idx=slot_idx,
+                slots=slots,
+                config=config,
+                terminal_penalty_idx=terminal_penalty_idx,
+            ):
+                recon_futile_factor = 0.0
 
             stage = _cost_stage_cost(
                 action,

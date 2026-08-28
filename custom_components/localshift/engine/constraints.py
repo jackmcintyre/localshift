@@ -187,6 +187,13 @@ def feasible_actions(
 
     actions.append(PlannerAction.HOLD)
 
+    # Issue #906: HOLD_STRICT is available outside demand windows, but only when
+    # the operator has configured a positive min_hold_saving threshold. With the
+    # default of 0.0 the action is omitted from the feasible set so behaviour is
+    # identical to the pre-#906 planner.
+    if not slot.is_demand_window_slot and config.min_hold_saving > 0.0:
+        actions.append(PlannerAction.HOLD_STRICT)
+
     _solar_covers_deficit = False
     _global_solar_covers = False
     if config.optimization_mode == "self_consumption" and slots is not None:

@@ -272,7 +272,9 @@ class LocalShiftCoordinator:
             self.hass, self.entry, self._entity_validator, _pricing_provider
         )
         self._cost_tracker = CostTracker(self.hass)
-        self._battery_controller = BatteryController(self.hass, self.get_entity_id)
+        self._battery_controller = BatteryController(
+            self.hass, self.get_entity_id, get_option_func=self.get_option
+        )
         self._notification_service = NotificationService(
             self.hass, self.entry, self.get_entity_id, self.get_switch_state
         )
@@ -292,6 +294,7 @@ class LocalShiftCoordinator:
         # This prevents state machine evaluation during startup before entities populate
         # The grace period must be set before ANY computation that might trigger evaluation
         self._state_machine.set_startup_grace(30)
+        self._state_machine.start_grid_charging_listener(self.hass)
 
         self._learning_orchestrator = LearningOrchestrator(
             self.hass,
@@ -476,6 +479,8 @@ class LocalShiftCoordinator:
 
         # Issue #508: remove the temporary physical-response listener
         self._remove_battery_power_listener()
+        if self._state_machine is not None:
+            self._state_machine.stop_grid_charging_listener()
         # Save all learning data to storage before shutdown
         await self._save_learning_data()
 

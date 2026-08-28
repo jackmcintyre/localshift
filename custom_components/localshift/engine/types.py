@@ -39,6 +39,17 @@ class PlannerAction(StrEnum):
     EXPORT_PROACTIVE = "export_proactive"
     """Discharge battery to grid during high sell-price window."""
 
+    HOLD_STRICT = "hold_strict"
+    """Strict SOC hold: preserve SOC by meeting all load deficit from grid (zero discharge).
+
+    Issue #906: unlike ordinary HOLD which discharges to meet load, HOLD_STRICT
+    forbids battery discharge entirely — the deficit is imported from the grid.
+    Used to save SOC for a dearer period (e.g. morning price peak) when overnight
+    prices are flat/inverted and the round-trip loss of discharging+recharging is
+    wasteful. Gated by min_hold_saving threshold so it only fires when the saving
+    exceeds a configured dollar-per-kWh bar.
+    """
+
 
 # -----------------------------------------------------------------------------
 # Reason codes
@@ -503,7 +514,28 @@ class OptimizerConfig:
     ``effective_cheap_price`` when ``None`` (backward compatibility)."""
 
     switching_penalty: float = 0.02
-    """Penalty applied when switching away from the currently commanded action ($/switch)."""
+    """Penalty applied when switching away from the currently commanded action ($/switch).
+
+    The *effective* penalty is the max of this flat knob and the slot-energy-scaled
+    floor ``switching_penalty_per_kwh × max(charge_rate_kw, discharge_rate_kw) ×
+    slot_hours``. The floor makes the hurdle price-scale-aware (per #919): a flat
+    $0.08 knob is trivially paid through by Amber's 5-min price jitter, but a
+    $0.40/kWh floor equals $0.50 per 15-min slot at 5 kW and suppresses the
+    marginal SC↔X flips that caused 105 changes / 7 days in live data. Zero disables
+    the floor and restores legacy flat-knob-only behaviour (dataclass default = 0.0
+    so existing unit tests remain unaffected).
+    """
+
+    switching_penalty_per_kwh: float = 0.0
+    """Scale factor for the slot-energy-scaled floor on mode-switch penalty ($/kWh).
+
+    Effective penalty = max(flat_knob, this × max(charge_rate_kw, discharge_rate_kw)
+    × slot_hours). Product of the slot's kW rating × duration in hours is the
+    energy at stake in any mode switch, so the resulting $/switch hurdle is
+    comparable across slot granularities (5-min Amber, 15-min fixed). Default
+    0.40 → $0.50 per 15-min slot at 5 kW, sufficient to suppress sub-threshold
+    SC↔X churn while preserving spike / DW pre-charge value. 0.0 disables.
+    """
 
     export_price_margin: float = 0.02
     """Minimum profit margin for proactive export above self-consumption value ($/kWh)."""
@@ -521,6 +553,16 @@ class OptimizerConfig:
     unaffected; production sets it from ``CONF_MIN_CYCLE_SAVING`` (default 0.25) in
     ``optimizer_runner``."""
 
+    min_hold_saving: float = 0.0
+    """Minimum saving over ordinary HOLD ($/kWh held) required to select HOLD_STRICT.
+
+    Issue #906: HOLD_STRICT preserves SOC by importing the entire load deficit from
+    the grid instead of discharging the battery. It only fires when the saved
+    round-trip loss (charged later at a dearer price) exceeds this threshold.
+    0.0 disables the action entirely (legacy behaviour). Production default is 0.0
+    as a kill switch for the first live night.
+    """
+
     forecast_horizon_hours: float = 24.0
     """Actual hours of forecast available (Issue #431)."""
 
@@ -536,7 +578,7 @@ class OptimizerConfig:
     """
 
     # --- Charge curve modeling ---
-    charge_taper_start_pct: float = 80.0
+    charge_taper_start_pct: float = 90.0
     """SOC percentage above which charge rate begins tapering.
 
     A lithium battery (and the Powerwall inverter) holds near-constant power up to a
@@ -545,14 +587,26 @@ class OptimizerConfig:
     above it the rate is linearly derated toward ``charge_taper_min_factor`` at 100%.
     Modelling this stops the planner from believing it can add the last ~15-20% as fast as
     the bulk-charge region, which previously produced over-optimistic last-minute top-ups
-    that fell short of target (the rate is lower than expected as the battery fills)."""
+    that fell short of target (the rate is lower than expected as the battery fills).
+
+    Default raised from 80% to 90% (Issue #905): live measurement on 2026-07-29 showed
+    the Powerwall held a flat 5.0 kW from 80% through 88% SOC with no derating
+    whatsoever, while the old 80% knee was already derating to 3.3 kW by 88%. The 90%
+    knee keeps the model accurate across the measured no-derate band; the portion above
+    88% remains unvalidated (see ``charge_taper_min_factor``)."""
 
     charge_taper_min_factor: float = 0.2
     """Fraction of nominal charge rate still available at 100% SOC (end of the taper).
 
     The taper ramps the rate linearly from 1.0 at ``charge_taper_start_pct`` down to this
     floor at ``max_soc_pct``. Kept > 0 so the model never predicts an infinitely-slow
-    final approach (which would make the target unreachable in finite slots)."""
+    final approach (which would make the target unreachable in finite slots).
+
+    Unvalidated above ~88% SOC (Issue #905): the live measurement that drove the knee
+    raise was supply-limited by solar surplus and never reached full-rate grid charge
+    above 88%. Published reports suggest the floor is closer to 0.66-0.70x for some
+    firmware versions; pinning the floor requires a deliberate full-rate overnight
+    charge test."""
 
     # --- Anti-sawtooth protection ---
     min_soc_floor_buffer_pct: float = 1.0

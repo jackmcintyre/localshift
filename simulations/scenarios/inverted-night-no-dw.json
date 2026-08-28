@@ -1,0 +1,60 @@
+{
+  "name": "Inverted Night No DW - HOLD_STRICT Not Economical",
+  "description": "Flat overnight prices with no demand window. Ordinary HOLD (drain + cheap recharge) is cheaper than HOLD_STRICT (preserve SOC via grid import). Regression test: HOLD_STRICT must not fire when not economically justified.",
+  "input": {
+    "test_time": "2026-07-29T17:00:00+10:00",
+    "soc": 68.0,
+    "operation_mode": "autonomous",
+    "backup_reserve": 10,
+    "grid_power_kw": 0.0,
+    "load_power_kw": 0.5,
+    "solar_power_kw": 0.0,
+    "battery_power_kw": 0.0,
+    "general_price": 0.18,
+    "feed_in_price": 0.08,
+    "price_spike": false,
+    "manual_override": false,
+    "target_reached_today": false,
+    "solcast_today": [],
+    "solcast_tomorrow": [],
+    "general_forecast": [
+      {"start_time": "2026-07-29T17:00:00+10:00", "end_time": "2026-07-29T17:30:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T17:30:00+10:00", "end_time": "2026-07-29T18:00:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T18:00:00+10:00", "end_time": "2026-07-29T18:30:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T18:30:00+10:00", "end_time": "2026-07-29T19:00:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T19:00:00+10:00", "end_time": "2026-07-29T19:30:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T19:30:00+10:00", "end_time": "2026-07-29T20:00:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T20:00:00+10:00", "end_time": "2026-07-29T20:30:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T20:30:00+10:00", "end_time": "2026-07-29T21:00:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T21:00:00+10:00", "end_time": "2026-07-29T21:30:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T21:30:00+10:00", "end_time": "2026-07-29T22:00:00+10:00", "per_kwh": 0.18},
+      {"start_time": "2026-07-29T22:00:00+10:00", "end_time": "2026-07-29T22:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-29T22:30:00+10:00", "end_time": "2026-07-30T00:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T00:00:00+10:00", "end_time": "2026-07-30T00:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T00:30:00+10:00", "end_time": "2026-07-30T01:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T01:00:00+10:00", "end_time": "2026-07-30T01:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T01:30:00+10:00", "end_time": "2026-07-30T02:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T02:00:00+10:00", "end_time": "2026-07-30T02:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T02:30:00+10:00", "end_time": "2026-07-30T03:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T03:00:00+10:00", "end_time": "2026-07-30T03:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T03:30:00+10:00", "end_time": "2026-07-30T04:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T04:00:00+10:00", "end_time": "2026-07-30T04:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T04:30:00+10:00", "end_time": "2026-07-30T05:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T05:00:00+10:00", "end_time": "2026-07-30T05:30:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T05:30:00+10:00", "end_time": "2026-07-30T06:00:00+10:00", "per_kwh": 0.10},
+      {"start_time": "2026-07-30T06:00:00+10:00", "end_time": "2026-07-30T06:30:00+10:00", "per_kwh": 0.25},
+      {"start_time": "2026-07-30T06:30:00+10:00", "end_time": "2026-07-30T07:00:00+10:00", "per_kwh": 0.30},
+      {"start_time": "2026-07-30T07:00:00+10:00", "end_time": "2026-07-30T07:30:00+10:00", "per_kwh": 0.35}
+    ],
+    "general_tomorrow": [],
+    "automation_enabled": true,
+    "spike_discharge_enabled": true,
+    "demand_window_block": false
+  },
+  "config_overrides": {
+    "min_hold_saving": 0.10
+  },
+  "expected": {
+    "optimizer_result_success": true
+  }
+}

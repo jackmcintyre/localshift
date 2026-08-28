@@ -5,7 +5,7 @@ and error handling as specified in backlog-crit-002.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1040,6 +1040,199 @@ class TestHealthCheck:
 
 
 # =============================================================================
+# REACTIVE GRID CHARGING LISTENER TESTS (Issue #491)
+# =============================================================================
+
+
+class TestGridChargingListener:
+    """Tests for the reactive grid_charging state-change listener (#491)."""
+
+    _MACHINE_TRACK = (
+        "custom_components.localshift.state.machine.async_track_state_change_event"
+    )
+
+    def _patch_track(self, monkeypatch):
+        """Patch async_track_state_change_event, capturing entity_ids + callback."""
+        captured = {}
+
+        def _fake_track(hass, entity_ids, callback):
+            captured["entity_ids"] = entity_ids
+            captured["callback"] = callback
+            return MagicMock()
+
+        monkeypatch.setattr(self._MACHINE_TRACK, _fake_track)
+        return captured
+
+    def _make_event(self, state):
+        """Build a fake state-change Event whose data carries new_state/old_state."""
+        event = MagicMock()
+        event.data = {
+            "new_state": MagicMock(state=state),
+            "old_state": MagicMock(state="off" if state == "on" else "on"),
+        }
+        return event
+
+    def test_start_listener_registers_callback(
+        self, state_machine, mock_hass, monkeypatch
+    ):
+        """start_grid_charging_listener should register a state-change listener."""
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+        assert "callback" in captured
+        assert len(captured["entity_ids"]) == 1
+
+    def test_start_listener_is_idempotent(
+        self, state_machine, mock_hass, monkeypatch
+    ):
+        """Calling start twice should only register once."""
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+        state_machine.start_grid_charging_listener(mock_hass)
+        assert "callback" in captured
+
+    def test_stop_listener_calls_unsubscribe(
+        self, state_machine, mock_hass
+    ):
+        """stop_grid_charging_listener should call the listener handle."""
+        handle = MagicMock()
+        state_machine._grid_charging_listener = handle
+        state_machine.stop_grid_charging_listener()
+        handle.assert_called_once()
+        assert state_machine._grid_charging_listener is None
+
+    def test_stop_listener_noop_when_none(
+        self, state_machine
+    ):
+        """stop_grid_charging_listener should not error when no listener is active."""
+        state_machine._grid_charging_listener = None
+        state_machine.stop_grid_charging_listener()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_turns_off_grid_charging(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """Listener should turn off grid_charging when it flips to on in self_consumption."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        # Fire the listener callback manually
+        captured["callback"](self._make_event("on"))
+
+        # Give the task a tick to complete
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_called_once_with(
+            "switch",
+            "turn_off",
+            {"entity_id": "switch.my_home_allow_charging_from_grid"},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_respects_cooldown(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """Listener should skip correction when health-check cooldown is active."""
+        from datetime import datetime, timedelta
+
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+        # Set last correction to 1 minute ago (within 5-min cooldown)
+        now = datetime.now(UTC)
+        state_machine._last_health_correction = now - timedelta(minutes=1)
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        captured["callback"](self._make_event("on"))
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_skips_when_tesla_override_active(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """Listener should skip correction when Tesla override is active."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._tesla_override_detected = True
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        captured["callback"](self._make_event("on"))
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_skips_in_grid_charging_mode(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """Listener should do nothing when commanded mode is GRID_CHARGING."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        captured["callback"](self._make_event("on"))
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reactive_correction_noop_when_switch_turns_off(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """Listener should not act when the switch turns off (only on)."""
+        from custom_components.localshift.const import BatteryMode
+
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        captured["callback"](self._make_event("off"))
+        await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+
+
+# =============================================================================
 # MANUAL OVERRIDE TESTS
 # =============================================================================
 
@@ -1830,7 +2023,7 @@ class TestModeTransitionGating:
         once debounce is satisfied.
         """
         import asyncio
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         # Set up data with prices
         coordinator_data.general_price = 0.25

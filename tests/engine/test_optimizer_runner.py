@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
+from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.engine.optimizer_dp import (
     ObjectiveTerms,
     OptimizerConfig,
@@ -28,7 +29,6 @@ from custom_components.localshift.engine.optimizer_runner import (
     _serialize_result,
     _validate_slot_alignment,
 )
-from custom_components.localshift.const import BatteryMode
 
 
 class TestOptimizerRunner:
@@ -219,6 +219,26 @@ class TestOptimizerRunnerHelpers:
 
         updated = _build_optimizer_config(MockData(), {})
         assert updated.base_cheap_price is None
+
+    def test_build_optimizer_config_wires_switching_penalty_per_kwh(self):
+        """Issue #919: runner should read the new per-kWh floor and pass it
+        through so the DP can scale the switching hurdle to slot energy."""
+
+        class MockData:
+            effective_cheap_price = 0.10
+            general_price = 0.20
+            adaptive_params = None
+
+        updated = _build_optimizer_config(
+            MockData(),
+            {"switching_penalty_per_kwh": 0.50},
+        )
+        assert updated.switching_penalty_per_kwh == pytest.approx(0.50)
+
+        # Default (option absent) should fall back to production default 0.40,
+        # not the dataclass 0.0 default (which is overridden by the runner).
+        updated_default = _build_optimizer_config(MockData(), {})
+        assert updated_default.switching_penalty_per_kwh == pytest.approx(0.40)
 
     def test_compute_legacy_energy_totals(self):
         """Legacy totals should ignore invalid numeric inputs."""

@@ -142,12 +142,12 @@ class ForecastAccuracyComparisonSensor(LocalShiftSensorBase):
         # Calculate combined score (weighted average)
         # When both available, weight equally
         # When only one available, use that one
-        if localshift_accuracy and solcast_mape is not None:
+        if localshift_accuracy is not None and solcast_mape is not None:
             # MAPE is error %, so convert to accuracy %
             solcast_accuracy = max(0, 100 - solcast_mape)
             combined = (localshift_accuracy + solcast_accuracy) / 2
             self._attr_native_value = round(combined, 1)
-        elif localshift_accuracy:
+        elif localshift_accuracy is not None:
             self._attr_native_value = round(localshift_accuracy, 1)
         elif solcast_mape is not None:
             # Convert MAPE to accuracy
@@ -163,7 +163,7 @@ class ForecastAccuracyComparisonSensor(LocalShiftSensorBase):
 
         attrs = {
             "localshift_accuracy_pct": round(localshift_accuracy, 1)
-            if localshift_accuracy
+            if localshift_accuracy is not None
             else None,
             "solcast_mape_pct": round(solcast_mape, 1)
             if solcast_mape is not None
@@ -171,7 +171,7 @@ class ForecastAccuracyComparisonSensor(LocalShiftSensorBase):
         }
 
         # Calculate divergence if both available
-        if localshift_accuracy and solcast_mape is not None:
+        if localshift_accuracy is not None and solcast_mape is not None:
             # Both are percentages, but MAPE is error while localshift is accuracy
             # Convert MAPE to accuracy for comparison
             solcast_accuracy = max(0, 100 - solcast_mape)

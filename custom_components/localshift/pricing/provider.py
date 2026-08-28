@@ -75,7 +75,7 @@ class _ProviderMixin:
         return ForecastSlot(
             start_time=self._parse_timestamp(raw["start_time"]),
             duration=int(duration),
-            per_kwh=raw["per_kwh"],
+            per_kwh=float(raw["per_kwh"]),
             is_spike=self.is_spike(raw),  # type: ignore[attr-defined]
             source_type=self.name,  # type: ignore[attr-defined]
         )

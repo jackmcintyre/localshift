@@ -344,3 +344,18 @@ class TestAccumulateEnergyKwh:
         assert data.grid_to_battery_kwh_today == 0.0
         assert data.soc_gain_during_grid_charge_kwh_today == 0.0
         assert data.export_while_battery_not_full_kwh_today == 0.0
+
+    def test_reset_daily_accumulators_clears_last_soc_pct(self, cost_tracker):
+        """Issue #899: reset must clear _last_soc_pct to avoid cross-day smear.
+
+        Without this, a grid charge spanning midnight leaves _last_soc_pct at
+        the pre-midnight value, so the first post-midnight sample attributes
+        the overnight SOC gain to the new day's grid-charge-efficiency metric.
+        """
+        data = self._make_data(grid_power_kw=3.0, battery_power_kw=-2.0, soc=40.0)
+        cost_tracker.accumulate_costs(data)
+        assert cost_tracker._last_soc_pct == 40.0
+
+        cost_tracker.reset_daily_accumulators(data)
+
+        assert cost_tracker._last_soc_pct is None

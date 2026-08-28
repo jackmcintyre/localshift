@@ -201,6 +201,7 @@ CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_MIN_CYCLE_SAVING = "min_cycle_saving"
+CONF_MIN_HOLD_SAVING = "min_hold_saving"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
@@ -209,7 +210,10 @@ CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
+CONF_SWITCHING_PENALTY_PER_KWH = "switching_penalty_per_kwh"
 CONF_TARGET_PENALTY = "target_penalty"
+CONF_CHARGE_TAPER_START_PCT = "charge_taper_start_pct"
+CONF_CHARGE_TAPER_MIN_FACTOR = "charge_taper_min_factor"
 
 # Optimization mode options
 OPTIMIZATION_MODE_SELF_CONSUMPTION = "self_consumption"
@@ -257,11 +261,17 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
-DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive
+DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive (flat knob)
+DEFAULT_SWITCHING_PENALTY_PER_KWH = (
+    0.40  # $/kWh floor: scales the hurdle to slot energy, damps marginal jitter
+)
 DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0.015 -> 0.03 so the soft lever can at least exceed typical charge prices)
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
 )
+DEFAULT_MIN_HOLD_SAVING = 0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
+DEFAULT_CHARGE_TAPER_START_PCT = 90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
+DEFAULT_CHARGE_TAPER_MIN_FACTOR = 0.2  # Floor fraction at 100% SOC (unvalidated above ~88%)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -313,6 +323,20 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "$/kWh",
         "icon": "mdi:battery-sync-outline",
+    },
+    CONF_MIN_HOLD_SAVING: {
+        "min": 0.00,
+        "max": 1.00,
+        "step": 0.05,
+        "unit": "$/kWh",
+        "icon": "mdi:battery-arrow-up",
+    },
+    CONF_SWITCHING_PENALTY_PER_KWH: {
+        "min": 0.00,
+        "max": 1.00,
+        "step": 0.05,
+        "unit": "$/kWh",
+        "icon": "mdi:swap-horizontal-variant",
     },
     CONF_SPIKE_PRICE_PERCENTILE: {
         "min": 50,
@@ -376,6 +400,20 @@ THRESHOLD_RANGES = {
         "step": 5.0,
         "unit": "min",
         "icon": "mdi:timer-alert-outline",
+    },
+    CONF_CHARGE_TAPER_START_PCT: {
+        "min": 50.0,
+        "max": 99.0,
+        "step": 1.0,
+        "unit": "%",
+        "icon": "mdi:battery-heart-variant",
+    },
+    CONF_CHARGE_TAPER_MIN_FACTOR: {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "",
+        "icon": "mdi:battery-architect",
     },
 }
 

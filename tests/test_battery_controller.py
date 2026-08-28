@@ -6,6 +6,8 @@ import pytest
 
 from custom_components.localshift.integration.controller import BatteryController
 from custom_components.localshift.const import (
+    CONF_MINIMUM_TARGET_SOC,
+    DEFAULT_MINIMUM_TARGET_SOC,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
@@ -42,8 +44,20 @@ def mock_get_entity_id():
 
 @pytest.fixture
 def battery_controller(mock_hass, mock_get_entity_id):
-    """Create a BatteryController instance."""
-    return BatteryController(mock_hass, mock_get_entity_id)
+    """Create a BatteryController instance.
+
+    Wired with a get_option_func so minimum_target_soc reads work (Issue #894).
+    Individual tests can override the option value by constructing their own
+    controller with a custom get_option_func.
+    """
+    options = {CONF_MINIMUM_TARGET_SOC: DEFAULT_MINIMUM_TARGET_SOC}
+
+    def get_option(key, default=None):
+        return options.get(key, default)
+
+    return BatteryController(
+        mock_hass, mock_get_entity_id, get_option_func=get_option
+    )
 
 
 @pytest.fixture
@@ -346,11 +360,9 @@ class TestSetForceDischarge:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "10"
+                state.state = str(DEFAULT_MINIMUM_TARGET_SOC)
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
-            elif "minimum_target_soc" in entity_id:
-                state.state = "10"
             return state
 
         mock_hass.states.get = mock_get_state
@@ -415,9 +427,14 @@ class TestSetForceDischarge:
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_force_discharge_uses_minimum_target_soc(
-        self, battery_controller, coordinator_data, mock_hass
+        self, coordinator_data, mock_hass, mock_get_entity_id
     ):
-        """Test that force discharge uses minimum_target_soc when no override."""
+        """Issue #894: force discharge reads minimum_target_soc from config option."""
+        controller = BatteryController(
+            mock_hass,
+            mock_get_entity_id,
+            get_option_func=lambda key, default=None: 15.0,
+        )
         mock_hass.services.async_call.return_value = None
 
         def mock_get_state(entity_id):
@@ -430,13 +447,11 @@ class TestSetForceDischarge:
                 state.state = "15"
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
-            elif "minimum_target_soc" in entity_id:
-                state.state = "15"
             return state
 
         mock_hass.states.get = mock_get_state
 
-        result = await battery_controller.set_force_discharge(coordinator_data)
+        result = await controller.set_force_discharge(coordinator_data)
 
         assert result is True
         # Should have used minimum_target_soc (15) for reserve
@@ -608,6 +623,41 @@ class TestSetProactiveExport:
                 break
         assert reserve_call is not None
         assert reserve_call[0][2]["value"] == 4  # max(4, 5-5) = max(4, 0) = 4
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_set_proactive_export_floors_reserve_at_minimum_target_when_soc_zero(
+        self, battery_controller, coordinator_data, mock_hass
+    ):
+        """Issue #895: SOC=0 floors reserve at minimum_target_soc, not 4%."""
+        mock_hass.services.async_call.return_value = None
+        coordinator_data.soc = 0.0  # Unavailable/empty SOC
+
+        def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "autonomous"
+            elif "backup_reserve" in entity_id:
+                state.state = str(DEFAULT_MINIMUM_TARGET_SOC)
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        await battery_controller.set_proactive_export(coordinator_data)
+
+        calls = mock_hass.services.async_call.call_args_list
+        reserve_call = None
+        for call in calls:
+            if call[0][0] == "number" and call[0][1] == "set_value":
+                reserve_call = call
+                break
+        assert reserve_call is not None
+        # SOC=0 must floor at minimum_target_soc (20), not the dynamic 4.0.
+        assert reserve_call[0][2]["value"] == DEFAULT_MINIMUM_TARGET_SOC
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("mock_battery_sleep")
@@ -1118,22 +1168,46 @@ class TestHelperMethods:
         assert result == "default"
 
     def test_get_minimum_target_soc(self, battery_controller, mock_hass):
-        """Test _get_minimum_target_soc reads from entity."""
-        state = MagicMock()
-        state.state = "15"
-        mock_hass.states.get = MagicMock(return_value=state)
-
+        """Issue #894: _get_minimum_target_soc reads the config option value."""
         result = battery_controller._get_minimum_target_soc()
 
-        assert result == 15.0
+        assert result == float(DEFAULT_MINIMUM_TARGET_SOC)
 
-    def test_get_minimum_target_soc_default(self, battery_controller, mock_hass):
-        """Test _get_minimum_target_soc returns default when unavailable."""
-        mock_hass.states.get = MagicMock(return_value=None)
+    def test_get_minimum_target_soc_uses_configured_option(
+        self, mock_hass, mock_get_entity_id
+    ):
+        """Issue #894: _get_minimum_target_soc returns the configured option."""
+        controller = BatteryController(
+            mock_hass,
+            mock_get_entity_id,
+            get_option_func=lambda key, default=None: 25.0,
+        )
 
-        result = battery_controller._get_minimum_target_soc()
+        assert controller._get_minimum_target_soc() == 25.0
 
-        assert result == 10.0
+    def test_get_minimum_target_soc_default(self, mock_hass, mock_get_entity_id):
+        """Issue #894: default is DEFAULT_MINIMUM_TARGET_SOC (20) without option func."""
+        controller = BatteryController(mock_hass, mock_get_entity_id)
+
+        result = controller._get_minimum_target_soc()
+
+        assert result == float(DEFAULT_MINIMUM_TARGET_SOC)
+
+    def test_get_minimum_target_soc_option_func_raises_falls_back(
+        self, mock_hass, mock_get_entity_id
+    ):
+        """Issue #894: a raising option func falls back to DEFAULT_MINIMUM_TARGET_SOC."""
+
+        def raising_option(key, default=None):
+            raise ValueError("uncoercible option")
+
+        controller = BatteryController(
+            mock_hass,
+            mock_get_entity_id,
+            get_option_func=raising_option,
+        )
+
+        assert controller._get_minimum_target_soc() == float(DEFAULT_MINIMUM_TARGET_SOC)
 
     def test_read_fresh_soc_success(self, battery_controller, mock_hass):
         """Issue #559 Phase 4: test read_fresh_soc() returns float on valid state."""

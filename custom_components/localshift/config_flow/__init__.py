@@ -25,6 +25,7 @@ from ..const import (
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MIN_CYCLE_SAVING,
+    CONF_MIN_HOLD_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_NOTIFY_SERVICE,
     CONF_OPTIMIZATION_MODE,
@@ -36,6 +37,7 @@ from ..const import (
     CONF_PRICING_PRICE_SPIKE,
     CONF_SOLCAST_FORECAST_TODAY,
     CONF_SOLCAST_FORECAST_TOMORROW,
+    CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
@@ -57,9 +59,11 @@ from ..const import (
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MIN_CYCLE_SAVING,
+    DEFAULT_MIN_HOLD_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_PRICING_DATA_SOURCE,
+    DEFAULT_SWITCHING_PENALTY_PER_KWH,
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_ENTITY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
@@ -700,6 +704,12 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MIN_CYCLE_SAVING: current.get(
                     CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
                 ),
+                CONF_MIN_HOLD_SAVING: current.get(
+                    CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING
+                ),
+                CONF_SWITCHING_PENALTY_PER_KWH: current.get(
+                    CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+                ),
             }),
             description_placeholders={
                 "integration_name": "LocalShift",
@@ -775,7 +785,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.000,
-                    max=0.100,
+                    max=0.200,
                     step=0.005,
                     unit_of_measurement="$/%-point",
                     mode=selector.NumberSelectorMode.SLIDER,
@@ -785,6 +795,34 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_MIN_CYCLE_SAVING,
                 default=values.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING),
                 description="Min saving per kWh cycled to grid-charge (0 disables)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=1.00,
+                    step=0.05,
+                    unit_of_measurement="$/kWh",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_MIN_HOLD_SAVING,
+                default=values.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING),
+                description="Min saving per kWh held to activate strict SOC hold (0 disables)",
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.00,
+                    max=1.00,
+                    step=0.05,
+                    unit_of_measurement="$/kWh",
+                    mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Required(
+                CONF_SWITCHING_PENALTY_PER_KWH,
+                default=values.get(
+                    CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+                ),
+                description="Scale factor for slot-energy-scaled switching penalty ($/kWh of at-stake energy; 0 disables floor)",
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.00,

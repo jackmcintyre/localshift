@@ -910,3 +910,68 @@ def test_manual_override_bypasses_optimizer():
         f"active_mode should be MANUAL when manual_override=True, got {data.active_mode}"
     )
     assert data.manual_override is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #906: HOLD_STRICT scenario tests
+# ---------------------------------------------------------------------------
+
+def test_inverted_night_no_dw_no_hold_strict():
+    """Inverted-night without DW: HOLD_STRICT correctly absent (drain+recharge cheaper).
+
+    Issue #906 regression: when overnight prices are flat and a cheap recharge
+    window exists, ordinary HOLD (drain battery, recharge at cheap price) is
+    cheaper than HOLD_STRICT (import from grid at same price to preserve SOC).
+    The DP must prefer HOLD, not HOLD_STRICT.
+    """
+    data = run_scenario("inverted-night-no-dw")
+    decisions = data.optimizer_decisions
+    hold_strict_slots = [d for d in decisions if d.get("action") == "hold_strict"]
+    assert len(hold_strict_slots) == 0, (
+        f"HOLD_STRICT should not fire when drain+recharge is cheaper, got {len(hold_strict_slots)} slots"
+    )
+    assert data.optimizer_result is not None
+    assert data.optimizer_result["success"] is True
+
+
+def test_default_min_hold_saving_produces_no_hold_strict():
+    """With min_hold_saving=0 (default), HOLD_STRICT must not appear in any plan."""
+    from simulations.schema import Scenario, discover_scenarios
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime
+
+    # Reuse the inverted-night scenario but with default config (min_hold_saving=0)
+    paths = discover_scenarios()
+    matching = [p for p in paths if p.stem == "inverted-night"]
+    assert matching, "inverted-night scenario not found"
+
+    scenario = Scenario.from_json(matching[0])
+    # Override to disable min_hold_saving
+    scenario.config_overrides = {}
+
+    test_time_str = scenario.input.get("test_time", "2026-07-29T17:00:00+10:00")
+    test_time = datetime.fromisoformat(test_time_str)
+
+    data = setup_coordinator_data(scenario.input)
+    hass = setup_mock_hass(scenario.input)
+    entry = create_mock_entry(scenario.config_overrides)
+    get_entity_id = create_mock_get_entity_id()
+    get_switch_state = create_mock_get_switch_state(scenario.switch_states)
+
+    engine = ComputationEngine(hass, entry, get_entity_id, get_switch_state)
+    recent_load = scenario.input.get("load_power_kw", 0.5)
+    with (
+        patch("homeassistant.util.dt.now", return_value=test_time),
+        patch.object(engine, "_get_historical_hourly_averages", return_value={}),
+        patch.object(engine._history_fetcher, "_historical_load_cache", {}),
+        patch.object(engine._history_fetcher, "_historical_load_sample_counts", {}),
+        patch.object(engine._history_fetcher, "_historical_load_source", "none"),
+        patch.object(engine._history_fetcher, "_recent_load_1hr_kw", recent_load),
+    ):
+        engine.compute_derived_values(data)
+
+    decisions = data.optimizer_decisions
+    hold_strict_slots = [d for d in decisions if d.get("action") == "hold_strict"]
+    assert len(hold_strict_slots) == 0, (
+        f"HOLD_STRICT should not appear when min_hold_saving=0, got {len(hold_strict_slots)} slots"
+    )

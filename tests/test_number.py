@@ -13,6 +13,7 @@ from custom_components.localshift.const import (
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MINIMUM_TARGET_SOC,
     CONF_SWITCHING_PENALTY,
+    CONF_SWITCHING_PENALTY_PER_KWH,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_MAX_PRECHARGE_PRICE,
@@ -199,9 +200,8 @@ class TestNumberDefinitions:
     """Tests for NUMBER_DEFINITIONS constant."""
 
     def test_number_definitions_count(self):
-        """Test that there are 9 number definitions (4 basic + 2 penalty + 1 solar
-        + 1 min-cycle-saving + 1 switching-penalty + 1 runway margin)."""
-        assert len(NUMBER_DEFINITIONS) == 9
+        """Test that there are 13 number definitions (11 existing + 2 taper knobs)."""
+        assert len(NUMBER_DEFINITIONS) == 13
 
     def test_number_definitions_contains_cheap_price_percentile(self):
         """Test definitions contain cheap price percentile."""
@@ -228,6 +228,11 @@ class TestNumberDefinitions:
         keys = [d[0] for d in NUMBER_DEFINITIONS]
         assert CONF_SWITCHING_PENALTY in keys
 
+    def test_number_definitions_contains_switching_penalty_per_kwh(self):
+        """Issue #919: scale-aware per-kWh switching penalty knob exists."""
+        keys = [d[0] for d in NUMBER_DEFINITIONS]
+        assert CONF_SWITCHING_PENALTY_PER_KWH in keys
+
 
 class TestAsyncSetupEntry:
     """Tests for async_setup_entry."""
@@ -236,7 +241,7 @@ class TestAsyncSetupEntry:
     async def test_async_setup_entry_creates_all_numbers(
         self, mock_coordinator, mock_entry
     ):
-        """Test that async_setup_entry creates all 9 number entities."""
+        """Test that async_setup_entry creates all number entities."""
         mock_entry.runtime_data = mock_coordinator
         added_entities = []
 
@@ -245,7 +250,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 9
+        assert len(added_entities) == 13
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_localshift_number_instances(

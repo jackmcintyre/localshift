@@ -8,6 +8,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from homeassistant.core import Event, callback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -114,6 +116,8 @@ class StateMachine:
         # Cooldown for health-check corrections (prevents command spam when
         # Teslemetry cloud lags in reflecting a legitimate transition)
         self._last_health_correction: datetime | None = None
+        # Listener for reactive grid_charging correction (#491)
+        self._grid_charging_listener: Callable | None = None
         # Decision-token gating (#622 gate replacement): the mode may be
         # re-decided at most once per discrete decision-context change. The
         # fingerprint is consumed by the *evaluation* that observes the change
@@ -1702,3 +1706,87 @@ class StateMachine:
     def in_mode_transition(self) -> bool:
         """Check if currently in a mode transition."""
         return self._in_mode_transition
+
+    def start_grid_charging_listener(self, hass: Any) -> None:
+        """Register a state-change listener on the grid_charging switch.
+
+        The listener corrects the switch immediately when Teslemetry's hourly
+        cloud sync re-enables grid charging while LocalShift expects it off.
+        The 5-minute cooldown on ``_last_health_correction`` is shared with
+        the periodic health check so corrections do not thrash.
+        """
+        if self._grid_charging_listener is not None:
+            return
+
+        entity_id = self._battery_controller._get_entity_id(  # noqa: SLF001
+            "teslemetry_allow_charging_from_grid"
+        )
+
+        @callback
+        def _on_grid_charging_state_change(event: Event) -> None:
+            new_state = event.data.get("new_state")
+            if new_state is None or new_state.state not in ("on", "off"):
+                return
+            # Only react to the switch turning ON (reversion)
+            if new_state.state != "on":
+                return
+            hass.async_create_task(
+                self._reactive_correct_grid_charging(hass, entity_id)
+            )
+
+        self._grid_charging_listener = async_track_state_change_event(
+            hass, [entity_id], _on_grid_charging_state_change
+        )
+        _LOGGER.debug("Registered grid_charging state listener on %s (#491)", entity_id)
+
+    def stop_grid_charging_listener(self) -> None:
+        """Unregister the reactive grid_charging state listener."""
+        if self._grid_charging_listener is not None:
+            self._grid_charging_listener()
+            self._grid_charging_listener = None
+            _LOGGER.debug("Unregistered grid_charging state listener (#491)")
+
+    async def _reactive_correct_grid_charging(self, hass: Any, entity_id: str) -> None:
+        """Turn off grid_charging when it was re-enabled unexpectedly.
+
+        Respects the same cooldown as the health check and skips when a
+        Tesla override is active.
+        """
+        now = dt_util.now()
+        if (
+            self._last_health_correction is not None
+            and now - self._last_health_correction < self._MIN_CORRECTION_INTERVAL
+        ):
+            _LOGGER.debug("[GRID CHARGING LISTENER] Correction blocked by cooldown")
+            return
+        if self.is_tesla_override_active():
+            _LOGGER.debug("[GRID CHARGING LISTENER] Skipping — Tesla override active")
+            return
+        if self._commanded_mode not in (
+            BatteryMode.SELF_CONSUMPTION,
+            BatteryMode.DEMAND_BLOCK,
+            BatteryMode.SPIKE_DISCHARGE,
+            BatteryMode.PROACTIVE_EXPORT,
+            BatteryMode.HOLD,
+        ):
+            return
+
+        _LOGGER.warning(
+            "[GRID CHARGING LISTENER] Grid charging re-enabled while in "
+            "mode %s — correcting immediately",
+            self._commanded_mode.value,
+        )
+        try:
+            await hass.services.async_call(
+                "switch",
+                "turn_off",
+                {"entity_id": entity_id},
+                blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.error(
+                "[GRID CHARGING LISTENER] Failed to correct grid_charging: %s",
+                exc,
+                exc_info=True,
+            )
+        self._last_health_correction = now

@@ -246,27 +246,35 @@ def _build_optimizer_config(
         CHARGE_RATE_SOLAR_KW,
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_BATTERY_TARGET,
+        CONF_CHARGE_TAPER_MIN_FACTOR,
+        CONF_CHARGE_TAPER_START_PCT,
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MAX_PRECHARGE_PRICE,
         CONF_MIN_CYCLE_SAVING,
+        CONF_MIN_HOLD_SAVING,
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
+        CONF_SWITCHING_PENALTY_PER_KWH,
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_CHARGE_TAPER_MIN_FACTOR,
+        DEFAULT_CHARGE_TAPER_START_PCT,
         DEFAULT_EXPORT_PRICE_MARGIN,
         DEFAULT_MAX_PRECHARGE_PRICE,
         DEFAULT_MIN_CYCLE_SAVING,
+        DEFAULT_MIN_HOLD_SAVING,
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
         DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
         DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
+        DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
     )
 
@@ -322,12 +330,30 @@ def _build_optimizer_config(
         config_options.get(CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY)
     )
 
+    switching_penalty_per_kwh = float(
+        config_options.get(
+            CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+        )
+    )
+
     target_penalty = float(
         config_options.get(CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY)
     )
 
     min_cycle_saving = float(
         config_options.get(CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING)
+    )
+
+    min_hold_saving = float(
+        config_options.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING)
+    )
+
+    # Charge taper curve (Issue #905: raised from 80% to 90% to match measured hardware).
+    charge_taper_start_pct = float(
+        config_options.get(CONF_CHARGE_TAPER_START_PCT, DEFAULT_CHARGE_TAPER_START_PCT)
+    )
+    charge_taper_min_factor = float(
+        config_options.get(CONF_CHARGE_TAPER_MIN_FACTOR, DEFAULT_CHARGE_TAPER_MIN_FACTOR)
     )
 
     # Target-first eligibility (2026-06-12): the operator's pre-charge price ceiling.
@@ -394,6 +420,10 @@ def _build_optimizer_config(
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
+        min_hold_saving=min_hold_saving,
+        # --- Charge curve (Issue #905: configurable to match hardware) ---
+        charge_taper_start_pct=charge_taper_start_pct,
+        charge_taper_min_factor=charge_taper_min_factor,
         # --- SOC discretization ---
         soc_bins=50,
         # --- Optimization mode ---
@@ -403,6 +433,7 @@ def _build_optimizer_config(
         base_cheap_price=base_cheap_price,
         max_precharge_price=max_precharge_price,
         switching_penalty=switching_penalty,
+        switching_penalty_per_kwh=switching_penalty_per_kwh,
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )
