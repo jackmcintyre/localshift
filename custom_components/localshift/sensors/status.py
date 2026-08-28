@@ -269,6 +269,15 @@ class DecisionLagSensor(LocalShiftSensorBase):
             "command_completion_timestamp": d.command_completion_timestamp.isoformat()
             if d.command_completion_timestamp
             else None,
+            # Issue #510 slice 1 (measurement only): boundary-lag telemetry.
+            # History windowed to 20 for attribute-size parity with `history`
+            # above; the full 200-entry window stays in CoordinatorData.
+            "boundary_lag_seconds": round(d.boundary_lag_seconds, 2)
+            if d.boundary_lag_seconds is not None
+            else None,
+            "boundary_lag_history": (d.boundary_lag_history or [])[-20:],
+            "anticipated_transitions_today": d.anticipated_transitions_today,
+            "anticipation_corrections_today": d.anticipation_corrections_today,
         }
 
     @property

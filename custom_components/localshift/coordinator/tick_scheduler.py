@@ -266,6 +266,9 @@ class TickScheduler:
         self._coordinator.data.grid_to_battery_kwh_today = 0.0
         self._coordinator.data.soc_gain_during_grid_charge_kwh_today = 0.0
         self._coordinator.data.export_while_battery_not_full_kwh_today = 0.0
+        # Issue #510: the anticipation counters are per-day like the rest.
+        self._coordinator.data.anticipated_transitions_today = 0
+        self._coordinator.data.anticipation_corrections_today = 0
 
         if self._coordinator.learning_orchestrator is not None:
             self._coordinator.learning_orchestrator.handle_midnight_reset(
