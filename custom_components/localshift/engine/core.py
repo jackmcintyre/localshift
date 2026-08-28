@@ -33,6 +33,7 @@ from custom_components.localshift.engine.negative_fit import (
     derive_negative_fit_avoidance_context,
 )
 from custom_components.localshift.engine.penalties import (
+    cheap_recovery_charge_relief,
     get_futile_cycling_penalty_factor,
     get_solar_opportunity_penalty_factor,
 )
@@ -157,6 +158,19 @@ def _evaluate_action_cost(
         charge_kwh=charge_kwh,
         terminal_penalty_idx=terminal_penalty_idx,
     )
+    # Issue #918: on a recovery day (hard target floor active) with a genuinely
+    # distinct cheap window, charging at the day's minimum must not be pushed
+    # later by the futile-cycling penalty — that is exactly the mistiming the
+    # issue documents. Relief only fires inside the cheapest window of a day
+    # whose min is clearly below its median; flat-price days keep the full
+    # penalty (the #406 overnight-sawtooth guard).
+    if futile_factor > 0.0 and cheap_recovery_charge_relief(
+        slot_idx=slot_idx,
+        slots=slots,
+        config=config,
+        terminal_penalty_idx=terminal_penalty_idx,
+    ):
+        futile_factor = 0.0
 
     stage = _cost_stage_cost(
         action,
@@ -1608,6 +1622,15 @@ class DPPlanner:
                 charge_kwh=recon_charge_kwh,
                 terminal_penalty_idx=terminal_penalty_idx,
             )
+            # Issue #918: mirror the DP-pass relief here so the reconstructed
+            # plan's stage costs agree with the value function that chose them.
+            if recon_futile_factor > 0.0 and cheap_recovery_charge_relief(
+                slot_idx=slot_idx,
+                slots=slots,
+                config=config,
+                terminal_penalty_idx=terminal_penalty_idx,
+            ):
+                recon_futile_factor = 0.0
 
             stage = _cost_stage_cost(
                 action,

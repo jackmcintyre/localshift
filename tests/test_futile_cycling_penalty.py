@@ -18,6 +18,7 @@ import pytest
 
 from custom_components.localshift.engine.cost import stage_cost
 from custom_components.localshift.engine.penalties import (
+    cheap_recovery_charge_relief,
     get_futile_cycling_penalty_factor,
 )
 from custom_components.localshift.engine.optimizer_dp import (
@@ -840,4 +841,101 @@ class TestLaterCheaperWindow:
         assert factor > 0.7, (
             f"Expected high futile factor (>0.7) when battery drains to min_soc "
             f"before cheaper window, got {factor:.3f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #918: recovery-mode suppression of futile cycling penalty
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryModeSuppression:
+    """Issue #918: on recovery days, charging in the day's distinct cheapest window
+    must not be punished as futile.
+
+    The relief is TARGETED: it fires only when a hard target floor is active AND the
+    pre-DW price profile has a *distinct* cheapest window (day-min well below the
+    median). On flat-price days — the #406 sawtooth world — there is no distinct
+    window, so the penalty stays fully armed and overnight sawtooth charging stays
+    suppressed.
+    """
+
+    def test_relief_in_distinct_cheapest_window(self):
+        """Recovery day with a real cheap window: slots at day-min get relief."""
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            demand_window_target_soc_pct=95.0,
+            min_soc_pct=10.0,
+            effective_cheap_price=0.14,
+            charge_efficiency=0.92,
+            discharge_efficiency=0.95,
+            hard_target_floor=85.0,  # recovery day: grid charge is mandatory
+        )
+        # Morning cheap window 0.13-0.14 vs afternoon 0.19-0.20 — the 25 Aug pattern.
+        # Enough afternoon slots that the day median (0.19) sits clearly above the
+        # cheap window; a 5-slot fixture leaves the median at 0.14 and the window
+        # is not "distinct".
+        slots = [
+            make_slot(0, 8, 0, buy_price=0.13, consumption_kwh=0.30),
+            make_slot(1, 8, 30, buy_price=0.13, consumption_kwh=0.30),
+            make_slot(2, 9, 0, buy_price=0.14, consumption_kwh=0.30),
+            make_slot(3, 12, 0, buy_price=0.19, consumption_kwh=0.30),
+            make_slot(4, 12, 30, buy_price=0.19, consumption_kwh=0.30),
+            make_slot(5, 13, 0, buy_price=0.20, consumption_kwh=0.30),
+            make_slot(6, 13, 30, buy_price=0.20, consumption_kwh=0.30),
+        ]
+        assert cheap_recovery_charge_relief(
+            slot_idx=0, slots=slots, config=config, terminal_penalty_idx=7
+        )
+        assert cheap_recovery_charge_relief(
+            slot_idx=2, slots=slots, config=config, terminal_penalty_idx=7
+        )
+        # Outside the cheapest window (12:00 at 0.19): no relief.
+        assert not cheap_recovery_charge_relief(
+            slot_idx=3, slots=slots, config=config, terminal_penalty_idx=7
+        )
+
+    def test_no_relief_on_flat_price_day(self):
+        """Flat prices (the #406 sawtooth world): no distinct window, no relief.
+
+        This is the guard that keeps overnight sawtooth charging suppressed —
+        blanket relief here would reopen #406.
+        """
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            demand_window_target_soc_pct=95.0,
+            min_soc_pct=10.0,
+            effective_cheap_price=0.16,
+            charge_efficiency=0.92,
+            discharge_efficiency=0.95,
+            hard_target_floor=85.0,
+        )
+        slots = [
+            make_slot(0, 22, 0, buy_price=0.16, consumption_kwh=0.25),
+            make_slot(1, 22, 30, buy_price=0.16, consumption_kwh=0.25),
+            make_slot(2, 23, 0, buy_price=0.16, consumption_kwh=0.25),
+            make_slot(3, 23, 30, buy_price=0.16, consumption_kwh=0.25),
+        ]
+        assert not cheap_recovery_charge_relief(
+            slot_idx=0, slots=slots, config=config, terminal_penalty_idx=4
+        )
+
+    def test_no_relief_when_floor_dormant(self):
+        """hard_target_floor None (solar can reach target): relief inactive —
+        the existing penalty behaviour is untouched."""
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            demand_window_target_soc_pct=95.0,
+            min_soc_pct=10.0,
+            effective_cheap_price=0.14,
+            charge_efficiency=0.92,
+            discharge_efficiency=0.95,
+            hard_target_floor=None,
+        )
+        slots = [
+            make_slot(0, 8, 0, buy_price=0.13, consumption_kwh=0.30),
+            make_slot(1, 12, 0, buy_price=0.19, consumption_kwh=0.30),
+        ]
+        assert not cheap_recovery_charge_relief(
+            slot_idx=0, slots=slots, config=config, terminal_penalty_idx=2
         )
