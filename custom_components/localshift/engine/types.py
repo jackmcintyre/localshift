@@ -124,7 +124,7 @@ class SlotContext:
     """True if this slot falls within the demand window."""
 
     price_source: str = "unknown"
-    """Source of price data (e.g. '5min', '30min', 'synthetic')."""
+    """Source of price data (e.g. 'forecast_current', '5min', '30min', 'synthetic')."""
 
 
 # -----------------------------------------------------------------------------

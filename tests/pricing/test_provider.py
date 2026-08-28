@@ -217,9 +217,7 @@ def test_amber_express_v2_reads_detailed_forecast_from_main_entity():
         ],
     }
     # Legacy _price_detailed entity is gone in v2.0.0 → returns None.
-    hass.states.get.side_effect = lambda eid: (
-        None if "detailed" in eid else main_state
-    )
+    hass.states.get.side_effect = lambda eid: None if "detailed" in eid else main_state
 
     slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
 
@@ -255,9 +253,7 @@ def test_amber_express_simple_forecast_only_yields_empty():
             {"time": "2026-03-16T12:30:00+11:00", "value": 2.50},
         ],
     }
-    hass.states.get.side_effect = lambda eid: (
-        None if "detailed" in eid else main_state
-    )
+    hass.states.get.side_effect = lambda eid: None if "detailed" in eid else main_state
 
     slots = provider.read_forecasts(hass, "sensor.amber_express_100h_general_price")
     assert slots == []
@@ -517,3 +513,41 @@ def test_normalize_slot_negative_duration_defaults_to_5():
     }
     slot = provider._normalize_slot(raw)
     assert slot.duration == 5  # -30 min: abs diffs = |35|, |45|, |60|; 5 wins
+
+
+def test_normalize_slot_carries_estimate():
+    """Issue #510 Slice 2: _normalize_slot carries the raw `estimate` flag through.
+
+    Without this, ForecastSlot.get("estimate") always returned None in
+    production (the field didn't exist on ForecastSlot at all), so the
+    SLOT0_CURRENT log line's estimate=... could never read true/false from
+    real Amber data.
+    """
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+
+    raw_settled = {
+        "start_time": "2026-03-16T10:00:01+00:00",
+        "end_time": "2026-03-16T10:30:00+00:00",
+        "per_kwh": 0.15,
+        "demand_window": False,
+        "estimate": False,
+    }
+    raw_forecast = {
+        "start_time": "2026-03-16T10:30:01+00:00",
+        "end_time": "2026-03-16T11:00:00+00:00",
+        "per_kwh": 0.18,
+        "demand_window": False,
+        "estimate": True,
+    }
+    raw_missing = {
+        "start_time": "2026-03-16T11:00:01+00:00",
+        "end_time": "2026-03-16T11:30:00+00:00",
+        "per_kwh": 0.20,
+        "demand_window": False,
+    }
+
+    assert provider._normalize_slot(raw_settled).estimate is False
+    assert provider._normalize_slot(raw_forecast).estimate is True
+    assert provider._normalize_slot(raw_missing).estimate is None
