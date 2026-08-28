@@ -230,6 +230,9 @@ async def test_handle_midnight_reset(coordinator):
     coordinator.data.grid_to_battery_kwh_today = 2.0
     coordinator.data.soc_gain_during_grid_charge_kwh_today = 1.5
     coordinator.data.export_while_battery_not_full_kwh_today = 1.0
+    # Issue #510: the anticipation counters reset daily like the rest.
+    coordinator.data.anticipated_transitions_today = 4
+    coordinator.data.anticipation_corrections_today = 2
     coordinator._learning_orchestrator = MagicMock()
     coordinator._learning_orchestrator.handle_midnight_reset = MagicMock()
     coordinator.notify_listeners = MagicMock()
@@ -246,6 +249,8 @@ async def test_handle_midnight_reset(coordinator):
     assert coordinator.data.grid_to_battery_kwh_today == 0.0
     assert coordinator.data.soc_gain_during_grid_charge_kwh_today == 0.0
     assert coordinator.data.export_while_battery_not_full_kwh_today == 0.0
+    assert coordinator.data.anticipated_transitions_today == 0
+    assert coordinator.data.anticipation_corrections_today == 0
     coordinator._learning_orchestrator.handle_midnight_reset.assert_called_once_with(
         coordinator.data
     )
