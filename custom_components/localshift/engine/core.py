@@ -22,6 +22,9 @@ from custom_components.localshift.engine.cost import (
 from custom_components.localshift.engine.cost import (
     terminal_cost as _cost_terminal_cost,
 )
+from custom_components.localshift.engine.cost import (
+    terminal_salvage_value as _cost_terminal_salvage_value,
+)
 from custom_components.localshift.engine.dp_math import (
     _build_soc_grid,
     _interpolate_cost_to_soc,
@@ -1186,9 +1189,31 @@ class DPPlanner:
             {} for _ in range(n_slots + 1)
         ]
 
-        # Horizon-end boundary carries no target (Issue #811): always zero.
-        for bin_idx in range(len(soc_grid)):
-            dp[n_slots][bin_idx] = (0.0, PlannerAction.HOLD, bin_idx, 0.0, 0.0, 0.0)
+        # Horizon-end boundary carries no target (Issue #811/#816) — but it does
+        # carry a bounded residual-energy salvage credit (also Issue #811): residual
+        # SOC above the floor displaces a post-horizon grid import once the rolling
+        # horizon advances, so pricing it at exactly zero made the planner too
+        # willing to dump value near the end of the modeled horizon. The credit is
+        # bounded (at most half the cheapest observed buy price, capped absolutely)
+        # so charging to harvest it can never pay, and it never touches the
+        # strict-mode DW-entry penalty rows.
+        salvage_buy_price = (
+            min(slot.buy_price for slot in inputs.slots) if inputs.slots else 0.0
+        )
+        for bin_idx, soc in enumerate(soc_grid):
+            salvage_credit = (
+                _cost_terminal_salvage_value(soc, config, salvage_buy_price)
+                if config.terminal_salvage_enabled
+                else 0.0
+            )
+            dp[n_slots][bin_idx] = (
+                -salvage_credit,
+                PlannerAction.HOLD,
+                bin_idx,
+                0.0,
+                0.0,
+                0.0,
+            )
 
         terminal_penalty_by_bin: dict[int, float] = {}
 
@@ -1299,9 +1324,16 @@ class DPPlanner:
                 if config.allow_dw_entry_under_target:
                     # Issue #505: target may be met mid-DW via solar — keep the penalty
                     # at the horizon boundary (legacy behaviour) so it does not force
-                    # pre-charge before the demand window.
+                    # pre-charge before the demand window. Issue #811: net the bounded
+                    # residual salvage credit against it (raw bin soc — post-horizon
+                    # solar gain is not bankable energy at the boundary).
+                    salvage_credit = (
+                        _cost_terminal_salvage_value(soc, config, salvage_buy_price)
+                        if config.terminal_salvage_enabled
+                        else 0.0
+                    )
                     dp[n_slots][bin_idx] = (
-                        shortfall_penalty,
+                        shortfall_penalty - salvage_credit,
                         PlannerAction.HOLD,
                         bin_idx,
                         0.0,

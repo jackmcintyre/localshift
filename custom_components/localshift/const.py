@@ -269,9 +269,15 @@ DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
 )
-DEFAULT_MIN_HOLD_SAVING = 0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
-DEFAULT_CHARGE_TAPER_START_PCT = 90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
-DEFAULT_CHARGE_TAPER_MIN_FACTOR = 0.2  # Floor fraction at 100% SOC (unvalidated above ~88%)
+DEFAULT_MIN_HOLD_SAVING = (
+    0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
+)
+DEFAULT_CHARGE_TAPER_START_PCT = (
+    90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
+)
+DEFAULT_CHARGE_TAPER_MIN_FACTOR = (
+    0.2  # Floor fraction at 100% SOC (unvalidated above ~88%)
+)
 
 # Threshold min/max/step (for NumberEntity and options validation)
 THRESHOLD_RANGES = {
@@ -662,6 +668,19 @@ NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
 # Minimum net benefit ($/kWh) required to allow proactive export inside
 # demand window while running negative-FIT avoidance.
 NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
+
+# -----------------------------------------------------------------------------
+# Terminal Salvage Value Constants (Issue #811)
+# -----------------------------------------------------------------------------
+
+# Fraction of the cheapest observed buy price credited per kWh of residual
+# energy at the horizon boundary. Kept below 1.0 so charging purely to harvest
+# the credit always loses at least (1 - fraction) of the outlay.
+TERMINAL_SALVAGE_DISCOUNT: Final[float] = 0.5
+
+# Absolute ceiling on the per-kWh salvage credit ($/kWh), so pathological
+# tariffs cannot turn residual energy into a reserve-seeking incentive.
+TERMINAL_SALVAGE_MAX_PER_KWH: Final[float] = 0.05
 
 # -----------------------------------------------------------------------------
 # Tesla Override Detection Constants

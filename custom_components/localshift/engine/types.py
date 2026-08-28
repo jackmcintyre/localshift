@@ -221,10 +221,22 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
+    terminal_salvage_enabled: bool = True
+    """If True, credit a bounded salvage value for residual energy at the horizon
+    boundary (Issue #811).
+
+    Residual energy above the floor displaces a post-horizon grid import, so a
+    zero boundary price made the planner too willing to dump value near the end
+    of the modeled horizon. The credit is bounded — at most half the cheapest
+    observed buy price, capped absolutely at ``TERMINAL_SALVAGE_MAX_PER_KWH`` —
+    so charging purely to harvest it always loses money and the planner cannot
+    regress into overnight reserve-holding. The strict-mode demand-window entry
+    penalty is unaffected; the credit lives only on the horizon boundary row.
+    """
+
     # --- SOC discretization ---
     soc_bins: int = 100
     """Number of SOC bins for DP state space (higher = more precise, slower).
-
     Raised 50 -> 100 on 2026-08-25. At 50 bins each bin spans 1.84 SOC points (~0.25 kWh)
     while a single 5-minute boost slot moves ~2.84 points — 1.5 bins. The value function
     could not resolve "charge now" from "charge in 15 minutes", so the DP deferred the
