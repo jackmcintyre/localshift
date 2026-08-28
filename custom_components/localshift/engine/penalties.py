@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from statistics import median
 from typing import Any
 
 from custom_components.localshift.engine.types import (
@@ -10,6 +11,56 @@ from custom_components.localshift.engine.types import (
     PlannerAction,
     SlotContext,
 )
+
+# Issue #918: a pre-DW price window counts as "distinct cheapest" only when the
+# day minimum sits at least this far below the pre-DW median — flat-price days
+# (the #406 sawtooth world) must NOT qualify, or the futile-cycling penalty that
+# suppresses overnight sawtooth charging would be disarmed.
+RECOVERY_WINDOW_SEPARATION = 0.03  # $/kWh below the pre-DW median
+# ...and relief applies only within this margin of the day minimum, matching the
+# issue's acceptance criterion (bulk charging within ~1c of the day-min).
+RECOVERY_WINDOW_PRICE_MARGIN = 0.01  # $/kWh above the day minimum
+
+
+def cheap_recovery_charge_relief(
+    *,
+    slot_idx: int,
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int | None,
+) -> bool:
+    """Issue #918: should the futile-cycling penalty stand down for this slot?
+
+    On a recovery day (``hard_target_floor`` set — grid charging is mandatory to
+    reach the demand-window target), charging at the day's cheapest hours is the
+    *right* plan, yet the futile-cycling penalty can price it as wasteful and push
+    the bulk charge 2-4 hours later at materially higher prices.
+
+    Relief is granted only when BOTH hold:
+
+    1. A **distinct cheapest window** exists: the pre-DW minimum is at least
+       ``RECOVERY_WINDOW_SEPARATION`` below the pre-DW median. Flat-price days
+       fail this test, so the #406 overnight-sawtooth guard stays armed.
+    2. This slot sits within ``RECOVERY_WINDOW_PRICE_MARGIN`` of that minimum.
+
+    Returns False when the hard target floor is dormant (solar can reach target),
+    leaving the penalty untouched in the normal self-consumption world.
+    """
+    if config.hard_target_floor is None or not slots:
+        return False
+    horizon_end = (
+        terminal_penalty_idx if terminal_penalty_idx is not None else len(slots)
+    )
+    prices = [
+        slot.buy_price for slot in slots[:horizon_end] if not slot.is_demand_window_slot
+    ]
+    if len(prices) < 2:
+        return False
+    day_min = min(prices)
+    day_median = median(prices)
+    if day_min > day_median - RECOVERY_WINDOW_SEPARATION:
+        return False  # no distinct cheap window (flat day) — penalty stays armed
+    return slots[slot_idx].buy_price <= day_min + RECOVERY_WINDOW_PRICE_MARGIN
 
 
 def get_solar_opportunity_penalty_factor(
