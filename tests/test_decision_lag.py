@@ -543,6 +543,11 @@ class TestDecisionLagSensor:
             ],
             decision_timestamp=now,
             command_completion_timestamp=now,
+            # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
+            boundary_lag_seconds=None,
+            boundary_lag_history=[],
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
         )
         attrs = sensor.extra_state_attributes
         assert attrs["command_lag_seconds"] == 7.0
@@ -562,6 +567,11 @@ class TestDecisionLagSensor:
             decision_lag_history=[],
             decision_timestamp=None,
             command_completion_timestamp=None,
+            # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
+            boundary_lag_seconds=None,
+            boundary_lag_history=[],
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
         )
         attrs = sensor.extra_state_attributes
         assert attrs["avg_lag_24h"] is None

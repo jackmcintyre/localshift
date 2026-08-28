@@ -118,6 +118,10 @@ class StateMachine:
         self._last_health_correction: datetime | None = None
         # Listener for reactive grid_charging correction (#491)
         self._grid_charging_listener: Callable | None = None
+        # Issue #510 slice 1: one-shot tag for transitions issued outside the
+        # decision path (Tesla re-probe, health-check correction). Set immediately
+        # before the call, cleared immediately after — never left armed.
+        self._transition_source_override: str | None = None
         # Decision-token gating (#622 gate replacement): the mode may be
         # re-decided at most once per discrete decision-context change. The
         # fingerprint is consumed by the *evaluation* that observes the change
@@ -128,6 +132,11 @@ class StateMachine:
         # evaluation, kept separately so a grant can be attributed: same base +
         # different epoch ⇒ the grant came from the plan alone.
         self._last_evaluated_base: str | None = None
+        # Issue #510 slice 1 (measurement only): the grant source attributed at
+        # token-grant time. Captured in _apply_decision_token because the base it
+        # is derived from is overwritten there — by transition time the "previous"
+        # base is already the current one.
+        self._last_grant_source: str | None = None
         # Plan-disagreement trigger (2026-07-27 pre-charge incident): the plan is
         # itself a decision input. ``_plan_charge_epoch`` is a MONOTONE counter
         # incremented on the rising edge of "the plan wants to START charging while
@@ -881,6 +890,11 @@ class StateMachine:
         # only thing that moved ⇒ the plan alone granted this.
         plan_charge_only = decision_allowed and context == self._last_evaluated_base
         if decision_allowed:
+            # Issue #510 slice 1 (measurement only): attribute the grant BEFORE
+            # _last_evaluated_base is overwritten below — by transition time the
+            # "previous" base is already this one, so the comparison must happen
+            # here or the tag is unrecoverable.
+            self._last_grant_source = self._classify_grant_source(context)
             # Consume immediately: the evaluation, not the transition, spends the
             # token. Covers every downstream path (including debounce-in-progress).
             self._last_evaluated_fingerprint = fingerprint
@@ -898,6 +912,35 @@ class StateMachine:
         # compute_derived_values in coordinator.async_recompute_and_evaluate can
         # never trip it.
         data.mode_backstop_allowed = True
+
+    def _classify_grant_source(self, context: str | None) -> str:
+        """Attribute a grant to the fingerprint component that moved (Issue #510).
+
+        Observation only — the return value gates nothing. Compares the new
+        price/spike/DW/floor context positionally against the previously granted
+        one. Precedence when several components move at once is deliberate: the
+        non-price causes win, because the tag exists to EXCLUDE legitimately
+        mid-interval transitions from the boundary-lag baseline. A DW crossing
+        that happens to coincide with a price tick is not a clean sample.
+        """
+        previous = self._last_evaluated_base
+        if previous is None or context is None:
+            return "unknown"
+        if previous == context:
+            return "plan_charge"  # base unchanged ⇒ only the epoch moved
+        old = previous.split("|")
+        new = context.split("|")
+        if len(old) != 5 or len(new) != 5:
+            return "unknown"
+        if old[4] != new[4]:
+            return "soc_floor"
+        if old[3] != new[3]:
+            return "demand_window"
+        if old[2] != new[2]:
+            return "spike"
+        if old[0] != new[0] or old[1] != new[1]:
+            return "price"
+        return "unknown"
 
     async def _evaluate_core(
         self, data: CoordinatorData, computation_engine: ComputationEngine
@@ -1209,6 +1252,10 @@ class StateMachine:
         transition_time = dt_util.now()
         if not dry_run:
             self._last_successful_transition = transition_time
+            # Issue #510 slice 1: measured for EVERY successful non-dry-run
+            # transition, including the ones the decision_mode guard below
+            # skips (debounce completion, retry, re-probe, health correction).
+            self._record_boundary_lag(data, target, transition_time)
 
         # Issue #508: dry runs execute no real commands and drive no physical
         # change, so neither phase is recorded.
@@ -1251,6 +1298,55 @@ class StateMachine:
             "Recorded successful transition to %s at %s",
             target.value,
             transition_time.strftime("%H:%M:%S"),
+        )
+
+    def _record_boundary_lag(
+        self, data: CoordinatorData, target: BatteryMode, transition_time: datetime
+    ) -> None:
+        """Measure how far into its 5-minute price interval a transition landed.
+
+        Issue #510 slice 1 — telemetry only, changes no decision. The interval
+        start is derived in UTC: NEM time is a fixed UTC+10 offset, so a UTC
+        floor is correct by construction and a DST transition is a non-event.
+        """
+        utc_time = dt_util.as_utc(transition_time)
+        interval_start = utc_time.replace(
+            minute=(utc_time.minute // 5) * 5, second=0, microsecond=0
+        )
+        boundary_lag = (utc_time - interval_start).total_seconds()
+        grant_source = self._transition_source_override or (
+            self._last_grant_source or "unknown"
+        )
+
+        data.boundary_lag_seconds = boundary_lag
+        data.boundary_lag_history.append({
+            "from_mode": data.active_mode.value if data.active_mode else "unknown",
+            "to_mode": target.value,
+            "boundary_lag": round(boundary_lag, 2),
+            "grant_source": grant_source,
+            # Key is explicitly _utc: interval_start is derived in UTC (NEM is a
+            # fixed UTC+10 offset, so a UTC floor is correct by construction and
+            # DST is a non-event), while transition_time is local wall clock like
+            # every other timestamp in decision_lag_history. Naming the difference
+            # beats normalising it — converting the interval to local would make
+            # the two DST tests pass trivially and hide the property they pin.
+            "interval_start_utc": interval_start.isoformat(),
+            "transition_time": transition_time.isoformat(),
+        })
+        # 200, not decision_lag_history's 50 (#942): this is ONE ring shared by
+        # every grant source, so a backstop or spike burst evicts the price-tagged
+        # samples slice 3's acceptance criterion is measured against. 200 covers
+        # days of transitions at any plausible rate. The proper fix is a window
+        # per source — deliberately deferred, see #942.
+        if len(data.boundary_lag_history) > 200:
+            data.boundary_lag_history = data.boundary_lag_history[-200:]
+
+        _LOGGER.info(
+            "Boundary lag: %s landed %.2fs into interval %s (source=%s)",
+            target.value,
+            boundary_lag,
+            interval_start.isoformat(),
+            grant_source,
         )
 
     def _start_physical_response_watch(
@@ -1403,9 +1499,19 @@ class StateMachine:
                     duration,
                     self._commanded_mode.value,
                 )
-                probe_success = await self._execute_mode_transition(
-                    data, self._commanded_mode
-                )
+                # Issue #510 slice 1: tag as backstop — a re-probe is not a
+                # decision-token grant, so _last_grant_source would be stale
+                # here without an explicit override.
+                self._transition_source_override = "backstop"
+                try:
+                    probe_success = await self._execute_mode_transition(
+                        data, self._commanded_mode
+                    )
+                finally:
+                    # try/finally is load-bearing: _record_transition_metrics only
+                    # runs on success, so a failed probe would otherwise leave the
+                    # override armed and mislabel the next genuine transition.
+                    self._transition_source_override = None
                 if probe_success:
                     _LOGGER.info(
                         "[TESLA OVERRIDE] Re-probe succeeded after %s — control "
@@ -1602,9 +1708,19 @@ class StateMachine:
             )
 
             # Attempt to correct the state
-            correction_success = await self._execute_mode_transition(
-                data, self._commanded_mode
-            )
+            # Issue #510 slice 1: tag as backstop — a health-check correction is
+            # not a decision-token grant, so _last_grant_source would be stale
+            # here without an explicit override.
+            self._transition_source_override = "backstop"
+            try:
+                correction_success = await self._execute_mode_transition(
+                    data, self._commanded_mode
+                )
+            finally:
+                # try/finally is load-bearing: _record_transition_metrics only
+                # runs on success, so a failed correction would otherwise leave
+                # the override armed and mislabel the next genuine transition.
+                self._transition_source_override = None
             self._last_health_correction = now
 
             if correction_success:
@@ -1686,6 +1802,9 @@ class StateMachine:
         # Cleared with it, or the next grant would be misattributed to the plan
         # ("same base as last time") and restricted to charge modes only.
         self._last_evaluated_base = None
+        # Issue #510 slice 1: a transition landing between this invalidation
+        # and the next grant must not inherit a now-stale attribution.
+        self._last_grant_source = None
 
     def suppress_next_plan_charge_grant(self, reason: str) -> None:
         """Bar the NEXT evaluation from granting on the plan-charge trigger.

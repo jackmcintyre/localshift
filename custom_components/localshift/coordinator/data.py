@@ -593,6 +593,32 @@ class CoordinatorData:
     physical_response_timed_out: bool = False
     """Issue #508: True when the last physical-response watch timed out."""
 
+    # --- Boundary-lag telemetry (Issue #510 slice 1) ---
+    # How far into its 5-minute price interval a transition landed. Amber's
+    # spot sensor updates 14-36s after each boundary, so real transitions are
+    # expected to land ~20-45s in. Measurement only — no decision reads these.
+
+    boundary_lag_seconds: float | None = None
+    """Issue #510: seconds from the 5-min interval start to the transition."""
+
+    boundary_lag_history: list[dict[str, Any]] = field(default_factory=list)
+    """History of boundary-lag measurements.
+    Each entry: {from_mode, to_mode, boundary_lag, grant_source,
+    interval_start_utc, transition_time}. interval_start_utc is UTC (NEM is
+    a fixed UTC+10 offset); transition_time is local wall clock. Max 200
+    entries (capped in machine.py) — deliberately deeper than
+    decision_lag_history's 50, because this ring is shared across grant
+    sources and a burst must not evict the price samples (#942).
+    """
+
+    anticipated_transitions_today: int = 0
+    """Issue #510: transitions fired anticipatorily. Declared and daily-reset
+    here; a later slice owns the increment. Stays 0 in slice 1."""
+
+    anticipation_corrections_today: int = 0
+    """Issue #510: anticipated transitions later corrected by spot prices.
+    Declared and daily-reset here; a later slice owns the increment."""
+
     # ---------------------------------------------------------------------------
     # --- Decision-token gating (#622 gate replacement) ---
     # ---------------------------------------------------------------------------

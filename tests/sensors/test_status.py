@@ -321,6 +321,11 @@ class TestDecisionLagSensor:
             decision_lag_history=[],
             decision_timestamp=None,
             command_completion_timestamp=None,
+            # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
+            boundary_lag_seconds=None,
+            boundary_lag_history=[],
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
         )
         attrs = sensor.extra_state_attributes
         assert attrs["avg_lag_24h"] is None
@@ -335,6 +340,10 @@ class TestDecisionLagSensor:
         assert attrs["physical_lag_seconds"] is None
         assert attrs["physical_lag_observable"] is False
         assert attrs["physical_response_timed_out"] is False
+        assert attrs["boundary_lag_seconds"] is None
+        assert attrs["boundary_lag_history"] == []
+        assert attrs["anticipated_transitions_today"] == 0
+        assert attrs["anticipation_corrections_today"] == 0
 
     def test_extra_state_attributes_with_history(self):
         now = datetime(2026, 3, 12, 12, 0, 0)
@@ -352,6 +361,11 @@ class TestDecisionLagSensor:
             decision_lag_history=history,
             decision_timestamp=now,
             command_completion_timestamp=now,
+            # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
+            boundary_lag_seconds=None,
+            boundary_lag_history=[],
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
         )
         attrs = sensor.extra_state_attributes
         assert attrs["avg_lag_24h"] == pytest.approx(2.0)
@@ -362,6 +376,55 @@ class TestDecisionLagSensor:
         assert attrs["command_lag_seconds"] == pytest.approx(3.0)
         assert attrs["physical_lag_seconds"] == pytest.approx(7.0)
         assert attrs["command_completion_timestamp"] == now.isoformat()
+
+    def test_extra_state_attributes_boundary_lag(self):
+        # Issue #510 slice 1 (measurement only): the four new attributes are
+        # surfaced on this EXISTING sensor — no new entity.
+        boundary_history = [
+            {"boundary_lag": 23.4, "grant_source": "price"},
+            {"boundary_lag": 41.0, "grant_source": "demand_window"},
+        ]
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=23.4321,
+            boundary_lag_history=boundary_history,
+            anticipated_transitions_today=3,
+            anticipation_corrections_today=1,
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["boundary_lag_seconds"] == pytest.approx(23.43)
+        assert attrs["boundary_lag_history"] == boundary_history
+        assert attrs["anticipated_transitions_today"] == 3
+        assert attrs["anticipation_corrections_today"] == 1
+
+    def test_extra_state_attributes_boundary_lag_history_windowed(self):
+        # The attribute exposes the last 20 entries; the full 50-entry window
+        # stays in CoordinatorData (size budget — see status.py comment).
+        full_history = [{"boundary_lag": float(i)} for i in range(30)]
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=None,
+            boundary_lag_history=full_history,
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["boundary_lag_history"] == full_history[-20:]
+        assert len(attrs["boundary_lag_history"]) == 20
 
     def test_icon_with_decision_timestamp(self):
         sensor = _sensor(DecisionLagSensor, decision_timestamp=MagicMock())
