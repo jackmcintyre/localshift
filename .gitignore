@@ -63,4 +63,6 @@ worktrees/
 _bmad/
 _bmad-output/
 .claude/
+.flow/
+.opencode/
 
