@@ -154,25 +154,6 @@ def compute_hybrid_slot_schedule(
         _LOGGER.warning("compute_hybrid_slot_schedule: Empty general_forecast")
         return [], metadata
 
-    # TEMPORARY DIAGNOSTIC (#510): slice 2 is live but every evaluation still
-    # falls back to synthetic, meaning the entry covering "now" never reaches
-    # the parser. Log what actually arrives so the upstream drop can be located.
-    # Remove once the read path is fixed.
-    _LOGGER.info(
-        "GENERAL_FORECAST_IN: n=%d now_local=%s first3=%s",
-        len(general_forecast or []),
-        now_local.isoformat(),
-        [
-            {
-                "start_time": str(e.get("start_time")),
-                "per_kwh": e.get("per_kwh"),
-                "duration": e.get("duration"),
-                "estimate": e.get("estimate"),
-            }
-            for e in (general_forecast or [])[:3]
-        ],
-    )
-
     all_slots_raw = _parse_forecast_entries(general_forecast, now_local, ha_timezone)
     if not all_slots_raw:
         _LOGGER.warning("compute_hybrid_slot_schedule: No valid slots after parsing")
