@@ -591,73 +591,35 @@ class LocalShiftCoordinator:
         self._check_physical_response_watch()
 
     @callback
-    def _handle_medium_tick(self, now: datetime) -> None:  # pragma: no cover
+    def _handle_medium_tick(self, now: datetime) -> None:
         """Handle MEDIUM tier periodic tasks (5 minutes).
 
-        Learning and monitoring tasks that don't need minute-level accuracy:
-        - Entity health check
-        - Load data refresh
-        - Decision backfill
-        - Weather learning
-        - Baseline calculation
+        Delegates to TickScheduler, matching _handle_fast_tick and
+        _handle_slow_tick.
+
+        This handler previously carried a duplicate inline copy of the
+        scheduler's medium-tick body, in which the solar-accuracy backfill call
+        had been replaced by a bare ``pass``. Because SubscriptionManager
+        registers *this* method, TickScheduler.handle_medium_tick had no
+        production caller and _backfill_solar_actual /
+        _flush_completed_periods were unreachable — the solar-accuracy sampler
+        never recorded a single period and pending forecasts were never
+        evicted. Keep this a thin delegate so the two bodies cannot drift
+        again; test_tick_handlers_delegate.py enforces it.
         """
-        # Read raw entity values
-        self._read_all_external_state()
+        if self._tick_scheduler is not None:
+            self._tick_scheduler.handle_medium_tick(now)
 
-        # Skip expensive operations during startup grace period
-        # This prevents errors when entities haven't populated yet (Issue #551)
-        if self._is_in_startup_grace():
-            _LOGGER.debug("Skipping medium tick operations during startup grace period")
-            return
-
-        # Check entity health
-        self._check_entity_health()
-
-        # Refresh load data (historical and recent)
-        if self._computation_engine is not None:
-            load_entity_id = self.get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
-            self.hass.async_create_task(
-                self._computation_engine.async_get_recent_load_1hr(load_entity_id),
-                "localshift_fetch_recent_load",
-            )
-            self.hass.async_create_task(
-                self._computation_engine.async_get_historical_hourly_averages(
-                    load_entity_id
-                ),
-                "localshift_fetch_historical_load",
-            )
-
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.update_medium_tick(self.data)
-
-        # Backfill solar forecast accuracy for completed periods (Issue #378)
-        if (
-            hasattr(self, "solar_accuracy_tracker")
-            and self.solar_accuracy_tracker is not None
-        ):
-            pass
-
-        # Update solar bias metrics from tracker (Issue #378)
-        if (
-            hasattr(self, "solar_accuracy_tracker")
-            and self.solar_accuracy_tracker is not None
-        ):
-            self.data.solar_bias_metrics = self.solar_accuracy_tracker.get_status_dict()
-            self.data.solar_forecast_accuracy = (
-                self.solar_accuracy_tracker.reported_accuracy()
-            )
-
-        # Compute hybrid accuracy combining LocalShift tracker + Solcast MAPE (Issue #778 Phase 2)
-        self._update_hybrid_accuracy()
-
-        # Learn from current temperature/load for weather correlation
-        if self._computation_engine is not None:
-            self.hass.async_create_task(
-                self._computation_engine.async_learn_weather_sample(self.data),
-                "localshift_weather_learning",
-            )
-
-        _LOGGER.debug("Medium tick completed: learning and monitoring tasks")
+        # Issue #778 Phase 2: hybrid accuracy is coordinator-owned and is
+        # computed from the solar metrics the scheduler just refreshed. Kept
+        # here rather than pushed into TickScheduler so the scheduler does not
+        # reach back into a private coordinator method; mirrors the way
+        # _handle_fast_tick calls _check_physical_response_watch after
+        # delegating. Unlike the old inline body this also runs during the
+        # startup grace period, which is harmless: the computation is
+        # null-safe and the next post-grace tick recomputes it.
+        if self.data is not None:
+            self._update_hybrid_accuracy()
 
     def _update_hybrid_accuracy(self) -> None:
         """Compute hybrid accuracy combining LocalShift tracker with Solcast MAPE.

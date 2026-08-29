@@ -674,6 +674,66 @@ class TestHandleSlowTick:
         assert call_args[0][1] == "localshift_save_accuracy_metrics"
 
 
+class TestHandleMediumTick:
+    """Tests for _handle_medium_tick method.
+
+    The medium tick is the tier that drives the solar-accuracy backfill. It was
+    once a duplicate inline copy of TickScheduler.handle_medium_tick with the
+    backfill call stubbed out to ``pass``, which orphaned the scheduler method
+    and silently disabled solar-accuracy sampling. These tests pin the
+    delegation behaviourally; test_tick_handlers_delegate.py pins it
+    structurally.
+    """
+
+    def test_medium_tick_delegates_to_scheduler(self, coordinator, coordinator_data):
+        """The registered handler must route to TickScheduler, not reimplement it."""
+        from datetime import UTC, datetime
+
+        coordinator.data = coordinator_data
+        coordinator._tick_scheduler = MagicMock()
+
+        now = datetime.now(UTC)
+        coordinator._handle_medium_tick(now)
+
+        coordinator._tick_scheduler.handle_medium_tick.assert_called_once_with(now)
+
+    def test_medium_tick_updates_hybrid_accuracy(self, coordinator, coordinator_data):
+        """Hybrid accuracy (#778 Phase 2) is computed after the scheduler runs."""
+        from datetime import UTC, datetime
+
+        coordinator.data = coordinator_data
+        coordinator.data.solcast_mape = 12.0
+        coordinator.data.solar_forecast_accuracy = None
+        coordinator._tick_scheduler = MagicMock()
+
+        coordinator._handle_medium_tick(datetime.now(UTC))
+
+        # No LocalShift samples yet, so it defers wholly to Solcast.
+        assert coordinator.data.hybrid_solar_accuracy == 88.0
+
+    def test_medium_tick_without_scheduler_does_not_raise(
+        self, coordinator, coordinator_data
+    ):
+        """A missing scheduler must not break the tick."""
+        from datetime import UTC, datetime
+
+        coordinator.data = coordinator_data
+        coordinator._tick_scheduler = None
+
+        coordinator._handle_medium_tick(datetime.now(UTC))
+
+    def test_medium_tick_skips_hybrid_accuracy_without_data(self, coordinator):
+        """Before the first refresh ``data`` is None; the tick must stay safe."""
+        from datetime import UTC, datetime
+
+        coordinator.data = None
+        coordinator._tick_scheduler = MagicMock()
+
+        coordinator._handle_medium_tick(datetime.now(UTC))
+
+        coordinator._tick_scheduler.handle_medium_tick.assert_called_once()
+
+
 class TestAsyncStop:
     """Tests for async_stop method."""
 
