@@ -1,0 +1,99 @@
+"""Re-run the anti-cycling checks on the full-precision post-DW horizon (#958).
+
+The historical probes hardcode slot windows tied to the 2026-08-25 capture's
+shape (overnight == slots 27-45). This capture starts at 21:05, so overnight is
+slots 0-27 instead. The windows are recomputed from timestamps here rather than
+reused blind.
+"""
+
+import contextlib
+import io
+import runpy
+import sys
+from datetime import timedelta
+
+sys.path.insert(0, ".")
+
+cap = runpy.run_path("scratchpad/raw_2026-08-29.py")
+RAW = cap["RAW"]
+INITIAL_SOC = cap["INITIAL_SOC"]
+DW_ENTRY_IDX = cap["DW_ENTRY_IDX"]
+DW_END_IDX = cap["DW_END_IDX"]
+ROLL = cap["DAY_ROLLOVER_IDX"]
+
+with contextlib.redirect_stdout(io.StringIO()):
+    from scratchpad.deferral_replay import build_config
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import OptimizerInputs, SlotContext
+
+# Overnight = sunset-to-sunrise, derived from the capture rather than hardcoded:
+# every slot before solar first appears (slot 28, 06:30).
+OVERNIGHT = [i for i, r in enumerate(RAW) if i < 28]
+
+
+def build(round_to_cents: bool):
+    out = []
+    for i, (idx, hhmm, interval, buy, sell, solar, cons) in enumerate(RAW):
+        day = cap["START_DAY"] if i < ROLL else cap["NEXT_DAY"]
+        out.append(
+            SlotContext(
+                slot_index=idx,
+                timestamp_iso=f"{day}T{hhmm}:01+10:00",
+                slot_interval_minutes=interval,
+                buy_price=round(buy, 2) if round_to_cents else buy,
+                sell_price=round(sell, 2) if round_to_cents else sell,
+                solar_kwh=solar,
+                consumption_kwh=cons,
+                is_demand_window_entry=(idx == DW_ENTRY_IDX),
+                is_demand_window_slot=(DW_ENTRY_IDX <= idx < DW_END_IDX),
+                price_source="5min" if interval == 5 else "30min",
+            )
+        )
+    return out
+
+
+def run(label, slots, bins=None):
+    cfg = build_config()
+    if bins is not None:
+        cfg.soc_bins = bins
+    r = DPPlanner().plan(
+        OptimizerInputs(cycle_id=label, initial_soc_pct=INITIAL_SOC, slots=slots, config=cfg)
+    )
+    acts = [str(getattr(d, "action", "")) for d in r.decisions]
+    charges = [d for d in r.decisions if "charge_grid" in str(getattr(d, "action", ""))]
+    overnight_kwh = sum(
+        float(getattr(d, "grid_import_kwh", 0.0) or 0.0)
+        for d in r.decisions
+        if getattr(d, "slot_index", -1) in OVERNIGHT
+        and "charge_grid" in str(getattr(d, "action", ""))
+    )
+    flips = sum(1 for a, b in zip(acts, acts[1:]) if a != b)
+    print(
+        f"{label:26s} charge_slots={len(charges):>2d}  overnight_grid={overnight_kwh:6.3f} kWh  "
+        f"flips={flips:>2d}  dw_entry={r.dw_entry_soc_pct:6.2f}  net_cost={r.projected_net_cost:.4f}"
+    )
+    return r, acts
+
+
+print(f"horizon: {len(RAW)} slots, 21:05 -> 21:00 next day; initial_soc={INITIAL_SOC}%")
+print(f"overnight window = slots 0-27 (21:05-06:30, before solar appears)")
+print(f"distinct buy prices: full={len({r[3] for r in RAW})}  cents={len({round(r[3], 2) for r in RAW})}\n")
+
+print("--- A/B: price resolution, everything else identical ---")
+r_full, a_full = run("full precision", build(False))
+r_cent, a_cent = run("rounded to cents", build(True))
+diff = [i for i, (x, y) in enumerate(zip(a_full, a_cent)) if x != y]
+print(f"\naction differs on {len(diff)} of {len(a_full)} slots: {diff}")
+for i in diff[:8]:
+    print(
+        f"  slot {i:>2d} {RAW[i][1]}  {RAW[i][3]:.4f} -> {round(RAW[i][3], 2):.2f}   "
+        f"{a_full[i]}  vs  {a_cent[i]}"
+    )
+
+print("\n--- #800 sawtooth control: soc_bins sweep on full-precision prices ---")
+for bins in (50, 100, 200):
+    run(f"soc_bins={bins}", build(False), bins=bins)
+
+print("\n--- same sweep on the cent-rounded series (what every past probe saw) ---")
+for bins in (50, 100, 200):
+    run(f"soc_bins={bins}", build(True), bins=bins)
