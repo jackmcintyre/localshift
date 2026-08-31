@@ -1058,9 +1058,7 @@ class TestForecastP10Recording:
     def test_record_forecast_stores_p10(self, tracker):
         """record_forecast captures the P10 energy alongside the median."""
         period_start = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
-        tracker.record_forecast(
-            period_start, 2.5, "cloudy", forecast_p10_kwh=1.25
-        )
+        tracker.record_forecast(period_start, 2.5, "cloudy", forecast_p10_kwh=1.25)
 
         record = tracker._pending_forecasts[period_start.isoformat()]
         assert record.forecast_p10_kwh == pytest.approx(1.25)
@@ -1076,9 +1074,7 @@ class TestForecastP10Recording:
     def test_backfill_preserves_p10(self, tracker):
         """The P10 forecast survives the pending → record transition."""
         period_start = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
-        tracker.record_forecast(
-            period_start, 2.5, "cloudy", forecast_p10_kwh=1.25
-        )
+        tracker.record_forecast(period_start, 2.5, "cloudy", forecast_p10_kwh=1.25)
         tracker.backfill_actual(period_start, 1.6)
 
         assert tracker._period_records[-1].forecast_p10_kwh == pytest.approx(1.25)
@@ -1100,13 +1096,11 @@ class TestForecastP10Recording:
         restored = SolarPeriodRecord.from_dict(data)
         assert restored.forecast_p10_kwh == pytest.approx(1.25)
 
-        legacy = SolarPeriodRecord.from_dict(
-            {
-                "period_start": "2026-08-26T10:00:00+00:00",
-                "forecast_kwh": 2.5,
-                "actual_kwh": 1.6,
-            }
-        )
+        legacy = SolarPeriodRecord.from_dict({
+            "period_start": "2026-08-26T10:00:00+00:00",
+            "forecast_kwh": 2.5,
+            "actual_kwh": 1.6,
+        })
         assert legacy.forecast_p10_kwh == 0.0
 
 
@@ -1241,9 +1235,7 @@ class TestOverforecastConfidenceCap:
 
     def test_boost_days_excluded(self, tracker, cap_now):
         """Boost periods are excluded from learning (same rule as metrics)."""
-        _seed_completed_day(
-            tracker, date(2026, 8, 27), 1.5, 0.6, 0.5, boost=True
-        )
+        _seed_completed_day(tracker, date(2026, 8, 27), 1.5, 0.6, 0.5, boost=True)
         _seed_completed_day(tracker, date(2026, 8, 26), 1.5, 0.6, 0.5)
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
@@ -1316,7 +1308,9 @@ class TestOverforecastConfidenceCap:
         # Half-life 2 days: weights 0.7071 / 0.5 / 0.3536 over ratios above.
         weights = [0.7071, 0.5, 0.3536]
         ratios = [0.68, 0.53, 0.66]
-        expected_ratio = sum(w * r for w, r in zip(weights, ratios, strict=True)) / sum(weights)
+        expected_ratio = sum(w * r for w, r in zip(weights, ratios, strict=True)) / sum(
+            weights
+        )
         # Cloudy-day spread: P10 = 0.5 * median.
         effective = _blend_solar_estimate(1.0, 0.5, cap)
         assert abs(effective - expected_ratio) / expected_ratio <= 0.20
@@ -1339,7 +1333,9 @@ class TestOverforecastConfidenceCap:
         # Weighted ratio stays well under 1.0 despite the clear old day.
         weights = [0.7071, 0.5, 0.125]
         ratios = [0.60, 0.60, 1.30]
-        expected_ratio = sum(w * r for w, r in zip(weights, ratios, strict=True)) / sum(weights)
+        expected_ratio = sum(w * r for w, r in zip(weights, ratios, strict=True)) / sum(
+            weights
+        )
         assert expected_ratio < 0.85
 
 
@@ -1485,3 +1481,146 @@ class TestAccuracyConfidenceCeiling:
         ceiling = tracker.accuracy_confidence_ceiling(low=0.3, high=1.0)
         # accuracy = 100 - 32.5 = 67.5 → interpolation at (67.5-50)/(85-50) = 0.5
         assert 0.3 < ceiling < 1.0
+
+
+def _fill_morning_records(
+    tracker,
+    count,
+    *,
+    weather,
+    season_month,
+    bias=0.25,
+    is_boost=False,
+):
+    """Lay `count` completed records into distinct morning 30-min slots.
+
+    Slots run 06:00-11:30 (12 per day) and roll onto following days as needed,
+    so every record lands in the 'morning' time_of_day bucket with a distinct
+    period key. `season_month` selects the season bucket via _get_season.
+    """
+    now = dt_util.now()
+    base = now.replace(
+        month=season_month, day=1, hour=6, minute=0, second=0, microsecond=0
+    )
+    if base > now:
+        base = base.replace(year=base.year - 1)
+
+    added = 0
+    day = 0
+    while added < count:
+        for slot in range(12):
+            if added >= count:
+                break
+            dt = base + timedelta(days=day, minutes=30 * slot)
+            tracker.record_forecast(dt, 2.0, weather, is_boost=is_boost)
+            tracker.backfill_actual(dt, 2.0 * (1.0 - bias))
+            added += 1
+        day += 1
+    return tracker
+
+
+class TestBiasScopeLadder:
+    """The correction must reach the optimizer, not just light up the sensor.
+
+    Regression cover for the failure where correction_active reported True off
+    a *global* sample count while get_bias_correction() required
+    MIN_SOLAR_CORRECTION_SAMPLES in the exact (time, weather, season) triple —
+    so every lookup returned a 1.0 multiplier and the DP saw an uncorrected
+    forecast. 102 tests passed throughout, because none of them asserted that a
+    partially-filled bucket still yields a correction.
+    """
+
+    @pytest.fixture
+    def tracker(self, mock_hass):
+        return SolarAccuracyTracker(mock_hass, "test_entry")
+
+    def test_exact_triple_preferred_when_populated(self, tracker):
+        """A well-sampled exact context wins - no needless coarsening."""
+        _fill_morning_records(tracker, 24, weather="sunny", season_month=6)
+
+        resolved = tracker._resolve_bias_scope("morning", "sunny", "winter")
+        assert resolved is not None
+        weighted_bias, count, scope = resolved
+        assert scope == "time+weather+season"
+        assert count == 24
+        assert weighted_bias == pytest.approx(0.25, rel=1e-6)
+
+    def test_falls_back_to_time_when_weather_splits_the_samples(self, tracker):
+        """Samples split across weather must still produce a correction.
+
+        12 sunny + 12 foggy leaves no triple at 20, but the 'time' rung pools
+        24. Previously this returned 1.0 and the learned bias was discarded.
+        """
+        _fill_morning_records(tracker, 12, weather="sunny", season_month=6, bias=0.25)
+        _fill_morning_records(tracker, 12, weather="fog", season_month=7, bias=0.25)
+
+        resolved = tracker._resolve_bias_scope("morning", "sunny", "winter")
+        assert resolved is not None
+        _, count, scope = resolved
+        assert scope == "time"
+        assert count == 24
+
+        assert tracker.get_bias_correction(
+            "morning", "sunny", "winter"
+        ) == pytest.approx(0.75, rel=1e-6)
+
+    def test_season_rollover_does_not_wipe_the_correction(self, tracker):
+        """The 1-September cliff: a season change must not zero the buckets.
+
+        Records banked in winter have to keep correcting on the first spring
+        day, via the season-agnostic rung, instead of dropping to 1.0.
+        """
+        _fill_morning_records(tracker, 24, weather="sunny", season_month=6)
+
+        resolved = tracker._resolve_bias_scope("morning", "sunny", "spring")
+        assert resolved is not None
+        _, count, scope = resolved
+        assert scope == "time+weather"
+        assert count == 24
+
+        assert tracker.get_bias_correction(
+            "morning", "sunny", "spring"
+        ) == pytest.approx(0.75, rel=1e-6)
+
+    def test_under_sampled_overall_stays_dormant(self, tracker):
+        """Below the global threshold there is still no correction."""
+        _fill_morning_records(tracker, 10, weather="sunny", season_month=6)
+
+        assert tracker._resolve_bias_scope("morning", "sunny", "winter") is None
+        assert tracker.get_bias_correction("morning", "sunny", "winter") == 1.0
+
+    def test_boost_records_excluded_from_lookup(self, tracker):
+        """Boost periods are contaminated, so they must not feed the ladder.
+
+        _recompute_metrics() already excluded them; the lookup did not, so the
+        gate and the correction disagreed about which records count.
+        """
+        _fill_morning_records(
+            tracker, 24, weather="sunny", season_month=6, is_boost=True
+        )
+
+        assert tracker._resolve_bias_scope("morning", "sunny", "winter") is None
+        assert tracker.get_bias_correction("morning", "sunny", "winter") == 1.0
+
+    def test_under_forecast_bias_raises_the_forecast(self, tracker):
+        """Negative bias (under-forecast) must scale the forecast up."""
+        _fill_morning_records(tracker, 24, weather="sunny", season_month=6, bias=-0.2)
+
+        assert tracker.apply_bias_correction(
+            1.0, "morning", "sunny", "winter"
+        ) == pytest.approx(1.2, rel=1e-6)
+
+    def test_status_dict_reports_the_resolved_scope(self, tracker):
+        """correction_scope answers 'at what granularity' without log-diving."""
+        _fill_morning_records(tracker, 24, weather="sunny", season_month=6)
+
+        status = tracker.get_status_dict()
+        assert status["correction_active"] is True
+        assert status["correction_scope"] == "time+weather+season"
+
+    def test_status_scope_is_none_while_dormant(self, tracker):
+        _fill_morning_records(tracker, 5, weather="sunny", season_month=6)
+
+        status = tracker.get_status_dict()
+        assert status["correction_active"] is False
+        assert status["correction_scope"] is None

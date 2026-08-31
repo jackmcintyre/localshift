@@ -491,18 +491,31 @@ class SolarAccuracyTracker:
 
     def _compute_context_metric(
         self,
-        time_of_day: str,
-        weather: str,
+        time_of_day: str | None,
+        weather: str | None,
         season: str | None,
         metric_getter: Callable[[SolarPeriodRecord], float],
     ) -> tuple[float, int] | None:
+        """Recency-weighted metric over the records matching a context.
+
+        Passing ``None`` for time_of_day / weather / season widens that
+        dimension to "any" — the mechanism _resolve_bias_scope() uses to fall
+        back to a coarser bucket when the exact context is under-sampled.
+
+        Boost periods are excluded, matching _recompute_metrics(): during a
+        forced grid charge the measured "solar" figure is contaminated, so its
+        bias is not a forecast error. Without this the gate (sample_count,
+        boost-excluded) and the lookup disagreed about which records count.
+        """
         now = dt_util.now()
         values: list[tuple[float, float]] = []
 
         for record in self._period_records:
-            if record.time_of_day != time_of_day:
+            if record.is_boost_period:
                 continue
-            if record.weather_condition != weather:
+            if time_of_day and record.time_of_day != time_of_day:
+                continue
+            if weather and record.weather_condition != weather:
                 continue
             if season and record.season != season:
                 continue
@@ -630,6 +643,7 @@ class SolarAccuracyTracker:
             ),
             "min_samples_required": MIN_SOLAR_CORRECTION_SAMPLES,
             "correction_active": self.has_sufficient_samples(),
+            "correction_scope": self.active_correction_scope(),
             "boost_records_excluded": sum(
                 1 for r in self._period_records if r.is_boost_period
             ),
@@ -739,6 +753,67 @@ class SolarAccuracyTracker:
         )
         return cap
 
+    def _resolve_bias_scope(
+        self,
+        time_of_day: str,
+        weather: str,
+        season: str | None,
+    ) -> tuple[float, int, str] | None:
+        """Find the narrowest context bucket that carries enough evidence.
+
+        The bias signal is real but sparse. Requiring the exact
+        (time_of_day, weather, season) triple to hold MIN_SOLAR_CORRECTION_SAMPLES
+        records of its own meant the correction almost never applied: samples
+        split across weather conditions, and every season boundary silently
+        reset the season key and emptied every bucket. The sensor reported
+        correction_active (a *global* sample count) while every lookup returned
+        a 1.0 multiplier and the optimizer saw an uncorrected forecast.
+
+        So walk specific -> coarse and take the first bucket with enough
+        samples. Each rung is a superset of the one above it, so the result is
+        "narrowest context still backed by evidence" rather than
+        all-or-nothing. Recency weighting (BIAS_HALF_LIFE_DAYS) keeps a coarse
+        bucket tracking present conditions instead of averaging a whole
+        season flat.
+
+        Returns (weighted_bias, sample_count, scope_label), or None when even
+        the global bucket is under-sampled.
+        """
+        ladder: tuple[tuple[str, str | None, str | None, str | None], ...] = (
+            ("time+weather+season", time_of_day, weather, season),
+            ("time+weather", time_of_day, weather, None),
+            ("time", time_of_day, None, None),
+            ("global", None, None, None),
+        )
+
+        for label, tod, wx, szn in ladder:
+            result = self._compute_context_metric(
+                tod, wx, szn, lambda record: record.bias
+            )
+            if result is None:
+                continue
+            weighted_bias, sample_count = result
+            if sample_count >= MIN_SOLAR_CORRECTION_SAMPLES:
+                return (weighted_bias, sample_count, label)
+
+        return None
+
+    def active_correction_scope(self) -> str | None:
+        """Which ladder rung the newest record's context currently resolves to.
+
+        Surfaced on the sensor so "is the correction doing anything, and at
+        what granularity" is answerable without log-diving — the question the
+        old global-count-only correction_active flag could not answer.
+        """
+        for record in reversed(self._period_records):
+            if record.is_boost_period:
+                continue
+            resolved = self._resolve_bias_scope(
+                record.time_of_day, record.weather_condition, record.season
+            )
+            return None if resolved is None else resolved[2]
+        return None
+
     def get_bias_correction(
         self,
         time_of_day: str,
@@ -764,21 +839,20 @@ class SolarAccuracyTracker:
 
         """
         normalized_weather = self._normalize_weather(weather)
-        result = self._compute_context_bias(time_of_day, normalized_weather, season)
-        if result is None:
+        resolved = self._resolve_bias_scope(time_of_day, normalized_weather, season)
+        if resolved is None:
             return 1.0
 
-        weighted_bias, sample_count = result
-        if sample_count < MIN_SOLAR_CORRECTION_SAMPLES:
-            return 1.0
+        weighted_bias, sample_count, scope = resolved
 
         _LOGGER.debug(
-            "Bias correction for %s/%s/%s: bias=%.2f%%, samples=%d",
+            "Bias correction for %s/%s/%s: bias=%.2f%%, samples=%d, scope=%s",
             time_of_day,
             normalized_weather,
             season or "any",
             weighted_bias * 100,
             sample_count,
+            scope,
         )
         correction = 1.0 - weighted_bias
         return max(0.5, min(1.5, correction))
