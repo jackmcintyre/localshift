@@ -20,6 +20,7 @@ from custom_components.localshift.computation_engine import (
     ComputationEngine,
 )
 from custom_components.localshift.coordinator import CoordinatorData
+from custom_components.localshift.coordinator.data import AdaptiveParameters
 from custom_components.localshift.pricing.types import ForecastSlot
 from simulations.schema import Scenario, discover_scenarios
 
@@ -122,6 +123,14 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
     data.forecast_consumption_source_counts = {}
     data.forecast_history = []
     data.target_reached_today = input_data.get("target_reached_today", False)
+
+    # Learned/contextual parameter offsets in force at decision time. Left at the
+    # zero default unless a scenario names them, so existing scenarios are
+    # unaffected; replay scenarios set this to compare arms (see
+    # scripts/replay_adaptive_arms.py).
+    adaptive = input_data.get("adaptive_params")
+    if adaptive:
+        data.adaptive_params = AdaptiveParameters(values=dict(adaptive))
 
     # Issue #319: Mark forecast as ready for tests (tests have forecast data)
     data.forecast_ready = True
