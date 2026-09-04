@@ -24,7 +24,6 @@ from .const import (
     SWITCH_DEFAULTS,
     SWITCH_DEMAND_WINDOW_BLOCK,
     SWITCH_DRY_RUN,
-    SWITCH_ENABLE_LEARNING,
     SWITCH_ICONS,
     SWITCH_NAMES,
     SWITCH_NOTIFICATIONS_ENABLED,
@@ -48,7 +47,6 @@ SWITCH_KEYS = [
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
     SWITCH_NOTIFICATIONS_ENABLED,  # Consolidated notification toggle (Issue #214)
-    SWITCH_ENABLE_LEARNING,
 ]
 
 
@@ -92,17 +90,6 @@ class LocalShiftSwitch(SwitchEntity):
         # Sync initial state to coordinator's switch state bridge
         self.coordinator.set_switch_state(key, self._is_on)
 
-        # Issue #913: sync persisted learning state to the optimization
-        # controller. The orchestrator reads the switch bridge during
-        # coordinator init, before this platform loads, so without this
-        # the controller stays disabled after every restart.
-        if key == SWITCH_ENABLE_LEARNING:
-            if self.coordinator.optimization_controller is not None:
-                self.coordinator.optimization_controller.set_learning_enabled(
-                    self._is_on
-                )
-                _LOGGER.debug("Learning sync at switch load: learning=%s", self._is_on)
-
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information to link all entities under one device."""
@@ -133,12 +120,6 @@ class LocalShiftSwitch(SwitchEntity):
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info("LocalShift automation enabled")
 
-        # Handle Enable Learning switch (Issue #170 Phase 4)
-        if self._key == SWITCH_ENABLE_LEARNING:
-            if self.coordinator.optimization_controller is not None:
-                self.coordinator.optimization_controller.set_learning_enabled(True)
-                _LOGGER.info("Learning system active optimization enabled")
-
         # Re-evaluate derived values and trigger state machine
         await self.coordinator.async_recompute_and_evaluate()
 
@@ -163,12 +144,6 @@ class LocalShiftSwitch(SwitchEntity):
                 await self.coordinator._notification_service.send_automation_disabled_notification(
                     self.coordinator.data
                 )
-
-        # Issue #913: symmetric learning disable (turn_on already had this)
-        if self._key == SWITCH_ENABLE_LEARNING:
-            if self.coordinator.optimization_controller is not None:
-                self.coordinator.optimization_controller.set_learning_enabled(False)
-                _LOGGER.info("Learning system active optimization disabled")
 
         # Re-evaluate derived values and trigger state machine
         await self.coordinator.async_recompute_and_evaluate()

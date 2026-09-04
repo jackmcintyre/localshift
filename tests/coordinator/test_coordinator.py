@@ -89,8 +89,7 @@ class TestAsyncStart:
     """Tests for async_start method.
 
     Uses mock_storage fixture to mock HA's Store class for components
-    that use persistent storage (DecisionOutcomeTracker, ParameterOptimizer,
-    PatternAnalyzer, OptimizationController).
+    that use persistent storage (DecisionOutcomeTracker).
     """
 
     @pytest.mark.asyncio
@@ -762,154 +761,6 @@ class TestAsyncStop:
 
         coordinator._computation_engine.clear_historical_cache.assert_called_once()
 
-
-# =============================================================================
-# MEDIUM TICK OPTIMIZATION CONTROLLER WIRING TESTS (Issue #449 Phase 7)
-# =============================================================================
-
-
-class TestMediumTickOptimizationController:
-    """Tests that LearningOrchestrator wires OptimizationController.evaluate()."""
-
-    @pytest.fixture
-    def learning_orchestrator_with_data(
-        self, mock_hass_with_services, mock_entry, coordinator_data
-    ):
-        """Learning orchestrator with data for medium tick tests."""
-        from custom_components.localshift.learning.orchestrator import (
-            LearningOrchestrator,
-        )
-
-        orchestrator = LearningOrchestrator(
-            mock_hass_with_services,
-            mock_entry,
-            lambda _key: False,
-        )
-        return orchestrator, coordinator_data
-
-    def test_medium_tick_calls_evaluate_when_controller_set(
-        self, learning_orchestrator_with_data
-    ):
-        """evaluate() is called on every medium tick when controller is present."""
-        from custom_components.localshift.coordinator import AdaptiveParameters
-
-        orchestrator, data = learning_orchestrator_with_data
-
-        # Build a fake AdaptiveParameters result
-        returned_params = AdaptiveParameters()
-        returned_params.values["cheap_price_bias"] = 2.5
-
-        # Mock OptimizationController
-        mock_controller = MagicMock()
-        mock_controller.evaluate.return_value = returned_params
-        mock_controller.weights.to_dict.return_value = {
-            "cost_minimization": 0.50,
-            "export_avoidance": 0.20,
-            "target_achievement": 0.20,
-            "cycle_reduction": 0.10,
-        }
-        mock_controller.get_active_adjustments.return_value = []
-
-        orchestrator.optimization_controller = mock_controller
-
-        orchestrator.update_medium_tick(data)
-
-        mock_controller.evaluate.assert_called_once_with(data)
-
-    def test_medium_tick_updates_adaptive_params(self, learning_orchestrator_with_data):
-        """data.adaptive_params is replaced with the result of evaluate()."""
-        from custom_components.localshift.coordinator import AdaptiveParameters
-
-        orchestrator, data = learning_orchestrator_with_data
-
-        returned_params = AdaptiveParameters()
-        returned_params.values["overnight_drain_safety_margin"] = 5.0
-
-        mock_controller = MagicMock()
-        mock_controller.evaluate.return_value = returned_params
-        mock_controller.weights.to_dict.return_value = {}
-        mock_controller.get_active_adjustments.return_value = []
-
-        orchestrator.optimization_controller = mock_controller
-
-        orchestrator.update_medium_tick(data)
-
-        assert data.adaptive_params is returned_params
-        assert data.adaptive_params.values["overnight_drain_safety_margin"] == 5.0
-
-    def test_medium_tick_updates_optimization_weights(
-        self, learning_orchestrator_with_data
-    ):
-        """data.optimization_weights is populated from weights.to_dict()."""
-        orchestrator, data = learning_orchestrator_with_data
-
-        expected_weights = {
-            "cost_minimization": 0.60,
-            "export_avoidance": 0.15,
-            "target_achievement": 0.15,
-            "cycle_reduction": 0.10,
-        }
-
-        from custom_components.localshift.coordinator import AdaptiveParameters
-
-        mock_controller = MagicMock()
-        mock_controller.evaluate.return_value = AdaptiveParameters()
-        mock_controller.weights.to_dict.return_value = expected_weights
-        mock_controller.get_active_adjustments.return_value = []
-
-        orchestrator.optimization_controller = mock_controller
-
-        orchestrator.update_medium_tick(data)
-
-        assert data.optimization_weights == expected_weights
-
-    def test_medium_tick_updates_contextual_adjustments_active(
-        self, learning_orchestrator_with_data
-    ):
-        """data.contextual_adjustments_active is populated from get_active_adjustments()."""
-        orchestrator, data = learning_orchestrator_with_data
-
-        active_adjustments = [
-            {
-                "param": "cheap_price_bias",
-                "adjustment": 1.5,
-                "reason": "high export rate",
-            }
-        ]
-
-        from custom_components.localshift.coordinator import AdaptiveParameters
-
-        mock_controller = MagicMock()
-        mock_controller.evaluate.return_value = AdaptiveParameters()
-        mock_controller.weights.to_dict.return_value = {}
-        mock_controller.get_active_adjustments.return_value = active_adjustments
-
-        orchestrator.optimization_controller = mock_controller
-
-        orchestrator.update_medium_tick(data)
-
-        assert data.contextual_adjustments_active == active_adjustments
-
-    def test_medium_tick_skips_evaluate_when_no_controller(
-        self, learning_orchestrator_with_data
-    ):
-        """When optimization_controller is None, no evaluate() call is made and
-        adaptive_params/optimization_weights are unchanged."""
-        orchestrator, data = learning_orchestrator_with_data
-        orchestrator.optimization_controller = None
-
-        # Set a sentinel on data fields so we can verify nothing changes
-        from custom_components.localshift.coordinator import AdaptiveParameters
-
-        original_params = AdaptiveParameters()
-        data.adaptive_params = original_params
-
-        orchestrator.update_medium_tick(data)
-
-        # Unchanged - no controller was present
-        assert data.adaptive_params is original_params
-
-
 class TestFastTickPriceGate:
     """Test Issue #622: Fast tick always dispatches to StateMachine.
 
@@ -1140,31 +991,31 @@ class TestCoordinatorBootstrapperAndLearning:
         """Test _save_learning_data returns early when orchestrator is None."""
         import asyncio
 
-        coordinator._learning_orchestrator = None
+        coordinator._decision_telemetry = None
 
         # Should not raise
         asyncio.run(coordinator._save_learning_data())
 
-    def test_save_learning_data_calls_orchestrator_when_present(self, coordinator):
-        """Test _save_learning_data calls orchestrator when present."""
+    def test_save_learning_data_calls_telemetry_when_present(self, coordinator):
+        """Test _save_learning_data calls the telemetry owner when present."""
         import asyncio
         from unittest.mock import AsyncMock
 
-        mock_orchestrator = AsyncMock()
-        coordinator._learning_orchestrator = mock_orchestrator
+        mock_telemetry = AsyncMock()
+        coordinator._decision_telemetry = mock_telemetry
 
         # Call the method
         asyncio.run(coordinator._save_learning_data())
 
-        # Verify orchestrator was called
-        mock_orchestrator.async_save_all.assert_called_once()
+        # Verify the telemetry owner was called
+        mock_telemetry.async_save_all.assert_called_once()
 
     def test_save_learning_data_calls_solar_tracker(self, coordinator):
         """Test _save_learning_data persists the solar accuracy tracker."""
         import asyncio
         from unittest.mock import AsyncMock
 
-        coordinator._learning_orchestrator = AsyncMock()
+        coordinator._decision_telemetry = AsyncMock()
         tracker = AsyncMock()
         coordinator.solar_accuracy_tracker = tracker
 
@@ -1177,7 +1028,7 @@ class TestCoordinatorBootstrapperAndLearning:
         import asyncio
         from unittest.mock import AsyncMock
 
-        coordinator._learning_orchestrator = AsyncMock()
+        coordinator._decision_telemetry = AsyncMock()
         # Ensure the attribute is absent (getattr guard path)
         if hasattr(coordinator, "solar_accuracy_tracker"):
             del coordinator.solar_accuracy_tracker
@@ -1185,7 +1036,7 @@ class TestCoordinatorBootstrapperAndLearning:
         # Should not raise
         asyncio.run(coordinator._save_learning_data())
 
-    def test_save_learning_data_tracker_save_does_not_block_orchestrator(
+    def test_save_learning_data_tracker_save_does_not_block_telemetry(
         self, coordinator
     ):
         """Tracker save runs after the orchestrator save; ordering is preserved."""
@@ -1194,15 +1045,15 @@ class TestCoordinatorBootstrapperAndLearning:
 
         calls = []
         orchestrator = AsyncMock()
-        orchestrator.async_save_all.side_effect = lambda: calls.append("orchestrator")
+        orchestrator.async_save_all.side_effect = lambda: calls.append("telemetry")
         tracker = AsyncMock()
         tracker.async_save.side_effect = lambda: calls.append("tracker")
-        coordinator._learning_orchestrator = orchestrator
+        coordinator._decision_telemetry = orchestrator
         coordinator.solar_accuracy_tracker = tracker
 
         asyncio.run(coordinator._save_learning_data())
 
-        assert calls == ["orchestrator", "tracker"]
+        assert calls == ["telemetry", "tracker"]
 
     def test_handle_learning_save_schedules_save_learning_data(self, coordinator):
         """Test _handle_learning_save schedules the shared _save_learning_data path."""
@@ -1228,7 +1079,7 @@ class TestCoordinatorBootstrapperAndLearning:
         from unittest.mock import MagicMock
 
         coordinator.hass.async_create_task = MagicMock()
-        coordinator._learning_orchestrator = None
+        coordinator._decision_telemetry = None
 
         # Should not raise
         coordinator._handle_learning_save(datetime.now(UTC))

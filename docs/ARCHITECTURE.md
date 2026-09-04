@@ -7,7 +7,7 @@ The LocalShift integration optimizes Tesla Powerwall battery charging/dischargin
 - Solcast solar forecasts (30-minute intervals)  
 - Tesla Powerwall state (via Teslemetry)
 - Household consumption patterns
-- Adaptive learning from past decisions
+- Decision telemetry recorded from past decisions
 
 ## System Design Goals
 
@@ -109,13 +109,13 @@ The architecture was designed to solve several problems from the original YAML-b
 │  │     │  └─────────────────────────────────────────────────────────┘│  │  │
 │  │     │                                                               │  │  │
 │  │     │  ┌─────────────────────────────────────────────────────────┐│  │  │
-│  │     │  │                    Learning System                      ││  │  │
+│  │     │  │                  Decision Telemetry                     ││  │  │
 │  │     │  │                                                          ││  │  │
-│  │     │  │  ┌─────────────┐  ┌─────────────┐  ┌───────────────┐   ││  │  │
-│  │     │  │  │ parameters  │  │  outcomes   │  │pattern_analyzer│  ││  │  │
-│  │     │  │  │ (Thompson   │  │ (decision   │  │ (bias         │   ││  │  │
-│  │     │  │  │  sampling)  │  │  tracking)  │  │  detection)   │   ││  │  │
-│  │     │  │  └─────────────┘  └─────────────┘  └───────────────┘   ││  │  │
+│  │     │  │            ┌─────────────┐  ┌──────────────┐            ││  │  │
+│  │     │  │            │  outcomes   │  │  telemetry   │            ││  │  │
+│  │     │  │            │ (decision   │  │ (record set  │            ││  │  │
+│  │     │  │            │  recording) │  │  + storage)  │            ││  │  │
+│  │     │  │            └─────────────┘  └──────────────┘            ││  │  │
 │  │     │  └─────────────────────────────────────────────────────────┘│  │  │
 │  │     │                                                               │  │  │
 │  │     └───────────────────────────────────────────────────────────────┘  │  │
@@ -162,11 +162,7 @@ custom_components/localshift/
 │   ├── cost.py               # Cost function components (stage_cost, terminal_cost)
 │   ├── types.py              # Type definitions (SlotContext, OptimizerConfig, etc.)
 │   ├── core.py               # Core optimizer logic
-│   ├── parameters.py          # Adaptive parameter management (Thompson sampling)
-│   ├── outcomes.py           # Decision outcome tracking
-│   ├── pattern_analyzer.py   # Bias detection (weekly patterns)
-│   ├── counterfactual.py     # TOU baseline scoring
-│   ├── optimization_controller.py # Real-time contextual adjustments
+│   ├── outcomes.py           # Decision outcome recording (telemetry only)
 │   ├── slots.py              # Slot building (SlotBuilder, SlotBuildMetadata)
 │   ├── slot_schedule.py      # Hybrid slot schedule (5-min + 15-min)
 │   ├── price_calculator.py  # Price calculations
@@ -196,8 +192,8 @@ custom_components/localshift/
 │   ├── controller.py         # Battery controller (Teslemetry)
 │   └── client.py             # Powerwall service client
 │
-├── learning/                 # Adaptive learning system
-│   ├── orchestrator.py       # Learning system coordinator
+├── learning/                 # Decision telemetry + weather correlation
+│   ├── telemetry.py          # Decision record set + forecast-correction storage
 │   ├── correlation.py        # Weather correlation regression + storage facade
 │   ├── temperature.py        # Weather forecast fetching/parsing/caching
 │   └── anomaly.py            # Weather anomaly detection
@@ -217,8 +213,7 @@ custom_components/localshift/
 │   ├── base.py               # Base sensor class
 │   ├── pricing.py            # Price-related sensors (3 sensors)
 │   ├── forecast.py           # Forecast/optimizer sensors (9 sensors)
-│   ├── status.py             # Status/health sensors (7 sensors)
-│   ├── learning.py           # Learning-related sensors (4 sensors)
+│   ├── status.py             # Status/health sensors (8 sensors)
 │   ├── optimizer.py          # Optimizer-specific sensors (3 sensors)
 │   ├── misc.py               # Miscellaneous sensors (2 sensors)
 │   ├── load_deviation.py     # Load deviation sensor (1 sensor)
@@ -371,16 +366,17 @@ The state machine evaluates desired operating mode based on:
 
 See [PLANNING_MODEL.md](PLANNING_MODEL.md) for optimizer constraint design.
 
-## Learning System
+## Decision Telemetry
 
-The adaptive learning system adjusts optimizer parameters:
+Each mode decision is recorded with the conditions at the time and its measured
+outcome, and surfaced on `sensor.localshift_learning_decision_history`. Nothing
+reads the records back to change behaviour.
 
-- **Parameters**: Thompson sampling for price bias, solar confidence, etc.
-- **Outcomes**: Tracks decisions and backfills results
-- **Pattern Analysis**: Detects weekly systematic biases
-- **Safety Rails**: Warm-up period, step limits, bounds, rollback
-
-See [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) for details.
+The parameter-learning layer that once did — Thompson sampling, pattern
+analysis, contextual adjustment, counterfactual scoring — was retired in
+September 2026 after it produced no measurable gain. See
+[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) for the evidence and for what would
+have to be true to bring it back.
 
 ## Related Documentation
 

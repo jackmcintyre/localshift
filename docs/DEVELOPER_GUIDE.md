@@ -213,7 +213,7 @@ Important sensors for debugging:
 | `sensor.localshift_forecast_battery` | Battery SOC forecast |
 | `sensor.localshift_cost_electricity_net` | Net electricity cost |
 | `sensor.localshift_decision_log` | Recent optimizer decisions |
-| `sensor.localshift_learning_status` | Learning system status |
+| `sensor.localshift_learning_decision_history` | Recorded decisions and outcomes (telemetry) |
 | `sensor.localshift_automation_ready` | System ready for automation |
 
 ## Code Style

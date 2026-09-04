@@ -297,24 +297,20 @@ views:
               rapid mode flapping. **Shortfall penalty** controls how hard
               the optimizer pushes to hit the demand window target.
 
-      # --- Learning System -------------------------------------------------------------
+      # --- Decision Telemetry ----------------------------------------------------------
       - type: grid
         cards:
           - type: heading
-            heading: Learning System
+            heading: Decision Telemetry
             heading_style: title
 
           - type: tile
-            entity: switch.localshift_enable_learning
-            name: Learning
-            icon: mdi:brain
-
-          - type: tile
-            entity: sensor.localshift_learning_status
-            name: Status
+            entity: sensor.localshift_learning_decision_history
+            name: Decisions Recorded
+            icon: mdi:history
 
           - type: button
-            name: Reset Learning Data
+            name: Reset Decision Telemetry
             icon: mdi:restore-alert
             tap_action:
               action: perform-action
@@ -322,14 +318,15 @@ views:
               target:
                 entity_id: button.localshift_reset_learning
               confirmation:
-                text: This wipes all learned parameters and restarts observation. Continue?
+                text: This discards every recorded decision and its outcome. Continue?
             icon_height: 40px
 
           - type: markdown
             content: >
-              When enabled, LocalShift scores its own decisions and gradually
-              tunes optimization weights. It starts in *observing* and only
-              adjusts parameters once it has enough data.
+              LocalShift records each mode decision and its measured outcome.
+              These are observations only — nothing reads them back to change
+              behaviour. The parameter-learning layer that once did was retired
+              after it produced no measurable gain.
 
       # --- Powerwall (live system) --------------------------------------------------------
       - type: grid
@@ -590,8 +587,6 @@ views:
 
               Computed At: {{ state_attr('sensor.localshift_optimizer_plan_detailed', 'computed_at') | default('-') }}
 
-              Optimizer Advantage: {{ states('sensor.localshift_optimizer_advantage') }}
-
               === FORECAST ACCURACY ===
 
               Forecast Accuracy: {{ states('sensor.localshift_forecast_accuracy') }}
@@ -684,29 +679,7 @@ views:
 
               Allow Export: {{ states('select.my_home_allow_export') }}
 
-              === LEARNING SYSTEM ===
-
-              Learning Status: {{ states('sensor.localshift_learning_status') }}
-
-              Decision Quality: {{ states('sensor.localshift_decision_quality') }}%
-
-              Decisions Today: {{ state_attr('sensor.localshift_learning_status', 'total_decisions_today') | default(0) }}
-
-              Avg Score Today: {{ state_attr('sensor.localshift_learning_status', 'avg_decision_score_today') | default(0) }}
-
-              Avg Score 7d: {{ state_attr('sensor.localshift_learning_status', 'avg_decision_score_7d') | default(0) }}
-
-              Cost Trend: {{ state_attr('sensor.localshift_learning_status', 'cost_trend') | default('stable') }}
-
-              Grid Charge Efficiency: {{ state_attr('sensor.localshift_decision_quality', 'grid_charge_efficiency') | default(0) }}%
-
-              Export Loss Ratio: {{ state_attr('sensor.localshift_decision_quality', 'export_loss_ratio') | default(0) }}%
-
-              Unnecessary Grid Charge: {{ state_attr('sensor.localshift_decision_quality', 'unnecessary_grid_charge_kwh') | default(0) }} kWh
-
-              Mode Durations Today: {{ state_attr('sensor.localshift_learning_status', 'mode_durations_today') | default({}) }}
-
-              Mode Cost Attribution: {{ state_attr('sensor.localshift_learning_status', 'mode_cost_attribution') | default({}) }}
+              === DECISION TELEMETRY ===
 
               Decision History Count: {{ states('sensor.localshift_learning_decision_history') }}
 
@@ -751,8 +724,6 @@ views:
               Stale Solar Conservative: {{ states('switch.localshift_stale_solar_conservative') }}
 
               Notifications Enabled: {{ states('switch.localshift_notifications_enabled') }}
-
-              Enable Learning: {{ states('switch.localshift_enable_learning') }}
 
               === END OF DEBUG SUMMARY ===
               ```

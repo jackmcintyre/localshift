@@ -701,9 +701,6 @@ def mock_storage():
 
     Use this for tests that initialize components with persistent storage:
     - DecisionOutcomeTracker
-    - ParameterOptimizer
-    - PatternAnalyzer
-    - OptimizationController
     - ThermalManager
     """
     mock_store = MagicMock()
@@ -717,19 +714,7 @@ def mock_storage():
             return_value=mock_store,
         ),
         patch(
-            "custom_components.localshift.engine.parameters.Store",
-            return_value=mock_store,
-        ),
-        patch(
-            "custom_components.localshift.engine.pattern_analyzer.Store",
-            return_value=mock_store,
-        ),
-        patch(
-            "custom_components.localshift.engine.optimization_controller.Store",
-            return_value=mock_store,
-        ),
-        patch(
-            "custom_components.localshift.learning.orchestrator.Store",
+            "custom_components.localshift.learning.telemetry.Store",
             return_value=mock_store,
         ),
     ):

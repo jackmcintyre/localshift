@@ -169,8 +169,8 @@ class TickScheduler:
                 "localshift_fetch_historical_load",
             )
 
-        if self._coordinator.learning_orchestrator is not None:
-            self._coordinator.learning_orchestrator.update_medium_tick(
+        if self._coordinator.decision_telemetry is not None:
+            self._coordinator.decision_telemetry.update_medium_tick(
                 self._coordinator.data
             )
 
@@ -270,8 +270,8 @@ class TickScheduler:
         self._coordinator.data.anticipated_transitions_today = 0
         self._coordinator.data.anticipation_corrections_today = 0
 
-        if self._coordinator.learning_orchestrator is not None:
-            self._coordinator.learning_orchestrator.handle_midnight_reset(
+        if self._coordinator.decision_telemetry is not None:
+            self._coordinator.decision_telemetry.handle_midnight_reset(
                 self._coordinator.data
             )
 

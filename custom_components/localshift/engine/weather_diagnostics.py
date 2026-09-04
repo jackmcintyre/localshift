@@ -41,7 +41,6 @@ class WeatherDiagnosticsEngine:
             data.weather_avg_heating_slope = 0.0
             data.weather_avg_r_squared = 0.0
             data.weather_sample_count = 0
-            data.weather_anomaly_weight = 1.0
             return
 
         diagnostics = weather_correlation.get_diagnostics()
@@ -72,14 +71,12 @@ class WeatherDiagnosticsEngine:
         data.weather_usable_hours = n_usable
         data.weather_hours_with_data = n_hours
 
-        # Issue #681: Weather anomaly detection for rollback protection
+        # The daily temperature history still feeds the correlation model; the
+        # anomaly weight it produced only ever fed ParameterOptimizer's rollback
+        # check (#681), which was retired with the learning layer.
         current_temp = weather_correlation.get_current_temperature()
         if current_temp is not None:
             weather_correlation.record_daily_temperature(current_temp)
-            anomaly_result = weather_correlation.detect_weather_anomaly(current_temp)
-            data.weather_anomaly_weight = anomaly_result.weight
-        else:
-            data.weather_anomaly_weight = 1.0
 
         _LOGGER.debug(
             "Weather diagnostics: samples=%d, cooling=%.4f, heating=%.4f, r2=%.3f, confidence=%s",

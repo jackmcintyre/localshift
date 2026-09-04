@@ -10,7 +10,6 @@ from custom_components.localshift.sensors import (
     CheapChargeStopPriceSensor,
     DecisionLagSensor,
     DecisionLogSensor,
-    DecisionQualitySensor,
     EffectiveCheapPriceSensor,
     EntityHealthSensor,
     ExcessSolarSensor,
@@ -21,7 +20,6 @@ from custom_components.localshift.sensors import (
     ForecastStatusSensor,
     IntegrationStatusSensor,
     LearningDecisionHistorySensor,
-    LearningStatusSensor,
     LoadDeviationSensor,
     LoadShiftSignalSensor,
     MinimumTargetSOCSensor,
@@ -185,8 +183,6 @@ class Fixtures:
             "sensor.test": {"status": "ok", "category": "required"}
         }
         data.learning_status = "optimizing"
-        data.optimization_weights = {"cost": 0.8, "comfort": 0.2}
-        data.contextual_adjustments_active = True
         data.performance_metrics = MagicMock()
         data.performance_metrics.total_decisions_today = 10
         data.performance_metrics.avg_decision_score_today = 0.85
@@ -368,18 +364,7 @@ class TestStatusSensors(Fixtures):
         assert attrs["avg_lag_24h"] == 2.5
 
 
-class TestLearningSensors(Fixtures):
-    def test_learning_status(self, mock_coordinator, mock_entry):
-        sensor = LearningStatusSensor(mock_coordinator, mock_entry)
-        sensor._update_from_coordinator()
-        assert sensor.native_value == "optimizing"
-        assert sensor.icon == "mdi:brain"
-
-    def test_decision_quality(self, mock_coordinator, mock_entry):
-        sensor = DecisionQualitySensor(mock_coordinator, mock_entry)
-        sensor._update_from_coordinator()
-        assert sensor.native_value == 85.0
-
+class TestDecisionTelemetrySensors(Fixtures):
     def test_learning_decision_history(self, mock_coordinator, mock_entry):
         sensor = LearningDecisionHistorySensor(mock_coordinator, mock_entry)
         sensor._update_from_coordinator()

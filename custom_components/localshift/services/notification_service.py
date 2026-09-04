@@ -301,13 +301,13 @@ class NotificationService:
 
         soc = round(data.soc)
 
-        # Learning system stats (Issue #170 Phase 5)
+        # Decision-telemetry summary (see learning/telemetry.py)
         metrics = data.performance_metrics
         learning_summary = ""
         if metrics.total_decisions_today > 0:
             quality_pct = round(metrics.avg_decision_score_today * 100)
             learning_summary = (
-                f"\n\nLearning: {data.learning_status} | "
+                f"\n\nDecisions: {data.learning_status} | "
                 f"Quality: {quality_pct}% | "
                 f"Trend: {metrics.cost_trend}"
             )

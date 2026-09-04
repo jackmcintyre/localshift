@@ -67,15 +67,6 @@ BOOST_CHARGE_MAX_SOC = 80.0
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
 
-# Issue #868: Export-leak protection gate (optimization_controller.py Rule 2).
-# When the daily export_loss_ratio metric exceeds 0.3, Rule 2 nudges the optimizer
-# to be more conservative about exporting. This flag keeps that behavioural rule
-# OFF by default so computing the metric (now real) does not silently arm the
-# adjustment on systems that already have the learning switch enabled. The metric
-# becomes visible on the dashboard first; an operator flips this constant ON in a
-# follow-up once real export_loss_ratio values have been observed.
-EXPORT_LEAK_PROTECTION_ENABLED = False
-
 # Force discharge time window (dummy tariff limitation)
 DISCHARGE_EARLIEST_HOUR = 6
 
@@ -438,9 +429,6 @@ SWITCH_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 # Consolidated notification switch (Issue #214)
 SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
 
-# Learning system switch (Issue #170 Phase 4)
-SWITCH_ENABLE_LEARNING = "enable_learning"
-
 SWITCH_DEFAULTS = {
     SWITCH_AUTOMATION_ENABLED: True,
     SWITCH_SPIKE_DISCHARGE_ENABLED: True,
@@ -450,7 +438,6 @@ SWITCH_DEFAULTS = {
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
     SWITCH_STALE_SOLAR_CONSERVATIVE: True,
     SWITCH_NOTIFICATIONS_ENABLED: True,  # Consolidated notification toggle
-    SWITCH_ENABLE_LEARNING: False,  # Users must opt-in to active optimization
 }
 
 SWITCH_ICONS = {
@@ -462,7 +449,6 @@ SWITCH_ICONS = {
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:transfer-down",
     SWITCH_STALE_SOLAR_CONSERVATIVE: "mdi:weather-sunny-off",
     SWITCH_NOTIFICATIONS_ENABLED: "mdi:bell",
-    SWITCH_ENABLE_LEARNING: "mdi:brain",
 }
 
 SWITCH_NAMES = {
@@ -474,7 +460,6 @@ SWITCH_NAMES = {
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
     SWITCH_STALE_SOLAR_CONSERVATIVE: "Stale Solar Conservative",
     SWITCH_NOTIFICATIONS_ENABLED: "Notifications Enabled",
-    SWITCH_ENABLE_LEARNING: "Enable Learning",
 }
 
 # -----------------------------------------------------------------------------
@@ -520,7 +505,7 @@ BUTTON_ICONS = {
 
 BUTTON_NAMES = {
     BUTTON_UPDATE_FORECAST: "Update Forecast",
-    BUTTON_RESET_LEARNING: "Reset Learning Data",
+    BUTTON_RESET_LEARNING: "Reset Decision Telemetry",
 }
 
 # -----------------------------------------------------------------------------

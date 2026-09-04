@@ -285,3 +285,26 @@ class DecisionLagSensor(LocalShiftSensorBase):
         if self.coordinator.data.decision_timestamp is not None:
             return "mdi:timer-sand"
         return "mdi:timer-outline"
+
+
+class LearningDecisionHistorySensor(LocalShiftSensorBase):
+    """Recent mode decisions and their measured outcomes.
+
+    Decision telemetry, not learning: nothing consumes these records to change
+    behaviour. Kept because the record set is the only durable asset the
+    retired parameter-learning layer produced, and any future attempt would
+    need it. The unique_id predates the rename and must not change.
+    """
+
+    _attr_unique_id = "localshift_learning_decision_history"
+    _attr_name = "Learning Decision History"
+    _attr_icon = "mdi:history"
+
+    def _update_from_coordinator(self) -> None:
+        self._attr_native_value = len(self.coordinator.data.recent_decision_log)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "decisions": self.coordinator.data.recent_decision_log[-20:],
+        }

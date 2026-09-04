@@ -473,65 +473,14 @@ Attributes:
 
 ---
 
-### 18. sensor.localshift_learning_status
 
-**Purpose:** Current learning system status and parameter values.
-
-Added in Issue #170 Phase 5 for learning system observability.
-
-**State:** Current learning phase: `observing`, `tuning`, `optimizing`, or `disabled`
-
-**Example Data:**
-```
-State: observing
-Attributes:
-  total_decisions_today: 15
-  avg_decision_score_today: 0.383
-  avg_decision_score_7d: 0.424
-  cost_trend: stable
-  mode_durations_today:
-    boost_charging: 37.5
-    self_consumption: 91.0
-    grid_charging: 8.5
-  mode_cost_attribution:
-    grid_charging: -0.0
-  optimization_weights: {}
-  contextual_adjustments_active: []
-```
-
-**Icon:** Dynamic (brain for optimizing, tune for tuning, eye for observing, brain-off for disabled)
-
----
-
-### 19. sensor.localshift_decision_quality
-
-**Purpose:** Rolling decision quality score.
-
-Added in Issue #170 Phase 5 for tracking learning system effectiveness.
-
-**State:** Today's average decision quality as percentage (0-100%)
-
-**Example Data:**
-```
-State: 38.3
-Attributes:
-  total_decisions_today: 15
-  avg_score_7d: 42.4
-  cost_trend: stable
-  grid_charge_efficiency: 0.0
-  export_loss_ratio: 0.0
-  unnecessary_grid_charge_kwh: 0.0
-  mode_durations_today: {...}
-  mode_cost_attribution: {...}
-```
-
----
 
 ### 20. sensor.localshift_learning_decision_history
 
-**Purpose:** Recent decision history with outcomes.
+**Purpose:** Recent decision history with measured outcomes.
 
-Added in Issue #170 Phase 5 for learning system debugging.
+Telemetry only — nothing reads these records back to change behaviour. See
+[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md).
 
 **State:** Count of decisions in last 24 hours
 
@@ -544,44 +493,6 @@ Attributes:
 
 ---
 
-### 21. sensor.localshift_optimizer_advantage
-
-**Purpose:** Counterfactual TOU baseline comparison showing optimizer value.
-
-Added in Issue #683 to measure whether the optimizer performs better than a simple time-of-use baseline strategy (charge during cheapest 4 hours, discharge during peak).
-
-**State Class:** `measurement`
-
-**State:** Daily optimizer advantage in $ (negative = TOU cheaper, positive = optimizer cheaper)
-
-**Example Data:**
-```
-State: 1.25
-Attributes:
-  advantage_7d: 8.75
-  advantage_daily_avg: 1.25
-  advantage_percent: 15.2
-  tou_cost: 8.25
-  actual_cost: 7.00
-  degrading: false
-```
-
-**Key Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `advantage_7d` | float | 7-day rolling total advantage ($) |
-| `advantage_daily_avg` | float | Daily average over 7 days ($) |
-| `advantage_percent` | float | Advantage as percentage of TOU cost |
-| `tou_cost` | float | Estimated cost with TOU baseline strategy ($) |
-| `actual_cost` | float | Actual cost with optimizer decisions ($) |
-| `degrading` | bool | Whether advantage trend is negative |
-
-**Use Case:** This sensor answers "Is the optimizer actually saving money compared to simple TOU rules?" The TOU baseline strategy charges during the cheapest 4 hours and discharges/self-consumes during peak hours. A positive value means the optimizer is outperforming this simple baseline.
-
-**Icon:** `mdi:scale-balance`
-
----
 
 ### 22. sensor.localshift_decision_lag
 
@@ -1227,26 +1138,6 @@ State: on
 
 ---
 
-### 8. switch.localshift_enable_learning
-
-**Purpose:** Enable the learning system to adjust parameters.
-
-Added in Issue #170 Phase 4 for user control over learning system.
-
-**Default:** OFF
-
-**Example Data:**
-```
-State: on
-```
-
-**Behavior:**
-- ON: Learning system can adjust parameters based on outcomes
-- OFF: Learning system observes only, parameters stay at defaults
-
-**Use Case:** Enable after the system has collected enough data (~50 decisions, typically 2-3 days). Disable if you want to pause learning or return to default behavior.
-
----
 
 ## Numbers (Configuration Thresholds)
 
@@ -1454,7 +1345,7 @@ State: 2026-02-24T02:32:04+00:00 (last pressed)
 
 ### 2. button.localshift_reset_learning
 
-**Action:** Reset learning system decision tracking and start fresh.
+**Action:** Discard the recorded decisions and the weather-correlation history.
 
 **Effect:**
 - Clears decision tracker state
