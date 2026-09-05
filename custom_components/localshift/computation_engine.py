@@ -19,6 +19,7 @@ from .const import (
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
+    CONF_MAX_PRECHARGE_PRICE,
     CONF_MIN_CYCLE_SAVING,
     CONF_MIN_HOLD_SAVING,
     CONF_MINIMUM_TARGET_SOC,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_DEMAND_WINDOW_START,
     DEFAULT_EXPORT_PRICE_MARGIN,
     DEFAULT_FORECAST_LOOKAHEAD_HOURS,
+    DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MIN_CYCLE_SAVING,
     DEFAULT_MIN_HOLD_SAVING,
     DEFAULT_MINIMUM_TARGET_SOC,
@@ -855,6 +857,16 @@ class ComputationEngine:
             ),
             CONF_MIN_CYCLE_SAVING: self.entry.options.get(
                 CONF_MIN_CYCLE_SAVING, DEFAULT_MIN_CYCLE_SAVING
+            ),
+            # Pre-charge price cap. Same trap as the runway margin below: the number
+            # entity writes entry.options, but the DP reads THIS dict, so without this
+            # line the solver's ramp / water level / hard-floor feasibility all ran on
+            # the 0.20 default no matter where the slider sat (2026-09-05: slider at
+            # 0.26, plan still refused 20.5–21.1c pre-DW slots). Only the live "now"
+            # ramp in price_calculator read the real value, so plan and controller
+            # disagreed about what the operator was willing to pay.
+            CONF_MAX_PRECHARGE_PRICE: self.entry.options.get(
+                CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE
             ),
             CONF_MIN_HOLD_SAVING: self.entry.options.get(
                 CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING

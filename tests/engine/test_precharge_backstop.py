@@ -1056,7 +1056,8 @@ class TestRunwayMarginKnob:
         ``ComputationEngine._build_optimizer_config_options`` hand-copies each option
         into the dict that reaches ``_build_optimizer_config``, so a knob missing from
         that copy is decorative — the slider moves and the engine keeps the default.
-        (``max_pre_charge_price`` is currently in exactly that state.)
+        (``max_pre_charge_price`` sat in exactly that state until 2026-09-05; see
+        ``test_the_precharge_cap_slider_reaches_the_engine``.)
         """
         from custom_components.localshift.computation_engine import ComputationEngine
         from custom_components.localshift.const import (
@@ -1078,6 +1079,47 @@ class TestRunwayMarginKnob:
                 SimpleNamespace(), options
             ).precharge_runway_margin_min
             == 45.0
+        )
+
+    def test_the_precharge_cap_slider_reaches_the_engine(self) -> None:
+        """``number.localshift_max_pre_charge_price`` must reach the DP, not just the ramp.
+
+        2026-09-05 live: the slider was raised 0.20 -> 0.26 to unlock three 20.5–21.1c
+        pre-DW slots and the plan did not move, because
+        ``_build_optimizer_config_options`` never forwarded the option and the runner fell
+        through to ``DEFAULT_MAX_PRECHARGE_PRICE``. Only ``price_calculator``'s live "now"
+        ramp read ``entry.options``, so the controller and the plan disagreed about the
+        operator's ceiling. The cap gates the urgency ramp, the funding water level AND
+        the #885 hard-floor feasibility sim, so a decorative slider silently caps how far
+        strict mode can pre-charge.
+        """
+        from custom_components.localshift.computation_engine import ComputationEngine
+        from custom_components.localshift.const import (
+            CONF_MAX_PRECHARGE_PRICE,
+            DEFAULT_MAX_PRECHARGE_PRICE,
+        )
+        from custom_components.localshift.engine.optimizer_runner import (
+            _build_optimizer_config,
+        )
+
+        engine = ComputationEngine.__new__(ComputationEngine)
+        engine.entry = SimpleNamespace(options={CONF_MAX_PRECHARGE_PRICE: 0.26})
+        engine._get_switch_state = lambda _key: False
+
+        options = engine._build_optimizer_config_options()
+
+        assert options[CONF_MAX_PRECHARGE_PRICE] == 0.26
+        assert (
+            _build_optimizer_config(SimpleNamespace(), options).max_precharge_price
+            == 0.26
+        )
+
+        # And the default still flows when the option is absent.
+        engine.entry = SimpleNamespace(options={})
+        options = engine._build_optimizer_config_options()
+        assert (
+            _build_optimizer_config(SimpleNamespace(), options).max_precharge_price
+            == DEFAULT_MAX_PRECHARGE_PRICE
         )
 
     def test_the_entity_is_actually_exposed(self) -> None:
