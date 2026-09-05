@@ -24,6 +24,12 @@ def dt_aware(*args):
     return datetime(*args, tzinfo=SYDNEY)
 
 
+def _all_entries(data):
+    """Flatten every per-source bucket (#942) — for assertions where the grant
+    source is incidental."""
+    return [e for bucket in data.boundary_lag_history.values() for e in bucket]
+
+
 @pytest.fixture
 def data():
     return CoordinatorData()
@@ -71,8 +77,8 @@ class TestBoundaryLagMeasurement:
 
         # But boundary lag is measured regardless — the core point of this slice.
         assert data.boundary_lag_seconds == pytest.approx(23.0)
-        assert len(data.boundary_lag_history) == 1
-        entry = data.boundary_lag_history[0]
+        assert len(_all_entries(data)) == 1
+        entry = _all_entries(data)[0]
         assert entry["from_mode"] == "self_consumption"
         assert entry["to_mode"] == "grid_charging"
         assert entry["boundary_lag"] == pytest.approx(23.0)
@@ -88,7 +94,7 @@ class TestBoundaryLagMeasurement:
             )
         assert data.boundary_lag_seconds == pytest.approx(143.0)
         assert (
-            data.boundary_lag_history[0]["interval_start_utc"]
+            data.boundary_lag_history["unknown"][0]["interval_start_utc"]
             == dt_util.as_utc(dt_aware(2026, 8, 27, 6, 5, 0)).isoformat()
         )
 
@@ -113,7 +119,7 @@ class TestBoundaryLagMeasurement:
         assert data.boundary_lag_seconds == pytest.approx(299.5)
         # Interval start is still 06:05, NOT rolled forward to 06:10.
         assert (
-            data.boundary_lag_history[0]["interval_start_utc"]
+            data.boundary_lag_history["unknown"][0]["interval_start_utc"]
             == dt_util.as_utc(dt_aware(2026, 8, 27, 6, 5, 0)).isoformat()
         )
 
@@ -127,7 +133,7 @@ class TestBoundaryLagMeasurement:
             state_machine._record_transition_metrics(
                 data, BatteryMode.GRID_CHARGING, dry_run=False
             )
-        entry = data.boundary_lag_history[0]
+        entry = data.boundary_lag_history["unknown"][0]
         assert {
             "from_mode",
             "to_mode",
@@ -159,7 +165,7 @@ class TestBoundaryLagDryRun:
                 data, BatteryMode.GRID_CHARGING, dry_run=True
             )
         assert data.boundary_lag_seconds is None
-        assert data.boundary_lag_history == []
+        assert data.boundary_lag_history == {}
         # Dry runs skip the whole `if not dry_run` block, not just our part.
         assert state_machine._last_successful_transition is None
 
@@ -256,7 +262,7 @@ class TestGrantSourceTagging:
             )
         state_machine._transition_source_override = None
         # Tagged backstop even though _last_grant_source says "price".
-        assert data.boundary_lag_history[-1]["grant_source"] == "backstop"
+        assert data.boundary_lag_history["backstop"][-1]["grant_source"] == "backstop"
 
     def test_invalidate_clears_grant_source(self, state_machine, data):
         self._seed(data, state_machine)
@@ -274,7 +280,7 @@ class TestGrantSourceTagging:
             state_machine._record_transition_metrics(
                 data, BatteryMode.SELF_CONSUMPTION, dry_run=False
             )
-        assert data.boundary_lag_history[-1]["grant_source"] == "unknown"
+        assert data.boundary_lag_history["unknown"][-1]["grant_source"] == "unknown"
 
 
 class TestOverrideLifecycle:
@@ -303,7 +309,7 @@ class TestOverrideLifecycle:
 
         assert state_machine._transition_source_override is None
         # The failed correction never reaches _record_transition_metrics.
-        assert data.boundary_lag_history == []
+        assert data.boundary_lag_history == {}
 
         # A subsequent SUCCESSFUL transition must not inherit "backstop".
         state_machine._battery_controller.set_self_consumption = AsyncMock(
@@ -317,21 +323,94 @@ class TestOverrideLifecycle:
                 data, BatteryMode.SELF_CONSUMPTION
             )
         assert success is True
-        assert data.boundary_lag_history[-1]["grant_source"] == "price"
+        assert data.boundary_lag_history["price"][-1]["grant_source"] == "price"
 
 
-class TestBoundaryLagHistoryCap:
-    def test_capped_at_200(self, state_machine, data):
-        data.boundary_lag_history = [{"boundary_lag": float(i)} for i in range(210)]
+class TestBoundaryLagPartition:
+    """#942: the ring is partitioned per grant source, so a burst from one
+    source can never evict another source's samples.
+
+    The old single 200-entry ring was shared by every grant source, and
+    health-check backstop corrections alone can fire up to 288 times a day
+    (5-minute cooldown) — during a long override-fight episode that would
+    evict every grant_source == 'price' sample, the exact population slice 3
+    of #510 needs."""
+
+    def _record(self, state_machine, data, minute, second=0):
         with patch(
             "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
-            mock_now.return_value = dt_aware(2026, 8, 27, 6, 5, 0)
+            mock_now.return_value = dt_aware(2026, 8, 27, 6, minute, second)
             state_machine._record_transition_metrics(
                 data, BatteryMode.SELF_CONSUMPTION, dry_run=False
             )
-        assert len(data.boundary_lag_history) == 200
-        assert data.boundary_lag_history[-1]["to_mode"] == "self_consumption"
+
+    def test_partitioned_by_grant_source(self, state_machine, data):
+        state_machine._last_grant_source = "price"
+        self._record(state_machine, data, 5)
+        state_machine._last_grant_source = None
+        state_machine._transition_source_override = "backstop"
+        self._record(state_machine, data, 10)
+        state_machine._transition_source_override = None
+
+        assert set(data.boundary_lag_history) == {"price", "backstop"}
+        assert data.boundary_lag_history["price"][0]["grant_source"] == "price"
+        assert data.boundary_lag_history["backstop"][0]["grant_source"] == "backstop"
+
+    def test_backstop_burst_does_not_evict_price_samples(self, state_machine, data):
+        """THE #942 acceptance test: 300 backstop corrections (more than a full
+        day's worst-case burst) must not touch the price sample."""
+        state_machine._last_grant_source = "price"
+        self._record(state_machine, data, 5)
+        price_entry = data.boundary_lag_history["price"][0]
+
+        state_machine._last_grant_source = None
+        state_machine._transition_source_override = "backstop"
+        try:
+            for i in range(300):
+                self._record(state_machine, data, 6 + i // 60, i % 60)
+        finally:
+            state_machine._transition_source_override = None
+
+        # The price bucket still holds exactly its one original sample.
+        assert data.boundary_lag_history["price"] == [price_entry]
+        # The backstop bucket is capped at its own per-source window.
+        assert len(data.boundary_lag_history["backstop"]) == 50
+        assert set(data.boundary_lag_history) == {"price", "backstop"}
+
+    def test_per_source_cap_keeps_newest(self, state_machine, data):
+        state_machine._last_grant_source = "price"
+        for minute in range(60):
+            self._record(state_machine, data, minute)
+
+        bucket = data.boundary_lag_history["price"]
+        assert len(bucket) == 50
+        # Newest last, oldest gone. interval_start_utc floors to the 5-minute
+        # boundary (minute 59 -> :55), so the newest entry's floor differs
+        # from its raw minute even though the offset is whole hours.
+        assert bucket[-1]["interval_start_utc"] == dt_util.as_utc(
+            dt_aware(2026, 8, 27, 6, 55, 0)
+        ).isoformat()
+        assert bucket[0]["interval_start_utc"] == dt_util.as_utc(
+            dt_aware(2026, 8, 27, 6, 10, 0)
+        ).isoformat()
+
+    def test_unknown_bucket_on_fresh_machine(self, state_machine, data):
+        # No prior grant and no override -> the "unknown" bucket.
+        self._record(state_machine, data, 5)
+        assert set(data.boundary_lag_history) == {"unknown"}
+        assert data.boundary_lag_history["unknown"][0]["grant_source"] == "unknown"
+
+    def test_history_is_not_rebound_when_capping(self, state_machine, data):
+        """The bucket is trimmed in place — rebinding boundary_lag_history would
+        drop any bucket another coroutine just wrote to."""
+        state_machine._last_grant_source = "price"
+        self._record(state_machine, data, 5)
+        ring = data.boundary_lag_history
+        for minute in range(5, 60):
+            self._record(state_machine, data, minute)
+        assert data.boundary_lag_history is ring
+        assert len(ring["price"]) == 50
 
 
 class TestUtcDerivation:
@@ -371,8 +450,8 @@ class TestUtcDerivation:
 
         assert data_a.boundary_lag_seconds == pytest.approx(data_b.boundary_lag_seconds)
         assert (
-            data_a.boundary_lag_history[0]["interval_start_utc"]
-            == data_b.boundary_lag_history[0]["interval_start_utc"]
+            data_a.boundary_lag_history["unknown"][0]["interval_start_utc"]
+            == data_b.boundary_lag_history["unknown"][0]["interval_start_utc"]
         )
 
     def test_spring_forward_boundary_does_not_shift_interval(self, state_machine, data):
@@ -402,6 +481,131 @@ class TestUtcDerivation:
 
         assert data_a.boundary_lag_seconds == pytest.approx(data_b.boundary_lag_seconds)
         assert (
-            data_a.boundary_lag_history[0]["interval_start_utc"]
-            == data_b.boundary_lag_history[0]["interval_start_utc"]
+            data_a.boundary_lag_history["unknown"][0]["interval_start_utc"]
+            == data_b.boundary_lag_history["unknown"][0]["interval_start_utc"]
         )
+
+
+class TestReprobeOverrideLifecycle:
+    """Issue #944: the Tesla re-probe override block (machine.py, inside
+    ``_handle_tesla_override_state``, near the ``_handle_stable_mode``
+    re-probe path) has no test at all, while the byte-similar health-check
+    block (``_perform_health_check``) is covered by ``TestOverrideLifecycle``
+    above. Both wrap ``_execute_mode_transition`` in the same
+    try/set-before/finally-clear shape; this class closes that asymmetry for
+    the re-probe call site."""
+
+    async def _arm_override(self, state_machine, data, detected_at):
+        """Get the state machine into the uncorroborated-override state so the
+        next call at +31 minutes fires the re-probe."""
+        data.operation_mode = "self_consumption"
+        data.backup_reserve = 80.0
+        data.grid_services_active = None
+        data.storm_watch_active = None
+        state_machine._notification_service.send_tesla_override_notification = (
+            AsyncMock()
+        )
+        return await state_machine._handle_tesla_override_state(data, detected_at)
+
+    async def test_override_armed_during_reprobe(self, state_machine, data):
+        detected_at = dt_aware(2026, 8, 27, 6, 0, 0)
+        await self._arm_override(state_machine, data, detected_at)
+
+        captured = {}
+
+        async def _capture(*args, **kwargs):
+            captured["override"] = state_machine._transition_source_override
+            return True
+
+        state_machine._execute_mode_transition = AsyncMock(side_effect=_capture)
+
+        at_interval = detected_at + timedelta(minutes=31)
+        await state_machine._handle_tesla_override_state(data, at_interval)
+
+        assert captured["override"] == "backstop"
+        assert state_machine._transition_source_override is None
+
+    async def test_reprobe_records_backstop_tagged_sample(self, state_machine, data):
+        # Do NOT stub _execute_mode_transition — let the real path run against
+        # the fixture's mocked controller (set_self_consumption -> True), so
+        # this test ties #944 to #942: the tag must reach the ring, not just
+        # be observable mid-call.
+        detected_at = dt_aware(2026, 8, 27, 6, 0, 0)
+        await self._arm_override(state_machine, data, detected_at)
+
+        at_interval = detected_at + timedelta(minutes=31)
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = at_interval
+            await state_machine._handle_tesla_override_state(data, at_interval)
+
+        assert "backstop" in data.boundary_lag_history
+        assert data.boundary_lag_history["backstop"][-1]["grant_source"] == "backstop"
+        assert state_machine._transition_source_override is None
+
+    async def test_override_cleared_after_failed_reprobe(self, state_machine, data):
+        detected_at = dt_aware(2026, 8, 27, 6, 0, 0)
+        await self._arm_override(state_machine, data, detected_at)
+
+        state_machine._battery_controller.set_self_consumption = AsyncMock(
+            return_value=False
+        )
+
+        at_interval = detected_at + timedelta(minutes=31)
+        should_skip = await state_machine._handle_tesla_override_state(
+            data, at_interval
+        )
+
+        assert should_skip is True
+        assert state_machine._tesla_override_detected is True
+        assert state_machine._transition_source_override is None
+        # A failed probe never reaches _record_transition_metrics.
+        assert data.boundary_lag_history == {}
+
+    async def test_override_cleared_when_reprobe_raises(self, state_machine, data):
+        detected_at = dt_aware(2026, 8, 27, 6, 0, 0)
+        await self._arm_override(state_machine, data, detected_at)
+
+        state_machine._execute_mode_transition = AsyncMock(
+            side_effect=RuntimeError("probe blew up")
+        )
+
+        at_interval = detected_at + timedelta(minutes=31)
+        with pytest.raises(RuntimeError, match="probe blew up"):
+            await state_machine._handle_tesla_override_state(data, at_interval)
+
+        # The finally must not swallow the exception (pinning that behaviour
+        # against a future "fix"), but it must still clear the override.
+        assert state_machine._transition_source_override is None
+
+    async def test_next_genuine_transition_not_mislabelled_after_failed_reprobe(
+        self, state_machine, data
+    ):
+        detected_at = dt_aware(2026, 8, 27, 6, 0, 0)
+        await self._arm_override(state_machine, data, detected_at)
+
+        state_machine._battery_controller.set_self_consumption = AsyncMock(
+            return_value=False
+        )
+        at_interval = detected_at + timedelta(minutes=31)
+        await state_machine._handle_tesla_override_state(data, at_interval)
+        assert state_machine._transition_source_override is None
+        assert data.boundary_lag_history == {}
+
+        # A subsequent SUCCESSFUL, genuinely price-granted transition must not
+        # inherit "backstop" from the failed probe.
+        state_machine._last_grant_source = "price"
+        state_machine._battery_controller.set_self_consumption = AsyncMock(
+            return_value=True
+        )
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = at_interval + timedelta(seconds=30)
+            success = await state_machine._execute_mode_transition(
+                data, BatteryMode.SELF_CONSUMPTION
+            )
+        assert success is True
+        assert data.boundary_lag_history["price"][-1]["grant_source"] == "price"
+        assert "backstop" not in data.boundary_lag_history

@@ -211,7 +211,7 @@ class Fixtures:
         data.physical_response_timed_out = False
         # Issue #510 slice 1: boundary-lag telemetry, untouched by these tests.
         data.boundary_lag_seconds = None
-        data.boundary_lag_history = []
+        data.boundary_lag_history = {}
         data.anticipated_transitions_today = 0
         data.anticipation_corrections_today = 0
         data.forecast_status = "ready"

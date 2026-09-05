@@ -527,7 +527,7 @@ Attributes:
   anticipation_corrections_today: 0
 ```
 
-Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `backstop`, `unknown`). `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
+Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `backstop`, `unknown`). Internally the ring is partitioned per `grant_source` (50 entries each, #942) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
 
 ---
 
