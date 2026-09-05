@@ -122,6 +122,12 @@ class StateMachine:
         # decision path (Tesla re-probe, health-check correction). Set immediately
         # before the call, cleared immediately after — never left armed.
         self._transition_source_override: str | None = None
+        # Issue #941: a mode whose last transition attempt failed or was blocked
+        # by the entity validator, so the next attempt at that SAME mode is a
+        # retry rather than a fresh price-granted decision. Mode-scoped (not a
+        # bool) on purpose: a bool would inherit exactly the stickiness bug this
+        # exists to fix, relabelling a later transition to a different mode.
+        self._pending_retry_mode: BatteryMode | None = None
         # Decision-token gating (#622 gate replacement): the mode may be
         # re-decided at most once per discrete decision-context change. The
         # fingerprint is consumed by the *evaluation* that observes the change
@@ -942,6 +948,28 @@ class StateMachine:
             return "price"
         return "unknown"
 
+    def _classify_transition_source(
+        self, retrying: bool, debounce: timedelta, debounce_in_progress: bool
+    ) -> str | None:
+        """Classify a convergence transition that is NOT a fresh token grant (#941).
+
+        ``_last_grant_source`` is sticky — written only when a decision token is
+        granted, cleared only by ``invalidate_decision_fingerprint`` — so a
+        debounce-completion or post-failure retry transition would otherwise
+        inherit a stale ``price``/``spike``/``demand_window`` tag and pollute the
+        Amber-latency baseline those buckets exist to measure.
+
+        Returns None for an ordinary transition, which falls through the
+        ``_transition_source_override or (_last_grant_source or "unknown")`` chain
+        unchanged. Retry deliberately outranks debounce: it is the more specific
+        cause, and either tag excludes the sample from the baseline.
+        """
+        if retrying:
+            return "retry"
+        if debounce_in_progress and debounce > timedelta(0):
+            return "debounce"
+        return None
+
     async def _evaluate_core(
         self, data: CoordinatorData, computation_engine: ComputationEngine
     ) -> None:
@@ -973,6 +1001,10 @@ class StateMachine:
     async def _handle_stable_mode(self, data: CoordinatorData) -> None:
         """Handle case where desired mode matches commanded mode."""
         self._mode_desired_since.clear()
+        # Issue #941: the mode has converged (or was never divergent), so any
+        # pending retry marker is stale — drop it here too, else it is as
+        # sticky as the bug it exists to fix.
+        self._pending_retry_mode = None
         self._skip_next_debounce = False
 
         if await self._handle_soc_monitoring(data):
@@ -1004,13 +1036,42 @@ class StateMachine:
         if not await self._check_debounce_and_transition(data, desired, now, debounce):
             return
 
-        await self._execute_transition_with_validation(data, desired, now)
+        # Issue #941: tag the convergence paths that did NOT land on a fresh
+        # price grant, so an analyst can exclude them from the Amber-latency
+        # baseline. None for an ordinary transition falls through the existing
+        # `override or (_last_grant_source or "unknown")` chain untouched.
+        # Reuses the debounce/debounce_in_progress already computed above —
+        # _get_debounce_duration cannot be called twice, it consumes
+        # _skip_next_debounce.
+        retrying = self._pending_retry_mode == desired
+        # Issue #941: read-and-clear. Consumed here; re-armed by
+        # _handle_failed_transition or the validator-blocked early return in
+        # _execute_transition_with_validation if this attempt does not land,
+        # so a genuinely repeated retry is still tagged on the next tick.
+        self._pending_retry_mode = None
+        self._transition_source_override = self._classify_transition_source(
+            retrying, debounce, debounce_in_progress
+        )
+        try:
+            # try/finally is load-bearing (same contract as the two backstop
+            # sites): _record_transition_metrics only runs on success, so a
+            # failed or validator-blocked attempt would otherwise leave the
+            # override armed and mislabel the next genuine transition. A None
+            # override is a no-op, so it is set unconditionally.
+            await self._execute_transition_with_validation(data, desired, now)
+        finally:
+            self._transition_source_override = None
 
     def _clear_stale_debounce_timers(self, desired: BatteryMode) -> None:
         """Clear debounce timers for modes no longer desired."""
         for mode in list(self._mode_desired_since.keys()):
             if mode != desired:
                 self._mode_desired_since.pop(mode, None)
+        # Issue #941: a retry marker for a mode that is no longer desired must
+        # not outlive it — otherwise a later, unrelated transition to that same
+        # mode (on a fresh grant) would be mislabelled retry forever.
+        if self._pending_retry_mode not in (None, desired):
+            self._pending_retry_mode = None
 
     async def _execute_transition_with_validation(
         self, data: CoordinatorData, desired: BatteryMode, now: datetime
@@ -1029,6 +1090,11 @@ class StateMachine:
                 "Automation blocked: Required entities unavailable. Maintaining current mode %s.",
                 old_mode.value,
             )
+            # Issue #941: this attempt at `desired` did not land, so the next
+            # attempt at the SAME mode is a retry, not a fresh price grant.
+            # The debounce timer is deliberately left alone here — blocked is
+            # not failed, so the retry keeps its place in the debounce queue.
+            self._pending_retry_mode = desired
             return
 
         transition_success = await self._execute_mode_transition(data, desired)
@@ -1052,6 +1118,9 @@ class StateMachine:
             desired, data
         )
         self._mode_desired_since.pop(desired, None)
+        # Issue #941: the command was rejected, so the next attempt at
+        # `desired` is a retry, not a fresh price grant.
+        self._pending_retry_mode = desired
 
     async def _finalize_successful_transition(
         self, data: CoordinatorData, desired: BatteryMode, old_mode: BatteryMode
@@ -1320,7 +1389,18 @@ class StateMachine:
 
         data.boundary_lag_seconds = boundary_lag
         data.boundary_lag_history.append({
-            "from_mode": data.active_mode.value if data.active_mode else "unknown",
+            # Issue #940: NOT data.active_mode — _evaluate_core sets
+            # `desired = data.active_mode`, so active_mode is always identical
+            # to `target` on every reachable path, making it a dead field that
+            # always echoed the destination back as the origin.
+            # `self._commanded_mode` still holds the genuine previous mode
+            # here: `_finalize_successful_transition` only reassigns it after
+            # `_execute_mode_transition` returns, and this method runs from
+            # inside that same call chain, before the reassignment. On a
+            # backstop correction (health-check, Tesla re-probe) the commanded
+            # mode is re-issued to itself, so from_mode == to_mode there by
+            # construction — that is a correction, not a mode change.
+            "from_mode": self._commanded_mode.value,
             "to_mode": target.value,
             "boundary_lag": round(boundary_lag, 2),
             "grant_source": grant_source,
@@ -1341,7 +1421,15 @@ class StateMachine:
         if len(data.boundary_lag_history) > 200:
             data.boundary_lag_history = data.boundary_lag_history[-200:]
 
-        _LOGGER.info(
+        # Issue #943: health-check corrections and Tesla re-probes ("backstop")
+        # fire up to once per 5 minutes for the length of a drift episode and
+        # carry no analytic signal for the Amber-latency baseline, so they are
+        # demoted to DEBUG. Every decision-granted transition (price, spike,
+        # demand_window, soc_floor, plan_charge, debounce, retry, unknown)
+        # stays at INFO.
+        level = logging.DEBUG if grant_source == "backstop" else logging.INFO
+        _LOGGER.log(
+            level,
             "Boundary lag: %s landed %.2fs into interval %s (source=%s)",
             target.value,
             boundary_lag,
