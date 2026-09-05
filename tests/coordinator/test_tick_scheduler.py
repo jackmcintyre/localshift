@@ -236,9 +236,17 @@ async def test_handle_midnight_reset(coordinator):
     coordinator._decision_telemetry = MagicMock()
     coordinator._decision_telemetry.handle_midnight_reset = MagicMock()
     coordinator.notify_listeners = MagicMock()
+    # Issue #968: the reset is delegated to the real CostTracker, which is also
+    # what clears the #899 SOC baseline. Use a real tracker with a stale baseline.
+    from custom_components.localshift.utils.costs import CostTracker
+
+    coordinator._cost_tracker = CostTracker(coordinator.hass)
+    coordinator._cost_tracker._last_soc_pct = 63.0
 
     scheduler.handle_midnight_reset(now)
 
+    # Issue #899 / #968: the SOC baseline must be cleared on the live path.
+    assert coordinator._cost_tracker._last_soc_pct is None
     assert coordinator.data.grid_import_cost == 0.0
     assert coordinator.data.grid_export_revenue == 0.0
     assert coordinator.data.battery_savings == 0.0
@@ -825,6 +833,9 @@ async def test_handle_midnight_reset_no_decision_telemetry(coordinator):
     coordinator.data.target_reached_today = True
     coordinator._decision_telemetry = None
     coordinator.notify_listeners = MagicMock()
+    from custom_components.localshift.utils.costs import CostTracker
+
+    coordinator._cost_tracker = CostTracker(coordinator.hass)
 
     scheduler.handle_midnight_reset(now)
 
