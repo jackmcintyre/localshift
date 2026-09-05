@@ -3,8 +3,8 @@
 # =============================================================================
 #
 # Three views:
-#   - Overview: mission control — a bespoke command card (status + live flows
-#     + a fused plan timeline), the decision feed, money, and quick controls.
+#   - Overview: mission control — status, live flows, the plan timeline, peak
+#     readiness, money, the decision feed, and quick controls.
 #   - Settings: all LocalShift controls, grouped by how often you touch them.
 #   - Debug:    full state dump, decision log, and slot-by-slot optimizer plan.
 #
@@ -14,14 +14,18 @@
 #   - my_home_*  entities from the Tesla Powerwall integration (Teslemetry)
 #   - 100h_*     entities from the Amber Electric YAML package
 #
-# No HACS cards required. The Overview uses LocalShift's own cards, shipped
-# with the integration at custom_components/localshift/www/localshift-cards.js.
-# Install the cards once:
+# No HACS cards required. Everything here is a native Home Assistant card
+# except one: custom:localshift-plan-timeline. Core HA can only plot the past
+# (history-graph, statistics-graph), so the forward plan has no native
+# equivalent — that card, and only that card, ships with the integration at
+# custom_components/localshift/www/localshift-cards.js.
+# Install it once:
 #   1. Copy custom_components/localshift/www/localshift-cards.js
 #      to <ha-config>/www/localshift/localshift-cards.js
 #   2. Settings -> Dashboards -> Resources -> Add resource:
-#        URL:  /local/localshift/localshift-cards.js
+#        URL:  /local/localshift/localshift-cards.js?v=2.0.0
 #        Type: JavaScript module
+#      (bump the ?v= query on update, or browsers keep the old module cached)
 #
 # Add to configuration.yaml:
 #   lovelace:
@@ -39,10 +43,10 @@ title: LocalShift
 views:
   # ===========================================================================
   # VIEW 1: OVERVIEW — mission control
-  # One bespoke command card carries the story: status + live flows + a fused
-  # timeline (price bands, peak window, planned actions, SOC actual & plan).
-  # Supporting cards: the decision feed ("why"), money, and quick controls.
-  # Cards are defined in www/localshift-cards.js (see install note above).
+  # Built from native cards wherever Home Assistant has one. The single custom
+  # element left is the plan timeline: core HA plots the past (history-graph,
+  # statistics-graph) and has nothing that plots a forward series, and the
+  # forward plan is the whole point of this integration.
   # ===========================================================================
   - title: Overview
     path: overview
@@ -50,6 +54,103 @@ views:
     type: sections
     max_columns: 2
     sections:
+      # --- What it is doing, and why ---------------------------------------
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Right now
+            heading_style: title
+            icon: mdi:home-battery
+            badges:
+              - type: entity
+                entity: switch.localshift_automation_enabled
+                show_state: true
+              - type: entity
+                entity: switch.localshift_dry_run
+                show_state: true
+              - type: entity
+                entity: binary_sensor.localshift_tesla_override_active
+                show_state: true
+              - type: entity
+                entity: sensor.localshift_integration_status
+                show_state: true
+              - type: entity
+                entity: sensor.localshift_optimizer_summary
+                show_state: true
+
+          - type: markdown
+            content: |
+              {% set mode = states('select.localshift_battery_mode') %}
+              {% set heads = {
+                   'self_consumption': 'Running on sun & stored energy',
+                   'grid_charging': 'Charging on cheap power',
+                   'boost_charging': 'Boost charging before the peak',
+                   'spike_discharge': 'Selling into the spike',
+                   'proactive_export': 'Exporting ahead of negative prices',
+                   'automatic': 'Optimizer in control' } %}
+              {% if not is_state('switch.localshift_automation_enabled', 'on') %}
+              ## Manual control
+              Automation is off — LocalShift is not steering the battery.
+              {% else %}
+              ## {{ heads.get(mode, 'Optimizer in control') }}
+              {{ state_attr('sensor.localshift_decision_log', 'reason') or '' }}
+              {% endif %}
+
+              {% set c = state_attr('sensor.localshift_optimizer_plan_detailed', 'computed_at') %}
+              {% set age = ((now() - as_datetime(c)).total_seconds() / 60) if c else 0 %}
+              {% if age > 30 %}
+              ⚠️ Plan is {{ age | round(0) }} minutes old.
+              {% endif %}
+
+      # --- Live flows -------------------------------------------------------
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Live flows
+            heading_style: subtitle
+            icon: mdi:transmission-tower
+
+          - type: tile
+            entity: sensor.my_home_solar_power
+            name: Solar
+            icon: mdi:solar-power
+
+          - type: tile
+            entity: sensor.my_home_load_power
+            name: Home
+            icon: mdi:home-lightning-bolt
+
+          - type: tile
+            entity: sensor.my_home_grid_power
+            name: Grid
+            icon: mdi:transmission-tower
+            state_content:
+              - state
+              - last_changed
+
+          - type: tile
+            entity: sensor.my_home_battery_power
+            name: Battery
+            icon: mdi:battery-charging
+
+          - type: tile
+            entity: sensor.my_home_percentage_charged
+            name: State of charge
+            icon: mdi:battery
+
+          - type: tile
+            entity: sensor.100h_general_price
+            name: Buy now
+            icon: mdi:cash-minus
+
+          - type: tile
+            entity: sensor.100h_feed_in_price
+            name: Sell now
+            icon: mdi:cash-plus
+
+      # --- The plan (the one custom card) ----------------------------------
       - type: grid
         column_span: 2
         cards:
@@ -57,26 +158,127 @@ views:
           # www/localshift-cards.js. Example:
           #   entities:
           #     soc: sensor.my_home_percentage_charged
-          #     buy_price: sensor.100h_general_price
           #   dw_start: "15:00"
           #   dw_end: "21:00"
-          - type: custom:localshift-command-card
+          - type: custom:localshift-plan-timeline
             grid_options:
               columns: full
 
+      # --- Peak readiness ---------------------------------------------------
       - type: grid
         cards:
-          - type: custom:localshift-decisions-card
+          - type: heading
+            heading: Peak window
+            heading_style: subtitle
+            icon: mdi:chart-bell-curve
 
+          - type: markdown
+            content: |
+              {%- set s = 'sensor.localshift_optimizer_summary' %}
+              {%- set target = states('number.localshift_battery_target') | float(95) %}
+              {%- set entry = state_attr(s, 'dw_entry_soc_pct') %}
+              {%- set actual = state_attr(s, 'dw_entry_actual_soc_pct') %}
+              {%- set short = state_attr(s, 'terminal_shortfall_pct') | float(0) %}
+              {%- if is_state('binary_sensor.localshift_demand_window', 'on') %}
+              **In the peak window now.**
+              {% if actual is not none %}Entered at {{ actual | round(1) }}% against a {{ target | round(0) }}% target — {{ (target - actual) | round(1) }}pp {{ 'short' if actual < target else 'over' }}.{% endif %}
+              {%- elif entry is not none %}
+              **Planned entry:** {{ entry | round(0) }}% of a {{ target | round(0) }}% target — {% if entry < target %}**{{ (target - entry) | round(0) }}pp short**{% else %}on target ✓{% endif %}
+              {%- else %}
+              **Planned entry:** on track — solar alone is forecast to reach the {{ target | round(0) }}% target, so the planner computed no pre-charge requirement.
+              {%- endif %}
+
+              Terminal shortfall (measured at the *end* of the window, not at entry): **{{ short | round(1) }}%**
+
+              {% set d = state_attr('sensor.localshift_optimizer_plan_detailed', 'decisions') or [] -%}
+              {%- set labels = {
+                   'charge_grid_normal': 'Charge',
+                   'charge_grid_boost': 'Boost',
+                   'proactive_export': 'Export',
+                   'spike_discharge': 'Sell',
+                   'hold': 'Hold' } -%}
+              {%- set cur = d[0].action if d | length > 0 else none -%}
+              {%- set ns = namespace(next=none) -%}
+              {%- for slot in d if ns.next is none and slot.action != cur -%}
+              {%- set ns.next = slot -%}
+              {%- endfor -%}
+              {%- if ns.next is not none -%}
+              {%- set at = as_datetime(ns.next.timestamp_iso) | as_local -%}
+              **Next move:** {{ labels.get(ns.next.action, ns.next.action) }} at {{ at.strftime('%H:%M') }}{{ '' if at.date() == now().date() else ' ' ~ at.strftime('%a') }}
+              {%- else -%}
+              **Next move:** none planned in this horizon.
+              {%- endif %}
+
+              {% if state_attr(s, 'precharge_backstop_active') -%}
+              🟠 Runway backstop armed ({{ state_attr(s, 'precharge_runway_slack_min') }} min slack).
+              {%- endif %}
+
+      # --- Money ------------------------------------------------------------
       - type: grid
         cards:
-          - type: custom:localshift-money-card
+          - type: heading
+            heading: Money
+            heading_style: subtitle
+            icon: mdi:cash-multiple
 
+          - type: tile
+            entity: sensor.localshift_cost_electricity_net
+            name: Net today
+
+          - type: markdown
+            content: |
+              {%- set c = 'sensor.localshift_cost_electricity_net' %}
+              imports **${{ '%.2f' | format(state_attr(c, 'grid_import_cost') | float(0)) }}**
+              · exports **${{ '%.2f' | format(state_attr(c, 'grid_export_revenue') | float(0)) }}**
+              · rest of plan **${{ '%.2f' | format(states('sensor.localshift_optimizer_plan_grid') | float(0)) }}**
+
+          # Native replacement for the old hand-rolled SVG bar chart — the cost
+          # sensor carries state_class: total, so it is a long-term statistic.
+          - type: statistics-graph
+            title: Net cost, last 7 days
+            entities:
+              - entity: sensor.localshift_cost_electricity_net
+                name: Net
+            stat_types:
+              - state
+            period: day
+            chart_type: bar
+            days_to_show: 7
+
+      # --- Why it did that --------------------------------------------------
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Why it did that
+            heading_style: subtitle
+            icon: mdi:comment-question-outline
+
+          - type: markdown
+            content: |
+              {%- set h = state_attr('sensor.localshift_decision_log', 'history') or [] -%}
+              {%- set ns = namespace(rows=[], last='') -%}
+              {%- for e in h | reverse -%}
+              {%- if e.reason != ns.last and ns.rows | length < 8 -%}
+              {%- set ns.rows = ns.rows + [e] -%}
+              {%- set ns.last = e.reason -%}
+              {%- endif -%}
+              {%- endfor -%}
+              {%- if ns.rows | length == 0 -%}
+              No decisions logged yet.
+              {%- else -%}
+              {%- for e in ns.rows %}
+              - **{{ e.reason }}** — {{ (as_datetime(e.timestamp) | as_local).strftime('%H:%M') }}, SOC {{ e.soc }}%
+              {%- endfor -%}
+              {%- endif %}
+
+      # --- Quick controls ---------------------------------------------------
       - type: grid
         cards:
           - type: heading
             heading: Quick Controls
-            heading_style: title
+            heading_style: subtitle
+            icon: mdi:tune-variant
 
           - type: tile
             entity: select.localshift_battery_mode
@@ -239,13 +441,26 @@ views:
             entity: switch.localshift_stale_solar_conservative
             name: Stale Solar Conservative
 
+          - type: tile
+            entity: number.localshift_charge_taper_start
+            name: Charge Taper Start
+            features:
+              - type: numeric-input
+                style: slider
+
+          - type: tile
+            entity: number.localshift_charge_taper_min_factor
+            name: Charge Taper Min Factor
+
           - type: markdown
             content: >
               **Allow DW entry under target** lets the demand window start
               below target when solar is forecast to close the gap.
               **Conservative spike discharge** keeps a dynamic reserve while
               selling. **Stale solar conservative** distrusts the solar
-              forecast when Solcast data is stale or missing.
+              forecast when Solcast data is stale or missing. **Charge taper**
+              ramps charge power down as SOC approaches full — *start* is the
+              SOC where tapering begins, *min factor* the floor it tapers to.
 
       # --- Price & Optimizer Tuning (advanced) ---------------------------------------
       - type: grid
@@ -275,12 +490,27 @@ views:
             name: Min Cycle Saving
 
           - type: tile
+            entity: number.localshift_min_hold_saving
+            name: Min Hold Saving
+
+          - type: tile
             entity: number.localshift_switching_penalty
             name: Switching Penalty
 
           - type: tile
+            entity: number.localshift_switching_penalty_per_kwh
+            name: Switching Penalty Per kWh
+
+          - type: tile
             entity: number.localshift_target_shortfall_penalty
             name: Shortfall Penalty
+
+          - type: tile
+            entity: number.localshift_pre_charge_runway_margin
+            name: Pre-charge Runway Margin
+            features:
+              - type: numeric-input
+                style: slider
 
           - type: tile
             entity: number.localshift_stale_solar_confidence_ceiling
@@ -293,9 +523,15 @@ views:
 
               **Cheap price percentile** sets where in the price forecast
               "cheap" begins. **Min cycle saving** is the $/kWh margin needed
-              to justify wearing the battery. **Switching penalty** damps
-              rapid mode flapping. **Shortfall penalty** controls how hard
-              the optimizer pushes to hit the demand window target.
+              to justify wearing the battery; **min hold saving** is the same
+              test applied to holding charge rather than cycling it.
+              **Switching penalty** damps rapid mode flapping — the flat term
+              per change, the *per kWh* term scaling with how much energy the
+              change moves. **Shortfall penalty** controls how hard the
+              optimizer pushes to hit the demand window target. **Pre-charge
+              runway margin** is the safety net: minutes of slack before the
+              demand window at which pre-charge is armed even when solar looks
+              sufficient. Set it to 0 to disarm the backstop entirely.
 
       # --- Decision Telemetry ----------------------------------------------------------
       - type: grid
@@ -316,7 +552,7 @@ views:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.localshift_reset_learning
+                entity_id: button.localshift_reset_learning_data
               confirmation:
                 text: This discards every recorded decision and its outcome. Continue?
             icon_height: 40px
@@ -818,3 +1054,126 @@ views:
               | Battery Target | {{ cfg.get('battery_target', '-') }}% |
               | Allow DW Entry Under Target | {{ cfg.get('allow_dw_entry_under_target', '-') }} |
               | Export Price Margin | {{ cfg.get('export_price_margin', '-') }} |
+
+      # --- Pre-charge, spike funding & demand-window entry ------------------
+      # Added: the optimizer_summary telemetry that #886/#889/#902/#910/#911
+      # introduced. None of it was on the dashboard, so verifying any of those
+      # fixes meant grepping the logs.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Pre-charge, Spike Funding & DW Entry
+            heading_style: title
+
+          - type: markdown
+            content: |
+              {%- set s = 'sensor.localshift_optimizer_summary' -%}
+              {%- macro v(x, unit='') -%}
+              {%- if x is none %}—{% else %}{{ x }}{{ unit }}{% endif -%}
+              {%- endmacro %}
+
+              **Demand-window entry**
+
+              | Field | Value |
+              | :--- | :--- |
+              | Planned DW entry SOC | {{ v(state_attr(s, 'dw_entry_soc_pct'), '%') }} |
+              | Actual DW entry SOC | {{ v(state_attr(s, 'dw_entry_actual_soc_pct'), '%') }} |
+              | Actual DW entry at | {{ v(state_attr(s, 'dw_entry_actual_at')) }} |
+              | Actual entry target | {{ v(state_attr(s, 'dw_entry_actual_target_pct'), '%') }} |
+              | Actual entry shortfall | {{ v(state_attr(s, 'dw_entry_actual_shortfall_pct'), '%') }} |
+              | Terminal shortfall | {{ v(state_attr(s, 'terminal_shortfall_pct'), '%') }} |
+              | Initial SOC (plan basis) | {{ v(state_attr(s, 'initial_soc_pct'), '%') }} |
+              | Peak SOC in plan | {{ v(state_attr(s, 'peak_soc_pct'), '%') }} |
+              | Effective SOC at terminal | {{ v(state_attr(s, 'effective_soc_at_terminal')) }} |
+
+              Planned DW entry is only computed when solar **cannot** reach the
+              target, so a blank value on a sunny day is expected, not a fault.
+              An em dash below means the field is absent; `False` means present
+              and false — the difference matters when checking whether a guard
+              ran at all.
+
+              **Pre-charge runway backstop (#902)**
+
+              | Field | Value |
+              | :--- | :--- |
+              | Backstop active | {{ v(state_attr(s, 'precharge_backstop_active')) }} |
+              | Runway slack | {{ v(state_attr(s, 'precharge_runway_slack_min'), ' min') }} |
+              | Runway margin setting | {{ states('number.localshift_pre_charge_runway_margin') }} min |
+              | Hard floor suppressed by solar | {{ v(state_attr(s, 'hard_floor_suppressed_by_solar')) }} |
+              | Projected solar gain | {{ v(state_attr(s, 'projected_solar_gain_pct'), '%') }} |
+              | Adjusted solar gain | {{ v(state_attr(s, 'adjusted_solar_gain_pct'), '%') }} |
+              | Accuracy discount factor | {{ v(state_attr(s, 'accuracy_discount_factor')) }} |
+
+              The backstop firing on a good-solar day is the #816/#849
+              regression signature — it should stay silent when solar is real.
+
+              **Spike pre-charge funding (#908/#910)**
+
+              | Field | Value |
+              | :--- | :--- |
+              | Funding accepted | {{ v(state_attr(s, 'spike_funding_accepted')) }} |
+              | Funding slot count | {{ v(state_attr(s, 'spike_funding_slot_count')) }} |
+              | Net cost delta | ${{ '%.4f' | format(state_attr(s, 'spike_funding_net_cost_delta') | float(0)) }} |
+              | Price spike coming | {{ states('binary_sensor.localshift_price_spike_coming') }} |
+              | Expensive price coming | {{ states('binary_sensor.localshift_price_expensive_coming') }} |
+              | Amber spike flag | {{ states('binary_sensor.100h_price_spike') }} |
+
+              **Solar confidence**
+
+              | Field | Value |
+              | :--- | :--- |
+              | Confidence regime | {{ v(state_attr(s, 'solar_confidence_regime')) }} |
+              | Confidence average | {{ '%.3f' | format(state_attr(s, 'solar_confidence_avg') | float(0)) }} |
+              | Blend applied | {{ v(state_attr(s, 'solar_blend_applied')) }} |
+              | Solcast confidence today | {{ states('sensor.localshift_solcast_confidence_today') }}% |
+              | Solcast confidence tomorrow | {{ states('sensor.localshift_solcast_confidence_tomorrow') }}% |
+              | Solar forecast accuracy | {{ '%.1f' | format(states('sensor.localshift_solar_forecast_accuracy') | float(0)) }}% |
+              | Forecast accuracy (summary) | {{ '%.3f' | format(state_attr(s, 'forecast_accuracy') | float(0)) }} |
+              | Solar can reach target | {{ states('binary_sensor.localshift_solar_can_reach_target') }} |
+
+      # --- Sensors not surfaced anywhere else -------------------------------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Unsurfaced Sensors
+            heading_style: title
+
+          - type: markdown
+            content: |
+              These exist on the integration but appear on no other card. Kept
+              here so a new sensor is visible the day it ships rather than the
+              day someone remembers to add it.
+
+              | Sensor | State |
+              | :--- | :--- |
+              | Forecast prices | {{ states('sensor.localshift_forecast_prices') }} |
+              | Forecast battery | {{ states('sensor.localshift_forecast_battery') }} |
+              | Forecast history | {{ states('sensor.localshift_forecast_history') }} |
+              | Forecast accuracy comparison | {{ states('sensor.localshift_forecast_accuracy_comparison') }} |
+              | Comparison result | {{ states('sensor.localshift_comparison_result') }} |
+              | Price delta | {{ states('sensor.localshift_price_delta') }} |
+              | Cloud event | {{ states('sensor.localshift_cloud_event') }} |
+              | Solar weighted avg FIT | {{ states('sensor.localshift_solar_weighted_avg_fit') }} |
+              | Excess solar | {{ states('sensor.localshift_excess_solar') }} |
+              | Load shift signal | {{ states('sensor.localshift_load_shift_signal') }} |
+              | Load deviation | {{ states('sensor.localshift_load_deviation') }} |
+              | Decision lag | {{ states('sensor.localshift_decision_lag') }} |
+              | Optimizer plan (slots) | {{ states('sensor.localshift_optimizer_plan') }} |
+              | Target SOC minimum | {{ states('sensor.localshift_target_soc_minimum') }} |
+
+          - type: entities
+            title: Number knobs (live values)
+            entities:
+              - number.localshift_battery_target
+              - number.localshift_minimum_target_soc
+              - number.localshift_cheap_price_percentile
+              - number.localshift_max_pre_charge_price
+              - number.localshift_min_cycle_saving
+              - number.localshift_min_hold_saving
+              - number.localshift_switching_penalty
+              - number.localshift_switching_penalty_per_kwh
+              - number.localshift_target_shortfall_penalty
+              - number.localshift_pre_charge_runway_margin
+              - number.localshift_stale_solar_confidence_ceiling
+              - number.localshift_charge_taper_start
+              - number.localshift_charge_taper_min_factor
