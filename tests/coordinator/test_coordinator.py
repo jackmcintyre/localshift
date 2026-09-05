@@ -382,10 +382,17 @@ class TestHandleMidnightReset:
 
         # Mock listeners
         coordinator.notify_listeners = MagicMock()
+        # Issue #968: the reset is delegated to the real CostTracker.
+        from custom_components.localshift.utils.costs import CostTracker
+
+        coordinator._cost_tracker = CostTracker(coordinator.hass)
+        coordinator._cost_tracker._last_soc_pct = 55.0
 
         now = datetime(2026, 2, 17, 0, 0, 0)
         coordinator._handle_midnight_reset(now)
 
+        # Issue #899 / #968: SOC baseline cleared on the live path.
+        assert coordinator._cost_tracker._last_soc_pct is None
         # Verify accumulators were reset
         assert coordinator.data.grid_import_cost == 0.0
         assert coordinator.data.grid_export_revenue == 0.0

@@ -253,19 +253,23 @@ class TickScheduler:
         grid_export_revenue) and the target_reached flag.
 
         Notifies listeners and logs the reset for debugging.
+
+        Issue #968: the cost/energy reset is delegated to
+        ``CostTracker.reset_daily_accumulators`` rather than re-implemented here.
+        That method is the only place that also clears the tracker's SOC
+        baseline (``_last_soc_pct``, Issue #899); an inline copy of the field
+        zeroing on this path left that fix with no production caller, so a grid
+        charge spanning midnight kept smearing overnight SOC gain into the new
+        day's grid-charge-efficiency metric.
         """
-        self._coordinator.data.grid_import_cost = 0.0
-        self._coordinator.data.grid_export_revenue = 0.0
-        self._coordinator.data.battery_savings = 0.0
-        self._coordinator.data.battery_charge_cost = 0.0
-        self._coordinator.data.target_reached_today = False
-        # Issue #868: reset the daily energy accumulators alongside the cost
-        # accumulators so the performance-metric ratios start fresh each day.
-        self._coordinator.data.grid_import_kwh_today = 0.0
-        self._coordinator.data.grid_export_kwh_today = 0.0
-        self._coordinator.data.grid_to_battery_kwh_today = 0.0
-        self._coordinator.data.soc_gain_during_grid_charge_kwh_today = 0.0
-        self._coordinator.data.export_while_battery_not_full_kwh_today = 0.0
+        cost_tracker = self._coordinator.cost_tracker
+        if cost_tracker is not None:
+            cost_tracker.reset_daily_accumulators(self._coordinator.data)
+        else:
+            _LOGGER.warning(
+                "Midnight reset: cost tracker not initialised, daily accumulators "
+                "not reset"
+            )
         # Issue #510: the anticipation counters are per-day like the rest.
         self._coordinator.data.anticipated_transitions_today = 0
         self._coordinator.data.anticipation_corrections_today = 0
