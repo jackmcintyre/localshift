@@ -26,8 +26,8 @@ LocalShift runs as four cooperating layers. The deeper design lives in
  load   ┘    (24h of slots)      (engine/)     (per-slot   (state/)        (Teslemetry)
                                                  action)         │
                                                                  ▼
-                                            measured outcomes ─▶ learning (learning/)
-                                                                 (adapts parameters)
+                                            measured outcomes ─▶ telemetry (learning/)
+                                                                 (recorded, not fed back)
 ```
 
 1. **Forecast pipeline** (`forecast/`) builds 24 hours of *hybrid slots* — 5-minute
@@ -53,10 +53,10 @@ LocalShift runs as four cooperating layers. The deeper design lives in
    Tesla (Storm Watch / Grid Event / VPP) overrides. It follows the plan — it does
    not decide it.
 
-4. **Learning system** (`learning/`) measures the outcome of each decision and slowly
-   adapts the optimizer's parameters to reduce cost over time. It is **off by default**
-   and moves through *observing → tuning → optimizing* phases with safety rails. See
-   [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md).
+4. **Decision telemetry** (`learning/`) records the outcome of each decision. It is
+   observation only — nothing reads the records back to change behaviour. The
+   parameter-learning layer that once did was retired in September 2026; see
+   [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md) for what it was and why.
 
 ### Optimization modes
 
@@ -86,9 +86,8 @@ Changes take effect on the next recompute cycle.
 - **Demand window blocking** — prevents grid charging during peak periods (configurable)
 - **Anti-cycling gate** — a minimum-cycle-saving feasibility gate that blocks marginal
   overnight arbitrage while preserving genuine pre-charge and spike capture
-- **Adaptive learning** — continuously tunes decision parameters from measured outcomes
-- **Counterfactual advantage tracking** — quantifies how much the optimizer saved vs a
-  baseline strategy
+- **Offline replay** — real days captured from history and replayed through the
+  optimizer, so a behaviour change is measured before it reaches live
 - **Weather-aware consumption prediction** — learns temperature/load correlation for
   more accurate forecasts on hot/cold days
 - **Day-of-week consumption profiles** — separate weekday and weekend load profiles
@@ -162,7 +161,7 @@ All entities are grouped under a single **LocalShift** device in Settings →
 Devices & Services. Full canonical reference:
 [`docs/ENTITY_REFERENCE.md`](docs/ENTITY_REFERENCE.md).
 
-### Sensors (34)
+### Sensors (31)
 
 | Entity ID | Description |
 |---|---|
@@ -186,10 +185,7 @@ Devices & Services. Full canonical reference:
 | `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |
 | `sensor.localshift_integration_status` | Overall integration health (ok/degraded/error) |
 | `sensor.localshift_entity_health` | Per-entity health detail for all tracked entities |
-| `sensor.localshift_learning_status` | Learning-system phase (observing/tuning/optimizing) |
-| `sensor.localshift_decision_quality` | Today's average decision-quality score (%) |
-| `sensor.localshift_learning_decision_history` | Recent mode decisions with measured outcomes |
-| `sensor.localshift_optimizer_advantage` | Counterfactual advantage of the optimizer vs baseline |
+| `sensor.localshift_learning_decision_history` | Recorded mode decisions and their measured outcomes |
 | `sensor.localshift_decision_lag` | Decision-to-implementation lag |
 | `sensor.localshift_forecast_status` | Forecast freshness/readiness status |
 | `sensor.localshift_automation_ready` | Whether automation has everything it needs to act |
@@ -217,7 +213,7 @@ Devices & Services. Full canonical reference:
 | `binary_sensor.localshift_tesla_override_active` | Tesla has taken control (Storm Watch, Grid Event, VPP) |
 | `binary_sensor.localshift_amber_demand_window` | Amber Express demand-window signal active |
 
-### Switches (9)
+### Switches (8)
 
 | Entity ID | Default | Description |
 |---|---|---|
@@ -229,7 +225,6 @@ Devices & Services. Full canonical reference:
 | `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
 | `switch.localshift_stale_solar_conservative` | ON | Cap solar confidence when Solcast is stale/absent |
 | `switch.localshift_notifications_enabled` | ON | Enable all notifications (transitions, summaries, manual actions, alerts) |
-| `switch.localshift_enable_learning` | OFF | Enable learning-system parameter optimization |
 
 ### Numbers (8)
 
@@ -256,7 +251,7 @@ Devices & Services. Full canonical reference:
 | Entity ID | Description |
 |---|---|
 | `button.localshift_update_forecast` | Force a forecast update and clear the historical-load cache |
-| `button.localshift_reset_learning` | Reset learning-system data and restart observation |
+| `button.localshift_reset_learning` | Discard the recorded decisions and the weather-correlation history |
 
 ## Dashboard
 
@@ -346,7 +341,7 @@ If entities show as "missing or not currently available":
 | [`docs/PLANNING_MODEL.md`](docs/PLANNING_MODEL.md) | The DP model: feasible actions, stage cost, terminal cost |
 | [`docs/FORECAST_DRIVEN_CONTROL.md`](docs/FORECAST_DRIVEN_CONTROL.md) | "The forecast IS the plan" — single source of truth |
 | [`docs/ENTITY_REFERENCE.md`](docs/ENTITY_REFERENCE.md) | Complete entity catalog |
-| [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md) | Adaptive learning: phases, parameters, safety rails |
+| [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md) | The retired learning layer: what it was, why it went, what would bring it back |
 | [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) | Setup, project structure, extension patterns |
 | [`VISION.md`](VISION.md) | Mission, goals, constraints, success metrics |
 

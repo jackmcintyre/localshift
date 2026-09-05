@@ -1,321 +1,114 @@
-# Learning System
-
-The LocalShift integration includes an adaptive learning system that continuously optimizes battery decisions to minimize your electricity costs while avoiding common pitfalls like over-charging or unnecessary exports.
-
-## Overview
-
-The learning system operates in the background, observing your battery's behavior and the outcomes of charging/discharging decisions. Over time, it adjusts internal parameters to improve decision quality.
-
-### Key Features
-
-- **Decision Tracking**: Records every mode transition with full context
-- **Outcome Scoring**: Measures the financial impact of each decision
-- **Parameter Optimization**: Adjusts decision thresholds based on outcomes
-- **Pattern Recognition**: Identifies systematic issues (e.g., over-charging on cloudy days)
-- **Multi-Objective Balance**: Balances cost minimization, export avoidance, and target achievement
-
-## How It Works
-
-### The Feedback Loop
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    LEARNING SYSTEM LOOP                          │
-│                                                                  │
-│   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
-│   │   Decision   │───▶│   Outcome    │───▶│  Parameter   │     │
-│   │   Made       │    │   Tracking   │    │  Optimization│     │
-│   └──────────────┘    └──────────────┘    └──────────────┘     │
-│          ▲                                        │              │
-│          └────────────────────────────────────────┘              │
-│                     (Improved Decisions)                         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-1. **Decision Made**: When the battery mode changes, the system records the context (SOC, prices, forecasts, weather) plus a snapshot of the grid meter accumulators (import/export kWh and cost/revenue, integrated from instantaneous power on every fast tick)
-2. **Outcome Tracking**: After the decision period ends (next mode change or 30 min), import/export/cost are attributed by differencing the meter snapshot over the exact decision window (Issue #915; daily-reset aware)
-3. **Parameter Optimization**: Parameters are adjusted to improve future decisions
-4. **Improved Decisions**: Next time, the system uses learned parameters
-
-### Learning Phases
-
-The system progresses through three phases:
-
-| Phase | Status | Description | Duration |
-|-------|--------|-------------|----------|
-| **Observing** | Default | Collecting data, no parameter changes | 2-3 days |
-| **Tuning** | After warm-up | Making small parameter adjustments | Ongoing |
-| **Optimizing** | Active | Full optimization with pattern recognition | After 1+ week |
-
-**Warm-up Period**: The system requires ~50 decision records before making any parameter adjustments. This typically takes 2-3 days of normal operation.
-
-## Decision Quality Score
-
-The Decision Quality Score (0-100%) measures how well each decision performed:
-
-### Score Components
-
-The score uses a **blended base+cost** model with **additive adjustments**:
-
-```python
-score = 0.5 * 0.6 + cost_score * 0.4   # base/cost blend
-score += export_penalty                  # -0.15 to +0.05
-score += target_score                    # -0.10 to +0.15
-score -= cycling_penalty                 # 0.0 or 0.10
-score = max(0.0, min(1.0, score))        # clamp to [0, 1]
-```
-
-| Component | Type | Range | Description |
-|-----------|------|-------|-------------|
-| Base | Fixed | 0.5 | Starting point |
-| Cost Score | Blend 40% | 0.2–0.9 | Cost efficiency by mode |
-| Export Penalty | Additive | -0.15 to +0.05 | Penalize grid-bought exports |
-| Target Score | Additive | -0.10 to +0.15 | Bonus/penalty for SOC target |
-| Cycling Penalty | Additive | 0.0 or 0.10 | Rapid mode change penalty |
-
-**Note:** This is NOT a weighted average. The base+cost blend creates the foundation, then additive components adjust the score up or down.
-
-### Cost Attribution and Rate-Based Scoring (Issue #915)
-
-Energy and cost are attributed from real meters, not SOC estimates:
-
-- `actual_import_kwh` / `actual_export_kwh`: meter deltas over the decision window (never derived from SOC change)
-- `actual_cost_during_period`: net dollars — grid import cost minus export revenue (negative = the period earned money)
-- A daily accumulator reset falling inside the window is handled conservatively (post-reset accrual only, never negative)
-
-The cost score compares **average price per kWh actually paid/earned** against the cheap-price threshold (charge/hold) or the feed-in price at decision (export) — like-for-like, which keeps the score continuous instead of clamped onto band edges. Records persisted before Issue #915 (no metered energy) keep the legacy dollar-ratio scoring.
-
-### Interpreting the Score
-
-| Score Range | Interpretation |
-|-------------|----------------|
-| 80-100% | Excellent decision — optimal outcome |
-| 60-80% | Good decision — near-optimal |
-| 40-60% | Acceptable — room for improvement |
-| 20-40% | Sub-optimal — learning opportunity |
-| 0-20% | Poor decision — will trigger parameter adjustment |
-
-## Adaptive Parameters
-
-The learning system adjusts these internal parameters:
-
-### Cheap Price Bias
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `cheap_price_bias` | -5.0 to +5.0 c/kWh | Adjusts the cheap price threshold |
-
-- **Positive values**: More willing to grid charge (charge at higher prices)
-- **Negative values**: More conservative (only charge at lower prices)
-
-### Solar Confidence Factor
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `solar_confidence_factor` | 0.5 to 1.5 | Multiplier on solar forecasts |
-
-- **< 1.0**: Pessimistic — trust solar less, charge more
-- **> 1.0**: Optimistic — trust solar more, charge less
-
-### Overnight Drain Safety Margin
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `overnight_drain_safety_margin` | -5.0 to +10.0 % | Extra SOC buffer for overnight |
-
-- **Positive values**: Keep more reserve for overnight drain
-- **Negative values**: Accept lower overnight SOC
-
-### Grid Charge SOC Headroom
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `grid_charge_soc_headroom` | -5.0 to +10.0 % | Extra SOC above target |
-
-- **Positive values**: Charge slightly above target (safety buffer)
-- **Negative values**: Charge to exact target
-
-### Export Threshold Adjustment
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `export_threshold_adjustment` | -3.0 to +3.0 c/kWh | Adjusts export profitability threshold |
-
-- **Positive values**: More conservative about exporting
-- **Negative values**: More aggressive about exporting
-
-### Consumption Forecast Bias
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `consumption_forecast_bias` | -0.5 to +0.5 kW | Adjusts consumption predictions |
-
-- **Positive values**: Assume higher consumption
-- **Negative values**: Assume lower consumption
-
-## Sensors and Entities
-
-### Learning Status Sensor
-
-**Entity:** `sensor.localshift_learning_status`
-
-Shows the current learning phase and parameter values.
-
-| Attribute | Description |
-|-----------|-------------|
-| `phase` | Current learning phase (observing/tuning/optimizing) |
-| `parameters` | Current parameter values with confidence scores |
-| `update_count` | Number of parameter updates made |
-| `last_updated` | When parameters were last updated |
-
-### Decision Quality Sensor
-
-**Entity:** `sensor.localshift_decision_quality`
-
-Shows the rolling decision quality score.
-
-| Attribute | Description |
-|-----------|-------------|
-| `score_today` | Average decision quality today (%) |
-| `score_7d` | 7-day rolling average (%) |
-| `total_decisions_today` | Count of decisions made today |
-| `cost_trend` | improving/stable/degrading |
-
-### Decision History Sensor
-
-**Entity:** `sensor.localshift_decision_history`
-
-Shows recent decision history with outcomes.
-
-| Attribute | Description |
-|-----------|-------------|
-| `decisions` | Last 20 decisions with context and outcomes |
-| `pattern_report` | Latest pattern analysis summary |
-
-## Switches
-
-### Enable Learning
-
-**Entity:** `switch.localshift_enable_learning`
-
-- **ON**: Learning system can adjust parameters
-- **OFF**: Learning system observes only, no parameter changes
-
-**Default:** OFF — You must explicitly enable learning
-
-When disabled, the system still tracks decisions but uses default (zero-offset) parameters.
-
-## Buttons
-
-### Reset Learning Data
-
-**Entity:** `button.localshift_reset_learning`
-
-Clears decision tracking data and weather regression statistics, then restarts the learning phase.
-
-**Warning:** This resets decision history and weather regression stats. Parameter optimizer and pattern analysis data are not reset by this button yet.
-
-## FAQ
-
-### How long before the system starts optimizing?
-
-- **Observing phase**: 2-3 days (50 decisions needed)
-- **Tuning phase**: Begins after warm-up
-- **Full optimization**: After 1+ week of data
-
-### Why is my learning status stuck on "observing"?
-
-The system needs approximately 50 decision records before entering the tuning phase. This typically takes 2-3 days of normal operation. During this time:
-
-- Decisions are tracked but not influenced by learning
-- Parameters remain at default (zero-offset) values
-- The system builds a baseline dataset
-
-### How do I reset learning data?
-
-1. Go to **Settings → Devices & Services → LocalShift**
-2. Find the **Reset Learning Data** button
-3. Press it to clear all learning data
-
-This is useful if:
-- You've made significant changes to your household patterns
-- You want to start fresh after testing
-- The system learned sub-optimal parameters
-
-### Can I disable the learning system?
-
-Yes. Use the **Enable Learning** switch to disable parameter optimization. When disabled:
-
-- Decisions are still tracked for observability
-- Parameters remain at default values
-- No behavioral changes occur
-
-### What happens when I reset learning data?
-
-1. Decision records are cleared
-2. Weather regression statistics are cleared (temperature history retained)
-3. The system returns to "observing" phase
-4. Recent decision log and performance metrics are reset
-5. Parameter optimizer and pattern analysis data remain unchanged for now
-
-### Is my learning data persisted?
-
-Yes. Learning data is stored in Home Assistant's storage system and survives restarts. Data includes:
-
-- Decision records (last 500)
-- Parameter values and confidence scores
-- Pattern analysis results
-- Optimization weights
-
-### How do I know if learning is improving my costs?
-
-Monitor these indicators:
-
-1. **Decision Quality Score**: Should trend upward over time
-2. **Cost Trend Attribute**: Shows "improving" when costs are decreasing
-3. **Grid Charge Efficiency**: Should improve (less wasted charging)
-4. **Export Loss Ratio**: Should decrease (fewer unnecessary exports)
-
-### What's the difference between "tuning" and "optimizing"?
-
-| Phase | Behavior |
-|-------|----------|
-| **Tuning** | Small parameter adjustments, no pattern-based corrections |
-| **Optimizing** | Full optimization including pattern recognition and contextual adjustments |
-
-## Technical Details
-
-### Storage Keys
-
-Learning data is stored under these keys (scoped to entry ID):
-
-| Key | Content |
-|-----|---------|
-| `localshift.decision_outcomes.{entry_id}` | Decision records |
-| `localshift.param_optimizer.{entry_id}` | Optimizer state |
-| `localshift.pattern_analysis.{entry_id}` | Pattern data |
-| `localshift.opt_controller.{entry_id}` | Controller weights |
-
-### Optimization Safety Rails
-
-The learning system includes several safety mechanisms:
-
-1. **Step Limits**: Parameters can only move one step per daily update
-2. **Bounds Clamping**: All parameters stay within defined min/max
-3. **Rollback**: If 7-day score decreases for 3 consecutive days, parameters revert
-4. **Warm-up**: No adjustments until 50+ decisions collected
-
-### Pattern Detection Dimensions
-
-The pattern analyzer looks for biases across:
-
-- Day of week (Monday-Sunday)
-- Hour of day (0-23)
-- Weather condition (sunny, cloudy, rainy)
-- Season (summer, autumn, winter, spring)
-- Price regime (low, medium, high)
-- Solar availability (high, medium, low)
-
-## Troubleshooting
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and solutions.
+# The learning system (retired September 2026)
+
+LocalShift used to carry a parameter-learning layer: it scored each mode
+decision, ran Thompson sampling over six optimizer parameters, mined the
+decision history for biases, layered contextual adjustments on top, and
+compared itself against a time-of-use baseline. It was removed. This page
+records what it was, why it went, and what would have to be true to bring it
+back — so the next person with the idea starts from the evidence rather than
+from scratch.
+
+## What it did
+
+| Piece | Module | Job |
+|---|---|---|
+| Outcome scoring | `engine/outcomes.py` | Score each decision 0–1 after a 30-minute window |
+| Parameter optimizer | `engine/parameters.py` | Thompson sampling over 6 parameters |
+| Pattern analyzer | `engine/pattern_analyzer.py` | Mine the decision history for biases by hour, weekday, weather, season |
+| Contextual controller | `engine/optimization_controller.py` | Heuristic overlay for SOC emergencies, low forecast accuracy, approaching demand window |
+| Counterfactual | `engine/counterfactual.py` | Compare actual cost against a TOU baseline |
+
+Its output reached the optimizer as six offsets on `data.adaptive_params`,
+applied in `engine/optimizer_runner.py` — most importantly `cheap_price_bias`,
+which shifts the price threshold below which grid charging is allowed.
+
+## Why it was retired
+
+**It never produced a measurable gain.** `sensor.localshift_decision_quality`
+across 75 days: mean 55.38, standard deviation 3.00, and a drift between the
+first and last 25 days of **+0.32 points**. Nothing.
+
+**Its own metric could not have detected a gain.** Holding the mode mixture at
+what the optimizer actually produces and varying only outcome quality, the
+whole span from a catastrophic day to a flawless one is **12.7 points** —
+against 3.0 points of ordinary day-to-day noise. A real improvement is worth
+one or two points, permanently under the noise floor.
+
+**The reward has no gradient where the system operates.** `_compute_target_score`
+is a step function: a linear gradient only within 15pp of target, flat zero
+from 15–20pp, flat −0.10 beyond. Typical daytime SOC of 10–70% lands entirely
+in the flat zone, so a HOLD at 10% and a HOLD at 70% score identically. For
+HOLD specifically the far-penalty branch is unreachable by construction, and
+with hold costs near zero the score collapses to a near-constant 0.56 — about
+half of all decisions.
+
+**The frame was wrong, not just the tuning.** The reward is scored over a
+30-minute window (`MAX_DECISION_DURATION`), but the outcome that matters —
+demand-window entry SOC at 15:00 — arrives hours later. A HOLD at 40% at 10am
+on a sunny day is *correct*, because the plan is to solar-charge to target by
+15:00. No amount of reshaping a per-decision reward fixes that; it needs
+episode-level credit assignment. This is why #626, #915 and #925 each tuned the
+scoring function and none of them changed the outcome.
+
+**Meanwhile it did change live behaviour, unintentionally.** Contextual
+adjustments compounded: `OptimizationController.evaluate()` rebased on its own
+previous output every tick and every rule was additive, so `cheap_price_bias`
+ratcheted to its `+5` bound within two ticks of an SOC dip and stayed there
+until the next daily optimizer run — with `contextual_adjustments_active`
+reporting an empty list. Live had never once run without a +3 to +5 c/kWh
+inflation of the grid-charge gate.
+
+**Three investigations, one outcome.** #170 built it (February). #913 found the
+core inert (August) and #914 repaired two of three defects. A third review in
+September found the ratchet, the step-function reward, and a counterfactual
+that appended a result on every 5-minute tick — making `advantage_7d` a sum of
+roughly 900 duplicate evaluations of the same day, and `is_degrading()`
+compare a per-tick figure against a per-day threshold.
+
+## What removing it changed
+
+A ten-day offline replay over real captured days, varying only the offsets
+(`scripts/replay_adaptive_arms.py`, full table in
+[`simulations/replay/README.md`](../../simulations/replay/README.md)):
+
+- Planned demand-window entry SOC moved by at most **0.31pp**, on 10 of 10 days.
+- Projected cost was identical on nine days and **$0.055 cheaper** on the tenth.
+- Terminal shortfall rose 1.00pp on the three solar-constrained days — not a
+  regression: `grid_charge_soc_headroom` and `overnight_drain_safety_margin`
+  both sat at `-0.5`, so the learned offsets had been quietly lowering the
+  demand-window target by 1pp. Removal restores the operator's configured 95%.
+
+## What survives
+
+- **The decision records.** `engine/outcomes.py` still records every mode
+  decision, the conditions at the time, and the measured outcome, surfaced on
+  `sensor.localshift_learning_decision_history`. Nothing reads them back. They
+  are kept because they are the only durable asset the layer produced, and any
+  future attempt would need exactly this history.
+- **`compute_outcome_score`** still runs, as an attribute on each record. Treat
+  it as uninformative — the analysis above is about this function.
+- **Solar forecast bias correction** (`forecast/solar_accuracy.py`) is a
+  separate, healthy loop and was untouched.
+- **Weather/load correlation** (`learning/correlation.py`) feeds the load
+  forecast and is independent of parameter learning.
+- **`data.adaptive_params`** remains at its zero default. The optimizer reads
+  the offsets unconditionally and zero is the identity, so the field stays
+  rather than threading a removal through seven call sites.
+
+## Bringing it back
+
+`tests/test_learning_layer_retired.py` fails if a retired module or field
+returns. That is deliberate. If you are replacing it, delete that test in the
+same commit so the decision is explicit in history — do not edit it to pass.
+
+Before writing code, clear these three bars:
+
+1. **A metric that can see the answer.** Whatever you optimise must resolve a
+   good day from a bad one by more than its own day-to-day noise. Establish
+   that first, on replayed days, before building anything that consumes it.
+2. **Episode-level credit assignment.** Per-decision scoring over a 30-minute
+   window cannot represent "did we reach target at 15:00, and at what cost".
+3. **An offline win before a live wire.** Beat the deterministic optimizer on
+   replayed real days (`scripts/export_replay_days.py` captures them). The
+   optimizer plus its execution guards is what carries this system; a learning
+   layer has to show it adds something on top.

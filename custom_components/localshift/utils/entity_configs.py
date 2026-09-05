@@ -332,11 +332,6 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": bool,
         "staleness_minutes": None,
     },
-    "switch.localshift_enable_learning": {
-        "category": EntityCategory.REQUIRED,
-        "expected_type": bool,
-        "staleness_minutes": None,
-    },
     "select.localshift_battery_mode": {
         "category": EntityCategory.REQUIRED,
         "expected_type": str,
@@ -391,16 +386,6 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "category": EntityCategory.OPTIONAL,
         "expected_type": float,
         "staleness_minutes": 15,
-    },
-    "sensor.localshift_learning_status": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": str,
-        "staleness_minutes": 60,
-    },
-    "sensor.localshift_decision_quality": {
-        "category": EntityCategory.OPTIONAL,
-        "expected_type": float,
-        "staleness_minutes": 60,
     },
     "sensor.localshift_learning_decision_history": {
         "category": EntityCategory.OPTIONAL,

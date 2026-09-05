@@ -34,7 +34,7 @@ from ..const import (
     BatteryMode,
 )
 from ..forecast.bootstrapper import ForecastBootstrapper
-from ..learning.orchestrator import LearningOrchestrator
+from ..learning.telemetry import DecisionTelemetry
 from ..services.evaluation_dispatcher import EvaluationDispatcher
 from ..services.subscription_manager import SubscriptionManager
 from .data import CoordinatorData
@@ -110,20 +110,13 @@ class LocalShiftCoordinator:
         self._entity_validator: EntityValidator | None = None
         self._entity_monitor: EntityMonitor | None = None
 
-        # Decision outcome tracker for learning system (Issue #170 Phase 1)
+        # Decision-outcome record set. Telemetry only — nothing consumes the
+        # records to change behaviour since the parameter-learning layer was
+        # retired (see learning/telemetry.py).
         self.decision_tracker = None
 
-        # Parameter optimizer for learning system (Issue #170 Phase 2)
-        self.param_optimizer = None
-
-        # Pattern analyzer for learning system (Issue #170 Phase 3)
-        self.pattern_analyzer = None
-
-        # Optimization controller for learning system (Issue #170 Phase 4)
-        self.optimization_controller = None
-
         # Orchestrators
-        self._learning_orchestrator: LearningOrchestrator | None = None
+        self._decision_telemetry: DecisionTelemetry | None = None
         self._forecast_bootstrapper: ForecastBootstrapper | None = None
         self._evaluation_dispatcher: EvaluationDispatcher | None = None
         self._subscription_manager: SubscriptionManager | None = None
@@ -193,9 +186,9 @@ class LocalShiftCoordinator:
         return self._computation_engine
 
     @property
-    def learning_orchestrator(self) -> LearningOrchestrator | None:
-        """Return the learning orchestrator, if initialized."""
-        return self._learning_orchestrator
+    def decision_telemetry(self) -> DecisionTelemetry | None:
+        """Return the decision-telemetry owner, if initialized."""
+        return self._decision_telemetry
 
     @property
     def state_machine(self) -> StateMachine | None:
@@ -296,24 +289,13 @@ class LocalShiftCoordinator:
         self._state_machine.set_startup_grace(30)
         self._state_machine.start_grid_charging_listener(self.hass)
 
-        self._learning_orchestrator = LearningOrchestrator(
-            self.hass,
-            self.entry,
-            self.get_switch_state,
-        )
-        await self._learning_orchestrator.async_initialize()
+        self._decision_telemetry = DecisionTelemetry(self.hass, self.entry)
+        await self._decision_telemetry.async_initialize()
+        self.decision_tracker = self._decision_telemetry.decision_tracker
 
-        self.decision_tracker = self._learning_orchestrator.decision_tracker
-        self.param_optimizer = self._learning_orchestrator.param_optimizer
-        self.pattern_analyzer = self._learning_orchestrator.pattern_analyzer
-        self.optimization_controller = (
-            self._learning_orchestrator.optimization_controller
-        )
-
-        # Re-derive ephemeral learning state from persisted data before sensors
-        # first render: learning_status from the decision deque, and the last
-        # pattern report / bias corrections (which only lived in memory).
-        self._learning_orchestrator.restore_runtime_state(self.data)
+        # Re-derive the published status from the persisted record set before
+        # sensors first render.
+        self._decision_telemetry.restore_runtime_state(self.data)
 
         # Initialize solar forecast accuracy tracker (Issue #378)
         from ..forecast.solar_accuracy import SolarAccuracyTracker
@@ -329,8 +311,8 @@ class LocalShiftCoordinator:
                 self.solar_accuracy_tracker
             )
 
-        if self._learning_orchestrator is not None:
-            self._learning_orchestrator.attach_state_machine(self._state_machine)
+        if self._decision_telemetry is not None:
+            self._decision_telemetry.attach_state_machine(self._state_machine)
 
         # Set battery target SOC in coordinator data for decision scoring
         self.data.battery_target_soc = float(
@@ -495,11 +477,11 @@ class LocalShiftCoordinator:
 
         Called on shutdown and periodically to prevent data loss.
         """
-        if self._learning_orchestrator is not None:
-            await self._learning_orchestrator.async_save_all()
+        if self._decision_telemetry is not None:
+            await self._decision_telemetry.async_save_all()
 
         # Persist solar accuracy samples. The tracker is owned by the
-        # coordinator (not the orchestrator), so async_save_all() misses it.
+        # coordinator (not the telemetry owner), so async_save_all() misses it.
         # async_save() early-returns unless there are pending changes and
         # swallows its own exceptions, so this is a cheap, safe no-op most
         # ticks and cannot block the orchestrator save above (which runs first

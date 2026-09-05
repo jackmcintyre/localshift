@@ -102,10 +102,11 @@ class UpdateForecastButton(LocalShiftButtonBase):
 
 
 class ResetLearningDataButton(LocalShiftButtonBase):
-    """Reset all learning system data and start fresh.
+    """Clear the decision-telemetry record set and start fresh.
 
-    Clears decision tracker data and resets learning status to 'observing'.
-    Used when the user wants to start the learning process over.
+    Drops the decision records, the published status, and the weather
+    correlation history. Nothing consumes these to change behaviour — see
+    learning/telemetry.py — so this only discards accumulated observations.
     """
 
     def __init__(self, coordinator, entry):
@@ -113,7 +114,7 @@ class ResetLearningDataButton(LocalShiftButtonBase):
 
     async def async_press(self) -> None:
         """Handle button press - reset all learning data."""
-        _LOGGER.info("Resetting learning system data")
+        _LOGGER.info("Resetting decision telemetry")
 
         # Clear decision tracker data
         tracker = getattr(self.coordinator, "decision_tracker", None)
@@ -148,7 +149,7 @@ class ResetLearningDataButton(LocalShiftButtonBase):
 
         self.coordinator.data.performance_metrics = PerformanceMetrics()
 
-        _LOGGER.info("Learning system data reset complete")
+        _LOGGER.info("Decision telemetry reset complete")
 
         if self.coordinator._notification_service is not None:
             await (

@@ -64,3 +64,10 @@ _bmad/
 _bmad-output/
 .claude/
 
+
+# Captured replay days (scripts/export_replay_days.py). Regenerate with the
+# script; a 3-day sample spanning poor->good solar is committed for the harness.
+simulations/replay/*.json
+!simulations/replay/2026-08-25.json
+!simulations/replay/2026-08-27.json
+!simulations/replay/2026-09-03.json

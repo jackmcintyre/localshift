@@ -13,12 +13,6 @@ from .forecast import (
     OptimizerPlanSensor,
     SolarBatteryForecastSensor,
 )
-from .learning import (
-    DecisionQualitySensor,
-    LearningDecisionHistorySensor,
-    LearningStatusSensor,
-    OptimizerAdvantageSensor,
-)
 from .load_deviation import LoadDeviationSensor
 from .misc import (
     ExcessSolarSensor,
@@ -48,6 +42,7 @@ from .status import (
     ForecastAccuracySensor,
     ForecastStatusSensor,
     IntegrationStatusSensor,
+    LearningDecisionHistorySensor,
 )
 
 __all__ = [
@@ -76,10 +71,7 @@ __all__ = [
     "OptimizerSummarySensor",
     "SolarForecastAccuracySensor",
     # Learning
-    "LearningStatusSensor",
-    "DecisionQualitySensor",
     "LearningDecisionHistorySensor",
-    "OptimizerAdvantageSensor",
     # Status
     "IntegrationStatusSensor",
     "EntityHealthSensor",

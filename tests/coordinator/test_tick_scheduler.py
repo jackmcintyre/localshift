@@ -125,8 +125,8 @@ async def test_handle_medium_tick(coordinator):
     coordinator._entity_monitor.check_entity_health = MagicMock()
     coordinator._state_machine = MagicMock()
     coordinator._state_machine.startup_grace_until = None  # No grace period
-    coordinator._learning_orchestrator = MagicMock()
-    coordinator._learning_orchestrator.update_medium_tick = MagicMock()
+    coordinator._decision_telemetry = MagicMock()
+    coordinator._decision_telemetry.update_medium_tick = MagicMock()
     coordinator.data = MagicMock()
     coordinator.data.solar_bias_metrics = {}
     coordinator.data.solar_forecast_accuracy = 0.0
@@ -135,7 +135,7 @@ async def test_handle_medium_tick(coordinator):
 
     coordinator._entity_monitor.read_all_external_state.assert_called_once()
     coordinator._entity_monitor.check_entity_health.assert_called_once()
-    coordinator._learning_orchestrator.update_medium_tick.assert_called_once_with(
+    coordinator._decision_telemetry.update_medium_tick.assert_called_once_with(
         coordinator.data
     )
 
@@ -151,7 +151,7 @@ async def test_handle_medium_tick_drives_solar_backfill(coordinator):
     coordinator._entity_monitor.check_entity_health = MagicMock()
     coordinator._state_machine = MagicMock()
     coordinator._state_machine.startup_grace_until = None
-    coordinator._learning_orchestrator = None
+    coordinator._decision_telemetry = None
     coordinator._computation_engine = None
     coordinator.data = MagicMock()
 
@@ -233,8 +233,8 @@ async def test_handle_midnight_reset(coordinator):
     # Issue #510: the anticipation counters reset daily like the rest.
     coordinator.data.anticipated_transitions_today = 4
     coordinator.data.anticipation_corrections_today = 2
-    coordinator._learning_orchestrator = MagicMock()
-    coordinator._learning_orchestrator.handle_midnight_reset = MagicMock()
+    coordinator._decision_telemetry = MagicMock()
+    coordinator._decision_telemetry.handle_midnight_reset = MagicMock()
     coordinator.notify_listeners = MagicMock()
 
     scheduler.handle_midnight_reset(now)
@@ -251,7 +251,7 @@ async def test_handle_midnight_reset(coordinator):
     assert coordinator.data.export_while_battery_not_full_kwh_today == 0.0
     assert coordinator.data.anticipated_transitions_today == 0
     assert coordinator.data.anticipation_corrections_today == 0
-    coordinator._learning_orchestrator.handle_midnight_reset.assert_called_once_with(
+    coordinator._decision_telemetry.handle_midnight_reset.assert_called_once_with(
         coordinator.data
     )
     coordinator.notify_listeners.assert_called_once()
@@ -811,7 +811,7 @@ async def test_handle_slow_tick_no_entity_monitor(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_handle_midnight_reset_no_learning_orchestrator(coordinator):
+async def test_handle_midnight_reset_no_decision_telemetry(coordinator):
     """Test handle_midnight_reset handles missing learning orchestrator."""
     scheduler = TickScheduler(coordinator)
     now = datetime.now()
@@ -823,7 +823,7 @@ async def test_handle_midnight_reset_no_learning_orchestrator(coordinator):
     coordinator.data.battery_savings = 25.0
     coordinator.data.battery_charge_cost = 10.0
     coordinator.data.target_reached_today = True
-    coordinator._learning_orchestrator = None
+    coordinator._decision_telemetry = None
     coordinator.notify_listeners = MagicMock()
 
     scheduler.handle_midnight_reset(now)
@@ -873,7 +873,7 @@ async def test_handle_medium_tick_no_entity_monitor(coordinator):
     coordinator._entity_monitor = None
     coordinator._state_machine = MagicMock()
     coordinator._state_machine.startup_grace_until = None  # No grace period
-    coordinator._learning_orchestrator = None
+    coordinator._decision_telemetry = None
     coordinator.data = MagicMock()
 
     # Should not raise

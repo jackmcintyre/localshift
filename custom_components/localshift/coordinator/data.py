@@ -18,7 +18,6 @@ class PerformanceMetrics:
     """Aggregated performance metrics for the learning system.
 
     Issue #170 Phase 1: Tracks decision outcomes and efficiency metrics.
-    Issue #683: Added counterfactual TOU baseline metrics for optimizer value measurement.
     """
 
     # Daily metrics
@@ -37,15 +36,6 @@ class PerformanceMetrics:
     mode_durations_today: dict[str, float] = field(default_factory=dict)
     mode_cost_attribution: dict[str, float] = field(default_factory=dict)
 
-    # Counterfactual metrics (Issue #683)
-    counterfactual_tou_cost: float = 0.0
-    counterfactual_actual_cost: float = 0.0
-    optimizer_advantage_daily: float = 0.0
-    optimizer_advantage_7d: float = 0.0
-    optimizer_advantage_daily_avg: float = 0.0
-    optimizer_advantage_percent: float = 0.0
-    counterfactual_degrading: bool = False
-
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -59,13 +49,6 @@ class PerformanceMetrics:
             "cost_trend": self.cost_trend,
             "mode_durations_today": self.mode_durations_today,
             "mode_cost_attribution": self.mode_cost_attribution,
-            "counterfactual_tou_cost": self.counterfactual_tou_cost,
-            "counterfactual_actual_cost": self.counterfactual_actual_cost,
-            "optimizer_advantage_daily": self.optimizer_advantage_daily,
-            "optimizer_advantage_7d": self.optimizer_advantage_7d,
-            "optimizer_advantage_daily_avg": self.optimizer_advantage_daily_avg,
-            "optimizer_advantage_percent": self.optimizer_advantage_percent,
-            "counterfactual_degrading": self.counterfactual_degrading,
         }
 
     @classmethod
@@ -82,15 +65,6 @@ class PerformanceMetrics:
             cost_trend=data.get("cost_trend", "stable"),
             mode_durations_today=data.get("mode_durations_today", {}),
             mode_cost_attribution=data.get("mode_cost_attribution", {}),
-            counterfactual_tou_cost=data.get("counterfactual_tou_cost", 0.0),
-            counterfactual_actual_cost=data.get("counterfactual_actual_cost", 0.0),
-            optimizer_advantage_daily=data.get("optimizer_advantage_daily", 0.0),
-            optimizer_advantage_7d=data.get("optimizer_advantage_7d", 0.0),
-            optimizer_advantage_daily_avg=data.get(
-                "optimizer_advantage_daily_avg", 0.0
-            ),
-            optimizer_advantage_percent=data.get("optimizer_advantage_percent", 0.0),
-            counterfactual_degrading=data.get("counterfactual_degrading", False),
         )
 
 
@@ -408,7 +382,6 @@ class CoordinatorData:
     weather_sample_count: int = 0  # Number of samples used for learning
     weather_usable_hours: int = 0  # Hours whose label is medium or high
     weather_hours_with_data: int = 0  # Hours with any regression result
-    weather_anomaly_weight: float = 1.0  # Issue #681: Weight for rollback evaluation
 
     # Forecast accuracy tracking fields (Issue #37 Phase 2)
     # SOC prediction errors (predicted - actual, in percentage points)
@@ -445,27 +418,20 @@ class CoordinatorData:
         default_factory=dict
     )  # Owned registry entries absent from LOCALSHIFT_ENTITY_CONFIG (Issue #880)
 
-    # --- Learning system (Issue #170 Phase 1) ---
+    # --- Decision telemetry (see learning/telemetry.py) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
     recent_decision_log: list[dict[str, Any]] = field(
         default_factory=list
     )  # last 24h of decisions for sensor
-    learning_status: str = "observing"  # "observing", "tuning", "optimizing"
+    learning_status: str = "observing"  # telemetry volume, not a learning stage
     battery_target_soc: float = 80.0  # Configured battery target for decision scoring
 
-    # --- Adaptive parameters (Issue #170 Phase 2) ---
+    # Adaptive parameter offsets. The layer that populated these was retired;
+    # the field stays at its zero default because the optimizer reads it
+    # unconditionally (engine/optimizer_runner.py), and zero is the identity.
     adaptive_params: AdaptiveParameters = field(default_factory=AdaptiveParameters)
 
-    # --- Pattern analysis (Issue #170 Phase 3) ---
-    pattern_report_summary: dict[str, Any] = field(
-        default_factory=dict
-    )  # Latest pattern analysis summary
-    active_bias_corrections: list[dict[str, Any]] = field(
-        default_factory=list
-    )  # Currently active corrections
-    last_pattern_analysis: str | None = (
-        None  # ISO timestamp of the last pattern-analysis run
-    )
+    # --- Solar forecast bias correction (independent of parameter learning) ---
     solar_bias_metrics: dict[str, Any] = field(
         default_factory=dict
     )  # Solar forecast bias metrics and correction factors
@@ -475,14 +441,6 @@ class CoordinatorData:
     hybrid_solar_accuracy: float | None = (
         None  # Combined LocalShift + Solcast MAPE accuracy
     )
-
-    # --- Optimization controller (Issue #170 Phase 4) ---
-    optimization_weights: dict[str, float] = field(
-        default_factory=dict
-    )  # Objective weights for multi-objective scoring
-    contextual_adjustments_active: list[dict[str, Any]] = field(
-        default_factory=list
-    )  # Active contextual adjustments
 
     # --- Hybrid timescale metadata (Issue #329) ---
     hybrid_slot_metadata: dict[str, Any] = field(
