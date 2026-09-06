@@ -15,6 +15,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -48,6 +49,22 @@ SWITCH_KEYS = [
     SWITCH_STALE_SOLAR_CONSERVATIVE,
     SWITCH_NOTIFICATIONS_ENABLED,  # Consolidated notification toggle (Issue #214)
 ]
+
+# Issue #787: entity_category per switch. automation_enabled and
+# demand_window_block are primary operational controls users flip routinely,
+# so they stay visible with no category. Everything else here is a tuning
+# knob or a mode-of-operation toggle -> CONFIG. Keep this beside SWITCH_KEYS
+# (not in const.py) since it is presentation, not domain config.
+SWITCH_CATEGORIES: dict[str, EntityCategory | None] = {
+    SWITCH_AUTOMATION_ENABLED: None,
+    SWITCH_SPIKE_DISCHARGE_ENABLED: EntityCategory.CONFIG,
+    SWITCH_SPIKE_DISCHARGE_CONSERVATIVE: EntityCategory.CONFIG,
+    SWITCH_DRY_RUN: EntityCategory.CONFIG,
+    SWITCH_DEMAND_WINDOW_BLOCK: None,
+    SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: EntityCategory.CONFIG,
+    SWITCH_STALE_SOLAR_CONSERVATIVE: EntityCategory.CONFIG,
+    SWITCH_NOTIFICATIONS_ENABLED: EntityCategory.CONFIG,
+}
 
 
 async def async_setup_entry(
@@ -86,6 +103,7 @@ class LocalShiftSwitch(SwitchEntity):
         self._attr_unique_id = f"localshift_{key}"
         self._attr_name = SWITCH_NAMES[key]
         self._attr_icon = SWITCH_ICONS[key]
+        self._attr_entity_category = SWITCH_CATEGORIES.get(key)
 
         # Sync initial state to coordinator's switch state bridge
         self.coordinator.set_switch_state(key, self._is_on)

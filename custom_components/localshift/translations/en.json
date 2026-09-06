@@ -199,10 +199,6 @@
         "name": "Entity Health",
         "description": "Detailed health status for all tracked entities. Shows which entities are available or have issues."
       },
-      "baseline_load_profile": {
-        "name": "Baseline Load Profile",
-        "description": "Non-HVAC baseline load by hour. Shows your home's base consumption without heating/cooling."
-      },
       "learning_decision_history": {
         "name": "Learning Decision History",
         "description": "Recent mode decisions with their measured outcomes. Observation only — nothing reads these back to change behaviour."

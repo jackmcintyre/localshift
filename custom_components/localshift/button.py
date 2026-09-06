@@ -15,6 +15,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -108,6 +109,8 @@ class ResetLearningDataButton(LocalShiftButtonBase):
     correlation history. Nothing consumes these to change behaviour — see
     learning/telemetry.py — so this only discards accumulated observations.
     """
+
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry, BUTTON_RESET_LEARNING)

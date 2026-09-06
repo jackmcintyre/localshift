@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 
 from ..pricing.types import ForecastSlot
@@ -83,6 +84,7 @@ class DecisionLogSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_decision_log"
     _attr_name = "Decision Log"
     _attr_icon = "mdi:history"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         log = self.coordinator.data.decision_log
@@ -109,6 +111,7 @@ class ForecastHistorySensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_history"
     _attr_name = "Forecast History"
     _attr_icon = "mdi:chart-line-variant"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = len(self.coordinator.data.forecast_history)
@@ -256,6 +259,7 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_diagnostics"
     _attr_name = "Forecast Diagnostics"
     _attr_icon = "mdi:bug-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = self.coordinator.data.consumption_source

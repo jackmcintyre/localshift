@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.helpers.entity import EntityCategory
 
 from .base import LocalShiftSensorBase
 
@@ -13,6 +14,7 @@ class LoadDeviationSensor(LocalShiftSensorBase):
     _attr_icon = "mdi:chart-bell-curve-cumulative"
     _attr_native_unit_of_measurement = "kW"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         diagnostics = self.coordinator.data.load_deviation_diagnostics

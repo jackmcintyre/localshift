@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 
 from .base import LocalShiftSensorBase
@@ -32,6 +33,7 @@ class OptimizerPlanDetailedSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_optimizer_plan_detailed"
     _attr_name = "Optimizer Plan Detailed"
     _attr_icon = "mdi:format-list-bulleted"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _unrecorded_attributes = frozenset({"decisions"})
 
     def _update_from_coordinator(self) -> None:
@@ -220,6 +222,7 @@ class SolarForecastAccuracySensor(LocalShiftSensorBase):
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:solar-power-variant"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         # None until enough samples are collected (#881) — surfaces as

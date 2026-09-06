@@ -199,18 +199,6 @@
         "name": "Entity Health",
         "description": "Detailed health status for all tracked entities. Shows which entities are available or have issues."
       },
-      "baseline_load_profile": {
-        "name": "Baseline Load Profile",
-        "description": "Non-HVAC baseline load by hour. Shows your home's base consumption without heating/cooling."
-      },
-      "learning_status": {
-        "name": "Learning Status",
-        "description": "Current learning system phase (observing, tuning, optimizing). Shows if the system is learning your patterns."
-      },
-      "decision_quality": {
-        "name": "Decision Quality",
-        "description": "Today's average decision quality score as a percentage. Higher is better."
-      },
       "learning_decision_history": {
         "name": "Learning Decision History",
         "description": "Recent mode decisions with outcomes. Shows what the learning system tried and what happened."
@@ -294,10 +282,6 @@
       "notifications_enabled": {
         "name": "Notifications Enabled",
         "description": "Enable all notifications (mode transitions, daily summaries, manual actions, alerts). Turn off to silence all notifications."
-      },
-      "enable_learning": {
-        "name": "Enable Learning",
-        "description": "Enable active optimization by the learning system. Adjusts parameters based on your usage patterns."
       }
     },
     "number": {
