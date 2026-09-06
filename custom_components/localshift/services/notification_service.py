@@ -454,13 +454,26 @@ class NotificationService:
         await self.send_notification(title, message)
 
     async def send_manual_override_timeout_notification(
-        self, data: CoordinatorData, timeout_hours: float
+        self,
+        data: CoordinatorData,
+        timeout_hours: float,
+        *,
+        automation_enabled: bool,
     ) -> None:
         """Notify when manual override auto-clears after timeout.
 
         Args:
             data: Current coordinator data
             timeout_hours: The timeout duration in hours
+            automation_enabled: Whether the automation switch is currently on.
+                Issue #934: the override is entered via the battery-mode
+                select, which always flips the automation switch off first —
+                so the switch is almost always still off when this timeout
+                fires. Clearing ``manual_override`` alone does not flip the
+                switch back on (see StateMachine._handle_manual_override_timeout),
+                so the message must not claim automation is resuming unless it
+                actually is, or the user is told a false "all clear" while the
+                battery keeps running whatever manual posture was set.
 
         """
         if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
@@ -469,9 +482,16 @@ class NotificationService:
 
         dry_run_prefix = self._get_dry_run_prefix()
         title = f"{dry_run_prefix}{NOTIFICATION_PREFIX}Manual Override Timeout"
+        if automation_enabled:
+            resume_clause = "Automation resuming."
+        else:
+            resume_clause = (
+                "Automation is still disabled — select 'automatic' mode to "
+                "resume control."
+            )
         message = (
             f"Manual override cleared after {timeout_hours:.1f} hours. "
-            f"Automation resuming. Battery at {data.soc:.0f}%."
+            f"{resume_clause} Battery at {data.soc:.0f}%."
         )
 
         await self.send_notification(title, message)

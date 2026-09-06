@@ -687,12 +687,13 @@ class TestAlertNotifications:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_manual_override_timeout_notification(
+    async def test_manual_override_timeout_notification_automation_enabled(
         self, notification_service, coordinator_data, mock_hass
     ):
-        """Test manual override timeout notification."""
+        """When the automation switch is back on, the message can honestly
+        say automation is resuming."""
         await notification_service.send_manual_override_timeout_notification(
-            coordinator_data, timeout_hours=4.0
+            coordinator_data, timeout_hours=4.0, automation_enabled=True
         )
 
         call_args = mock_hass.services.async_call.call_args
@@ -713,10 +714,33 @@ class TestAlertNotifications:
         switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
 
         await service.send_manual_override_timeout_notification(
-            coordinator_data, timeout_hours=4.0
+            coordinator_data, timeout_hours=4.0, automation_enabled=True
         )
 
         mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_manual_override_timeout_notification_automation_still_disabled(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Issue #934 review fix: manual entry via the select always turns the
+        automation switch off first, and clearing manual_override alone does
+        not flip it back on — so the dominant real-world case has the switch
+        still off when this notification fires. The message must not claim
+        automation is resuming when it is not, or the user stops watching a
+        battery that is still running whatever manual posture they set.
+        """
+        await notification_service.send_manual_override_timeout_notification(
+            coordinator_data, timeout_hours=4.0, automation_enabled=False
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+        message = data["message"]
+
+        assert "Automation resuming" not in message
+        assert "still disabled" in message
+        assert "automatic" in message
 
     @pytest.mark.asyncio
     async def test_tesla_override_detected_corroborated(
