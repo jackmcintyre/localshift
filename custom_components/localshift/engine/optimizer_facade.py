@@ -264,7 +264,24 @@ class OptimizerFacade:
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
                 self._mark_mode_debug_fallback(data)
+                # Issue #956: an empty build is the WORST case the tracker
+                # exists to catch -- the configured forecast source produced
+                # nothing covering "now" at all, so _ensure_current_slot_coverage
+                # never even ran to insert a synthetic slot. Record it as a
+                # (non-covering) sample rather than skipping recording, or a
+                # total forecast-source outage would never trip the rate,
+                # never satisfy needs_startup_warning, and never degrade.
+                data.synthetic_slot_health.record(True, now_dt or dt_util.now())
                 return
+
+            # Issue #956: sample the synthetic-slot-0 rate on every successful
+            # build too, so the denominator covers every evaluation that
+            # reached a price_source decision -- synthetic, real, or (above)
+            # none at all.
+            slot0_price_source = getattr(slot_metadata, "slot0_price_source", "unknown")
+            data.synthetic_slot_health.record(
+                slot0_price_source == "synthetic", now_dt or dt_util.now()
+            )
 
             optimizer_config = _build_optimizer_config(data, config_options)
 
@@ -1247,7 +1264,13 @@ class OptimizerFacade:
                 config_options=config_options, ha_timezone=ha_timezone
             )
 
-            # Build slots with shadow prices
+            # Build slots with shadow prices. Deliberately does NOT sample
+            # data.synthetic_slot_health (Issue #956) -- only the live
+            # (primary) build above feeds that tracker. Sampling both would
+            # double-count every evaluation and skew the rate against
+            # whichever comparison_mode happens to be enabled; the shadow
+            # build's own success/failure is already surfaced separately via
+            # comparison_match / shadow_decision.
             shadow_slots, _ = slot_builder.build_slots(
                 data,
                 data.adaptive_params,

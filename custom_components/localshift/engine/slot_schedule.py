@@ -509,9 +509,11 @@ def _ensure_current_slot_coverage(slots: list[dict], now_local: datetime) -> Non
     slots.insert(0, synthetic_slot)
 
     _LOGGER.warning(
-        "SYNTHETIC SLOT FALLBACK: no forecast entry covers %s (first entry %s, "
-        "gap=%.0fs) — price borrowed from the next interval; check the price "
-        "sensor for staleness",
+        "SYNTHETIC SLOT FALLBACK: no entry in the configured price forecast "
+        "covers %s (first entry %s, gap=%.0fs) — slot 0 price borrowed from "
+        "the next interval; check the configured general-price forecast "
+        "source (pricing_general_forecast), not just sensor staleness. Rate "
+        "tracked for integration degradation (#956).",
         synthetic_start.strftime("%H:%M:%S"),
         slots[1]["start"].strftime("%H:%M:%S") if len(slots) > 1 else "N/A",
         (slots[1]["start"] - synthetic_start).total_seconds() if len(slots) > 1 else 0,

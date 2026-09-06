@@ -14,7 +14,8 @@ import logging
 from datetime import time
 from typing import TYPE_CHECKING
 
-from ..const import CONF_WEATHER_ENTITY
+from ..const import CONF_PRICING_GENERAL_FORECAST, CONF_WEATHER_ENTITY
+from .synthetic_slot_health import SyntheticSlotHealth
 
 if TYPE_CHECKING:  # pragma: no cover
     from .coordinator import LocalShiftCoordinator
@@ -48,6 +49,14 @@ class EntityMonitor:
         Populates integration status, errors, and warnings in CoordinatorData
         for sensors to expose to users.
         """
+        self._check_validator_health()
+        # Issue #956: independent of the validator being present -- a
+        # sustained synthetic slot 0 must still escalate integration_status
+        # even on a config with no entity_validator wired up.
+        self._apply_synthetic_slot_health()
+
+    def _check_validator_health(self) -> None:
+        """Run the entity validator and copy its results onto CoordinatorData."""
         if self._coordinator._entity_validator is None:
             return
 
@@ -97,6 +106,60 @@ class EntityMonitor:
         if data.entity_warnings:
             for warning in data.entity_warnings:
                 _LOGGER.debug("Entity health warning: %s", warning)
+
+    def _apply_synthetic_slot_health(self) -> None:
+        """Escalate a sustained synthetic-slot-0 rate into integration_status.
+
+        Issue #956: ``engine/optimizer_facade.py`` records one sample per
+        evaluation onto ``data.synthetic_slot_health``. This method reads
+        that tracker's state and (a) fires a one-shot startup WARNING if the
+        configured forecast source has never produced an entry covering
+        "now", and (b) escalates ``integration_status`` to "degraded" (never
+        downgrading "error") while the rate stays sustained above threshold.
+        Clearing is automatic: once the tracker's own hysteresis flips
+        `degraded` back to False, this method simply stops touching status,
+        and `_check_validator_health` has already recomputed it from scratch
+        this cycle.
+        """
+        data = self._coordinator.data
+        health = getattr(data, "synthetic_slot_health", None)
+        # Guard against a bare MagicMock (unit tests that build coordinator
+        # data from a generic mock, not a real CoordinatorData) leaking a
+        # truthy Mock into integration_status.
+        if not isinstance(health, SyntheticSlotHealth):
+            return
+
+        # Issue #956 review fix: the pricing entity mappings live in
+        # entry.data, never entry.options (get_option reads entry.options
+        # and would always return None here) -- get_entity_id is the
+        # accessor every other read site in the codebase uses
+        # (coordinator.py:338, state/reader.py:497), and it falls back to
+        # DEFAULT_ENTITY_IDS when the key is unset.
+        forecast_entity = self._coordinator.get_entity_id(CONF_PRICING_GENERAL_FORECAST)
+
+        if health.needs_startup_warning:
+            _LOGGER.warning(
+                "SYNTHETIC_SLOT_STARTUP: no entry from the configured price "
+                "forecast source %s has covered 'now' in %d evaluations "
+                "since startup -- every slot 0 has been priced synthetically "
+                "(Issue #956)",
+                forecast_entity,
+                health.evaluations_since_start,
+            )
+            health.startup_warning_logged = True
+
+        if not health.degraded:
+            return
+
+        warning = (
+            f"slot 0 priced synthetically in {round(health.rate * 100)}% of "
+            f"the last hour's evaluations ({health.sample_count} samples) -- "
+            f"check {forecast_entity}"
+        )
+        data.entity_warnings = list(data.entity_warnings) + [warning]
+        if data.integration_status == "ok":
+            data.integration_status = "degraded"
+            data.integration_status_message = warning
 
     def reset_entity_tracking_on_options_change(self) -> None:
         """Reset entity tracking when options change.

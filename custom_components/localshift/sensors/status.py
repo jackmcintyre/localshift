@@ -4,16 +4,48 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
 
+from ..coordinator.synthetic_slot_health import SyntheticSlotHealth
 from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
+
+_SYNTHETIC_SLOT_HEALTH_FALLBACK: dict[str, Any] = {
+    "rate": 0.0,
+    "degraded": False,
+    "sample_count": 0,
+    "consecutive_above": 0,
+    "consecutive_below": 0,
+}
+
+
+def _synthetic_slot_attrs(data: Any) -> dict[str, Any]:
+    """Build the synthetic-slot-0 attribute trio (Issue #956).
+
+    Falls back to safe defaults when ``data.synthetic_slot_health`` is
+    missing or not a real :class:`SyntheticSlotHealth` -- e.g. a bare
+    ``MagicMock`` coordinator in tests, which would otherwise auto-vivify a
+    truthy Mock attribute and leak it into the sensor's attributes.
+    """
+    health = getattr(data, "synthetic_slot_health", None)
+    if not isinstance(health, SyntheticSlotHealth):
+        return {
+            "synthetic_slot_rate": 0.0,
+            "synthetic_slot_degraded": False,
+            "synthetic_slot_health": dict(_SYNTHETIC_SLOT_HEALTH_FALLBACK),
+        }
+    return {
+        "synthetic_slot_rate": round(health.rate, 3),
+        "synthetic_slot_degraded": health.degraded,
+        "synthetic_slot_health": health.to_dict(),
+    }
 
 
 class IntegrationStatusSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_integration_status"
     _attr_name = "Integration Status"
     _attr_icon = "mdi:check-circle"
+    _unrecorded_attributes = frozenset({"synthetic_slot_health"})
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = self.coordinator.data.integration_status
@@ -29,6 +61,7 @@ class IntegrationStatusSensor(LocalShiftSensorBase):
             "errors": d.entity_errors,
             "warnings": d.entity_warnings,
             "last_check": d.last_entity_check,
+            **_synthetic_slot_attrs(d),
         }
 
     @property

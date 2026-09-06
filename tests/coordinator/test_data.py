@@ -30,6 +30,17 @@ def test_coordinator_data_has_independent_load_deviation_diagnostics():
 
 
 
+def test_coordinator_data_has_independent_synthetic_slot_health():
+    """Issue #956: each CoordinatorData gets its own tracker, not a shared one."""
+    first = CoordinatorData()
+    second = CoordinatorData()
+
+    first.synthetic_slot_health.evaluations_since_start = 5
+
+    assert first.synthetic_slot_health.evaluations_since_start == 5
+    assert second.synthetic_slot_health.evaluations_since_start == 0
+
+
 def test_coordinator_data_forecast_types():
     """Test CoordinatorData forecast fields accept ForecastSlot."""
     from datetime import datetime, timezone
