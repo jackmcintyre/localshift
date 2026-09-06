@@ -80,6 +80,14 @@ HISTORY_WINDOW_DAYS = 28
 # Minimum samples per hour before using profile-specific data
 MIN_SAMPLES_PER_HOUR = 3
 
+# Issue #679: per-day-of-week load profile fallback chain thresholds.
+# Day-specific (Mon=0..Sun=6) bucket needs at least this many samples for the
+# hour before it is trusted over the weekday/weekend aggregate.
+MIN_SAMPLES_PER_DAY_HOUR = 4
+# Weekday/weekend aggregate bucket needs at least this many samples for the
+# hour before it is trusted over the global (combined) average.
+MIN_SAMPLES_PER_AGGREGATE_HOUR = 8
+
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Entity Selection (Step 1)
 # -----------------------------------------------------------------------------

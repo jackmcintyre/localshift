@@ -125,6 +125,13 @@ class HistoryFetcher:
             "unknown"  # "weekday_weekend" or "combined_fallback"
         )
 
+        # Per-day-of-week (Mon=0..Sun=6) consumption profiles (Issue #679).
+        # {day_of_week: {hour: avg_kw}} / {day_of_week: {hour: sample_count}}.
+        # Populated under the same _historical_load_cache_date guard as the
+        # weekday/weekend aggregate above, so cache invalidation stays correct.
+        self._daily_hourly_avg_kw: dict[int, dict[int, float]] = {}
+        self._daily_sample_counts: dict[int, dict[int, int]] = {}
+
         # Recent load cache (1-hour average)
         self._recent_load_1hr_kw: float = 0.0
         self._recent_load_short_kw: float = 0.0
@@ -173,6 +180,8 @@ class HistoryFetcher:
         weekend_avg = result.get("weekend_avg", {})
         weekday_counts = result.get("weekday_counts", {})
         weekend_counts = result.get("weekend_counts", {})
+        daily_avg = result.get("daily_avg", {})
+        daily_counts = result.get("daily_counts", {})
         profile_source = result.get("profile_source", "unknown")
 
         _LOGGER.info(
@@ -194,6 +203,11 @@ class HistoryFetcher:
             self._weekday_sample_counts = weekday_counts
             self._weekend_sample_counts = weekend_counts
             self._profile_source = profile_source
+
+            # Store per-day-of-week profiles (Issue #679), same cache-date
+            # guard as everything else above so invalidation stays correct.
+            self._daily_hourly_avg_kw = daily_avg
+            self._daily_sample_counts = daily_counts
 
             self._historical_load_cache_date = today_str
             _LOGGER.debug(
@@ -279,9 +293,8 @@ class HistoryFetcher:
             Dict with weekday/weekend/combined/baseline/hvac profiles
 
         """
-        weekday_by_hour, weekend_by_hour = self._separate_samples_by_day_type(
-            rows, local_tz
-        )
+        by_weekday = self._separate_samples_by_weekday(rows, local_tz)
+        weekday_by_hour, weekend_by_hour = self._derive_day_type_buckets(by_weekday)
 
         non_hvac_by_hour, hvac_by_hour = self._separate_hvac_load(
             weekday_by_hour, weekend_by_hour, climate_states=None
@@ -297,6 +310,8 @@ class HistoryFetcher:
             weekday_by_hour, weekend_by_hour
         )
 
+        daily_avg, daily_counts = self._compute_daily_profiles(by_weekday)
+
         profile_source = self._determine_profile_source(weekday_counts, weekend_counts)
 
         return {
@@ -306,6 +321,8 @@ class HistoryFetcher:
             "weekend_avg": weekend_avg,
             "weekday_counts": weekday_counts,
             "weekend_counts": weekend_counts,
+            "daily_avg": daily_avg,
+            "daily_counts": daily_counts,
             "profile_source": profile_source,
             "baseline_avg": baseline_by_hour,
             "baseline_counts": {
@@ -359,22 +376,29 @@ class HistoryFetcher:
                 combined_counts[hour] = len(all_vals)
         return combined_avg, combined_counts
 
-    def _separate_samples_by_day_type(
+    def _separate_samples_by_weekday(
         self, rows: list[dict[str, Any]], _local_tz: Any
-    ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
-        """Separate statistics rows into weekday and weekend hourly buckets.
+    ) -> dict[int, dict[int, list[float]]]:
+        """Separate statistics rows into per-day-of-week hourly buckets (Issue #679).
+
+        This is the single parser of `rows`: `_separate_samples_by_day_type`
+        derives its weekday/weekend 2-bucket split from this method's output
+        rather than re-parsing `rows` itself.
 
         Args:
             rows: List of statistics rows with 'start' and 'mean' fields
-            _local_tz: Local timezone for day-of-week determination (unused, kept for API compatibility)
+            _local_tz: Local timezone for day-of-week determination (unused,
+                kept for API compatibility with _separate_samples_by_day_type)
 
         Returns:
-            Tuple of (weekday_by_hour, weekend_by_hour) where each is
-            {hour: [values]} for hours 0-23.
+            Dict {0..6: {0..23: [values]}}, Monday=0 .. Sunday=6. Every
+            day-of-week and every hour key is always present (possibly with
+            an empty list) so callers never need a defensive .get().
 
         """
-        weekday_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
-        weekend_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
+        by_weekday: dict[int, dict[int, list[float]]] = {
+            dow: {h: [] for h in range(24)} for dow in range(7)
+        }
 
         for row in rows:
             if not isinstance(row, dict):
@@ -409,13 +433,79 @@ class HistoryFetcher:
             hour = local_dt.hour
             day_of_week = local_dt.weekday()  # Monday=0, Sunday=6
 
-            # Separate weekday (Mon-Fri, 0-4) vs weekend (Sat-Sun, 5-6)
-            if day_of_week >= 5:  # Saturday or Sunday
-                weekend_by_hour[hour].append(mean_kw)
-            else:
-                weekday_by_hour[hour].append(mean_kw)
+            by_weekday[day_of_week][hour].append(mean_kw)
+
+        return by_weekday
+
+    def _derive_day_type_buckets(
+        self, by_weekday: dict[int, dict[int, list[float]]]
+    ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
+        """Merge per-day-of-week buckets into weekday (Mon-Fri) / weekend (Sat-Sun).
+
+        Args:
+            by_weekday: Output of _separate_samples_by_weekday: {0..6: {0..23: [values]}}
+
+        Returns:
+            Tuple of (weekday_by_hour, weekend_by_hour) where each is
+            {hour: [values]} for hours 0-23.
+
+        """
+        weekday_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
+        weekend_by_hour: dict[int, list[float]] = {h: [] for h in range(24)}
+
+        for day_of_week, samples_by_hour in by_weekday.items():
+            target = weekend_by_hour if day_of_week >= 5 else weekday_by_hour
+            for hour, values in samples_by_hour.items():
+                if values:
+                    target[hour].extend(values)
 
         return weekday_by_hour, weekend_by_hour
+
+    def _separate_samples_by_day_type(
+        self, rows: list[dict[str, Any]], _local_tz: Any
+    ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
+        """Separate statistics rows into weekday and weekend hourly buckets.
+
+        Derived from _separate_samples_by_weekday (Issue #679): weekday is the
+        Mon-Fri (0-4) buckets merged, weekend is Sat-Sun (5-6) merged. Kept as
+        its own method (rather than inlined at every call site) because its
+        2-tuple return shape is part of the tested public surface.
+
+        Args:
+            rows: List of statistics rows with 'start' and 'mean' fields
+            _local_tz: Local timezone for day-of-week determination (unused, kept for API compatibility)
+
+        Returns:
+            Tuple of (weekday_by_hour, weekend_by_hour) where each is
+            {hour: [values]} for hours 0-23.
+
+        """
+        by_weekday = self._separate_samples_by_weekday(rows, _local_tz)
+        return self._derive_day_type_buckets(by_weekday)
+
+    def _compute_daily_profiles(
+        self, by_weekday: dict[int, dict[int, list[float]]]
+    ) -> tuple[dict[int, dict[int, float]], dict[int, dict[int, int]]]:
+        """Compute per-day-of-week hourly averages and sample counts (Issue #679).
+
+        Args:
+            by_weekday: Output of _separate_samples_by_weekday: {0..6: {0..23: [values]}}
+
+        Returns:
+            Tuple of (daily_avg, daily_counts), each {day_of_week: {hour: value}}.
+            A day-of-week with no samples anywhere still gets an entry (from
+            _compute_hourly_averages skipping empty hours), so lookups on an
+            always-present key never need a defensive .get() at the day level
+            either — only at the hour level, same as the 2-bucket profiles.
+
+        """
+        daily_avg: dict[int, dict[int, float]] = {}
+        daily_counts: dict[int, dict[int, int]] = {}
+        for day_of_week, samples_by_hour in by_weekday.items():
+            avg, counts = self._compute_hourly_averages(samples_by_hour)
+            daily_avg[day_of_week] = avg
+            daily_counts[day_of_week] = counts
+        return daily_avg, daily_counts
 
     def _separate_hvac_load(
         self,
@@ -549,6 +639,8 @@ class HistoryFetcher:
             "weekend_avg": {},
             "weekday_counts": {},
             "weekend_counts": {},
+            "daily_avg": {},
+            "daily_counts": {},
             "profile_source": "unknown",
         }
 
@@ -650,6 +742,17 @@ class HistoryFetcher:
 
         """
         return self._weekend_hourly_avg_kw, self._weekend_sample_counts
+
+    def get_daily_profiles(
+        self,
+    ) -> tuple[dict[int, dict[int, float]], dict[int, dict[int, int]]]:
+        """Get per-day-of-week (Mon=0..Sun=6) profiles for injection (Issue #679).
+
+        Returns:
+            Tuple of (daily_avg, daily_counts), each {day_of_week: {hour: value}}.
+
+        """
+        return self._daily_hourly_avg_kw, self._daily_sample_counts
 
     def get_profile_source(self) -> str:
         """Get the current profile source for diagnostics.
@@ -930,3 +1033,7 @@ class HistoryFetcher:
         self._weekday_sample_counts = {}
         self._weekend_sample_counts = {}
         self._profile_source = "unknown"
+
+        # Clear per-day-of-week profiles (Issue #679)
+        self._daily_hourly_avg_kw = {}
+        self._daily_sample_counts = {}

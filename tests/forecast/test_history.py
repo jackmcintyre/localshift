@@ -1297,3 +1297,215 @@ class TestSeparateHvacLoadActions:
 
         assert non_hvac[10] == [1.0]
         assert 10 not in hvac
+
+
+class TestSeparateSamplesByWeekday:
+    """Tests for _separate_samples_by_weekday (Issue #679: 7-bucket profiles).
+
+    1704067200 = 2024-01-01T00:00:00Z, a Monday (day_of_week=0).
+    1704585600 = 2024-01-07T00:00:00Z, a Sunday (day_of_week=6).
+    """
+
+    def test_all_seven_days_always_present(self, history_fetcher):
+        """Every day-of-week key (0-6) is present even with no rows at all."""
+        from datetime import timezone
+
+        by_weekday = history_fetcher._separate_samples_by_weekday([], timezone.utc)
+
+        assert set(by_weekday.keys()) == set(range(7))
+        for day_samples in by_weekday.values():
+            assert set(day_samples.keys()) == set(range(24))
+            assert all(v == [] for v in day_samples.values())
+
+    def test_monday_row_lands_in_bucket_zero_only(self, history_fetcher):
+        """A known Monday row lands in bucket 0 and nowhere else."""
+        from datetime import timezone
+
+        rows = [{"start": 1704067200, "mean": 1.5}]
+        by_weekday = history_fetcher._separate_samples_by_weekday(rows, timezone.utc)
+
+        assert by_weekday[0][0] == [1.5]
+        for day_of_week in range(1, 7):
+            assert all(v == [] for v in by_weekday[day_of_week].values())
+
+    def test_sunday_row_lands_in_bucket_six_only(self, history_fetcher):
+        """A known Sunday row lands in bucket 6 and nowhere else."""
+        from datetime import timezone
+
+        rows = [{"start": 1704585600, "mean": 2.0}]
+        by_weekday = history_fetcher._separate_samples_by_weekday(rows, timezone.utc)
+
+        assert by_weekday[6][0] == [2.0]
+        for day_of_week in range(6):
+            assert all(v == [] for v in by_weekday[day_of_week].values())
+
+    def test_rows_across_all_seven_days_populate_all_buckets(self, history_fetcher):
+        """Rows spanning a full week populate all 7 day-of-week buckets."""
+        from datetime import timezone
+
+        # 1704067200 = Monday 2024-01-01; one row per day for a week.
+        rows = [
+            {"start": 1704067200 + day * 86400, "mean": float(day)}
+            for day in range(7)
+        ]
+        by_weekday = history_fetcher._separate_samples_by_weekday(rows, timezone.utc)
+
+        for day_of_week in range(7):
+            assert by_weekday[day_of_week][0] == [float(day_of_week)]
+
+    def test_absent_day_yields_empty_bucket_not_keyerror(self, history_fetcher):
+        """A day-of-week absent from rows still returns an (empty) entry."""
+        from datetime import timezone
+
+        rows = [{"start": 1704067200, "mean": 1.5}]  # Monday only
+        by_weekday = history_fetcher._separate_samples_by_weekday(rows, timezone.utc)
+
+        # Tuesday (1) had no rows -- must be present and empty, not missing.
+        assert 1 in by_weekday
+        assert by_weekday[1][0] == []
+
+    def test_skips_non_dict_and_invalid_rows(self, history_fetcher):
+        """Malformed rows are skipped, not raised on (mirrors day-type parser)."""
+        from datetime import timezone
+
+        rows = [
+            "not a dict",
+            {"start": "invalid", "mean": 1.5},
+            {"start": 1704067200, "mean": "unknown"},
+            {"start": 1704067200, "mean": 1.5},  # the only valid row
+        ]
+        by_weekday = history_fetcher._separate_samples_by_weekday(rows, timezone.utc)
+
+        assert by_weekday[0][0] == [1.5]
+
+    def test_derived_day_type_matches_pre_change_two_bucket_split(
+        self, history_fetcher
+    ):
+        """Regression guard: _separate_samples_by_day_type(rows) is unchanged
+        by rebasing it onto _separate_samples_by_weekday."""
+        from datetime import timezone
+
+        rows = [
+            {"start": 1704067200, "mean": 1.0},  # Monday
+            {"start": 1704585600, "mean": 2.0},  # Sunday
+            {"start": 1704067200 + 3600, "mean": 3.0},  # Monday, hour 1
+        ]
+        weekday, weekend = history_fetcher._separate_samples_by_day_type(
+            rows, timezone.utc
+        )
+
+        assert weekday[0] == [1.0]
+        assert weekday[1] == [3.0]
+        assert weekend[0] == [2.0]
+
+
+class TestComputeDailyProfiles:
+    """Tests for _compute_daily_profiles (Issue #679)."""
+
+    def test_computes_average_and_count_per_day(self, history_fetcher):
+        """Averages and counts are computed independently per day-of-week."""
+        by_weekday = {
+            dow: {h: [] for h in range(24)} for dow in range(7)
+        }
+        by_weekday[0][10] = [1.0, 3.0]  # Monday, hour 10 -> avg 2.0, count 2
+        by_weekday[6][10] = [5.0]  # Sunday, hour 10 -> avg 5.0, count 1
+
+        daily_avg, daily_counts = history_fetcher._compute_daily_profiles(by_weekday)
+
+        assert daily_avg[0][10] == 2.0
+        assert daily_counts[0][10] == 2
+        assert daily_avg[6][10] == 5.0
+        assert daily_counts[6][10] == 1
+        # An hour with no samples is omitted, not zero-filled.
+        assert 11 not in daily_avg[0]
+
+    def test_empty_input_yields_all_days_with_no_hours(self, history_fetcher):
+        """A day-of-week with no samples anywhere yields an empty (not missing) dict."""
+        by_weekday = {dow: {h: [] for h in range(24)} for dow in range(7)}
+
+        daily_avg, daily_counts = history_fetcher._compute_daily_profiles(by_weekday)
+
+        assert set(daily_avg.keys()) == set(range(7))
+        assert daily_avg[3] == {}
+        assert daily_counts[3] == {}
+
+
+class TestDailyProfileCacheLifecycle:
+    """Issue #679: 7-bucket profiles share the combined profile's cache lifecycle."""
+
+    def test_empty_result_includes_daily_keys(self, history_fetcher):
+        """_empty_result carries daily_avg/daily_counts so callers never KeyError."""
+        result = history_fetcher._empty_result()
+
+        assert result["daily_avg"] == {}
+        assert result["daily_counts"] == {}
+
+    @pytest.mark.asyncio
+    async def test_daily_profiles_populated_on_fetch(self, history_fetcher):
+        """A fresh fetch stores daily_avg/daily_counts, retrievable via get_daily_profiles."""
+        history_fetcher._historical_load_cache_date = "2020-01-01"
+
+        mock_result = {
+            "combined_avg": {h: 1.0 for h in range(10)},
+            "combined_counts": {h: 5 for h in range(10)},
+            "weekday_avg": {10: 1.5},
+            "weekend_avg": {10: 1.0},
+            "weekday_counts": {10: 3},
+            "weekend_counts": {10: 2},
+            "daily_avg": {0: {10: 2.0}, 6: {10: 5.0}},
+            "daily_counts": {0: {10: 4}, 6: {10: 1}},
+            "profile_source": "weekday_weekend",
+        }
+
+        with patch(
+            "homeassistant.components.recorder.get_instance"
+        ) as mock_get_instance:
+            mock_recorder = MagicMock()
+            mock_recorder.async_add_executor_job = AsyncMock(return_value=mock_result)
+            mock_get_instance.return_value = mock_recorder
+
+            await history_fetcher.async_get_historical_hourly_averages("sensor.test")
+
+        daily_avg, daily_counts = history_fetcher.get_daily_profiles()
+        assert daily_avg[0][10] == 2.0
+        assert daily_counts[6][10] == 1
+
+    @pytest.mark.asyncio
+    async def test_same_day_second_call_does_not_refetch(self, history_fetcher):
+        """A same-day second call is served from cache; daily profiles unchanged."""
+        from homeassistant.util import dt as dt_util
+
+        today_str = dt_util.now().strftime("%Y-%m-%d")
+        history_fetcher._historical_load_cache = {10: 1.5}
+        history_fetcher._historical_load_sample_counts = {10: 5}
+        history_fetcher._historical_load_cache_date = today_str
+        history_fetcher._daily_hourly_avg_kw = {0: {10: 9.9}}
+        history_fetcher._daily_sample_counts = {0: {10: 4}}
+
+        with patch(
+            "homeassistant.components.recorder.get_instance"
+        ) as mock_get_instance:
+            await history_fetcher.async_get_historical_hourly_averages("sensor.test")
+            # A cache hit must not touch the recorder at all.
+            mock_get_instance.assert_not_called()
+
+        daily_avg, _ = history_fetcher.get_daily_profiles()
+        assert daily_avg[0][10] == 9.9
+
+    def test_clear_historical_cache_clears_daily_profiles(self, history_fetcher):
+        """clear_historical_cache() resets the 7-bucket profiles too."""
+        history_fetcher._daily_hourly_avg_kw = {0: {10: 2.0}}
+        history_fetcher._daily_sample_counts = {0: {10: 4}}
+
+        history_fetcher.clear_historical_cache()
+
+        daily_avg, daily_counts = history_fetcher.get_daily_profiles()
+        assert daily_avg == {}
+        assert daily_counts == {}
+
+    def test_get_daily_profiles_default_empty(self, history_fetcher):
+        """A freshly constructed fetcher has no daily profiles yet."""
+        daily_avg, daily_counts = history_fetcher.get_daily_profiles()
+
+        assert daily_avg == {}
+        assert daily_counts == {}

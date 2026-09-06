@@ -151,6 +151,75 @@ def test_compute_load_forecast_slots_passes_context():
     assert all(call["season"] == "winter" for call in load_forecaster.calls)
 
 
+def test_compute_load_forecast_slots_day_of_week_changes_across_midnight():
+    """Issue #679: day_of_week is computed per-slot, not once per run, so a
+    horizon crossing midnight correctly changes day mid-run (no pipeline.py
+    change needed -- day_of_week already flows through per-slot; this guards
+    that behaviour with an explicit regression test)."""
+    data = CoordinatorData()
+    data.weather_temperature_forecast = {}
+    data.load_power_kw = 0.5
+
+    load_forecaster = _StubLoadForecaster(1.0)
+    pipeline = ForecastPipeline(
+        load_forecaster=load_forecaster,
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+    # 2026-06-01 is a Monday (day_of_week=0). 23:00 + 8*15min slots crosses
+    # into 2026-06-02, a Tuesday (day_of_week=1).
+    now_dt = datetime(2026, 6, 1, 23, 0, 0, tzinfo=UTC)
+    pipeline.compute_load_forecast_slots(
+        data=data,
+        now_dt=now_dt,
+        historical_avg_kw={10: 0.5},
+        recent_load_kw=0.5,
+        total_slots=8,
+    )
+
+    days_seen = [call["day_of_week"] for call in load_forecaster.calls]
+    # First 4 slots (23:00-23:45) are still Monday; last 4 (00:00-00:45) are
+    # Tuesday -- confirms per-slot, not per-run, resolution.
+    assert days_seen == [0, 0, 0, 0, 1, 1, 1, 1]
+
+
+def test_compute_load_forecast_slots_day_of_week_uses_now_dt_directly():
+    """day_of_week is derived from whatever tzinfo now_dt carries -- the
+    pipeline does no local conversion itself. Production is correct because
+    the caller (ComputationEngine) always passes ctx.now_dt from
+    dt_util.now() (already local, matching how HistoryFetcher buckets
+    historical samples); this test documents that contract explicitly so a
+    future caller passing a UTC now_dt is a visible behaviour change, not a
+    silent one."""
+    data = CoordinatorData()
+    data.weather_temperature_forecast = {}
+    data.load_power_kw = 0.5
+
+    load_forecaster = _StubLoadForecaster(1.0)
+    pipeline = ForecastPipeline(
+        load_forecaster=load_forecaster,
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+    # A tz-naive "local" datetime: Sunday 2026-06-07.
+    now_dt = datetime(2026, 6, 7, 10, 0, 0)
+    pipeline.compute_load_forecast_slots(
+        data=data,
+        now_dt=now_dt,
+        historical_avg_kw={10: 0.5},
+        recent_load_kw=0.5,
+        total_slots=1,
+    )
+
+    assert load_forecaster.calls[0]["day_of_week"] == now_dt.weekday() == 6
+
+
 def test_compute_solar_battery_forecast_uses_dp_decision():
     """Solar battery forecast should use DP decisions when available."""
     data = CoordinatorData()
