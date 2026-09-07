@@ -104,9 +104,10 @@ def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, An
 
     # Costs come off data.optimizer_result. The SOC trajectory has to be read
     # from data.optimizer_decisions rather than the summary: the summary's
-    # dw_entry_soc_pct is only computed when solar CANNOT reach target
-    # (engine/core.py:728), so on good days it is legitimately absent — which
-    # is precisely when we still need to know what the plan intends to do.
+    # dw_entry_soc_pct is only computed when the plan has a demand window at
+    # all (issue #973 fixed the prior "only when solar CANNOT reach target"
+    # gate), so on a no-DW day it is legitimately absent — which is precisely
+    # when we still need to know what the plan intends to do.
     result = data.optimizer_result or {}
     summary = getattr(data, "optimizer_summary", None) or {}
     decisions = getattr(data, "optimizer_decisions", None) or []

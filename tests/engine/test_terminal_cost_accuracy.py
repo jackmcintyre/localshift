@@ -212,9 +212,7 @@ class TestTerminalDiagnostics:
         planner = DPPlanner.__new__(DPPlanner)
         result = planner._get_terminal_diagnostics(
             soc_pct=60.0,
-            target=95.0,
             accuracy_discount=0.5,
-            future_solar_gain_pct=5.0,
             decisions=decisions,
             terminal_penalty_idx=0,
         )
@@ -229,9 +227,7 @@ class TestTerminalDiagnostics:
         planner = DPPlanner.__new__(DPPlanner)
         result = planner._get_terminal_diagnostics(
             soc_pct=60.0,
-            target=95.0,
             accuracy_discount=0.5,
-            future_solar_gain_pct=5.0,
             decisions=[],
             terminal_penalty_idx=None,
         )
@@ -251,14 +247,33 @@ class TestTerminalDiagnostics:
         planner = DPPlanner.__new__(DPPlanner)
         result = planner._get_terminal_diagnostics(
             soc_pct=60.0,
-            target=95.0,
             accuracy_discount=0.5,
-            future_solar_gain_pct=5.0,
             decisions=decisions,
             terminal_penalty_idx=1,
         )
 
         assert result["peak_soc_pct"] == 90.0  # max of 75, 90, 85
+
+    def test_dw_entry_soc_zero_is_published_not_dropped_to_none(self):
+        """Issue #973: a legitimate 0.0 dw_entry_soc must publish as 0.0, not None.
+
+        ``round(dw_entry_soc, 2) if dw_entry_soc else None`` treats a falsy 0.0
+        the same as an absent value, silently swallowing a genuine "the battery
+        enters the demand window empty" reading.
+        """
+        mock_decision = Mock()
+        mock_decision.predicted_soc_pct = 0.0
+        decisions: list = [mock_decision]
+
+        planner = DPPlanner.__new__(DPPlanner)
+        result = planner._get_terminal_diagnostics(
+            soc_pct=0.0,
+            accuracy_discount=0.5,
+            decisions=decisions,
+            terminal_penalty_idx=0,
+        )
+
+        assert result["dw_entry_soc_pct"] == 0.0
 
 
 class TestOptimizerResultDiagnosticFields:
@@ -512,3 +527,69 @@ class TestSolveDiagnostics:
         # Removed assertions for deleted diagnostic fields
         # The test verified that future solar projection used confidence resolver,
         # which is still active in the terminal cost calculation
+
+
+class TestSolveDiagnosticIntegration:
+    """Issue #973: terminal diagnostics must publish on solar-capable days too.
+
+    Before the fix, ``_solve`` only computed ``dw_entry_soc_pct`` /
+    ``peak_soc_pct`` when ``not solar_capable`` — so on any day sunny enough
+    for solar alone to reach the demand-window target, both fields were
+    always ``None``. That is exactly the condition the runway backstop
+    (``engine/optimizer_facade.py``) reads those fields to guard against, so
+    the backstop was silently blind on every sunny day.
+    """
+
+    def _make_solar_capable_inputs(self) -> OptimizerInputs:
+        """4-slot horizon with abundant solar and a demand window it can fill."""
+        base = datetime(2026, 3, 20, 14, 0, tzinfo=UTC)
+        slots = []
+        for i in range(4):
+            ts = base + timedelta(minutes=30 * i)
+            slots.append(
+                SlotContext(
+                    slot_index=i,
+                    timestamp_iso=ts.isoformat(),
+                    slot_interval_minutes=30,
+                    buy_price=0.30,
+                    sell_price=0.05,
+                    consumption_kwh=0.1,
+                    solar_kwh=5.0,
+                    is_demand_window_entry=i == 3,
+                    is_demand_window_slot=i >= 3,
+                ),
+            )
+
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            charge_rate_kw=3.3,
+            discharge_rate_kw=5.0,
+            demand_window_target_soc_pct=70.0,
+            optimization_mode="self_consumption",
+            allow_dw_entry_under_target=True,
+            switching_penalty=0.02,
+            target_shortfall_penalty_per_pct=0.015,
+        )
+
+        tracker = Mock()
+        tracker.metrics.accuracy = 75.0
+
+        return OptimizerInputs(
+            cycle_id="test_solar_capable",
+            initial_soc_pct=50.0,
+            slots=slots,
+            config=config,
+            solar_accuracy_tracker=tracker,
+            all_solcast=[],
+        )
+
+    def test_terminal_diagnostics_populated_when_solar_capable(self):
+        """Solar alone reaching the DW target must not blank the diagnostics."""
+        inputs = self._make_solar_capable_inputs()
+        planner = DPPlanner()
+        result = planner._solve(inputs)
+
+        assert result.success is True
+        assert result.can_solar_reach_target_in_dw is True
+        assert result.dw_entry_soc_pct is not None
+        assert result.peak_soc_pct is not None

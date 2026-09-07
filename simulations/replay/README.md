@@ -71,8 +71,10 @@ Two secondary findings, both arguing for removal rather than against it:
 
 Verdict: the offsets can be removed outright.
 
-A note on the metric. `dw_entry_soc_pct` from the optimizer summary is only
-computed when solar *cannot* reach target (`engine/core.py:728`), so it is
-absent by design on good days — seven of these ten. The table above therefore
-reads the planned SOC at demand-window start out of `data.optimizer_decisions`,
-which is populated on every day.
+A note on the metric. As of issue #973, `dw_entry_soc_pct` from the optimizer
+summary is computed whenever the plan has a demand window at all, regardless
+of whether solar can reach target — it used to be gated on solar *cannot*
+reach target, which left it absent by design on good days. This replay
+predates that fix, so the table above instead reads the planned SOC at
+demand-window start out of `data.optimizer_decisions`, which was populated on
+every day either way.

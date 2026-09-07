@@ -335,11 +335,6 @@ State: 0.09
 Attributes:
   effective_cheap_price: 0.09
   cheap_charge_stop_price: 0.12
-  forecast_import_cost: 0.92
-  forecast_export_revenue: -0.01
-  forecast_net_cost: 0.93
-  forecast_grid_charge_cost: 0.59
-  forecast_proactive_export_revenue: 0.0
   buy_prices: [...96 slots...]
   sell_prices: [...96 slots...]
 ```
@@ -386,7 +381,6 @@ Split from `forecast_daily` to stay under 16KB limit (Issue #37).
 State: statistics
 Attributes:
   consumption_source: statistics
-  consumption_statistic_id: sensor.my_home_load_power
   consumption_profile_hours: 24
   consumption_weighting: 0.67
   current_load_kw: 0.791
@@ -913,11 +907,8 @@ Attributes:
 **Attributes (new):**
 - `peak_soc_pct` - Maximum SOC projected in the plan
 - `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
-- `projected_solar_gain_pct` - Raw projected solar SOC gain
 - `forecast_accuracy` - Current forecast accuracy (0-1)
 - `accuracy_discount_factor` - Applied discount (0.5-1.0)
-- `adjusted_solar_gain_pct` - Discounted projected solar SOC gain
-- `effective_soc_at_terminal` - SOC used in terminal cost calculation
 
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 

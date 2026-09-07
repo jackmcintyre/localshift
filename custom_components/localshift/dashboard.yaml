@@ -851,8 +851,6 @@ views:
 
               Consumption Profile Hours: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_profile_hours') | default(0) }}
 
-              Consumption Fallback Hours: {{ state_attr('sensor.localshift_forecast_diagnostics', 'consumption_fallback_hours') | default(0) }}
-
               === DECISION LOG ===
 
               Latest Decision: {{ state_attr('sensor.localshift_decision_log', 'reason') | default('No decisions yet') }}
@@ -1084,13 +1082,13 @@ views:
               | Terminal shortfall | {{ v(state_attr(s, 'terminal_shortfall_pct'), '%') }} |
               | Initial SOC (plan basis) | {{ v(state_attr(s, 'initial_soc_pct'), '%') }} |
               | Peak SOC in plan | {{ v(state_attr(s, 'peak_soc_pct'), '%') }} |
-              | Effective SOC at terminal | {{ v(state_attr(s, 'effective_soc_at_terminal')) }} |
 
-              Planned DW entry is only computed when solar **cannot** reach the
-              target, so a blank value on a sunny day is expected, not a fault.
-              An em dash below means the field is absent; `False` means present
-              and false — the difference matters when checking whether a guard
-              ran at all.
+              Planned DW entry is computed whenever the plan has a demand
+              window at all, regardless of whether solar can reach the target
+              (issue #973) — a blank value means no demand window in the plan,
+              not that solar was sufficient. An em dash below means the field
+              is absent; `False` means present and false — the difference
+              matters when checking whether a guard ran at all.
 
               **Pre-charge runway backstop (#902)**
 
@@ -1100,8 +1098,6 @@ views:
               | Runway slack | {{ v(state_attr(s, 'precharge_runway_slack_min'), ' min') }} |
               | Runway margin setting | {{ states('number.localshift_pre_charge_runway_margin') }} min |
               | Hard floor suppressed by solar | {{ v(state_attr(s, 'hard_floor_suppressed_by_solar')) }} |
-              | Projected solar gain | {{ v(state_attr(s, 'projected_solar_gain_pct'), '%') }} |
-              | Adjusted solar gain | {{ v(state_attr(s, 'adjusted_solar_gain_pct'), '%') }} |
               | Accuracy discount factor | {{ v(state_attr(s, 'accuracy_discount_factor')) }} |
 
               The backstop firing on a good-solar day is the #816/#849

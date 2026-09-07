@@ -179,21 +179,18 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             ),
             # Runway telemetry for the pre-charge backstop (2026-07-28). Both are
             # solver-derived OptimizerConfig fields, so the summary is their natural
-            # home (same as terminal_shortfall_pct / effective_soc_at_terminal); the
-            # coordinator-data fallback keeps them visible if the engine publishes
-            # them alongside precharge_backstop_active instead, and both resolve to
-            # the dormant default when neither carries them.
+            # home (same as terminal_shortfall_pct); the coordinator-data fallback
+            # keeps them visible if the engine publishes them alongside
+            # precharge_backstop_active instead, and both resolve to the dormant
+            # default when neither carries them.
             "precharge_runway_slack_min": _resolve_optional(
                 summary, d, "precharge_runway_slack_min", None
             ),
             "hard_floor_suppressed_by_solar": _resolve_optional(
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),
-            "projected_solar_gain_pct": summary.get("projected_solar_gain_pct"),
             "forecast_accuracy": summary.get("forecast_accuracy"),
             "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
-            "adjusted_solar_gain_pct": summary.get("adjusted_solar_gain_pct"),
-            "effective_soc_at_terminal": summary.get("effective_soc_at_terminal"),
             "solar_confidence_avg": avg_confidence,
             "solar_confidence_regime": (
                 "high"

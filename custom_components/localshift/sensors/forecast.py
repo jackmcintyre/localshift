@@ -211,13 +211,6 @@ class ForecastPricesSensor(LocalShiftSensorBase):
             "planner_threshold_used": round(d.planner_threshold_used, 4)
             if d.planner_threshold_used is not None
             else None,
-            "forecast_import_cost": round(d.forecast_import_cost or 0.0, 2),
-            "forecast_export_revenue": round(d.forecast_export_revenue or 0.0, 2),
-            "forecast_net_cost": round(d.forecast_net_cost or 0.0, 2),
-            "forecast_grid_charge_cost": round(d.forecast_grid_charge_cost or 0.0, 2),
-            "forecast_proactive_export_revenue": round(
-                d.forecast_proactive_export_revenue or 0.0, 2
-            ),
         }
 
 
@@ -272,9 +265,7 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
 
         return {
             "consumption_source": self.coordinator.data.consumption_source,
-            "consumption_statistic_id": self.coordinator.data.consumption_statistic_id,
             "consumption_profile_hours": self.coordinator.data.consumption_profile_hours,
-            "consumption_fallback_hours": self.coordinator.data.consumption_fallback_hours,
             "forecast_consumption_source_counts": dict(source_counts),
             "consumption_hourly_sample_counts": {
                 str(hour): count for hour, count in sorted(sample_counts.items())
@@ -362,9 +353,6 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
                 if len(self.coordinator.data.load_forecast_slots) > 8
                 else None,
             },
-            "adaptive_params_values": dict(self.coordinator.data.adaptive_params.values)
-            if self.coordinator.data.adaptive_params
-            else {},
         }
 
 

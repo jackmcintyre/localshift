@@ -721,46 +721,24 @@ class DPPlanner:
             inputs, decisions, config, terminal_penalty_idx, demand_bounds
         )
 
-        # Compute terminal diagnostics (PR #789 wiring fix)
+        # Compute terminal diagnostics (PR #789 wiring fix). Issue #973: this
+        # used to also require ``not solar_capable``, so dw_entry_soc_pct /
+        # peak_soc_pct were always None on any day solar alone could reach the
+        # demand-window target — exactly the days the pre-charge runway
+        # backstop (optimizer_facade.py) relies on those fields. The compute
+        # is cheap (one accuracy-tracker read plus a max() over decisions), so
+        # publish it whenever there is a terminal penalty slot at all; "no
+        # demand window" is still the one case with nothing to report.
         terminal_diags: dict[str, Any] = {}
         forecast_accuracy_val: float | None = None
 
-        if terminal_penalty_idx is not None and not solar_capable:
-            # Recompute terminal context values for diagnostics
-            future_solar_gain_pct = 0.0
-            if inputs.all_solcast and inputs.slots:
-                from custom_components.localshift.forecast.analysis_resolver import (
-                    ConfidenceResolver,
-                )
-
-                last_slot = inputs.slots[-1]
-                last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
-                last_slot_end = last_slot_start + timedelta(
-                    minutes=last_slot.slot_interval_minutes
-                )
-                target_slot = inputs.slots[terminal_penalty_idx]
-                target_time = datetime.fromisoformat(target_slot.timestamp_iso)
-                confidence_resolver = ConfidenceResolver(
-                    inputs.solcast_analysis_today,
-                    inputs.solcast_analysis_tomorrow,
-                    absent_confidence=getattr(inputs, "solar_absent_confidence", 1.0),
-                )
-                future_solar_gain_pct = projected_solcast_gain_pct(
-                    inputs.all_solcast,
-                    start_time=last_slot_end,
-                    end_time=target_time,
-                    battery_capacity_kwh=config.battery_capacity_kwh,
-                    confidence_resolver=confidence_resolver,
-                )
-
+        if terminal_penalty_idx is not None:
             forecast_accuracy_val = get_forecast_accuracy(inputs.solar_accuracy_tracker)
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy_val))
 
             terminal_diags = self._get_terminal_diagnostics(
                 soc_pct=inputs.initial_soc_pct,
-                target=config.demand_window_target_soc_pct,
                 accuracy_discount=accuracy_discount,
-                future_solar_gain_pct=future_solar_gain_pct,
                 decisions=decisions,
                 terminal_penalty_idx=terminal_penalty_idx,
             )
@@ -1350,9 +1328,7 @@ class DPPlanner:
     def _get_terminal_diagnostics(
         self,
         soc_pct: float,
-        target: float,
         accuracy_discount: float,
-        future_solar_gain_pct: float,
         decisions: list[PlannedSlotDecision],
         terminal_penalty_idx: int | None,
     ) -> dict[str, Any]:
@@ -1360,9 +1336,7 @@ class DPPlanner:
 
         Args:
             soc_pct: Current state of charge percentage
-            target: Target SOC percentage
             accuracy_discount: Applied discount factor
-            future_solar_gain_pct: Beyond-horizon solar gain
             decisions: All optimizer decisions with predicted SOC
             terminal_penalty_idx: Index of terminal penalty slot
 
@@ -1387,7 +1361,12 @@ class DPPlanner:
         return {
             "accuracy_discount_factor": round(accuracy_discount, 2),
             "peak_soc_pct": round(peak_soc, 2),
-            "dw_entry_soc_pct": round(dw_entry_soc, 2) if dw_entry_soc else None,
+            # Issue #973: a legitimate 0.0 (battery enters the DW empty) is
+            # falsy, so ``if dw_entry_soc`` silently dropped it to None —
+            # check identity against None instead.
+            "dw_entry_soc_pct": round(dw_entry_soc, 2)
+            if dw_entry_soc is not None
+            else None,
         }
 
     def _backward_induction(

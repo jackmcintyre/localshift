@@ -411,9 +411,6 @@ class SnapshotGenerator:
         profile_hours = self.attr(
             "sensor.localshift_forecast_diagnostics", "consumption_profile_hours", 0
         )
-        fallback_hours = self.attr(
-            "sensor.localshift_forecast_diagnostics", "consumption_fallback_hours", 0
-        )
 
         return f"""
 ## FORECAST DIAGNOSTICS
@@ -427,8 +424,7 @@ class SnapshotGenerator:
 | **Recent 1hr Error** | {error or "None"} |
 | **Consumption Weighting** | {weighting} |
 | **Consumption Source** | {source} |
-| **Consumption Profile Hours** | {profile_hours} |
-| **Consumption Fallback Hours** | {fallback_hours} |"""
+| **Consumption Profile Hours** | {profile_hours} |"""
 
     def _forecast_table(self) -> str:
         """Generate detailed forecast table with slot-by-slot breakdown."""
