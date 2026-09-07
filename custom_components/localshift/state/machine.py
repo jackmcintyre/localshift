@@ -70,6 +70,11 @@ PHYSICAL_RESPONSE_DIRECTIONS: dict[BatteryMode, Literal["charging", "discharging
 # Issue #508: how long to wait for the physical response before giving up.
 PHYSICAL_RESPONSE_TIMEOUT = timedelta(minutes=10)
 
+# Issue #942: per-grant-source window for boundary_lag_history. Caps live
+# inline in this module (decision_lag_history's 50 is the precedent), not in
+# const.py.
+_BOUNDARY_LAG_PER_SOURCE_CAP = 50
+
 
 class StateMachine:
     """Manages battery mode state machine evaluation and transitions."""
@@ -1388,7 +1393,12 @@ class StateMachine:
         )
 
         data.boundary_lag_seconds = boundary_lag
-        data.boundary_lag_history.append({
+        # #942: one bounded ring PER grant source, keyed on whatever string
+        # arrives (setdefault, never an allowlist — new sources need no change
+        # here). Buckets are mutated in place so a concurrent write to another
+        # bucket is never dropped by a rebind.
+        bucket = data.boundary_lag_history.setdefault(grant_source, [])
+        bucket.append({
             # Issue #940: NOT data.active_mode — _evaluate_core sets
             # `desired = data.active_mode`, so active_mode is always identical
             # to `target` on every reachable path, making it a dead field that
@@ -1413,13 +1423,14 @@ class StateMachine:
             "interval_start_utc": interval_start.isoformat(),
             "transition_time": transition_time.isoformat(),
         })
-        # 200, not decision_lag_history's 50 (#942): this is ONE ring shared by
-        # every grant source, so a backstop or spike burst evicts the price-tagged
-        # samples slice 3's acceptance criterion is measured against. 200 covers
-        # days of transitions at any plausible rate. The proper fix is a window
-        # per source — deliberately deferred, see #942.
-        if len(data.boundary_lag_history) > 200:
-            data.boundary_lag_history = data.boundary_lag_history[-200:]
+        # Per-source cap (#942): the old single 200-entry ring was shared by
+        # every grant source, and a backstop burst alone (up to 288 corrections
+        # a day at the 5-minute cooldown) would evict every price-tagged sample
+        # slice 3 of #510 measures. 50 per source matches
+        # decision_lag_history's window; worst case ~9 sources × 50 = 450
+        # entries, still trivial.
+        if len(bucket) > _BOUNDARY_LAG_PER_SOURCE_CAP:
+            del bucket[:-_BOUNDARY_LAG_PER_SOURCE_CAP]
 
         # Issue #943: health-check corrections and Tesla re-probes ("backstop")
         # fire up to once per 5 minutes for the length of a drift episode and

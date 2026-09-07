@@ -559,14 +559,14 @@ class CoordinatorData:
     boundary_lag_seconds: float | None = None
     """Issue #510: seconds from the 5-min interval start to the transition."""
 
-    boundary_lag_history: list[dict[str, Any]] = field(default_factory=list)
+    boundary_lag_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     """History of boundary-lag measurements.
     Each entry: {from_mode, to_mode, boundary_lag, grant_source,
     interval_start_utc, transition_time}. interval_start_utc is UTC (NEM is
-    a fixed UTC+10 offset); transition_time is local wall clock. Max 200
-    entries (capped in machine.py) — deliberately deeper than
-    decision_lag_history's 50, because this ring is shared across grant
-    sources and a burst must not evict the price samples (#942).
+    a fixed UTC+10 offset); transition_time is local wall clock. Partitioned
+    per grant_source (50 entries per source, capped in machine.py) so a
+    backstop burst can never evict the price samples slice 3 of #510
+    measures.
 
     from_mode (#940) is the previously *commanded* mode, not the transition's
     own target — data.active_mode is always identical to the target on every

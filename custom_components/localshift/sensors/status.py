@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import chain
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
@@ -8,6 +9,26 @@ from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
+
+
+def _flatten_boundary_lag_history(
+    history: dict[str, list[dict[str, Any]]], limit: int = 20
+) -> list[dict[str, Any]]:
+    """Merge the per-grant-source rings (#942) into one chronologically ordered
+    list, keeping the last ``limit`` entries.
+
+    Ordering key is ``(interval_start_utc, boundary_lag)``: the interval start
+    is a UTC ISO string (lexically sortable) and adding the lag reconstructs the
+    transition instant exactly — a true chronological total order with no
+    datetime parsing and no local-offset ambiguity. ``transition_time`` is local
+    wall clock and would mis-sort across a UTC-offset change, which is precisely
+    the property TestUtcDerivation exists to protect.
+    """
+    ordered = sorted(
+        chain.from_iterable(history.values()),
+        key=lambda e: (e.get("interval_start_utc") or "", e.get("boundary_lag") or 0.0),
+    )
+    return ordered[-limit:]
 
 
 class IntegrationStatusSensor(LocalShiftSensorBase):
@@ -270,12 +291,16 @@ class DecisionLagSensor(LocalShiftSensorBase):
             if d.command_completion_timestamp
             else None,
             # Issue #510 slice 1 (measurement only): boundary-lag telemetry.
-            # History windowed to 20 for attribute-size parity with `history`
-            # above; the full 200-entry window stays in CoordinatorData.
+            # #942: the ring is partitioned per grant source in CoordinatorData
+            # (so a backstop burst can never evict price samples); the attribute
+            # surface stays a flat, chronologically ordered list of the last 20
+            # entries overall.
             "boundary_lag_seconds": round(d.boundary_lag_seconds, 2)
             if d.boundary_lag_seconds is not None
             else None,
-            "boundary_lag_history": (d.boundary_lag_history or [])[-20:],
+            "boundary_lag_history": _flatten_boundary_lag_history(
+                d.boundary_lag_history or {}
+            ),
             "anticipated_transitions_today": d.anticipated_transitions_today,
             "anticipation_corrections_today": d.anticipation_corrections_today,
         }
