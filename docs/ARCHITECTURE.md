@@ -343,14 +343,14 @@ Interfaces with Tesla Powerwall via Teslemetry:
 
 | Platform | Count | Examples |
 |----------|-------|----------|
-| Sensors | 30 | `sensor.localshift_optimizer_plan`, `sensor.localshift_forecast_battery` |
-| Binary Sensors | 10 | `binary_sensor.localshift_charge_boost`, `binary_sensor.localshift_excess_solar_available` |
+| Sensors | 31 | `sensor.localshift_optimizer_plan`, `sensor.localshift_forecast_battery` |
+| Binary Sensors | 11 | `binary_sensor.localshift_charge_boost`, `binary_sensor.localshift_excess_solar_available` |
 | Switches | 8 | `switch.localshift_automation_enabled`, `switch.localshift_spike_discharge_enabled` |
-| Numbers | 4 | `number.localshift_cheap_price_percentile`, `number.localshift_battery_target` |
+| Numbers | 13 | `number.localshift_cheap_price_percentile`, `number.localshift_battery_target` |
 | Selects | 2 | `select.localshift_battery_mode`, `select.localshift_optimization_mode` |
-| Buttons | 2 | `button.localshift_update_forecast`, `button.localshift_reset_learning` |
+| Buttons | 2 | `button.localshift_update_forecast`, `button.localshift_reset_decision_telemetry` |
 
-**Total: 56 entities**
+**Total: 67 entities**
 
 See [ENTITY_REFERENCE.md](ENTITY_REFERENCE.md) for complete entity details.
 

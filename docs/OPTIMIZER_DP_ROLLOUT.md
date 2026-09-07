@@ -34,47 +34,6 @@ The optimizer is controlled via integration configuration:
 
 When enabled, the optimizer runs every coordinator cycle and populates shadow telemetry sensors.
 
-## Interpreting the Comparison Sensor
-
-The `sensor.localshift_optimizer_comparison` sensor shows the side-by-side comparison between legacy and optimizer plans.
-
-### State Values
-
-| State | Meaning |
-|-------|---------|
-| `None` | Optimizer disabled or no data |
-| `-1` | Comparison failed |
-| `0` | Plans match perfectly |
-| `N > 0` | N slots differ between plans |
-
-### Key Attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `net_cost_delta` | Optimizer cost - Legacy cost (negative = optimizer cheaper) |
-| `import_kwh_delta` | Optimizer import - Legacy import (negative = optimizer imports less) |
-| `export_kwh_delta` | Optimizer export - Legacy export (positive = optimizer exports more) |
-| `mismatch_by_type` | Count of mismatches by classification type |
-| `top_mismatches` | Top 5 slots with largest disagreements |
-| `legacy_meets_dw_target` | Whether legacy plan reaches demand window SOC target |
-| `optimizer_meets_dw_target` | Whether optimizer plan reaches demand window SOC target |
-
-### Cost Delta Interpretation
-
-- **Negative `net_cost_delta`**: Optimizer projects lower cost than legacy
-- **Positive `net_cost_delta`**: Legacy projects lower cost than optimizer
-- Values are in dollars per forecast horizon (typically 24 hours)
-
-## Mismatch Types
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `ACTION_MISMATCH` | Different action types chosen | Legacy: hold, Optimizer: charge |
-| `IMPORT_QUANTITY_MISMATCH` | Same action, different import qty | Both charge but different kWh |
-| `EXPORT_QUANTITY_MISMATCH` | Same action, different export qty | Both export but different kWh |
-| `TARGET_ATTAINMENT_MISMATCH` | DW target met by only one plan | Legacy meets target, optimizer doesn't |
-| `PROFITABILITY_MISMATCH` | Action differs due to cost optimization | Optimizer avoids costly legacy action |
-
 ## When to Trust the Optimizer
 
 The optimizer is trustworthy when:

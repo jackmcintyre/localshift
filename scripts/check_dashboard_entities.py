@@ -5,10 +5,11 @@ Three checks, all of which need live state and so cannot live in the unit
 tests:
 
 1. **Every entity the dashboard references exists.** This is the check that
-   matters. `button.localshift_reset_learning` sat on the Settings view for a
-   month after the parameter-learning cut renamed it to
-   `..._reset_learning_data`; the button silently did nothing and no test
-   noticed, because no test can know what the live entity registry holds.
+   matters. The reset-learning button sat on the Settings view for a
+   month referencing a stale id after the parameter-learning cut renamed it
+   (it is `button.localshift_reset_decision_telemetry` in code today); the
+   button silently did nothing and no test noticed, because no test can know
+   what the live entity registry holds.
 2. **Every LocalShift entity appears somewhere on the dashboard.** Catches the
    opposite drift — a sensor ships and nothing surfaces it.
 3. **Every markdown card's Jinja renders.** A template that raises renders as a

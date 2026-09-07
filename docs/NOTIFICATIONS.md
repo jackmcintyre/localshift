@@ -119,7 +119,7 @@ Message:
 **When:** At demand window end time (default 21:00)
 
 **Data Sources:**
-- Solar, grid import/export energy: From Home Assistant utility meter sensors
+- Solar, grid import/export energy: From the integration's own daily accumulators (`solar_kwh_today`, `grid_import_kwh_today`, `grid_export_kwh_today`)
 - Costs: From LocalShift cost accumulator sensors
 
 ---
@@ -231,33 +231,24 @@ Check Home Assistant logs:
 
 ## Notification Preferences
 
-The integration provides 4 switches to control which notifications are sent:
+The integration provides a single switch to control whether notifications are sent (Issue #214 — the earlier per-type switches were consolidated into this one):
 
-### Switches
+### Switch
 
 | Switch | Default | Description |
 |--------|---------|-------------|
-| `switch.localshift_notify_transitions` | ON | Send notifications when battery mode changes |
-| `switch.localshift_notify_daily_summary` | ON | Send daily energy/cost summary at demand window end |
-| `switch.localshift_notify_manual_actions` | ON | Send notifications when manual control buttons are pressed |
-| `switch.localshift_notify_alerts` | ON | Send alert notifications (automation disabled, health check failures) |
+| `switch.localshift_notifications_enabled` | ON | Send all LocalShift notifications (transitions, daily summary, manual actions, alerts) |
 
 ### Usage
 
-- Turn off specific notification types if you find them too noisy
-- All switches default to ON for new installations
-- Settings persist across Home Assistant restarts
+- Turn the switch OFF to silence all LocalShift notifications
+- Defaults to ON for new installations
+- Setting persists across Home Assistant restarts
 
 ### Examples
 
-**Quiet mode (only important alerts):**
-- Turn OFF `notify_transitions`
-- Turn OFF `notify_manual_actions`
-- Keep ON `notify_daily_summary`
-- Keep ON `notify_alerts`
-
-**Minimal notifications:**
-- Turn OFF all except `notify_alerts`
+**Quiet mode / minimal notifications:**
+- There is no per-type control — turn `switch.localshift_notifications_enabled` OFF to silence everything, or leave it ON to receive all notification types
 
 ---
 

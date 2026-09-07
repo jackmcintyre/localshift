@@ -290,6 +290,7 @@ class CoordinatorData:
     export_while_battery_not_full_kwh_today: float = (
         0.0  # Exported energy that could have charged a non-full battery
     )
+    solar_kwh_today: float = 0.0  # Total solar generation today (Issue #971)
 
     # Forecast cost accumulators (rest of today)
     forecast_import_cost: float = 0.0  # Expected grid import cost

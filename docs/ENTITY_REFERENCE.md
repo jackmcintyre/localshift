@@ -733,31 +733,6 @@ Attributes:
 
 ---
 
-### 26. sensor.localshift_extended_forecast_accuracy
-
-**Purpose:** Extended forecast accuracy with long-term metrics.
-
-Added in Issue #270. Multi-horizon validation with bias detection. Shows 24h, 7d, and 30d accuracy metrics.
-
-**State Class:** `measurement`
-
-**State:** 24-hour accuracy percentage
-
-**Example Data:**
-```
-State: 100.0
-Attributes:
-  accuracy_24h: 100.0
-  accuracy_7d: 100.0
-  accuracy_30d: 100.0
-  bias: 0.0
-  mape: 0.0
-  sample_count: 0
-  last_updated: null
-```
-
----
-
 ### 27. sensor.localshift_load_deviation
 
 **Purpose:** Real-time diagnostic for current load-vs-forecast deviation while an optimizer runtime plan is active.
@@ -1463,7 +1438,7 @@ State: 2026-02-24T02:32:04+00:00 (last pressed)
 
 ---
 
-### 2. button.localshift_reset_learning
+### 2. button.localshift_reset_decision_telemetry
 
 **Action:** Discard the recorded decisions and the weather-correlation history.
 

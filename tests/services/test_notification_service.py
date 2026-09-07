@@ -331,6 +331,102 @@ class TestTransitionNotifications:
         assert "Charging Stopped" in title
         assert "0.12" in message  # cheap_charge_stop_price
 
+    @pytest.mark.asyncio
+    async def test_self_consumption_from_proactive_export(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Test notification when returning to self consumption after FIT improves."""
+        await notification_service.send_transition_notification(
+            BatteryMode.PROACTIVE_EXPORT, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+
+        assert "Proactive Export Ended" in data["title"]
+        assert "FIT has improved" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_self_consumption_charging_ended_above_effective_only(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Price above effective threshold but not stop threshold."""
+        # 0.11 is between effective_cheap_price (0.10) and cheap_charge_stop_price (0.12).
+        coordinator_data.general_price = 0.11
+
+        await notification_service.send_transition_notification(
+            BatteryMode.GRID_CHARGING, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+
+        assert "Charging Stopped" in data["title"]
+        assert "above effective threshold" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_self_consumption_charging_complete_still_cheap(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Charging stopped for a reason other than price (still below threshold)."""
+        coordinator_data.general_price = 0.05  # below effective threshold (0.10)
+
+        await notification_service.send_transition_notification(
+            BatteryMode.BOOST_CHARGING, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+
+        assert "Charging Complete" in data["title"]
+        assert "still below threshold" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_self_consumption_from_demand_block(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Test notification when the demand window ends."""
+        await notification_service.send_transition_notification(
+            BatteryMode.DEMAND_BLOCK, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+
+        assert "Demand Window Ended" in data["title"]
+        assert "Returning to normal automation" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_self_consumption_from_unmapped_old_mode(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Generic self-consumption message when old_mode has no special case."""
+        await notification_service.send_transition_notification(
+            BatteryMode.HOLD, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+
+        assert "Self Consumption" in data["title"]
+        assert "Returning to self consumption" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_transition_notification_unmapped_mode_fallback(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """A new_mode with no dedicated branch still gets a generic notification."""
+        await notification_service.send_transition_notification(
+            BatteryMode.SELF_CONSUMPTION, BatteryMode.HOLD, coordinator_data
+        )
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+
+        assert "Mode Change" in data["title"]
+        assert "self_consumption" in data["message"]
+        assert "hold" in data["message"]
+
 
 # =============================================================================
 # DAILY SUMMARY TESTS
@@ -344,22 +440,15 @@ class TestDailySummary:
     async def test_daily_summary_content(
         self, notification_service, coordinator_data, mock_hass
     ):
-        """Test daily summary includes all expected content."""
+        """Test daily summary includes all expected content.
 
-        # Mock state reads for energy values
-        def mock_get_state(entity_id):
-            state = MagicMock()
-            if "grid_import_energy" in entity_id:
-                state.state = "15.5"
-            elif "grid_export_energy" in entity_id:
-                state.state = "8.2"
-            elif "solar_production_energy" in entity_id:
-                state.state = "25.0"
-            else:
-                state.state = "0"
-            return state
-
-        mock_hass.states.get = mock_get_state
+        Issue #971: energy values come from the integration's own daily
+        accumulators, not entity state lookups (those utility meter entities
+        were removed with the legacy YAML stack in #880).
+        """
+        coordinator_data.solar_kwh_today = 25.0
+        coordinator_data.grid_import_kwh_today = 15.5
+        coordinator_data.grid_export_kwh_today = 8.2
 
         await notification_service.send_daily_summary(coordinator_data)
 
@@ -368,13 +457,52 @@ class TestDailySummary:
         message = data["message"]
 
         assert "Daily Summary" in data["title"]
-        assert "Solar:" in message
-        assert "25.0 kWh" in message
-        assert "Grid import:" in message
-        assert "Grid export:" in message
+        assert "Solar: 25.0 kWh" in message
+        assert "Grid import: 15.5 kWh" in message
+        assert "Grid export: 8.2 kWh" in message
         assert "Net cost:" in message
         assert "Battery savings:" in message
         assert "SOC:" in message
+
+    @pytest.mark.asyncio
+    async def test_daily_summary_does_not_read_hass_states(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Issue #971: the daily summary must not read any entity state.
+
+        The three utility meter entities it used to read were removed with
+        the YAML stack (#880) and would return ENTITY_NOT_FOUND, which is
+        exactly the bug this pins shut.
+        """
+        coordinator_data.solar_kwh_today = 25.0
+        coordinator_data.grid_import_kwh_today = 15.5
+        coordinator_data.grid_export_kwh_today = 8.2
+        mock_hass.states.get = MagicMock(
+            side_effect=AssertionError("must not read entity state")
+        )
+
+        await notification_service.send_daily_summary(coordinator_data)
+
+        call_args = mock_hass.services.async_call.call_args
+        data = call_args[0][2]
+        assert "25.0 kWh" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_daily_summary_includes_decision_telemetry_when_present(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """When decisions were made today, the summary appends the quality line."""
+        coordinator_data.performance_metrics.total_decisions_today = 12
+        coordinator_data.performance_metrics.avg_decision_score_today = 0.875
+        coordinator_data.performance_metrics.cost_trend = "improving"
+        coordinator_data.learning_status = "active"
+
+        await notification_service.send_daily_summary(coordinator_data)
+
+        message = mock_hass.services.async_call.call_args[0][2]["message"]
+        assert "Decisions: active" in message
+        assert "Quality: 88%" in message
+        assert "Trend: improving" in message
 
     @pytest.mark.asyncio
     async def test_daily_summary_with_dry_run(
@@ -393,12 +521,9 @@ class TestDailySummary:
             get_switch_state_func=get_switch_state,
         )
 
-        def mock_get_state(entity_id):
-            state = MagicMock()
-            state.state = "10.0"
-            return state
-
-        mock_hass.states.get = mock_get_state
+        mock_hass.states.get = MagicMock(
+            side_effect=AssertionError("must not read entity state")
+        )
 
         await service.send_daily_summary(coordinator_data)
 
@@ -436,6 +561,71 @@ class TestAlertNotifications:
         assert "50%" in message
 
     @pytest.mark.asyncio
+    async def test_health_correction_suppressed_for_tesla_grid_charging_sync(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Issue #394: suppress when only grid_charging_allowed mismatched."""
+        await notification_service.send_health_correction_notification(
+            BatteryMode.SELF_CONSUMPTION,
+            coordinator_data,
+            mismatch_details={
+                "grid_charging_allowed": True,
+                "operation_mode": False,
+                "backup_reserve": False,
+            },
+        )
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_health_correction_not_suppressed_when_other_field_mismatched(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Not suppressed when operation_mode also mismatched, not just grid_charging."""
+        await notification_service.send_health_correction_notification(
+            BatteryMode.SELF_CONSUMPTION,
+            coordinator_data,
+            mismatch_details={
+                "grid_charging_allowed": True,
+                "operation_mode": True,
+                "backup_reserve": False,
+            },
+        )
+
+        mock_hass.services.async_call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_health_correction_not_suppressed_for_unrelated_mode(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """Tesla grid_charging sync only applies to SELF_CONSUMPTION/DEMAND_BLOCK."""
+        await notification_service.send_health_correction_notification(
+            BatteryMode.GRID_CHARGING,
+            coordinator_data,
+            mismatch_details={
+                "grid_charging_allowed": True,
+                "operation_mode": False,
+                "backup_reserve": False,
+            },
+        )
+
+        mock_hass.services.async_call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_health_correction_notification_disabled(
+        self, notification_service_with_switches, coordinator_data, mock_hass
+    ):
+        """No notification is sent when notifications are disabled."""
+        service, switch_states = notification_service_with_switches
+        switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
+
+        await service.send_health_correction_notification(
+            BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_transition_failed_notification(
         self, notification_service, coordinator_data, mock_hass
     ):
@@ -452,6 +642,20 @@ class TestAlertNotifications:
         assert "Transition Failed" in title
         assert "grid_charging" in message
         assert "Powerwall connectivity" in message
+
+    @pytest.mark.asyncio
+    async def test_transition_failed_notification_disabled(
+        self, notification_service_with_switches, coordinator_data, mock_hass
+    ):
+        """No notification is sent when notifications are disabled."""
+        service, switch_states = notification_service_with_switches
+        switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
+
+        await service.send_transition_failed_notification(
+            BatteryMode.GRID_CHARGING, coordinator_data
+        )
+
+        mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_automation_disabled_notification(
@@ -471,6 +675,18 @@ class TestAlertNotifications:
         assert "self consumption" in message.lower()
 
     @pytest.mark.asyncio
+    async def test_automation_disabled_notification_disabled(
+        self, notification_service_with_switches, coordinator_data, mock_hass
+    ):
+        """No notification is sent when notifications are disabled."""
+        service, switch_states = notification_service_with_switches
+        switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
+
+        await service.send_automation_disabled_notification(coordinator_data)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_manual_override_timeout_notification(
         self, notification_service, coordinator_data, mock_hass
     ):
@@ -487,6 +703,20 @@ class TestAlertNotifications:
         assert "Manual Override Timeout" in title
         assert "4.0 hours" in message
         assert "Automation resuming" in message
+
+    @pytest.mark.asyncio
+    async def test_manual_override_timeout_notification_disabled(
+        self, notification_service_with_switches, coordinator_data, mock_hass
+    ):
+        """No notification is sent when notifications are disabled."""
+        service, switch_states = notification_service_with_switches
+        switch_states[SWITCH_NOTIFICATIONS_ENABLED] = False
+
+        await service.send_manual_override_timeout_notification(
+            coordinator_data, timeout_hours=4.0
+        )
+
+        mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_tesla_override_detected_corroborated(
@@ -532,6 +762,34 @@ class TestAlertNotifications:
         assert "Tesla Override Released" in data["title"]
         assert "17h 48m" in data["message"]
         assert "re-probe succeeded" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_released_unknown_duration(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """A None duration renders as an unknown period, not a crash."""
+        await notification_service.send_tesla_override_notification(
+            coordinator_data, detected=False, corroborated=False, duration=None
+        )
+
+        data = mock_hass.services.async_call.call_args[0][2]
+        assert "an unknown period" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_released_sub_hour_duration(
+        self, notification_service, coordinator_data, mock_hass
+    ):
+        """A sub-hour duration renders as minutes only, no leading '0h'."""
+        await notification_service.send_tesla_override_notification(
+            coordinator_data,
+            detected=False,
+            corroborated=False,
+            duration=timedelta(minutes=25),
+        )
+
+        data = mock_hass.services.async_call.call_args[0][2]
+        assert "25m" in data["message"]
+        assert "0h" not in data["message"]
 
     @pytest.mark.asyncio
     async def test_tesla_override_notification_suppressed_when_disabled(
@@ -658,6 +916,69 @@ class TestGenerateDecisionReason:
 
         assert "Normal operation" in reason
 
+    def test_self_consumption_from_proactive_export_reason(
+        self, notification_service, coordinator_data
+    ):
+        """Test decision reason for returning to self consumption from export."""
+        reason = notification_service.generate_decision_reason(
+            BatteryMode.PROACTIVE_EXPORT, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        assert "Proactive export ended" in reason
+
+    def test_self_consumption_from_demand_block_reason(
+        self, notification_service, coordinator_data
+    ):
+        """Test decision reason for returning to self consumption after demand window."""
+        reason = notification_service.generate_decision_reason(
+            BatteryMode.DEMAND_BLOCK, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        assert "Demand window ended" in reason
+
+    def test_charging_ended_reason_above_effective_only(
+        self, notification_service, coordinator_data
+    ):
+        """Price above effective threshold but not stop threshold."""
+        coordinator_data.general_price = 0.11  # between 0.10 and 0.12
+
+        reason = notification_service.generate_decision_reason(
+            BatteryMode.GRID_CHARGING, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        assert "above effective threshold" in reason
+
+    def test_charging_ended_reason_still_cheap(
+        self, notification_service, coordinator_data
+    ):
+        """Charging stopped for another reason while price is still cheap."""
+        coordinator_data.general_price = 0.05  # below effective threshold
+
+        reason = notification_service.generate_decision_reason(
+            BatteryMode.BOOST_CHARGING, BatteryMode.SELF_CONSUMPTION, coordinator_data
+        )
+
+        assert "Charging complete" in reason
+        assert "still below threshold" in reason
+
+    def test_manual_override_reason(self, notification_service, coordinator_data):
+        """Test decision reason for manual override."""
+        reason = notification_service.generate_decision_reason(
+            BatteryMode.SELF_CONSUMPTION, BatteryMode.MANUAL, coordinator_data
+        )
+
+        assert reason == "Automation disabled or manual override"
+
+    def test_unmapped_mode_decision_reason_fallback(
+        self, notification_service, coordinator_data
+    ):
+        """A new_mode with no dedicated reason handler still gets a generic reason."""
+        reason = notification_service.generate_decision_reason(
+            BatteryMode.SELF_CONSUMPTION, BatteryMode.HOLD, coordinator_data
+        )
+
+        assert reason == "Mode changed: self_consumption -> hold"
+
 
 # =============================================================================
 # HELPER METHOD TESTS
@@ -720,31 +1041,3 @@ class TestHelperMethods:
 
         result = service._get_dry_run_prefix()
         assert result == "[Dry Run] "
-
-    def test_read_float_valid(self, notification_service, mock_hass):
-        """Test _read_float with valid state."""
-        state = MagicMock()
-        state.state = "42.5"
-        mock_hass.states.get.return_value = state
-
-        result = notification_service._read_float("sensor.test")
-
-        assert result == 42.5
-
-    def test_read_float_unavailable(self, notification_service, mock_hass):
-        """Test _read_float with unavailable state."""
-        state = MagicMock()
-        state.state = "unavailable"
-        mock_hass.states.get.return_value = state
-
-        result = notification_service._read_float("sensor.test", default=10.0)
-
-        assert result == 10.0
-
-    def test_read_float_none(self, notification_service, mock_hass):
-        """Test _read_float with None state."""
-        mock_hass.states.get.return_value = None
-
-        result = notification_service._read_float("sensor.test", default=5.0)
-
-        assert result == 5.0

@@ -227,6 +227,8 @@ async def test_handle_midnight_reset(coordinator):
     # Issue #868: the daily energy accumulators must reset on this path too.
     coordinator.data.grid_import_kwh_today = 5.0
     coordinator.data.grid_export_kwh_today = 3.0
+    # Issue #971: the solar accumulator must reset on this path too.
+    coordinator.data.solar_kwh_today = 4.0
     coordinator.data.grid_to_battery_kwh_today = 2.0
     coordinator.data.soc_gain_during_grid_charge_kwh_today = 1.5
     coordinator.data.export_while_battery_not_full_kwh_today = 1.0
@@ -254,6 +256,7 @@ async def test_handle_midnight_reset(coordinator):
     assert coordinator.data.target_reached_today is False
     assert coordinator.data.grid_import_kwh_today == 0.0
     assert coordinator.data.grid_export_kwh_today == 0.0
+    assert coordinator.data.solar_kwh_today == 0.0
     assert coordinator.data.grid_to_battery_kwh_today == 0.0
     assert coordinator.data.soc_gain_during_grid_charge_kwh_today == 0.0
     assert coordinator.data.export_while_battery_not_full_kwh_today == 0.0
