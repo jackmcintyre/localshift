@@ -101,3 +101,61 @@ def test_coordinator_handler_delegates_to_scheduler(scheduler_handler: str) -> N
         f"{scheduler_handler} would never run in production. Delegate rather "
         f"than reimplementing the body inline."
     )
+
+
+# Fields whose reset is owned by CostTracker.reset_daily_accumulators. An inline
+# assignment to any of them inside handle_midnight_reset is the #968 defect
+# reappearing: a second copy of the reset that will drift from the tracker's.
+_COST_TRACKER_OWNED_FIELDS = frozenset({
+    "grid_import_cost",
+    "grid_export_revenue",
+    "battery_savings",
+    "battery_charge_cost",
+    "target_reached_today",
+    "grid_import_kwh_today",
+    "grid_export_kwh_today",
+    "grid_to_battery_kwh_today",
+    "soc_gain_during_grid_charge_kwh_today",
+    "export_while_battery_not_full_kwh_today",
+})
+
+
+def test_midnight_reset_delegates_to_cost_tracker() -> None:
+    """Issue #968: the midnight reset must call reset_daily_accumulators.
+
+    The #899 fix (clear the tracker's ``_last_soc_pct`` at midnight) lives in
+    ``CostTracker.reset_daily_accumulators``. ``handle_midnight_reset`` carried an
+    older inline copy of the field zeroing instead of calling it, so the fix was
+    merged (PR #930) with no production caller and the metric it protects stayed
+    corrupted. This gate is static for the same reason the delegation test above
+    is: calling the tracker method in a unit test proves it works, not that the
+    midnight path reaches it.
+    """
+    scheduler_methods = _methods(_class_def(_TICK_SCHEDULER_PY, "TickScheduler"))
+    handler = scheduler_methods["handle_midnight_reset"]
+
+    calls_tracker = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "reset_daily_accumulators"
+        for node in ast.walk(handler)
+    )
+    assert calls_tracker, (
+        "TickScheduler.handle_midnight_reset does not call "
+        "cost_tracker.reset_daily_accumulators(); the #899 SOC-baseline clear "
+        "only lives there."
+    )
+
+    inline = sorted({
+        target.attr
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute)
+        and target.attr in _COST_TRACKER_OWNED_FIELDS
+    })
+    assert not inline, (
+        f"handle_midnight_reset assigns {inline} inline. Those fields are reset by "
+        "CostTracker.reset_daily_accumulators; a second copy here is how #899 "
+        "was lost."
+    )

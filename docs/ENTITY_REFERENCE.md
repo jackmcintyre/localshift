@@ -533,7 +533,42 @@ Attributes:
   errors: []
   warnings: []
   last_check: 2026-02-26T09:08:34+11:00
+  synthetic_slot_rate: 0.0
+  synthetic_slot_degraded: false
+  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12}
 ```
+
+**Synthetic slot-0 rate (Issue #956):** `engine/slot_schedule.py` prices slot 0
+("now") synthetically whenever no entry from the configured
+`pricing_general_forecast` source covers the current moment — it borrows the
+next interval's price instead and logs a `SYNTHETIC SLOT FALLBACK` warning.
+A single synthetic slot is harmless (one missed tick); a sustained run means
+the configured forecast source has stopped producing usable data. Each
+optimizer evaluation records whether slot 0 was synthetic onto a rolling
+~60-minute window (capped at 240 samples):
+
+- `synthetic_slot_rate` — share of the window's evaluations where slot 0 was
+  synthetic (0.0–1.0).
+- `synthetic_slot_degraded` — `true` once that rate has stayed at or above
+  0.5 for 3 consecutive evaluations (with at least 6 samples in the window
+  to avoid flagging on a single cold-start sample); it clears automatically
+  once the rate drops back below 0.5 for 3 consecutive evaluations. Streaks
+  count evaluations, not wall-clock time.
+- `synthetic_slot_health` — the tracker's full state (`rate`, `degraded`,
+  `sample_count`, `consecutive_above`, `consecutive_below`), for diagnostics.
+  Not recorded to history (`_unrecorded_attributes`).
+
+While `synthetic_slot_degraded` is `true`, `state` escalates from `ok` to
+`degraded` (never downgrading an existing `error`) and `message` names the
+rate and the configured forecast entity to check. If the configured forecast
+source has *never* produced an entry covering "now" since startup, a single
+loud `WARNING` fires once, naming that entity, independently of the rolling
+rate. This also covers the total-outage case where the configured source
+yields *no* usable forecast entries at all (an empty or missing
+`general_forecast`): that evaluation is still recorded as a non-covering
+sample even though no slot 0 was ever built to be priced synthetic, so a
+complete forecast-source outage reaches the same rate, degrade, and startup
+checks as a partial one.
 
 **Icon:** Dynamic (check-circle for ok, alert-circle for degraded, close-circle for error)
 
@@ -612,7 +647,7 @@ Attributes:
   anticipation_corrections_today: 0
 ```
 
-Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `backstop`, `unknown`). `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
+Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target). Internally the ring is partitioned per `grant_source` (50 entries each, #942) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
 
 ---
 

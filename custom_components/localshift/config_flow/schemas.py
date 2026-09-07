@@ -187,6 +187,20 @@ def build_pricing_schema(
     if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
         merged_defaults[CONF_PRICING_GENERAL_FORECAST] = ""
         merged_defaults[CONF_PRICING_FEED_IN_FORECAST] = ""
+    else:
+        # Issue #955: forecast entities are only used by non-Express sources,
+        # but older entries (and Express -> amber switches) can carry an empty
+        # string or no value at all. Fall back to the prefix-derived id so the
+        # pre-filled form validates instead of dying on "Entity  is neither a
+        # valid entity ID nor a valid UUID". A stored mapping always wins.
+        merged_defaults[CONF_PRICING_GENERAL_FORECAST] = (
+            merged_defaults.get(CONF_PRICING_GENERAL_FORECAST)
+            or f"{prefix}general_forecast"
+        )
+        merged_defaults[CONF_PRICING_FEED_IN_FORECAST] = (
+            merged_defaults.get(CONF_PRICING_FEED_IN_FORECAST)
+            or f"{prefix}feed_in_forecast"
+        )
 
     schema_fields: dict[Any, Any] = {
         vol.Required(

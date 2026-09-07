@@ -64,6 +64,12 @@ class SlotBuildMetadata:
     all_solcast: list[dict[str, Any]] = field(default_factory=list)
     """Full solar forecast (today + tomorrow) for penalty calculation (Issue #607)."""
 
+    slot0_price_source: str = "unknown"
+    """slots[0].price_source ("forecast_current", "synthetic", "5min", "30min")
+    from the just-built hybrid schedule, or "unknown" when no slots were built.
+    Read by OptimizerFacade.run_inline to feed the synthetic-slot-0 rolling
+    rate tracker (Issue #956)."""
+
     def to_parity_dict(self) -> dict[str, Any]:
         """Convert to legacy parity_info dict format for backward compatibility.
 
@@ -217,6 +223,7 @@ class SlotBuilder:
             slots_with_defaulted_price=counts["defaulted_price"],
             slots_with_defaulted_consumption=counts["defaulted_consumption"],
             all_solcast=all_solcast,
+            slot0_price_source=(contexts[0].price_source if contexts else "unknown"),
         )
 
         _LOGGER.debug(

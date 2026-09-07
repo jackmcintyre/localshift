@@ -6,10 +6,12 @@ from .data import (
     CoordinatorData,
     PerformanceMetrics,
 )
+from .synthetic_slot_health import SyntheticSlotHealth
 
 __all__ = [
     "AdaptiveParameters",
     "CoordinatorData",
     "LocalShiftCoordinator",
     "PerformanceMetrics",
+    "SyntheticSlotHealth",
 ]

@@ -1,14 +1,66 @@
 from __future__ import annotations
 
+from itertools import chain
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
 
+from ..coordinator.synthetic_slot_health import SyntheticSlotHealth
 from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
+
+_SYNTHETIC_SLOT_HEALTH_FALLBACK: dict[str, Any] = {
+    "rate": 0.0,
+    "degraded": False,
+    "sample_count": 0,
+    "consecutive_above": 0,
+    "consecutive_below": 0,
+}
+
+
+def _synthetic_slot_attrs(data: Any) -> dict[str, Any]:
+    """Build the synthetic-slot-0 attribute trio (Issue #956).
+
+    Falls back to safe defaults when ``data.synthetic_slot_health`` is
+    missing or not a real :class:`SyntheticSlotHealth` -- e.g. a bare
+    ``MagicMock`` coordinator in tests, which would otherwise auto-vivify a
+    truthy Mock attribute and leak it into the sensor's attributes.
+    """
+    health = getattr(data, "synthetic_slot_health", None)
+    if not isinstance(health, SyntheticSlotHealth):
+        return {
+            "synthetic_slot_rate": 0.0,
+            "synthetic_slot_degraded": False,
+            "synthetic_slot_health": dict(_SYNTHETIC_SLOT_HEALTH_FALLBACK),
+        }
+    return {
+        "synthetic_slot_rate": round(health.rate, 3),
+        "synthetic_slot_degraded": health.degraded,
+        "synthetic_slot_health": health.to_dict(),
+    }
+
+
+def _flatten_boundary_lag_history(
+    history: dict[str, list[dict[str, Any]]], limit: int = 20
+) -> list[dict[str, Any]]:
+    """Merge the per-grant-source rings (#942) into one chronologically ordered
+    list, keeping the last ``limit`` entries.
+
+    Ordering key is ``(interval_start_utc, boundary_lag)``: the interval start
+    is a UTC ISO string (lexically sortable) and adding the lag reconstructs the
+    transition instant exactly — a true chronological total order with no
+    datetime parsing and no local-offset ambiguity. ``transition_time`` is local
+    wall clock and would mis-sort across a UTC-offset change, which is precisely
+    the property TestUtcDerivation exists to protect.
+    """
+    ordered = sorted(
+        chain.from_iterable(history.values()),
+        key=lambda e: (e.get("interval_start_utc") or "", e.get("boundary_lag") or 0.0),
+    )
+    return ordered[-limit:]
 
 
 class IntegrationStatusSensor(LocalShiftSensorBase):
@@ -16,6 +68,7 @@ class IntegrationStatusSensor(LocalShiftSensorBase):
     _attr_name = "Integration Status"
     _attr_icon = "mdi:check-circle"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _unrecorded_attributes = frozenset({"synthetic_slot_health"})
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = self.coordinator.data.integration_status
@@ -31,6 +84,7 @@ class IntegrationStatusSensor(LocalShiftSensorBase):
             "errors": d.entity_errors,
             "warnings": d.entity_warnings,
             "last_check": d.last_entity_check,
+            **_synthetic_slot_attrs(d),
         }
 
     @property
@@ -277,12 +331,16 @@ class DecisionLagSensor(LocalShiftSensorBase):
             if d.command_completion_timestamp
             else None,
             # Issue #510 slice 1 (measurement only): boundary-lag telemetry.
-            # History windowed to 20 for attribute-size parity with `history`
-            # above; the full 200-entry window stays in CoordinatorData.
+            # #942: the ring is partitioned per grant source in CoordinatorData
+            # (so a backstop burst can never evict price samples); the attribute
+            # surface stays a flat, chronologically ordered list of the last 20
+            # entries overall.
             "boundary_lag_seconds": round(d.boundary_lag_seconds, 2)
             if d.boundary_lag_seconds is not None
             else None,
-            "boundary_lag_history": (d.boundary_lag_history or [])[-20:],
+            "boundary_lag_history": _flatten_boundary_lag_history(
+                d.boundary_lag_history or {}
+            ),
             "anticipated_transitions_today": d.anticipated_transitions_today,
             "anticipation_corrections_today": d.anticipation_corrections_today,
         }

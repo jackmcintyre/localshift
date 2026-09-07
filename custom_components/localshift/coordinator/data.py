@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..const import BatteryMode
+from .synthetic_slot_health import SyntheticSlotHealth
 
 if TYPE_CHECKING:
     from ..forecast.solcast_analysis import SolcastAnalysis
@@ -417,6 +418,9 @@ class CoordinatorData:
     orphaned_localshift_entities: dict[str, Any] = field(
         default_factory=dict
     )  # Owned registry entries absent from LOCALSHIFT_ENTITY_CONFIG (Issue #880)
+    synthetic_slot_health: SyntheticSlotHealth = field(
+        default_factory=SyntheticSlotHealth
+    )  # Rolling synthetic slot-0 rate + degrade state (Issue #956)
 
     # --- Decision telemetry (see learning/telemetry.py) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
@@ -559,14 +563,29 @@ class CoordinatorData:
     boundary_lag_seconds: float | None = None
     """Issue #510: seconds from the 5-min interval start to the transition."""
 
-    boundary_lag_history: list[dict[str, Any]] = field(default_factory=list)
+    boundary_lag_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     """History of boundary-lag measurements.
     Each entry: {from_mode, to_mode, boundary_lag, grant_source,
     interval_start_utc, transition_time}. interval_start_utc is UTC (NEM is
-    a fixed UTC+10 offset); transition_time is local wall clock. Max 200
-    entries (capped in machine.py) — deliberately deeper than
-    decision_lag_history's 50, because this ring is shared across grant
-    sources and a burst must not evict the price samples (#942).
+    a fixed UTC+10 offset); transition_time is local wall clock. Partitioned
+    per grant_source (50 entries per source, capped in machine.py) so a
+    backstop burst can never evict the price samples slice 3 of #510
+    measures.
+
+    from_mode (#940) is the previously *commanded* mode, not the transition's
+    own target — data.active_mode is always identical to the target on every
+    reachable path, which made the field read the destination back as its own
+    origin. On a backstop correction (health-check, Tesla re-probe) the
+    commanded mode is re-issued to itself, so from_mode == to_mode there by
+    construction; that is a correction, not a mode change.
+
+    grant_source (#941) is `price` | `spike` | `demand_window` | `soc_floor`
+    | `plan_charge` | `debounce` | `retry` | `backstop` | `unknown`.
+    `debounce` and `retry` mark a transition that did NOT land on a fresh
+    decision token — a debounce completing after its wait, or a retry of a
+    command the controller rejected or the entity validator blocked — and
+    both should be excluded from the Amber-latency baseline the other tags
+    feed, same as `backstop`.
     """
 
     anticipated_transitions_today: int = 0

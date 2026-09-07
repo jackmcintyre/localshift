@@ -15,6 +15,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_BATTERY_TARGET,
+    CONF_CHARGE_TAPER_MIN_FACTOR,
+    CONF_CHARGE_TAPER_START_PCT,
     CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
@@ -29,10 +31,13 @@ from .const import (
     CONF_STALE_SOLAR_CONFIDENCE_CEILING,
     CONF_STALE_SOLAR_CONSERVATIVE,
     CONF_SWITCHING_PENALTY,
+    CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ABSENT_SOLAR_CONFIDENCE,
     DEFAULT_BATTERY_TARGET,
+    DEFAULT_CHARGE_TAPER_MIN_FACTOR,
+    DEFAULT_CHARGE_TAPER_START_PCT,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
@@ -48,6 +53,7 @@ from .const import (
     DEFAULT_PRICING_DATA_SOURCE,
     DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
     DEFAULT_SWITCHING_PENALTY,
+    DEFAULT_SWITCHING_PENALTY_PER_KWH,
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
@@ -82,6 +88,7 @@ from .forecast import (
     ForecastPipeline,
     HistoryFetcher,
     LoadForecaster,
+    LoadProfiles,
     sum_solar_before_target,
 )
 from .learning.correlation import WeatherCorrelation
@@ -612,6 +619,27 @@ class ComputationEngine:
         # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
         self._load_forecaster.set_adaptive_params(data.adaptive_params)
 
+        # Issue #679: wire the per-day-of-week load profiles into the
+        # forecaster on the live path. Sourced fresh every cycle from
+        # HistoryFetcher (populated by the async fetch in
+        # async_get_historical_hourly_averages()); harmless before the first
+        # fetch completes, since all fields default to {} and
+        # LoadForecaster.estimate_hourly_consumption_kw() falls back to the
+        # caller-supplied combined average whenever nothing qualifies.
+        daily_avg, daily_counts = self._history_fetcher.get_daily_profiles()
+        weekday_avg, weekday_counts = self._history_fetcher.get_weekday_profile()
+        weekend_avg, weekend_counts = self._history_fetcher.get_weekend_profile()
+        self._load_forecaster.set_daily_profiles(
+            LoadProfiles(
+                daily_avg=daily_avg,
+                daily_counts=daily_counts,
+                weekday_avg=weekday_avg,
+                weekday_counts=weekday_counts,
+                weekend_avg=weekend_avg,
+                weekend_counts=weekend_counts,
+            )
+        )
+
         # ---- Step 2: Mode detection from Teslemetry state ----
         self._detect_hardware_modes(data)
 
@@ -851,6 +879,20 @@ class ComputationEngine:
             ),
             CONF_SWITCHING_PENALTY: self.entry.options.get(
                 CONF_SWITCHING_PENALTY, DEFAULT_SWITCHING_PENALTY
+            ),
+            # Issue #969: the three knobs below were added to the number platform
+            # (#919, #939) but never to this dict, so the runner fell through to
+            # DEFAULT_* and the sliders were decorative. Every CONF the runner reads
+            # via config_options.get() must appear here — enforced by
+            # tests/engine/test_config_options_coverage.py.
+            CONF_SWITCHING_PENALTY_PER_KWH: self.entry.options.get(
+                CONF_SWITCHING_PENALTY_PER_KWH, DEFAULT_SWITCHING_PENALTY_PER_KWH
+            ),
+            CONF_CHARGE_TAPER_START_PCT: self.entry.options.get(
+                CONF_CHARGE_TAPER_START_PCT, DEFAULT_CHARGE_TAPER_START_PCT
+            ),
+            CONF_CHARGE_TAPER_MIN_FACTOR: self.entry.options.get(
+                CONF_CHARGE_TAPER_MIN_FACTOR, DEFAULT_CHARGE_TAPER_MIN_FACTOR
             ),
             CONF_TARGET_PENALTY: self.entry.options.get(
                 CONF_TARGET_PENALTY, DEFAULT_TARGET_PENALTY

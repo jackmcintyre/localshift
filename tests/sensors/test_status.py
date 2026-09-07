@@ -61,6 +61,56 @@ class TestIntegrationStatusSensor:
         assert sensor.icon == "mdi:close-circle"
 
 
+class TestIntegrationStatusSensorSyntheticSlotHealth:
+    """Issue #956: the sensor exposes the rolling synthetic-slot-0 rate."""
+
+    def test_real_tracker_exposes_rate_and_degraded(self):
+        from custom_components.localshift.coordinator.synthetic_slot_health import (
+            SyntheticSlotHealth,
+        )
+
+        health = SyntheticSlotHealth()
+        health.record(True, datetime(2026, 9, 6, 12, 0, 0))
+        health.degraded = True
+
+        sensor = _sensor(
+            IntegrationStatusSensor,
+            integration_status="degraded",
+            integration_status_message="degraded",
+            entity_errors=[],
+            entity_warnings=["slot 0 priced synthetically"],
+            required_entities_healthy=True,
+            last_entity_check="2026-09-06T12:00:00",
+            synthetic_slot_health=health,
+        )
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["synthetic_slot_rate"] == 1.0
+        assert attrs["synthetic_slot_degraded"] is True
+        assert attrs["synthetic_slot_health"] == health.to_dict()
+
+    def test_missing_tracker_falls_back_to_safe_defaults(self):
+        """A coordinator built from a bare MagicMock (no synthetic_slot_health
+        explicitly set) must not leak a Mock object into the attribute dict."""
+        sensor = _sensor(
+            IntegrationStatusSensor,
+            integration_status="ok",
+            integration_status_message="All good",
+            entity_errors=[],
+            entity_warnings=[],
+            required_entities_healthy=True,
+            last_entity_check="2026-03-12T12:00:00",
+        )
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["synthetic_slot_rate"] == 0.0
+        assert attrs["synthetic_slot_degraded"] is False
+        assert isinstance(attrs["synthetic_slot_health"], dict)
+
+    def test_synthetic_slot_health_is_unrecorded(self):
+        assert "synthetic_slot_health" in IntegrationStatusSensor._unrecorded_attributes
+
+
 class TestEntityHealthSensor:
     def test_update_from_coordinator(self):
         sensor = _sensor(
@@ -323,7 +373,8 @@ class TestDecisionLagSensor:
             command_completion_timestamp=None,
             # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
             boundary_lag_seconds=None,
-            boundary_lag_history=[],
+            # #942: partitioned per grant_source; empty means no buckets at all.
+            boundary_lag_history={},
             anticipated_transitions_today=0,
             anticipation_corrections_today=0,
         )
@@ -363,7 +414,7 @@ class TestDecisionLagSensor:
             command_completion_timestamp=now,
             # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
             boundary_lag_seconds=None,
-            boundary_lag_history=[],
+            boundary_lag_history={},
             anticipated_transitions_today=0,
             anticipation_corrections_today=0,
         )
@@ -379,11 +430,15 @@ class TestDecisionLagSensor:
 
     def test_extra_state_attributes_boundary_lag(self):
         # Issue #510 slice 1 (measurement only): the four new attributes are
-        # surfaced on this EXISTING sensor — no new entity.
-        boundary_history = [
-            {"boundary_lag": 23.4, "grant_source": "price"},
-            {"boundary_lag": 41.0, "grant_source": "demand_window"},
-        ]
+        # surfaced on this EXISTING sensor — no new entity. #942 partitions
+        # the ring per grant_source; the attribute flattens the buckets back
+        # into one chronologically ordered list (both entries lack
+        # interval_start_utc here, so the flatten's ordering falls back to
+        # boundary_lag, which already matches the order below).
+        boundary_history = {
+            "price": [{"boundary_lag": 23.4, "grant_source": "price"}],
+            "demand_window": [{"boundary_lag": 41.0, "grant_source": "demand_window"}],
+        }
         sensor = _sensor(
             DecisionLagSensor,
             decision_lag_seconds=None,
@@ -400,12 +455,16 @@ class TestDecisionLagSensor:
         )
         attrs = sensor.extra_state_attributes
         assert attrs["boundary_lag_seconds"] == pytest.approx(23.43)
-        assert attrs["boundary_lag_history"] == boundary_history
+        assert attrs["boundary_lag_history"] == [
+            {"boundary_lag": 23.4, "grant_source": "price"},
+            {"boundary_lag": 41.0, "grant_source": "demand_window"},
+        ]
         assert attrs["anticipated_transitions_today"] == 3
         assert attrs["anticipation_corrections_today"] == 1
 
     def test_extra_state_attributes_boundary_lag_history_windowed(self):
-        # The attribute exposes the last 20 entries; the full 50-entry window
+        # The attribute exposes the last 20 entries overall, flattened across
+        # every per-source bucket (#942); the full per-source window (50)
         # stays in CoordinatorData (size budget — see status.py comment).
         full_history = [{"boundary_lag": float(i)} for i in range(30)]
         sensor = _sensor(
@@ -418,7 +477,7 @@ class TestDecisionLagSensor:
             decision_timestamp=None,
             command_completion_timestamp=None,
             boundary_lag_seconds=None,
-            boundary_lag_history=full_history,
+            boundary_lag_history={"price": full_history},
             anticipated_transitions_today=0,
             anticipation_corrections_today=0,
         )

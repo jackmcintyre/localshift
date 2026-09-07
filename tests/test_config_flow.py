@@ -26,13 +26,16 @@ from custom_components.localshift.const import (
     CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
+    CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
     CONF_TESLEMETRY_LOAD_POWER,
     CONF_TESLEMETRY_OPERATION_MODE,
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
+    CONF_WEATHER_ENTITY,
     DOMAIN,
+    PRICING_SOURCE_AMBER,
     PRICING_SOURCE_AMBER_EXPRESS,
 )
 
@@ -313,6 +316,43 @@ class TestUserStep:
 
 
 # =============================================================================
+# CONFIG FLOW: PRICING SOURCE STEP TESTS
+# =============================================================================
+
+
+class TestPricingSourceStep:
+    """Tests for async_step_pricing_source."""
+
+    @pytest.mark.asyncio
+    async def test_show_form(self, mock_hass):
+        """Initial render shows the pricing source form."""
+        flow = LocalShiftConfigFlow()
+        flow.hass = mock_hass
+
+        result = await flow.async_step_pricing_source(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "pricing_source"
+
+    @pytest.mark.asyncio
+    async def test_user_input_moves_to_pricing_step(self, mock_hass):
+        """Submitted input is stored and the flow advances to pricing."""
+        flow = LocalShiftConfigFlow()
+        flow.hass = mock_hass
+
+        user_input = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+
+        result = await flow.async_step_pricing_source(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "pricing"
+        assert flow._pricing_source_data == user_input
+
+
+# =============================================================================
 # PRICING STEP TESTS
 # =============================================================================
 
@@ -358,6 +398,32 @@ class TestPricingStep:
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "solcast"
+
+    @pytest.mark.asyncio
+    async def test_pricing_step_invalid_input_reshows_form(self, mock_hass):
+        """Validation failures re-render the pricing form with errors."""
+        flow = LocalShiftConfigFlow()
+        flow.hass = mock_hass
+        flow._teslemetry_data = {}
+        flow._pricing_source_data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            CONF_COMPARISON_MODE: "disabled",
+        }
+        mock_hass.states.get = MagicMock(return_value=None)
+
+        user_input = {
+            CONF_PRICING_GENERAL_PRICE: "sensor.amber_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.amber_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.amber_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.amber_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.amber_price_spike",
+        }
+
+        result = await flow.async_step_pricing(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "pricing"
+        assert result["errors"]
 
     @pytest.mark.asyncio
     async def test_pricing_step_amber_express_without_forecasts_proceeds_to_solcast(
@@ -468,6 +534,29 @@ class TestSolcastStep:
         assert result["type"] == FlowResultType.FORM
         assert "errors" in result
         assert CONF_NOTIFY_SERVICE in result["errors"]
+
+
+# =============================================================================
+# OPTIONS FLOW HELPERS
+# =============================================================================
+
+
+def make_options_flow(mock_hass, mock_config_entry):
+    """Create an options flow wired to a mock hass and config entry."""
+    flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+    mock_config_entries = MagicMock()
+    mock_config_entries.async_get_known_entry = MagicMock(
+        return_value=mock_config_entry
+    )
+    mock_config_entries.async_update_entry = MagicMock()
+    mock_hass.config_entries = mock_config_entries
+    flow.hass = mock_hass
+
+    # OptionsFlow.config_entry resolves through _config_entry_id
+    type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+    return flow
 
 
 # =============================================================================
@@ -596,6 +685,257 @@ class TestOptionsFlow:
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "entity_mappings"
         mock_config_entries.async_update_entry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_entity_mappings_prefilled_form_validates_under_amber(
+        self, mock_hass, mock_config_entry
+    ):
+        """Issue #955: the Entity Mappings form must be submittable under amber.
+
+        Previously the two forecast fields were stripped from the values handed
+        to build_pricing_schema, so under a non-Express pricing source they were
+        re-created as Required with a default of ''. The entity selector rejects
+        that default with "Entity  is neither a valid entity ID nor a valid UUID",
+        which made the step impossible to submit.
+        """
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+        mock_config_entries = MagicMock()
+        mock_config_entries.async_get_known_entry = MagicMock(
+            return_value=mock_config_entry
+        )
+        mock_config_entries.async_update_entry = MagicMock()
+        mock_hass.config_entries = mock_config_entries
+        flow.hass = mock_hass
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            CONF_TESLEMETRY_OPERATION_MODE: "select.teslemetry_operation_mode",
+            CONF_TESLEMETRY_BACKUP_RESERVE: "number.teslemetry_backup_reserve",
+            CONF_TESLEMETRY_SOC: "sensor.teslemetry_soc",
+            CONF_TESLEMETRY_GRID_POWER: "sensor.teslemetry_grid_power",
+            CONF_TESLEMETRY_BATTERY_POWER: "sensor.teslemetry_battery_power",
+            CONF_TESLEMETRY_SOLAR_POWER: "sensor.teslemetry_solar_power",
+            CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
+            CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
+        }
+
+        schema = flow._build_entity_mappings_schema(
+            mock_config_entry.data, ["notify.mobile_app"], ["weather.home"]
+        )
+        defaults = {key.schema: key.default() for key in schema.schema}
+
+        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.100h_general_forecast"
+        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.100h_feed_in_forecast"
+
+        # The pre-filled form must validate — this is what the frontend submits.
+        schema(defaults)
+
+    @pytest.mark.asyncio
+    async def test_entity_mappings_form_renders_prefilled_under_amber(
+        self, mock_hass, mock_config_entry
+    ):
+        """Issue #955: the rendered Entity Mappings step validates under amber."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+
+        mock_config_entries = MagicMock()
+        mock_config_entries.async_get_known_entry = MagicMock(
+            return_value=mock_config_entry
+        )
+        mock_config_entries.async_update_entry = MagicMock()
+        mock_hass.config_entries = mock_config_entries
+        flow.hass = mock_hass
+        type(flow)._config_entry_id = property(lambda self: mock_config_entry.entry_id)
+
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            CONF_TESLEMETRY_OPERATION_MODE: "select.teslemetry_operation_mode",
+            CONF_TESLEMETRY_BACKUP_RESERVE: "number.teslemetry_backup_reserve",
+            CONF_TESLEMETRY_SOC: "sensor.teslemetry_soc",
+            CONF_TESLEMETRY_GRID_POWER: "sensor.teslemetry_grid_power",
+            CONF_TESLEMETRY_BATTERY_POWER: "sensor.teslemetry_battery_power",
+            CONF_TESLEMETRY_SOLAR_POWER: "sensor.teslemetry_solar_power",
+            CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
+            CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
+        }
+
+        result = await flow.async_step_entity_mappings(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "entity_mappings"
+
+        schema = result["data_schema"]
+        defaults = {key.schema: key.default() for key in schema.schema}
+        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.100h_general_forecast"
+        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.100h_feed_in_forecast"
+        schema(defaults)
+
+
+# =============================================================================
+# OPTIONS FLOW: ENTITY MAPPING VALIDATION TESTS
+# =============================================================================
+
+
+class TestValidateEntityMappings:
+    """Tests for LocalShiftOptionsFlow._validate_entity_mappings."""
+
+    @pytest.mark.asyncio
+    async def test_all_valid_returns_none(self, mock_hass, mock_config_entry):
+        """Existing entities with a usable state produce no errors."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_hass.states.get = MagicMock(
+            return_value=create_mock_state("sensor.price", "0.25")
+        )
+
+        result = await flow._validate_entity_mappings({
+            "pricing_general_price": "sensor.price"
+        })
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_empty_entity_id_is_required_error(
+        self, mock_hass, mock_config_entry
+    ):
+        """An empty mapping reports 'Entity is required'."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+
+        result = await flow._validate_entity_mappings({"pricing_general_price": ""})
+
+        assert result == {"pricing_general_price": "Entity is required"}
+
+    @pytest.mark.asyncio
+    async def test_missing_entity_reports_does_not_exist(
+        self, mock_hass, mock_config_entry
+    ):
+        """An entity the state machine has never seen reports as missing."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_hass.states.get = MagicMock(return_value=None)
+
+        result = await flow._validate_entity_mappings({
+            "pricing_general_price": "sensor.gone"
+        })
+
+        assert result == {"pricing_general_price": "Entity 'sensor.gone' does not exist"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", ["unavailable", "unknown"])
+    async def test_unavailable_or_unknown_entity_reported(
+        self, mock_hass, mock_config_entry, state
+    ):
+        """Entities resting in unavailable/unknown are surfaced to the user."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_hass.states.get = MagicMock(
+            return_value=create_mock_state("sensor.price", state)
+        )
+
+        result = await flow._validate_entity_mappings({
+            "pricing_general_price": "sensor.price"
+        })
+
+        assert result == {
+            "pricing_general_price": f"Entity 'sensor.price' is {state}"
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_entity_fields_are_skipped(self, mock_hass, mock_config_entry):
+        """Notify/weather/source/mode keys are not entity ids and are ignored."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_hass.states.get = MagicMock(side_effect=AssertionError("should not call"))
+
+        result = await flow._validate_entity_mappings({
+            CONF_NOTIFY_SERVICE: "notify.mobile_app",
+            CONF_WEATHER_ENTITY: "weather.home",
+            CONF_PRICING_DATA_SOURCE: "amber",
+            CONF_COMPARISON_MODE: "disabled",
+        })
+
+        assert result is None
+
+
+# =============================================================================
+# OPTIONS FLOW: ENTITY MAPPINGS STEP TESTS
+# =============================================================================
+
+
+class TestEntityMappingsStep:
+    """Tests for async_step_entity_mappings."""
+
+    @pytest.mark.asyncio
+    async def test_show_form_uses_current_data_as_defaults(
+        self, mock_hass, mock_config_entry
+    ):
+        """Rendering the step pre-fills it from the config entry."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            CONF_TESLEMETRY_OPERATION_MODE: "select.teslemetry_operation_mode",
+            CONF_TESLEMETRY_BACKUP_RESERVE: "number.teslemetry_backup_reserve",
+            CONF_TESLEMETRY_SOC: "sensor.teslemetry_soc",
+            CONF_TESLEMETRY_GRID_POWER: "sensor.teslemetry_grid_power",
+            CONF_TESLEMETRY_BATTERY_POWER: "sensor.teslemetry_battery_power",
+            CONF_TESLEMETRY_SOLAR_POWER: "sensor.teslemetry_solar_power",
+            CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
+            CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
+        }
+
+        result = await flow.async_step_entity_mappings(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "entity_mappings"
+        assert "errors" in result
+
+    @pytest.mark.asyncio
+    async def test_invalid_input_reshows_form_with_errors(
+        self, mock_hass, mock_config_entry
+    ):
+        """Issue #955 path: failed validation re-renders instead of saving."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.data = {
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER,
+            CONF_TESLEMETRY_OPERATION_MODE: "select.teslemetry_operation_mode",
+            CONF_TESLEMETRY_BACKUP_RESERVE: "number.teslemetry_backup_reserve",
+            CONF_TESLEMETRY_SOC: "sensor.teslemetry_soc",
+            CONF_TESLEMETRY_GRID_POWER: "sensor.teslemetry_grid_power",
+            CONF_TESLEMETRY_BATTERY_POWER: "sensor.teslemetry_battery_power",
+            CONF_TESLEMETRY_SOLAR_POWER: "sensor.teslemetry_solar_power",
+            CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
+            CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
+            CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
+            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
+        }
+        # Entity does not exist in the state machine
+        mock_hass.states.get = MagicMock(return_value=None)
+
+        result = await flow.async_step_entity_mappings(dict(mock_config_entry.data))
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "entity_mappings"
+        assert result["errors"]
+        assert mock_hass.config_entries.async_update_entry.call_count == 0
 
 
 # =============================================================================
