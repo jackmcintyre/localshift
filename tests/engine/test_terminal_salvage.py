@@ -137,7 +137,7 @@ class TestTerminalSalvageBoundary:
 
     def _boundary_row(self, slots, **overrides):
         config = _config(**overrides)
-        planner = DPPlanner(config)
+        planner = DPPlanner()
         inputs = OptimizerInputs(
             cycle_id="salvage-boundary",
             initial_soc_pct=50.0,
@@ -252,7 +252,7 @@ class TestTerminalSalvageBehaviour:
             config=config,
             all_solcast=[],
         )
-        result = DPPlanner(config).plan(inputs)
+        result = DPPlanner().plan(inputs)
         assert result.success
         return sum(
             d.grid_import_kwh
@@ -320,6 +320,6 @@ class TestTerminalSalvageBehaviour:
             config=config,
             all_solcast=[],
         )
-        result = DPPlanner(config).plan(inputs)
+        result = DPPlanner().plan(inputs)
         assert result.success
         return result.decisions[-1].predicted_soc_pct

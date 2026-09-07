@@ -98,7 +98,7 @@ def _overnight_charge_kwh(n: int) -> float:
         config=config,
         all_solcast=[],
     )
-    result = DPPlanner(config).plan(inputs)
+    result = DPPlanner().plan(inputs)
     assert result.success
     return sum(
         d.grid_import_kwh

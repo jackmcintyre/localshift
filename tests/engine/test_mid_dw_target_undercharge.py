@@ -111,7 +111,7 @@ def _config() -> OptimizerConfig:
 def _plan():
     slots = _build_slots(_N_SLOTS)
     config = _config()
-    return DPPlanner(config).plan(
+    return DPPlanner().plan(
         OptimizerInputs(
             cycle_id="mid-dw-undercharge",
             initial_soc_pct=70.0,
@@ -130,7 +130,7 @@ class TestMidDwEntryDetection:
         assert slots[0].is_demand_window_slot and slots[0].is_demand_window_entry
         assert slots[_TOMORROW_DW_ENTRY_IDX].is_demand_window_entry
 
-        bounds = DPPlanner(_config())._find_demand_window_bounds(slots)
+        bounds = DPPlanner()._find_demand_window_bounds(slots)
         assert bounds["entry_idx"] == _TOMORROW_DW_ENTRY_IDX, (
             "demand-window entry must resolve to tomorrow's real 15:00 entry, not the "
             f"in-progress slot 0; got {bounds['entry_idx']}"
@@ -175,7 +175,7 @@ class TestSolarSufficientDayNoOverCharge:
     def _plan_strong_solar(self):
         slots = _build_slots(_N_SLOTS, solar_fn=_strong_solar)
         config = _config()
-        return DPPlanner(config).plan(
+        return DPPlanner().plan(
             OptimizerInputs(
                 cycle_id="mid-dw-solar-sufficient",
                 initial_soc_pct=70.0,

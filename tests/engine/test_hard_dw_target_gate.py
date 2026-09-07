@@ -102,7 +102,7 @@ def _repro_slots() -> list[SlotContext]:
 def _plan_repro(**config_overrides):
     slots = _repro_slots()
     config = _config(**config_overrides)
-    return DPPlanner(config).plan(
+    return DPPlanner().plan(
         OptimizerInputs(
             cycle_id="repro-885",
             initial_soc_pct=66.0,
@@ -116,7 +116,7 @@ def _plan_repro(**config_overrides):
 def _plan(slots, initial_soc_pct, **config_overrides):
     """Plan and return ``(result, config)`` so solver-derived fields can be inspected."""
     config = _config(**config_overrides)
-    result = DPPlanner(config).plan(
+    result = DPPlanner().plan(
         OptimizerInputs(
             cycle_id="repro-885",
             initial_soc_pct=initial_soc_pct,
@@ -616,7 +616,7 @@ def test_runway_slack_is_a_governor_while_boost_charging():
 def test_runway_telemetry_is_reset_between_cycles():
     """A reused config must never carry a previous cycle's runway telemetry forward."""
     config = _config()
-    planner = DPPlanner(config)
+    planner = DPPlanner()
     planner.plan(
         OptimizerInputs(
             cycle_id="cycle-1-solar",
