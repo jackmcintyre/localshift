@@ -567,6 +567,21 @@ class CoordinatorData:
     entries (capped in machine.py) — deliberately deeper than
     decision_lag_history's 50, because this ring is shared across grant
     sources and a burst must not evict the price samples (#942).
+
+    from_mode (#940) is the previously *commanded* mode, not the transition's
+    own target — data.active_mode is always identical to the target on every
+    reachable path, which made the field read the destination back as its own
+    origin. On a backstop correction (health-check, Tesla re-probe) the
+    commanded mode is re-issued to itself, so from_mode == to_mode there by
+    construction; that is a correction, not a mode change.
+
+    grant_source (#941) is `price` | `spike` | `demand_window` | `soc_floor`
+    | `plan_charge` | `debounce` | `retry` | `backstop` | `unknown`.
+    `debounce` and `retry` mark a transition that did NOT land on a fresh
+    decision token — a debounce completing after its wait, or a retry of a
+    command the controller rejected or the entity validator blocked — and
+    both should be excluded from the Amber-latency baseline the other tags
+    feed, same as `backstop`.
     """
 
     anticipated_transitions_today: int = 0

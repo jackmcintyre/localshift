@@ -527,7 +527,7 @@ Attributes:
   anticipation_corrections_today: 0
 ```
 
-Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `backstop`, `unknown`). `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
+Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target). `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
 
 ---
 
