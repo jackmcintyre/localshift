@@ -17,6 +17,7 @@ from ..const import (
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
+from ..state.mode_configs import calculate_proactive_export_reserve
 from ..state.validator import TransitionValidator
 from .client import PowerwallServiceClient
 
@@ -662,7 +663,7 @@ class BatteryController:
             )
             reserve = minimum_target
         else:
-            reserve = max(4.0, current_soc - 5.0)
+            reserve = calculate_proactive_export_reserve(current_soc, minimum_target)
 
         if dry_run:
             _LOGGER.info(

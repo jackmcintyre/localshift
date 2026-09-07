@@ -13,7 +13,9 @@ import pytest
 from custom_components.localshift.const import (
     BACKUP_RESERVE_MAX_VALID,
     CONF_BATTERY_TARGET,
+    CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
+    DEFAULT_MINIMUM_TARGET_SOC,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
@@ -424,6 +426,37 @@ class TestModeConfig:
         assert config.backup_reserve == 15.0
         assert config.export_mode == TESLEMETRY_EXPORT_BATTERY_OK
 
+    def test_get_mode_config_spike_discharge_conservative_reserve_tracked(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #972: the conservative spike reserve is tracked in ModeConfig.
+
+        The health check compares hardware reserve against this value; without
+        it the expectation falls back to the hardcoded 10 and every conservative
+        spike (typically 20-60) mismatches every tick.
+        """
+        coordinator_data.spike_in_conservative_mode = True
+        coordinator_data.spike_reserve_soc = 45.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SPIKE_DISCHARGE, coordinator_data
+        )
+
+        assert config.spike_discharge_reserve == 45.0
+
+    def test_get_mode_config_spike_discharge_tracks_minimum_target_reserve(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #972: the non-conservative fallback is tracked too, so the
+        health-check expectation always matches the value that was written."""
+        coordinator_data.spike_in_conservative_mode = False
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SPIKE_DISCHARGE, coordinator_data
+        )
+
+        assert config.spike_discharge_reserve == DEFAULT_MINIMUM_TARGET_SOC
+
     def test_get_mode_config_spike_discharge_default_minimum(
         self, state_machine, coordinator_data
     ):
@@ -443,6 +476,20 @@ class TestModeConfig:
 
         assert config.backup_reserve == 12.0
 
+    def test_get_mode_config_spike_discharge_default_minimum_target_soc_default(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #972: with no configured option the reserve defaults to
+        DEFAULT_MINIMUM_TARGET_SOC (20) — matching the actuator's
+        _get_minimum_target_soc — not the old hardcoded 10.0."""
+        coordinator_data.spike_in_conservative_mode = False
+
+        config = state_machine._get_mode_config(
+            BatteryMode.SPIKE_DISCHARGE, coordinator_data
+        )
+
+        assert config.backup_reserve == float(DEFAULT_MINIMUM_TARGET_SOC)
+
     def test_get_mode_config_proactive_export(self, state_machine, coordinator_data):
         """PROACTIVE_EXPORT uses dynamic reserve based on SOC."""
         coordinator_data.soc = 50.0
@@ -459,14 +506,64 @@ class TestModeConfig:
     def test_get_mode_config_proactive_export_minimum(
         self, state_machine, coordinator_data
     ):
-        """PROACTIVE_EXPORT reserve never below 4%."""
+        """PROACTIVE_EXPORT reserve floors at minimum_target_soc (Issue #974).
+
+        The old absolute floor of 4 let a SOC between minimum_target_soc and
+        minimum_target_soc+5 command a reserve below the configured floor.
+        With the stock mock_get_option (returns the caller's default), the
+        floor is DEFAULT_MINIMUM_TARGET_SOC (20).
+        """
         coordinator_data.soc = 6.0
 
         config = state_machine._get_mode_config(
             BatteryMode.PROACTIVE_EXPORT, coordinator_data
         )
 
-        assert config.backup_reserve == 4.0
+        assert config.backup_reserve == DEFAULT_MINIMUM_TARGET_SOC
+        assert config.proactive_export_reserve == DEFAULT_MINIMUM_TARGET_SOC
+
+    def test_get_mode_config_proactive_export_floors_at_minimum_target(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #974: SOC 22 with minimum_target_soc 20 -> reserve 20.
+
+        max(4, 22-5)=17 would have driven the hardware to 17% against a
+        modelled floor of 20.
+        """
+
+        def _get_option(key, default):
+            if key == CONF_MINIMUM_TARGET_SOC:
+                return 20.0
+            return default
+
+        state_machine._get_option = _get_option
+        coordinator_data.soc = 22.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.PROACTIVE_EXPORT, coordinator_data
+        )
+
+        assert config.backup_reserve == 20.0
+        assert config.proactive_export_reserve == 20.0
+
+    def test_get_mode_config_proactive_export_buffer_above_floor(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #974 non-regression: above the floor the SOC-5 buffer still applies."""
+
+        def _get_option(key, default):
+            if key == CONF_MINIMUM_TARGET_SOC:
+                return 20.0
+            return default
+
+        state_machine._get_option = _get_option
+        coordinator_data.soc = 26.0
+
+        config = state_machine._get_mode_config(
+            BatteryMode.PROACTIVE_EXPORT, coordinator_data
+        )
+
+        assert config.backup_reserve == 21.0
 
     def test_get_mode_config_hold(self, state_machine, coordinator_data):
         """HOLD preserves current SOC via elevated reserve."""
@@ -506,6 +603,21 @@ class TestModeConfig:
 
         assert config.backup_reserve == 15.0
         assert config.self_consumption_reserve == 15.0
+
+    def test_get_mode_config_hold_default_minimum_target_soc(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #972: HOLD defaults to DEFAULT_MINIMUM_TARGET_SOC (20) when the
+        option is unconfigured — not the old hardcoded 10.0 — matching the
+        actuator's _get_minimum_target_soc."""
+        coordinator_data.soc = 60.0
+        state_machine._battery_controller.read_fresh_soc = MagicMock(return_value=8.0)
+
+        config = state_machine._get_mode_config(BatteryMode.HOLD, coordinator_data)
+
+        # Fresh SOC (8) is below the default floor (20) -> floor wins.
+        assert config.backup_reserve == float(DEFAULT_MINIMUM_TARGET_SOC)
+        assert config.self_consumption_reserve == float(DEFAULT_MINIMUM_TARGET_SOC)
 
     def test_get_mode_config_manual_returns_none(self, state_machine, coordinator_data):
         """MANUAL mode returns None (no config)."""
@@ -1039,6 +1151,172 @@ class TestHealthCheck:
         )
 
 
+class TestSpikeDischargeHealthCheckReserve:
+    """Issue #972: the health check must expect the reserve actually written.
+
+    _build_spike_discharge_config writes spike_reserve_soc when the
+    conservative switch is on (typically 20-60) or minimum_target_soc
+    otherwise, but the health check expected a hardcoded 10. With the
+    validator's abs(actual - expected) < 1 tolerance, every conservative spike
+    mismatched every tick and re-issued the transition (plus a Health Check
+    Correction notification) every 5 minutes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_conservative_reserve_tracked_after_transition(
+        self, state_machine, coordinator_data
+    ):
+        """A conservative SPIKE_DISCHARGE transition tracks the reserve used."""
+        coordinator_data.spike_in_conservative_mode = True
+        coordinator_data.spike_reserve_soc = 45.0
+
+        success = await state_machine._execute_mode_transition(
+            coordinator_data, BatteryMode.SPIKE_DISCHARGE
+        )
+
+        assert success is True
+        assert state_machine._spike_discharge_reserve == 45.0
+
+    @pytest.mark.asyncio
+    async def test_non_conservative_transition_tracks_minimum_target(
+        self, state_machine, coordinator_data
+    ):
+        """A non-conservative SPIKE_DISCHARGE tracks minimum_target_soc (20 default)."""
+        coordinator_data.spike_in_conservative_mode = False
+
+        success = await state_machine._execute_mode_transition(
+            coordinator_data, BatteryMode.SPIKE_DISCHARGE
+        )
+
+        assert success is True
+        assert state_machine._spike_discharge_reserve == DEFAULT_MINIMUM_TARGET_SOC
+
+    @pytest.mark.asyncio
+    async def test_reserve_cleared_on_other_mode_transition(
+        self, state_machine, coordinator_data
+    ):
+        """Leaving SPIKE_DISCHARGE clears the tracked reserve (falls back to 10)."""
+        coordinator_data.spike_in_conservative_mode = True
+        coordinator_data.spike_reserve_soc = 45.0
+        await state_machine._execute_mode_transition(
+            coordinator_data, BatteryMode.SPIKE_DISCHARGE
+        )
+        assert state_machine._spike_discharge_reserve == 45.0
+
+        await state_machine._execute_mode_transition(
+            coordinator_data, BatteryMode.SELF_CONSUMPTION
+        )
+
+        assert state_machine._spike_discharge_reserve is None
+
+    async def _command_conservative_spike(self, state_machine, coordinator_data):
+        """Command SPIKE_DISCHARGE with a conservative reserve of 45."""
+        coordinator_data.spike_in_conservative_mode = True
+        coordinator_data.spike_reserve_soc = 45.0
+        result = await state_machine._execute_mode_transition(
+            coordinator_data, BatteryMode.SPIKE_DISCHARGE
+        )
+        # _execute_mode_transition does not set _commanded_mode; in production
+        # _finalize_successful_transition does that after it returns. The health
+        # check reads _commanded_mode to pick its expectations, so model the
+        # post-transition state the same way.
+        state_machine._commanded_mode = BatteryMode.SPIKE_DISCHARGE
+        return result
+
+    @pytest.mark.asyncio
+    async def test_health_check_uses_conservative_reserve(
+        self,
+        state_machine,
+        coordinator_data,
+        mock_battery_controller,
+        mock_notification_service,
+    ):
+        """Issue #972 named test: hardware reports 45, expected reserve is 45,
+        and no correction fires."""
+        assert await self._command_conservative_spike(state_machine, coordinator_data)
+
+        # Hardware now reports exactly what we commanded.
+        coordinator_data.operation_mode = "autonomous"
+        coordinator_data.backup_reserve = 45.0
+        coordinator_data.manual_override = False
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = False
+        # Clear grace/cooldown so the health check actually evaluates.
+        state_machine._last_successful_transition = None
+        state_machine._last_health_correction = None
+        mock_battery_controller.set_force_discharge.reset_mock()
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        mock_battery_controller.verify_current_state.assert_awaited_once()
+        assert (
+            mock_battery_controller.verify_current_state.await_args.kwargs[
+                "expected_backup_reserve"
+            ]
+            == 45
+        )
+        # No correction: the transition is not re-issued, no notification.
+        mock_battery_controller.set_force_discharge.assert_not_called()
+        mock_notification_service.send_health_correction_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_health_check_corrects_genuine_drift(
+        self,
+        state_machine,
+        coordinator_data,
+        mock_battery_controller,
+        mock_notification_service,
+    ):
+        """The correction path still fires when the reserve genuinely drifts.
+
+        Guards against an over-broad fix that simply stops correcting.
+        """
+        assert await self._command_conservative_spike(state_machine, coordinator_data)
+
+        coordinator_data.operation_mode = "autonomous"
+        coordinator_data.backup_reserve = 45.0
+        coordinator_data.manual_override = False
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = False
+        state_machine._last_successful_transition = None
+        state_machine._last_health_correction = None
+        mock_battery_controller.set_force_discharge.reset_mock()
+        # The verifier now reports drift (hardware reports something else).
+        mock_battery_controller.verify_current_state = AsyncMock(return_value=False)
+        mock_battery_controller._get_entity_id.return_value = "switch.grid_charging"
+        mock_battery_controller._read_bool.return_value = True
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        mock_battery_controller.set_force_discharge.assert_called_once()
+        mock_notification_service.send_health_correction_notification.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_health_check_untracked_spike_falls_back_to_10(
+        self,
+        state_machine,
+        coordinator_data,
+        mock_battery_controller,
+    ):
+        """Without a tracked reserve the expectation stays the 10 fallback."""
+        state_machine._commanded_mode = BatteryMode.SPIKE_DISCHARGE
+        state_machine._spike_discharge_reserve = None
+        coordinator_data.manual_override = False
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = False
+        state_machine._last_successful_transition = None
+        state_machine._last_health_correction = None
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        assert (
+            mock_battery_controller.verify_current_state.await_args.kwargs[
+                "expected_backup_reserve"
+            ]
+            == 10
+        )
+
+
 # =============================================================================
 # REACTIVE GRID CHARGING LISTENER TESTS (Issue #491)
 # =============================================================================
@@ -1081,18 +1359,14 @@ class TestGridChargingListener:
         assert "callback" in captured
         assert len(captured["entity_ids"]) == 1
 
-    def test_start_listener_is_idempotent(
-        self, state_machine, mock_hass, monkeypatch
-    ):
+    def test_start_listener_is_idempotent(self, state_machine, mock_hass, monkeypatch):
         """Calling start twice should only register once."""
         captured = self._patch_track(monkeypatch)
         state_machine.start_grid_charging_listener(mock_hass)
         state_machine.start_grid_charging_listener(mock_hass)
         assert "callback" in captured
 
-    def test_stop_listener_calls_unsubscribe(
-        self, state_machine, mock_hass
-    ):
+    def test_stop_listener_calls_unsubscribe(self, state_machine, mock_hass):
         """stop_grid_charging_listener should call the listener handle."""
         handle = MagicMock()
         state_machine._grid_charging_listener = handle
@@ -1100,9 +1374,7 @@ class TestGridChargingListener:
         handle.assert_called_once()
         assert state_machine._grid_charging_listener is None
 
-    def test_stop_listener_noop_when_none(
-        self, state_machine
-    ):
+    def test_stop_listener_noop_when_none(self, state_machine):
         """stop_grid_charging_listener should not error when no listener is active."""
         state_machine._grid_charging_listener = None
         state_machine.stop_grid_charging_listener()  # should not raise

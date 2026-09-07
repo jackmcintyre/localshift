@@ -20,8 +20,6 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MINIMUM_TARGET_SOC,
-    PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
-    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -34,7 +32,12 @@ from ..const import (
     BatteryMode,
 )
 from ..coordinator.data import CoordinatorData, PhysicalResponseWatch
-from .mode_configs import MODE_CONFIG_BUILDERS, MODE_EXECUTORS, ModeConfig
+from .mode_configs import (
+    MODE_CONFIG_BUILDERS,
+    MODE_EXECUTORS,
+    ModeConfig,
+    calculate_proactive_export_reserve,
+)
 
 if TYPE_CHECKING:
     from ..computation_engine import ComputationEngine
@@ -113,6 +116,10 @@ class StateMachine:
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
+        # Issue #972: the reserve SPIKE_DISCHARGE actually wrote, so the health
+        # check expects it instead of a hardcoded 10 and stops correcting a
+        # conservative spike every 5 minutes.
+        self._spike_discharge_reserve: float | None = None
         # Track grid charging target reserve (clamped for Tesla firmware compatibility)
         self._grid_charging_reserve: int | None = None
         # Track self_consumption reserve (preserve_soc when set, otherwise 10)
@@ -521,7 +528,12 @@ class StateMachine:
 
     def _build_spike_discharge_config(self, data: CoordinatorData) -> ModeConfig:
         """Build SPIKE_DISCHARGE config."""
-        min_target_soc = float(self._get_option("minimum_target_soc", 10.0))
+        # Issue #972: CONF_/DEFAULT_ (20), not the literal "minimum_target_soc"
+        # with a 10 default — BatteryController._get_minimum_target_soc uses the
+        # DEFAULT, so the two halves of the same transition disagreed.
+        min_target_soc = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
         backup_reserve = (
             data.spike_reserve_soc
             if data.spike_in_conservative_mode and data.spike_reserve_soc is not None
@@ -532,13 +544,21 @@ class StateMachine:
             backup_reserve=backup_reserve,
             export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
             grid_charging_allowed=False,
+            # Issue #972: published so _update_transition_reserves can track it
+            # and the health check expects what was written.
+            spike_discharge_reserve=backup_reserve,
         )
 
     def _build_proactive_export_config(self, data: CoordinatorData) -> ModeConfig:
         """Build PROACTIVE_EXPORT config."""
-        backup_reserve = max(
-            PROACTIVE_EXPORT_MIN_RESERVE_PERCENT,
-            data.soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+        # Issue #974: one shared formula with BatteryController.set_proactive_export,
+        # floored at minimum_target_soc rather than the absolute 4% — the old floor
+        # let SOC just above the configured minimum discharge below it.
+        backup_reserve = calculate_proactive_export_reserve(
+            data.soc,
+            float(
+                self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+            ),
         )
         return ModeConfig(
             operation_mode="autonomous",
@@ -550,7 +570,10 @@ class StateMachine:
 
     def _build_hold_config(self, data: CoordinatorData) -> ModeConfig:
         """Build HOLD config."""
-        min_soc = float(self._get_option("minimum_target_soc", 10.0))
+        # Issue #972: same CONF_/DEFAULT_ correction as the spike builder.
+        min_soc = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
         fresh_soc = self._battery_controller.read_fresh_soc()
         if fresh_soc is not None:
             backup_reserve = max(min_soc, fresh_soc)
@@ -1313,6 +1336,7 @@ class StateMachine:
         self._self_consumption_reserve = config.self_consumption_reserve
         self._grid_charging_reserve = config.grid_charging_reserve
         self._proactive_export_reserve = config.proactive_export_reserve
+        self._spike_discharge_reserve = config.spike_discharge_reserve
 
     def _record_transition_metrics(
         self, data: CoordinatorData, target: BatteryMode, dry_run: bool
@@ -1756,6 +1780,16 @@ class StateMachine:
             and self._proactive_export_reserve is not None
         ):
             expected_reserve = int(self._proactive_export_reserve)
+
+        # Issue #972: SPIKE_DISCHARGE writes spike_reserve_soc (conservative) or
+        # minimum_target_soc, never the hardcoded 10 the expectation carried, so
+        # every conservative spike mismatched on each tick and re-issued the
+        # transition with a notification every 5 minutes.
+        if (
+            self._commanded_mode == BatteryMode.SPIKE_DISCHARGE
+            and self._spike_discharge_reserve is not None
+        ):
+            expected_reserve = int(self._spike_discharge_reserve)
 
         # For GRID_CHARGING, use the tracked clamped reserve
         if (
