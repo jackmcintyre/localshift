@@ -8,6 +8,7 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
@@ -248,6 +249,7 @@ class TeslaOverrideActiveSensor(LocalShiftBinarySensorBase):
 
     _attr_unique_id = "localshift_tesla_override_active"
     _attr_name = "Tesla Override Active"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def icon(self) -> str:

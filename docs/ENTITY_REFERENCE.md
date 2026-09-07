@@ -4,18 +4,103 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **63 entities** grouped under a single "LocalShift" device:
+The integration creates **67 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 35 | `sensor` |
+| Sensors | 31 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
-| Numbers | 5 | `number` |
+| Numbers | 13 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
+
+---
+
+## Entity Categories
+
+Issue #787: every entity's Home Assistant `entity_category`, kept in sync with
+the integration's code by `tests/test_entity_category.py` — that test fails
+if an entity is added, removed, or recategorised here without a matching code
+change, or vice versa. Regenerate this table with
+`uv run python scripts/dump_entity_categories.py` after any entity change.
+
+`config` entities appear under the device's Configuration section (and are
+excluded from auto-generated dashboards and default Assist exposure);
+`diagnostic` entities appear under Diagnostics; `—` entities are primary,
+user-facing entities with no category and appear on the main device card.
+
+| Entity ID | Unique ID | Platform | Category |
+|-----------|-----------|----------|----------|
+| `binary_sensor.localshift_amber_demand_window` | `localshift_amber_demand_window` | `binary_sensor` | — |
+| `binary_sensor.localshift_charge_boost` | `localshift_charge_boost` | `binary_sensor` | — |
+| `binary_sensor.localshift_charge_boost_needed` | `localshift_charge_boost_needed` | `binary_sensor` | — |
+| `binary_sensor.localshift_charge_forced` | `localshift_charge_forced` | `binary_sensor` | — |
+| `binary_sensor.localshift_demand_window` | `localshift_demand_window` | `binary_sensor` | — |
+| `binary_sensor.localshift_discharge_forced` | `localshift_discharge_forced` | `binary_sensor` | — |
+| `binary_sensor.localshift_excess_solar_available` | `localshift_excess_solar_available` | `binary_sensor` | — |
+| `binary_sensor.localshift_price_expensive_coming` | `localshift_price_expensive_coming` | `binary_sensor` | — |
+| `binary_sensor.localshift_price_spike_coming` | `localshift_price_spike_coming` | `binary_sensor` | — |
+| `binary_sensor.localshift_solar_can_reach_target` | `localshift_solar_can_reach_target` | `binary_sensor` | — |
+| `binary_sensor.localshift_tesla_override_active` | `localshift_tesla_override_active` | `binary_sensor` | diagnostic |
+| `button.localshift_reset_decision_telemetry` | `localshift_reset_learning` | `button` | config |
+| `button.localshift_update_forecast` | `localshift_update_forecast` | `button` | — |
+| `number.localshift_battery_target` | `localshift_battery_target` | `number` | config |
+| `number.localshift_charge_taper_min_factor` | `localshift_charge_taper_min_factor` | `number` | config |
+| `number.localshift_charge_taper_start` | `localshift_charge_taper_start_pct` | `number` | config |
+| `number.localshift_cheap_price_percentile` | `localshift_cheap_price_percentile` | `number` | config |
+| `number.localshift_max_pre_charge_price` | `localshift_max_pre_charge_price` | `number` | config |
+| `number.localshift_min_cycle_saving` | `localshift_min_cycle_saving` | `number` | config |
+| `number.localshift_min_hold_saving` | `localshift_min_hold_saving` | `number` | config |
+| `number.localshift_minimum_target_soc` | `localshift_minimum_target_soc` | `number` | config |
+| `number.localshift_pre_charge_runway_margin` | `localshift_precharge_runway_margin_min` | `number` | config |
+| `number.localshift_stale_solar_confidence_ceiling` | `localshift_stale_solar_confidence_ceiling` | `number` | config |
+| `number.localshift_switching_penalty` | `localshift_switching_penalty` | `number` | config |
+| `number.localshift_switching_penalty_per_kwh` | `localshift_switching_penalty_per_kwh` | `number` | config |
+| `number.localshift_target_shortfall_penalty` | `localshift_target_penalty` | `number` | config |
+| `select.localshift_battery_mode` | `localshift_battery_mode` | `select` | — |
+| `select.localshift_optimization_mode` | `localshift_optimization_mode` | `select` | — |
+| `sensor.localshift_automation_ready` | `localshift_automation_ready` | `sensor` | diagnostic |
+| `sensor.localshift_cloud_event` | `localshift_cloud_event` | `sensor` | — |
+| `sensor.localshift_comparison_result` | `localshift_comparison_result` | `sensor` | — |
+| `sensor.localshift_cost_electricity_net` | `localshift_cost_electricity_net` | `sensor` | — |
+| `sensor.localshift_decision_lag` | `localshift_decision_lag` | `sensor` | diagnostic |
+| `sensor.localshift_decision_log` | `localshift_decision_log` | `sensor` | diagnostic |
+| `sensor.localshift_entity_health` | `localshift_entity_health` | `sensor` | diagnostic |
+| `sensor.localshift_excess_solar` | `localshift_excess_solar_kwh` | `sensor` | — |
+| `sensor.localshift_forecast_accuracy` | `localshift_forecast_accuracy` | `sensor` | diagnostic |
+| `sensor.localshift_forecast_accuracy_comparison` | `localshift_forecast_accuracy_comparison` | `sensor` | diagnostic |
+| `sensor.localshift_forecast_battery` | `localshift_forecast_battery` | `sensor` | — |
+| `sensor.localshift_forecast_diagnostics` | `localshift_forecast_diagnostics` | `sensor` | diagnostic |
+| `sensor.localshift_forecast_history` | `localshift_forecast_history` | `sensor` | diagnostic |
+| `sensor.localshift_forecast_prices` | `localshift_forecast_prices` | `sensor` | — |
+| `sensor.localshift_forecast_status` | `localshift_forecast_status` | `sensor` | diagnostic |
+| `sensor.localshift_integration_status` | `localshift_integration_status` | `sensor` | diagnostic |
+| `sensor.localshift_learning_decision_history` | `localshift_learning_decision_history` | `sensor` | diagnostic |
+| `sensor.localshift_load_deviation` | `localshift_load_deviation` | `sensor` | diagnostic |
+| `sensor.localshift_load_shift_signal` | `localshift_load_shift_signal` | `sensor` | — |
+| `sensor.localshift_optimizer_plan` | `localshift_optimizer_plan` | `sensor` | — |
+| `sensor.localshift_optimizer_plan_detailed` | `localshift_optimizer_plan_detailed` | `sensor` | diagnostic |
+| `sensor.localshift_optimizer_plan_grid` | `localshift_optimizer_plan_grid` | `sensor` | — |
+| `sensor.localshift_optimizer_summary` | `localshift_optimizer_summary` | `sensor` | — |
+| `sensor.localshift_price_cheap_charge_stop` | `localshift_price_cheap_charge_stop` | `sensor` | — |
+| `sensor.localshift_price_cheap_effective` | `localshift_price_cheap_effective` | `sensor` | — |
+| `sensor.localshift_price_delta` | `localshift_price_delta` | `sensor` | — |
+| `sensor.localshift_solar_forecast_accuracy` | `localshift_solar_forecast_accuracy` | `sensor` | diagnostic |
+| `sensor.localshift_solar_weighted_avg_fit` | `localshift_solar_weighted_avg_fit` | `sensor` | — |
+| `sensor.localshift_solcast_confidence_today` | `localshift_solcast_confidence_today` | `sensor` | diagnostic |
+| `sensor.localshift_solcast_confidence_tomorrow` | `localshift_solcast_confidence_tomorrow` | `sensor` | diagnostic |
+| `sensor.localshift_target_soc_minimum` | `localshift_target_soc_minimum` | `sensor` | — |
+| `switch.localshift_allow_dw_entry_under_target` | `localshift_allow_dw_entry_under_target` | `switch` | config |
+| `switch.localshift_automation_enabled` | `localshift_automation_enabled` | `switch` | — |
+| `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
+| `switch.localshift_dry_run` | `localshift_dry_run` | `switch` | config |
+| `switch.localshift_notifications_enabled` | `localshift_notifications_enabled` | `switch` | config |
+| `switch.localshift_spike_discharge_conservative` | `localshift_spike_discharge_conservative` | `switch` | config |
+| `switch.localshift_spike_discharge_enabled` | `localshift_spike_discharge_enabled` | `switch` | config |
+| `switch.localshift_stale_solar_conservative` | `localshift_stale_solar_conservative` | `switch` | config |
 
 ---
 

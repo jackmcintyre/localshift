@@ -4,6 +4,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
+from homeassistant.helpers.entity import EntityCategory
 
 from ..coordinator.synthetic_slot_health import SyntheticSlotHealth
 from .base import LocalShiftSensorBase
@@ -66,6 +67,7 @@ class IntegrationStatusSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_integration_status"
     _attr_name = "Integration Status"
     _attr_icon = "mdi:check-circle"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _unrecorded_attributes = frozenset({"synthetic_slot_health"})
 
     def _update_from_coordinator(self) -> None:
@@ -100,6 +102,7 @@ class EntityHealthSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_entity_health"
     _attr_name = "Entity Health"
     _attr_icon = "mdi:heart-pulse"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _unrecorded_attributes = frozenset({
         "entities",
         "dependencies",
@@ -167,6 +170,7 @@ class ForecastAccuracySensor(LocalShiftSensorBase):
     _attr_icon = "mdi:target"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         accuracy = self.coordinator.data.forecast_accuracy_soc_1h
@@ -201,6 +205,7 @@ class ForecastStatusSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_forecast_status"
     _attr_name = "Forecast Status"
     _attr_icon = "mdi:weather-sunny"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = self.coordinator.data.forecast_status
@@ -232,6 +237,7 @@ class AutomationReadySensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_automation_ready"
     _attr_name = "Automation Ready"
     _attr_icon = "mdi:check-decagram"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         if self.coordinator.data.automation_ready:
@@ -267,6 +273,7 @@ class DecisionLagSensor(LocalShiftSensorBase):
     _attr_icon = "mdi:timer-outline"
     _attr_native_unit_of_measurement = "s"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         d = self.coordinator.data
@@ -357,6 +364,7 @@ class LearningDecisionHistorySensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_learning_decision_history"
     _attr_name = "Learning Decision History"
     _attr_icon = "mdi:history"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _update_from_coordinator(self) -> None:
         self._attr_native_value = len(self.coordinator.data.recent_decision_log)
