@@ -61,6 +61,56 @@ class TestIntegrationStatusSensor:
         assert sensor.icon == "mdi:close-circle"
 
 
+class TestIntegrationStatusSensorSyntheticSlotHealth:
+    """Issue #956: the sensor exposes the rolling synthetic-slot-0 rate."""
+
+    def test_real_tracker_exposes_rate_and_degraded(self):
+        from custom_components.localshift.coordinator.synthetic_slot_health import (
+            SyntheticSlotHealth,
+        )
+
+        health = SyntheticSlotHealth()
+        health.record(True, datetime(2026, 9, 6, 12, 0, 0))
+        health.degraded = True
+
+        sensor = _sensor(
+            IntegrationStatusSensor,
+            integration_status="degraded",
+            integration_status_message="degraded",
+            entity_errors=[],
+            entity_warnings=["slot 0 priced synthetically"],
+            required_entities_healthy=True,
+            last_entity_check="2026-09-06T12:00:00",
+            synthetic_slot_health=health,
+        )
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["synthetic_slot_rate"] == 1.0
+        assert attrs["synthetic_slot_degraded"] is True
+        assert attrs["synthetic_slot_health"] == health.to_dict()
+
+    def test_missing_tracker_falls_back_to_safe_defaults(self):
+        """A coordinator built from a bare MagicMock (no synthetic_slot_health
+        explicitly set) must not leak a Mock object into the attribute dict."""
+        sensor = _sensor(
+            IntegrationStatusSensor,
+            integration_status="ok",
+            integration_status_message="All good",
+            entity_errors=[],
+            entity_warnings=[],
+            required_entities_healthy=True,
+            last_entity_check="2026-03-12T12:00:00",
+        )
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["synthetic_slot_rate"] == 0.0
+        assert attrs["synthetic_slot_degraded"] is False
+        assert isinstance(attrs["synthetic_slot_health"], dict)
+
+    def test_synthetic_slot_health_is_unrecorded(self):
+        assert "synthetic_slot_health" in IntegrationStatusSensor._unrecorded_attributes
+
+
 class TestEntityHealthSensor:
     def test_update_from_coordinator(self):
         sensor = _sensor(

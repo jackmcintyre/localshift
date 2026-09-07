@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..const import BatteryMode
+from .synthetic_slot_health import SyntheticSlotHealth
 
 if TYPE_CHECKING:
     from ..forecast.solcast_analysis import SolcastAnalysis
@@ -417,6 +418,9 @@ class CoordinatorData:
     orphaned_localshift_entities: dict[str, Any] = field(
         default_factory=dict
     )  # Owned registry entries absent from LOCALSHIFT_ENTITY_CONFIG (Issue #880)
+    synthetic_slot_health: SyntheticSlotHealth = field(
+        default_factory=SyntheticSlotHealth
+    )  # Rolling synthetic slot-0 rate + degrade state (Issue #956)
 
     # --- Decision telemetry (see learning/telemetry.py) ---
     performance_metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
