@@ -544,6 +544,10 @@ class TestSolcastStep:
 def make_options_flow(mock_hass, mock_config_entry):
     """Create an options flow wired to a mock hass and config entry."""
     flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+    # #1018: OptionsFlow.config_entry raises unless `handler` is set —
+    # OptionsFlowManager sets it when it starts the flow. Set it here too so
+    # each test stands alone rather than relying on state an earlier test left.
+    flow.handler = mock_config_entry.entry_id
 
     mock_config_entries = MagicMock()
     mock_config_entries.async_get_known_entry = MagicMock(
@@ -571,6 +575,7 @@ class TestOptionsFlow:
     async def test_options_flow_creates_entry(self, mock_hass, mock_config_entry):
         """Test options flow creates entry with user input."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         # Mock hass.config_entries to return our mock config entry
         mock_config_entries = MagicMock()
@@ -629,6 +634,7 @@ class TestOptionsFlow:
     ):
         """Test options flow starts with pricing source selection step."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -660,6 +666,7 @@ class TestOptionsFlow:
     ):
         """Test pricing source selection updates config and proceeds to entity mappings."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -699,6 +706,7 @@ class TestOptionsFlow:
         which made the step impossible to submit.
         """
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -744,6 +752,7 @@ class TestOptionsFlow:
     ):
         """Issue #955: the rendered Entity Mappings step validates under amber."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -829,7 +838,9 @@ class TestValidateEntityMappings:
             "pricing_general_price": "sensor.gone"
         })
 
-        assert result == {"pricing_general_price": "Entity 'sensor.gone' does not exist"}
+        assert result == {
+            "pricing_general_price": "Entity 'sensor.gone' does not exist"
+        }
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("state", ["unavailable", "unknown"])
@@ -846,9 +857,7 @@ class TestValidateEntityMappings:
             "pricing_general_price": "sensor.price"
         })
 
-        assert result == {
-            "pricing_general_price": f"Entity 'sensor.price' is {state}"
-        }
+        assert result == {"pricing_general_price": f"Entity 'sensor.price' is {state}"}
 
     @pytest.mark.asyncio
     async def test_non_entity_fields_are_skipped(self, mock_hass, mock_config_entry):
@@ -1115,6 +1124,7 @@ class TestOptionsFlowValidation:
     ):
         """Test options flow with empty notify service."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -1139,6 +1149,7 @@ class TestOptionsFlowValidation:
     async def test_options_flow_negative_timeout(self, mock_hass, mock_config_entry):
         """Test options flow with negative manual override timeout."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -1162,6 +1173,7 @@ class TestOptionsFlowValidation:
     async def test_options_flow_very_large_timeout(self, mock_hass, mock_config_entry):
         """Test options flow with very large timeout value."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -1187,6 +1199,7 @@ class TestOptionsFlowValidation:
     ):
         """Test options flow when demand window start is after end."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -1298,6 +1311,7 @@ class TestOptionsFlowMigration:
         }
 
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
@@ -1339,6 +1353,7 @@ class TestOptionsFlowMigration:
         }
 
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
+        flow.handler = mock_config_entry.entry_id
 
         mock_config_entries = MagicMock()
         mock_config_entries.async_get_known_entry = MagicMock(
