@@ -550,6 +550,13 @@ class LocalShiftOptionsFlow(OptionsFlow):
             CONF_PRICING_DATA_SOURCE,
             DEFAULT_PRICING_DATA_SOURCE,
         )
+        # Issue #955: keep the forecast mapping keys in the values handed to
+        # build_pricing_schema so the user's stored entities survive as form
+        # defaults. Only the three price/spike entities are stripped, because
+        # build_pricing_schema re-derives those from the pricing source prefix.
+        # Stripping the forecast keys left them Required with a default of ''
+        # under a non-Express source, which the entity selector rejects and the
+        # Entity Mappings step could then never be submitted.
         pricing_values = {
             k: v
             for k, v in values.items()
@@ -558,8 +565,6 @@ class LocalShiftOptionsFlow(OptionsFlow):
                 CONF_PRICING_GENERAL_PRICE,
                 CONF_PRICING_FEED_IN_PRICE,
                 CONF_PRICING_PRICE_SPIKE,
-                CONF_PRICING_GENERAL_FORECAST,
-                CONF_PRICING_FEED_IN_FORECAST,
             )
         }
         pricing_schema = build_pricing_schema(
