@@ -169,6 +169,8 @@ class LocalShiftNumber(NumberEntity):
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         self.async_write_ha_state()
 
-        # Trigger immediate re-evaluation with new threshold values
-        # This fixes the issue where threshold changes only took effect on next periodic tick (up to 1 min delay)
-        await self.coordinator.async_recompute_and_evaluate()
+        # Persisting the option above fires the entry update listener
+        # (_async_options_updated in __init__.py), which is the single
+        # recompute trigger for entity writes (issue #975) — do not also
+        # call async_recompute_and_evaluate() here, or the decision
+        # fingerprint gets invalidated twice per write.

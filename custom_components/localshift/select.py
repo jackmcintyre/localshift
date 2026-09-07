@@ -249,7 +249,9 @@ class OptimizationModeSelect(SelectEntity):
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         self.async_write_ha_state()
-        await self.coordinator.async_recompute_and_evaluate()
+        # Persisting the option above fires the entry update listener
+        # (_async_options_updated in __init__.py), which is the single
+        # recompute trigger for entity writes (issue #975).
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to coordinator updates."""
