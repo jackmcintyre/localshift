@@ -88,6 +88,7 @@ from .forecast import (
     ForecastPipeline,
     HistoryFetcher,
     LoadForecaster,
+    LoadProfiles,
     sum_solar_before_target,
 )
 from .learning.correlation import WeatherCorrelation
@@ -617,6 +618,27 @@ class ComputationEngine:
 
         # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
         self._load_forecaster.set_adaptive_params(data.adaptive_params)
+
+        # Issue #679: wire the per-day-of-week load profiles into the
+        # forecaster on the live path. Sourced fresh every cycle from
+        # HistoryFetcher (populated by the async fetch in
+        # async_get_historical_hourly_averages()); harmless before the first
+        # fetch completes, since all fields default to {} and
+        # LoadForecaster.estimate_hourly_consumption_kw() falls back to the
+        # caller-supplied combined average whenever nothing qualifies.
+        daily_avg, daily_counts = self._history_fetcher.get_daily_profiles()
+        weekday_avg, weekday_counts = self._history_fetcher.get_weekday_profile()
+        weekend_avg, weekend_counts = self._history_fetcher.get_weekend_profile()
+        self._load_forecaster.set_daily_profiles(
+            LoadProfiles(
+                daily_avg=daily_avg,
+                daily_counts=daily_counts,
+                weekday_avg=weekday_avg,
+                weekday_counts=weekday_counts,
+                weekend_avg=weekend_avg,
+                weekend_counts=weekend_counts,
+            )
+        )
 
         # ---- Step 2: Mode detection from Teslemetry state ----
         self._detect_hardware_modes(data)

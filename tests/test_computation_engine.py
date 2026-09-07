@@ -644,6 +644,29 @@ class TestComputationEngineDelegations:
         result = computation_engine._get_profile_for_day(datetime(2026, 2, 12))
         assert result == ({1: 0.2}, {1: 3}, "weekday")
 
+    def test_compute_derived_values_wires_daily_profiles_into_forecaster(
+        self, computation_engine, coordinator_data
+    ):
+        """Issue #679: compute_derived_values must inject the per-day-of-week
+        profiles fetched by HistoryFetcher into the live LoadForecaster --
+        the forecast pipeline never reaches the day-aware profile otherwise
+        (it only ever consumed the combined profile before this wiring)."""
+        computation_engine._history_fetcher._daily_hourly_avg_kw = {0: {10: 2.0}}
+        computation_engine._history_fetcher._daily_sample_counts = {0: {10: 4}}
+        computation_engine._history_fetcher._weekday_hourly_avg_kw = {10: 1.2}
+        computation_engine._history_fetcher._weekday_sample_counts = {10: 8}
+        computation_engine._history_fetcher._weekend_hourly_avg_kw = {10: 3.0}
+        computation_engine._history_fetcher._weekend_sample_counts = {10: 8}
+
+        computation_engine.compute_derived_values(coordinator_data)
+
+        profiles = computation_engine._load_forecaster._daily_profiles
+        assert profiles is not None
+        assert profiles.daily_avg == {0: {10: 2.0}}
+        assert profiles.daily_counts == {0: {10: 4}}
+        assert profiles.weekday_avg == {10: 1.2}
+        assert profiles.weekend_avg == {10: 3.0}
+
     def test_helper_wrappers(self, computation_engine):
         """Utility wrappers should return delegated values."""
         with patch(
