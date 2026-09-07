@@ -223,7 +223,14 @@ The project follows these conventions:
 - **Python**: 3.13+ with type hints
 - **Type hints**: All functions have type annotations
 - **Docstrings**: Google-style docstrings for public methods
-- **Logging**: Use `_LOGGER.info/debug/warning/error`
+- **Logging**: Use `_LOGGER.info/debug/warning/error`. INFO is for a state
+  change or something actionable (a pre-charge decision, a backstop firing,
+  a mode transition); DEBUG is for per-cycle or intermediate state that
+  fires every optimizer tick regardless of whether anything changed.
+  Issue-tagged `ISSUE_<n>` diagnostics added while chasing a bug must never
+  ship at INFO/WARNING — `tests/test_logging_patterns.py` statically blocks
+  this, and demoting a message means updating any test that asserts on it
+  at the old level (issue #976).
 - **Constants**: All magic numbers in `const.py`
 - **Async**: Use `async/await` throughout, no blocking calls
 

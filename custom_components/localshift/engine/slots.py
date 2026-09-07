@@ -356,7 +356,7 @@ class SlotBuilder:
             counts["defaulted_solar"] = 1
 
         consumption_kwh = self._get_consumption_kwh(
-            data.load_forecast_slots, slot_start, base_slot, interval_minutes, i
+            data.load_forecast_slots, slot_start, base_slot, interval_minutes
         )
         if consumption_kwh < 0.001:
             counts["defaulted_consumption"] = 1
@@ -440,7 +440,6 @@ class SlotBuilder:
         slot_start: datetime,
         base_slot: datetime,
         interval_minutes: int,
-        slot_index: int,
     ) -> float:
         """Get consumption kWh for a slot from load_forecast_slots."""
         if not load_forecast_slots:
@@ -469,19 +468,6 @@ class SlotBuilder:
             if overlap <= 0.0:
                 continue
             consumption_kwh += load_forecast_slots[idx] * overlap / 60.0
-
-        if interval_minutes == 30 and 11 <= slot_start.hour <= 14:
-            _LOGGER.info(
-                "ISSUE_500 slot_builder: slot=%d time=%s interval=%d bins=%d-%d "
-                "slots_len=%d kwh=%.3f",
-                slot_index,
-                slot_start.strftime("%H:%M"),
-                interval_minutes,
-                start_bin,
-                end_bin,
-                len(load_forecast_slots),
-                consumption_kwh,
-            )
 
         return consumption_kwh
 

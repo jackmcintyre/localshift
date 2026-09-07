@@ -181,7 +181,7 @@ class ExcessSolarSignalsEngine:
             and data.can_add_load_now
         )
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Excess solar: available=%s, can_add_load=%s, signal=%s, safe_kw=%.1f, next_2h=%.1fkWh",
             data.excess_solar_available,
             data.can_add_load_now,

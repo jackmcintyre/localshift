@@ -822,7 +822,7 @@ class StateMachine:
 
         """
         async with self._evaluate_lock:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "State machine evaluate: desired=%s, commanded=%s, hardware_op=%s",
                 data.active_mode.value if hasattr(data, "active_mode") else "unknown",
                 self._commanded_mode.value,

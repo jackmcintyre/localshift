@@ -327,7 +327,7 @@ class TestGetConsumptionKwh:
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
-        result = builder._get_consumption_kwh([], now, now, 30, 0)
+        result = builder._get_consumption_kwh([], now, now, 30)
         assert result == 0.0
 
     def test_computes_from_kw(self, builder):
@@ -338,7 +338,7 @@ class TestGetConsumptionKwh:
         base_slot = now.replace(minute=0, second=0, microsecond=0)
         load_slots = [1.0] * 96
 
-        result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30, 0)
+        result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30)
         assert result == 0.5
 
     def test_aggregates_two_bins_for_30_min_slot(self, builder):
@@ -349,7 +349,7 @@ class TestGetConsumptionKwh:
         base_slot = now.replace(minute=0, second=0, microsecond=0)
         load_slots = [1.0, 2.0] + [0.0] * 94
 
-        result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30, 0)
+        result = builder._get_consumption_kwh(load_slots, base_slot, base_slot, 30)
         assert result == 0.75
 
     def test_aggregates_shifted_30_min_window(self, builder):
@@ -361,7 +361,7 @@ class TestGetConsumptionKwh:
         slot_start = base_slot + timedelta(minutes=30)
         load_slots = [1.0, 2.0, 3.0, 4.0] + [0.0] * 92
 
-        result = builder._get_consumption_kwh(load_slots, slot_start, base_slot, 30, 1)
+        result = builder._get_consumption_kwh(load_slots, slot_start, base_slot, 30)
         assert result == 1.75
 
     def test_out_of_range_index_returns_zero(self, builder):
@@ -372,7 +372,7 @@ class TestGetConsumptionKwh:
         base_slot = now - timedelta(hours=48)
         load_slots = [1.0] * 96
 
-        result = builder._get_consumption_kwh(load_slots, now, base_slot, 30, 0)
+        result = builder._get_consumption_kwh(load_slots, now, base_slot, 30)
         assert result >= 0.0
 
 
