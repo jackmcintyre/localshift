@@ -138,8 +138,9 @@ class LocalShiftSwitch(SwitchEntity):
         if self._key == SWITCH_AUTOMATION_ENABLED:
             _LOGGER.info("LocalShift automation enabled")
 
-        # Re-evaluate derived values and trigger state machine
-        await self.coordinator.async_recompute_and_evaluate()
+        # Persisting the option above fires the entry update listener
+        # (_async_options_updated in __init__.py), which is the single
+        # recompute trigger for entity writes (issue #975).
 
     async def async_turn_off(self, **_kwargs) -> None:
         """Turn the switch off."""
@@ -163,5 +164,6 @@ class LocalShiftSwitch(SwitchEntity):
                     self.coordinator.data
                 )
 
-        # Re-evaluate derived values and trigger state machine
-        await self.coordinator.async_recompute_and_evaluate()
+        # Persisting the option above fires the entry update listener
+        # (_async_options_updated in __init__.py), which is the single
+        # recompute trigger for entity writes (issue #975).

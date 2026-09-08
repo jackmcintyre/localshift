@@ -50,7 +50,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) 
 async def _async_options_updated(
     hass: HomeAssistant, entry: LocalShiftConfigEntry
 ) -> None:
-    """Handle options update — trigger a re-evaluation with new thresholds."""
+    """Handle options update — trigger a re-evaluation with new thresholds.
+
+    This is the SOLE recompute trigger for entity writes (number/switch/select
+    platform writes and options-flow saves) — issue #975. HA's config-entry
+    update mechanism fires this listener once per persisted change, so
+    platform code must not also call coordinator.async_recompute_and_evaluate()
+    after persisting an option, or the decision fingerprint gets invalidated
+    twice per write. Do not re-add a platform-side call here.
+    """
     coordinator: LocalShiftCoordinator = entry.runtime_data
     # Reschedule daily summary timer in case demand_window_end changed
     coordinator.reschedule_daily_summary_timer()
