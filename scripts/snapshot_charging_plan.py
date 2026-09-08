@@ -33,8 +33,6 @@ Sections Included:
     - Cost Tracking
     - Weather Correlation
     - System Info
-    - Thermal Management
-    - Learning System
     - Binary Sensors Summary
     - Switches Summary
 
@@ -135,11 +133,16 @@ class SnapshotGenerator:
     def __init__(self, ha_client: HomeAssistantClient):
         self.ha = ha_client
         self._cache: dict[str, dict] = {}
+        # Issue #977: entities that returned no state, so a stale/renamed
+        # reference is reported loudly instead of silently printing "unknown".
+        self._missing: set[str] = set()
 
     def get_entity(self, entity_id: str) -> dict | None:
         """Get entity with caching."""
         if entity_id not in self._cache:
             self._cache[entity_id] = self.ha.get_state(entity_id)
+            if self._cache[entity_id] is None:
+                self._missing.add(entity_id)
         return self._cache[entity_id]
 
     def state(self, entity_id: str, default: str = "unknown") -> str:
@@ -166,8 +169,6 @@ class SnapshotGenerator:
             self._cost_tracking(),
             self._weather_correlation(),
             self._system_info(),
-            self._thermal_management(),
-            self._learning_system(),
             self._binary_sensors(),
             self._switches(),
             self._footer(),
@@ -360,13 +361,17 @@ class SnapshotGenerator:
         boost_needed = self.attr(
             "sensor.localshift_forecast_battery", "boost_needed", False
         )
-        daily_entries = self.state("sensor.localshift_forecast_daily")
-        slot_count = self.attr("sensor.localshift_forecast_daily", "slot_count", 0)
+        # Issue #977: the old forecast-daily sensor was renamed to
+        # sensor.localshift_optimizer_plan in #447, and its attributes changed
+        # shape at the same time (forecast_slots/slot_count -> slots/total_slots;
+        # solcast entry counts moved to sensor.localshift_forecast_status).
+        optimizer_decisions = self.state("sensor.localshift_optimizer_plan")
+        slot_count = self.attr("sensor.localshift_optimizer_plan", "total_slots", 0)
         solcast_today = self.attr(
-            "sensor.localshift_forecast_daily", "solcast_today_entries", 0
+            "sensor.localshift_forecast_status", "solcast_today_entries", 0
         )
         solcast_tomorrow = self.attr(
-            "sensor.localshift_forecast_daily", "solcast_tomorrow_entries", 0
+            "sensor.localshift_forecast_status", "solcast_tomorrow_entries", 0
         )
 
         return f"""
@@ -381,7 +386,7 @@ class SnapshotGenerator:
 | **Hours to DW** | {hours_to_dw}h |
 | **Can Reach Target** | {can_reach} |
 | **Boost Needed** | {boost_needed} |
-| **Daily Forecast Entries** | {daily_entries} |
+| **Optimizer Plan Entries** | {optimizer_decisions} |
 | **Slot Count** | {slot_count} |
 | **Solcast Today Entries** | {solcast_today} |
 | **Solcast Tomorrow Entries** | {solcast_tomorrow} |"""
@@ -431,73 +436,71 @@ class SnapshotGenerator:
 | **Consumption Fallback Hours** | {fallback_hours} |"""
 
     def _forecast_table(self) -> str:
-        """Generate detailed forecast table with slot-by-slot breakdown."""
-        # Get forecast slots from forecast_daily
-        forecast_slots = self.attr(
-            "sensor.localshift_forecast_daily", "forecast_slots", []
-        )
-        grid_interaction = self.attr(
-            "sensor.localshift_forecast_grid", "grid_interaction", []
-        )
+        """Generate detailed forecast table with slot-by-slot breakdown.
+
+        Issue #977: the old forecast-daily / forecast-grid sensors were
+        renamed to sensor.localshift_optimizer_plan / _optimizer_plan_grid in
+        #447, and the DP optimizer's per-slot data is shaped differently from
+        the retired legacy planner's — it carries slot_idx/action/reason_code
+        rather than predicted SOC/solar/load/grid-flow per slot, so this table
+        reports what the live sensors actually expose instead of columns that
+        would silently read as zero.
+        """
+        plan_slots = self.attr("sensor.localshift_optimizer_plan", "slots", [])
         buy_prices = self.attr("sensor.localshift_forecast_prices", "buy_prices", [])
         sell_prices = self.attr("sensor.localshift_forecast_prices", "sell_prices", [])
 
         # Summary stats
-        grid_slots = self.attr(
-            "sensor.localshift_forecast_grid", "grid_charge_slots", 0
-        )
-        export_slots = self.attr(
-            "sensor.localshift_forecast_grid", "proactive_export_slots", 0
+        action_breakdown = self.attr(
+            "sensor.localshift_optimizer_plan_grid", "action_breakdown", {}
         )
         total_import = self.attr(
-            "sensor.localshift_forecast_grid", "total_grid_import_kwh", 0
+            "sensor.localshift_optimizer_plan_grid", "projected_import_kwh", 0
         )
         total_export = self.attr(
-            "sensor.localshift_forecast_grid", "total_grid_export_kwh", 0
+            "sensor.localshift_optimizer_plan_grid", "projected_export_kwh", 0
+        )
+        action_summary = (
+            ", ".join(
+                f"{action}: {count}" for action, count in action_breakdown.items()
+            )
+            if action_breakdown
+            else "none"
         )
 
         # Build header
         lines = [
             "## FORECAST TABLE",
             "",
-            f"**Grid Charge Slots:** {grid_slots} | **Proactive Export Slots:** {export_slots}",
-            f"**Total Import:** {total_import} kWh | **Total Export:** {total_export} kWh",
+            f"**Action Breakdown:** {action_summary}",
+            f"**Projected Import:** {total_import} kWh | **Projected Export:** {total_export} kWh",
             "",
-            "| Time | SOC% | Solar | Load | Net | Buy$ | Sell$ | GridIn | GridOut | GC | Boost | PE |",
-            "|:----:|-----:|------:|-----:|----:|-----:|------:|-------:|--------:|:--:|:-----:|:--:|",
+            "| Slot | Time | Buy$ | Sell$ | Action | Reason |",
+            "|:----:|:----:|-----:|------:|:-------|:-------|",
         ]
 
         # Build rows - limit to first 48 slots (12 hours) to keep output manageable
         max_slots = 48
-        for i, slot in enumerate((forecast_slots or [])[:max_slots]):
-            grid = (
-                (grid_interaction or [])[i] if i < len(grid_interaction or []) else {}
-            )
+        for i, slot in enumerate((plan_slots or [])[:max_slots]):
             buy = (buy_prices or [])[i] if i < len(buy_prices or []) else {}
             sell = (sell_prices or [])[i] if i < len(sell_prices or []) else {}
 
-            time_str = slot.get("time", "-")
-            soc = slot.get("predicted_soc", 0)
-            solar = slot.get("solar_kwh", 0)
-            load = slot.get("consumption_kwh", 0)
-            net = slot.get("net_kwh", 0)
+            slot_idx = slot.get("slot_idx", i)
+            time_str = buy.get("time", "-") if isinstance(buy, dict) else "-"
             buy_price = buy.get("price", 0) if isinstance(buy, dict) else 0
             sell_price = sell.get("price", 0) if isinstance(sell, dict) else 0
-            grid_in = grid.get("grid_import_kwh", 0) if isinstance(grid, dict) else 0
-            grid_out = grid.get("grid_export_kwh", 0) if isinstance(grid, dict) else 0
-            gc = "Y" if grid.get("grid_charge") else "-"
-            boost = "Y" if grid.get("grid_charge_boost") else "-"
-            pe = "Y" if grid.get("proactive_export") else "-"
+            action = slot.get("action", "-")
+            reason = slot.get("reason_code", "-")
 
             lines.append(
-                f"| {time_str} | {soc:.1f} | {solar:.3f} | {load:.3f} | {net:.3f} | "
-                f"${buy_price:.3f} | ${sell_price:.3f} | {grid_in:.4f} | {grid_out:.4f} | "
-                f"{gc} | {boost} | {pe} |"
+                f"| {slot_idx} | {time_str} | "
+                f"${(buy_price or 0):.3f} | ${(sell_price or 0):.3f} | "
+                f"{action} | {reason} |"
             )
 
-        if len(forecast_slots or []) > max_slots:
+        if len(plan_slots or []) > max_slots:
             lines.append(
-                f"| ... | ({len(forecast_slots) - max_slots} more slots) | | | | | | | | | | |"
+                f"| ... | ({len(plan_slots) - max_slots} more slots) | | | | |"
             )
 
         return "\n".join(lines)
@@ -629,66 +632,6 @@ class SnapshotGenerator:
 | **Backup Reserve** | {backup}% |
 | **Allow Export** | {allow_export} |"""
 
-    def _thermal_management(self) -> str:
-        enabled = self.state("binary_sensor.localshift_thermal_management_enabled")
-        mode = self.state("sensor.localshift_daily_thermal_mode")
-        locked = self.attr("sensor.localshift_daily_thermal_mode", "mode_locked", False)
-        determined = self.attr(
-            "sensor.localshift_daily_thermal_mode", "determined_at", ""
-        )
-        preconditioning = self.state("binary_sensor.localshift_preconditioning_active")
-        solar_taper = self.state("binary_sensor.localshift_solar_taper_active")
-        cooling_trigger = self.state("number.localshift_cooling_trigger_temp")
-        heating_trigger = self.state("number.localshift_heating_trigger_temp")
-
-        return f"""
-## THERMAL MANAGEMENT
-
-| Attribute | Value |
-|-----------|-------|
-| **Thermal Management Enabled** | {enabled} |
-| **Daily Thermal Mode** | {mode} |
-| **Mode Locked** | {locked} |
-| **Mode Determined At** | {determined or "N/A"} |
-| **Preconditioning Active** | {preconditioning} |
-| **Solar Taper Active** | {solar_taper} |
-| **Cooling Trigger Temp** | {cooling_trigger}°C |
-| **Heating Trigger Temp** | {heating_trigger}°C |"""
-
-    def _learning_system(self) -> str:
-        status = self.state("sensor.localshift_learning_status")
-        quality = self.state("sensor.localshift_decision_quality")
-        decisions = self.attr(
-            "sensor.localshift_learning_status", "total_decisions_today", 0
-        )
-        avg_today = self.attr(
-            "sensor.localshift_learning_status", "avg_decision_score_today", 0
-        )
-        avg_7d = self.attr(
-            "sensor.localshift_learning_status", "avg_decision_score_7d", 0
-        )
-        trend = self.attr("sensor.localshift_learning_status", "cost_trend", "stable")
-        grid_eff = self.attr(
-            "sensor.localshift_decision_quality", "grid_charge_efficiency", 0
-        )
-        export_loss = self.attr(
-            "sensor.localshift_decision_quality", "export_loss_ratio", 0
-        )
-
-        return f"""
-## LEARNING SYSTEM
-
-| Attribute | Value |
-|-----------|-------|
-| **Learning Status** | {status} |
-| **Decision Quality** | {quality}% |
-| **Decisions Today** | {decisions} |
-| **Avg Score Today** | {avg_today} |
-| **Avg Score 7d** | {avg_7d} |
-| **Cost Trend** | {trend} |
-| **Grid Charge Efficiency** | {grid_eff}% |
-| **Export Loss Ratio** | {export_loss}% |"""
-
     def _binary_sensors(self) -> str:
         sensors = [
             ("Price Spike Coming", "binary_sensor.localshift_price_spike_coming"),
@@ -710,15 +653,6 @@ class SnapshotGenerator:
                 "binary_sensor.localshift_excess_solar_available",
             ),
             ("Tesla Override Active", "binary_sensor.localshift_tesla_override_active"),
-            (
-                "Preconditioning Active",
-                "binary_sensor.localshift_preconditioning_active",
-            ),
-            ("Solar Taper Active", "binary_sensor.localshift_solar_taper_active"),
-            (
-                "Thermal Management Enabled",
-                "binary_sensor.localshift_thermal_management_enabled",
-            ),
         ]
 
         lines = [
@@ -748,7 +682,6 @@ class SnapshotGenerator:
                 "switch.localshift_allow_dw_entry_under_target",
             ),
             ("Notifications Enabled", "switch.localshift_notifications_enabled"),
-            ("Enable Learning", "switch.localshift_enable_learning"),
         ]
 
         lines = ["## SWITCHES SUMMARY", "", "| Switch | State |", "|--------|-------|"]
@@ -810,6 +743,18 @@ def main():
 
     print(f"Snapshot saved to: {output_path}", file=sys.stderr)
     print(markdown)
+
+    # Issue #977: a missing entity usually means a stale or renamed reference
+    # in this script, not a transient HA hiccup — fail loudly rather than
+    # let the snapshot silently read "unknown" everywhere.
+    if generator._missing:
+        missing_list = ", ".join(sorted(generator._missing))
+        print(
+            f"Warning: {len(generator._missing)} entity id(s) returned no state: "
+            f"{missing_list}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,13 @@ def test_coordinator_data_has_independent_synthetic_slot_health():
     assert second.synthetic_slot_health.evaluations_since_start == 0
 
 
+def test_coordinator_data_solar_kwh_today_defaults_to_zero():
+    """Issue #971: solar_kwh_today feeds the daily summary and starts at 0."""
+    data = CoordinatorData()
+
+    assert data.solar_kwh_today == 0.0
+
+
 def test_coordinator_data_forecast_types():
     """Test CoordinatorData forecast fields accept ForecastSlot."""
     from datetime import datetime, timezone

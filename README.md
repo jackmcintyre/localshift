@@ -251,7 +251,7 @@ Devices & Services. Full canonical reference:
 | Entity ID | Description |
 |---|---|
 | `button.localshift_update_forecast` | Force a forecast update and clear the historical-load cache |
-| `button.localshift_reset_learning` | Discard the recorded decisions and the weather-correlation history |
+| `button.localshift_reset_decision_telemetry` | Discard the recorded decisions and the weather-correlation history |
 
 ## Dashboard
 

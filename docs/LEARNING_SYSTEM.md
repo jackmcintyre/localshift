@@ -24,7 +24,7 @@ which shifts the price threshold below which grid charging is allowed.
 
 ## Why it was retired
 
-**It never produced a measurable gain.** `sensor.localshift_decision_quality`
+**It never produced a measurable gain.** The decision-quality metric
 across 75 days: mean 55.38, standard deviation 3.00, and a drift between the
 first and last 25 days of **+0.32 points**. Nothing.
 

@@ -86,6 +86,13 @@ class CostTracker:
         if export_kw >= _POWER_DEADBAND_KW:
             data.grid_export_kwh_today += export_kw / 60
 
+        # Total solar generation this minute (Issue #971 — feeds the daily
+        # summary, replacing the retired sensor.solar_production_energy_daily
+        # YAML utility meter). Same deadband as the grid accumulators above.
+        solar_kw = max(data.solar_power_kw, 0.0)
+        if solar_kw >= _POWER_DEADBAND_KW:
+            data.solar_kwh_today += solar_kw / 60
+
         # Grid energy flowing into the battery: only when both importing from the
         # grid AND charging the battery. The grid-to-battery rate cannot exceed
         # either flow, so take the min of the two.
@@ -136,6 +143,7 @@ class CostTracker:
         """Reset the Issue #868 daily energy accumulators."""
         data.grid_import_kwh_today = 0.0
         data.grid_export_kwh_today = 0.0
+        data.solar_kwh_today = 0.0
         data.grid_to_battery_kwh_today = 0.0
         data.soc_gain_during_grid_charge_kwh_today = 0.0
         data.export_while_battery_not_full_kwh_today = 0.0

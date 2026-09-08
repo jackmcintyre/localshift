@@ -280,8 +280,10 @@ class NotificationService:
     async def send_daily_summary(self, data: CoordinatorData) -> None:
         """Send end-of-day summary notification with energy and cost stats.
 
-        Replaces YAML A15 (localshift_daily_summary). Reads daily energy
-        from utility meter entities (still in YAML) and cost accumulators.
+        Replaces YAML A15 (localshift_daily_summary). Reads daily energy from
+        the integration's own daily accumulators (Issue #868/#971) and cost
+        accumulators — the legacy utility meter entities this used to read
+        were removed with the YAML stack (Issue #880).
 
         Args:
             data: Current coordinator data
@@ -294,10 +296,10 @@ class NotificationService:
         dry_run_prefix = self._get_dry_run_prefix()
         net = data.grid_import_cost - data.grid_export_revenue
 
-        # Read daily energy from utility meter sensors (remain in YAML)
-        import_kwh = self._read_float("sensor.grid_import_energy_daily", 0.0)
-        export_kwh = self._read_float("sensor.grid_export_energy_daily", 0.0)
-        solar_kwh = self._read_float("sensor.solar_production_energy_daily", 0.0)
+        # Read daily energy from the integration's own accumulators (Issue #971).
+        import_kwh = data.grid_import_kwh_today
+        export_kwh = data.grid_export_kwh_today
+        solar_kwh = data.solar_kwh_today
 
         soc = round(data.soc)
 
@@ -629,13 +631,3 @@ class NotificationService:
 
     def _reason_manual(self, _data: CoordinatorData) -> str:
         return "Automation disabled or manual override"
-
-    def _read_float(self, entity_id: str, default: float = 0.0) -> float:
-        """Read a float value from an entity's state."""
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return default
-        try:
-            return float(state.state)
-        except (ValueError, TypeError):
-            return default

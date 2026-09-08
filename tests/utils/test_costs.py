@@ -359,3 +359,38 @@ class TestAccumulateEnergyKwh:
         cost_tracker.reset_daily_accumulators(data)
 
         assert cost_tracker._last_soc_pct is None
+
+    def test_accumulate_energy_kwh_tracks_solar(self, cost_tracker):
+        """Issue #971: solar production accumulates into solar_kwh_today.
+
+        The daily summary used to read a retired YAML utility meter; it now
+        reports this accumulator, so it has to actually be fed.
+        """
+        data = self._make_data(solar_power_kw=6.0)
+        cost_tracker.accumulate_costs(data)
+        cost_tracker.accumulate_costs(data)
+
+        assert data.solar_kwh_today == pytest.approx(6.0 / 60 * 2)
+
+    def test_solar_deadband_ignores_trickle(self, cost_tracker):
+        """Solar under the 0.1 kW deadband is treated as idle, like grid flows."""
+        data = self._make_data(solar_power_kw=0.05)
+        cost_tracker.accumulate_costs(data)
+
+        assert data.solar_kwh_today == 0.0
+
+    def test_solar_accumulator_ignores_negative(self, cost_tracker):
+        """Negative solar power (an inverter reading artefact) adds nothing."""
+        data = self._make_data(solar_power_kw=-0.5)
+        cost_tracker.accumulate_costs(data)
+
+        assert data.solar_kwh_today == 0.0
+
+    def test_reset_daily_accumulators_clears_solar(self, cost_tracker):
+        """Issue #971: the solar accumulator resets at midnight with the rest."""
+        data = self._make_data()
+        data.solar_kwh_today = 12.3
+
+        cost_tracker.reset_daily_accumulators(data)
+
+        assert data.solar_kwh_today == 0.0
