@@ -1523,7 +1523,7 @@ planner: "DP_OPTIMIZER"
 
 ### Binary Sensor Notes
 
-`binary_sensor.localshift_solar_can_reach_target` now reads from `optimizer_result.can_solar_reach_target` — powered by DP optimizer terminal shortfall analysis.
+`binary_sensor.localshift_solar_can_reach_target` now reads from `optimizer_summary.can_solar_reach_target` — powered by DP optimizer terminal shortfall analysis.
 
 ### Dashboard Migration
 

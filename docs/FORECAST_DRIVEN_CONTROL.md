@@ -540,7 +540,7 @@ The DP optimizer (Issue #403) runs alongside the legacy planner. This section cl
 
 ```
 Coordinator Cycle:
-1. DP Optimizer (DPPlanner) → produces optimizer_result with decisions
+1. DP Optimizer (DPPlanner) → produces optimizer_summary (+ optimizer_decisions)
 2. Safety Gate → validates optimizer can control
 3. Apply Plan → maps optimizer actions to battery modes
 4. [fallback] SELF_CONSUMPTION → used if optimizer fails any check

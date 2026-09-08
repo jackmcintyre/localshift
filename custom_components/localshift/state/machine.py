@@ -492,8 +492,13 @@ class StateMachine:
         return getattr(self, builder_name)(data) if builder_name else None
 
     def _build_self_consumption_config(self, data: CoordinatorData) -> ModeConfig:
-        """Build SELF_CONSUMPTION / DEMAND_BLOCK config."""
-        backup_reserve = data.preserve_soc if data.preserve_soc is not None else 10.0
+        """Build SELF_CONSUMPTION / DEMAND_BLOCK config.
+
+        #981: ``data.preserve_soc`` (#350/#522) is never written on any live
+        path — both callers below always pass ``preserve_soc=config.backup_reserve``,
+        which is never None — so this collapsed to the constant.
+        """
+        backup_reserve = 10.0
         return ModeConfig(
             operation_mode="self_consumption",
             backup_reserve=backup_reserve,

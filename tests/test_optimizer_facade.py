@@ -187,7 +187,7 @@ def test_run_inline_trips_soc_underprepared_guardrail(caplog):
             _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
         )
 
-    assert data.optimizer_soc_underprepared is True
+    assert data.optimizer_summary["optimizer_soc_underprepared"] is True
     assert "SOC UNDERPREPARED" in caplog.text
 
 
@@ -200,7 +200,7 @@ def test_run_inline_no_underprepared_when_charged():
         _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
     )
 
-    assert data.optimizer_soc_underprepared is False
+    assert data.optimizer_summary["optimizer_soc_underprepared"] is False
 
 
 def test_apply_bias_correction_to_slots_uses_tracker_combined_correction():
@@ -532,7 +532,6 @@ def test_assign_active_mode_sets_mode_and_apply_status():
     }
     assert data.active_mode == BatteryMode.GRID_CHARGING
     assert data.optimizer_last_apply_status == "ready_to_apply"
-    assert data.optimizer_safety_block_reason == ""
     assert data.decision_timestamp == decision_time
     assert data.decision_mode == BatteryMode.GRID_CHARGING
     # Mode-decision debug fields (PR C): a real slot match attributed to the
@@ -643,7 +642,6 @@ def test_assign_active_mode_frozen_safety_block_pins_mode():
     assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
     # Block status is observability and still recorded.
     assert data.optimizer_last_apply_status == "blocked"
-    assert data.optimizer_safety_block_reason == "stale forecast"
 
 
 def test_assign_active_mode_frozen_valueerror_pins_mode():
@@ -764,8 +762,7 @@ def test_run_shadow_comparison_disabled_returns_early():
         MagicMock(all_solcast=[]),
     )
 
-    assert data.primary_decision == ""
-    assert data.shadow_decision == ""
+    assert data.comparison_match is True
 
 
 def test_run_shadow_comparison_resets_when_shadow_price_unavailable():
@@ -773,8 +770,6 @@ def test_run_shadow_comparison_resets_when_shadow_price_unavailable():
     data = CoordinatorData()
     data.general_price_shadow = 0.0
     data.comparison_match = False
-    data.primary_decision = "old"
-    data.shadow_decision = "other"
     data.price_delta = 99.0
 
     facade._run_shadow_comparison(
@@ -785,8 +780,6 @@ def test_run_shadow_comparison_resets_when_shadow_price_unavailable():
     )
 
     assert data.comparison_match is True
-    assert data.primary_decision == ""
-    assert data.shadow_decision == ""
     assert data.price_delta == 0.0
 
 
@@ -838,8 +831,6 @@ def test_run_shadow_comparison_threads_solcast_analysis_and_logs_mismatch():
     inputs = facade._planner.plan.call_args.args[0]
     assert inputs.solcast_analysis_today is data.solcast_analysis_today
     assert inputs.solcast_analysis_tomorrow is data.solcast_analysis_tomorrow
-    assert data.primary_decision == BatteryMode.SELF_CONSUMPTION.value
-    assert data.shadow_decision == BatteryMode.GRID_CHARGING.value
     assert data.comparison_match is False
     assert data.price_delta == pytest.approx(0.10)
     assert len(data.decision_log) == 1
@@ -1024,7 +1015,7 @@ def test_underprepared_warning_carries_the_captured_entry_soc(caplog):
             _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
         )
 
-    assert data.optimizer_soc_underprepared is True
+    assert data.optimizer_summary["optimizer_soc_underprepared"] is True
     assert "SOC UNDERPREPARED" in caplog.text
     assert "entered at 64.0%@15:00" in caplog.text
 

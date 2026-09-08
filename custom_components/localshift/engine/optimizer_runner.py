@@ -252,24 +252,6 @@ def _normalize_initial_soc(
 # ---------------------------------------------------------------------------
 
 
-def _serialize_result(result: OptimizerResult) -> dict[str, Any]:
-    """Serialize OptimizerResult metadata (without decisions) to dict."""
-    return {
-        "success": result.success,
-        "planner_version": result.planner_version,
-        "solve_time_seconds": round(result.solve_time_seconds, 4),
-        "total_slots": result.total_slots,
-        "states_explored": result.states_explored,
-        "projected_import_kwh": round(result.projected_import_kwh, 3),
-        "projected_export_kwh": round(result.projected_export_kwh, 3),
-        "projected_net_cost": round(result.projected_net_cost, 4),
-        "terminal_shortfall_pct": round(result.terminal_shortfall_pct, 2),
-        "error_message": result.error_message,
-        "reason_code_histogram": result.reason_code_histogram,
-        "can_solar_reach_target": result.can_solar_reach_target,  # Phase 8 (#450): enables contradiction regression test
-    }
-
-
 def _serialize_decision(decision: Any) -> dict[str, Any]:
     """Serialize a single PlannedSlotDecision to dict."""
     return {
@@ -316,6 +298,7 @@ def _build_summary(
         "computed_at": cycle_timestamp_iso,
         "solve_time_seconds": round(result.solve_time_seconds, 4),
         "total_slots": result.total_slots,
+        "states_explored": result.states_explored,
         "projected_net_cost": round(result.projected_net_cost, 4),
         "projected_import_kwh": round(result.projected_import_kwh, 3),
         "projected_export_kwh": round(result.projected_export_kwh, 3),
@@ -323,6 +306,8 @@ def _build_summary(
         "reason_code_histogram": result.reason_code_histogram,
         "error_message": result.error_message,
         "config_options": config_options or {},
+        # Phase 8 (#450): enables the #401 contradiction regression test.
+        "can_solar_reach_target": result.can_solar_reach_target,
     }
 
     if initial_soc_info:

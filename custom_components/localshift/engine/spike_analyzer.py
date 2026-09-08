@@ -54,11 +54,7 @@ class SpikeAnalyzer:
         # Hardcoded defaults (Issue #214)
         spike_percentile = DEFAULT_SPIKE_PRICE_PERCENTILE
 
-        data.spike_end_time = None
-        data.spike_max_price = 0.0
-        data.spike_price_threshold = 0.0
         data.spike_reserve_soc = 0.0
-        data.spike_hours_remaining = 0.0
         data.spike_in_conservative_mode = False
 
         if not conservative_enabled:
@@ -75,10 +71,8 @@ class SpikeAnalyzer:
         if spike_end is None or not spike_prices:
             return
 
-        data.spike_end_time = spike_end
-        data.spike_max_price = max_price
-        data.spike_hours_remaining = (spike_end - now_dt).total_seconds() / 3600
-        data.spike_price_threshold = self._calculate_spike_price_threshold(
+        hours_remaining = (spike_end - now_dt).total_seconds() / 3600
+        threshold = self._calculate_spike_price_threshold(
             spike_prices, spike_percentile
         )
         data.spike_reserve_soc = self.calculate_spike_reserve_soc(
@@ -88,10 +82,10 @@ class SpikeAnalyzer:
 
         _LOGGER.info(
             "Spike analysis: max_price=%.2f, threshold=%.2f, reserve=%.1f%%, hours_remaining=%.1f",
-            data.spike_max_price,
-            data.spike_price_threshold,
+            max_price,
+            threshold,
             data.spike_reserve_soc,
-            data.spike_hours_remaining,
+            hours_remaining,
         )
 
     def calculate_spike_reserve_soc(

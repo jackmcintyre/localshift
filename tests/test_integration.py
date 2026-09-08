@@ -37,7 +37,6 @@ def integration_data():
     data.manual_override = False
     data.decision_log = []
     data.daily_forecast = []
-    data.daily_forecast_soc_15min = []
     data.target_reached_today = False
     # Issue #319: Mark forecast as ready for integration tests
     data.forecast_ready = True

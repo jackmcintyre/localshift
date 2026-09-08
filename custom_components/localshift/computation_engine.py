@@ -652,14 +652,6 @@ class ComputationEngine:
             target_pct=ctx.target_pct,
         )
 
-        # Set allow_dw_entry_under_target flag on data for forecast_computer.
-        # This allows grid charging decision to simulate to DW END instead of DW START
-        # when solar can reach target within the DW period.
-        allow_dw_under_target = self._get_switch_state(
-            SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
-        )
-        data.allow_dw_entry_under_target = allow_dw_under_target and ctx.before_dw
-
         # ---- Stamp staleness confidence ceilings on Solcast analysis objects ----
         self._stamp_confidence_ceilings(data)
 

@@ -87,7 +87,6 @@ class TestPhysicalResponseWatch:
         data = CoordinatorData()
         assert data.command_completion_timestamp is None
         assert data.physical_response_watch is None
-        assert data.physical_response_timestamp is None
         assert data.physical_response_lag_seconds is None
         assert data.physical_response_timed_out is False
         assert data.decision_timestamp is None
@@ -433,7 +432,6 @@ class TestCoordinatorPhysicalWatch:
             mock_now.return_value = now
             coordinator._on_battery_power_change(make_event(-0.35))
         assert coordinator.data.physical_response_lag_seconds == 8.0
-        assert coordinator.data.physical_response_timestamp == now
         assert coordinator.data.physical_response_watch is None
         assert coordinator.data.physical_response_timed_out is False
         assert coordinator.data.decision_lag_history[-1]["physical_lag"] == 8.0

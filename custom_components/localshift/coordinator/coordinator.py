@@ -620,81 +620,6 @@ class LocalShiftCoordinator:
         if self._tick_scheduler is not None:
             self._tick_scheduler.handle_medium_tick(now)
 
-        # Issue #778 Phase 2: hybrid accuracy is coordinator-owned and is
-        # computed from the solar metrics the scheduler just refreshed. Kept
-        # here rather than pushed into TickScheduler so the scheduler does not
-        # reach back into a private coordinator method; mirrors the way
-        # _handle_fast_tick calls _check_physical_response_watch after
-        # delegating. Unlike the old inline body this also runs during the
-        # startup grace period, which is harmless: the computation is
-        # null-safe and the next post-grace tick recomputes it.
-        if self.data is not None:
-            self._update_hybrid_accuracy()
-
-    def _update_hybrid_accuracy(self) -> None:
-        """Compute hybrid accuracy combining LocalShift tracker with Solcast MAPE.
-
-        Issue #778 Phase 2: Combines LocalShift's internal accuracy tracking
-        with Solcast's reported MAPE for more robust accuracy estimation.
-
-        Strategy:
-        - If Solcast MAPE unavailable: use LocalShift accuracy (100% default)
-        - If LocalShift has insufficient samples (<10): weight Solcast more
-        - Otherwise: weighted average favoring the more confident source
-        """
-        localshift_accuracy = self.data.solar_forecast_accuracy
-        solcast_mape = self.data.solcast_mape
-
-        # If no Solcast data, use LocalShift only
-        if solcast_mape is None:
-            self.data.hybrid_solar_accuracy = localshift_accuracy
-            return
-
-        # Convert MAPE to accuracy
-        solcast_accuracy = max(0, 100 - solcast_mape)
-
-        # No LocalShift accuracy yet (insufficient samples, #881): defer wholly
-        # to Solcast rather than blending against a fabricated 100%.
-        if localshift_accuracy is None:
-            self.data.hybrid_solar_accuracy = round(solcast_accuracy, 1)
-            return
-
-        # Check LocalShift sample count for confidence weighting
-        localshift_samples = 0
-        if hasattr(self, "solar_accuracy_tracker") and self.solar_accuracy_tracker:
-            localshift_samples = self.solar_accuracy_tracker.metrics.sample_count
-
-        # Weighted combination based on sample confidence
-        if localshift_samples < 10:
-            # Low confidence in LocalShift - favor Solcast
-            weight_solcast = 0.7
-        elif localshift_samples < 30:
-            # Medium confidence - equal weight
-            weight_solcast = 0.5
-        else:
-            # High confidence - check divergence
-            divergence = abs(localshift_accuracy - solcast_accuracy)
-            if divergence > 15:
-                weight_solcast = 0.6
-            elif divergence > 10:
-                weight_solcast = 0.5
-            else:
-                weight_solcast = 0.4
-
-        # Compute weighted hybrid accuracy
-        hybrid = (
-            1 - weight_solcast
-        ) * localshift_accuracy + weight_solcast * solcast_accuracy
-        self.data.hybrid_solar_accuracy = round(hybrid, 1)
-
-        _LOGGER.debug(
-            "Hybrid accuracy: %.1f%% (LS: %.1f%%, Solcast MAPE: %.1f%%, weight: %.0f%%)",
-            hybrid,
-            localshift_accuracy,
-            solcast_mape,
-            weight_solcast * 100,
-        )
-
     @callback
     def _handle_slow_tick(self, now: datetime) -> None:
         """Handle SLOW tier periodic tasks (30 minutes)."""
@@ -873,7 +798,6 @@ class LocalShiftCoordinator:
             )
         else:
             lag_seconds = (now - watch.decision_timestamp).total_seconds()
-            self.data.physical_response_timestamp = now
             self.data.physical_response_lag_seconds = lag_seconds
             self.data.physical_response_timed_out = False
             _LOGGER.info(

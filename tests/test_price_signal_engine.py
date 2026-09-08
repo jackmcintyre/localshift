@@ -39,7 +39,6 @@ class TestPriceSignalEngineSpikeAnalysis:
         price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
         assert coordinator_data.spike_in_conservative_mode is False
-        assert coordinator_data.spike_end_time is None
 
     def test_analyze_spike_no_spike_in_forecast(
         self, price_signal_engine, coordinator_data
@@ -77,8 +76,7 @@ class TestPriceSignalEngineSpikeAnalysis:
         now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
         price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
-        assert coordinator_data.spike_end_time is None
-        assert coordinator_data.spike_max_price == 0.0
+        assert coordinator_data.spike_in_conservative_mode is False
 
     def test_analyze_spike_with_spike_prices(
         self, price_signal_engine, coordinator_data
@@ -126,8 +124,6 @@ class TestPriceSignalEngineSpikeAnalysis:
         price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
         assert coordinator_data.spike_in_conservative_mode is True
-        assert coordinator_data.spike_max_price > 1.0
-        assert coordinator_data.spike_price_threshold > 0
 
     def test_analyze_spike_calculates_reserve_soc(
         self, price_signal_engine, coordinator_data
@@ -164,4 +160,3 @@ class TestPriceSignalEngineSpikeAnalysis:
         price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
         assert coordinator_data.spike_reserve_soc >= 0
-        assert coordinator_data.spike_hours_remaining >= 0

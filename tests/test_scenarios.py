@@ -118,7 +118,6 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
     # Initialize empty containers
     data.decision_log = []
     data.daily_forecast = []
-    data.daily_forecast_soc_15min = []
     data.forecast_consumption_source_counts = {}
     data.forecast_history = []
     data.target_reached_today = input_data.get("target_reached_today", False)
@@ -250,7 +249,7 @@ def assert_expected_values(data: CoordinatorData, expected: dict, scenario_name:
     """Assert that CoordinatorData matches expected values.
 
     Supports standard attribute checks plus the following special keys:
-    - ``optimizer_result_success``: checks ``data.optimizer_result["success"]``
+    - ``optimizer_result_success``: checks ``data.optimizer_summary["success"]``
 
     Args:
         data: Computed CoordinatorData
@@ -260,14 +259,14 @@ def assert_expected_values(data: CoordinatorData, expected: dict, scenario_name:
     for key, expected_value in expected.items():
         # --- Special key: optimizer_result_success ---
         if key == "optimizer_result_success":
-            result = data.optimizer_result
-            if result is None:
+            result = data.optimizer_summary
+            if not result:
                 pytest.fail(
-                    f"[{scenario_name}] optimizer_result is None — optimizer did not run"
+                    f"[{scenario_name}] optimizer_summary is empty — optimizer did not run"
                 )
             actual = result.get("success")
             assert actual == expected_value, (
-                f"[{scenario_name}] optimizer_result['success']: "
+                f"[{scenario_name}] optimizer_summary['success']: "
                 f"expected {expected_value}, got {actual}"
             )
             continue
@@ -525,8 +524,8 @@ def test_sunny_day_terminal_shortfall_zero():
     solar-sufficient premise.
     """
     data = run_scenario("sunny-day")
-    assert data.optimizer_result is not None, "optimizer did not run"
-    shortfall = data.optimizer_result.get("terminal_shortfall_pct", -1)
+    assert data.optimizer_summary, "optimizer did not run"
+    shortfall = data.optimizer_summary.get("terminal_shortfall_pct", -1)
     assert shortfall == pytest.approx(0.0, abs=0.1), (
         f"Sunny day should have zero terminal shortfall, got {shortfall:.2f}%"
     )
@@ -813,22 +812,23 @@ def test_high_target_soc_charges_in_cheap_slots():
 
 
 def test_solar_can_reach_target_matches_optimizer_result_sunny():
-    """Regression #401: data.solar_can_reach_target == optimizer_result['can_solar_reach_target'] (sunny).
+    """Regression #401: data.solar_can_reach_target == optimizer_summary['can_solar_reach_target'] (sunny).
 
     After Phase 4, data.solar_can_reach_target is set exclusively from the DP
-    result in _write_optimizer_fields(). The serialized optimizer_result dict
-    must carry the same value. Any divergence indicates a second code path that
-    has overwritten data.solar_can_reach_target after the DP write — reproducing
-    the split-brain bug from #401.
+    result in _write_optimizer_fields(). The optimizer_summary dict (#981:
+    formerly the standalone optimizer_result field) must carry the same value.
+    Any divergence indicates a second code path that has overwritten
+    data.solar_can_reach_target after the DP write — reproducing the
+    split-brain bug from #401.
     """
     data = run_scenario("sunny-day")
-    assert data.optimizer_result is not None, "optimizer did not run"
+    assert data.optimizer_summary, "optimizer did not run"
     assert (
-        data.solar_can_reach_target == data.optimizer_result["can_solar_reach_target"]
+        data.solar_can_reach_target == data.optimizer_summary["can_solar_reach_target"]
     ), (
         f"Contradiction (#401): data.solar_can_reach_target={data.solar_can_reach_target} "
-        f"but optimizer_result['can_solar_reach_target']="
-        f"{data.optimizer_result['can_solar_reach_target']}"
+        f"but optimizer_summary['can_solar_reach_target']="
+        f"{data.optimizer_summary['can_solar_reach_target']}"
     )
 
 
@@ -839,13 +839,13 @@ def test_solar_can_reach_target_matches_optimizer_result_cloudy():
     where the expected value is False. Guards the False branch of the linkage.
     """
     data = run_scenario("cloudy-day")
-    assert data.optimizer_result is not None, "optimizer did not run"
+    assert data.optimizer_summary, "optimizer did not run"
     assert (
-        data.solar_can_reach_target == data.optimizer_result["can_solar_reach_target"]
+        data.solar_can_reach_target == data.optimizer_summary["can_solar_reach_target"]
     ), (
         f"Contradiction (#401): data.solar_can_reach_target={data.solar_can_reach_target} "
-        f"but optimizer_result['can_solar_reach_target']="
-        f"{data.optimizer_result['can_solar_reach_target']}"
+        f"but optimizer_summary['can_solar_reach_target']="
+        f"{data.optimizer_summary['can_solar_reach_target']}"
     )
 
 
@@ -859,8 +859,8 @@ def test_allow_dw_entry_under_target_avoids_pre_dw_charging():
     data = run_scenario("allow-dw-entry-under-target")
     decisions = data.optimizer_decisions
     assert decisions, "optimizer produced no decisions"
-    assert data.optimizer_result is not None, "optimizer did not run"
-    assert data.optimizer_result.get("success") is True
+    assert data.optimizer_summary, "optimizer did not run"
+    assert data.optimizer_summary.get("success") is True
 
     pre_dw_slots = decisions[:8]
     for slot in pre_dw_slots:
@@ -880,7 +880,7 @@ def test_cross_day_first_dw_only_ignores_second_window_pressure():
     data = run_scenario("cross-day-first-dw-only")
     decisions = data.optimizer_decisions
     assert decisions, "optimizer produced no decisions"
-    assert data.optimizer_result is not None, "optimizer did not run"
+    assert data.optimizer_summary, "optimizer did not run"
 
     overnight_slots = decisions[20:36]
     overnight_charges = [
@@ -892,7 +892,7 @@ def test_cross_day_first_dw_only_ignores_second_window_pressure():
         f"should not charge overnight for second-day DW, found {len(overnight_charges)} charge slots"
     )
 
-    assert data.optimizer_result["terminal_shortfall_pct"] == pytest.approx(
+    assert data.optimizer_summary["terminal_shortfall_pct"] == pytest.approx(
         0.0, abs=0.1
     )
 
@@ -931,8 +931,8 @@ def test_inverted_night_no_dw_no_hold_strict():
     assert len(hold_strict_slots) == 0, (
         f"HOLD_STRICT should not fire when drain+recharge is cheaper, got {len(hold_strict_slots)} slots"
     )
-    assert data.optimizer_result is not None
-    assert data.optimizer_result["success"] is True
+    assert data.optimizer_summary
+    assert data.optimizer_summary["success"] is True
 
 
 def test_default_min_hold_saving_produces_no_hold_strict():

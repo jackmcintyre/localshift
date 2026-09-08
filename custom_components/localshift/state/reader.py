@@ -852,8 +852,6 @@ class StateReader:
             data.feed_in_price_shadow = 0.0
             data.general_forecast_shadow = []
             data.feed_in_forecast_shadow = []
-            data.primary_decision = ""
-            data.shadow_decision = ""
             data.comparison_match = True
             data.price_delta = 0.0
 

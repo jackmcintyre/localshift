@@ -313,7 +313,6 @@ def coordinator_data():
     data.force_discharge_active = False
     data.decision_log = []
     data.daily_forecast = []
-    data.daily_forecast_soc_15min = []
     # Issue #349: Mark automation as ready for tests
     data.automation_ready = True
     return data
@@ -322,48 +321,32 @@ def coordinator_data():
 class TestModeConfig:
     """Test ModeConfig generation for each mode."""
 
-    def test_get_mode_config_self_consumption_with_preserve_soc(
+    def test_get_mode_config_self_consumption_constant_reserve(
         self, state_machine, coordinator_data
     ):
-        """SELF_CONSUMPTION uses preserve_soc when set."""
-        coordinator_data.preserve_soc = 25.0
-
+        """SELF_CONSUMPTION always uses the constant 10% reserve (#981: the
+        former data.preserve_soc override was never written on any live path)."""
         config = state_machine._get_mode_config(
             BatteryMode.SELF_CONSUMPTION, coordinator_data
         )
 
         assert config.operation_mode == "self_consumption"
-        assert config.backup_reserve == 25.0
+        assert config.backup_reserve == 10.0
         assert config.export_mode == TESLEMETRY_EXPORT_PV_ONLY
         assert config.grid_charging_allowed is False
-        assert config.self_consumption_reserve == 25.0
+        assert config.self_consumption_reserve == 10.0
         assert config.grid_charging_reserve is None
         assert config.proactive_export_reserve is None
 
-    def test_get_mode_config_self_consumption_without_preserve_soc(
-        self, state_machine, coordinator_data
-    ):
-        """SELF_CONSUMPTION defaults to 10 when preserve_soc missing."""
-        coordinator_data.preserve_soc = None
-
-        config = state_machine._get_mode_config(
-            BatteryMode.SELF_CONSUMPTION, coordinator_data
-        )
-
-        assert config.backup_reserve == 10.0
-        assert config.self_consumption_reserve == 10.0
-
     def test_get_mode_config_demand_block(self, state_machine, coordinator_data):
         """DEMAND_BLOCK mirrors self consumption settings."""
-        coordinator_data.preserve_soc = 20.0
-
         config = state_machine._get_mode_config(
             BatteryMode.DEMAND_BLOCK, coordinator_data
         )
 
         assert config.operation_mode == "self_consumption"
-        assert config.backup_reserve == 20.0
-        assert config.self_consumption_reserve == 20.0
+        assert config.backup_reserve == 10.0
+        assert config.self_consumption_reserve == 10.0
 
     def test_get_mode_config_grid_charging_clamps_reserve(
         self, state_machine, coordinator_data

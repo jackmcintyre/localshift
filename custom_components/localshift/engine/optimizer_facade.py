@@ -22,7 +22,6 @@ from .optimizer_runner import (
     _find_current_slot_index,
     _normalize_initial_soc,
     _serialize_decision,
-    _serialize_result,
 )
 from .slots import SlotBuilder
 
@@ -363,7 +362,6 @@ class OptimizerFacade:
                 only need the result-derived fields are unaffected.
 
         """
-        data.optimizer_result = _serialize_result(result)
         data.optimizer_decisions = [_serialize_decision(d) for d in result.decisions]
         data.optimizer_summary = _build_summary(
             result=result,
@@ -494,12 +492,16 @@ class OptimizerFacade:
         dw_entry: float | None,
         target_soc: float | None,
     ) -> None:
-        """Loudly flag the silent-failure mode and set a coordinator flag.
+        """Loudly flag the silent-failure mode and surface it on the summary.
 
         Trips when a demand window is active but the real SOC is far below target
-        — i.e. pre-charge appears to have been missed. Sets
-        ``data.optimizer_soc_underprepared`` (a sensor / coordinator notification
-        can surface it) and emits a WARNING so the failure is never silent again.
+        — i.e. pre-charge appears to have been missed. Publishes
+        ``optimizer_soc_underprepared`` onto ``data.optimizer_summary`` (#981:
+        this used to be its own CoordinatorData field, but nothing ever read it
+        there — the diagnostics sensor dumps ``optimizer_summary`` directly, so
+        folding the flag into that dict is what finally surfaces the #889
+        guardrail as intended) and emits a WARNING so the failure is never
+        silent again.
 
         The message carries the *captured* DW-entry actual as well as the live SOC
         (2026-07-27): by the time this trips, the battery may have recovered some
@@ -509,7 +511,7 @@ class OptimizerFacade:
         in_dw = getattr(data, "demand_window_active", False)
         # Materially short = more than 20 points below target while the DW is live.
         underprepared = bool(in_dw and initial_soc < (threshold - 20.0))
-        data.optimizer_soc_underprepared = underprepared
+        data.optimizer_summary["optimizer_soc_underprepared"] = underprepared
         if underprepared:
             _LOGGER.warning(
                 "SOC UNDERPREPARED: demand window active but battery at %.1f%% "
@@ -577,7 +579,6 @@ class OptimizerFacade:
             )
 
             data.optimizer_last_apply_status = "blocked"
-            data.optimizer_safety_block_reason = gate_result.block_reason or ""
             self._commit_or_hold_mode(
                 data,
                 _BatteryMode.SELF_CONSUMPTION,
@@ -598,7 +599,6 @@ class OptimizerFacade:
         try:
             new_mode = _BatteryMode(battery_mode_str)
             data.optimizer_last_apply_status = "ready_to_apply"
-            data.optimizer_safety_block_reason = ""
 
             # A token granted purely by the plan-charge trigger is one-directional in
             # what committed it, so it must be one-directional in what it commits.
@@ -1246,8 +1246,6 @@ class OptimizerFacade:
         if data.general_price_shadow <= 0:
             # Shadow unavailable - reset to neutral
             data.comparison_match = True
-            data.primary_decision = ""
-            data.shadow_decision = ""
             data.price_delta = 0.0
             _LOGGER.debug("Shadow optimizer: shadow prices unavailable, skipping")
             return
@@ -1268,7 +1266,7 @@ class OptimizerFacade:
             # double-count every evaluation and skew the rate against
             # whichever comparison_mode happens to be enabled; the shadow
             # build's own success/failure is already surfaced separately via
-            # comparison_match / shadow_decision.
+            # comparison_match.
             shadow_slots, _ = slot_builder.build_slots(
                 data,
                 now_dt=now_dt,
@@ -1315,8 +1313,6 @@ class OptimizerFacade:
 
             # Compare decisions
             primary_mode = data.active_mode.value if data.active_mode else ""
-            data.primary_decision = primary_mode
-            data.shadow_decision = shadow_mode
             data.comparison_match = primary_mode == shadow_mode
 
             # Calculate price delta

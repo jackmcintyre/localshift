@@ -70,22 +70,6 @@ class PerformanceMetrics:
 
 
 @dataclass
-class ChargingDecision:
-    """Represents a charging decision for a specific time slot.
-
-    This is the shared decision structure used by both the forecast
-    simulation and the active mode logic to ensure consistency.
-    """
-
-    slot_start: datetime
-    should_grid_charge: bool = False
-    should_boost: bool = False
-    charge_amount_kwh: float = 0.0
-    price_per_kwh: float = 0.0
-    reason: str = ""
-
-
-@dataclass
 class PhysicalResponseWatch:
     """Active watch for a physical battery response after a mode command.
 
@@ -130,8 +114,6 @@ class CoordinatorData:
     feed_in_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
 
     # Decision comparison results
-    primary_decision: str = ""
-    shadow_decision: str = ""
     comparison_match: bool = True
     price_delta: float = 0.0  # Difference between sources
 
@@ -160,25 +142,15 @@ class CoordinatorData:
     force_discharge_active: bool = False
     force_charge_active: bool = False
     boost_charge_active: bool = False
-    proactive_export_active: bool = False
     forecast_expensive_period_coming: bool = False
     solar_can_reach_target: bool = False
     solar_can_reach_target_in_dw: bool = False
     boost_charge_needed: bool = False
     demand_window_active: bool = False
-    # Loud guardrail for the silent pre-charge miss (2026-06-30): set True when a
-    # demand window is active but the real SOC is far below target, i.e. pre-charge
-    # appears to have been missed. A diagnostics sensor / coordinator notification
-    # can surface this so the failure is never silent again.
-    optimizer_soc_underprepared: bool = False
-
-    # Battery preservation (Issue #350)
-    preserve_soc: float | None = None  # SOC to preserve when charging needed
 
     # Extra attributes for binary sensors
     max_forecast_price: float = 0.0
     max_buy_forecast_price: float = 0.0  # Max buy price (general_forecast) for display
-    surplus_ratio: float = 0.0
 
     # Computed sensors
     effective_cheap_price: float = 0.0
@@ -194,9 +166,6 @@ class CoordinatorData:
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
-    # Legacy forecast fields — retained for compatibility, always empty after #441 migration.
-    daily_forecast_hourly: list[dict[str, Any]] = field(default_factory=list)
-    daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
     consumption_source: str = "unknown"
     consumption_profile_hours: int = 0
     consumption_hourly_sample_counts: dict[int, int] = field(default_factory=dict)
@@ -255,17 +224,8 @@ class CoordinatorData:
     # compute cycle that is immune to a missed midnight event (the latch's only other
     # live reset), preventing a stuck latch from silently disabling pre-charge.
     last_target_reset_date: date | None = None
-    allow_dw_entry_under_target: bool = (
-        False  # Allow DW entry when solar can reach target
-    )
     solar_absent_confidence: float = 1.0
     """Confidence to use when Solcast analysis is absent; 0.3 when stale_solar_conservative=True."""
-
-    # Shared charging decisions (computed once, used by both forecast and active_mode)
-    forecast_charging_decisions: list[ChargingDecision] = field(default_factory=list)
-    charging_needed_before_dw: float = 0.0  # Total kWh needed before DW
-    optimal_charge_start: datetime | None = None  # Earliest optimal charging slot
-    optimal_charge_end: datetime | None = None  # Latest optimal charging slot
 
     # Debug/diagnostic fields for dashboard troubleshooting
     forecast_ready: bool = (
@@ -283,22 +243,13 @@ class CoordinatorData:
     debug_mode_source: str = (
         "unknown"  # "manual_override" | "optimizer" | "fallback" | "unknown"
     )
-    debug_dry_run: bool = False  # Dry run mode active
-    debug_commanded_mode: str = ""  # State machine's commanded mode
-    debug_pending_transition: str = ""  # Pending mode transition (if any)
-    debug_debounce_wait_seconds: float = 0.0  # Seconds remaining in debounce
 
     # Spike analysis fields for conservative spike discharge
-    spike_end_time: datetime | None = None  # Estimated end of current spike
-    spike_max_price: float = 0.0  # Maximum price within spike window
-    spike_price_threshold: float = 0.0  # Price threshold for top X% percentile
     spike_reserve_soc: float = 0.0  # Calculated reserve SOC for spike survival
-    spike_hours_remaining: float = 0.0  # Hours until spike ends
     spike_in_conservative_mode: bool = False  # Whether conservative mode is active
 
     # Excess solar load shifting sensors (backlog-high-017)
     excess_solar_available: bool = False  # Simple ON/OFF for basic automations
-    excess_solar_current_kw: float = 0.0  # Current excess generation rate
     excess_solar_current_hour_kwh: float = 0.0  # Excess available in current hour
     excess_solar_next_2h_kwh: float = 0.0  # Excess available in next 2 hours
     excess_solar_next_4h_kwh: float = 0.0  # Excess available in next 4 hours
@@ -387,14 +338,7 @@ class CoordinatorData:
     solar_forecast_accuracy: float | None = (
         None  # Overall solar forecast accuracy %; None until enough samples (#881)
     )
-    hybrid_solar_accuracy: float | None = (
-        None  # Combined LocalShift + Solcast MAPE accuracy
-    )
 
-    # --- Hybrid timescale metadata (Issue #329) ---
-    hybrid_slot_metadata: dict[str, Any] = field(
-        default_factory=dict
-    )  # slot_intervals, transition_boundary, total_slots, horizon_hours
     forecast_horizon_hours: float = (
         0.0  # Actual time span covered by forecast (Issue #431)
     )
@@ -413,15 +357,6 @@ class CoordinatorData:
     # --- DP Optimizer outputs (#403 Phase 1, #447 Phase 5)
     # ---------------------------------------------------------------------------
     # The DP optimizer is now the primary planner (Phase 5).
-    # None when optimizer is disabled or not yet run this cycle.
-
-    optimizer_result: dict[str, Any] | None = None
-    """Serialized OptimizerResult from DPPlanner.plan() for this cycle.
-    Keys: success, planner_version, solve_time_seconds, total_slots,
-    states_explored, projected_import_kwh, projected_export_kwh,
-    projected_net_cost, terminal_shortfall_pct, error_message, reason_code_histogram.
-    Decisions are stored separately in optimizer_decisions.
-    """
 
     optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
     """Per-slot decisions from the optimizer.
@@ -435,7 +370,9 @@ class CoordinatorData:
     """Compact summary of optimizer run for diagnostics sensor.
     Keys: enabled, planner_version, success, solve_time_seconds,
     projected_net_cost, projected_import_kwh, projected_export_kwh,
-    total_slots, reason_code_histogram, error_message.
+    total_slots, states_explored, can_solar_reach_target,
+    reason_code_histogram, error_message, optimizer_soc_underprepared
+    (set later by _warn_soc_divergence, #981/#889).
     """
 
     # ---------------------------------------------------------------------------
@@ -445,12 +382,6 @@ class CoordinatorData:
 
     optimizer_last_apply_status: str = "none"
     """Last apply attempt status: "none", "success", "fallback", "blocked"."""
-
-    optimizer_safety_block_reason: str = ""
-    """Reason for safety gate block (empty if not blocked)."""
-
-    optimizer_active_applied_at: str | None = None
-    """ISO timestamp of last successful apply."""
 
     optimizer_apply_plan: dict[str, Any] | None = None
     """Apply plan derived from optimizer decisions.
@@ -496,9 +427,6 @@ class CoordinatorData:
 
     physical_response_watch: PhysicalResponseWatch | None = None
     """Issue #508 phase 2: active physical-response watch, if any."""
-
-    physical_response_timestamp: datetime | None = None
-    """Issue #508: when the battery physically responded."""
 
     physical_response_lag_seconds: float | None = None
     """Issue #508: physical lag, decision -> physical response (seconds)."""

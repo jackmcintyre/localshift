@@ -243,11 +243,12 @@ def run_arm(scenario: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
         engine.compute_derived_values(data)
         engine.compute_derived_values(data)
 
-    result = data.optimizer_result or {}
+    # #981: optimizer_result (the standalone serialized-result field) was
+    # deleted — optimizer_summary carries the same success/cost/shortfall keys.
     summary = getattr(data, "optimizer_summary", None) or {}
     decisions = getattr(data, "optimizer_decisions", None) or []
 
-    return _extract(result, summary, decisions, data)
+    return _extract(summary, decisions, data)
 
 
 class _Tally:
@@ -338,7 +339,6 @@ def _slot_row(dec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract(
-    result: dict[str, Any],
     summary: dict[str, Any],
     decisions: list[dict[str, Any]],
     data: Any,
@@ -348,11 +348,11 @@ def _extract(
         t.add(dec)
     prices = t.charge_prices
     return {
-        "success": bool(result.get("success")),
-        "projected_net_cost": result.get("projected_net_cost"),
-        "projected_import_kwh": result.get("projected_import_kwh"),
-        "projected_export_kwh": result.get("projected_export_kwh"),
-        "terminal_shortfall_pct": result.get("terminal_shortfall_pct"),
+        "success": bool(summary.get("success")),
+        "projected_net_cost": summary.get("projected_net_cost"),
+        "projected_import_kwh": summary.get("projected_import_kwh"),
+        "projected_export_kwh": summary.get("projected_export_kwh"),
+        "terminal_shortfall_pct": summary.get("terminal_shortfall_pct"),
         "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
         "initial_soc_pct": summary.get("initial_soc_pct"),
         "soc_at_15": t.soc_at_dw_start,

@@ -20,7 +20,6 @@ from custom_components.localshift.engine.optimizer_runner import (
     _find_current_slot_index,
     _normalize_initial_soc,
     _serialize_decision,
-    _serialize_result,
 )
 
 
@@ -176,8 +175,8 @@ class TestOptimizerRunnerHelpers:
         updated_default = _build_optimizer_config(MockData(), {})
         assert updated_default.switching_penalty_per_kwh == pytest.approx(0.40)
 
-    def test_serialize_result_and_decision(self):
-        """Serialize helpers should format core fields for sensors."""
+    def test_serialize_decision(self):
+        """Serialize helper should format core decision fields for sensors."""
         decision = PlannedSlotDecision(
             slot_index=0,
             timestamp_iso="2026-01-01T10:00:00Z",
@@ -193,26 +192,12 @@ class TestOptimizerRunnerHelpers:
             buy_price=0.12345,
             sell_price=0.05678,
         )
-        result = OptimizerResult(
-            success=True,
-            solve_time_seconds=1.23456,
-            total_slots=1,
-            states_explored=10,
-            projected_import_kwh=1.23456,
-            projected_export_kwh=0.0,
-            projected_net_cost=0.12345,
-            terminal_shortfall_pct=1.234,
-            decisions=[decision],
-        )
 
         serialized_decision = _serialize_decision(decision)
-        serialized_result = _serialize_result(result)
 
         assert serialized_decision["predicted_soc_pct"] == 55.12
         assert serialized_decision["grid_import_kwh"] == 1.2346
         assert serialized_decision["buy_price"] == 0.1235
-        assert serialized_result["solve_time_seconds"] == 1.2346
-        assert serialized_result["projected_net_cost"] == 0.1235
 
     def test_build_summary_includes_optional_fields(self):
         """Summary should include parity and SOC info when provided."""

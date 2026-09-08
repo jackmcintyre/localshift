@@ -102,13 +102,14 @@ def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, An
     ):
         engine.compute_derived_values(data)
 
-    # Costs come off data.optimizer_result. The SOC trajectory has to be read
-    # from data.optimizer_decisions rather than the summary: the summary's
+    # Costs come off data.optimizer_summary (#981: the standalone
+    # optimizer_result field was deleted; optimizer_summary carries the same
+    # success/cost/shortfall keys). The SOC trajectory has to be read from
+    # data.optimizer_decisions rather than the summary: the summary's
     # dw_entry_soc_pct is only computed when the plan has a demand window at
     # all (issue #973 fixed the prior "only when solar CANNOT reach target"
     # gate), so on a no-DW day it is legitimately absent — which is precisely
     # when we still need to know what the plan intends to do.
-    result = data.optimizer_result or {}
     summary = getattr(data, "optimizer_summary", None) or {}
     decisions = getattr(data, "optimizer_decisions", None) or []
 
@@ -130,7 +131,7 @@ def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, An
                 precharge_kwh += float(dec.get("grid_import_kwh") or 0.0)
 
     return {
-        "success": bool(result.get("success")),
+        "success": bool(summary.get("success")),
         # Plan-derived, present on every day.
         "dw_soc_planned": round(dw_soc, 2)
         if isinstance(dw_soc, (int, float))
@@ -141,10 +142,10 @@ def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, An
         "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
         "peak_soc_pct": summary.get("peak_soc_pct"),
         "initial_soc_pct": summary.get("initial_soc_pct"),
-        "projected_net_cost": result.get("projected_net_cost"),
-        "terminal_shortfall_pct": result.get("terminal_shortfall_pct"),
-        "projected_import_kwh": result.get("projected_import_kwh"),
-        "projected_export_kwh": result.get("projected_export_kwh"),
+        "projected_net_cost": summary.get("projected_net_cost"),
+        "terminal_shortfall_pct": summary.get("terminal_shortfall_pct"),
+        "projected_import_kwh": summary.get("projected_import_kwh"),
+        "projected_export_kwh": summary.get("projected_export_kwh"),
         "effective_cheap_price": getattr(data, "effective_cheap_price", None),
     }
 

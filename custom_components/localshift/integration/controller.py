@@ -168,7 +168,10 @@ class BatteryController:
         charging is needed to meet a demand window target.
 
         Issue #522: preserve_soc parameter allows state machine to override
-        data.preserve_soc for HOLD mode (preserve current SOC).
+        the backup reserve for HOLD mode (preserve current SOC).
+
+        #981: this parameter is now the only source of an override —
+        ``data.preserve_soc`` was never written on any live path.
 
         Args:
             data: Coordinator data
@@ -182,25 +185,19 @@ class BatteryController:
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
 
-        # Determine backup reserve: use parameter override, then data.preserve_soc, else default to 10%
-        reserve = (
-            preserve_soc
-            if preserve_soc is not None
-            else (data.preserve_soc if data.preserve_soc is not None else 10)
-        )
+        # Determine backup reserve: use parameter override, else default to 10%
+        reserve = preserve_soc if preserve_soc is not None else 10
 
         if dry_run:
             _LOGGER.info(
-                "DRY RUN: set_self_consumption (reserve=%s, preserve_soc=%s)",
+                "DRY RUN: set_self_consumption (reserve=%s)",
                 reserve,
-                data.preserve_soc,
             )
             return True
 
         _LOGGER.info(
-            "Setting battery to self consumption mode (reserve=%s, preserve_soc=%s)",
+            "Setting battery to self consumption mode (reserve=%s)",
             reserve,
-            data.preserve_soc,
         )
 
         def _log_validation_failure() -> None:
