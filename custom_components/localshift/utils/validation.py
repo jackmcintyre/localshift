@@ -61,7 +61,6 @@ class EntityHealth:
     config_key: str
     category: EntityCategory
     status: EntityStatus
-    last_check: datetime
     last_valid_value: Any = None
     last_valid_time: datetime | None = None
     error_message: str = ""
@@ -127,7 +126,6 @@ class EntityValidator:
                 config_key=config_key,
                 category=config["category"],
                 status=EntityStatus.OK,
-                last_check=dt_util.now(),
             )
 
     def check_entity(self, config_key: str) -> EntityHealth:
@@ -142,12 +140,10 @@ class EntityValidator:
                 config_key=config_key,
                 category=config.get("category", EntityCategory.OPTIONAL),
                 status=EntityStatus.OK,
-                last_check=dt_util.now(),
             )
             self._entity_health[config_key] = health
 
         health.entity_id = entity_id
-        health.last_check = dt_util.now()
 
         if not entity_id and health.category == EntityCategory.OPTIONAL:
             health.status = EntityStatus.OK
@@ -553,12 +549,10 @@ class EntityValidator:
                 config_key=entity_id,
                 category=config["category"],
                 status=EntityStatus.OK,
-                last_check=now,
             )
             self._localshift_entity_health[entity_id] = health
         else:
             health.entity_id = entity_id
-            health.last_check = now
 
         state = self.hass.states.get(entity_id)
         if state is None:

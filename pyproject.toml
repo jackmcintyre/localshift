@@ -37,9 +37,18 @@ select = [
 
 
 [tool.vulture]
-min_confidence = 80
+min_confidence = 60
 paths = ["custom_components/localshift"]
 exclude = ["tests/"]
+# These three prefixes are structural facts about dispatch mechanisms, not
+# case-by-case suppressions (Issue #986):
+#  - async_step_*            HA's config-flow manager dispatches by step_id
+#                             string (self.async_step_<step_id>) via getattr,
+#                             so vulture can never see the call site.
+#  - _build_*_config          keyed by name in state/mode_configs.py's
+#  - _execute_*_transition    MODE_CONFIG_BUILDERS / MODE_EXECUTORS dicts and
+#                             resolved with getattr in state/machine.py.
+ignore_names = ["async_step_*", "_build_*_config", "_execute_*_transition"]
 
 [tool.deptry]
 known_first_party = ["custom_components.localshift"]

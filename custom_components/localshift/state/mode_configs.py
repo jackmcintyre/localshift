@@ -37,10 +37,11 @@ def calculate_proactive_export_reserve(soc: float, minimum_target_soc: float) ->
     This is the ONE shared formula, called by both the state-machine builder
     (``_build_proactive_export_config``) and the actuator
     (``BatteryController.set_proactive_export``) so the planner's expectation
-    and the hardware write can never drift apart again. The old absolute
-    ``PROACTIVE_EXPORT_MIN_RESERVE_PERCENT`` (4) floor is redundant here: for
-    any SOC in (minimum_target_soc, minimum_target_soc + 5) it produced a
-    reserve below the configured floor the planner never models.
+    and the hardware write can never drift apart again. The old absolute 4%
+    floor this replaced (formerly ``PROACTIVE_EXPORT_MIN_RESERVE_PERCENT``,
+    removed as dead code) was redundant here: for any SOC in
+    (minimum_target_soc, minimum_target_soc + 5) it produced a reserve below
+    the configured floor the planner never models.
     """
     return max(minimum_target_soc, soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT)
 

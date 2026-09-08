@@ -128,7 +128,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.OK,
-            last_check=dt_util.now(),
         )
         assert health.is_healthy is True
 
@@ -139,7 +138,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.UNAVAILABLE,
-            last_check=dt_util.now(),
         )
         assert health.is_healthy is False
 
@@ -150,7 +148,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.OK,
-            last_check=dt_util.now(),
             is_broken=True,
         )
         assert health.is_healthy is False
@@ -162,7 +159,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.OK,
-            last_check=dt_util.now(),
         )
         assert health.is_available is True
 
@@ -173,7 +169,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.STALE,
-            last_check=dt_util.now(),
         )
         assert health.is_available is True
 
@@ -184,7 +179,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.UNAVAILABLE,
-            last_check=dt_util.now(),
         )
         assert health.is_available is False
 
@@ -195,7 +189,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.OK,
-            last_check=dt_util.now(),
             is_broken=True,
         )
         assert health.is_available is False
@@ -1377,7 +1370,6 @@ class TestIntegrationStatus:
             config_key="test",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.MISSING,
-            last_check=dt_util.now(),
         )
         is_error, is_warning = validator._categorize_health_severity(health)
         assert is_error is True
@@ -1437,7 +1429,6 @@ class TestEdgeCases:
             config_key="test",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.MISSING,
-            last_check=dt_util.now(),
         )
         msg = validator._format_health_error_message(health, "Battery SOC")
         assert "not found" in msg
