@@ -21,7 +21,11 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.coordinator.data import CoordinatorData
-from custom_components.localshift.state.machine import StateMachine
+from custom_components.localshift.sensors.status import _flatten_boundary_lag_history
+from custom_components.localshift.state.machine import (
+    _BOUNDARY_LAG_PER_SOURCE_CAP,
+    StateMachine,
+)
 
 SYDNEY = timezone(timedelta(hours=11))
 
@@ -667,6 +671,132 @@ class TestDebounceAndRetryTagging:
         assert _all_entries(data)[-1]["grant_source"] == "backstop"
 
 
+class TestRetryMarkerClearing:
+    """#966: the retry marker must be cleared on the three paths that leave the
+    decision flow, not only on the ones #941 covered.
+
+    A marker that survives a fresh decision-token grant, an automation
+    disable, or a manual button press relabels the NEXT transition at that
+    same mode as ``retry`` even when it landed on a genuinely new price grant
+    — polluting the Amber-latency baseline from the other direction (#941
+    fixed over-tagging of failures; this fixes under-clearing of the marker).
+    """
+
+    GRANT_KWARGS = {
+        "general_price": 0.20,
+        "feed_in_price": 0.05,
+        "price_spike": False,
+        "demand_window_active": False,
+        "soc": 50.0,
+    }
+
+    def _arm(self, state_machine, mode=BatteryMode.GRID_CHARGING):
+        state_machine._pending_retry_mode = mode
+
+    def test_marker_cleared_on_fresh_decision_token(self, state_machine, data):
+        """A fresh grant is a new decision by construction: whatever failed
+        before it is no longer pending."""
+        for key, value in self.GRANT_KWARGS.items():
+            setattr(data, key, value)
+        # Grant #1 establishes the baseline fingerprint/base.
+        state_machine._apply_decision_token(data)
+        assert state_machine._last_evaluated_fingerprint is not None
+
+        self._arm(state_machine)
+        # Grant #2: a genuinely different context (price moved).
+        data.general_price = 0.30
+        state_machine._apply_decision_token(data)
+        assert state_machine._last_grant_source == "price"
+        assert state_machine._pending_retry_mode is None
+
+    def test_marker_survives_a_non_granting_evaluation(self, state_machine, data):
+        """The negative twin — without it, clearing the marker unconditionally
+        in ``_apply_decision_token`` would strip a genuine retry of its tag on
+        the next quiet (frozen) tick, re-introducing the bug #941 fixed.
+
+        Two frozen shapes must both leave the marker armed: an unchanged
+        fingerprint, and a None context (price sensor unavailable).
+        """
+        for key, value in self.GRANT_KWARGS.items():
+            setattr(data, key, value)
+        state_machine._apply_decision_token(data)
+
+        self._arm(state_machine)
+        # Unchanged context -> no token granted -> marker must survive.
+        state_machine._apply_decision_token(data)
+        assert data.mode_decision_allowed is False
+        assert state_machine._pending_retry_mode is BatteryMode.GRID_CHARGING
+
+        # Prices unavailable -> None context -> still frozen, marker survives.
+        data.general_price = None
+        state_machine._apply_decision_token(data)
+        assert data.mode_decision_allowed is False
+        assert state_machine._pending_retry_mode is BatteryMode.GRID_CHARGING
+
+    def test_marker_cleared_when_automation_disabled(self, state_machine, data):
+        """``_handle_automation_disabled`` parks the machine in MANUAL and
+        returns early — the pending retry belongs to the automation run that
+        just ended, not to whatever the user does next."""
+        state_machine._get_switch_state = lambda key: key != "automation_enabled"
+        self._arm(state_machine)
+        assert state_machine._handle_automation_disabled() is True
+        assert state_machine._commanded_mode == BatteryMode.MANUAL
+        assert state_machine._pending_retry_mode is None
+
+    def test_marker_cleared_on_manual_button_press(self, state_machine, data):
+        """``set_commanded_mode`` is the manual button-press entry point; the
+        user has taken over, so the automation's pending retry is void."""
+        self._arm(state_machine)
+        state_machine.set_commanded_mode(BatteryMode.MANUAL)
+        assert state_machine._commanded_mode == BatteryMode.MANUAL
+        assert state_machine._pending_retry_mode is None
+
+    async def test_fresh_price_grant_after_failure_tagged_price_not_retry(
+        self, state_machine, data
+    ):
+        """End-to-end wiring of the user-visible defect (#966): a transition
+        attempt fails and arms the marker; a NEW price grant then re-decides
+        the same mode and the transition succeeds. The recorded sample must be
+        tagged ``price`` — the fresh grant — not ``retry``.
+        """
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        data.active_mode = BatteryMode.GRID_CHARGING
+
+        # Tick 1: the controller rejects the command -> _handle_failed_transition
+        # arms the marker. Nothing is recorded.
+        state_machine._battery_controller.set_force_charge = AsyncMock(
+            return_value=False
+        )
+        await state_machine._handle_desired_mode_transition(
+            data, BatteryMode.GRID_CHARGING, dt_aware(2026, 8, 27, 6, 0, 0)
+        )
+        assert state_machine._pending_retry_mode is BatteryMode.GRID_CHARGING
+        assert _all_entries(data) == []
+
+        # Tick 2: a genuinely fresh price grant re-decides the same mode.
+        for key, value in self.GRANT_KWARGS.items():
+            if key != "soc":
+                setattr(data, key, value)
+        data.soc = 50.0
+        state_machine._apply_decision_token(data)
+        data.general_price = 0.30
+        state_machine._apply_decision_token(data)
+        assert state_machine._last_grant_source == "price"
+        # The grant itself must clear the marker — that is the #966 fix.
+        assert state_machine._pending_retry_mode is None
+
+        # Tick 3: the retry now lands and must carry the fresh grant's tag.
+        state_machine._battery_controller.set_force_charge = AsyncMock(
+            return_value=True
+        )
+        await state_machine._handle_desired_mode_transition(
+            data, BatteryMode.GRID_CHARGING, dt_aware(2026, 8, 27, 6, 1, 0)
+        )
+
+        assert len(_all_entries(data)) == 1
+        assert _all_entries(data)[-1]["grant_source"] == "price"
+
+
 class TestBoundaryLagLogLevel:
     """#943: the ``Boundary lag:`` line is INFO for decision-granted transitions
     and DEBUG for backstop corrections.
@@ -723,6 +853,108 @@ class TestBoundaryLagLogLevel:
         assert _all_entries(data)[-1]["grant_source"] == "unknown"
 
 
+class TestBoundaryLagFlatten:
+    """#989: the cross-bucket chronological merge in
+    ``sensors/status.py::_flatten_boundary_lag_history`` had no test at all —
+    deleting the ``sorted(...)`` passed the whole suite.
+
+    #942 partitioned the ring per grant source, so the buckets are appended in
+    per-source chronological order but NOT in global order: flattening with a
+    bare ``chain`` would emit every price entry before any backstop entry. The
+    sort is what makes the merged attribute a chronological series at all, and
+    the ``[-limit:]`` window is what makes it draw from BOTH buckets.
+    """
+
+    @staticmethod
+    def _entry(source, minute, second=0, lag=None):
+        return {
+            "from_mode": "self_consumption",
+            "to_mode": "grid_charging",
+            "boundary_lag": lag if lag is not None else float(second),
+            "grant_source": source,
+            "interval_start_utc": f"2026-08-27T06:{minute:02d}:{second:02d}+00:00",
+            "transition_time": f"2026-08-27T06:{minute:02d}:{second:02d}+11:00",
+        }
+
+    def test_interleaved_buckets_merge_chronologically(self):
+        """Two buckets whose real ``interval_start_utc`` values alternate in
+        time. The merged output must be strictly ascending AND the sources must
+        alternate — the alternation is what kills the sort-free mutation, since
+        a bare ``chain`` emits all three price entries first.
+        """
+        history = {
+            "price": [
+                self._entry("price", 0),
+                self._entry("price", 10),
+                self._entry("price", 20),
+            ],
+            "backstop": [
+                self._entry("backstop", 5),
+                self._entry("backstop", 15),
+                self._entry("backstop", 25),
+            ],
+        }
+        merged = _flatten_boundary_lag_history(history)
+
+        assert [e["interval_start_utc"] for e in merged] == sorted(
+            e["interval_start_utc"] for e in merged
+        )
+        # Strictly ascending: no duplicate keys collapse the ordering.
+        starts = [e["interval_start_utc"] for e in merged]
+        assert len(set(starts)) == len(starts)
+        # The interleaving itself — 6 entries, 3 from each bucket, alternating.
+        assert [e["grant_source"] for e in merged] == [
+            "price",
+            "backstop",
+            "price",
+            "backstop",
+            "price",
+            "backstop",
+        ]
+
+    def test_window_crosses_bucket_boundaries(self):
+        """More than ``limit`` entries in total, with the newest 20 drawn from
+        BOTH buckets. The dropped entries must be the globally oldest — not
+        simply the whole of one bucket."""
+        price = [self._entry("price", m) for m in range(0, 40, 2)]  # 20 entries
+        backstop = [self._entry("backstop", m) for m in range(1, 41, 2)]  # 20
+        history = {"price": price, "backstop": backstop}
+        merged = _flatten_boundary_lag_history(history, limit=20)
+
+        assert len(merged) == 20
+        # Both buckets survive the window: 10 newest from each, not 20 from one.
+        sources = [e["grant_source"] for e in merged]
+        assert sources.count("price") == 10
+        assert sources.count("backstop") == 10
+
+        def _minute(entry):
+            return int(entry["interval_start_utc"][14:16])
+
+        minutes = [_minute(e) for e in merged]
+        assert minutes == sorted(minutes)
+        # Exactly the newest 20 of the 40 interleaved entries (minutes 20..39).
+        assert minutes == list(range(20, 40))
+        # The globally oldest (minutes 0..19) are gone — one from each bucket
+        # per dropped slot, proving the drop is global, not per-bucket.
+        assert all(m >= 20 for m in minutes)
+
+    def test_ties_broken_by_boundary_lag(self):
+        """Two entries sharing an interval start order on the lag half of the
+        documented key — the second half of ``(interval_start_utc,
+        boundary_lag)`` is not decorative.
+        """
+        history = {
+            "price": [self._entry("price", 5, second=30)],
+            "backstop": [self._entry("backstop", 5, second=10)],
+        }
+        merged = _flatten_boundary_lag_history(history)
+        assert [e["boundary_lag"] for e in merged] == [10.0, 30.0]
+
+    def test_empty_and_missing_keys(self):
+        assert _flatten_boundary_lag_history({}) == []
+        assert _flatten_boundary_lag_history({"price": []}) == []
+
+
 class TestBoundaryLagPartition:
     """#942: the ring is partitioned per grant source, so a burst from one
     source can never evict another source's samples.
@@ -734,10 +966,16 @@ class TestBoundaryLagPartition:
     of #510 needs."""
 
     def _record(self, state_machine, data, minute, second=0):
+        # `minute` is elapsed minutes since 06:00, not a wall-clock minute —
+        # scaling the partition tests to _BOUNDARY_LAG_PER_SOURCE_CAP (#990)
+        # needs more than 59 distinct instants, so overflow into the hour
+        # field rather than wrapping (a wrap would collide two records on the
+        # same timestamp and silently shrink the bucket by a duplicate slot).
+        hour, real_minute = divmod(minute, 60)
         with patch(
             "custom_components.localshift.state.machine.dt_util.now"
         ) as mock_now:
-            mock_now.return_value = dt_aware(2026, 8, 27, 6, minute, second)
+            mock_now.return_value = dt_aware(2026, 8, 27, 6 + hour, real_minute, second)
             state_machine._record_transition_metrics(
                 data, BatteryMode.SELF_CONSUMPTION, dry_run=False
             )
@@ -755,16 +993,18 @@ class TestBoundaryLagPartition:
         assert data.boundary_lag_history["backstop"][0]["grant_source"] == "backstop"
 
     def test_backstop_burst_does_not_evict_price_samples(self, state_machine, data):
-        """THE #942 acceptance test: 300 backstop corrections (more than a full
-        day's worst-case burst) must not touch the price sample."""
+        """THE #942 acceptance test: a burst well past _BOUNDARY_LAG_PER_SOURCE_CAP
+        (#990: 200 per source, about a day and a half's worst-case backstop
+        corrections at the 5-minute cooldown) must not touch the price sample."""
         state_machine._last_grant_source = "price"
         self._record(state_machine, data, 5)
         price_entry = data.boundary_lag_history["price"][0]
 
+        burst = _BOUNDARY_LAG_PER_SOURCE_CAP + 100
         state_machine._last_grant_source = None
         state_machine._transition_source_override = "backstop"
         try:
-            for i in range(300):
+            for i in range(burst):
                 self._record(state_machine, data, 6 + i // 60, i % 60)
         finally:
             state_machine._transition_source_override = None
@@ -772,27 +1012,33 @@ class TestBoundaryLagPartition:
         # The price bucket still holds exactly its one original sample.
         assert data.boundary_lag_history["price"] == [price_entry]
         # The backstop bucket is capped at its own per-source window.
-        assert len(data.boundary_lag_history["backstop"]) == 50
+        assert len(data.boundary_lag_history["backstop"]) == _BOUNDARY_LAG_PER_SOURCE_CAP
         assert set(data.boundary_lag_history) == {"price", "backstop"}
 
     def test_per_source_cap_keeps_newest(self, state_machine, data):
         state_machine._last_grant_source = "price"
-        for minute in range(60):
+        total = _BOUNDARY_LAG_PER_SOURCE_CAP + 10
+        for minute in range(total):
             self._record(state_machine, data, minute)
 
         bucket = data.boundary_lag_history["price"]
-        assert len(bucket) == 50
-        # Newest last, oldest gone. interval_start_utc floors to the 5-minute
-        # boundary (minute 59 -> :55), so the newest entry's floor differs
-        # from its raw minute even though the offset is whole hours.
-        assert (
-            bucket[-1]["interval_start_utc"]
-            == dt_util.as_utc(dt_aware(2026, 8, 27, 6, 55, 0)).isoformat()
-        )
-        assert (
-            bucket[0]["interval_start_utc"]
-            == dt_util.as_utc(dt_aware(2026, 8, 27, 6, 10, 0)).isoformat()
-        )
+        assert len(bucket) == _BOUNDARY_LAG_PER_SOURCE_CAP
+        # Newest last, oldest gone. `minute` overflows into the hour field
+        # (see _record), and interval_start_utc floors to the 5-minute
+        # boundary, so the newest/oldest survivors are derived the same way
+        # rather than hard-coded against a specific cap size.
+        newest_hour, newest_minute = divmod(total - 1, 60)
+        oldest_hour, oldest_minute = divmod(total - _BOUNDARY_LAG_PER_SOURCE_CAP, 60)
+        assert bucket[-1]["interval_start_utc"] == dt_util.as_utc(
+            dt_aware(
+                2026, 8, 27, 6 + newest_hour, (newest_minute // 5) * 5, 0
+            )
+        ).isoformat()
+        assert bucket[0]["interval_start_utc"] == dt_util.as_utc(
+            dt_aware(
+                2026, 8, 27, 6 + oldest_hour, (oldest_minute // 5) * 5, 0
+            )
+        ).isoformat()
 
     def test_unknown_bucket_on_fresh_machine(self, state_machine, data):
         # No prior grant and no override -> the "unknown" bucket.
@@ -806,10 +1052,10 @@ class TestBoundaryLagPartition:
         state_machine._last_grant_source = "price"
         self._record(state_machine, data, 5)
         ring = data.boundary_lag_history
-        for minute in range(5, 60):
+        for minute in range(5, _BOUNDARY_LAG_PER_SOURCE_CAP + 10):
             self._record(state_machine, data, minute)
         assert data.boundary_lag_history is ring
-        assert len(ring["price"]) == 50
+        assert len(ring["price"]) == _BOUNDARY_LAG_PER_SOURCE_CAP
 
 
 class TestUtcDerivation:

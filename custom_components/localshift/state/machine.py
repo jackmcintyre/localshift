@@ -70,10 +70,14 @@ PHYSICAL_RESPONSE_DIRECTIONS: dict[BatteryMode, Literal["charging", "discharging
 # Issue #508: how long to wait for the physical response before giving up.
 PHYSICAL_RESPONSE_TIMEOUT = timedelta(minutes=10)
 
-# Issue #942: per-grant-source window for boundary_lag_history. Caps live
-# inline in this module (decision_lag_history's 50 is the precedent), not in
-# const.py.
-_BOUNDARY_LAG_PER_SOURCE_CAP = 50
+# Issue #942/#990: per-grant-source window for boundary_lag_history. 200 is
+# what #510 slice 3 needs to estimate the Amber-latency distribution per grant
+# source: a 50-sample price bucket is roughly two days of transitions, too
+# thin a population for a tail estimate. Worst case is about 9 sources × 200 =
+# 1800 dicts — still trivial in memory, and never serialised in full since the
+# sensor attribute exposes only the flattened last 20 (`_flatten_boundary_lag_
+# history`). Caps live inline in this module, not in const.py.
+_BOUNDARY_LAG_PER_SOURCE_CAP = 200
 
 
 class StateMachine:
@@ -665,6 +669,9 @@ class StateMachine:
 
         self._commanded_mode = BatteryMode.MANUAL
         self._mode_desired_since.clear()
+        # Issue #966: the pending retry belongs to the automation run that just
+        # ended; it must not relabel a post-re-enable transition as a retry.
+        self._pending_retry_mode = None
         return True
 
     async def _handle_manual_override_timeout(
@@ -906,6 +913,12 @@ class StateMachine:
             # "previous" base is already this one, so the comparison must happen
             # here or the tag is unrecoverable.
             self._last_grant_source = self._classify_grant_source(context)
+            # Issue #966: a fresh token is a new decision by construction, so
+            # whatever attempt failed before it is no longer pending. Cleared
+            # only here (never unconditionally) — a non-granting evaluation
+            # leaves it armed, else a genuine retry on the next quiet tick
+            # would lose its tag and land in the price baseline.
+            self._pending_retry_mode = None
             # Consume immediately: the evaluation, not the transition, spends the
             # token. Covers every downstream path (including debounce-in-progress).
             self._last_evaluated_fingerprint = fingerprint
@@ -1344,8 +1357,17 @@ class StateMachine:
 
             observable = self._start_physical_response_watch(data, target, dry_run)
 
+            # Issue #967 (same fix as boundary_lag_history's #940): NOT
+            # data.active_mode — _evaluate_core sets `desired = data.active_mode`,
+            # so active_mode is always identical to `target` on every reachable
+            # path, making it a dead field that always echoed the destination
+            # back as the origin. `self._commanded_mode` still holds the genuine
+            # previous mode here: _finalize_successful_transition only reassigns
+            # it after _execute_mode_transition returns, and this method runs
+            # from inside that same call chain, before the reassignment. The two
+            # lag rings must agree on what from_mode means.
             history_entry = {
-                "from_mode": data.active_mode.value if data.active_mode else "unknown",
+                "from_mode": self._commanded_mode.value,
                 "to_mode": target.value,
                 "command_lag": round(command_lag, 2),
                 "physical_lag": None,
@@ -1425,9 +1447,11 @@ class StateMachine:
         })
         # Per-source cap (#942): the old single 200-entry ring was shared by
         # every grant source, and a backstop burst alone (up to 288 corrections
-        # a day at the 5-minute cooldown) would evict every price-tagged sample
-        # slice 3 of #510 measures. 50 per source matches
-        # decision_lag_history's window; worst case ~9 sources × 50 = 450
+        # a day at the 5-minute cooldown) would evict every price-tagged
+        # sample slice 3 of #510 measures. 200 per source (#990) is what that
+        # slice needs to estimate the Amber-latency distribution per grant
+        # source — 50 was roughly two days of price transitions, too thin a
+        # tail-estimate population; worst case ~9 sources × 200 = 1800
         # entries, still trivial.
         if len(bucket) > _BOUNDARY_LAG_PER_SOURCE_CAP:
             del bucket[:-_BOUNDARY_LAG_PER_SOURCE_CAP]
@@ -1876,6 +1900,10 @@ class StateMachine:
         """
         self._commanded_mode = mode
         self._mode_desired_since.clear()
+        # Issue #966: the user has taken over, so the automation's pending
+        # retry is void — otherwise the first automated transition at that
+        # mode after re-enabling would be mislabelled retry.
+        self._pending_retry_mode = None
         _LOGGER.info(
             "Commanded mode set directly to %s (manual button press)",
             mode.value,
