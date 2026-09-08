@@ -246,8 +246,6 @@ class CoordinatorData:
     daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
     consumption_source: str = "unknown"
     consumption_profile_hours: int = 0
-    consumption_fallback_hours: int = 0
-    consumption_statistic_id: str = ""
     consumption_hourly_sample_counts: dict[int, int] = field(default_factory=dict)
     consumption_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
     # Day-of-week aware consumption profiles (issue-60)
@@ -291,13 +289,6 @@ class CoordinatorData:
         0.0  # Exported energy that could have charged a non-full battery
     )
     solar_kwh_today: float = 0.0  # Total solar generation today (Issue #971)
-
-    # Forecast cost accumulators (rest of today)
-    forecast_import_cost: float = 0.0  # Expected grid import cost
-    forecast_export_revenue: float = 0.0  # Expected grid export revenue
-    forecast_net_cost: float = 0.0  # Expected net cost (import - export)
-    forecast_grid_charge_cost: float = 0.0  # Expected cost for grid charging
-    forecast_proactive_export_revenue: float = 0.0  # Revenue from proactive exports
 
     # Internal state flags (managed by state machine / buttons)
     manual_override: bool = False

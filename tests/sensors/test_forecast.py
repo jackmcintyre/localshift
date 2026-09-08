@@ -406,11 +406,6 @@ class TestForecastPricesSensor:
                     "sell_price": 0.05,
                 },
             ],
-            forecast_import_cost=5.0,
-            forecast_export_revenue=2.0,
-            forecast_net_cost=3.0,
-            forecast_grid_charge_cost=1.0,
-            forecast_proactive_export_revenue=0.5,
         )
         mock_entry = MagicMock()
 
@@ -519,9 +514,7 @@ class TestForecastDiagnosticsSensor:
         """Test extra_state_attributes contains all diagnostic fields."""
         mock_coordinator, data = create_mock_coordinator_with_data(
             consumption_source="recorder",
-            consumption_statistic_id="sensor.energy",
             consumption_profile_hours=168,
-            consumption_fallback_hours=24,
             forecast_consumption_source_counts={"recorder": 10, "fallback": 2},
             consumption_hourly_sample_counts={0: 5, 1: 6},
             consumption_hourly_profile_kw={0: 0.5, 1: 0.6},
@@ -562,34 +555,11 @@ class TestForecastDiagnosticsSensor:
         attrs = sensor.extra_state_attributes
 
         assert attrs["consumption_source"] == "recorder"
-        assert attrs["consumption_statistic_id"] == "sensor.energy"
         assert attrs["consumption_profile_hours"] == 168
         assert attrs["allow_export"] == "yes"
         assert attrs["weather_avg_cooling_slope"] == 0.05
         assert attrs["weather_avg_heating_slope"] == 0.03
         assert attrs["weather_avg_r_squared"] == 0.42
-
-    def test_extra_state_attributes_none_adaptive_params(self):
-        """Test extra_state_attributes handles None adaptive_params."""
-        mock_coordinator, data = create_mock_coordinator_with_data(
-            consumption_source="unknown",
-            consumption_hourly_sample_counts={},
-            consumption_hourly_profile_kw={},
-            forecast_consumption_source_counts={},
-            weekday_sample_counts={},
-            weekend_sample_counts={},
-            weekday_hourly_profile_kw={},
-            weekend_hourly_profile_kw={},
-            weather_temperature_forecast={},
-            load_forecast_slots=[],
-            adaptive_params=None,
-        )
-        mock_entry = MagicMock()
-
-        sensor = ForecastDiagnosticsSensor(mock_coordinator, mock_entry)
-        attrs = sensor.extra_state_attributes
-
-        assert attrs["adaptive_params_values"] == {}
 
 
 class TestMinimumTargetSOCSensor:

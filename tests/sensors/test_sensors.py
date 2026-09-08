@@ -83,11 +83,6 @@ class Fixtures:
         data.forecast_horizon_hours = 24
         data.general_forecast = []
         data.feed_in_forecast = []
-        data.forecast_import_cost = 5.0
-        data.forecast_export_revenue = 2.0
-        data.forecast_net_cost = 3.0
-        data.forecast_grid_charge_cost = 1.0
-        data.forecast_proactive_export_revenue = 0.5
         data.optimizer_summary = {
             "enabled": True,
             "success": True,
@@ -96,9 +91,7 @@ class Fixtures:
             "projected_net_cost": 2.0,
         }
         data.consumption_source = "history"
-        data.consumption_statistic_id = "sensor.consumption"
         data.consumption_profile_hours = 24
-        data.consumption_fallback_hours = 0
         data.consumption_hourly_sample_counts = {12: 30, 13: 25}
         data.consumption_hourly_profile_kw = {12: 1.5, 13: 1.8}
         data.forecast_consumption_source_counts = {"history": 100}
