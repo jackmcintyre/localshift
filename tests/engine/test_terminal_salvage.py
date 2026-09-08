@@ -174,29 +174,31 @@ class TestTerminalSalvageBoundary:
         slots = [_slot(i, buy=0.20) for i in range(12)]
         row, _, soc_grid, config = self._boundary_row(slots)
         for bin_idx, soc in enumerate(soc_grid):
-            usable = max(0.0, soc - config.min_soc_pct) / 100.0 * (
-                config.battery_capacity_kwh * config.discharge_efficiency
+            usable = (
+                max(0.0, soc - config.min_soc_pct)
+                / 100.0
+                * (config.battery_capacity_kwh * config.discharge_efficiency)
             )
             assert -row[bin_idx][0] <= usable * TERMINAL_SALVAGE_MAX_PER_KWH + 1e-12
 
     def test_boundary_zero_when_disabled(self):
         slots = [_slot(i, buy=0.20) for i in range(12)]
-        row, _, soc_grid, _ = self._boundary_row(
-            slots, terminal_salvage_enabled=False
-        )
+        row, _, soc_grid, _ = self._boundary_row(slots, terminal_salvage_enabled=False)
         assert all(row[b][0] == 0.0 for b in range(len(soc_grid)))
 
     def test_dw_entry_penalty_unaffected(self):
         """Subordination: the strict-mode DW-entry penalty ignores salvage."""
         slots = [
-            _slot(i, buy=0.20, is_demand_window_slot=(6 <= i < 10),
-                  is_demand_window_entry=(i == 6))
+            _slot(
+                i,
+                buy=0.20,
+                is_demand_window_slot=(6 <= i < 10),
+                is_demand_window_entry=(i == 6),
+            )
             for i in range(12)
         ]
         _, penalty_on, _, _ = self._boundary_row(slots)
-        _, penalty_off, _, _ = self._boundary_row(
-            slots, terminal_salvage_enabled=False
-        )
+        _, penalty_off, _, _ = self._boundary_row(slots, terminal_salvage_enabled=False)
         assert penalty_on  # a DW entry exists in this fixture
         assert penalty_on == penalty_off
 
@@ -331,6 +333,12 @@ class TestTerminalSalvageBehaviour:
 class TestTerminalSalvagePublished:
     """Issue #1033 — surface the #811 salvage credit on the PUBLISHED plan.
 
+    NOTE the coverage boundary: the live 2026-09-07 plan settled ON the SOC floor,
+    which is precisely where this field publishes 0.0. See
+    test_salvage_is_zero_when_tail_drains_to_floor_the_live_2026_09_07_shape.
+    These tests assert the credit is legible WHEN it is non-zero; they do not
+    close the observability gap for a floor-settled tail.
+
     Live 2026-09-07: the 24h horizon held every slot and the tail settled on the
     SOC floor (9.3% vs a 95% demand-window target) because the demand window sat
     just beyond the horizon end. ``shortfall_penalty`` is legitimately 0.0 in that
@@ -353,8 +361,7 @@ class TestTerminalSalvagePublished:
         unspent at the horizon end.
         """
         return [
-            _slot(i, buy=0.15 + 0.05 * (i % 3), consumption_kwh=0.15)
-            for i in range(n)
+            _slot(i, buy=0.15 + 0.05 * (i % 3), consumption_kwh=0.15) for i in range(n)
         ]
 
     def test_salvage_published_when_demand_window_outside_horizon(self):
@@ -463,3 +470,63 @@ class TestTerminalSalvagePublished:
 
         for decision in result.decisions[:-1]:
             assert decision.objective_terms.terminal_salvage_value == 0.0
+
+    def test_salvage_is_zero_when_tail_drains_to_floor_the_live_2026_09_07_shape(self):
+        """LIMITATION PIN — the #1033 live plan is exactly where this field is silent.
+
+        On 2026-09-07 the tail settled ON the SOC floor (9.3%). ``usable_kwh`` is
+        ``max(0.0, final_soc - min_soc_pct)``, so a floor-settled tail has zero usable
+        residual and the published credit is ``0.0`` — indistinguishable from the
+        feature being off. The sibling test above uses a reduced consumption so the
+        tail retains charge; that is the OTHER real outcome, not the live one. This
+        test pins the live one so the gap stays on the record rather than looking
+        like coverage it is not.
+        """
+        slots = [
+            _slot(i, buy=0.15 + 0.05 * (i % 3), consumption_kwh=0.3) for i in range(24)
+        ]
+        config = _config()
+        result = DPPlanner().plan(
+            OptimizerInputs(
+                cycle_id="salvage-floor-drain",
+                initial_soc_pct=50.0,
+                slots=slots,
+                config=config,
+                all_solcast=[],
+            )
+        )
+        assert result.success
+        terminal = result.decisions[-1]
+        assert terminal.predicted_soc_pct == pytest.approx(config.min_soc_pct, abs=0.01)
+        assert terminal.objective_terms.terminal_salvage_value == 0.0
+
+    def test_salvage_is_zero_when_any_horizon_interval_is_negative(self):
+        """One negative interval zeroes the credit, because it is priced at MIN(buy).
+
+        ``_salvage_buy_price`` is the cheapest price in the horizon and
+        ``cost.terminal_salvage_value`` returns 0.0 when that is <= 0. Negative
+        intervals are routine on Amber (see engine/negative_fit.py), so this is the
+        common case rather than an edge one — the tail here retains plenty of charge
+        and the credit is still 0.0.
+        """
+        slots = [
+            _slot(
+                i,
+                buy=(-0.02 if i == 7 else 0.15 + 0.05 * (i % 3)),
+                consumption_kwh=0.15,
+            )
+            for i in range(24)
+        ]
+        result = DPPlanner().plan(
+            OptimizerInputs(
+                cycle_id="salvage-negative-interval",
+                initial_soc_pct=50.0,
+                slots=slots,
+                config=_config(),
+                all_solcast=[],
+            )
+        )
+        assert result.success
+        terminal = result.decisions[-1]
+        assert terminal.predicted_soc_pct > _config().min_soc_pct
+        assert terminal.objective_terms.terminal_salvage_value == 0.0

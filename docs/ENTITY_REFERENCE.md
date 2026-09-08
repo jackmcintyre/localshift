@@ -318,8 +318,13 @@ Each slot in the optimizer plan contains:
 
 `objective_terms.terminal_salvage_value` (float, $ credit, always positive when non-zero) is the
 bounded residual-energy credit from #811. It is non-zero only on the FINAL slot of the published
-horizon, and only when the plan ends with residual SOC above `min_soc_pct`, a positive buy price
-was observed somewhere in the horizon, and `terminal_salvage_enabled` is on (default). It is
+horizon, and only when the plan ends with residual SOC above `min_soc_pct`, the CHEAPEST buy
+price in the horizon is positive, and `terminal_salvage_enabled` is on (default). The credit is
+valued at `min(buy_price)` across the horizon, so a single negative interval anywhere in the
+24h window zeroes it for every SOC level — routine on Amber, not a corner case. Equally, a plan
+whose tail settles ON `min_soc_pct` has no usable residual and publishes `0.0`: that is the
+shape of the live 2026-09-07 plan in #1033, so a `0.0` here is common and does NOT by itself
+mean the credit is disabled. It is
 **diagnostic only** — the DP already applies this credit once, to the horizon-boundary state, not
 as a per-slot stage cost; it is deliberately excluded from `objective_terms.net_cost` and from
 every rollup that sums slot `net_cost` (e.g. `projected_net_cost`). Added for issue #1033, where a
