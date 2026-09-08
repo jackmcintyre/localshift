@@ -136,7 +136,7 @@ def _plan(base_cheap_price: float | None):
         config=config,
         all_solcast=[],
     )
-    return DPPlanner(config).plan(inputs)
+    return DPPlanner().plan(inputs)
 
 
 def _dw_entry_idx(decisions) -> int:
@@ -420,7 +420,7 @@ class TestUrgencyWindowGate:
             target_shortfall_penalty_per_pct=0.03,
             soc_bins=100,
         )
-        result = DPPlanner(config).plan(
+        result = DPPlanner().plan(
             OptimizerInputs(
                 cycle_id="overnight-gap",
                 initial_soc_pct=60.0,
@@ -497,7 +497,7 @@ class TestUrgencyWindowGate:
             target_shortfall_penalty_per_pct=0.03,
             soc_bins=100,
         )
-        result = DPPlanner(config).plan(
+        result = DPPlanner().plan(
             OptimizerInputs(
                 cycle_id="overnight-gap-deep-soc",
                 initial_soc_pct=12.0,  # deep deficit -> ~4.2h window, still well short

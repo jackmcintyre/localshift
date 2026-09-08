@@ -96,7 +96,7 @@ def _plan(min_floor_gain: float, *, soc0: float = 10.0, with_dw: bool = False):
         soc_bins=100,
         min_floor_charge_gain_pct=min_floor_gain,
     )
-    return DPPlanner(config).plan(
+    return DPPlanner().plan(
         OptimizerInputs(
             cycle_id="floor-guard",
             initial_soc_pct=soc0,

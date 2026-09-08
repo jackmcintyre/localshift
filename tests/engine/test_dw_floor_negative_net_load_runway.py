@@ -109,7 +109,7 @@ def _live_slots(
 
 def _plan(slots, initial_soc_pct, **overrides):
     config = _config(**overrides)
-    result = DPPlanner(config).plan(
+    result = DPPlanner().plan(
         OptimizerInputs(
             cycle_id="repro-903",
             initial_soc_pct=initial_soc_pct,
@@ -233,7 +233,7 @@ def test_max_feasible_stacks_solar_surplus_on_a_charge_slot():
 def _terminal_penalties(slots, initial_soc_pct, **overrides):
     """``(soc_grid, penalty_by_bin, config)`` from a real solve's terminal costs."""
     config = _config(**overrides)
-    planner = DPPlanner(config)
+    planner = DPPlanner()
     inputs = OptimizerInputs(
         cycle_id="penalty-903",
         initial_soc_pct=initial_soc_pct,

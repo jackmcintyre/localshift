@@ -189,7 +189,7 @@ def _run_scenario(confidence: float) -> tuple[float, list]:
         slots=slots,
         config=config,
     )
-    result = DPPlanner(config).plan(inputs)
+    result = DPPlanner().plan(inputs)
     assert result.success, f"DPPlanner failed for confidence={confidence}"
 
     # DW entry SOC = predicted_soc_pct at the end of the slot BEFORE DW entry

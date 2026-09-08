@@ -226,7 +226,7 @@ class TestIncidentEndToEnd:
             config=config,
             all_solcast=[],
         )
-        return DPPlanner(config).plan(inputs)
+        return DPPlanner().plan(inputs)
 
     def test_deep_deficit_boosts_and_reaches_target(self):
         result = self._plan(initial_soc=11.6)

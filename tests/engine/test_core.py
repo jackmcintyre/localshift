@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.negative_fit import (
@@ -81,11 +83,19 @@ class TestDPPlanner:
         assert planner is not None
         assert planner.VERSION == "dp_v1"
 
-    def test_dpplanner_with_custom_config(self):
-        """DPPlanner can be created with custom config."""
+    def test_dpplanner_rejects_a_config_argument(self):
+        """DPPlanner takes no constructor config — all config comes from inputs.
+
+        Issue #985: the old ``__init__(config)`` parameter stored the argument on
+        ``self._config`` and never read it, so a config passed here was silently
+        ignored in favour of ``inputs.config``. The parameter is gone; a positional
+        or keyword config must now fail loudly.
+        """
         config = OptimizerConfig(min_soc_pct=20.0, max_soc_pct=90.0)
-        planner = DPPlanner(config=config)
-        assert planner is not None
+        with pytest.raises(TypeError):
+            DPPlanner(config)
+        with pytest.raises(TypeError):
+            DPPlanner(config=config)
 
     def test_plan_empty_slots(self):
         """Plan with empty slots returns empty result."""

@@ -259,7 +259,7 @@ class TestEndToEndPlan:
             config=config,
             all_solcast=[],
         )
-        return DPPlanner(config).plan(inputs)
+        return DPPlanner().plan(inputs)
 
     def test_without_ceiling_the_target_is_structurally_unreachable(self):
         """Pin the broken shape so the fix assertion below is meaningful."""
@@ -422,7 +422,7 @@ class TestOvernightSawtoothReplay:
             config=config,
             all_solcast=[],
         )
-        return DPPlanner(config).plan(inputs)
+        return DPPlanner().plan(inputs)
 
     def test_no_overnight_floor_bounce_charge(self):
         """RED on the #870 blanket exemption (charges ~03:00), GREEN with water scope."""

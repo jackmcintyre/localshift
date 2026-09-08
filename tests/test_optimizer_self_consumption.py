@@ -180,7 +180,6 @@ class TestSelfConsumptionObjectiveTerms:
 
     def test_hold_with_load_adds_self_consumption_value(self, self_consumption_config):
         config = self_consumption_config
-        planner = DPPlanner(config)
 
         slot = SlotContext(
             slot_index=0,
@@ -204,7 +203,6 @@ class TestSelfConsumptionObjectiveTerms:
 
     def test_hold_no_load_no_self_consumption_value(self, self_consumption_config):
         config = self_consumption_config
-        planner = DPPlanner(config)
 
         slot = SlotContext(
             slot_index=0,
@@ -228,7 +226,6 @@ class TestSelfConsumptionObjectiveTerms:
 
     def test_arbitrage_mode_no_self_consumption_value(self, arbitrage_config):
         config = arbitrage_config
-        planner = DPPlanner(config)
 
         slot = SlotContext(
             slot_index=0,
@@ -258,7 +255,7 @@ class TestSelfConsumptionPlanBehavior:
         self, self_consumption_config
     ):
         config = self_consumption_config
-        planner = DPPlanner(config)
+        planner = DPPlanner()
 
         slot = SlotContext(
             slot_index=0,
@@ -283,7 +280,7 @@ class TestSelfConsumptionPlanBehavior:
 
     def test_self_consumption_exports_when_fit_is_high(self, self_consumption_config):
         config = self_consumption_config
-        planner = DPPlanner(config)
+        planner = DPPlanner()
 
         slot = SlotContext(
             slot_index=0,
@@ -308,7 +305,7 @@ class TestSelfConsumptionPlanBehavior:
 
     def test_self_consumption_charges_at_cheap_price(self, self_consumption_config):
         config = self_consumption_config
-        planner = DPPlanner(config)
+        planner = DPPlanner()
 
         slot = SlotContext(
             slot_index=0,
@@ -336,7 +333,7 @@ class TestSelfConsumptionPlanBehavior:
         self, self_consumption_config
     ):
         config = self_consumption_config
-        planner = DPPlanner(config)
+        planner = DPPlanner()
 
         slot = SlotContext(
             slot_index=0,
@@ -362,7 +359,7 @@ class TestSelfConsumptionPlanBehavior:
 
     def test_self_consumption_does_not_export_at_low_fit(self, self_consumption_config):
         config = self_consumption_config
-        planner = DPPlanner(config)
+        planner = DPPlanner()
 
         slot = SlotContext(
             slot_index=0,

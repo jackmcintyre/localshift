@@ -425,9 +425,12 @@ class DPPlanner:
 
     VERSION = "dp_v1"
 
-    def __init__(self, config: OptimizerConfig | None = None) -> None:
-
-        self._config = config or OptimizerConfig()
+    # NOTE: no __init__ and no constructor configuration on purpose (issue #985).
+    # DPPlanner takes ALL of its configuration from ``OptimizerInputs.config``
+    # inside ``plan()``; a constructor ``config`` argument was stored on
+    # ``self._config`` and never read, so it silently misdirected callers into
+    # believing they had configured the solver. With no ``__init__`` at all,
+    # ``DPPlanner(config)`` raises ``TypeError`` loudly instead.
 
     # ------------------------------------------------------------------
 

@@ -125,7 +125,7 @@ def _plan(monkeypatch=None, *, double_credit=False):
         cycle_id="sawtooth-406", initial_soc_pct=INITIAL_SOC,
         slots=_slots(), config=_config(), all_solcast=[],
     )
-    return DPPlanner(_config()).plan(inputs)
+    return DPPlanner().plan(inputs)
 
 
 def _overnight_charge_kwh(result) -> float:

@@ -2840,7 +2840,6 @@ def _make_slot_for_neg_fit(
 
 def test_negative_fit_context_no_window(default_config):
     """Returns None when no negative-FIT window in horizon."""
-    DPPlanner(default_config)
     slots = [_make_slot_for_neg_fit(i, sell_price=0.08) for i in range(10)]
     inputs = OptimizerInputs(
         cycle_id="test",
@@ -2854,7 +2853,6 @@ def test_negative_fit_context_no_window(default_config):
 
 def test_negative_fit_context_no_overflow(default_config):
     """Returns None when no forecast overflow projected."""
-    DPPlanner(default_config)
     slots = [
         _make_slot_for_neg_fit(i, sell_price=0.08 if i < 5 else -0.05)
         for i in range(10)
@@ -2871,7 +2869,6 @@ def test_negative_fit_context_no_overflow(default_config):
 
 def test_negative_fit_context_no_positive_slots(default_config):
     """Returns None when no earlier positive-FIT slots."""
-    DPPlanner(default_config)
     slots = [
         _make_slot_for_neg_fit(i, sell_price=0.08 if i >= 5 else 0.0) for i in range(10)
     ]
@@ -2888,7 +2885,6 @@ def test_negative_fit_context_no_positive_slots(default_config):
 
 def test_negative_fit_context_computes_floor(default_config):
     """Computes correct recoverability_floor when all conditions met."""
-    DPPlanner(default_config)
     default_config.demand_window_target_soc_pct = 80.0
     slots = []
     for i in range(10):
