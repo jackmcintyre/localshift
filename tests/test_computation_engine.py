@@ -554,70 +554,6 @@ class TestComputationEngineDelegations:
 
         assert parsed == time(18, 0, 0)
 
-    def test_compute_solar_battery_forecast_delegates(
-        self, computation_engine, coordinator_data
-    ):
-        """Solar battery forecast wrapper should pass target_pct to pipeline."""
-        computation_engine.entry.options["battery_target"] = 77.0
-        computation_engine._forecast_pipeline.compute_solar_battery_forecast = (
-            MagicMock()
-        )
-
-        computation_engine._compute_solar_battery_forecast(
-            coordinator_data,
-            datetime(2026, 2, 12, 10, 0, 0),
-            target_hour=18,
-            before_dw=True,
-            after_dw=False,
-        )
-
-        computation_engine._forecast_pipeline.compute_solar_battery_forecast.assert_called_once()
-        _, kwargs = (
-            computation_engine._forecast_pipeline.compute_solar_battery_forecast.call_args
-        )
-        assert kwargs["target_pct"] == 77.0
-
-    def test_compute_load_forecast_slots_delegates(
-        self, computation_engine, coordinator_data
-    ):
-        """Load forecast slots wrapper should call pipeline."""
-        computation_engine._forecast_pipeline.compute_load_forecast_slots = MagicMock()
-
-        computation_engine._compute_load_forecast_slots(
-            coordinator_data,
-            datetime(2026, 2, 12, 10, 0, 0),
-            historical_avg_kw={10: 0.5},
-            recent_load_kw=0.6,
-        )
-
-        computation_engine._forecast_pipeline.compute_load_forecast_slots.assert_called_once()
-
-    def test_compute_effective_cheap_price_wrappers(
-        self, computation_engine, coordinator_data
-    ):
-        """Effective cheap price wrappers should call price signals."""
-        computation_engine._price_signals.compute_effective_cheap_price_preliminary = (
-            MagicMock()
-        )
-        computation_engine._price_signals.compute_effective_cheap_price = MagicMock()
-
-        computation_engine._compute_effective_cheap_price_preliminary(
-            coordinator_data,
-            datetime(2026, 2, 12, 10, 0, 0),
-            before_dw=True,
-            target_hour=18,
-            target_pct=80.0,
-        )
-        computation_engine._compute_effective_cheap_price(
-            coordinator_data,
-            datetime(2026, 2, 12, 10, 0, 0),
-            before_dw=True,
-            target_hour=18,
-        )
-
-        computation_engine._price_signals.compute_effective_cheap_price_preliminary.assert_called_once()
-        computation_engine._price_signals.compute_effective_cheap_price.assert_called_once()
-
     def test_history_fetcher_properties(self, computation_engine):
         """History fetcher properties should expose cached values."""
         computation_engine._history_fetcher._historical_load_cache = {1: 0.2}
@@ -635,14 +571,6 @@ class TestComputationEngineDelegations:
         assert computation_engine._recent_load_1hr_statistic_id == "stat_id"
         assert computation_engine._recent_load_1hr_samples == 7
         assert computation_engine._recent_load_1hr_last_error == ""
-
-    def test_get_profile_for_day_delegates(self, computation_engine):
-        """Profile selection should delegate to history fetcher."""
-        computation_engine._history_fetcher.get_profile_for_day = MagicMock(
-            return_value=({1: 0.2}, {1: 3}, "weekday")
-        )
-        result = computation_engine._get_profile_for_day(datetime(2026, 2, 12))
-        assert result == ({1: 0.2}, {1: 3}, "weekday")
 
     def test_compute_derived_values_wires_daily_profiles_into_forecaster(
         self, computation_engine, coordinator_data
@@ -689,27 +617,6 @@ class TestComputationEngineDelegations:
             mock_sum.assert_called_once()
 
         with patch(
-            "custom_components.localshift.computation_engine.scan_forecast_for_spike",
-            return_value=True,
-        ) as mock_scan:
-            assert computation_engine._scan_forecast_for_spike(
-                [], datetime(2026, 2, 12), datetime(2026, 2, 12, 12, 0, 0)
-            )
-            mock_scan.assert_called_once()
-
-        with patch(
-            "custom_components.localshift.computation_engine.max_forecast_price",
-            return_value=0.42,
-        ) as mock_max:
-            assert (
-                computation_engine._max_forecast_price(
-                    [], datetime(2026, 2, 12), datetime(2026, 2, 12, 12, 0, 0)
-                )
-                == 0.42
-            )
-            mock_max.assert_called_once()
-
-        with patch(
             "custom_components.localshift.computation_engine.percentile",
             return_value=0.25,
         ) as mock_percentile:
@@ -753,28 +660,6 @@ class TestComputationEngineDelegations:
         accuracy_mock.compute_forecast_accuracy.assert_awaited_once_with(
             coordinator_data
         )
-
-    def test_analyze_spike_delegates(self, computation_engine, coordinator_data):
-        """Spike analysis should delegate to price signals."""
-        computation_engine._price_signals.analyze_spike = MagicMock()
-
-        computation_engine._analyze_spike(
-            coordinator_data, datetime(2026, 2, 12, 10, 0, 0)
-        )
-
-        computation_engine._price_signals.analyze_spike.assert_called_once()
-
-    def test_compute_excess_solar_signals_delegates(
-        self, computation_engine, coordinator_data
-    ):
-        """Excess solar signal computation should delegate to forecast pipeline."""
-        computation_engine._forecast_pipeline.compute_excess_solar_signals = MagicMock()
-
-        computation_engine._compute_excess_solar_signals(
-            coordinator_data, datetime(2026, 2, 12, 10, 0, 0)
-        )
-
-        computation_engine._forecast_pipeline.compute_excess_solar_signals.assert_called_once()
 
     def test_populate_weather_diagnostics_delegates(
         self, computation_engine, coordinator_data

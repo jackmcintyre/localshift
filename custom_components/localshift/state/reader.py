@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -48,6 +49,38 @@ from ..pricing.types import ForecastSlot
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def read_fresh_soc(
+    hass: HomeAssistant,
+    get_entity_id: Callable[[str], str],
+) -> float | None:
+    """Read the absolute latest SOC directly from the Home Assistant state machine.
+
+    Bypasses the coordinator's caching delay which can be minutes behind during
+    mode transitions.
+
+    Issue #559 Root Cause 4: during transitions (e.g., GRID_CHARGING -> HOLD),
+    the state machine was using a cached, stale SOC from the coordinator, causing
+    the hardware reserve to drop immediately before the Tesla API updated.  This
+    function reads the live state to avoid that staleness.
+
+    Args:
+        hass: Home Assistant instance.
+        get_entity_id: Function to resolve a config key to an entity id.
+
+    Returns:
+        Current SOC percentage (0-100) if available, None if unavailable.
+
+    """
+    try:
+        soc_entity_id = get_entity_id(CONF_TESLEMETRY_SOC)
+        state = hass.states.get(soc_entity_id)
+        if state and state.state not in (None, "unknown", "unavailable"):
+            return float(state.state)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return None
 
 
 class StateReader:
