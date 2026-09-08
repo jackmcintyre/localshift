@@ -22,7 +22,6 @@ from custom_components.localshift.sensors import (
     LearningDecisionHistorySensor,
     LoadDeviationSensor,
     LoadShiftSignalSensor,
-    MinimumTargetSOCSensor,
     NetElectricityCostSensor,
     OptimizerPlanDetailedSensor,
     OptimizerPlanGridSensor,
@@ -294,11 +293,6 @@ class TestForecastSensors(Fixtures):
         attrs = sensor.extra_state_attributes
         assert attrs["status"] == "triggered"
         assert attrs["breach_type"] == "sustained"
-
-    def test_minimum_target_soc(self, mock_coordinator, mock_entry):
-        sensor = MinimumTargetSOCSensor(mock_coordinator, mock_entry)
-        sensor._update_from_coordinator()
-        assert sensor.native_value == 20
 
 
 class TestMiscSensors(Fixtures):

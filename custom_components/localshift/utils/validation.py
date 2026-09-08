@@ -861,43 +861,6 @@ class EntityValidator:
 
         return True
 
-    def reset_broken_status(self, config_key: str | None = None) -> None:
-        """Reset broken status for one or all entities.
-
-        This allows recovery without restart when:
-        - User reconfigures entity via options flow
-        - Entity becomes available again after being broken
-
-        Args:
-            config_key: Specific entity to reset, or None to reset all
-
-        """
-        if config_key is not None:
-            # Reset specific entity
-            health = self._entity_health.get(config_key)
-            if health is not None and health.is_broken:
-                health.is_broken = False
-                health.consecutive_failures = 0
-                _LOGGER.info(
-                    "Reset broken status for entity '%s' (%s)",
-                    health.entity_id,
-                    config_key,
-                )
-        else:
-            # Reset all broken entities
-            reset_count = 0
-            for _key, health in self._entity_health.items():
-                if health.is_broken:
-                    health.is_broken = False
-                    health.consecutive_failures = 0
-                    reset_count += 1
-
-            if reset_count > 0:
-                _LOGGER.info(
-                    "Reset broken status for %d entities",
-                    reset_count,
-                )
-
     def reset_entity_tracking(self, config_key: str) -> None:
         """Reset tracking for a specific entity when its ID changes.
 

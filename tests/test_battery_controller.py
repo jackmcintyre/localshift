@@ -1193,52 +1193,6 @@ class TestVerifyCurrentState:
 class TestHelperMethods:
     """Tests for helper methods."""
 
-    def test_read_float_success(self, battery_controller, mock_hass):
-        """Test _read_float with valid state."""
-        state = MagicMock()
-        state.state = "42.5"
-        mock_hass.states.get = MagicMock(return_value=state)
-
-        result = battery_controller._read_float("sensor.test")
-
-        assert result == 42.5
-
-    def test_read_float_unavailable(self, battery_controller, mock_hass):
-        """Test _read_float with unavailable state."""
-        mock_hass.states.get = MagicMock(return_value=None)
-
-        result = battery_controller._read_float("sensor.test", default=10.0)
-
-        assert result == 10.0
-
-    def test_read_float_invalid(self, battery_controller, mock_hass):
-        """Test _read_float with invalid value."""
-        state = MagicMock()
-        state.state = "invalid"
-        mock_hass.states.get = MagicMock(return_value=state)
-
-        result = battery_controller._read_float("sensor.test", default=5.0)
-
-        assert result == 5.0
-
-    def test_read_str_success(self, battery_controller, mock_hass):
-        """Test _read_str with valid state."""
-        state = MagicMock()
-        state.state = "autonomous"
-        mock_hass.states.get = MagicMock(return_value=state)
-
-        result = battery_controller._read_str("sensor.test")
-
-        assert result == "autonomous"
-
-    def test_read_str_unavailable(self, battery_controller, mock_hass):
-        """Test _read_str with unavailable state."""
-        mock_hass.states.get = MagicMock(return_value=None)
-
-        result = battery_controller._read_str("sensor.test", default="default")
-
-        assert result == "default"
-
     def test_get_minimum_target_soc(self, battery_controller, mock_hass):
         """Issue #894: _get_minimum_target_soc reads the config option value."""
         result = battery_controller._get_minimum_target_soc()

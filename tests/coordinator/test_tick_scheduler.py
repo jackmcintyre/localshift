@@ -47,20 +47,6 @@ async def test_handle_state_change_no_dispatcher(coordinator):
 
 
 @pytest.mark.asyncio
-async def test_handle_periodic_tick(coordinator):
-    """Test handle_periodic_tick delegates to handle_fast_tick."""
-    scheduler = TickScheduler(coordinator)
-    now = datetime.now()
-
-    # Mock handle_fast_tick
-    scheduler.handle_fast_tick = MagicMock()
-
-    scheduler.handle_periodic_tick(now)
-
-    scheduler.handle_fast_tick.assert_called_once_with(now)
-
-
-@pytest.mark.asyncio
 async def test_handle_fast_tick(coordinator):
     """Test handle_fast_tick reads state, accumulates costs, and dispatches evaluation."""
     scheduler = TickScheduler(coordinator)

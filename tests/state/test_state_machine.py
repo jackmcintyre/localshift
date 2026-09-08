@@ -1849,24 +1849,6 @@ class TestFinalizeSuccessfulTransition:
         )
 
 
-class TestHandleStableModeEarlyReturn:
-    """Coverage backfill: _handle_stable_mode skips the health check when SOC
-    monitoring already executed a transition."""
-
-    @pytest.mark.asyncio
-    async def test_returns_early_when_soc_monitoring_handled_it(
-        self, state_machine, coordinator_data, mock_battery_controller
-    ):
-        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
-
-        with patch.object(
-            state_machine, "_handle_soc_monitoring", AsyncMock(return_value=True)
-        ):
-            await state_machine._handle_stable_mode(coordinator_data)
-
-        mock_battery_controller.set_self_consumption.assert_not_called()
-
-
 class TestStateMachineInternalBranches:
     """Targeted branch tests for uncovered state machine helpers."""
 
@@ -2034,52 +2016,6 @@ class TestStateMachineInternalBranches:
         assert info["active"] is True
         assert info["corroborated"] is True
 
-    def test_handle_debounce_timing_clears_stale_and_starts_timer(self, state_machine):
-        """Debounce helper should clear stale timers and start desired timer."""
-        stale_mode = BatteryMode.BOOST_CHARGING
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        state_machine._mode_desired_since[stale_mode] = dt_aware(2026, 3, 1, 9, 0, 0)
-        now = dt_aware(2026, 3, 1, 10, 0, 0)
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode, now, timedelta(minutes=2)
-        )
-
-        assert should_wait is True
-        assert stale_mode not in state_machine._mode_desired_since
-        assert state_machine._mode_desired_since[desired_mode] == now
-
-    def test_handle_debounce_timing_allows_transition_after_elapsed(
-        self, state_machine
-    ):
-        """Debounce helper should return False when elapsed meets debounce."""
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
-        state_machine._mode_desired_since[desired_mode] = desired_since
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode,
-            desired_since + timedelta(minutes=2, seconds=1),
-            timedelta(minutes=2),
-        )
-
-        assert should_wait is False
-
-    def test_handle_debounce_timing_still_waiting_mid_debounce(self, state_machine):
-        """Debounce helper should return True (and log) while a timer is
-        already running but hasn't yet met the required duration."""
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
-        state_machine._mode_desired_since[desired_mode] = desired_since
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode,
-            desired_since + timedelta(minutes=1),
-            timedelta(minutes=2),
-        )
-
-        assert should_wait is True
-
     def test_record_transition_metrics_records_lag_and_trims_history(
         self, state_machine, coordinator_data
     ):
@@ -2155,9 +2091,12 @@ class TestStateMachineInternalBranches:
         state_machine._commanded_mode = BatteryMode.GRID_CHARGING
         coordinator_data.soc = 90.0
 
-        result = asyncio.run(state_machine._handle_soc_monitoring(coordinator_data))
+        # _log_soc_target_reached is the #984 hoist of the live log line out of
+        # the retired (always-False) _handle_soc_monitoring gate — sync, no
+        # return value, but must not raise on the target-reached branch.
+        result = state_machine._log_soc_target_reached(coordinator_data)
 
-        assert result is False
+        assert result is None
 
 
 # =============================================================================

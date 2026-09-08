@@ -156,7 +156,6 @@ class TestEntityHealthSensor:
 
         assert hasattr(sensor, "_unrecorded_attributes")
         assert "entities" in sensor._unrecorded_attributes
-        assert "dependencies" in sensor._unrecorded_attributes
         assert "localshift_entities" in sensor._unrecorded_attributes
         assert "orphaned_entities" in sensor._unrecorded_attributes
         assert "errors" in sensor._unrecorded_attributes

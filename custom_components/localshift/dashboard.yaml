@@ -787,8 +787,6 @@ views:
 
               Minimum Target SOC: {{ states('number.localshift_minimum_target_soc') }}%
 
-              Target SOC Minimum (effective): {{ states('sensor.localshift_target_soc_minimum') }}%
-
               Effective Cheap Price: ${{ states('sensor.localshift_price_cheap_effective') }}/kWh
 
               Cheap Charge Stop Price: ${{ states('sensor.localshift_price_cheap_charge_stop') }}/kWh
@@ -1155,7 +1153,6 @@ views:
               | Load deviation | {{ states('sensor.localshift_load_deviation') }} |
               | Decision lag | {{ states('sensor.localshift_decision_lag') }} |
               | Optimizer plan (slots) | {{ states('sensor.localshift_optimizer_plan') }} |
-              | Target SOC minimum | {{ states('sensor.localshift_target_soc_minimum') }} |
 
           - type: entities
             title: Number knobs (live values)

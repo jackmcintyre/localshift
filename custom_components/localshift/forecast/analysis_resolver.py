@@ -65,19 +65,3 @@ class ConfidenceResolver:
                 self._tomorrow, period_start, absent_confidence=self._absent_confidence
             )
         return self._absent_confidence
-
-    def get_analysis_for_period(self, period_start: datetime) -> Any | None:
-        """Return the SolcastAnalysis object that covers the given period."""
-        slot_date = period_start.date()
-
-        if self._today and self._today.intervals:
-            for interval in self._today.intervals:
-                if interval.period_start.date() == slot_date:
-                    return self._today
-
-        if self._tomorrow and self._tomorrow.intervals:
-            for interval in self._tomorrow.intervals:
-                if interval.period_start.date() == slot_date:
-                    return self._tomorrow
-
-        return self._today

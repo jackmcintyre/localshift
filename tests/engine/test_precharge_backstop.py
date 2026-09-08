@@ -956,7 +956,7 @@ class TestRunwayBackstopHysteresis:
     def test_the_hard_floor_going_live_does_not_drop_the_hold(self) -> None:
         """The coverage hole between the two arms, closed.
 
-        ``_floor_suppressed_by_solar`` hard-declines the moment ``hard_target_floor``
+        ``_precharge_required_today``'s predecessor hard-declined the moment ``hard_target_floor``
         goes non-None, while #901 independently declines when the plan's projected
         shortfall is immaterial — and both hold at once in the ordinary case, because a
         live floor makes the DP route a pre-DW charge and publish a clean shortfall.

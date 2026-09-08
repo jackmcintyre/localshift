@@ -7,7 +7,6 @@ from .forecast import (
     ForecastDiagnosticsSensor,
     ForecastHistorySensor,
     ForecastPricesSensor,
-    MinimumTargetSOCSensor,
     NetElectricityCostSensor,
     OptimizerPlanGridSensor,
     OptimizerPlanSensor,
@@ -65,7 +64,6 @@ __all__ = [
     "OptimizerPlanGridSensor",
     "LoadDeviationSensor",
     "ForecastDiagnosticsSensor",
-    "MinimumTargetSOCSensor",
     # Optimizer
     "OptimizerPlanDetailedSensor",
     "OptimizerSummarySensor",

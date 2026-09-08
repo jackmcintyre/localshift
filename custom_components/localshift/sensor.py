@@ -20,7 +20,6 @@ from .sensors import (
     LearningDecisionHistorySensor,
     LoadDeviationSensor,
     LoadShiftSignalSensor,
-    MinimumTargetSOCSensor,
     NetElectricityCostSensor,
     OptimizerPlanDetailedSensor,
     OptimizerPlanGridSensor,
@@ -51,7 +50,6 @@ __all__ = [
     "OptimizerPlanGridSensor",
     "LoadDeviationSensor",
     "ForecastDiagnosticsSensor",
-    "MinimumTargetSOCSensor",
     "ExcessSolarSensor",
     "LoadShiftSignalSensor",
     "ForecastAccuracySensor",
@@ -76,41 +74,6 @@ __all__ = [
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up LocalShift sensor entities."""
-    # Import here to avoid circular imports
-    from .sensors import (
-        AutomationReadySensor,
-        CheapChargeStopPriceSensor,
-        CloudEventSensor,
-        ComparisonResultSensor,
-        DecisionLagSensor,
-        DecisionLogSensor,
-        EffectiveCheapPriceSensor,
-        EntityHealthSensor,
-        ExcessSolarSensor,
-        ForecastAccuracyComparisonSensor,
-        ForecastAccuracySensor,
-        ForecastDiagnosticsSensor,
-        ForecastHistorySensor,
-        ForecastPricesSensor,
-        ForecastStatusSensor,
-        IntegrationStatusSensor,
-        LearningDecisionHistorySensor,
-        LoadDeviationSensor,
-        LoadShiftSignalSensor,
-        MinimumTargetSOCSensor,
-        NetElectricityCostSensor,
-        OptimizerPlanDetailedSensor,
-        OptimizerPlanGridSensor,
-        OptimizerPlanSensor,
-        OptimizerSummarySensor,
-        PriceDeltaSensor,
-        SolarBatteryForecastSensor,
-        SolarForecastAccuracySensor,
-        SolarWeightedAvgFITSensor,
-        SolcastConfidenceTodaySensor,
-        SolcastConfidenceTomorrowSensor,
-    )
-
     coordinator = entry.runtime_data
 
     entities = [
@@ -129,7 +92,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         OptimizerPlanGridSensor(coordinator, entry),  # Was ForecastGridSensor
         LoadDeviationSensor(coordinator, entry),
         ForecastDiagnosticsSensor(coordinator, entry),
-        MinimumTargetSOCSensor(coordinator, entry),
         # Excess solar load shifting sensors (backlog-high-017)
         ExcessSolarSensor(coordinator, entry),
         LoadShiftSignalSensor(coordinator, entry),

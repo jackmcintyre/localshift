@@ -175,10 +175,6 @@
         "name": "Forecast Diagnostics",
         "description": "Technical debug data for forecast system. Shows consumption profiles and weather correlation."
       },
-      "target_soc_minimum": {
-        "name": "Target SOC Minimum",
-        "description": "Minimum SOC maintained during discharge modes. Battery won't discharge below this level."
-      },
       "excess_solar": {
         "name": "Excess Solar",
         "description": "Forecasted excess solar energy available for discretionary loads. Shows how much solar you can use for EV, pool, etc."

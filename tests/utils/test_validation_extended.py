@@ -1290,33 +1290,7 @@ class TestShouldAllowAutomation:
 
 
 class TestResetMethods:
-    """Tests for reset_broken_status and reset_entity_tracking."""
-
-    def test_reset_broken_status_single_entity(self, mock_hass: MagicMock) -> None:
-        """Reset broken status for a single entity."""
-        validator = _create_validator(mock_hass)
-        health = validator._entity_health[CONF_TESLEMETRY_SOC]
-        health.is_broken = True
-        health.consecutive_failures = 10
-
-        validator.reset_broken_status(CONF_TESLEMETRY_SOC)
-
-        assert health.is_broken is False
-        assert health.consecutive_failures == 0
-
-    def test_reset_broken_status_all_entities(self, mock_hass: MagicMock) -> None:
-        """Reset broken status for all entities."""
-        validator = _create_validator(mock_hass)
-        # Mark multiple entities as broken
-        for health in validator._entity_health.values():
-            health.is_broken = True
-            health.consecutive_failures = 10
-
-        validator.reset_broken_status()  # None = reset all
-
-        for health in validator._entity_health.values():
-            assert health.is_broken is False
-            assert health.consecutive_failures == 0
+    """Tests for reset_entity_tracking."""
 
     def test_reset_entity_tracking(self, mock_hass: MagicMock) -> None:
         """Reset entity tracking when entity ID changes."""

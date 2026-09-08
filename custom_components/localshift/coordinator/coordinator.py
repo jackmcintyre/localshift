@@ -566,11 +566,6 @@ class LocalShiftCoordinator:
         if self._entity_monitor is not None:
             self._entity_monitor.read_all_external_state()
 
-    def _check_entity_health(self) -> None:
-        """Check health of all tracked entities and update data."""
-        if self._entity_monitor is not None:
-            self._entity_monitor.check_entity_health()
-
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -580,17 +575,6 @@ class LocalShiftCoordinator:
         """Handle a state change from a monitored entity."""
         if self._tick_scheduler is not None:
             self._tick_scheduler.handle_state_change(_event)
-
-    @callback
-    def _handle_periodic_tick(self, now: datetime) -> None:
-        """Handle the 1-minute periodic re-evaluation.
-
-        DEPRECATED: This method is kept for backward compatibility.
-        New tiered handlers (_handle_fast_tick, _handle_medium_tick, _handle_slow_tick)
-        are used instead. See async_start() for timer subscriptions.
-        """
-        if self._tick_scheduler is not None:
-            self._tick_scheduler.handle_periodic_tick(now)
 
     @callback
     def _handle_fast_tick(self, now: datetime) -> None:

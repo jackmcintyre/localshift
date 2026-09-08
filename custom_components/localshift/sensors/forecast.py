@@ -354,18 +354,3 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
                 else None,
             },
         }
-
-
-class MinimumTargetSOCSensor(LocalShiftSensorBase):
-    _attr_unique_id = "localshift_target_soc_minimum"
-    _attr_name = "Target SOC Minimum"
-    _attr_icon = "mdi:battery-charging-20"
-    _attr_native_unit_of_measurement = "%"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def _update_from_coordinator(self) -> None:
-        from ..const import CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC
-
-        self._attr_native_value = float(
-            self._entry.options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
-        )

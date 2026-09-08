@@ -87,20 +87,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def _validate_entities(
-        self, entities: dict[str, tuple[str, str]]
-    ) -> dict[str, str] | None:
-        """Validate entities exist, are available, and have correct domains."""
-        return await validate_all_entities(self.hass, entities)
-
-    async def _validate_notify_service(self, notify_service: str) -> str | None:
-        """Validate that a notify service exists."""
-        return await validate_notify_service(self.hass, notify_service)
-
-    async def _get_notify_services(self) -> list[str]:
-        """Get list of available notify services."""
-        return await get_notify_services(self.hass)
-
     async def _discover_pricing_defaults(self, pricing_source: str) -> dict[str, str]:
         """Discover pricing entity defaults based on pricing source."""
         discovered = await discover_pricing_entities(self.hass, pricing_source)

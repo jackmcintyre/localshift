@@ -9,7 +9,6 @@ Tests cover:
 - ForecastPricesSensor: native_value, extra_state_attributes, with/without decisions
 - OptimizerPlanGridSensor: native_value, extra_state_attributes
 - ForecastDiagnosticsSensor: native_value, extra_state_attributes
-- MinimumTargetSOCSensor: native_value
 """
 
 from datetime import datetime, timezone
@@ -25,7 +24,6 @@ from custom_components.localshift.sensors.forecast import (
     ForecastDiagnosticsSensor,
     ForecastHistorySensor,
     ForecastPricesSensor,
-    MinimumTargetSOCSensor,
     NetElectricityCostSensor,
     OptimizerPlanGridSensor,
     OptimizerPlanSensor,
@@ -556,30 +554,3 @@ class TestForecastDiagnosticsSensor:
         assert attrs["weather_avg_cooling_slope"] == 0.05
         assert attrs["weather_avg_heating_slope"] == 0.03
         assert attrs["weather_avg_r_squared"] == 0.42
-
-
-class TestMinimumTargetSOCSensor:
-    """Tests for MinimumTargetSOCSensor."""
-
-    def test_native_value_from_options(self):
-        """Test native_value reads from entry options."""
-        mock_coordinator, data = create_mock_coordinator_with_data()
-        mock_entry = MagicMock()
-        mock_entry.options = {"minimum_target_soc": 25}
-
-        sensor = MinimumTargetSOCSensor(mock_coordinator, mock_entry)
-        sensor._update_from_coordinator()
-
-        assert sensor._attr_native_value == 25.0
-
-    def test_native_value_default(self):
-        """Test native_value uses default when not in options."""
-        mock_coordinator, data = create_mock_coordinator_with_data()
-        mock_entry = MagicMock()
-        mock_entry.options = {}
-
-        sensor = MinimumTargetSOCSensor(mock_coordinator, mock_entry)
-        sensor._update_from_coordinator()
-
-        # Default is defined in const.py, typically 20
-        assert isinstance(sensor._attr_native_value, float)

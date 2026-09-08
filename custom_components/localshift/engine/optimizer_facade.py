@@ -922,19 +922,6 @@ class OptimizerFacade:
             return None
 
     @staticmethod
-    def _floor_suppressed_by_solar(optimizer_config: Any) -> bool:
-        """True only when the hard floor is dormant BECAUSE solar looked sufficient.
-
-        The solar suppression is the ONLY None-reason either backstop may act on —
-        ``allow_dw_entry_under_target``, no demand window, a non-self-consumption mode
-        and a legacy config without the field are policy or structural decisions that
-        must stay exactly as dormant as they are under #901.
-        """
-        if getattr(optimizer_config, "hard_target_floor", None) is not None:
-            return False
-        return bool(getattr(optimizer_config, "hard_floor_suppressed_by_solar", False))
-
-    @staticmethod
     def _precharge_required_today(optimizer_config: Any) -> bool:
         """True when today genuinely needs a pre-charge, by either engine signal.
 

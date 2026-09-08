@@ -778,16 +778,24 @@ class StateMachine:
         # fingerprint is invalidated, that tick is decision-allowed and the
         # optimizer mode commits instead of staying pinned at MANUAL.
 
-    async def _handle_soc_monitoring(self, data: CoordinatorData) -> bool:
-        """Handle SOC-based charge target enforcement.
+    def _log_soc_target_reached(self, data: CoordinatorData) -> None:
+        """Log when SOC reaches the battery target during grid/boost charging.
 
-        Returns True if a transition was executed and evaluation should return.
+        Hoisted from the retired ``_handle_soc_monitoring`` gate (#984 dead-code
+        removal): every branch of that gate returned False, so the
+        ``if await self._handle_soc_monitoring(data): return`` it guarded in
+        ``_handle_stable_mode`` was unreachable dead code. This log line is not
+        dead, though — it is the live production signal that SOC has reached
+        the battery target while the optimizer intentionally holds off any
+        target-triggered stop. Hardware naturally stops charging when backup
+        reserve is reached; we do not transition here — the optimizer decides
+        when to change modes.
         """
         if self._commanded_mode not in (
             BatteryMode.GRID_CHARGING,
             BatteryMode.BOOST_CHARGING,
         ):
-            return False
+            return
 
         battery_target = float(
             self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
@@ -804,18 +812,14 @@ class StateMachine:
         if not (
             needs_soc_monitoring and data.soc is not None and data.soc >= battery_target
         ):
-            return False
+            return
 
-        # SOC target reached, but we respect optimizer control.
-        # Hardware will naturally stop charging when backup reserve is reached.
-        # Do not transition; let the optimizer decide when to change modes.
         _LOGGER.info(
             "SOC %.1f%% reached battery target %.0f%% but remaining in %s (optimizer control)",
             data.soc,
             battery_target,
             self._commanded_mode.value,
         )
-        return False
 
     def _get_debounce_duration(self, desired: BatteryMode) -> timedelta:
         """Get debounce duration for a desired transition."""
@@ -825,48 +829,6 @@ class StateMachine:
             return timedelta(0)
 
         return self.get_debounce_for_transition(self._commanded_mode, desired)
-
-    def _handle_debounce_timing(
-        self, desired: BatteryMode, now: datetime, debounce: timedelta
-    ) -> bool:
-        """Handle debounce tracking for desired transitions.
-
-        Returns True if evaluation should return early.
-        """
-        # Clear timers for modes no longer desired.
-        # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
-        # desired at t=0, flipped away at t=2min, then desired again at t=3min,
-        # the old t=0 timer would make the debounce appear nearly satisfied.
-        # Clearing stale timers ensures the full debounce is always served from
-        # a continuous period of desire.
-        for mode in list(self._mode_desired_since.keys()):
-            if mode != desired:
-                self._mode_desired_since.pop(mode, None)
-
-        if desired not in self._mode_desired_since:
-            # First time this mode is (continuously) desired — start the timer
-            self._mode_desired_since[desired] = now
-            if debounce > timedelta(0):
-                _LOGGER.info(
-                    "Mode %s desired, debounce %s starts now",
-                    desired.value,
-                    debounce,
-                )
-                return True
-
-        desired_since = self._mode_desired_since[desired]
-        elapsed = now - desired_since
-
-        if elapsed < debounce:
-            _LOGGER.info(
-                "Mode %s desired for %s, need %s — waiting",
-                desired.value,
-                elapsed,
-                debounce,
-            )
-            return True
-
-        return False
 
     async def evaluate_state_machine(
         self,
@@ -1095,8 +1057,7 @@ class StateMachine:
         self._pending_retry_mode = None
         self._skip_next_debounce = False
 
-        if await self._handle_soc_monitoring(data):
-            return
+        self._log_soc_target_reached(data)
 
         if not self._get_switch_state("dry_run"):
             await self._perform_health_check(data)

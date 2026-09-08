@@ -34,20 +34,6 @@ def _normalize_slot_time(slot_start: datetime) -> datetime:
     return dt_util.as_local(slot_start)
 
 
-def _get_period_estimate(entry: dict[str, Any]) -> float:
-    """Extract the best available estimate from a forecast entry.
-
-    Priority: pv_estimate > estimate > pv_estimate10 > estimate10 > 0.0
-    """
-    return float(
-        entry.get("pv_estimate")
-        or entry.get("estimate")
-        or entry.get("pv_estimate10")
-        or entry.get("estimate10")
-        or 0.0
-    )
-
-
 def _blend_solar_estimate(
     pv_estimate: float,
     pv_estimate10: float,

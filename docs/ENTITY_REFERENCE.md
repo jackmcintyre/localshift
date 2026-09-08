@@ -92,7 +92,6 @@ user-facing entities with no category and appear on the main device card.
 | `sensor.localshift_solar_weighted_avg_fit` | `localshift_solar_weighted_avg_fit` | `sensor` | — |
 | `sensor.localshift_solcast_confidence_today` | `localshift_solcast_confidence_today` | `sensor` | diagnostic |
 | `sensor.localshift_solcast_confidence_tomorrow` | `localshift_solcast_confidence_tomorrow` | `sensor` | diagnostic |
-| `sensor.localshift_target_soc_minimum` | `localshift_target_soc_minimum` | `sensor` | — |
 | `switch.localshift_allow_dw_entry_under_target` | `localshift_allow_dw_entry_under_target` | `switch` | config |
 | `switch.localshift_automation_enabled` | `localshift_automation_enabled` | `switch` | — |
 | `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
@@ -394,23 +393,6 @@ Attributes:
   weather_avg_r_squared: 0.42
   weather_sample_count: 5723
 ```
-
----
-
-### 12. sensor.localshift_target_soc_minimum
-
-**Purpose:** Minimum target SOC for discharge modes (base reserve).
-
-**State:** Configured minimum SOC percentage
-
-**Example Data:**
-```
-State: 10.0
-```
-
-**Configuration:** Set via `number.localshift_minimum_target_soc`
-
-This is the floor SOC maintained during spike discharge and proactive export modes to protect battery health and ensure reserve capacity.
 
 ---
 

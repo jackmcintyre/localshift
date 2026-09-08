@@ -7,13 +7,11 @@ import pytest
 
 from custom_components.localshift.engine.price_calculator import (
     _STALE_TARGET_REACHED_SOC_DEADBAND_PCT,
-    _collect_prices_by_source,
     _compute_price_slot_data,
     _parse_price_entry,
     _target_reached_blocks_urgency,
     get_price_for_slot,
     get_price_for_slot_or_none,
-    get_price_for_slot_with_source,
 )
 from custom_components.localshift.engine.price_calculator import PriceCalculator
 
@@ -222,97 +220,6 @@ class TestComputePriceSlotData:
         assert prices == [0.12]
 
 
-class TestCollectPricesBySource:
-    """Tests for _collect_prices_by_source helper."""
-
-    def test_empty_forecast(self):
-        """Test empty forecast returns empty data."""
-        result = _collect_prices_by_source([], _make_utc_datetime(), 15)
-        assert result["prices_5min"] == []
-        assert result["prices_30min"] == []
-        assert result["fallback_price"] == 0.0
-        assert result["fallback_source"] == "unknown"
-
-    def test_5min_prices_collected(self):
-        """Test 5-minute prices are collected separately."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.10,
-                "duration": 5,
-            },
-            {
-                "start_time": (now + timedelta(minutes=5)).isoformat(),
-                "per_kwh": 0.12,
-                "duration": 5,
-            },
-        ]
-        result = _collect_prices_by_source(forecast, now, 15)
-        assert result["prices_5min"] == [0.10, 0.12]
-        assert result["prices_30min"] == []
-
-    def test_30min_prices_collected(self):
-        """Test 30-minute prices are collected separately."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.15,
-                "duration": 30,
-            }
-        ]
-        result = _collect_prices_by_source(forecast, now, 15)
-        assert result["prices_30min"] == [0.15]
-        assert result["prices_5min"] == []
-
-    def test_mixed_sources(self):
-        """Test mixed 5min and 30min data."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.10,
-                "duration": 5,
-            },
-            {
-                "start_time": (now + timedelta(minutes=5)).isoformat(),
-                "per_kwh": 0.20,
-                "duration": 30,
-            },
-        ]
-        result = _collect_prices_by_source(forecast, now, 15)
-        assert result["prices_5min"] == [0.10]
-        assert result["prices_30min"] == [0.20]
-
-    def test_fallback_tracking(self):
-        """Test fallback price and source tracking."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": (now - timedelta(minutes=10)).isoformat(),
-                "per_kwh": 0.18,
-                "duration": 30,
-            }
-        ]
-        result = _collect_prices_by_source(forecast, now, 15)
-        assert result["fallback_price"] == 0.18
-        assert result["fallback_source"] == "30min"
-
-    def test_custom_interval_minutes(self):
-        """Test custom interval minutes for slot end."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.25,
-                "duration": 30,
-            }
-        ]
-        result = _collect_prices_by_source(forecast, now, 30)
-        assert result["prices_30min"] == [0.25]
-
-
 class TestGetPriceForSlot:
     """Tests for get_price_for_slot function."""
 
@@ -360,91 +267,6 @@ class TestGetPriceForSlot:
             }
         ]
         assert get_price_for_slot(forecast, now) == 0.15
-
-
-class TestGetPriceForSlotWithSource:
-    """Tests for get_price_for_slot_with_source function."""
-
-    def test_empty_forecast_returns_unknown(self):
-        """Test empty forecast returns 0.0, unknown."""
-        price, source = get_price_for_slot_with_source([], _make_utc_datetime())
-        assert price == 0.0
-        assert source == "unknown"
-
-    def test_5min_data_preferred(self):
-        """Test 5-min data is preferred over 30-min."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.10,
-                "duration": 5,
-            }
-        ]
-        price, source = get_price_for_slot_with_source(forecast, now)
-        assert price == 0.10
-        assert source == "5min"
-
-    def test_30min_data_fallback(self):
-        """Test 30-min data is used when no 5-min available."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.15,
-                "duration": 30,
-            }
-        ]
-        price, source = get_price_for_slot_with_source(forecast, now)
-        assert price == 0.15
-        assert source == "30min"
-
-    def test_5min_priority_over_30min(self):
-        """Test 5-min data takes priority when both available."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.10,
-                "duration": 5,
-            },
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.20,
-                "duration": 30,
-            },
-        ]
-        price, source = get_price_for_slot_with_source(forecast, now)
-        assert price == 0.10
-        assert source == "5min"
-
-    def test_custom_interval(self):
-        """Test custom interval minutes."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.22,
-                "duration": 30,
-            }
-        ]
-        price, source = get_price_for_slot_with_source(forecast, now, 30)
-        assert price == 0.22
-        assert source == "30min"
-
-    def test_fallback_source(self):
-        """Test fallback when no overlapping data."""
-        now = _make_utc_datetime()
-        forecast = [
-            {
-                "start_time": (now - timedelta(minutes=10)).isoformat(),
-                "per_kwh": 0.18,
-                "duration": 5,
-            }
-        ]
-        price, source = get_price_for_slot_with_source(forecast, now)
-        assert price == 0.18
-        assert source == "5min"
 
 
 class TestGetPriceForSlotOrNull:

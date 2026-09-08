@@ -7,7 +7,6 @@ import pytest
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.negative_fit import (
-    compute_recoverability_floor_pct,
     derive_negative_fit_avoidance_context,
 )
 from custom_components.localshift.engine.penalties import (
@@ -298,69 +297,6 @@ class TestNegativeFitAvoidanceContext:
         assert ctx.risk_window_start_idx == 12
         assert ctx.risk_window_end_idx == 23
         assert ctx.required_headroom_kwh > 0
-
-    def test_recoverability_floor_allows_below_target(self):
-        """Recoverability floor can be below target when recovery is feasible."""
-        config = OptimizerConfig(
-            demand_window_target_soc_pct=100.0,
-            min_soc_pct=10.0,
-            battery_capacity_kwh=13.5,
-        )
-        slots = []
-        for i in range(20):
-            if i < 10:
-                sell = 0.07
-                solar = 0.0
-            else:
-                sell = -0.02
-                solar = 2.0
-            slots.append(self._make_slot(i, sell_price=sell, solar_kwh=solar))
-        inputs = OptimizerInputs(
-            cycle_id="test",
-            initial_soc_pct=58.0,
-            slots=slots,
-            config=config,
-        )
-        ctx = derive_negative_fit_avoidance_context(inputs)
-        assert ctx is not None
-        floor_pct = compute_recoverability_floor_pct(
-            slot_idx=5,
-            context=ctx,
-            config=config,
-        )
-        assert floor_pct < config.demand_window_target_soc_pct
-        assert floor_pct >= config.min_soc_pct
-
-    def test_recoverability_floor_stays_high_with_weak_solar(self):
-        """Recoverability floor stays near target when recovery solar is weak."""
-        config = OptimizerConfig(
-            demand_window_target_soc_pct=100.0,
-            min_soc_pct=10.0,
-            battery_capacity_kwh=13.5,
-        )
-        slots = []
-        for i in range(20):
-            if i < 10:
-                sell = 0.07
-                solar = 0.0
-            else:
-                sell = -0.02
-                solar = 0.1
-            slots.append(self._make_slot(i, sell_price=sell, solar_kwh=solar))
-        inputs = OptimizerInputs(
-            cycle_id="test",
-            initial_soc_pct=95.0,
-            slots=slots,
-            config=config,
-        )
-        ctx = derive_negative_fit_avoidance_context(inputs)
-        assert ctx is not None
-        floor_pct = compute_recoverability_floor_pct(
-            slot_idx=5,
-            context=ctx,
-            config=config,
-        )
-        assert floor_pct >= 80.0
 
     def test_context_stops_when_headroom_sufficient(self):
         """Context reflects when enough headroom already exists."""

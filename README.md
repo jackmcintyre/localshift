@@ -179,7 +179,6 @@ Devices & Services. Full canonical reference:
 | `sensor.localshift_optimizer_plan_grid` | Grid-interaction forecast series |
 | `sensor.localshift_load_deviation` | Live load vs forecast deviation |
 | `sensor.localshift_forecast_diagnostics` | Diagnostic/debug data for the forecast system |
-| `sensor.localshift_target_soc_minimum` | Minimum target SOC for discharge modes |
 | `sensor.localshift_excess_solar` | Forecasted excess solar available for load shifting |
 | `sensor.localshift_load_shift_signal` | Actionable signal for load-shifting automations |
 | `sensor.localshift_forecast_accuracy` | Forecast prediction accuracy tracking |

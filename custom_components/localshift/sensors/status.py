@@ -105,7 +105,6 @@ class EntityHealthSensor(LocalShiftSensorBase):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _unrecorded_attributes = frozenset({
         "entities",
-        "dependencies",
         "localshift_entities",
         "orphaned_entities",
         "errors",
@@ -127,7 +126,6 @@ class EntityHealthSensor(LocalShiftSensorBase):
         orphans = self.coordinator.data.orphaned_localshift_entities
         return {
             "entities": dep_health,
-            "dependencies": dep_health,
             "localshift_entities": ls_health,
             "orphaned_entities": orphans,
             "errors": self.coordinator.data.entity_errors,
