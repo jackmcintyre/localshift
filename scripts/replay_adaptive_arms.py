@@ -75,6 +75,28 @@ ARMS: dict[str, dict[str, float]] = {
 }
 
 
+def _seed_horizon(data: Any, payload: dict[str, Any]) -> None:
+    """Seed the price horizon BEFORE the first pass.
+
+    A fresh CoordinatorData carries forecast_horizon_hours=0.0 and the
+    cheap-price calculation reads it before the optimizer facade writes the
+    real span; the 0.0 collapses the cheap percentile to a tenth of its
+    configured value (horizon/24 floored at 0.1). Live never sees that because
+    the previous cycle's value persists — and the calculator's EMA hysteresis
+    means a wrong first value is only partly corrected by later passes, so the
+    seed has to be right first time.
+    """
+    gf = payload.get("general_forecast") or []
+    if not gf:
+        return
+    first = datetime.fromisoformat(gf[0]["start_time"])
+    last = datetime.fromisoformat(gf[-1]["start_time"])
+    span_h = (last - first).total_seconds() / 3600.0 + float(
+        gf[-1].get("duration", 30)
+    ) / 60.0
+    data.forecast_horizon_hours = max(0.0, span_h)
+
+
 def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, Any]:
     """Run one scenario under one set of adaptive offsets."""
     payload = dict(scenario["input"])
@@ -83,6 +105,7 @@ def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, An
     test_time = datetime.fromisoformat(payload["test_time"])
     data = setup_coordinator_data(payload)
     hass = setup_mock_hass(payload)
+    _seed_horizon(data, payload)
     entry = create_mock_entry(scenario.get("config_overrides", {}))
     engine = ComputationEngine(
         hass,
@@ -100,6 +123,11 @@ def run_arm(scenario: dict[str, Any], offsets: dict[str, float]) -> dict[str, An
         patch.object(engine._history_fetcher, "_historical_load_source", "none"),
         patch.object(engine._history_fetcher, "_recent_load_1hr_kw", recent_load),
     ):
+        # Two passes: the first warms the cycle-lagged coordinator fields that
+        # live carries over from the previous cycle (OptimizerConfig's
+        # forecast_horizon_hours feeds the short-horizon uncertainty penalty);
+        # the second is the one reported.
+        engine.compute_derived_values(data)
         engine.compute_derived_values(data)
 
     # Costs come off data.optimizer_result. The SOC trajectory has to be read
