@@ -28,6 +28,7 @@ Use this index to quickly determine which documentation files to consult before 
 
 ### Should Read
 - **[OPTIMIZER_DP_ROLLOUT.md](OPTIMIZER_DP_ROLLOUT.md)** — Rollout patterns and safety gates
+- **[PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md)** — Price-driven target blocks: seasonal demand window vs the expensive evening (design, 2026-09-08)
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — Common optimizer issues
 
 ### Key Constraints
