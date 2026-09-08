@@ -616,9 +616,6 @@ class ComputationEngine:
 
         self._reset_daily_precharge_latch(data, ctx.today)
 
-        # Pass adaptive parameters to load forecaster (Issue #170 Phase 2)
-        self._load_forecaster.set_adaptive_params(data.adaptive_params)
-
         # Issue #679: wire the per-day-of-week load profiles into the
         # forecaster on the live path. Sourced fresh every cycle from
         # HistoryFetcher (populated by the async fetch in

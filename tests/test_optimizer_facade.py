@@ -21,7 +21,7 @@ class _StubSlotBuilder:
     def __init__(self, **_kwargs) -> None:
         pass
 
-    def build_slots(self, _data, _adaptive_params, now_dt=None):
+    def build_slots(self, _data, now_dt=None):
         return [], None
 
 
@@ -29,7 +29,7 @@ class _StubSlotBuilderWithOneSlot:
     def __init__(self, **_kwargs) -> None:
         pass
 
-    def build_slots(self, _data, _adaptive_params, now_dt=None):
+    def build_slots(self, _data, now_dt=None):
         return [
             SimpleNamespace(solar_kwh=1.0, timestamp_iso="2026-01-15T10:00:00+00:00")
         ], MagicMock()
@@ -39,7 +39,7 @@ class _ExplodingSlotBuilder:
     def __init__(self, **_kwargs) -> None:
         pass
 
-    def build_slots(self, _data, _adaptive_params, now_dt=None):
+    def build_slots(self, _data, now_dt=None):
         raise RuntimeError("boom")
 
 
@@ -87,7 +87,7 @@ def test_facade_wires_solar_can_reach_target_in_dw_correctly():
         def __init__(self, **_kwargs):
             pass
 
-        def build_slots(self, _data, _adaptive_params, now_dt=None):
+        def build_slots(self, _data, now_dt=None):
             return [MagicMock()], mock_metadata
 
     with patch(
@@ -145,7 +145,7 @@ def _run_inline_with(result: MagicMock, data: CoordinatorData, config_options: d
         def __init__(self, **_kwargs):
             pass
 
-        def build_slots(self, _data, _adaptive_params, now_dt=None):
+        def build_slots(self, _data, now_dt=None):
             return [MagicMock()], metadata
 
     with patch(
@@ -726,7 +726,6 @@ class _ShadowSlotBuilderWithOneSlot:
     def build_slots(
         self,
         _data,
-        _adaptive_params,
         now_dt=None,
         override_general_forecast=None,
         override_feed_in_forecast=None,
@@ -801,7 +800,6 @@ def test_run_shadow_comparison_threads_solcast_analysis_and_logs_mismatch():
     data.general_price = 0.25
     data.general_forecast_shadow = cast(Any, [{"start": "shadow"}])
     data.feed_in_forecast_shadow = cast(Any, [{"start": "shadow-fit"}])
-    data.adaptive_params = cast(Any, None)
     data.soc = 55.0
     data.active_mode = BatteryMode.SELF_CONSUMPTION
     data.solcast_analysis_today = cast(Any, object())
@@ -852,7 +850,6 @@ def test_run_shadow_comparison_handles_empty_slots_invalid_soc_and_exceptions(ca
     data.general_price_shadow = 0.15
     data.general_forecast_shadow = cast(Any, [{"start": "shadow"}])
     data.feed_in_forecast_shadow = cast(Any, [{"start": "shadow-fit"}])
-    data.adaptive_params = cast(Any, None)
     data.soc = 55.0
 
     empty_facade = OptimizerFacade(slot_builder_cls=_ShadowSlotBuilderEmpty)

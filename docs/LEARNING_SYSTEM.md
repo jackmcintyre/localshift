@@ -20,7 +20,12 @@ from scratch.
 
 Its output reached the optimizer as six offsets on `data.adaptive_params`,
 applied in `engine/optimizer_runner.py` — most importantly `cheap_price_bias`,
-which shifts the price threshold below which grid charging is allowed.
+which shifts the price threshold below which grid charging is allowed. That
+plumbing (the `AdaptiveParameters` dataclass, the `data.adaptive_params`
+field, `OPTIMIZABLE_PARAMS`, and the four offset reads in
+`optimizer_runner.py`) was itself removed in #982, once it was confirmed
+nothing wrote to the field any more and every read was at the arithmetic
+identity — see "What was still around" below.
 
 ## Why it was retired
 
@@ -91,9 +96,16 @@ A ten-day offline replay over real captured days, varying only the offsets
   separate, healthy loop and was untouched.
 - **Weather/load correlation** (`learning/correlation.py`) feeds the load
   forecast and is independent of parameter learning.
-- **`data.adaptive_params`** remains at its zero default. The optimizer reads
-  the offsets unconditionally and zero is the identity, so the field stays
-  rather than threading a removal through seven call sites.
+- **`data.adaptive_params`** and the code that read it were removed in #982
+  (the second half of this retirement): the `AdaptiveParameters` dataclass,
+  the field itself, `OPTIMIZABLE_PARAMS`/`OptimizableParam`, and the offset
+  reads in `optimizer_runner.py`, `engine/slots.py`, `forecast/load.py`, and
+  `engine/outcomes.py`. Every one of those reads was already at its
+  arithmetic identity (zero offset, 1.0 factor), so removing them is a no-op
+  — verified by replaying a captured horizon before and after and confirming
+  the plan didn't move. The same change removed `forecast/corrections.py`
+  (#970): a forecast-correction provider that was wired to nothing and was
+  loaded/saved as an always-empty JSON blob every telemetry save cycle.
 
 ## Bringing it back
 

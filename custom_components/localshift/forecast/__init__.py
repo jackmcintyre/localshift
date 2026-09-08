@@ -3,7 +3,6 @@
 from .accuracy import ForecastAccuracyEngine
 from .accuracy_store import AccuracyMetricsStore
 from .bootstrapper import ForecastBootstrapper
-from .corrections import ForecastCorrectionProvider
 from .history import HistoryFetcher
 from .history_store import ForecastHistoryStore
 from .load import LoadForecaster, LoadProfiles
@@ -19,7 +18,6 @@ __all__ = [
     "AccuracyMetricsStore",
     "ForecastAccuracyEngine",
     "ForecastBootstrapper",
-    "ForecastCorrectionProvider",
     "ForecastHistoryStore",
     "ForecastPipeline",
     "HistoryFetcher",

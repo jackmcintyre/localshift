@@ -10,7 +10,6 @@ from custom_components.localshift.const import (
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
     MIN_SAMPLES_PER_DAY_HOUR,
 )
-from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
 from custom_components.localshift.forecast.load import (
     LoadForecaster,
     LoadProfiles,
@@ -318,34 +317,6 @@ class TestLoadForecasterExponentialDecay:
         expected = 0.3 * 0.45 + 0.7 * 0.5
         assert abs(kw - round(expected, 3)) < 0.001
 
-    def test_adaptive_bias_applied(self, mock_adaptive_params):
-        """Test consumption_forecast_bias adaptive parameter is applied.
-
-        Positive bias should increase forecast, negative should decrease.
-        """
-        mock_entry = _create_mock_entry()
-        forecaster = LoadForecaster(mock_entry)
-        forecaster.set_adaptive_params(mock_adaptive_params)
-        hourly_avg = {10: 0.5, 11: 0.6, 12: 0.7}
-
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw=hourly_avg,
-            slot_hour=10,
-            current_hour=11,
-            current_load_kw=0.45,
-            recent_load_kw=0.5,
-        )
-
-        # With bias of +0.1, expected: decay_weighted_result + 0.1
-        expected_live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
-            DEFAULT_LOAD_DECAY_FACTOR**1
-        )
-        expected_historical_weight = 1.0 - expected_live_weight
-        base_kw = (expected_live_weight * 0.5) + (expected_historical_weight * 0.5)
-        expected_kw = round(max(0.0, base_kw + 0.1), 3)
-
-        assert abs(kw - expected_kw) < 0.001
-
     def test_midnight_wrap_far_future_uses_historical(self):
         """Test hours_ahead prevents spurious live-blending for distant slots.
 
@@ -424,82 +395,6 @@ class TestLoadForecasterExponentialDecay:
         assert source == "live_load_fallback"
         assert kw == 0.0
         assert "NO_LOAD_DATA" in caplog.text
-
-    def test_context_correction_applies_when_context_provided(self):
-        forecaster = _create_load_forecaster()
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 1, 11, "summer")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-            day_of_week=1,
-            season="summer",
-        )
-
-        assert source == "blended_live"
-        assert kw == 1.5
-
-    def test_context_correction_runs_after_global_bias(self):
-        forecaster = _create_load_forecaster()
-        adaptive = MagicMock()
-        adaptive.get.return_value = 0.2
-        forecaster.set_adaptive_params(adaptive)
-
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 2, 11, "winter")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-            day_of_week=2,
-            season="winter",
-        )
-
-        assert kw == 1.8
-
-    def test_context_correction_ignored_without_context_parameters(self):
-        forecaster = _create_load_forecaster()
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 4, 11, "spring")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-        )
-
-        assert source == "blended_live"
-        assert kw == 1.0
-
-    def test_context_correction_neutral_factor_returns_original_load(self):
-        forecaster = _create_load_forecaster()
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(1.0, 1.0, 6, 11, "autumn")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-            day_of_week=6,
-            season="autumn",
-        )
-
-        assert kw == 1.0
 
     def test_parse_time_option_valid_and_invalid(self):
         entry = _create_mock_entry()
@@ -601,14 +496,6 @@ class TestLoadForecasterOutputCeiling:
 def mock_weather_correlation():
     """Mock WeatherCorrelation for testing."""
     mock = MagicMock()
-    return mock
-
-
-@pytest.fixture
-def mock_adaptive_params():
-    """Mock AdaptiveParameters with consumption_forecast_bias."""
-    mock = MagicMock()
-    mock.get.return_value = 0.1  # +0.1 bias
     return mock
 
 
@@ -1266,8 +1153,10 @@ class TestPerDayOfWeekProfiles:
             "global_avg": 23,
         }
 
-    def test_context_correction_still_applies_after_profile_resolution(self):
-        """Ordering is unchanged: profile -> weather -> bias -> context correction."""
+    def test_profile_resolution_is_the_final_stage(self):
+        """Ordering: profile -> weather. #970 removed the context-correction
+        stage that used to run after this; profile resolution's own output
+        is now the final result, unmodified."""
         forecaster = _create_load_forecaster()
         forecaster.set_daily_profiles(
             self._profiles(
@@ -1275,9 +1164,6 @@ class TestPerDayOfWeekProfiles:
                 daily_counts={1: {11: MIN_SAMPLES_PER_DAY_HOUR}},
             )
         )
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 1, 11, "summer")
-        forecaster.set_forecast_corrections(corrections)
 
         kw, source = forecaster.estimate_hourly_consumption_kw(
             hourly_avg_kw=_full_profile(0.5),
@@ -1286,15 +1172,10 @@ class TestPerDayOfWeekProfiles:
             current_load_kw=0.0,
             recent_load_kw=0.0,
             day_of_week=1,
-            season="summer",
         )
 
         assert source == "profile_hour:day_1"
-        # actual/forecast ratio is 2.0/1.0=2.0, clamped to the existing
-        # CORRECTION_CLAMP_MAX (1.5) by ForecastCorrectionProvider -- the
-        # clamp is pre-existing, unrelated-to-#679 behaviour this test must
-        # not silently bypass.
-        assert kw == 1.5
+        assert kw == 1.0
 
     def test_profiles_with_non_numeric_entry_are_ignored(self):
         """A malformed injected profile must not raise; the rung is skipped."""

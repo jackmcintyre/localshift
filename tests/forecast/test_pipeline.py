@@ -122,6 +122,9 @@ def test_compute_load_forecast_slots_tallies_source_counts():
 
 
 def test_compute_load_forecast_slots_passes_context():
+    """#970 removed the ``season`` context (fed only the retired forecast
+    corrections); ``day_of_week`` stays, feeding the #679 per-day-of-week
+    load profiles."""
     data = CoordinatorData()
     data.weather_temperature_forecast = {}
     data.load_power_kw = 0.5
@@ -146,9 +149,8 @@ def test_compute_load_forecast_slots_passes_context():
 
     assert len(load_forecaster.calls) == 4
     assert all("day_of_week" in call for call in load_forecaster.calls)
-    assert all("season" in call for call in load_forecaster.calls)
     assert all(call["day_of_week"] == 0 for call in load_forecaster.calls)
-    assert all(call["season"] == "winter" for call in load_forecaster.calls)
+    assert all("season" not in call for call in load_forecaster.calls)
 
 
 def test_compute_load_forecast_slots_day_of_week_changes_across_midnight():

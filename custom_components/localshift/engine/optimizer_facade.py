@@ -247,9 +247,7 @@ class OptimizerFacade:
                 ha_timezone=ha_timezone,
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
             )
-            slots, slot_metadata = slot_builder.build_slots(
-                data, data.adaptive_params, now_dt=now_dt
-            )
+            slots, slot_metadata = slot_builder.build_slots(data, now_dt=now_dt)
 
             weather_condition = getattr(data, "weather_condition", None) or "unknown"
             self._record_forecasts_for_slots(
@@ -1273,7 +1271,6 @@ class OptimizerFacade:
             # comparison_match / shadow_decision.
             shadow_slots, _ = slot_builder.build_slots(
                 data,
-                data.adaptive_params,
                 now_dt=now_dt,
                 override_general_forecast=data.general_forecast_shadow,
                 override_feed_in_forecast=data.feed_in_forecast_shadow,

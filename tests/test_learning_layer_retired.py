@@ -37,11 +37,14 @@ RETIRED_MODULES = (
     "engine/counterfactual.py",
     "learning/orchestrator.py",
     "sensors/learning.py",
+    "forecast/corrections.py",
 )
 
-# CoordinatorData fields that only ever carried learning output. adaptive_params
-# is deliberately NOT here: it survives at its zero default because the
-# optimizer reads it unconditionally and zero is the identity.
+# CoordinatorData fields that only ever carried learning output.
+# adaptive_params joined this list in #982: the layer that populated it was
+# already retired, and by then nothing wrote to it any more, so every read
+# was at the arithmetic identity (zero offset, 1.0 factor) and the plumbing
+# itself came out too.
 RETIRED_FIELDS = (
     "optimization_weights",
     "contextual_adjustments_active",
@@ -49,6 +52,7 @@ RETIRED_FIELDS = (
     "active_bias_corrections",
     "last_pattern_analysis",
     "weather_anomaly_weight",
+    "adaptive_params",
 )
 
 
@@ -65,23 +69,3 @@ def test_retired_field_is_absent(field_name: str) -> None:
         f"CoordinatorData.{field_name} is back — that field only ever carried "
         "parameter-learning output."
     )
-
-
-def test_adaptive_params_survive_at_the_zero_identity() -> None:
-    """The optimizer still reads the offsets, so the field must exist and be zero.
-
-    engine/optimizer_runner.py applies cheap_price_bias, the two SOC margins and
-    export_threshold_adjustment unconditionally. Removing the field would break
-    the optimizer; letting it default to anything but zero would silently
-    reintroduce the behaviour the ten-day replay was run to remove.
-    """
-    params = CoordinatorData().adaptive_params
-    assert params.values == {}
-    for name in (
-        "cheap_price_bias",
-        "export_threshold_adjustment",
-        "grid_charge_soc_headroom",
-        "overnight_drain_safety_margin",
-    ):
-        assert params.get(name, 0.0) == 0.0
-    assert params.get("solar_confidence_factor", 1.0) == 1.0

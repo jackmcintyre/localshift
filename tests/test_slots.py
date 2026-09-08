@@ -2,7 +2,6 @@
 
 Tests verify that SlotBuilder.build_slots() correctly:
 - Reads raw coordinator data (general_forecast, feed_in_forecast, solcast, load_forecast_slots)
-- Applies solar_confidence_factor adaptive param
 - Does NOT apply consumption_forecast_bias (already applied by LoadForecaster)
 - Computes demand window flags correctly
 - Returns typed SlotBuildMetadata with accurate counts
@@ -20,7 +19,6 @@ from custom_components.localshift.engine.slots import (
     SlotBuildMetadata,
     SlotContext,
 )
-from custom_components.localshift.coordinator import AdaptiveParameters
 
 
 class TestSlotBuildMetadata:
@@ -33,7 +31,6 @@ class TestSlotBuildMetadata:
             five_min_slots=48,
             thirty_min_slots=48,
             horizon_hours=24.0,
-            solar_confidence_factor=0.9,
             slots_with_defaulted_solar=5,
             slots_with_defaulted_price=2,
             slots_with_defaulted_consumption=0,
@@ -42,7 +39,6 @@ class TestSlotBuildMetadata:
         assert metadata.five_min_slots == 48
         assert metadata.thirty_min_slots == 48
         assert metadata.horizon_hours == 24.0
-        assert metadata.solar_confidence_factor == 0.9
         assert metadata.slots_with_defaulted_solar == 5
         assert metadata.slots_with_defaulted_price == 2
         assert metadata.slots_with_defaulted_consumption == 0
@@ -54,7 +50,6 @@ class TestSlotBuildMetadata:
             five_min_slots=2,
             thirty_min_slots=2,
             horizon_hours=12.0,
-            solar_confidence_factor=1.0,
             slots_with_defaulted_solar=1,
             slots_with_defaulted_price=1,
             slots_with_defaulted_consumption=0,
@@ -87,7 +82,6 @@ class TestSlotBuildMetadata:
             five_min_slots=0,
             thirty_min_slots=0,
             horizon_hours=0.0,
-            solar_confidence_factor=1.0,
             slots_with_defaulted_solar=0,
             slots_with_defaulted_price=0,
             slots_with_defaulted_consumption=0,
@@ -121,53 +115,6 @@ class TestIntegration:
         # Verify builder has required methods
         assert hasattr(builder, "build_slots")
         assert callable(builder.build_slots)
-
-
-class TestGetSolarConfidenceFactor:
-    """Tests for _get_solar_confidence_factor method."""
-
-    @pytest.fixture
-    def builder(self):
-        """Create a SlotBuilder instance."""
-        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
-        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
-
-    def test_none_params_returns_default(self, builder):
-        """Test None adaptive params returns 1.0."""
-        result = builder._get_solar_confidence_factor(None)
-        assert result == 1.0
-
-    def test_params_with_value(self, builder):
-        """Test adaptive params with solar_confidence_factor."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": 0.8})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 0.8
-
-    def test_params_without_value_uses_default(self, builder):
-        """Test adaptive params without solar_confidence_factor uses default."""
-        params = AdaptiveParameters(values={})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 1.0
-
-    def test_clamp_at_zero(self, builder):
-        """Test negative values clamped to 0.0."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": -0.5})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 0.0
-
-    def test_clamp_at_two(self, builder):
-        """Test values > 2.0 clamped to 2.0."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": 3.0})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 2.0
-
-    def test_exact_boundary_values(self, builder):
-        """Test exact boundary values 0.0 and 2.0."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": 0.0})
-        assert builder._get_solar_confidence_factor(params) == 0.0
-
-        params = AdaptiveParameters(values={"solar_confidence_factor": 2.0})
-        assert builder._get_solar_confidence_factor(params) == 2.0
 
 
 class TestComputeBaseSlot:
@@ -287,11 +234,11 @@ class TestGetSolarKwh:
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
-        result = builder._get_solar_kwh([], now, 30, 1.0)
+        result = builder._get_solar_kwh([], now, 30)
         assert result == 0.0
 
-    def test_applies_confidence_factor(self, builder):
-        """Test confidence factor is applied."""
+    def test_returns_raw_solar_for_slot(self, builder):
+        """Test raw solar kWh for the slot is returned (no confidence-factor multiply)."""
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
@@ -301,16 +248,22 @@ class TestGetSolarKwh:
                 "pv_estimate": 2.0,
             }
         ]
-        result = builder._get_solar_kwh(solcast, now, 30, 0.5)
-        assert result == 0.5
+        result = builder._get_solar_kwh(solcast, now, 30)
+        assert result == 1.0  # 2.0 kW * 0.5h
 
     def test_clamp_negative_to_zero(self, builder):
-        """Test negative solar values are clamped to 0.0."""
+        """Test a negative underlying solar estimate is clamped to 0.0."""
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
-        result = builder._get_solar_kwh([], now, 30, -1.0)
-        assert result >= 0.0
+        solcast = [
+            {
+                "period_start": now.isoformat(),
+                "pv_estimate": -2.0,
+            }
+        ]
+        result = builder._get_solar_kwh(solcast, now, 30)
+        assert result == 0.0
 
 
 class TestGetConsumptionKwh:
@@ -460,9 +413,6 @@ class TestBuildSlotsIntegration:
         ]
         data.solcast_tomorrow = []
         data.load_forecast_slots = [0.5 + (i % 24) * 0.1 for i in range(96)]
-        data.adaptive_params = AdaptiveParameters(
-            values={"solar_confidence_factor": 1.0}
-        )
         # Set solcast_analysis attributes to None so getattr returns None
         # instead of MagicMock objects
         data.solcast_analysis_today = None
@@ -474,9 +424,7 @@ class TestBuildSlotsIntegration:
         self, builder, mock_coordinator_data
     ):
         """Test build_slots returns list of SlotContext and metadata."""
-        slots, metadata = builder.build_slots(
-            mock_coordinator_data, mock_coordinator_data.adaptive_params
-        )
+        slots, metadata = builder.build_slots(mock_coordinator_data)
 
         assert isinstance(slots, list)
         assert len(slots) > 0
@@ -485,33 +433,19 @@ class TestBuildSlotsIntegration:
 
     def test_build_slots_metadata_counts(self, builder, mock_coordinator_data):
         """Test build_slots metadata has correct counts."""
-        slots, metadata = builder.build_slots(
-            mock_coordinator_data, mock_coordinator_data.adaptive_params
-        )
+        slots, metadata = builder.build_slots(mock_coordinator_data)
 
         assert metadata.total_slots == len(slots)
         assert (
             metadata.five_min_slots + metadata.thirty_min_slots == metadata.total_slots
         )
-        assert metadata.solar_confidence_factor == 1.0
-
-    def test_build_slots_with_none_adaptive_params(
-        self, builder, mock_coordinator_data
-    ):
-        """Test build_slots handles None adaptive params."""
-        slots, metadata = builder.build_slots(mock_coordinator_data, None)
-
-        assert metadata.solar_confidence_factor == 1.0
-        assert len(slots) > 0
 
     def test_build_slots_with_custom_now_dt(self, builder, mock_coordinator_data):
         """Test build_slots respects custom now_dt parameter."""
         from datetime import timezone
 
         custom_now = datetime.now(timezone.utc)
-        slots, metadata = builder.build_slots(
-            mock_coordinator_data, None, now_dt=custom_now
-        )
+        slots, metadata = builder.build_slots(mock_coordinator_data, now_dt=custom_now)
 
         assert len(slots) >= 0
 
@@ -553,7 +487,6 @@ class TestProcessAllSlots:
             hybrid_slots=hybrid_slots,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -593,7 +526,6 @@ class TestProcessAllSlots:
             hybrid_slots=hybrid_slots,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -640,7 +572,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -675,7 +606,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -707,7 +637,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -745,7 +674,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(22, 0),
@@ -781,7 +709,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),

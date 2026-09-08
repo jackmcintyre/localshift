@@ -5,7 +5,6 @@ serving as the input preparation layer for the DP optimizer.
 
 Design principles:
 - Read raw data: general_forecast, feed_in_forecast, solcast_today/tomorrow, load_forecast_slots
-- Apply adaptive param transforms: solar_confidence_factor to solar_kwh
 - DO NOT apply consumption_forecast_bias (already applied by LoadForecaster)
 - Compute demand window flags independently
 - Return typed SlotBuildMetadata for diagnostics
@@ -19,7 +18,6 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..coordinator.data import AdaptiveParameters
 from ..forecast.solar import get_solar_for_slot_by_interval
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from .optimizer_dp import SlotContext
@@ -48,9 +46,6 @@ class SlotBuildMetadata:
 
     horizon_hours: float
     """Forecast horizon in hours."""
-
-    solar_confidence_factor: float
-    """Adaptive parameter value actually applied to solar forecasts."""
 
     slots_with_defaulted_solar: int
     """Slots where solcast returned 0.0 kWh."""
@@ -101,7 +96,6 @@ class SlotBuildMetadata:
             "five_min_slots": self.five_min_slots,
             "thirty_min_slots": self.thirty_min_slots,
             "horizon_hours": self.horizon_hours,
-            "solar_confidence_factor": self.solar_confidence_factor,
         }
 
 
@@ -115,12 +109,11 @@ class SlotBuilder:
     - DW config options — demand window entry/slot flags per slot
 
     Applies:
-    - solar_confidence_factor: solar_kwh *= factor (clamped >= 0)
     - consumption_forecast_bias: already applied by LoadForecaster; not re-applied here
 
     Usage:
         slot_builder = SlotBuilder(config_options, ha_timezone)
-        slots, metadata = slot_builder.build_slots(data, adaptive_params)
+        slots, metadata = slot_builder.build_slots(data)
     """
 
     def __init__(
@@ -144,7 +137,6 @@ class SlotBuilder:
     def build_slots(
         self,
         data: Any,
-        adaptive_params: AdaptiveParameters | None,
         now_dt: datetime | None = None,
         override_general_forecast: list[dict[str, Any]] | None = None,
         override_feed_in_forecast: list[dict[str, Any]] | None = None,
@@ -153,7 +145,6 @@ class SlotBuilder:
 
         Args:
             data: CoordinatorData with prices, forecasts, etc.
-            adaptive_params: Adaptive parameters for solar confidence.
             now_dt: Current datetime (optional, defaults to now).
             override_general_forecast: Shadow forecast to use instead of data.general_forecast.
             override_feed_in_forecast: Shadow forecast to use instead of data.feed_in_forecast.
@@ -184,7 +175,6 @@ class SlotBuilder:
         dw_start_time = self._parse_time_option("demand_window_start")
         dw_end_time = self._parse_time_option("demand_window_end")
 
-        solar_confidence_factor = self._get_solar_confidence_factor(adaptive_params)
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
         base_slot = self._compute_base_slot(now_local)
         local_tz = self._get_local_timezone()
@@ -204,7 +194,6 @@ class SlotBuilder:
             hybrid_slots=hybrid_slots,
             data=data,
             all_solcast=all_solcast,
-            solar_confidence_factor=solar_confidence_factor,
             base_slot=base_slot,
             local_tz=local_tz,
             dw_start_time=dw_start_time,
@@ -218,7 +207,6 @@ class SlotBuilder:
             five_min_slots=counts["five_min"],
             thirty_min_slots=counts["thirty_min"],
             horizon_hours=hybrid_metadata.get("horizon_hours", 24.0),
-            solar_confidence_factor=solar_confidence_factor,
             slots_with_defaulted_solar=counts["defaulted_solar"],
             slots_with_defaulted_price=counts["defaulted_price"],
             slots_with_defaulted_consumption=counts["defaulted_consumption"],
@@ -228,26 +216,16 @@ class SlotBuilder:
 
         _LOGGER.debug(
             "SlotBuilder: built %d slots (%d x 5min, %d x 30min), "
-            "solar_confidence=%.2f, defaulted: solar=%d price=%d consumption=%d",
+            "defaulted: solar=%d price=%d consumption=%d",
             len(contexts),
             counts["five_min"],
             counts["thirty_min"],
-            solar_confidence_factor,
             counts["defaulted_solar"],
             counts["defaulted_price"],
             counts["defaulted_consumption"],
         )
 
         return contexts, metadata
-
-    def _get_solar_confidence_factor(
-        self, adaptive_params: AdaptiveParameters | None
-    ) -> float:
-        """Extract and clamp solar_confidence_factor from adaptive params."""
-        factor = 1.0
-        if adaptive_params is not None:
-            factor = adaptive_params.get("solar_confidence_factor", 1.0)
-        return max(0.0, min(2.0, factor))
 
     def _compute_base_slot(self, now_local: datetime) -> datetime:
         """Compute base slot time for load_forecast_slots indexing."""
@@ -266,7 +244,6 @@ class SlotBuilder:
         hybrid_slots: list[dict[str, Any]],
         data: Any,
         all_solcast: list[dict[str, Any]],
-        solar_confidence_factor: float,
         base_slot: datetime,
         local_tz: ZoneInfo | None,
         dw_start_time: time,
@@ -291,7 +268,6 @@ class SlotBuilder:
                 slot=slot,
                 data=data,
                 all_solcast=all_solcast,
-                solar_confidence_factor=solar_confidence_factor,
                 base_slot=base_slot,
                 local_tz=local_tz,
                 dw_start_time=dw_start_time,
@@ -313,7 +289,6 @@ class SlotBuilder:
         slot: dict[str, Any],
         data: Any,
         all_solcast: list[dict[str, Any]],
-        solar_confidence_factor: float,
         base_slot: datetime,
         local_tz: ZoneInfo | None,
         dw_start_time: time,
@@ -349,7 +324,6 @@ class SlotBuilder:
             all_solcast,
             slot_start,
             interval_minutes,
-            solar_confidence_factor,
             confidence,
         )
         if solar_kwh < 0.001:
@@ -410,29 +384,13 @@ class SlotBuilder:
         all_solcast: list[dict[str, Any]],
         slot_start: datetime,
         interval_minutes: int,
-        solar_confidence_factor: float,
         confidence: float = 1.0,
     ) -> float:
-        """Get solar kWh for a slot.
-
-        If bias correction has sufficient samples, return raw solar
-        (bias correction will be applied by OptimizerFacade).
-        Otherwise, apply solar_confidence_factor as fallback.
-        """
+        """Get solar kWh for a slot."""
         solar_kwh = get_solar_for_slot_by_interval(
             all_solcast, slot_start, interval_minutes, confidence
         )
-
-        # Check if bias correction is ready
-        if (
-            self._solar_accuracy_tracker is not None
-            and self._solar_accuracy_tracker.has_sufficient_samples()
-        ):
-            # Bias correction will handle it - return raw
-            return max(0.0, solar_kwh)
-
-        # Fall back to solar_confidence_factor
-        return max(0.0, solar_kwh * solar_confidence_factor)
+        return max(0.0, solar_kwh)
 
     def _get_consumption_kwh(
         self,

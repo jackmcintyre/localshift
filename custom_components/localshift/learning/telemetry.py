@@ -1,4 +1,4 @@
-"""Decision telemetry and forecast-correction persistence.
+"""Decision telemetry persistence.
 
 Replaces ``LearningOrchestrator``, which coordinated the parameter-learning
 layer (Thompson-sampling parameter optimizer, pattern analyzer, contextual
@@ -15,9 +15,6 @@ What survives, and why:
   measured outcome. Nothing consumes them to change behaviour; they are kept
   because they are the only durable asset the retired layer produced, and any
   future attempt at learning would need exactly this history to start from.
-- **Forecast corrections.** ``ForecastCorrectionProvider`` feeds the load
-  forecaster (forecast/load.py) and is independent of parameter learning; it
-  was only ever stored here because the orchestrator happened to own the Store.
 
 ``learning_status`` is still derived and published, but it now reports only how
 much telemetry has accumulated, not a learning stage.
@@ -30,15 +27,12 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.storage import Store
-
-from ..forecast.corrections import ForecastCorrectionProvider
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class DecisionTelemetry:
-    """Own the decision-outcome record set and the forecast corrections store."""
+    """Own the decision-outcome record set."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
@@ -46,25 +40,14 @@ class DecisionTelemetry:
         self._entry_id = entry.entry_id
 
         self.decision_tracker: Any | None = None
-        self._forecast_corrections: ForecastCorrectionProvider | None = None
-        self._forecast_corrections_store = Store(
-            hass,
-            version=1,
-            key=f"localshift.forecast_corrections.{self._entry_id}",
-        )
 
     async def async_initialize(self) -> None:
-        """Load persisted decision records and forecast corrections."""
+        """Load persisted decision records."""
         from ..engine.outcomes import DecisionOutcomeTracker
 
         tracker = DecisionOutcomeTracker(self.hass, self._entry_id)
         await tracker.async_load()
         self.decision_tracker = tracker
-
-        self._forecast_corrections = ForecastCorrectionProvider()
-        stored = await self._forecast_corrections_store.async_load()
-        if stored:
-            self._forecast_corrections = ForecastCorrectionProvider.from_dict(stored)
 
     def attach_state_machine(self, state_machine) -> None:
         """Wire the decision tracker into the state machine."""
@@ -105,7 +88,7 @@ class DecisionTelemetry:
             )
 
     async def async_save_all(self) -> None:
-        """Persist the record set and the forecast corrections."""
+        """Persist the record set."""
         saved: list[str] = []
 
         if self.decision_tracker is not None:
@@ -114,15 +97,6 @@ class DecisionTelemetry:
                 saved.append(f"decisions:{self.decision_tracker.completed_count}")
             except Exception as err:  # noqa: BLE001 - persistence must not break the tick
                 _LOGGER.error("Failed to save decision tracker: %s", err)
-
-        if self._forecast_corrections is not None:
-            try:
-                await self._forecast_corrections_store.async_save(
-                    self._forecast_corrections.to_dict()
-                )
-                saved.append("forecast_corrections")
-            except Exception:
-                _LOGGER.exception("Failed to save forecast corrections")
 
         if saved:
             _LOGGER.info("Telemetry saved: %s", ", ".join(saved))
@@ -139,7 +113,3 @@ class DecisionTelemetry:
         if decision_count >= 50:
             return "tuning"
         return "observing"
-
-    @property
-    def forecast_corrections(self) -> ForecastCorrectionProvider | None:
-        return self._forecast_corrections

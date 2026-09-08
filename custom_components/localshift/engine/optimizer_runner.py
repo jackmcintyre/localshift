@@ -145,9 +145,7 @@ def _run(
     slot_builder = SlotBuilder(
         config_options=config_options, ha_timezone=_get_ha_timezone()
     )
-    slots, slot_metadata = slot_builder.build_slots(
-        data, getattr(data, "adaptive_params", None)
-    )
+    slots, slot_metadata = slot_builder.build_slots(data)
     parity_info = slot_metadata.to_parity_dict()  # backward-compat shim
 
     if not slots:
@@ -365,39 +363,18 @@ def _build_optimizer_config(
         config_options.get(CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE)
     )
 
-    # Apply adaptive parameter transforms (Issue #444 Phase 2)
-    adaptive = getattr(data, "adaptive_params", None)
-
-    # cheap_price_bias -> effective_cheap_price
-    cheap_price_bias = adaptive.get("cheap_price_bias", 0.0) if adaptive else 0.0
-    effective_cheap_price = max(0.0, effective_cheap_price + cheap_price_bias / 100)
+    effective_cheap_price = max(0.0, effective_cheap_price)
+    export_price_margin = max(0.0, export_price_margin)
 
     # Issue #800: objective un-inflated percentile floor for post-demand-window gating.
-    # Deliberately independent of the urgency/adaptive adjustments baked into
+    # Deliberately independent of the urgency adjustments baked into
     # effective_cheap_price: those tune how aggressively to pre-charge before *today's*
     # demand window, whereas this is a guardrail against that inflation leaking onto
-    # tomorrow's slots. A negative cheap_price_bias still tightens the post-DW gate
-    # because the gate uses min(effective_cheap_price, base_cheap_price); a positive bias
-    # must NOT loosen it, which is exactly what keeping the bias off this floor achieves.
+    # tomorrow's slots (the gate uses min(effective_cheap_price, base_cheap_price)).
     # None means "not computed yet" (distinct from a genuinely <= 0 base in negative markets).
     base_cheap_price: float | None = getattr(data, "base_cheap_price", None)
 
-    # grid_charge_soc_headroom + overnight_drain_safety_margin -> demand_window_target_soc_pct
-    grid_charge_soc_headroom = (
-        adaptive.get("grid_charge_soc_headroom", 0.0) if adaptive else 0.0
-    )
-    overnight_drain_safety_margin = (
-        adaptive.get("overnight_drain_safety_margin", 0.0) if adaptive else 0.0
-    )
-    target_soc = min(
-        100.0, target_soc + grid_charge_soc_headroom + overnight_drain_safety_margin
-    )
-
-    # export_threshold_adjustment -> export_price_margin
-    export_threshold_adj = (
-        adaptive.get("export_threshold_adjustment", 0.0) if adaptive else 0.0
-    )
-    export_price_margin = max(0.0, export_price_margin + export_threshold_adj / 100)
+    target_soc = min(100.0, target_soc)
 
     return OptimizerConfig(
         # --- Battery hardware constraints ---

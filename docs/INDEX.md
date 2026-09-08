@@ -165,52 +165,36 @@ class LocalShiftSensor(SensorEntity):
 
 ## Learning System Changes
 
-**Modifying the adaptive learning system (`learning/`, `engine/parameters.py`, etc.).**
+**The adaptive parameter-learning layer is RETIRED (#962, #982). Do not reinstate it
+without reading the retirement record first.**
 
 ### Must Read
-- **[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md)** — Complete architecture and data flow
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Learning system section (lines 593-723)
+- **[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md)** — why it was retired, what the offline
+  replay showed, what survived, and what it would take to bring it back
 
-### Should Read
-- **[LEARNING_SYSTEM.md](LEARNING_SYSTEM.md)** — Learning system architecture (verify against current code)
+### What is gone
+`ParameterOptimizer` (Thompson sampling), `PatternAnalyzer`, `OptimizationController`,
+the warm-up/step-limit/rollback safety rails, `OPTIMIZABLE_PARAMS`, the
+`AdaptiveParameters` dataclass and the `data.adaptive_params` field, and the six
+parameter offsets the optimizer used to read from it. `forecast/corrections.py`
+(`ForecastCorrectionProvider`) went with them in #970.
 
-### Key Constraints
+`tests/test_learning_layer_retired.py` is the static gate that keeps them gone — add to
+its `RETIRED_MODULES` / `RETIRED_FIELDS` lists rather than writing a new guard.
 
-| Component | Purpose |
-|-----------|---------|
-| DecisionOutcomeTracker | Records decisions and backfills outcomes |
-| ParameterOptimizer | Thompson sampling for parameter tuning |
-| PatternAnalyzer | Detects systematic biases (weekly) |
-| OptimizationController | Real-time contextual adjustments |
-
-### Safety Rails
-- Warm-up: No adjustments until 50+ decisions
-- Step limits: Max 1 step per daily update
-- Bounds: All parameters within defined min/max
-- Rollback: Revert if 7-day score decreases for 3 consecutive days
-
-### Adaptive Parameters
-```yaml
-cheap_price_bias: [-5.0, +5.0] c/kWh
-solar_confidence_factor: [0.5, 1.5]
-overnight_drain_safety_margin: [-5.0, +10.0] %
-grid_charge_soc_headroom: [-5.0, +10.0] %
-export_threshold_adjustment: [-3.0, +3.0] c/kWh
-consumption_forecast_bias: [-0.5, +0.5] kW
-```
-
-### Multi-Objective Scoring
-```
-score = 0.50 × cost_score
-      + 0.20 × export_avoidance_score
-      + 0.20 × target_achievement_score
-      + 0.10 × cycle_reduction_score
-```
+### What survived and is still live
+- **`DecisionOutcomeTracker`** (`engine/outcomes.py`) — decision recording and outcome
+  backfill; a separate, healthy loop.
+- **Solar accuracy tracking** (`forecast/solar_accuracy.py`) — bias correction on the
+  solar forecast, unrelated to parameter learning.
+- **Weather/load correlation** (`learning/correlation.py`) — feeds the load forecast.
 
 ### Anti-Patterns
-- ✗ Adjusting parameters before warm-up period
-- ✗ Ignoring step limits (causes instability)
-- ✗ Breaking purity (learning system must be side-effect-free)
+- ✗ Re-adding a per-decision reward signal without re-reading why the last one failed
+  (the reward *frame* was wrong, not just its weights — a 30-minute window cannot score
+  an outcome that lands hours later)
+- ✗ Threading new "adaptive" offsets through the optimizer at arithmetic identity
+- ✗ Breaking purity (any future learning layer must stay side-effect-free)
 
 ---
 

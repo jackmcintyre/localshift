@@ -15,7 +15,6 @@ from ..const import (
 )
 from ..coordinator.data import CoordinatorData
 from .solar import sum_solar_before_target
-from .solar_accuracy import SolarAccuracyTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +63,6 @@ class ForecastPipeline:
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
             day_of_week = slot_start.weekday()
-            season = SolarAccuracyTracker._get_season(slot_start)
             hours_ahead = i / 4.0
             temperature = data.weather_temperature_forecast.get(slot_hour)
             load_kw, source = self._load_forecaster.estimate_hourly_consumption_kw(
@@ -76,7 +74,6 @@ class ForecastPipeline:
                 temperature=temperature,
                 hours_ahead=hours_ahead,
                 day_of_week=day_of_week,
-                season=season,
             )
             slots.append(load_kw)
             source_counts[source] = source_counts.get(source, 0) + 1

@@ -22,7 +22,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.coordinator import AdaptiveParameters
 from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.engine.optimizer_facade import OptimizerFacade
 from custom_components.localshift.engine.slot_schedule import (
@@ -103,9 +102,6 @@ class TestSlotBuildMetadataSlot0PriceSource:
         data.solcast_today = []
         data.solcast_tomorrow = []
         data.load_forecast_slots = [0.5] * 96
-        data.adaptive_params = AdaptiveParameters(
-            values={"solar_confidence_factor": 1.0}
-        )
         data.solcast_analysis_today = None
         data.solcast_analysis_tomorrow = None
         return data
@@ -123,7 +119,7 @@ class TestSlotBuildMetadataSlot0PriceSource:
             for i in range(4)
         ]
 
-        _slots, metadata = builder.build_slots(data, data.adaptive_params)
+        _slots, metadata = builder.build_slots(data)
 
         assert metadata.slot0_price_source == "forecast_current"
 
@@ -140,7 +136,7 @@ class TestSlotBuildMetadataSlot0PriceSource:
             for i in range(4)
         ]
 
-        _slots, metadata = builder.build_slots(data, data.adaptive_params)
+        _slots, metadata = builder.build_slots(data)
 
         assert metadata.slot0_price_source == "synthetic"
 
@@ -150,7 +146,6 @@ class TestSlotBuildMetadataSlot0PriceSource:
             five_min_slots=0,
             thirty_min_slots=0,
             horizon_hours=0.0,
-            solar_confidence_factor=1.0,
             slots_with_defaulted_solar=0,
             slots_with_defaulted_price=0,
             slots_with_defaulted_consumption=0,
@@ -164,13 +159,12 @@ class _StubSlotBuilderWithMetadata:
     def __init__(self, slot0_price_source: str, **_kwargs) -> None:
         self._slot0_price_source = slot0_price_source
 
-    def build_slots(self, _data, _adaptive_params, now_dt=None, **_kwargs):
+    def build_slots(self, _data, now_dt=None, **_kwargs):
         metadata = SlotBuildMetadata(
             total_slots=1,
             five_min_slots=1,
             thirty_min_slots=0,
             horizon_hours=1.0,
-            solar_confidence_factor=1.0,
             slots_with_defaulted_solar=0,
             slots_with_defaulted_price=0,
             slots_with_defaulted_consumption=0,
@@ -291,7 +285,7 @@ class TestRunInlineRecordsSyntheticSample:
             def __init__(self, **_kwargs) -> None:
                 pass
 
-            def build_slots(self, _data, _adaptive_params, now_dt=None, **_kwargs):
+            def build_slots(self, _data, now_dt=None, **_kwargs):
                 return [], None
 
         data = CoordinatorData()
@@ -314,7 +308,7 @@ class TestRunInlineRecordsSyntheticSample:
             def __init__(self, **_kwargs) -> None:
                 pass
 
-            def build_slots(self, _data, _adaptive_params, now_dt=None, **_kwargs):
+            def build_slots(self, _data, now_dt=None, **_kwargs):
                 return [], None
 
         data = CoordinatorData()
