@@ -71,3 +71,8 @@ simulations/replay/*.json
 !simulations/replay/2026-08-25.json
 !simulations/replay/2026-08-27.json
 !simulations/replay/2026-09-03.json
+
+# No-demand-window replay captures (scripts/replay_no_dw.py). The one
+# solar-deficit day is kept because recorder retention would lose it.
+simulations/replay-nodw/*.json
+!simulations/replay-nodw/2026-09-07.json
