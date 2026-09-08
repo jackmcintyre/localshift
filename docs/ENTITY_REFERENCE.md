@@ -316,6 +316,16 @@ Each slot in the optimizer plan contains:
 | `grid_import_kwh` | float | Grid import (kWh) | `0.825` |
 | `grid_export_kwh` | float | Grid export (kWh) | `0.0` |
 
+`objective_terms.terminal_salvage_value` (float, $ credit, always positive when non-zero) is the
+bounded residual-energy credit from #811. It is non-zero only on the FINAL slot of the published
+horizon, and only when the plan ends with residual SOC above `min_soc_pct`, a positive buy price
+was observed somewhere in the horizon, and `terminal_salvage_enabled` is on (default). It is
+**diagnostic only** — the DP already applies this credit once, to the horizon-boundary state, not
+as a per-slot stage cost; it is deliberately excluded from `objective_terms.net_cost` and from
+every rollup that sums slot `net_cost` (e.g. `projected_net_cost`). Added for issue #1033, where a
+demand window sitting just past the horizon end left `shortfall_penalty` at a legitimate `0.0` with
+no other terminal term visible on the published plan.
+
 ---
 
 ### 9. sensor.localshift_forecast_prices
@@ -1483,6 +1493,7 @@ slots:
       import_cost: 0.0
       export_revenue: 0.0
       shortfall_penalty: 0.0
+      terminal_salvage_value: 0.0  # non-zero on the final slot only — see #1033 above
 total_slots: 96
 forecast_horizon_hours: 24.0
 planner: "DP_OPTIMIZER"
