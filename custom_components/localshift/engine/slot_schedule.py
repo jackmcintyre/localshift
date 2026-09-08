@@ -21,14 +21,23 @@ MAX_5MIN_FORECAST_HOURS = 1  # Amber typically provides ~45-60 min of 5-min data
 # after the boundary (the 12:30 interval starts at 12:30:01). Absorb that
 # offset when deciding which interval covers "now" — but only if it really is
 # boundary noise, so a genuinely mid-interval start keeps its own boundary.
-# Why 60s: Amber's observed offset is +1s (the 12:30 interval starts at
-# 12:30:01), so this is ~60x margin — wide enough to absorb provider clock
-# skew without ever reaching the next 5-minute boundary. If the offset were
-# ever to exceed this, the covering entry stops being recognised and slot 0
-# falls back to the synthetic next-interval borrow: the exact defect this
-# slice removes. That failure is loud, not silent — it trips the
-# SYNTHETIC SLOT FALLBACK warning below — but it is the reason to keep this
-# generous rather than tighten it toward the observed +1s.
+#
+# Issue #949: the tolerance is SCALED TO THE INTERVAL, not flat. A flat 60s
+# window is ~3% of a 30-minute interval but a full 20% of a 5-minute one, and
+# on the fine granularity it let a genuinely late entry masquerade as the
+# current interval: slot 0 could then begin up to 59 seconds AFTER now with
+# nothing at all covering the interim. The scaling keeps the window a small
+# fraction of whatever interval it is applied to:
+#   min(_BOUNDARY_OFFSET_TOLERANCE_S, duration_minutes * 2) seconds
+# → 10s on a 5-minute interval, unchanged 60s on a 30-minute interval.
+# 10s is still ~10x the documented +1s provider skew, so the offset this
+# constant exists to absorb keeps being absorbed.
+# If the offset were ever to exceed the window, the covering entry stops being
+# recognised and slot 0 falls back to the synthetic next-interval borrow: the
+# exact defect Issue #510 Slice 2 removed. That failure is loud, not silent —
+# it trips the SYNTHETIC SLOT FALLBACK warning below — but it is the reason to
+# keep each window comfortably above the observed +1s rather than tighten it
+# to the bare minimum.
 _BOUNDARY_OFFSET_TOLERANCE_S = 60
 
 # Issue #976: "Hybrid slot schedule:" fired at INFO every optimizer cycle
@@ -43,13 +52,30 @@ _BOUNDARY_OFFSET_TOLERANCE_S = 60
 _LAST_HORIZON_SIGNATURE: tuple | None = None
 
 
+def _boundary_offset_tolerance_s(duration_minutes: int) -> float:
+    """Return the boundary-noise window for an interval of this width.
+
+    Issue #949: the window must scale with the interval it is applied to, or
+    it swallows a meaningful slice of the fine granularity and a late entry
+    gets credited with time that has already passed.
+
+    Args:
+        duration_minutes: Entry's duration in minutes (5, 30, or 60)
+
+    Returns:
+        Tolerance in seconds: min(60, duration_minutes * 2), floored at 0.
+
+    """
+    return max(0.0, min(float(_BOUNDARY_OFFSET_TOLERANCE_S), duration_minutes * 2))
+
+
 def _interval_origin(slot_start: datetime, duration_minutes: int) -> datetime:
     """Return the true interval boundary for an entry's start time.
 
     Floors slot_start down to the nearest duration_minutes boundary, but only
-    treats that floor as the real origin when slot_start is within
-    _BOUNDARY_OFFSET_TOLERANCE_S of it — a few seconds of provider clock skew,
-    not a genuinely different (misaligned) start time.
+    treats that floor as the real origin when slot_start is within the
+    interval's boundary-noise tolerance of it — a few seconds of provider
+    clock skew, not a genuinely different (misaligned) start time.
 
     Args:
         slot_start: Entry's parsed start time
@@ -65,7 +91,9 @@ def _interval_origin(slot_start: datetime, duration_minutes: int) -> datetime:
         second=0,
         microsecond=0,
     )
-    if (slot_start - floored).total_seconds() < _BOUNDARY_OFFSET_TOLERANCE_S:
+    if (slot_start - floored).total_seconds() < _boundary_offset_tolerance_s(
+        duration_minutes
+    ):
         return floored
     return slot_start
 
@@ -237,12 +265,60 @@ def _parse_forecast_entries(
     """
     all_slots_raw: list[dict] = []
 
+    malformed_durations = 0
+
     for entry in general_forecast:
         slot = _parse_single_entry(entry, now_local, ha_timezone)
         if slot:
             all_slots_raw.extend(slot if isinstance(slot, list) else [slot])
+        elif _has_malformed_duration(entry, now_local, ha_timezone):
+            malformed_durations += 1
+
+    # Issue #946: one aggregated warning, not one per bad entry — a bad feed
+    # can carry dozens of malformed entries and this runs on every 5-minute
+    # evaluation tick.
+    if malformed_durations:
+        _LOGGER.warning(
+            "slot_schedule: skipped %d of %d forecast entries with a malformed "
+            "duration -- horizon may be short; check the price sensor's data",
+            malformed_durations,
+            len(general_forecast),
+        )
 
     return all_slots_raw
+
+
+def _has_malformed_duration(
+    entry: object, now_local: datetime, ha_timezone: str
+) -> bool:
+    """Report whether a skipped entry was dropped for a malformed duration.
+
+    Issue #946: distinguishes "this entry was malformed" (worth a warning)
+    from "this entry was legitimately elapsed or unusable" (not). Used only
+    to aggregate the warning count in `_parse_forecast_entries`; the skip
+    itself already happened in `_get_entry_duration`.
+
+    Args:
+        entry: The raw forecast entry that produced no slot
+        now_local: Current local time
+        ha_timezone: HA timezone
+
+    Returns:
+        True if the entry carries a `duration` field that cannot be read as
+        an int (or an end_time/start_time pair that cannot be subtracted).
+
+    """
+    if not hasattr(entry, "get"):
+        return False
+
+    duration = entry.get("duration")  # type: ignore[union-attr]
+    if duration is None:
+        return False
+    try:
+        int(duration)
+    except (ValueError, TypeError):
+        return True
+    return False
 
 
 def _parse_single_entry(
@@ -311,13 +387,7 @@ def _parse_single_entry(
         # asked for the covering entry's PRICE, not for slot 0 to grow to
         # 30 minutes wide. A covering 5-min entry is already at (or under)
         # that quantum, so it keeps its own start/width untouched below.
-        return {
-            "start": _floor_to_5min(now_local),
-            "interval_minutes": 5,
-            "price": price,
-            "price_source": "forecast_current",
-            "estimate": entry.get("estimate"),
-        }
+        return _current_30min_slot(entry, slot_start, now_local, price)
 
     return {
         "start": slot_start,
@@ -330,10 +400,88 @@ def _parse_single_entry(
     }
 
 
+def _current_30min_slot(
+    entry: dict, slot_start: datetime, now_local: datetime, price: float
+) -> dict:
+    """Build slot 0 from a covering 30-minute entry, bounded to a 5-min quantum.
+
+    The covering entry is re-anchored onto the 5-minute "now" grid (see the
+    review feedback quoted in `_parse_single_entry`) so slot 0 never claims
+    up to 30 minutes of already-elapsed time. Two corrections keep that
+    re-anchor from destroying the schedule instead of bounding it:
+
+    Issue #947 — do not re-anchor when nothing has elapsed. The re-anchor
+    exists to stop slot 0 claiming time that has ALREADY gone by. When the
+    entry's origin is not strictly before now (now sits exactly on the
+    boundary, or in the sub-second window before Amber's +1s offset), no
+    time has elapsed and there is nothing to bound: the entry is returned at
+    its own start and full 30-minute width. Collapsing it to 5 minutes there
+    deleted 25 minutes from the head of the horizon and broke this module's
+    NO GAPS contract.
+
+    Issue #948 — back the anchor off so slot 0 ends on the covering
+    interval's own boundary. Re-anchoring to floor_5(now) blindly made slot 0
+    end at floor_5(now)+5, which on a feed that is NOT aligned to the
+    5-minute grid (e.g. intervals at :18/:48) overran the covering interval's
+    real end. That overrun then forced `_add_30min_after_transition` to
+    discard the next REAL interval, punching a hole in the horizon. Backing
+    off to (interval_end - 5min) when the grid anchor would overrun keeps
+    slot 0 a 5-minute quantum containing now, ending exactly on the real
+    boundary, with no gap and no double-counted overlap.
+
+    Args:
+        entry: The covering forecast entry (for its `estimate` flag)
+        slot_start: Entry's parsed start time
+        now_local: Current local time
+        price: The covering entry's price per kWh
+
+    Returns:
+        Slot 0 as a 5-minute (or full 30-minute, if nothing has elapsed)
+        slot priced from the covering entry.
+
+    """
+    origin = _interval_origin(slot_start, 30)
+    interval_end = origin + timedelta(minutes=30)
+
+    if origin >= now_local:
+        # Nothing elapsed -> nothing to bound (#947).
+        return {
+            "start": slot_start,
+            "interval_minutes": 30,
+            "price": price,
+            "price_source": "forecast_current",
+            "estimate": entry.get("estimate"),
+        }
+
+    anchor = _floor_to_5min(now_local)
+    if anchor + timedelta(minutes=5) > interval_end:
+        # Grid anchor would overrun the covering interval -> back it off so
+        # slot 0 ends exactly on the real boundary (#948).
+        anchor = interval_end - timedelta(minutes=5)
+
+    return {
+        "start": anchor,
+        "interval_minutes": 5,
+        "price": price,
+        "price_source": "forecast_current",
+        "estimate": entry.get("estimate"),
+    }
+
+
 def _get_entry_duration(
     entry: dict, slot_start: datetime, ha_timezone: str
 ) -> int | None:
     """Get duration for a forecast entry.
+
+    Issue #946: a malformed duration must skip THIS entry, never abort the
+    build. `get_slot_duration_minutes` does a bare `int(duration)`, so a
+    non-integral value such as "30.0" raises ValueError and a value of the
+    wrong type raises TypeError. Both are caught here and returned as None,
+    which `_parse_single_entry` already treats as "drop the entry" — so the
+    rest of the horizon survives and the optimiser keeps a plan instead of
+    getting none. (Deliberately NOT fixed inside utils.py: coercing
+    `int(float(duration))` there would silently accept malformed data for
+    every other caller.)
 
     Args:
         entry: Forecast entry
@@ -341,10 +489,20 @@ def _get_entry_duration(
         ha_timezone: HA timezone
 
     Returns:
-        Duration in minutes or None
+        Duration in minutes, or None if absent/malformed/unresolvable
 
     """
-    duration_minutes = get_slot_duration_minutes(entry)
+    try:
+        duration_minutes = get_slot_duration_minutes(entry)
+    except (ValueError, TypeError):
+        _LOGGER.debug(
+            "slot_schedule: malformed duration on entry start=%s duration=%r "
+            "-- skipping entry",
+            entry.get("start_time"),
+            entry.get("duration"),
+        )
+        return None
+
     if duration_minutes is not None:
         return duration_minutes
 
@@ -354,7 +512,16 @@ def _get_entry_duration(
 
     slot_end = parse_slot_time(end_time_str, ha_timezone)
     if slot_end:
-        return int((slot_end - slot_start).total_seconds() / 60)
+        try:
+            return int((slot_end - slot_start).total_seconds() / 60)
+        except (ValueError, TypeError):
+            _LOGGER.debug(
+                "slot_schedule: unresolvable end_time on entry start=%s "
+                "end_time=%r -- skipping entry",
+                entry.get("start_time"),
+                end_time_str,
+            )
+            return None
 
     return None
 
@@ -440,7 +607,17 @@ def _add_30min_after_transition(
     last_5min_end: datetime,
     cutoff_time: datetime,
 ) -> datetime | None:
-    """Add 30-min slots starting after 5-min transition.
+    """Add 30-min slots that are not already covered by the 5-min transition.
+
+    Issue #948: this used to discard every 30-min entry starting before
+    `last_5min_end`. On an ALIGNED feed that was safe — the overlapping
+    entry ends exactly where the 5-min block ends, so dropping it is a no-op.
+    On a MISALIGNED feed (intervals at :18/:48) the entry that straddles
+    `last_5min_end` is a REAL interval whose tail the 5-min block does not
+    own, and discarding it deleted live time and punched a hole in the
+    horizon. Only entries whose interval is FULLY contained inside the 5-min
+    block are dropped; a straddling entry is kept, and the re-anchor in
+    `_current_30min_slot` is responsible for making that hand-off exact.
 
     Args:
         slots: Slot list to extend
@@ -449,17 +626,22 @@ def _add_30min_after_transition(
         cutoff_time: Maximum forecast time
 
     Returns:
-        Transition boundary time or None
+        Transition boundary time (start of the first retained 30-min slot)
+        or None if nothing was retained.
 
     """
+    transition_boundary: datetime | None = None
     for slot in thirty_min_slots:
-        if slot["start"] >= last_5min_end:
-            idx = thirty_min_slots.index(slot)
-            for s in thirty_min_slots[idx:]:
-                if s["start"] < cutoff_time:
-                    slots.append(s)
-            return slot["start"]
-    return None
+        slot_end = slot["start"] + timedelta(minutes=slot["interval_minutes"])
+        if slot_end <= last_5min_end:
+            # Entirely inside the 5-min block -> already represented there.
+            continue
+        if slot["start"] >= cutoff_time:
+            break
+        if transition_boundary is None:
+            transition_boundary = slot["start"]
+        slots.append(slot)
+    return transition_boundary
 
 
 def _add_all_30min_slots(
