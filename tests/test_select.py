@@ -1,11 +1,15 @@
 """Tests for select platform entities.
 
 Issue #660: Add missing platform entity tests (0% coverage)
+Issue #934: restore/echo write must not enter manual override, and every manual
+entry must be stamped so the timeout can fire.
 """
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import Context
 
 from custom_components.localshift.const import (
     DOMAIN,
@@ -16,6 +20,7 @@ from custom_components.localshift.const import (
     SWITCH_AUTOMATION_ENABLED,
     BatteryMode,
 )
+from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.select import (
     BatteryModeSelect,
     OptimizationModeSelect,
@@ -25,13 +30,30 @@ from custom_components.localshift.select import (
 
 @pytest.fixture
 def mock_coordinator():
-    """Create a mock coordinator."""
+    """Create a mock coordinator.
+
+    ``data`` is a real CoordinatorData so assertions on
+    ``manual_override`` / ``manual_override_set_at`` observe real mutations, and
+    ``set_manual_override`` behaves like the production coordinator method
+    (Issue #934: the select routes every override write through it).
+    """
     coordinator = MagicMock()
-    coordinator.data = MagicMock()
+    coordinator.data = CoordinatorData()
     coordinator.data.active_mode = BatteryMode.SELF_CONSUMPTION
     coordinator._notification_service = None
+    coordinator.state_machine = None
     coordinator.get_switch_state = MagicMock(return_value=False)
     coordinator.async_set_battery_mode = AsyncMock(return_value=True)
+
+    def _set_manual_override(active: bool, *, reason: str = "test") -> None:
+        coordinator.data.manual_override = active
+        coordinator.data.manual_override_set_at = datetime.now(UTC) if active else None
+        if coordinator.state_machine is not None:
+            coordinator.state_machine._manual_override_set_at = (
+                coordinator.data.manual_override_set_at
+            )
+
+    coordinator.set_manual_override = MagicMock(side_effect=_set_manual_override)
     return coordinator
 
 
@@ -313,6 +335,191 @@ class TestBatteryModeSelect:
         with patch.object(select, "async_write_ha_state"):
             await select.async_added_to_hass()
         assert mock_coordinator.data.manual_override is False
+
+
+class TestManualOverrideRestorationEcho:
+    """Issue #934: distinguish a restore/echo write from a user selection."""
+
+    def _make_select(self, mock_coordinator, mock_entry, *, automation_on: bool):
+        mock_coordinator.get_switch_state.return_value = automation_on
+        mock_hass = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock()
+        select = BatteryModeSelect(mock_coordinator, mock_entry)
+        select.hass = mock_hass
+        select._attr_entity_id = "select.localshift_battery_mode"
+        return select
+
+    @pytest.mark.asyncio
+    async def test_restore_echo_does_not_enter_manual_override(
+        self, mock_coordinator, mock_entry, caplog
+    ):
+        """T1: options reload re-creates the entity and re-asserts the persisted
+        value (self_consumption), while the optimizer's LIVE mode happens to be
+        the same value. With no user context on the write, it must NOT disable
+        automation, persist options, or enter manual override.
+        """
+        mock_entry.options = {"manual_battery_mode": "self_consumption"}
+        mock_coordinator.data.active_mode = BatteryMode.SELF_CONSUMPTION
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=True)
+        await select.async_added_to_hass()
+        assert mock_coordinator.data.manual_override is False
+
+        # The (re)creation restore write: same value, no user behind it.
+        select._context = Context(user_id=None)
+        with patch.object(select, "async_write_ha_state"), caplog.at_level("WARNING"):
+            await select.async_select_option("self_consumption")
+
+        assert mock_coordinator.data.manual_override is False
+        assert mock_coordinator.data.manual_override_set_at is None
+        # The automation switch must never have been flipped OFF.
+        for call in mock_coordinator.set_switch_state.call_args_list:
+            assert call.args != (SWITCH_AUTOMATION_ENABLED, False)
+        select.hass.config_entries.async_update_entry.assert_not_called()
+        mock_coordinator.async_set_battery_mode.assert_not_awaited()
+        assert "Ignoring non-user battery mode re-assertion" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_restore_echo_ignored_even_when_live_mode_differs_from_persisted(
+        self, mock_coordinator, mock_entry, caplog
+    ):
+        """T1c (regression): the restore echo must be ignored by comparing
+        against the PERSISTED manual_battery_mode, not current_option — which,
+        with automation ON, reflects the optimizer's live mode instead. Here
+        the live mode (grid_charging) differs from the persisted value
+        (self_consumption) being restored, exactly as observed on 2026-08-27:
+        entry.options manual_battery_mode='self_consumption', but the
+        optimizer was actually running a different mode when the reload
+        write landed. A comparison against current_option would wrongly let
+        this echo enter manual override.
+        """
+        mock_entry.options = {"manual_battery_mode": "self_consumption"}
+        mock_coordinator.data.active_mode = BatteryMode.GRID_CHARGING
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=True)
+        await select.async_added_to_hass()
+        assert mock_coordinator.data.manual_override is False
+
+        select._context = Context(user_id=None)
+        with patch.object(select, "async_write_ha_state"), caplog.at_level("WARNING"):
+            await select.async_select_option("self_consumption")
+
+        assert mock_coordinator.data.manual_override is False
+        assert mock_coordinator.data.manual_override_set_at is None
+        for call in mock_coordinator.set_switch_state.call_args_list:
+            assert call.args != (SWITCH_AUTOMATION_ENABLED, False)
+        select.hass.config_entries.async_update_entry.assert_not_called()
+        mock_coordinator.async_set_battery_mode.assert_not_awaited()
+        assert "Ignoring non-user battery mode re-assertion" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_genuine_user_pick_still_enters_manual(
+        self, mock_coordinator, mock_entry
+    ):
+        """T2a (negative control): a real user pick with the SAME displayed value
+        DOES enter manual, persists options, and stamps the override."""
+        mock_entry.options = {"manual_battery_mode": "self_consumption"}
+        mock_coordinator.data.active_mode = BatteryMode.SELF_CONSUMPTION
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=True)
+        await select.async_added_to_hass()
+
+        # A frontend dropdown pick carries the user's context.
+        select._context = Context(user_id="user-1")
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("self_consumption")
+
+        assert mock_coordinator.data.manual_override is True
+        assert mock_coordinator.data.manual_override_set_at is not None
+        mock_coordinator.set_switch_state.assert_called_once_with(
+            SWITCH_AUTOMATION_ENABLED, False
+        )
+        select.hass.config_entries.async_update_entry.assert_called_once()
+        update_kwargs = select.hass.config_entries.async_update_entry.call_args[1]
+        assert update_kwargs["options"]["manual_battery_mode"] == "self_consumption"
+
+    @pytest.mark.asyncio
+    async def test_genuine_user_pick_of_different_option_enters_manual(
+        self, mock_coordinator, mock_entry
+    ):
+        """T2b (negative control): a user picking a DIFFERENT option enters manual
+        regardless of context."""
+        mock_entry.options = {"manual_battery_mode": "self_consumption"}
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=True)
+
+        select._context = Context(user_id=None)
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("grid_charging")
+
+        assert mock_coordinator.data.manual_override is True
+        assert mock_coordinator.data.manual_override_set_at is not None
+        mock_coordinator.set_switch_state.assert_called_once_with(
+            SWITCH_AUTOMATION_ENABLED, False
+        )
+
+    @pytest.mark.asyncio
+    async def test_reselecting_same_manual_mode_while_automation_off_enters_manual(
+        self, mock_coordinator, mock_entry
+    ):
+        """T2c: re-picking the already-displayed manual mode while automation is
+        ALREADY off is not the reload echo (that only happens with automation
+        ON) — it must still enter/refresh manual override, not be swallowed."""
+        mock_entry.options = {"manual_battery_mode": "grid_charging"}
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=False)
+
+        select._context = Context(user_id=None)
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("grid_charging")
+
+        assert mock_coordinator.data.manual_override is True
+        assert mock_coordinator.data.manual_override_set_at is not None
+        mock_coordinator.set_switch_state.assert_called_once_with(
+            SWITCH_AUTOMATION_ENABLED, False
+        )
+
+    @pytest.mark.asyncio
+    async def test_select_automatic_clears_override_and_stamp(
+        self, mock_coordinator, mock_entry
+    ):
+        """Selecting `automatic` clears the override AND its stamp."""
+        mock_entry.options = {"manual_battery_mode": "grid_charging"}
+        mock_coordinator.async_recompute_and_evaluate = AsyncMock()
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=False)
+        mock_coordinator.set_manual_override(True)
+        assert mock_coordinator.data.manual_override is True
+
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("automatic")
+
+        assert mock_coordinator.data.manual_override is False
+        assert mock_coordinator.data.manual_override_set_at is None
+
+    @pytest.mark.asyncio
+    async def test_startup_with_automation_off_stamps_override(
+        self, mock_coordinator, mock_entry
+    ):
+        """A restart while automation is off re-enters manual STAMPED, so the
+        4-hour timeout applies to it too."""
+        mock_entry.options = {
+            "manual_battery_mode": "grid_charging",
+            "switch_state_automation_enabled": False,
+        }
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=False)
+
+        await select.async_added_to_hass()
+
+        assert mock_coordinator.data.manual_override is True
+        assert mock_coordinator.data.manual_override_set_at is not None
+
+    @pytest.mark.asyncio
+    async def test_startup_with_automation_on_clears_override(
+        self, mock_coordinator, mock_entry
+    ):
+        """A restart with automation on clears the override and the stamp."""
+        mock_entry.options = {"switch_state_automation_enabled": True}
+        select = self._make_select(mock_coordinator, mock_entry, automation_on=True)
+
+        await select.async_added_to_hass()
+
+        assert mock_coordinator.data.manual_override is False
+        assert mock_coordinator.data.manual_override_set_at is None
 
 
 class TestOptimizationModeSelect:

@@ -226,6 +226,38 @@ class LocalShiftCoordinator:
         self._switch_states[key] = value
 
     # ------------------------------------------------------------------
+    # Manual override (Issue #934)
+    # ------------------------------------------------------------------
+
+    def set_manual_override(self, active: bool, *, reason: str) -> None:
+        """Single stamped entry/exit point for manual override.
+
+        Every writer of ``data.manual_override`` (the select entity's user
+        pick, its startup sync, the automatic timeout) MUST go through this
+        method rather than assigning the flag directly. Entering manual always
+        stamps ``manual_override_set_at`` (mirrored onto the state machine, if
+        one exists) so ``DEFAULT_MANUAL_OVERRIDE_TIMEOUT`` applies uniformly to
+        every path into manual mode; clearing it always resets the stamp too.
+
+        Args:
+            active: True to enter manual override, False to clear it.
+            reason: Short attribution for the INFO log — the 27 Aug 2026
+                freeze incident had zero log attribution for what entered
+                manual, so every call site names itself.
+
+        """
+        now = dt_util.now() if active else None
+        self.data.manual_override = active
+        self.data.manual_override_set_at = now
+        if self._state_machine is not None:
+            self._state_machine._manual_override_set_at = now
+        _LOGGER.info(
+            "Manual override %s (reason=%s)",
+            "entered" if active else "cleared",
+            reason,
+        )
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

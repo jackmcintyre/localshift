@@ -700,8 +700,33 @@ class StateMachine:
     async def _handle_manual_override_timeout(
         self, data: CoordinatorData, now: datetime
     ) -> None:
-        """Handle automatic manual override timeout clearing."""
-        if not data.manual_override or self._manual_override_set_at is None:
+        """Handle automatic manual override timeout clearing.
+
+        Issue #934: entry into manual can be stamped on either
+        ``self._manual_override_set_at`` (set directly by callers that hold a
+        StateMachine reference) or ``data.manual_override_set_at`` (set by
+        ``LocalShiftCoordinator.set_manual_override`` — the single stamped
+        entry point the select entity now routes every override write
+        through, and which mirrors onto the state machine attribute only when
+        one exists yet). Resolving either means the timeout applies no matter
+        which side stamped it.
+
+        A manual override observed with NEITHER stamped is exactly the
+        original defect (some path entered manual without going through the
+        stamped entry point) rather than proof none exists — self-heal by
+        stamping `now` on both and arming the clock from this tick, instead of
+        leaving the override un-timeoutable forever.
+        """
+        if not data.manual_override:
+            return
+
+        stamp = self._manual_override_set_at or data.manual_override_set_at
+        if stamp is None:
+            _LOGGER.info(
+                "Manual override active with no timeout stamp — arming timeout from now"
+            )
+            self._manual_override_set_at = now
+            data.manual_override_set_at = now
             return
 
         timeout_hours = float(
@@ -713,7 +738,7 @@ class StateMachine:
         if timeout_hours <= 0:
             return
 
-        elapsed = now - self._manual_override_set_at
+        elapsed = now - stamp
         if elapsed < timedelta(hours=timeout_hours):
             return
 
@@ -722,6 +747,7 @@ class StateMachine:
             timeout_hours,
         )
         data.manual_override = False
+        data.manual_override_set_at = None
         self._manual_override_set_at = None
         # #622 gate replacement: the timeout is a deliberate re-decision point.
         # Without invalidating the fingerprint the facade would keep pinning
@@ -729,9 +755,15 @@ class StateMachine:
         # min away), because an unchanged decision context grants no token.
         # Invalidate so the very next evaluation is decision-allowed.
         self.invalidate_decision_fingerprint("manual override timeout")
-        # Send notification about manual override timeout
+        # Send notification about manual override timeout. Report the
+        # automation switch's real state (issue #934 review): clearing
+        # manual_override does not flip the switch back on, and manual entry
+        # via the select always turns it off first, so the notification must
+        # not claim "automation resuming" when the switch is still off.
         await self._notification_service.send_manual_override_timeout_notification(
-            data, timeout_hours
+            data,
+            timeout_hours,
+            automation_enabled=self._get_switch_state("automation_enabled"),
         )
         # Do NOT call compute_derived_values() again here.
         # A full recompute already ran at the top of this lock
@@ -1019,10 +1051,20 @@ class StateMachine:
 
         if self._handle_startup_grace_period(data, now):
             return
+
+        # Issue #934: the timeout must run BEFORE the automation-disabled
+        # early-return below. Entering manual override also turns the
+        # automation switch off, so `_handle_automation_disabled` returns True
+        # on every subsequent tick — if the timeout ran after it, a manual
+        # override entered this way could never be reached to time out at all
+        # (the live 10-hour freeze). Running it first means the override is
+        # cleared even while automation stays off; the state machine still
+        # issues no hardware commands afterward (full autonomy needs the
+        # operator to pick "automatic"), but computed_at resumes advancing.
+        await self._handle_manual_override_timeout(data, now)
+
         if self._handle_automation_disabled():
             return
-
-        await self._handle_manual_override_timeout(data, now)
 
         # #622 gate replacement: the convergence-while-frozen guarantee rests on
         # the optimizer facade (_commit_or_hold_mode), not on any local state

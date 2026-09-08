@@ -292,6 +292,11 @@ class CoordinatorData:
 
     # Internal state flags (managed by state machine / buttons)
     manual_override: bool = False
+    # Issue #934: when manual_override was last set. The single stamped entry
+    # point is LocalShiftCoordinator.set_manual_override(); it mirrors this onto
+    # StateMachine._manual_override_set_at so every path into manual mode is
+    # uniformly subject to DEFAULT_MANUAL_OVERRIDE_TIMEOUT.
+    manual_override_set_at: datetime | None = None
     target_reached_today: bool = False
     # Local date the target latch was last reset. Drives a date-change reset in the
     # compute cycle that is immune to a missed midnight event (the latch's only other

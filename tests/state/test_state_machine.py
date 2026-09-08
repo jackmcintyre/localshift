@@ -387,6 +387,45 @@ class TestModeConfig:
         assert config.grid_charging_allowed is True
         assert config.grid_charging_reserve == BACKUP_RESERVE_MAX_VALID
 
+    def test_get_mode_config_grid_charging_low_target_uses_target_directly(
+        self, state_machine, coordinator_data
+    ):
+        """GRID_CHARGING with a target at/below BACKUP_RESERVE_MAX_VALID uses
+        the target itself, unclamped."""
+
+        def _get_option(key, default):
+            if key == CONF_BATTERY_TARGET:
+                return 50
+            return default
+
+        state_machine._get_option = _get_option
+
+        config = state_machine._get_mode_config(
+            BatteryMode.GRID_CHARGING, coordinator_data
+        )
+
+        assert config.backup_reserve == 50
+        assert config.grid_charging_reserve == 50
+
+    def test_get_mode_config_grid_charging_full_target_uses_100_reserve(
+        self, state_machine, coordinator_data
+    ):
+        """GRID_CHARGING with a target >= 100 uses reserve 100 directly."""
+
+        def _get_option(key, default):
+            if key == CONF_BATTERY_TARGET:
+                return 100
+            return default
+
+        state_machine._get_option = _get_option
+
+        config = state_machine._get_mode_config(
+            BatteryMode.GRID_CHARGING, coordinator_data
+        )
+
+        assert config.backup_reserve == 100
+        assert config.grid_charging_reserve == 100
+
     def test_get_mode_config_grid_charging_default_target(
         self, state_machine, coordinator_data
     ):
@@ -618,6 +657,26 @@ class TestModeConfig:
         # Fresh SOC (8) is below the default floor (20) -> floor wins.
         assert config.backup_reserve == float(DEFAULT_MINIMUM_TARGET_SOC)
         assert config.self_consumption_reserve == float(DEFAULT_MINIMUM_TARGET_SOC)
+
+    def test_get_mode_config_hold_falls_back_to_cached_soc_when_fresh_read_fails(
+        self, state_machine, coordinator_data
+    ):
+        """HOLD falls back to cached SOC (with a warning) when the fresh SOC
+        read fails (returns None)."""
+
+        def _get_option(key, default):
+            if key == "minimum_target_soc":
+                return 10.0
+            return default
+
+        state_machine._get_option = _get_option
+        coordinator_data.soc = 60.0
+        state_machine._battery_controller.read_fresh_soc = MagicMock(return_value=None)
+
+        config = state_machine._get_mode_config(BatteryMode.HOLD, coordinator_data)
+
+        assert config.backup_reserve == 60.0
+        assert config.self_consumption_reserve == 60.0
 
     def test_get_mode_config_manual_returns_none(self, state_machine, coordinator_data):
         """MANUAL mode returns None (no config)."""
@@ -885,6 +944,24 @@ class TestStartupGracePeriod:
 
         # Should have inferred SELF_CONSUMPTION
         assert state_machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+
+    def test_startup_grace_expiry_stays_self_consumption_when_not_ready(
+        self, state_machine, coordinator_data
+    ):
+        """Issue #349: grace ends but automation isn't ready yet (missing
+        entities) — stay in SELF_CONSUMPTION rather than infer from
+        potentially-stale hardware state, and return early."""
+        state_machine._startup_grace_until = dt_aware(2020, 1, 1, 0, 0, 0)
+        coordinator_data.automation_ready = False
+        coordinator_data.automation_ready_missing = ["sensor.missing_price"]
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        assert state_machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+        assert state_machine._skip_next_debounce is True
 
 
 # =============================================================================
@@ -1533,6 +1610,279 @@ class TestManualOverride:
         # Manual override should be cleared
         assert coordinator_data.manual_override == False
 
+    def test_manual_override_timeout_clears_via_data_stamp(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Issue #934: a manual entry stamped only on
+        ``data.manual_override_set_at`` (the attribute
+        ``LocalShiftCoordinator.set_manual_override`` writes; it mirrors onto
+        ``StateMachine._manual_override_set_at`` too, but only once a state
+        machine reference exists) still times out — the handler must resolve
+        either stamp, not just the local one."""
+        state_machine._commanded_mode = BatteryMode.MANUAL
+        coordinator_data.active_mode = BatteryMode.MANUAL
+        coordinator_data.manual_override = True
+        coordinator_data.manual_override_set_at = dt_aware(2020, 1, 1, 0, 0, 0)
+        assert state_machine._manual_override_set_at is None
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+        mock_engine._forecast_change_tracker = MagicMock()
+        mock_engine._forecast_change_tracker._last_forecast_time = None
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        assert coordinator_data.manual_override is False
+        assert coordinator_data.manual_override_set_at is None
+
+    def test_manual_override_timeout_fires_with_automation_disabled(
+        self,
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        coordinator_data,
+    ):
+        """Issue #934 ordering regression — reproduces the live 27 Aug 2026
+        10-hour computed_at freeze. Entering manual override via the select
+        entity also turns the automation switch OFF. Before the fix,
+        ``_evaluate_core`` checked ``_handle_automation_disabled()`` (which
+        returns True and early-returns whenever automation is off) BEFORE
+        ``_handle_manual_override_timeout`` ever ran — so an override entered
+        this way could never reach the timeout handler and never clear.
+        Automation staying off must not block the timeout from firing.
+        """
+        sm = StateMachine(
+            mock_battery_controller,
+            mock_notification_service,
+            lambda key: False,  # automation_enabled OFF, as when manual is entered
+            lambda key, default=None: {"manual_override_timeout": 24.0}.get(
+                key, default
+            ),
+            mock_entity_validator,
+        )
+        sm._commanded_mode = BatteryMode.MANUAL
+        coordinator_data.active_mode = BatteryMode.MANUAL
+        coordinator_data.manual_override = True
+        sm._manual_override_set_at = dt_aware(2020, 1, 1, 0, 0, 0)
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+        mock_engine._forecast_change_tracker = MagicMock()
+        mock_engine._forecast_change_tracker._last_forecast_time = None
+
+        asyncio.run(sm.evaluate_state_machine(coordinator_data, mock_engine))
+
+        assert coordinator_data.manual_override is False
+        assert sm._manual_override_set_at is None
+        mock_notification_service.send_manual_override_timeout_notification.assert_awaited_once()
+        # Review fix: automation is OFF in this scenario (the dominant real
+        # path per issue #934 — manual entry via the select always disables
+        # it first, and clearing manual_override does not flip it back on),
+        # so the notification must report that honestly rather than the
+        # blanket "Automation resuming" claim, which would tell the user to
+        # stop watching a battery that never actually resumed autonomy.
+        _, call_kwargs = (
+            mock_notification_service.send_manual_override_timeout_notification.call_args
+        )
+        assert call_kwargs["automation_enabled"] is False
+
+    def test_manual_override_self_heals_missing_stamp(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Issue #934 self-heal: a manual override observed with NO stamp on
+        either side (some path bypassed the stamped entry point) must not stay
+        un-timeoutable forever — the original defect was two guards that
+        returned early with nothing ever stamping either attribute. The first
+        evaluation arms the clock from `now`; a later evaluation past the
+        timeout then clears it.
+        """
+        state_machine._commanded_mode = BatteryMode.MANUAL
+        coordinator_data.active_mode = BatteryMode.MANUAL
+        coordinator_data.manual_override = True
+        assert state_machine._manual_override_set_at is None
+        assert coordinator_data.manual_override_set_at is None
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+        mock_engine._forecast_change_tracker = MagicMock()
+        mock_engine._forecast_change_tracker._last_forecast_time = None
+
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now",
+            return_value=dt_aware(2026, 1, 1, 0, 0, 0),
+        ):
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        # First eval: self-healed by stamping, not yet cleared.
+        assert coordinator_data.manual_override is True
+        assert coordinator_data.manual_override_set_at == dt_aware(2026, 1, 1, 0, 0, 0)
+        assert state_machine._manual_override_set_at == dt_aware(2026, 1, 1, 0, 0, 0)
+
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now",
+            return_value=dt_aware(2026, 1, 2, 1, 0, 0),  # 25h later
+        ):
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        assert coordinator_data.manual_override is False
+
+    def test_manual_override_timeout_disabled_via_zero_config(
+        self, state_machine, coordinator_data
+    ):
+        """timeout_hours <= 0 disables the auto-clear entirely."""
+        state_machine._commanded_mode = BatteryMode.MANUAL
+        coordinator_data.active_mode = BatteryMode.MANUAL
+        coordinator_data.manual_override = True
+        state_machine._manual_override_set_at = dt_aware(2020, 1, 1, 0, 0, 0)
+        state_machine._get_option = lambda key, default=None: 0.0
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+        mock_engine._forecast_change_tracker = MagicMock()
+        mock_engine._forecast_change_tracker._last_forecast_time = None
+
+        asyncio.run(state_machine.evaluate_state_machine(coordinator_data, mock_engine))
+
+        assert coordinator_data.manual_override is True
+
+    def test_manual_override_timeout_not_yet_elapsed(
+        self, state_machine, coordinator_data
+    ):
+        """Manual override stays set when the timeout hasn't elapsed yet."""
+        state_machine._commanded_mode = BatteryMode.MANUAL
+        coordinator_data.active_mode = BatteryMode.MANUAL
+        coordinator_data.manual_override = True
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+        mock_engine._forecast_change_tracker = MagicMock()
+        mock_engine._forecast_change_tracker._last_forecast_time = None
+
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now",
+            return_value=dt_aware(2026, 1, 1, 0, 0, 0),
+        ):
+            state_machine._manual_override_set_at = dt_aware(2026, 1, 1, 0, 0, 0)
+            asyncio.run(
+                state_machine.evaluate_state_machine(coordinator_data, mock_engine)
+            )
+
+        assert coordinator_data.manual_override is True
+
+
+class TestEvaluateStateMachineCallbacks:
+    """Coverage backfill: evaluate_state_machine's optional callback params."""
+
+    @pytest.mark.asyncio
+    async def test_calls_read_state_and_check_automation_ready_when_not_ready(
+        self, state_machine, coordinator_data
+    ):
+        """read_state_func always runs inside the lock; check_automation_ready_func
+        runs (with suppress_warning reflecting grace state) only when automation
+        isn't ready; notify_func always runs in the finally block."""
+        coordinator_data.automation_ready = False
+        read_state = MagicMock()
+        check_ready = MagicMock()
+        notify = MagicMock()
+
+        mock_engine = MagicMock()
+        mock_engine.compute_derived_values = MagicMock()
+
+        await state_machine.evaluate_state_machine(
+            coordinator_data,
+            mock_engine,
+            read_state_func=read_state,
+            notify_func=notify,
+            check_automation_ready_func=check_ready,
+        )
+
+        read_state.assert_called_once()
+        check_ready.assert_called_once_with(coordinator_data, suppress_warning=False)
+        notify.assert_called_once()
+
+
+class TestUpdatePlanChargeEpoch:
+    """Coverage backfill: the suppress-next-grant rebaseline branch."""
+
+    def test_suppressed_grant_rebaselines_context_without_advancing_epoch(
+        self, state_machine, coordinator_data
+    ):
+        """When a caller has barred the next grant, the plan-charge context is
+        still rebaselined (so the NEXT real evaluation isn't judged against a
+        stale one) but nothing is granted."""
+        state_machine._suppress_plan_charge_grant = True
+        state_machine._plan_charge_granted.add(BatteryMode.GRID_CHARGING.value)
+
+        state_machine._update_plan_charge_epoch(coordinator_data, "ctx-1")
+
+        assert state_machine._plan_charge_context == "ctx-1"
+        assert state_machine._plan_charge_granted == set()
+
+
+class TestClassifyGrantSource:
+    """Coverage backfill: _classify_grant_source's malformed-context guard."""
+
+    def test_malformed_context_returns_unknown(self, state_machine):
+        """A context string that doesn't split into exactly 5 parts (should
+        never happen in practice) falls back to 'unknown' rather than raising."""
+        state_machine._last_evaluated_base = "a|b|c"
+        result = state_machine._classify_grant_source("a|b|c|d|e")
+        assert result == "unknown"
+
+
+class TestFinalizeSuccessfulTransition:
+    """Coverage backfill: decision-tracker recording on a wired-in tracker."""
+
+    @pytest.mark.asyncio
+    async def test_records_decision_when_tracker_present_and_not_dry_run(
+        self,
+        mock_battery_controller,
+        mock_notification_service,
+        mock_get_switch_state,
+        mock_get_option,
+        mock_entity_validator,
+        coordinator_data,
+    ):
+        tracker = MagicMock()
+        sm = StateMachine(
+            mock_battery_controller,
+            mock_notification_service,
+            mock_get_switch_state,
+            mock_get_option,
+            mock_entity_validator,
+            decision_tracker=tracker,
+        )
+
+        await sm._finalize_successful_transition(
+            coordinator_data, BatteryMode.SELF_CONSUMPTION, BatteryMode.GRID_CHARGING
+        )
+
+        tracker.record_decision.assert_called_once_with(
+            coordinator_data, BatteryMode.SELF_CONSUMPTION, BatteryMode.GRID_CHARGING
+        )
+
+
+class TestHandleStableModeEarlyReturn:
+    """Coverage backfill: _handle_stable_mode skips the health check when SOC
+    monitoring already executed a transition."""
+
+    @pytest.mark.asyncio
+    async def test_returns_early_when_soc_monitoring_handled_it(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+
+        with patch.object(
+            state_machine, "_handle_soc_monitoring", AsyncMock(return_value=True)
+        ):
+            await state_machine._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_self_consumption.assert_not_called()
+
 
 class TestStateMachineInternalBranches:
     """Targeted branch tests for uncovered state machine helpers."""
@@ -1731,6 +2081,21 @@ class TestStateMachineInternalBranches:
         )
 
         assert should_wait is False
+
+    def test_handle_debounce_timing_still_waiting_mid_debounce(self, state_machine):
+        """Debounce helper should return True (and log) while a timer is
+        already running but hasn't yet met the required duration."""
+        desired_mode = BatteryMode.PROACTIVE_EXPORT
+        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
+        state_machine._mode_desired_since[desired_mode] = desired_since
+
+        should_wait = state_machine._handle_debounce_timing(
+            desired_mode,
+            desired_since + timedelta(minutes=1),
+            timedelta(minutes=2),
+        )
+
+        assert should_wait is True
 
     def test_record_transition_metrics_records_lag_and_trims_history(
         self, state_machine, coordinator_data

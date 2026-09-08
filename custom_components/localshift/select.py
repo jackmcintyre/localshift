@@ -106,11 +106,54 @@ class BatteryModeSelect(SelectEntity):
             return "self_consumption"
         return self._manual_mode
 
+    def _is_non_user_reassertion(self, option: str) -> bool:
+        """Classify a write as internal restoration rather than a user pick.
+
+        Provenance + idempotence (Issue #934): HA stamps ``self._context``
+        from the service call before dispatch, and a frontend dropdown pick
+        always carries a ``user_id``; a restore, automation, or internal
+        re-assertion does not. Combined with "the requested option matches
+        the PERSISTED manual mode" (``entry.options['manual_battery_mode']``
+        — what an options-reload / entity-recreation restore write re-asserts,
+        not ``current_option``, which reflects the optimizer's live mode
+        whenever automation is ON and so is frequently a different value from
+        the one actually being restored) and "automation is currently ON"
+        (the entity is not already parked in manual), this identifies exactly
+        the options-reload / entity-recreation echo without touching a real
+        re-pick of the displayed mode, which the automation-ON precondition
+        still permits when it carries a user context.
+
+        Comparing against ``current_option`` instead of the persisted value
+        was tried and found unsound: it only caught the echo by coincidence,
+        when the optimizer's live mode happened to equal the persisted one.
+        Any other live mode (grid_charging, demand_block, hold, ...) let the
+        echo straight through into manual override.
+        """
+        persisted_mode = self._entry.options.get(
+            "manual_battery_mode", self._manual_mode
+        )
+        if option != persisted_mode:
+            return False
+        if not self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
+            return False
+        context = getattr(self, "_context", None)
+        user_id = getattr(context, "user_id", None) if context is not None else None
+        return user_id is None
+
     async def async_select_option(self, option: str) -> None:
         """Handle selection of a new battery mode."""
         _LOGGER.info("Battery mode select changed to: %s", option)
         if option not in self._attr_options:
             _LOGGER.error("Invalid battery mode selected: %s", option)
+            return
+
+        if option != "automatic" and self._is_non_user_reassertion(option):
+            _LOGGER.warning(
+                "Ignoring non-user battery mode re-assertion of %s (context=%s) "
+                "— not entering manual override",
+                option,
+                getattr(self, "_context", None),
+            )
             return
 
         old_mode = self.current_option
@@ -121,7 +164,9 @@ class BatteryModeSelect(SelectEntity):
                 **self._entry.options,
                 "switch_state_automation_enabled": True,
             }
-            self.coordinator.data.manual_override = False
+            self.coordinator.set_manual_override(
+                False, reason="user_selected_automatic"
+            )
             self.hass.config_entries.async_update_entry(
                 self._entry, options=new_options
             )
@@ -137,7 +182,7 @@ class BatteryModeSelect(SelectEntity):
             "manual_battery_mode": option,
         }
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
-        self.coordinator.data.manual_override = True
+        self.coordinator.set_manual_override(True, reason="user_selection")
 
         try:
             target_mode = BatteryMode(option)
@@ -170,11 +215,15 @@ class BatteryModeSelect(SelectEntity):
         self.async_on_remove(
             self.coordinator.async_add_listener(self._handle_coordinator_update)
         )
-        # Sync manual_override flag with automation switch state
+        # Sync manual_override flag with automation switch state. Issue #934:
+        # a restart with automation already off (a genuine manual pick
+        # persisted across restart) re-enters manual STAMPED, so the 4-hour
+        # timeout applies to it too — it is not exempt just because no select
+        # write happened this session.
         if not self.coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED):
-            self.coordinator.data.manual_override = True
+            self.coordinator.set_manual_override(True, reason="startup_automation_off")
         else:
-            self.coordinator.data.manual_override = False
+            self.coordinator.set_manual_override(False, reason="startup_automation_on")
 
     @callback
     def _handle_coordinator_update(self) -> None:

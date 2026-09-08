@@ -1,6 +1,6 @@
 """Unit tests for coordinator."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -77,6 +77,97 @@ class TestCoordinatorInitialization:
 
         coordinator.set_switch_state("automation_enabled", False)
         assert coordinator.get_switch_state("automation_enabled") is False
+
+
+# =============================================================================
+# SET_MANUAL_OVERRIDE TESTS (Issue #934)
+#
+# The select entity's tests replace this method with a MagicMock
+# side_effect reimplementation (tests/test_select.py's mock_coordinator
+# fixture), so those tests certify the fixture's mimicry, never the real
+# method. These exercise LocalShiftCoordinator.set_manual_override itself —
+# the single stamped entry point both #934 fixes depend on — directly.
+# =============================================================================
+
+
+class TestSetManualOverride:
+    """Direct unit tests for LocalShiftCoordinator.set_manual_override."""
+
+    def test_entering_manual_stamps_data(self, mock_hass, mock_entry):
+        """active=True sets manual_override and stamps manual_override_set_at
+        on coordinator.data, with no state machine attached."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+        assert coordinator._state_machine is None
+
+        coordinator.set_manual_override(True, reason="test_enter")
+
+        assert coordinator.data.manual_override is True
+        assert coordinator.data.manual_override_set_at is not None
+
+    def test_clearing_manual_resets_stamp(self, mock_hass, mock_entry):
+        """active=False clears manual_override and its stamp."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+        coordinator.set_manual_override(True, reason="test_enter")
+        assert coordinator.data.manual_override is True
+
+        coordinator.set_manual_override(False, reason="test_clear")
+
+        assert coordinator.data.manual_override is False
+        assert coordinator.data.manual_override_set_at is None
+
+    def test_entering_manual_mirrors_stamp_onto_state_machine(
+        self, mock_hass, mock_entry
+    ):
+        """When a state machine is attached, entering manual mirrors the
+        stamp onto StateMachine._manual_override_set_at — the acceptance
+        criterion 'any entry into manual is cleared by the timeout' depends
+        on this mirroring for the case where a state machine already exists.
+        """
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+        fake_state_machine = MagicMock()
+        fake_state_machine._manual_override_set_at = None
+        coordinator._state_machine = fake_state_machine
+
+        coordinator.set_manual_override(True, reason="test_enter")
+
+        assert coordinator.data.manual_override_set_at is not None
+        assert (
+            fake_state_machine._manual_override_set_at
+            == coordinator.data.manual_override_set_at
+        )
+
+    def test_clearing_manual_mirrors_none_onto_state_machine(
+        self, mock_hass, mock_entry
+    ):
+        """Clearing the override with a state machine attached mirrors None
+        onto StateMachine._manual_override_set_at too, so a stale stamp does
+        not survive a clear."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+        fake_state_machine = MagicMock()
+        fake_state_machine._manual_override_set_at = datetime.now(UTC)
+        coordinator._state_machine = fake_state_machine
+
+        coordinator.set_manual_override(False, reason="test_clear")
+
+        assert coordinator.data.manual_override is False
+        assert coordinator.data.manual_override_set_at is None
+        assert fake_state_machine._manual_override_set_at is None
+
+    def test_repeated_entry_advances_the_stamp(self, mock_hass, mock_entry):
+        """A second entry into manual re-stamps rather than keeping the first
+        timestamp, so re-picking manual mode restarts the 4h timeout clock."""
+        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
+
+        coordinator.set_manual_override(True, reason="first")
+        first_stamp = coordinator.data.manual_override_set_at
+
+        with patch(
+            "custom_components.localshift.coordinator.coordinator.dt_util"
+        ) as mock_dt_util:
+            mock_dt_util.now.return_value = first_stamp + timedelta(hours=1)
+            coordinator.set_manual_override(True, reason="second")
+
+        assert coordinator.data.manual_override_set_at > first_stamp
 
 
 # =============================================================================
@@ -767,6 +858,7 @@ class TestAsyncStop:
         await coordinator.async_stop()
 
         coordinator._computation_engine.clear_historical_cache.assert_called_once()
+
 
 class TestFastTickPriceGate:
     """Test Issue #622: Fast tick always dispatches to StateMachine.
