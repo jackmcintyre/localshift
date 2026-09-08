@@ -113,7 +113,6 @@ The safety gate validates:
 - Optimizer is enabled
 - Control mode is set to "active"
 - Last solve was successful
-- Slot alignment is valid
 - Forecast data is fresh (within 30 minutes)
 - Not in cooldown period after recent failures
 

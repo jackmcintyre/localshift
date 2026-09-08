@@ -11,23 +11,16 @@ from custom_components.localshift.engine.optimizer_dp import (
     PlannedSlotDecision,
     PlannerAction,
     PlannerReasonCode,
-    SlotContext,
 )
 from custom_components.localshift.engine.optimizer_runner import (
     OptimizerSafetyGate,
     _build_optimizer_config,
     _build_summary,
-    _compute_legacy_energy_totals,
     _derive_runtime_apply_plan,
     _find_current_slot_index,
-    _get_ha_timezone,
-    _make_cycle_id,
-    _map_mode_to_action,
     _normalize_initial_soc,
-    _run,
     _serialize_decision,
     _serialize_result,
-    _validate_slot_alignment,
 )
 
 
@@ -98,32 +91,6 @@ class TestOptimizerRunner:
 
 
 class TestOptimizerRunnerHelpers:
-    def test_get_ha_timezone_success(self):
-        """Timezone helper should return string when HA provides tzinfo."""
-        with patch("homeassistant.util.dt.get_time_zone", return_value=UTC):
-            assert _get_ha_timezone() == "UTC"
-
-    def test_get_ha_timezone_fallback(self):
-        """Timezone helper should fall back to UTC on errors."""
-        with patch(
-            "homeassistant.util.dt.get_time_zone", side_effect=Exception("boom")
-        ):
-            assert _get_ha_timezone() == "UTC"
-
-    def test_map_mode_to_action(self):
-        """BatteryMode values should map to PlannerAction."""
-        assert _map_mode_to_action(BatteryMode.SELF_CONSUMPTION) == PlannerAction.HOLD
-        assert _map_mode_to_action(BatteryMode.GRID_CHARGING) == (
-            PlannerAction.CHARGE_GRID_NORMAL
-        )
-        assert _map_mode_to_action(BatteryMode.BOOST_CHARGING) == (
-            PlannerAction.CHARGE_GRID_BOOST
-        )
-        assert _map_mode_to_action(BatteryMode.PROACTIVE_EXPORT) == (
-            PlannerAction.EXPORT_PROACTIVE
-        )
-        assert _map_mode_to_action("unknown") is None
-
     def test_normalize_initial_soc_rejects_invalid(self):
         """Invalid SOC inputs should be rejected with error info."""
         config = OptimizerConfig(min_soc_pct=10.0, max_soc_pct=90.0)
@@ -209,48 +176,6 @@ class TestOptimizerRunnerHelpers:
         updated_default = _build_optimizer_config(MockData(), {})
         assert updated_default.switching_penalty_per_kwh == pytest.approx(0.40)
 
-    def test_compute_legacy_energy_totals(self):
-        """Legacy totals should ignore invalid numeric inputs."""
-        totals = _compute_legacy_energy_totals([
-            {"grid_import_kwh": "bad", "grid_export_kwh": 1.0},
-            {"grid_import_kwh": 2.5, "grid_export_kwh": None},
-        ])
-
-        assert totals == (2.5, 1.0)
-
-    def test_validate_slot_alignment_mismatch(self):
-        """Slot alignment should flag count mismatch."""
-        legacy_slots = [{}]
-        contexts: list[SlotContext] = []
-
-        result = _validate_slot_alignment(legacy_slots, contexts)
-
-        assert result["valid"] is False
-        assert "slot_count_mismatch" in result["issues"][0]
-
-    def test_validate_slot_alignment_warnings_and_issues(self):
-        """Slot alignment should surface warnings and issues for bad slots."""
-        legacy_slots = [{"slot_interval_minutes": 30}]
-        contexts = [
-            SlotContext(
-                slot_index=1,
-                timestamp_iso="",
-                slot_interval_minutes=15,
-                buy_price=-0.1,
-                sell_price=0.0,
-                solar_kwh=0.0,
-                consumption_kwh=0.0,
-            )
-        ]
-
-        result = _validate_slot_alignment(legacy_slots, contexts)
-
-        assert result["valid"] is False
-        assert any("index_mismatch" in issue for issue in result["issues"])
-        assert any("interval_mismatch" in issue for issue in result["issues"])
-        assert any("missing_timestamp" in warning for warning in result["warnings"])
-        assert any("negative_buy_price" in warning for warning in result["warnings"])
-
     def test_serialize_result_and_decision(self):
         """Serialize helpers should format core fields for sensors."""
         decision = PlannedSlotDecision(
@@ -290,7 +215,7 @@ class TestOptimizerRunnerHelpers:
         assert serialized_result["projected_net_cost"] == 0.1235
 
     def test_build_summary_includes_optional_fields(self):
-        """Summary should include parity, alignment, and SOC info when provided."""
+        """Summary should include parity and SOC info when provided."""
         result = OptimizerResult(
             success=True,
             projected_net_cost=1.0,
@@ -303,21 +228,12 @@ class TestOptimizerRunnerHelpers:
             cycle_id="cycle",
             cycle_timestamp_iso="2026-01-01T10:00:00Z",
             parity_info={"completeness_pct": 90.0, "defaulted_fields": {"x": 1}},
-            alignment={"valid": False, "issues": ["bad"], "warnings": ["warn"]},
             config_options={"a": 1},
             initial_soc_info={"normalized_soc_pct": 55.0},
         )
 
         assert summary["initial_soc_pct"] == 55.0
         assert summary["parity_completeness_pct"] == 90.0
-        assert summary["alignment_valid"] is False
-        assert summary["alignment_issues"] == ["bad"]
-        assert summary["alignment_warnings"] == ["warn"]
-
-    def test_make_cycle_id_length(self):
-        """Cycle IDs should be short and deterministic length."""
-        cycle_id = _make_cycle_id()
-        assert len(cycle_id) == 12
 
     def test_find_current_slot_index(self):
         """Slot index should resolve to current slot or default to 0."""
@@ -452,140 +368,3 @@ class TestOptimizerSafetyGate:
             )
 
         assert result.allowed is True
-
-
-class TestOptimizerRun:
-    def test_run_no_slots_sets_summary(self):
-        """Empty slot list should set summary with no_slots_available."""
-
-        class MockData:
-            daily_forecast = []
-            soc = 50.0
-            active_mode = BatteryMode.SELF_CONSUMPTION
-
-        class MockMeta:
-            @staticmethod
-            def to_parity_dict():
-                return {"completeness_pct": 0.0}
-
-        with patch(
-            "custom_components.localshift.engine.optimizer_runner.SlotBuilder"
-        ) as mock_builder:
-            mock_builder.return_value.build_slots.return_value = ([], MockMeta())
-
-            data = MockData()
-            _run(
-                data=data,
-                config_options={},
-                cycle_id="cycle",
-                cycle_timestamp_iso="2026-01-01T10:00:00Z",
-                planner=object(),
-            )
-
-        assert data.optimizer_summary["error_message"] == "no_slots_available"
-
-    def test_run_invalid_soc_sets_summary(self):
-        """Invalid initial SOC should set error summary and exit."""
-
-        class MockData:
-            daily_forecast = [{}]
-            soc = "bad"
-            active_mode = BatteryMode.SELF_CONSUMPTION
-
-        class MockMeta:
-            @staticmethod
-            def to_parity_dict():
-                return {"completeness_pct": 100.0}
-
-        with (
-            patch(
-                "custom_components.localshift.engine.optimizer_runner.SlotBuilder"
-            ) as mock_builder,
-            patch(
-                "custom_components.localshift.engine.optimizer_runner._normalize_initial_soc"
-            ) as mock_norm,
-        ):
-            mock_builder.return_value.build_slots.return_value = (
-                [SlotContext(0, "2026-01-01T10:00:00Z", 30, 0.2, 0.1, 0, 0)],
-                MockMeta(),
-            )
-            mock_norm.return_value = (None, {"error": "non_numeric"})
-
-            data = MockData()
-            _run(
-                data=data,
-                config_options={},
-                cycle_id="cycle",
-                cycle_timestamp_iso="2026-01-01T10:00:00Z",
-                planner=object(),
-            )
-
-        assert data.optimizer_summary["error_message"] == "invalid_initial_soc"
-
-    def test_run_success_writes_outputs(self):
-        """Successful optimizer run should populate result fields."""
-
-        class MockData:
-            daily_forecast = [{}]
-            soc = 50.0
-            active_mode = BatteryMode.SELF_CONSUMPTION
-            optimizer_summary = None
-            optimizer_result = None
-            optimizer_decisions = None
-
-        class MockMeta:
-            @staticmethod
-            def to_parity_dict():
-                return {"completeness_pct": 100.0}
-
-        decision = PlannedSlotDecision(
-            slot_index=0,
-            timestamp_iso="2026-01-01T10:00:00Z",
-            slot_interval_minutes=30,
-            action=PlannerAction.HOLD,
-            reason_code=PlannerReasonCode.IDLE,
-            objective_terms=ObjectiveTerms(),
-            predicted_soc_pct=55.0,
-            grid_import_kwh=1.0,
-            grid_export_kwh=0.0,
-            solar_kwh=0.0,
-            consumption_kwh=0.0,
-            buy_price=0.2,
-            sell_price=0.1,
-        )
-        result = OptimizerResult(success=True, total_slots=1, decisions=[decision])
-
-        class MockPlanner:
-            def plan(self, inputs):
-                return result
-
-        with (
-            patch(
-                "custom_components.localshift.engine.optimizer_runner.SlotBuilder"
-            ) as mock_builder,
-            patch(
-                "custom_components.localshift.engine.optimizer_runner._validate_slot_alignment"
-            ) as mock_align,
-            patch(
-                "custom_components.localshift.engine.optimizer_runner._normalize_initial_soc"
-            ) as mock_norm,
-        ):
-            mock_builder.return_value.build_slots.return_value = (
-                [SlotContext(0, "2026-01-01T10:00:00Z", 30, 0.2, 0.1, 0, 0)],
-                MockMeta(),
-            )
-            mock_align.return_value = {"valid": True}
-            mock_norm.return_value = (50.0, {"normalized_soc_pct": 50.0})
-
-            data = MockData()
-            _run(
-                data=data,
-                config_options={},
-                cycle_id="cycle",
-                cycle_timestamp_iso="2026-01-01T10:00:00Z",
-                planner=MockPlanner(),
-            )
-
-        assert data.optimizer_result is not None
-        assert data.optimizer_decisions is not None
-        assert data.optimizer_summary["success"] is True

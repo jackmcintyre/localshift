@@ -303,21 +303,6 @@ The safety gates:
 2. Verify forecast sensors have all expected attributes
 3. Check `sensor.localshift_forecast_battery` for complete data
 
-### Alignment Issues
-
-**Symptoms:**
-- `alignment_valid` is `False`
-- `alignment_issues` list contains warnings
-
-**Causes:**
-- Slot count mismatch between legacy and optimizer
-- Timestamp/interval inconsistencies
-
-**Solutions:**
-1. Check `alignment_issues` for specific problems
-2. Verify forecast is generating slots correctly
-3. Restart integration if issues persist
-
 ### Diagnostics Missing Optimizer Section
 
 **Symptoms:**
@@ -358,7 +343,6 @@ When using active mode (optimizer controls battery), additional monitoring is av
 | `optimizer_not_enabled` | Optimizer disabled in config | Enable optimizer in configuration |
 | `control_mode_not_active` | Control mode not set to "active" | Set control mode to "active" |
 | `solve_not_successful` | Last DP solve failed | Check optimizer error messages |
-| `slot_alignment_invalid` | Slot mismatch between legacy and optimizer | Check forecast generation |
 | `no_decisions` | No optimizer decisions available | Check optimizer is producing results |
 | `cooldown_active` | In fallback cooldown after repeated failures | Wait for cooldown to complete |
 

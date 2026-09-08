@@ -195,7 +195,6 @@ class CoordinatorData:
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
     # Legacy forecast fields — retained for compatibility, always empty after #441 migration.
-    daily_forecast: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast_hourly: list[dict[str, Any]] = field(default_factory=list)
     daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
     consumption_source: str = "unknown"

@@ -3,14 +3,23 @@ tests/test_optimizer_scaffold.py — Scaffolding tests for DP optimizer.
 
 Phase 6 (#448): Removed PlannerComparator tests (module deleted) and
 rollout-constants tests (CONF_OPTIMIZER_ENABLED etc. removed).
+Issue #979: removed the batch-path (run_optimizer) acceptance tests — that
+entry point had no production caller and was deleted. The one test that
+pinned a real, still-relevant property (HA state attributes must be
+JSON-serializable) is re-pointed at OptimizerFacade.run_inline, the live
+entry point, rather than dropped.
 
 Tests run ENTIRELY OFFLINE — no Home Assistant or Solcast data required.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+
 import pytest
 
+from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
     ObjectiveTerms,
@@ -22,6 +31,7 @@ from custom_components.localshift.engine.optimizer_dp import (
     PlannerReasonCode,
     SlotContext,
 )
+from custom_components.localshift.engine.optimizer_facade import OptimizerFacade
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -378,125 +388,39 @@ def test_dp_planner_runtime_budget(multi_slots):
     )
 
 
-def test_optimizer_no_actuation():
-    """Phase 6 acceptance: optimizer execution makes zero calls to battery/state-machine actuation.
-
-    The optimizer runner produces only data mutations, never actual control commands.
-    """
-    from dataclasses import dataclass, field
-    from typing import Any
-
-    from custom_components.localshift.engine.optimizer_runner import (
-        run_optimizer,
-    )
-
-    @dataclass
-    class MockCoordinatorData:
-        soc: float = 50.0
-        daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_result: dict[str, Any] | None = None
-        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_summary: dict[str, Any] = field(default_factory=dict)
-        forecast_net_cost: float = 0.0
-        forecast_import_cost: float = 0.0
-        forecast_export_revenue: float = 0.0
-
-    data = MockCoordinatorData(
-        daily_forecast=[
-            {
-                "timestamp_iso": "2026-01-03T10:00:00",
-                "slot_interval_minutes": 30,
-                "buy_price": 0.12,
-                "sell_price": 0.08,
-                "solar_kwh": 1.0,
-                "consumption_kwh": 0.5,
-            }
-        ]
-    )
-
-    # Run optimizer — should NOT call any battery/state-machine methods
-    run_optimizer(data, {})
-
-    # Verify result was produced (mutation on data)
-    assert data.optimizer_summary is not None
-    assert data.optimizer_summary.get("enabled") is True
-
-
-def test_optimizer_failure_fallback(default_config):
-    """Phase 6 acceptance: optimizer exceptions never block coordinator completion.
-
-    Error state is captured in telemetry without propagating.
-    """
-    from dataclasses import dataclass, field
-    from typing import Any
-
-    from custom_components.localshift.engine.optimizer_runner import (
-        run_optimizer,
-    )
-
-    @dataclass
-    class MockCoordinatorData:
-        soc: float = 50.0
-        daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_result: dict[str, Any] | None = None
-        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_summary: dict[str, Any] = field(default_factory=dict)
-        forecast_net_cost: float = 0.0
-        forecast_import_cost: float = 0.0
-        forecast_export_revenue: float = 0.0
-
-    # Empty slots — should handle gracefully
-    data = MockCoordinatorData(daily_forecast=[])
-
-    # Should not raise, even with empty slots
-    run_optimizer(data, {})
-
-    # Verify error state is captured in summary
-    assert data.optimizer_summary is not None
-    assert data.optimizer_summary.get("success") is False
-    assert "error_message" in data.optimizer_summary
-
-
-def test_optimizer_result_serialization_safe(default_config, multi_slots):
-    """Phase 6 acceptance: optimizer result is JSON-serializable for HA state attributes.
+def test_optimizer_result_serialization_safe(multi_slots):
+    """Optimizer result must be JSON-serializable for HA state attributes.
 
     All output fields must be serializable to JSON for storage in
-    CoordinatorData and exposure via sensor attributes.
+    CoordinatorData and exposure via sensor attributes. Re-pointed (#979) at
+    OptimizerFacade.run_inline — the live entry point — since the batch-path
+    run_optimizer() this originally pinned had no production caller and was
+    deleted; the JSON-safety property itself is independent of which entry
+    point produced the data.
     """
     import json
-    from dataclasses import dataclass, field
-    from typing import Any
 
-    from custom_components.localshift.engine.optimizer_runner import (
-        run_optimizer,
+    metadata = MagicMock()
+    metadata.horizon_hours = 24
+    metadata.to_parity_dict.return_value = {}
+    metadata.all_solcast = None
+
+    class _StubSlotBuilderWithRealSlots:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def build_slots(self, _data, now_dt=None):
+            return multi_slots, metadata
+
+    data = CoordinatorData()
+    data.soc = 50.0
+
+    facade = OptimizerFacade(slot_builder_cls=_StubSlotBuilderWithRealSlots)
+    facade.run_inline(
+        data=data,
+        now_dt=datetime(2026, 1, 3, 10, 0, tzinfo=UTC),
+        config_options={},
     )
-
-    @dataclass
-    class MockCoordinatorData:
-        soc: float = 50.0
-        daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_result: dict[str, Any] | None = None
-        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_summary: dict[str, Any] = field(default_factory=dict)
-        forecast_net_cost: float = 0.0
-        forecast_import_cost: float = 0.0
-        forecast_export_revenue: float = 0.0
-
-    data = MockCoordinatorData(
-        daily_forecast=[
-            {
-                "timestamp_iso": f"2026-01-03T{(i // 2):02d}:{(i % 2) * 30:02d}:00",
-                "slot_interval_minutes": 30,
-                "buy_price": 0.10 + 0.01 * (i % 10),
-                "sell_price": 0.06,
-                "solar_kwh": max(0.0, 2.5 - abs(i - 24) * 0.1),
-                "consumption_kwh": 0.35,
-            }
-            for i in range(48)
-        ]
-    )
-
-    run_optimizer(data, {})
 
     try:
         json_str = json.dumps(data.optimizer_summary)

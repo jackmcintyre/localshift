@@ -51,7 +51,6 @@ class TestOptimizerSafetyGate:
                 "enabled": True,
                 "success": True,
                 "cycle_timestamp_iso": datetime.now().isoformat(),
-                "alignment_valid": True,
             },
         )
         decision = PlannedSlotDecision(
@@ -287,12 +286,10 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
         from custom_components.localshift.engine.optimizer_runner import (
             OptimizerSafetyGate,
             _derive_runtime_apply_plan,
-            run_optimizer,
         )
 
         assert OptimizerSafetyGate is not None
         assert _derive_runtime_apply_plan is not None
-        assert run_optimizer is not None
 
     def test_optimizer_shadow_runner_module_does_not_exist(self):
         """optimizer_shadow_runner module must not exist after Phase 6."""

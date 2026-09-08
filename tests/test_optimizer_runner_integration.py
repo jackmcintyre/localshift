@@ -5,8 +5,7 @@ into OptimizerInputs with proper field mapping:
 
 1. Config mapping: all OptimizerConfig fields are correctly populated
 2. Slot context parity: legacy slots map 1:1 to SlotContext
-3. Alignment validation: issues are detected and reported
-4. Completeness tracking: parity_completeness_pct is accurate
+3. Completeness tracking: parity_completeness_pct is accurate
 """
 
 import pytest
@@ -15,8 +14,6 @@ from custom_components.localshift.engine.optimizer_runner import (
     _build_optimizer_config,
     _build_summary,
     _normalize_initial_soc,
-    _validate_slot_alignment,
-    run_optimizer,
 )
 
 # ---------------------------------------------------------------------------
@@ -265,37 +262,6 @@ class TestBuildSummary:
 
         assert "parity_completeness_pct" in summary
         assert summary["parity_completeness_pct"] == 95.0
-
-    def test_includes_alignment_results(self, mock_coordinator_data):
-        """Verify alignment results included in summary."""
-        from custom_components.localshift.engine.optimizer_dp import (
-            OptimizerResult,
-        )
-
-        result = OptimizerResult(success=True, total_slots=3)
-        alignment = {"valid": True, "issues": [], "warnings": ["test_warning"]}
-        summary = _build_summary(
-            result, "cycle123", "2025-01-15T06:00:00Z", None, alignment
-        )
-
-        assert "alignment_valid" in summary
-        assert summary["alignment_valid"] is True
-        assert "alignment_warnings" in summary
-
-    def test_includes_alignment_issues(self, mock_coordinator_data):
-        """Verify alignment issues included when present."""
-        from custom_components.localshift.engine.optimizer_dp import (
-            OptimizerResult,
-        )
-
-        result = OptimizerResult(success=True, total_slots=3)
-        alignment = {"valid": False, "issues": ["test_issue"], "warnings": []}
-        summary = _build_summary(
-            result, "cycle123", "2025-01-15T06:00:00Z", None, alignment
-        )
-
-        assert "alignment_issues" in summary
-        assert "test_issue" in summary["alignment_issues"]
 
     def test_summary_includes_cycle_timestamp_as_computed_at(
         self, mock_coordinator_data

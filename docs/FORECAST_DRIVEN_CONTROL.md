@@ -553,7 +553,6 @@ The DP optimizer is the sole control path:
 1. **Safety gate validates** all prerequisites before applying
 2. **Fallback to SELF_CONSUMPTION** occurs if:
    - Last solve failed
-   - Slot alignment is invalid
    - No decisions available
    - In cooldown after repeated failures
    - Forecast data is stale

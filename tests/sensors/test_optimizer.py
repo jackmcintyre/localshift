@@ -298,9 +298,6 @@ class TestOptimizerSummarySensor:
                 "config_options": {"mode": "self_consumption"},
                 "parity_completeness_pct": 95.0,
                 "parity_defaulted_fields": {"price": 0.25},
-                "alignment_valid": True,
-                "alignment_issues": [],
-                "alignment_warnings": ["Minor warning"],
                 "planner_version": "2.0",
                 "cycle_id": "cycle-123",
                 "solve_time_seconds": 0.5,
@@ -321,9 +318,6 @@ class TestOptimizerSummarySensor:
         assert attrs["config_options"] == {"mode": "self_consumption"}
         assert attrs["parity_completeness_pct"] == 95.0
         assert attrs["parity_defaulted_fields"] == {"price": 0.25}
-        assert attrs["alignment_valid"] is True
-        assert attrs["alignment_issues"] == []
-        assert attrs["alignment_warnings"] == ["Minor warning"]
         assert attrs["planner_version"] == "2.0"
         assert attrs["cycle_id"] == "cycle-123"
         assert attrs["solve_time_seconds"] == 0.5
