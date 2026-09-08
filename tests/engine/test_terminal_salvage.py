@@ -36,9 +36,12 @@ from custom_components.localshift.const import (
     TERMINAL_SALVAGE_DISCOUNT,
     TERMINAL_SALVAGE_MAX_PER_KWH,
 )
+from custom_components.localshift.engine.core import DPPlanner, _salvage_buy_price
 from custom_components.localshift.engine.cost import terminal_salvage_value
-from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.dp_math import _map_soc_to_bin
+from custom_components.localshift.engine.optimizer_runner import _serialize_decision
 from custom_components.localshift.engine.types import (
+    ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
     SlotContext,
@@ -323,3 +326,140 @@ class TestTerminalSalvageBehaviour:
         result = DPPlanner().plan(inputs)
         assert result.success
         return result.decisions[-1].predicted_soc_pct
+
+
+class TestTerminalSalvagePublished:
+    """Issue #1033 — surface the #811 salvage credit on the PUBLISHED plan.
+
+    Live 2026-09-07: the 24h horizon held every slot and the tail settled on the
+    SOC floor (9.3% vs a 95% demand-window target) because the demand window sat
+    just beyond the horizon end. ``shortfall_penalty`` is legitimately 0.0 in that
+    case (there is no terminal_penalty_idx to charge it against) — but the salvage
+    credit the DP DID apply to the horizon-boundary row was invisible, because
+    only ``cost.stage_cost`` populates published ``objective_terms``, and it sets
+    no terminal term. These tests assert the credit is now legible instead of
+    only inferred from the value function, without changing what the DP decides.
+    """
+
+    def _no_dw_slots(self, n: int = 24) -> list:
+        """n slots with buy prices, no demand window anywhere in the horizon.
+
+        ``consumption_kwh`` is deliberately lower than the module default
+        (0.3) so the 24-slot (12h) horizon leaves residual SOC above the
+        floor rather than fully draining to it — the case that actually
+        exercises a positive salvage credit. A full drain to ``min_soc_pct``
+        is a real, valid outcome (zero usable residual, zero credit); this
+        fixture targets the other real outcome, residual energy remaining
+        unspent at the horizon end.
+        """
+        return [
+            _slot(i, buy=0.15 + 0.05 * (i % 3), consumption_kwh=0.15)
+            for i in range(n)
+        ]
+
+    def test_salvage_published_when_demand_window_outside_horizon(self):
+        """The #1033 case: no DW in-horizon, so shortfall_penalty is legitimately
+        0.0 everywhere, but the terminal slot must still carry a positive salvage
+        credit that matches what the DP priced at the horizon boundary.
+        """
+        slots = self._no_dw_slots()
+        config = _config()
+        inputs = OptimizerInputs(
+            cycle_id="salvage-published-no-dw",
+            initial_soc_pct=50.0,
+            slots=slots,
+            config=config,
+            all_solcast=[],
+        )
+        planner = DPPlanner()
+        demand_bounds = planner._find_demand_window_bounds(slots)
+        assert demand_bounds["entry_idx"] is None  # DW sits outside the horizon
+
+        result = planner.plan(inputs)
+        assert result.success
+
+        terminal = result.decisions[-1]
+        assert terminal.objective_terms.shortfall_penalty == 0.0
+        assert terminal.objective_terms.terminal_salvage_value > 0.0
+
+        soc_grid = [
+            config.min_soc_pct
+            + (config.max_soc_pct - config.min_soc_pct) * i / (config.soc_bins - 1)
+            for i in range(config.soc_bins)
+        ]
+        terminal_bin = _map_soc_to_bin(terminal.predicted_soc_pct, soc_grid)
+        expected = terminal_salvage_value(
+            soc_grid[terminal_bin], config, _salvage_buy_price(slots)
+        )
+        assert terminal.objective_terms.terminal_salvage_value == pytest.approx(
+            expected, rel=1e-9
+        )
+
+        published = terminal.objective_terms.to_dict()
+        assert published["terminal_salvage_value"] > 0.0
+
+    def test_serialized_decision_carries_salvage(self):
+        """Round-trip through the same serializer that feeds
+        sensor.localshift_optimizer_plan / optimizer_plan_detailed.
+        """
+        slots = self._no_dw_slots()
+        config = _config()
+        inputs = OptimizerInputs(
+            cycle_id="salvage-published-serialize",
+            initial_soc_pct=50.0,
+            slots=slots,
+            config=config,
+            all_solcast=[],
+        )
+        result = DPPlanner().plan(inputs)
+        assert result.success
+
+        serialized = [_serialize_decision(d) for d in result.decisions]
+        assert all(
+            d["objective_terms"]["terminal_salvage_value"] == 0.0
+            for d in serialized[:-1]
+        )
+        assert serialized[-1]["objective_terms"]["terminal_salvage_value"] > 0.0
+
+    def test_salvage_is_diagnostic_only(self):
+        """Pins the no-behaviour-change contract: net_cost ignores the field."""
+        with_salvage = ObjectiveTerms(import_cost=1.0, terminal_salvage_value=5.0)
+        without_salvage = ObjectiveTerms(import_cost=1.0)
+        assert with_salvage.net_cost == without_salvage.net_cost
+
+    def test_salvage_zero_when_disabled(self):
+        """Key is always present and published, exactly 0.0 when the feature is
+        disabled — not omitted.
+        """
+        slots = self._no_dw_slots()
+        config = _config(terminal_salvage_enabled=False)
+        inputs = OptimizerInputs(
+            cycle_id="salvage-published-disabled",
+            initial_soc_pct=50.0,
+            slots=slots,
+            config=config,
+            all_solcast=[],
+        )
+        result = DPPlanner().plan(inputs)
+        assert result.success
+
+        terminal = result.decisions[-1]
+        assert terminal.objective_terms.terminal_salvage_value == 0.0
+        assert terminal.objective_terms.to_dict()["terminal_salvage_value"] == 0.0
+
+    def test_non_terminal_slots_have_zero_salvage(self):
+        """The credit is scoped to the horizon boundary only."""
+        slots = self._no_dw_slots()
+        config = _config()
+        inputs = OptimizerInputs(
+            cycle_id="salvage-published-non-terminal",
+            initial_soc_pct=50.0,
+            slots=slots,
+            config=config,
+            all_solcast=[],
+        )
+        result = DPPlanner().plan(inputs)
+        assert result.success
+
+        for decision in result.decisions[:-1]:
+            assert decision.objective_terms.terminal_salvage_value == 0.0

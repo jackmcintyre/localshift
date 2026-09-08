@@ -647,6 +647,26 @@ class ObjectiveTerms:
     """Penalty for grid charging when energy will drain through house load before reaching
     a useful period (solar surplus or demand window). Issue #638."""
 
+    terminal_salvage_value: float = 0.0
+    """DIAGNOSTIC ONLY: bounded residual-energy credit at the horizon boundary (#811).
+
+    The DP already prices this as a NEGATIVE terminal cost on the horizon-boundary row
+    ``dp[n_slots]`` (see ``core._initialize_dp_tables``): residual SOC above
+    ``min_soc_pct`` displaces a post-horizon grid import once the rolling horizon
+    advances. Reported here as a POSITIVE credit so it is legible on the published plan
+    rather than having to be inferred from the value function (issue #1033).
+
+    Populated on the FINAL horizon slot only; 0.0 on every other slot and whenever
+    ``terminal_salvage_enabled`` is False.
+
+    Deliberately NOT in ``net_cost``: the DP charges this ONCE against the terminal
+    state, not as a per-slot stage cost. Adding it into a per-slot ``net_cost`` would
+    double-count it (the terminal row is the successor of the last slot's transition) and
+    shift ``projected_net_cost`` / ``OptimizerResult.projected_net_cost``. Same reasoning
+    and same #406 history as ``self_consumption_value`` above — a diagnostic that is
+    summed into the objective becomes a behaviour change.
+    """
+
     @property
     def net_cost(self) -> float:
         """Net slot cost = import - revenue + penalties.
@@ -655,6 +675,10 @@ class ObjectiveTerms:
         is already captured by a reduced ``import_cost`` (see the field docstring and
         ``transitions._transition_hold_deficit``). Subtracting it double-counted the
         benefit and drove the #406 / #800 overnight sawtooth.
+
+        ``terminal_salvage_value`` is likewise excluded: the DP charges that credit once
+        against the terminal state on the horizon-boundary row, not as a per-slot stage
+        cost, so folding it in here would double-count it (issue #1033).
         """
         return (
             self.import_cost
@@ -677,6 +701,9 @@ class ObjectiveTerms:
             "switching_penalty": self.switching_penalty,
             "solar_opportunity_penalty": self.solar_opportunity_penalty,
             "futile_cycling_penalty": self.futile_cycling_penalty,
+            # Diagnostic-only (#1033): mirrors the terminal row's salvage credit. See the
+            # field docstring — deliberately NOT folded into net_cost.
+            "terminal_salvage_value": self.terminal_salvage_value,
             "net_cost": self.net_cost,
         }
 

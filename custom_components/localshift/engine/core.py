@@ -80,6 +80,23 @@ _GRID_CHARGE_ACTIONS = (
 )
 
 
+def _salvage_buy_price(slots: list[SlotContext]) -> float:
+    """Cheapest buy price observed in the horizon, the #811 salvage proxy ($/kWh).
+
+    Single source of truth for the price the terminal salvage credit is valued at.
+    ``_initialize_dp_tables`` seeds the horizon-boundary row with it and
+    ``_forward_reconstruct`` must publish the SAME number on the terminal slot's
+    ``objective_terms``, so the two can never drift apart (#959's orphaned-handler
+    lesson: an inlined copy of a live value is how a published diagnostic silently
+    stops describing the thing it was written to describe).
+
+    Returns 0.0 for an empty horizon — no observed price means no post-horizon import
+    to displace, and ``terminal_salvage_value`` already returns 0.0 for a non-positive
+    price.
+    """
+    return min(slot.buy_price for slot in slots) if slots else 0.0
+
+
 def _evaluate_action_cost(
     action: PlannerAction,
     soc: float,
@@ -1178,9 +1195,7 @@ class DPPlanner:
         # bounded (at most half the cheapest observed buy price, capped absolutely)
         # so charging to harvest it can never pay, and it never touches the
         # strict-mode DW-entry penalty rows.
-        salvage_buy_price = (
-            min(slot.buy_price for slot in inputs.slots) if inputs.slots else 0.0
-        )
+        salvage_buy_price = _salvage_buy_price(inputs.slots)
         for bin_idx, soc in enumerate(soc_grid):
             salvage_credit = (
                 _cost_terminal_salvage_value(soc, config, salvage_buy_price)
@@ -1698,6 +1713,22 @@ class DPPlanner:
 
             current_soc = next_soc
             current_bin = _map_soc_to_bin(current_soc, soc_grid)
+
+        # Issue #1033: surface the #811 terminal salvage credit on the published
+        # plan. The DP already prices this as a negative terminal cost on the
+        # horizon-boundary row dp[n_slots] (see _initialize_dp_tables) — it is not
+        # a new cost, just making a value the DP already used legible. We recompute
+        # it here from soc_grid[current_bin] (the BIN soc of the horizon-boundary
+        # row the loop just re-mapped current_bin to), not the raw reconstructed
+        # current_soc, because the bin value is what the DP actually credited —
+        # reporting the raw SOC would print a number the optimizer never priced.
+        # This mirrors dp[n_slots]; nothing reads this field back into the
+        # objective (see ObjectiveTerms.terminal_salvage_value / net_cost).
+        if decisions and config.terminal_salvage_enabled:
+            terminal_credit = _cost_terminal_salvage_value(
+                soc_grid[current_bin], config, _salvage_buy_price(inputs.slots)
+            )
+            decisions[-1].objective_terms.terminal_salvage_value = terminal_credit
 
         return decisions, totals, reason_histogram
 

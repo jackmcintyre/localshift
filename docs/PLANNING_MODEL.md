@@ -171,6 +171,12 @@ charging purely to harvest the credit always loses at least half the outlay, so 
 cannot regress into overnight reserve-holding. It never touches the strict-mode
 DW-entry penalty rows. Disable via `OptimizerConfig.terminal_salvage_enabled=False`.
 
+Published on the plan as `objective_terms.terminal_salvage_value` on the final horizon
+slot only (issue #1033) — see `docs/ENTITY_REFERENCE.md`'s `sensor.localshift_optimizer_plan`
+field table. It is a diagnostic mirror of the credit already applied at `dp[n_slots]`, not a
+second application of it: excluded from `net_cost` for the same reason as any other
+diagnostic-only term (see `self_consumption_value`).
+
 ### Why Terminal Cost Works
 
 The terminal cost creates a "backwards incentive" through DP:
