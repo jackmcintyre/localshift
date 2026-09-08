@@ -197,7 +197,7 @@ class TemperatureForecastProvider:
                 return_response=True,
             )
 
-            _LOGGER.info(
+            _LOGGER.debug(
                 "weather.get_forecasts response for %s: %s",
                 weather_entity,
                 "found" if response else "None",
@@ -246,7 +246,7 @@ class TemperatureForecastProvider:
         if forecast_data is None:
             return None
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "forecast_data type=%s, len=%s, keys=%s",
             type(forecast_data).__name__,
             len(forecast_data) if isinstance(forecast_data, list) else "N/A",
@@ -254,16 +254,16 @@ class TemperatureForecastProvider:
         )
 
         if isinstance(forecast_data, dict):
-            _LOGGER.info("forecast_data is dict, checking for forecast/hourly keys")
+            _LOGGER.debug("forecast_data is dict, checking for forecast/hourly keys")
             if "forecast" in forecast_data:
                 forecast_data = forecast_data["forecast"]
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Found 'forecast' key with %d entries",
                     len(forecast_data) if isinstance(forecast_data, list) else 0,
                 )
             elif "hourly" in forecast_data:
                 forecast_data = forecast_data["hourly"]
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Found 'hourly' key with %d entries",
                     len(forecast_data) if isinstance(forecast_data, list) else 0,
                 )
@@ -295,7 +295,7 @@ class TemperatureForecastProvider:
         skipped_no_datetime = 0
         filtered_count = 0
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Processing %d forecast entries, first entry keys: %s",
             len(forecast_data),
             list(forecast_data[0].keys())
@@ -318,7 +318,7 @@ class TemperatureForecastProvider:
             if forecast:
                 forecasts.append(forecast)
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Fetched %d temperature forecasts via weather.get_forecasts service",
             len(forecasts),
         )
@@ -354,7 +354,7 @@ class TemperatureForecastProvider:
         if not forecast_time_str:
             skipped_no_datetime += 1
             if skipped_no_datetime <= 2:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Entry missing 'datetime', keys: %s",
                     list(entry.keys()),
                 )
@@ -371,7 +371,7 @@ class TemperatureForecastProvider:
         if hours_ahead < 0 or hours_ahead > 24:
             filtered_count += 1
             if filtered_count <= 3:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Filtering out forecast: time=%s, now=%s, hours_ahead=%.1f",
                     forecast_time.isoformat(),
                     now.isoformat(),
@@ -412,7 +412,7 @@ class TemperatureForecastProvider:
                     naive_dt = dt.fromisoformat(time_str)
                     forecast_time = dt_util.as_local(naive_dt)
                     if index == 0:
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "First entry: datetime='%s' parsed as naive=%s, localized=%s",
                             time_str,
                             naive_dt,
@@ -420,7 +420,7 @@ class TemperatureForecastProvider:
                         )
                 except (ValueError, TypeError) as e:
                     if parse_failed_count < 3:
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Failed to parse datetime '%s': %s",
                             time_str,
                             e,
@@ -430,7 +430,7 @@ class TemperatureForecastProvider:
                 if forecast_time.tzinfo is None:
                     forecast_time = dt_util.as_local(forecast_time)
                 if index == 0:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "First entry: datetime='%s' parsed as %s (tzinfo=%s)",
                         time_str,
                         forecast_time,
@@ -439,7 +439,7 @@ class TemperatureForecastProvider:
             return forecast_time
         except (ValueError, TypeError) as e:
             if parse_failed_count < 3:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Exception parsing datetime '%s': %s",
                     time_str,
                     e,

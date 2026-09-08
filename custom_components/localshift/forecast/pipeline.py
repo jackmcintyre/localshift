@@ -86,14 +86,6 @@ class ForecastPipeline:
         data.weather_adjustment_applied = (
             self._load_forecaster.get_weather_adjustment_applied()
         )
-        _LOGGER.info(
-            "ISSUE_500 load_forecast_slots: %d slots, indices 4-8 = %s, recent_load=%.3f, hourly_avg_12=%.3f, robust_current=%.3f",
-            len(slots),
-            [round(slots[i], 3) for i in range(4, min(9, len(slots)))],
-            recent_load_kw,
-            historical_avg_kw.get(12, -1),
-            robust_current_kw,
-        )
 
     def compute_solar_battery_forecast(
         self,

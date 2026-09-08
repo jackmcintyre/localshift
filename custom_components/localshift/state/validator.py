@@ -389,8 +389,10 @@ class TransitionValidator:
             else True
         )
 
-        # DIAGNOSTIC: Always log at INFO level for visibility
-        _LOGGER.info(
+        # Per-cycle diagnostic; runs every health-check tick in stable mode,
+        # so it stays at DEBUG (issue #976). State mismatches still surface
+        # at WARNING below.
+        _LOGGER.debug(
             "Health check verify: expected=(op=%s, reserve=%s, export=%s, grid_charging=%s), actual=(op=%s, reserve=%s, export=%s, grid_charging=%s), match=%s",
             expected_operation_mode,
             expected_backup_reserve,

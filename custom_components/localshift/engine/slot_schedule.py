@@ -31,6 +31,17 @@ MAX_5MIN_FORECAST_HOURS = 1  # Amber typically provides ~45-60 min of 5-min data
 # generous rather than tighten it toward the observed +1s.
 _BOUNDARY_OFFSET_TOLERANCE_S = 60
 
+# Issue #976: "Hybrid slot schedule:" fired at INFO every optimizer cycle
+# regardless of whether anything changed. It now logs at INFO only when the
+# horizon signature (slot count, first slot start, last slot start) differs
+# from the previous cycle's — a genuine shape change worth surfacing — and at
+# DEBUG otherwise. This signature is process-global, not per-config-entry:
+# with two config entries running concurrently, their signatures could
+# alternate and produce more INFO logging than either running alone would.
+# That failure mode only ever produces *more* logging, never less, so it is
+# an accepted tradeoff rather than a correctness bug.
+_LAST_HORIZON_SIGNATURE: tuple | None = None
+
 
 def _interval_origin(slot_start: datetime, duration_minutes: int) -> datetime:
     """Return the true interval boundary for an entry's start time.
@@ -177,7 +188,7 @@ def compute_hybrid_slot_schedule(
     _ensure_current_slot_coverage(slots, now_local)
 
     if slots:
-        _LOGGER.info(
+        _LOGGER.debug(
             "SLOT0_CURRENT: start=%s interval=%dmin price=%.4f source=%s estimate=%s",
             slots[0]["start"].isoformat(),
             slots[0]["interval_minutes"],
@@ -486,7 +497,7 @@ def _ensure_current_slot_coverage(slots: list[dict], now_local: datetime) -> Non
 
     covers_now = _covers_now(slots[0]["start"], slots[0]["interval_minutes"], now_local)
 
-    _LOGGER.info(
+    _LOGGER.debug(
         "HYBRID_SLOTS: slots=%d, first_slot=%s, now_local=%s, comparison=%s",
         len(slots),
         slots[0]["start"].strftime("%H:%M:%S"),
@@ -550,7 +561,17 @@ def _compute_slot_metadata(
 
         _log_slot_details(slots)
 
-    _LOGGER.info(
+    global _LAST_HORIZON_SIGNATURE
+    signature = (
+        len(slots),
+        slots[0]["start"] if slots else None,
+        slots[-1]["start"] if slots else None,
+    )
+    level = logging.INFO if signature != _LAST_HORIZON_SIGNATURE else logging.DEBUG
+    _LAST_HORIZON_SIGNATURE = signature
+
+    _LOGGER.log(
+        level,
         "Hybrid slot schedule: %d 5-min slots, %d 30-min slots, horizon=%.2fh, transition at %s",
         five_min_count,
         thirty_min_count,
@@ -566,17 +587,17 @@ def _log_slot_details(slots: list[dict]) -> None:
         slots: Slot list
 
     """
-    _LOGGER.info(
+    _LOGGER.debug(
         "HYBRID_SLOTS: First 5 slots (with TZ): %s",
         [s["start"].isoformat() for s in slots[:5]],
     )
-    _LOGGER.info(
+    _LOGGER.debug(
         "HYBRID_SLOTS: Slot 0 TZ info: %s (offset=%s)",
         slots[0]["start"].isoformat(),
         slots[0]["start"].utcoffset(),
     )
     if len(slots) > 1:
-        _LOGGER.info(
+        _LOGGER.debug(
             "HYBRID_SLOTS: Slot 1 TZ info: %s (offset=%s)",
             slots[1]["start"].isoformat(),
             slots[1]["start"].utcoffset(),

@@ -240,7 +240,7 @@ class TestEstimateFlag:
         ]
         now = datetime(2026, 3, 16, 12, 33, 0, tzinfo=AEDT)
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.DEBUG):
             slots, _metadata = compute_hybrid_slot_schedule(
                 now, entries, "Australia/Sydney"
             )
