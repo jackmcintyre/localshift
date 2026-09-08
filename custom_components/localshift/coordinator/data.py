@@ -533,6 +533,12 @@ class CoordinatorData:
     """History of two-phase lag measurements.
     Each entry: {from_mode, to_mode, command_lag, physical_lag, decision_time,
     command_time, observable, timed_out}. Max 50 entries.
+
+    from_mode (#967, mirroring boundary_lag_history's #940) is the previously
+    *commanded* mode, not the transition's own target — data.active_mode is
+    set to the desired mode by _evaluate_core, so it always equals the target
+    on every reachable path and would read the destination back as its own
+    origin. The two lag rings must agree on what the field means.
     """
 
     physical_response_watch: PhysicalResponseWatch | None = None
@@ -560,9 +566,9 @@ class CoordinatorData:
     Each entry: {from_mode, to_mode, boundary_lag, grant_source,
     interval_start_utc, transition_time}. interval_start_utc is UTC (NEM is
     a fixed UTC+10 offset); transition_time is local wall clock. Partitioned
-    per grant_source (50 entries per source, capped in machine.py) so a
-    backstop burst can never evict the price samples slice 3 of #510
-    measures.
+    per grant_source (200 entries per source, #942/#990, capped in
+    machine.py) so a backstop burst can never evict the price samples slice 3
+    of #510 measures.
 
     from_mode (#940) is the previously *commanded* mode, not the transition's
     own target — data.active_mode is always identical to the target on every

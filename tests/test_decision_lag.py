@@ -220,6 +220,38 @@ class TestRecordTransitionMetrics:
         # Decision state preserved for the matching transition
         assert data.decision_timestamp is not None
 
+    def test_history_entry_from_mode_is_previous_commanded_not_active_mode(
+        self, state_machine, data
+    ):
+        """#967: decision_lag_history.from_mode must agree with
+        boundary_lag_history's (#940) meaning.
+
+        ``_evaluate_core`` sets ``desired = data.active_mode``, so on every
+        reachable path active_mode IS the target and reading it as the origin
+        echoes the destination back as its own source. The genuine previous
+        mode is still in ``_commanded_mode`` here —
+        ``_finalize_successful_transition`` reassigns it only after
+        ``_execute_mode_transition`` returns, and this method runs inside that
+        call chain. The old implementation reported "grid_charging".
+        """
+        self._prime(data)
+        data.active_mode = BatteryMode.GRID_CHARGING  # == target, as on every
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION  # real path
+        completion = dt_aware(2026, 8, 27, 6, 0, 7)
+        data.command_completion_timestamp = completion
+        with patch(
+            "custom_components.localshift.state.machine.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value = completion
+            state_machine._record_transition_metrics(
+                data, BatteryMode.GRID_CHARGING, dry_run=False
+            )
+        entry = data.decision_lag_history[-1]
+        assert entry["from_mode"] == "self_consumption"
+        assert entry["to_mode"] == "grid_charging"
+        # The two rings must agree on the field's meaning.
+        assert data.boundary_lag_history["unknown"][-1]["from_mode"] == "self_consumption"
+
     def test_history_entry_shape_and_cap(self, state_machine, data):
         self._prime(data)
         completion = dt_aware(2026, 8, 27, 6, 0, 7)
@@ -544,8 +576,12 @@ class TestDecisionLagSensor:
             decision_timestamp=now,
             command_completion_timestamp=now,
             # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
+            # #991: the field is dict[str, list[...]] (#942 partitioning) — {}
+            # is the correct empty value. A flat [] happened to pass here only
+            # because `d.boundary_lag_history or {}` in status.py treats an
+            # empty list and an empty dict identically; it is falsy either way.
             boundary_lag_seconds=None,
-            boundary_lag_history=[],
+            boundary_lag_history={},
             anticipated_transitions_today=0,
             anticipation_corrections_today=0,
         )
@@ -568,8 +604,10 @@ class TestDecisionLagSensor:
             decision_timestamp=None,
             command_completion_timestamp=None,
             # Issue #510 slice 1: boundary-lag telemetry, untouched by this case.
+            # #991: {} is the correctly-typed empty value (see the comment on
+            # test_attributes_expose_both_phases above).
             boundary_lag_seconds=None,
-            boundary_lag_history=[],
+            boundary_lag_history={},
             anticipated_transitions_today=0,
             anticipation_corrections_today=0,
         )
@@ -578,3 +616,54 @@ class TestDecisionLagSensor:
         assert attrs["avg_physical_lag"] is None
         assert attrs["physical_lag_observable"] is False
         assert attrs["command_completion_timestamp"] is None
+
+    def test_attributes_with_populated_boundary_lag_history(self):
+        """#991: a real dict[str, list[...]] had never crossed
+        ``extra_state_attributes`` in a test — every fixture passed a flat
+        ``[]``, which is falsy exactly like ``{}`` in the ``d.boundary_lag_history
+        or {}`` guard in status.py, so a type regression in the flatten path
+        (``_flatten_boundary_lag_history``) would have been invisible. This
+        pins the non-empty case: two buckets flow through and come out as one
+        chronologically ordered, flattened list.
+        """
+        sensor = self._sensor(
+            decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=12.5,
+            boundary_lag_history={
+                "price": [
+                    {
+                        "from_mode": "self_consumption",
+                        "to_mode": "grid_charging",
+                        "boundary_lag": 12.5,
+                        "grant_source": "price",
+                        "interval_start_utc": "2026-08-27T06:00:00+00:00",
+                        "transition_time": "2026-08-27T16:00:12.5+11:00",
+                    }
+                ],
+                "backstop": [
+                    {
+                        "from_mode": "grid_charging",
+                        "to_mode": "grid_charging",
+                        "boundary_lag": 30.0,
+                        "grant_source": "backstop",
+                        "interval_start_utc": "2026-08-27T06:05:00+00:00",
+                        "transition_time": "2026-08-27T16:05:30+11:00",
+                    }
+                ],
+            },
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
+        )
+        attrs = sensor.extra_state_attributes
+        history = attrs["boundary_lag_history"]
+        assert isinstance(history, list)
+        assert [e["grant_source"] for e in history] == ["price", "backstop"]
+        assert [e["interval_start_utc"] for e in history] == sorted(
+            e["interval_start_utc"] for e in history
+        )
