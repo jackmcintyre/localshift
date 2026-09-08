@@ -293,21 +293,9 @@
         "name": "Max Pre-charge Price",
         "description": "Maximum price ($/kWh) to pay for pre-charging battery"
       },
-      "cheap_price_deadband": {
-        "name": "Price Deadband",
-        "description": "Minimum price difference ($/kWh) to start/stop charging (prevents rapid cycling)"
-      },
-      "forecast_lookahead_hours": {
-        "name": "Forecast Lookahead",
-        "description": "Hours ahead to scan for price spikes and cheap periods"
-      },
       "battery_target": {
         "name": "Battery Target",
         "description": "Target SOC % for demand window (battery reserved for evening peak)"
-      },
-      "spike_price_percentile": {
-        "name": "Spike Price Percentile",
-        "description": "Price percentile for spike discharge (e.g., 75 = discharge at top 25% prices)"
       },
       "minimum_target_soc": {
         "name": "Minimum Target SOC",

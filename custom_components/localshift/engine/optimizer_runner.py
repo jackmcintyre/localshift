@@ -253,8 +253,6 @@ def _build_optimizer_config(
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
-        CONF_STALE_SOLAR_CONFIDENCE_CEILING,
-        CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
         CONF_SWITCHING_PENALTY_PER_KWH,
         CONF_TARGET_PENALTY,
@@ -269,8 +267,6 @@ def _build_optimizer_config(
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
-        DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
-        DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
@@ -289,17 +285,6 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
     )
 
-    stale_solar_conservative = bool(
-        config_options.get(
-            CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE
-        )
-    )
-    stale_solar_confidence_ceiling = float(
-        config_options.get(
-            CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
-        )
-    )
-
     # Runway backstop margin (fast-follow to #901). Read like every other live knob so
     # the slider takes effect on the next evaluation. 0 is a genuine kill switch — the
     # arm treats a non-positive margin as "disabled", not as "fire only at zero slack".
@@ -314,11 +299,6 @@ def _build_optimizer_config(
     )
 
     effective_cheap_price = float(getattr(data, "effective_cheap_price", 0.10))
-    self_consumption_value_per_kwh = float(
-        getattr(data, "general_price", effective_cheap_price)
-    )
-    if self_consumption_value_per_kwh <= 0.0:
-        self_consumption_value_per_kwh = max(0.10, effective_cheap_price)
 
     export_price_margin = float(
         config_options.get(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
@@ -392,8 +372,6 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
-        stale_solar_conservative=stale_solar_conservative,
-        stale_solar_confidence_ceiling=stale_solar_confidence_ceiling,
         precharge_runway_margin_min=precharge_runway_margin_min,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
@@ -407,7 +385,6 @@ def _build_optimizer_config(
         soc_bins=50,
         # --- Optimization mode ---
         optimization_mode=optimization_mode,
-        self_consumption_value_per_kwh=self_consumption_value_per_kwh,
         effective_cheap_price=effective_cheap_price,
         base_cheap_price=base_cheap_price,
         max_precharge_price=max_precharge_price,

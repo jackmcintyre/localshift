@@ -25,7 +25,6 @@ class ForecastHistoryStore:
         self._hass = hass
         self._store_key = store_key
         self._store: Any = None
-        self._loaded: bool = False
         self._last_forecast_hour: int | None = None
 
     async def async_initialize(self) -> None:
@@ -71,7 +70,6 @@ class ForecastHistoryStore:
                 if not first_prediction and valid_entries:
                     self._find_first_prediction_time(data, valid_entries)
 
-            self._loaded = True
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Failed to load forecast history: %s", exc)
 

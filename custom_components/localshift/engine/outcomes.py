@@ -44,14 +44,6 @@ LEGACY_MODE_TO_ACTION = {
     BatteryMode.PROACTIVE_EXPORT: PlannerAction.EXPORT_PROACTIVE,
 }
 
-# DP action to legacy mode mapping for observability
-ACTION_TO_LEGACY_MODE = {
-    PlannerAction.HOLD: BatteryMode.SELF_CONSUMPTION,
-    PlannerAction.CHARGE_GRID_NORMAL: BatteryMode.GRID_CHARGING,
-    PlannerAction.CHARGE_GRID_BOOST: BatteryMode.BOOST_CHARGING,
-    PlannerAction.EXPORT_PROACTIVE: BatteryMode.PROACTIVE_EXPORT,
-}
-
 # Maximum number of completed decisions to keep in memory
 MAX_COMPLETED_DECISIONS = 500
 

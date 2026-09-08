@@ -240,7 +240,6 @@ class TestBuildOptimizerConfig:
         """Verify self-consumption economic inputs are mapped."""
         config = _build_optimizer_config(mock_coordinator_data, config_options)
         assert config.effective_cheap_price == pytest.approx(0.12)
-        assert config.self_consumption_value_per_kwh == pytest.approx(0.26)
         assert config.export_price_margin == pytest.approx(0.10)
 
 

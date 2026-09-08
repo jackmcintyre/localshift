@@ -1686,7 +1686,6 @@ class DPPlanner:
                 consumption_kwh=slot.consumption_kwh,
                 buy_price=slot.buy_price,
                 sell_price=slot.sell_price,
-                is_solar_opportunity=stage.solar_opportunity_penalty > 0,
             )
             decisions.append(decision)
 

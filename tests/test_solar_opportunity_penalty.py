@@ -513,7 +513,8 @@ class TestSelfConsumptionCreditFix:
         """stage_cost() self_consumption_value must scale with slot.buy_price, not config value.
 
         At buy_price=$0.14 the credit should be ~$0.14 * battery_for_load,
-        NOT $0.15 * battery_for_load (the old fixed config.self_consumption_value_per_kwh).
+        NOT $0.15 * battery_for_load (the old fixed self-consumption value, since
+        removed — see Issue #983).
         """
         # Slot with $0.14 buy price, no solar, 1 kWh load
         slot = make_slot(

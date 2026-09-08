@@ -80,9 +80,6 @@ class PlannerReasonCode(StrEnum):
     SOC_CEILING_CONSTRAINT = "SOC_CEILING_CONSTRAINT"
     """Action constrained by maximum SOC (battery full)."""
 
-    DEMAND_WINDOW_CONSTRAINT = "DEMAND_WINDOW_CONSTRAINT"
-    """Action constrained by demand window entry requirements."""
-
     IDLE = "IDLE"
     """No economic or constraint reason to act; holding in self-consumption."""
 
@@ -186,12 +183,6 @@ class OptimizerConfig:
     allow_dw_entry_under_target: bool = False
     """If True, allow reaching target during DW via solar (instead of by DW start)."""
 
-    stale_solar_conservative: bool = True
-    """If True, cap confidence when Solcast data is stale or absent."""
-
-    stale_solar_confidence_ceiling: float = 0.3
-    """Confidence ceiling applied when stale_solar_conservative and data is stale."""
-
     solar_forecast_accuracy: float = 1.0
     """Forecast accuracy (0-1) used to discount projected solar in the pre-charge
     feasibility gate (``check_global_solar_sufficiency``).
@@ -264,13 +255,6 @@ class OptimizerConfig:
     # --- Optimization mode (Issue #406) ---
     optimization_mode: str = "self_consumption"
     """Optimization strategy: 'self_consumption' (default) or 'arbitrage'."""
-
-    self_consumption_value_per_kwh: float = 0.15
-    """Value of using battery energy for household load ($/kWh). Auto-derived from average buy price.
-
-    DEPRECATED (Issue #610): No longer used in optimizer hot path. Replaced by slot.buy_price
-    for slot-specific credit calculation. Kept for backward compatibility with optimizer_runner.py.
-    """
 
     effective_cheap_price: float = 0.10
     """Price threshold for grid charging in self-consumption mode ($/kWh)."""
@@ -740,9 +724,6 @@ class PlannedSlotDecision:
 
     sell_price: float = 0.0
     """Export (FIT) price ($/kWh), copied from SlotContext."""
-
-    is_solar_opportunity: bool = False
-    """True if this slot was identified as a solar opportunity wait period (#610)."""
 
     # --- Derived compatibility flags (set from action) ---
     @property

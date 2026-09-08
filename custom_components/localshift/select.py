@@ -80,7 +80,6 @@ class BatteryModeSelect(SelectEntity):
         self._manual_mode: str = entry.options.get(
             "manual_battery_mode", "self_consumption"
         )
-        self._previous_mode = self._manual_mode
         self._internal_update: bool = False
         self._last_committed_mode: str | None = None
         self._update_count: int = 0
@@ -201,7 +200,6 @@ class BatteryModeSelect(SelectEntity):
             return
 
         self._manual_mode = option
-        self._previous_mode = option
         if self.coordinator._notification_service is not None:
             await (
                 self.coordinator._notification_service.send_manual_action_notification(
@@ -244,7 +242,6 @@ class BatteryModeSelect(SelectEntity):
                 self._change_count,
             )
             self._last_committed_mode = current_mode
-            self._previous_mode = current_mode or "self_consumption"
             self.async_write_ha_state()
         else:
             if self._update_count % 60 == 0:

@@ -13,10 +13,6 @@ _LOGGER = logging.getLogger(__name__)
 # 15-min slots throughout for consistent alignment with Solcast 30-minute periods
 TOTAL_SLOTS = 96  # 24 hours × 4 slots/hour
 
-# Hybrid timescale constants (Issue #327)
-# Maximum number of 5-minute slots to use from Amber near-term forecast
-MAX_5MIN_FORECAST_HOURS = 1  # Amber typically provides ~45-60 min of 5-min data
-
 # Issue #510 Slice 2: Amber's detailedForecast starts each interval one second
 # after the boundary (the 12:30 interval starts at 12:30:01). Absorb that
 # offset when deciding which interval covers "now" — but only if it really is

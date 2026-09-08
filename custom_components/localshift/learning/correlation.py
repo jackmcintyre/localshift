@@ -60,7 +60,6 @@ STORAGE_VERSION = 2
 STORAGE_KEY = "weather_correlation"
 
 # Confidence thresholds based on sample count (legacy, retained for compatibility)
-CONFIDENCE_LOW_THRESHOLD = 7  # Less than 7 samples = low confidence
 CONFIDENCE_MEDIUM_THRESHOLD = 30  # 7-30 samples = medium, 30+ = high
 
 # Regression configuration
@@ -305,11 +304,6 @@ class WeatherCorrelation:
         self._store._async_migrate_func = self._async_migrate_store_data
         self._data: WeatherCorrelationData = WeatherCorrelationData()
         self._initialized = False
-
-        # Accumulated observations for batch learning
-        self._pending_observations: list[
-            tuple[int, float, float]
-        ] = []  # (hour, temp, load)
 
         self._temperature_provider = TemperatureForecastProvider(
             hass, entry, self._data.weather_entity_id

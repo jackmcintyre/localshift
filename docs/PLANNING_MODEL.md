@@ -281,7 +281,6 @@ class OptimizerConfig:
     target_shortfall_penalty_per_pct: float = 0.030  # $/%-point
     switching_penalty: float = 0.02                  # $ per mode switch (flat knob)
     switching_penalty_per_kwh: float = 0.0           # $/kWh floor: scales hurdle to slot energy (0 disables; production default 0.40)
-    self_consumption_value_per_kwh: float = 0.25     # $/kWh
     export_price_margin: float = 0.02                # $/kWh above self-consumption
 ```
 

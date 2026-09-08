@@ -78,7 +78,7 @@ class TestBatteryModeSelect:
         assert select._attr_name == SELECT_NAMES[SELECT_BATTERY_MODE]
         assert select._attr_icon == SELECT_ICONS[SELECT_BATTERY_MODE]
         assert select._attr_options == SELECT_OPTIONS[SELECT_BATTERY_MODE]
-        assert select._previous_mode == "self_consumption"
+        assert select._manual_mode == "self_consumption"
 
     def test_device_info(self, mock_coordinator, mock_entry):
         """Test device info is correctly generated."""
@@ -194,7 +194,6 @@ class TestBatteryModeSelect:
         assert update_call_kwargs["options"]["switch_state_automation_enabled"] is False
         assert update_call_kwargs["options"]["manual_battery_mode"] == "grid_charging"
         assert select._manual_mode == "grid_charging"
-        assert select._previous_mode == "grid_charging"
 
     @pytest.mark.asyncio
     async def test_startup_with_automation_off_syncs_manual_override(
@@ -265,7 +264,6 @@ class TestBatteryModeSelect:
         select = BatteryModeSelect(mock_coordinator, mock_entry)
         select._update_count = 59
         select._last_committed_mode = "self_consumption"
-        select._previous_mode = "self_consumption"
         with patch("custom_components.localshift.select._LOGGER") as mock_logger:
             select._handle_coordinator_update()
         assert select._update_count == 60
@@ -318,11 +316,10 @@ class TestBatteryModeSelect:
         mock_hass.config_entries.async_update_entry = MagicMock()
         select = BatteryModeSelect(mock_coordinator, mock_entry)
         select.hass = mock_hass
-        select._previous_mode = "self_consumption"
         select._attr_entity_id = "select.localshift_battery_mode"
         with patch.object(select, "async_write_ha_state"):
             await select.async_select_option("grid_charging")
-        assert select._previous_mode == "self_consumption"
+        assert select._manual_mode == "self_consumption"
 
     @pytest.mark.asyncio
     async def test_startup_with_automation_on_syncs_manual_override(

@@ -61,9 +61,6 @@ PERIODIC_INTERVAL_MEDIUM = timedelta(minutes=5)
 # SLOW: Slow-changing data tasks (30 minutes)
 PERIODIC_INTERVAL_SLOW = timedelta(minutes=30)
 
-# Legacy interval kept for backward compatibility
-PERIODIC_INTERVAL = PERIODIC_INTERVAL_FAST
-
 # How often to save learning data to storage (prevents data loss on restart)
 LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
 
@@ -92,7 +89,6 @@ class LocalShiftCoordinator:
         self.hass = hass
         self.entry = entry
         self.data = CoordinatorData()
-        self._listeners: list[CALLBACK_TYPE] = []
         self._update_callbacks: list[CALLBACK_TYPE] = []
         # Issue #508: temporary battery-power listener for the active watch
         self._unsub_battery_power_listener: CALLBACK_TYPE | None = None

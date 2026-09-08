@@ -24,7 +24,6 @@ def self_consumption_config():
         max_soc_pct=100.0,
         demand_window_target_soc_pct=80.0,
         optimization_mode="self_consumption",
-        self_consumption_value_per_kwh=0.15,
         effective_cheap_price=0.10,
         export_price_margin=0.02,
     )
