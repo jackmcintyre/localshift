@@ -594,7 +594,7 @@ class TestSetProactiveExport:
     async def test_set_proactive_export_minimum_reserve(
         self, battery_controller, coordinator_data, mock_hass
     ):
-        """Test that proactive export respects minimum reserve of 4%."""
+        """Proactive export reserve floors at minimum_target_soc (Issue #974)."""
         mock_hass.services.async_call.return_value = None
         coordinator_data.soc = 5.0  # Low SOC
 
@@ -605,7 +605,7 @@ class TestSetProactiveExport:
             if "operation_mode" in entity_id:
                 state.state = "autonomous"
             elif "backup_reserve" in entity_id:
-                state.state = "4"  # Minimum 4
+                state.state = str(DEFAULT_MINIMUM_TARGET_SOC)
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
             return state
@@ -614,7 +614,7 @@ class TestSetProactiveExport:
 
         await battery_controller.set_proactive_export(coordinator_data)
 
-        # Check that set_value was called with minimum 4
+        # Check that set_value was called with the configured floor (20)
         calls = mock_hass.services.async_call.call_args_list
         reserve_call = None
         for call in calls:
@@ -622,7 +622,80 @@ class TestSetProactiveExport:
                 reserve_call = call
                 break
         assert reserve_call is not None
-        assert reserve_call[0][2]["value"] == 4  # max(4, 5-5) = max(4, 0) = 4
+        # max(minimum_target_soc, 5 - 5) = max(20, 0) = 20
+        assert reserve_call[0][2]["value"] == DEFAULT_MINIMUM_TARGET_SOC
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_set_proactive_export_floors_reserve_at_minimum_target_soc(
+        self, battery_controller, coordinator_data, mock_hass
+    ):
+        """Issue #974: SOC 22 with minimum_target_soc 20 -> reserve 20.
+
+        The old max(4, soc-5)=17 formula drove the hardware below the
+        configured floor the planner never models.
+        """
+        mock_hass.services.async_call.return_value = None
+        coordinator_data.soc = 22.0
+
+        def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "autonomous"
+            elif "backup_reserve" in entity_id:
+                state.state = "20"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        await battery_controller.set_proactive_export(coordinator_data)
+
+        calls = mock_hass.services.async_call.call_args_list
+        reserve_call = None
+        for call in calls:
+            if call[0][0] == "number" and call[0][1] == "set_value":
+                reserve_call = call
+                break
+        assert reserve_call is not None
+        assert reserve_call[0][2]["value"] == 20
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_set_proactive_export_buffer_above_floor(
+        self, battery_controller, coordinator_data, mock_hass
+    ):
+        """Issue #974 non-regression: above the floor the SOC-5 buffer applies."""
+        mock_hass.services.async_call.return_value = None
+        coordinator_data.soc = 26.0
+
+        def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "autonomous"
+            elif "backup_reserve" in entity_id:
+                state.state = "21"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        await battery_controller.set_proactive_export(coordinator_data)
+
+        calls = mock_hass.services.async_call.call_args_list
+        reserve_call = None
+        for call in calls:
+            if call[0][0] == "number" and call[0][1] == "set_value":
+                reserve_call = call
+                break
+        assert reserve_call is not None
+        assert reserve_call[0][2]["value"] == 21
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("mock_battery_sleep")

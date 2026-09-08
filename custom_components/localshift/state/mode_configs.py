@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..const import BatteryMode
+from ..const import PROACTIVE_EXPORT_SOC_BUFFER_PERCENT, BatteryMode
 
 
 @dataclass
@@ -22,6 +22,27 @@ class ModeConfig:
     self_consumption_reserve: float | None = None
     grid_charging_reserve: int | None = None
     proactive_export_reserve: float | None = None
+    # Issue #972: reserve the SPIKE_DISCHARGE builder actually wrote, so the
+    # health-check expectation matches the written value (conservative
+    # spike_reserve_soc, or minimum_target_soc otherwise) instead of a
+    # hardcoded 10.
+    spike_discharge_reserve: float | None = None
+
+
+def calculate_proactive_export_reserve(soc: float, minimum_target_soc: float) -> float:
+    """Return the PROACTIVE_EXPORT backup reserve for *soc* (Issue #974).
+
+    ``max(minimum_target_soc, soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT)``.
+
+    This is the ONE shared formula, called by both the state-machine builder
+    (``_build_proactive_export_config``) and the actuator
+    (``BatteryController.set_proactive_export``) so the planner's expectation
+    and the hardware write can never drift apart again. The old absolute
+    ``PROACTIVE_EXPORT_MIN_RESERVE_PERCENT`` (4) floor is redundant here: for
+    any SOC in (minimum_target_soc, minimum_target_soc + 5) it produced a
+    reserve below the configured floor the planner never models.
+    """
+    return max(minimum_target_soc, soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT)
 
 
 MODE_CONFIG_BUILDERS: dict[BatteryMode, str] = {
