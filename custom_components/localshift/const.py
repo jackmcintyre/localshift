@@ -648,6 +648,12 @@ PROACTIVE_EXPORT_MIN_RESERVE_PERCENT = 4.0
 # 5% prevents immediate discharge below reserve threshold.
 PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
 
+# Issue #1081: while PROACTIVE_EXPORT stays selected, re-step the reserve once SOC
+# is within this many points of the tracked reserve. The Powerwall parks at the
+# reserve (2026-09-15: SOC 26.2-27.0 against a reserve of 27), so an exact
+# comparison would never fire.
+PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT = 1.0
+
 # -----------------------------------------------------------------------------
 # Negative FIT Avoidance Constants (Issue #719)
 # -----------------------------------------------------------------------------

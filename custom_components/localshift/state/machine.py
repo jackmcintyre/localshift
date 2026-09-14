@@ -20,6 +20,7 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MINIMUM_TARGET_SOC,
+    PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -1094,7 +1095,62 @@ class StateMachine:
             return
 
         if not self._get_switch_state("dry_run"):
+            if await self._step_proactive_export_reserve(data):
+                return
             await self._perform_health_check(data)
+
+    async def _step_proactive_export_reserve(self, data: CoordinatorData) -> bool:
+        """Re-step the PROACTIVE_EXPORT reserve once SOC has drained to it.
+
+        Issue #1081: the reserve is written once on entry. When the planner keeps
+        selecting export after SOC reaches it, the Powerwall pins at the reserve —
+        importing house load and exporting PV — while the health check re-asserts
+        the stale value. Step it with the shared #974 formula instead.
+
+        Returns True when a new reserve was written, so the caller skips this
+        tick's health check (it would read the pre-write hardware reserve).
+        """
+        tracked = self._proactive_export_reserve
+        if self._commanded_mode != BatteryMode.PROACTIVE_EXPORT or tracked is None:
+            return False
+
+        fresh_soc = self._battery_controller.read_fresh_soc()
+        soc = fresh_soc if fresh_soc is not None else data.soc
+        # Issue #895: SOC 0 means an unpopulated entity, not an empty battery —
+        # stepping on it would drop the reserve straight to the floor.
+        if (
+            soc is None
+            or soc <= 0.0
+            or soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT
+        ):
+            return False
+
+        minimum_target = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        new_reserve = calculate_proactive_export_reserve(soc, minimum_target)
+        if new_reserve >= tracked:
+            return False
+
+        if not await self._battery_controller.set_proactive_export_reserve(
+            new_reserve, False
+        ):
+            _LOGGER.warning(
+                "PROACTIVE_EXPORT reserve step %.1f%% -> %.1f%% failed (SOC=%.1f%%)",
+                tracked,
+                new_reserve,
+                soc,
+            )
+            return False
+
+        _LOGGER.info(
+            "PROACTIVE_EXPORT reserve stepped %.1f%% -> %.1f%% (SOC=%.1f%%)",
+            tracked,
+            new_reserve,
+            soc,
+        )
+        self._proactive_export_reserve = new_reserve
+        return True
 
     async def _handle_desired_mode_transition(
         self, data: CoordinatorData, desired: BatteryMode, now: datetime

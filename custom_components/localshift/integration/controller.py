@@ -627,6 +627,23 @@ class BatteryController:
         _LOGGER.info("[TRANSITION] Force discharge SUCCESS in %.2fs", elapsed)
         return True
 
+    async def set_proactive_export_reserve(
+        self, reserve: float, dry_run: bool = False
+    ) -> bool:
+        """Re-step the PROACTIVE_EXPORT backup reserve without a full transition.
+
+        Issue #1081: operation and export mode are already in place while export
+        stays selected; only the reserve needs to move once SOC has reached it.
+
+        Returns:
+            True if successful (or dry run), False otherwise.
+
+        """
+        if dry_run:
+            _LOGGER.info("DRY RUN: set_proactive_export_reserve (reserve=%s)", reserve)
+            return True
+        return await self._service_client.set_backup_reserve(reserve)
+
     async def set_proactive_export(
         self, data: CoordinatorData, dry_run: bool = False
     ) -> bool:
