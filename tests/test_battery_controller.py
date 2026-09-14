@@ -509,6 +509,42 @@ class TestSetForceDischarge:
 # =============================================================================
 
 
+class TestSetProactiveExportReserve:
+    """Issue #1081: re-step only the backup reserve while export stays selected."""
+
+    @pytest.mark.asyncio
+    async def test_writes_backup_reserve_only(self, battery_controller, mock_hass):
+        """Writes the reserve number and nothing else."""
+        result = await battery_controller.set_proactive_export_reserve(21.6)
+
+        assert result is True
+        mock_hass.services.async_call.assert_awaited_once_with(
+            "number",
+            "set_value",
+            {"entity_id": "number.tesla_powerwall_backup_reserve", "value": 21.6},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_dry_run_writes_nothing(self, battery_controller, mock_hass):
+        """Dry run reports success without touching hardware."""
+        result = await battery_controller.set_proactive_export_reserve(
+            21.6, dry_run=True
+        )
+
+        assert result is True
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_service_failure_returns_false(self, battery_controller, mock_hass):
+        """A failed service call surfaces as False."""
+        mock_hass.services.async_call.side_effect = RuntimeError("teslemetry down")
+
+        result = await battery_controller.set_proactive_export_reserve(21.6)
+
+        assert result is False
+
+
 class TestSetProactiveExport:
     """Tests for set_proactive_export method."""
 

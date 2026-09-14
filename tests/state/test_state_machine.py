@@ -1228,6 +1228,171 @@ class TestHealthCheck:
         )
 
 
+class TestProactiveExportReserveStep:
+    """Issue #1081: PROACTIVE_EXPORT must re-step its reserve while it stays selected.
+
+    The reserve (max(minimum_target_soc, SOC - 5)) was written once on entry. On
+    2026-09-15 the planner re-selected export every minute from 05:52 to 08:45,
+    but SOC had drained to the 27% entry reserve by 06:00 and nothing moved it:
+    the Powerwall sat pinned, importing house load from grid and exporting PV,
+    while the health check re-asserted the stale 27.
+    """
+
+    @pytest.fixture
+    def exporting(self, state_machine, coordinator_data, mock_battery_controller):
+        """Commanded and desired PROACTIVE_EXPORT with a tracked entry reserve of 27."""
+        state_machine._commanded_mode = BatteryMode.PROACTIVE_EXPORT
+        state_machine._proactive_export_reserve = 27.0
+        coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
+        coordinator_data.soc = 26.6
+        mock_battery_controller.read_fresh_soc = MagicMock(return_value=26.6)
+        mock_battery_controller.set_proactive_export_reserve = AsyncMock(
+            return_value=True
+        )
+        return state_machine
+
+    @pytest.mark.asyncio
+    async def test_steps_reserve_when_soc_reaches_tracked_reserve(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """SOC at the entry reserve re-steps it to max(floor, SOC - 5)."""
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_awaited_once_with(
+            pytest.approx(21.6), False
+        )
+        assert exporting._proactive_export_reserve == pytest.approx(21.6)
+
+    @pytest.mark.asyncio
+    async def test_step_skips_health_check_that_tick(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """The health check would read the pre-write hardware reserve, so skip it."""
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.verify_current_state.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_step_while_soc_above_reserve(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """Still draining toward the reserve: leave it, run the health check."""
+        mock_battery_controller.read_fresh_soc.return_value = 35.0
+
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+        assert exporting._proactive_export_reserve == 27.0
+        mock_battery_controller.verify_current_state.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_step_at_minimum_target_floor(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """The reserve never steps below minimum_target_soc (#974 floor)."""
+        exporting._proactive_export_reserve = float(DEFAULT_MINIMUM_TARGET_SOC)
+        mock_battery_controller.read_fresh_soc.return_value = (
+            DEFAULT_MINIMUM_TARGET_SOC + 0.3
+        )
+
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+        mock_battery_controller.verify_current_state.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_cached_soc(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """A failed fresh read uses the coordinator's cached SOC."""
+        mock_battery_controller.read_fresh_soc.return_value = None
+        coordinator_data.soc = 27.0
+
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_awaited_once_with(
+            pytest.approx(22.0), False
+        )
+
+    @pytest.mark.asyncio
+    async def test_unpopulated_soc_does_not_step(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """SOC 0 (entity unpopulated, #895) must not drop the reserve to the floor."""
+        mock_battery_controller.read_fresh_soc.return_value = None
+        coordinator_data.soc = 0.0
+
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+        assert exporting._proactive_export_reserve == 27.0
+
+    @pytest.mark.asyncio
+    async def test_failed_write_keeps_tracked_reserve(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """A failed write leaves tracking unchanged and lets the health check run."""
+        mock_battery_controller.set_proactive_export_reserve.return_value = False
+
+        await exporting._handle_stable_mode(coordinator_data)
+
+        assert exporting._proactive_export_reserve == 27.0
+        mock_battery_controller.verify_current_state.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_does_not_step(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """Dry run issues no hardware writes."""
+        exporting._get_switch_state = lambda key: key == "dry_run"
+
+        await exporting._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+        assert exporting._proactive_export_reserve == 27.0
+
+    @pytest.mark.asyncio
+    async def test_other_modes_do_not_step(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """Only PROACTIVE_EXPORT re-steps; a leftover tracked value is ignored."""
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._proactive_export_reserve = 27.0
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller.read_fresh_soc = MagicMock(return_value=26.6)
+        mock_battery_controller.set_proactive_export_reserve = AsyncMock(
+            return_value=True
+        )
+
+        await state_machine._handle_stable_mode(coordinator_data)
+
+        mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_incident_replay_trickles_down_to_floor(
+        self, exporting, coordinator_data, mock_battery_controller
+    ):
+        """2026-09-15 replay: export keeps stepping 5pp at a time until the floor."""
+        written = []
+
+        async def _record(reserve, dry_run):
+            written.append(reserve)
+            return True
+
+        mock_battery_controller.set_proactive_export_reserve.side_effect = _record
+
+        # Battery drains to each new reserve between ticks, then pins there.
+        for soc in (26.6, 26.2, 21.8, 21.6, 20.4, 20.2):
+            mock_battery_controller.read_fresh_soc.return_value = soc
+            await exporting._handle_stable_mode(coordinator_data)
+
+        assert written == [
+            pytest.approx(21.6),
+            pytest.approx(20.0),
+        ]
+        assert exporting._proactive_export_reserve == pytest.approx(20.0)
+
+
 class TestSpikeDischargeHealthCheckReserve:
     """Issue #972: the health check must expect the reserve actually written.
 
