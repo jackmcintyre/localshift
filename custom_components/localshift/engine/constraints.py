@@ -55,7 +55,7 @@ def _determine_export_actions(
     from custom_components.localshift.engine.types import PlannerAction
 
     actions = []
-    can_discharge = soc_pct > config.min_soc_pct
+    can_discharge = soc_pct > config.discharge_floor_pct
 
     if not can_discharge:
         return actions
@@ -109,7 +109,7 @@ def _determine_export_actions(
                 / config.battery_capacity_kwh
                 * 100.0
             )
-            landing_soc_pct = max(soc_pct - max_export_pp, config.min_soc_pct)
+            landing_soc_pct = max(soc_pct - max_export_pp, config.discharge_floor_pct)
             if landing_soc_pct >= floor_pct:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)
     else:

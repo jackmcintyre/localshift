@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.localshift.const import (
+    AWAY_RESERVE_MIN,
+    BACKUP_RESERVE_MAX_VALID,
+    CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
@@ -72,6 +75,28 @@ class TestLocalShiftNumber:
         assert number._attr_native_step == spec["step"]
         assert number._attr_native_unit_of_measurement == spec["unit"]
         assert number._attr_icon == spec["icon"]
+
+    def test_number_initialization_away_reserve(self, mock_coordinator, mock_entry):
+        """A1: range 10-80%, unit %, default 30 (docs/holiday-away/plan.md item 4)."""
+        number = LocalShiftNumber(
+            mock_coordinator,
+            mock_entry,
+            CONF_AWAY_RESERVE,
+            "Away Reserve",
+            30,
+        )
+
+        assert number._attr_unique_id == "localshift_away_reserve"
+        assert number._attr_name == "Away Reserve"
+        assert number._default == 30
+
+        spec = THRESHOLD_RANGES[CONF_AWAY_RESERVE]
+        assert spec["min"] == AWAY_RESERVE_MIN == 10
+        assert spec["max"] == BACKUP_RESERVE_MAX_VALID == 80
+        assert spec["unit"] == "%"
+        assert number._attr_native_min_value == spec["min"]
+        assert number._attr_native_max_value == spec["max"]
+        assert number._attr_native_unit_of_measurement == "%"
 
     def test_number_initialization_max_precharge_price(
         self, mock_coordinator, mock_entry
@@ -195,13 +220,46 @@ class TestLocalShiftNumber:
         assert call_args[0][0] == mock_entry
         assert call_args[1]["options"][CONF_BATTERY_TARGET] == 90
 
+    def test_away_reserve_native_value_falls_back_to_default(
+        self, mock_coordinator, mock_entry
+    ):
+        """A3: native_value falls back to 30 when unset."""
+        mock_entry.options = {}
+        number = LocalShiftNumber(
+            mock_coordinator, mock_entry, CONF_AWAY_RESERVE, "Away Reserve", 30
+        )
+
+        assert number.native_value == 30
+
+    @pytest.mark.asyncio
+    async def test_away_reserve_set_native_value_persists_options(
+        self, mock_coordinator, mock_entry
+    ):
+        """A3: setting a value persists options["away_reserve"]."""
+        mock_entry.options = {}
+        mock_hass = MagicMock()
+        mock_hass.config_entries = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock()
+
+        number = LocalShiftNumber(
+            mock_coordinator, mock_entry, CONF_AWAY_RESERVE, "Away Reserve", 30
+        )
+        number.hass = mock_hass
+        number._attr_entity_id = "number.localshift_away_reserve"
+
+        with patch.object(number, "async_write_ha_state"):
+            await number.async_set_native_value(45)
+
+        call_args = mock_hass.config_entries.async_update_entry.call_args
+        assert call_args[1]["options"][CONF_AWAY_RESERVE] == 45
+
 
 class TestNumberDefinitions:
     """Tests for NUMBER_DEFINITIONS constant."""
 
     def test_number_definitions_count(self):
-        """Test that there are 13 number definitions (11 existing + 2 taper knobs)."""
-        assert len(NUMBER_DEFINITIONS) == 13
+        """13 pre-existing + the away reserve (docs/holiday-away/plan.md item 4)."""
+        assert len(NUMBER_DEFINITIONS) == 14
 
     def test_number_definitions_contains_cheap_price_percentile(self):
         """Test definitions contain cheap price percentile."""
@@ -233,6 +291,17 @@ class TestNumberDefinitions:
         keys = [d[0] for d in NUMBER_DEFINITIONS]
         assert CONF_SWITCHING_PENALTY_PER_KWH in keys
 
+    def test_number_definitions_contains_away_reserve(self):
+        """docs/holiday-away/plan.md item 4: away reserve knob exists."""
+        keys = [d[0] for d in NUMBER_DEFINITIONS]
+        assert CONF_AWAY_RESERVE in keys
+        default = next(
+            default
+            for conf, _name, default in NUMBER_DEFINITIONS
+            if conf == CONF_AWAY_RESERVE
+        )
+        assert default == 30
+
 
 class TestAsyncSetupEntry:
     """Tests for async_setup_entry."""
@@ -250,7 +319,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 13
+        assert len(added_entities) == 14
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_localshift_number_instances(

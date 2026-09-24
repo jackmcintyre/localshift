@@ -12,12 +12,18 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
+    CONF_AWAY_RESERVE,
     CONF_MINIMUM_TARGET_SOC,
+    DEFAULT_AWAY_RESERVE,
     DEFAULT_MINIMUM_TARGET_SOC,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
 )
-from ..state.mode_configs import calculate_proactive_export_reserve
+from ..state.mode_configs import (
+    calculate_proactive_export_reserve,
+    calculate_self_consumption_reserve,
+    resolve_away_reserve_pct,
+)
 from ..state.validator import TransitionValidator
 from .client import PowerwallServiceClient
 
@@ -186,11 +192,18 @@ class BatteryController:
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
 
-        # Determine backup reserve: use parameter override, then data.preserve_soc, else default to 10%
-        reserve = (
-            preserve_soc
-            if preserve_soc is not None
-            else (data.preserve_soc if data.preserve_soc is not None else 10)
+        # Determine backup reserve: parameter override, then data.preserve_soc, else
+        # 10% — floored at the away reserve while away is active
+        # (docs/holiday-away/plan.md item 4). The state-machine builder already
+        # bakes the away floor into ``config.backup_reserve`` before it reaches
+        # here as ``preserve_soc``, so this is idempotent on that path and is the
+        # spec's literal enforcement point for any other caller (the select path,
+        # the automation-off path).
+        resolved_preserve_soc = (
+            preserve_soc if preserve_soc is not None else data.preserve_soc
+        )
+        reserve = calculate_self_consumption_reserve(
+            resolved_preserve_soc, self._resolve_away_reserve_pct(data)
         )
 
         if dry_run:
@@ -263,6 +276,27 @@ class BatteryController:
             reserve,
         )
         return True
+
+    async def set_self_consumption_reserve(
+        self, reserve: float, dry_run: bool = False
+    ) -> bool:
+        """Write only the backup reserve, without touching the rest of the mode.
+
+        docs/holiday-away/plan.md item 4: re-stepping the away reserve mid-trip
+        (or releasing it when away ends) needs a reserve-only write — the
+        operation mode, export mode and grid-charging flag are already correct
+        while SELF_CONSUMPTION/DEMAND_BLOCK stays commanded, and re-issuing the
+        full transition would be redundant. Mirrors the shape of the other
+        ``set_*`` transition methods without their multi-step recipe.
+
+        Returns:
+            True if successful, False otherwise.
+
+        """
+        if dry_run:
+            _LOGGER.info("DRY RUN: set_self_consumption_reserve (reserve=%s)", reserve)
+            return True
+        return await self._service_client.set_backup_reserve(reserve)
 
     @staticmethod
     def _clamp_backup_reserve(target: float) -> int:
@@ -526,6 +560,23 @@ class BatteryController:
                 return float(DEFAULT_MINIMUM_TARGET_SOC)
         return float(DEFAULT_MINIMUM_TARGET_SOC)
 
+    def _resolve_away_reserve_pct(self, data: CoordinatorData) -> float | None:
+        """Return the clamped away reserve while away is active, else None.
+
+        docs/holiday-away/plan.md item 4. ``is True`` rather than truthy — a
+        bare ``MagicMock``/``SimpleNamespace`` test double carries a truthy
+        ``away_active`` attribute even when nothing set it, and that must not
+        silently arm the away reserve.
+        """
+        if getattr(data, "away_active", False) is not True:
+            return None
+        raw = (
+            self._get_option(CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE)
+            if self._get_option is not None
+            else DEFAULT_AWAY_RESERVE
+        )
+        return resolve_away_reserve_pct(raw)
+
     async def set_force_discharge(
         self,
         data: CoordinatorData,
@@ -663,6 +714,12 @@ class BatteryController:
         # Dynamic reserve for throttling: SOC - 5%, minimum 4%
         current_soc = data.soc
         minimum_target = self._get_minimum_target_soc()
+        # docs/holiday-away/plan.md item 4: PROACTIVE_EXPORT is picked automatically
+        # by the planner, so its floor must also honour the away reserve, or it
+        # steps down to minimum_target_soc while away.
+        away_reserve_pct = self._resolve_away_reserve_pct(data)
+        if away_reserve_pct is not None:
+            minimum_target = max(minimum_target, away_reserve_pct)
 
         # Issue #895: when SOC is 0 (unavailable entity, startup, or genuinely
         # empty), the old ``max(4.0, soc - 5.0)`` formula yielded reserve=4.0,

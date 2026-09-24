@@ -172,7 +172,7 @@ def derive_negative_fit_avoidance_context(
     if not has_export_opportunity:
         return None
 
-    min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
+    min_floor_kwh = config.discharge_floor_pct / 100.0 * battery_capacity_kwh
     max_headroom_kwh = battery_capacity_kwh - min_floor_kwh
 
     required_headroom_kwh = compute_required_headroom(
@@ -200,7 +200,9 @@ def derive_negative_fit_avoidance_context(
         net_kwh = slot.solar_kwh - slot.consumption_kwh
         stored_kwh = net_kwh * config.charge_efficiency if net_kwh > 0.0 else net_kwh
         soc_at_risk_pct += stored_kwh / battery_capacity_kwh * 100.0
-    soc_at_risk_pct = min(max(soc_at_risk_pct, config.min_soc_pct), config.max_soc_pct)
+    soc_at_risk_pct = min(
+        max(soc_at_risk_pct, config.discharge_floor_pct), config.max_soc_pct
+    )
     existing_headroom_kwh = (
         (config.max_soc_pct - soc_at_risk_pct) / 100.0 * battery_capacity_kwh
     )
@@ -250,7 +252,7 @@ def compute_recoverability_floor_pct(
     """
     battery_capacity_kwh = config.battery_capacity_kwh
     target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
-    min_floor_kwh = config.min_soc_pct / 100.0 * battery_capacity_kwh
+    min_floor_kwh = config.discharge_floor_pct / 100.0 * battery_capacity_kwh
 
     if slot_idx >= len(context.conservative_recovery_kwh_by_slot):
         return config.demand_window_target_soc_pct

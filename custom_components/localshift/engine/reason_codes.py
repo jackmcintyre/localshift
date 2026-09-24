@@ -94,7 +94,7 @@ def classify_hold_reason(
     """
     if soc >= config.max_soc_pct - 0.5:
         return PlannerReasonCode.SOC_CEILING_CONSTRAINT
-    if soc <= config.min_soc_pct + 0.5:
+    if soc <= config.discharge_floor_pct + 0.5:
         return PlannerReasonCode.SOC_FLOOR_CONSTRAINT
 
     net_kwh = slot.solar_kwh - slot.consumption_kwh
