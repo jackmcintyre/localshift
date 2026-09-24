@@ -136,3 +136,75 @@ class TestWeatherDiagnosticsAnomalyPopulation:
         assert data.weather_correlation_confidence == "low"
         assert data.weather_hours_with_data == 10
         assert data.weather_usable_hours == 1
+
+
+def _away_entry(weather_learning_enabled: bool = True) -> MagicMock:
+    entry = MagicMock()
+    entry.options = {"weather_learning_enabled": weather_learning_enabled}
+    return entry
+
+
+class TestWeatherAwayMaskedHoursBridge:
+    """docs/holiday-away/plan.md item 2, decision D4: the *weather-correlation*
+    learning window's away-masked-hour count (separate from the consumption
+    window's ``away_masked_hours``) is bridged onto CoordinatorData."""
+
+    def test_bridged_from_get_diagnostics(self):
+        """W1: get_diagnostics()'s away_masked_hours reaches CoordinatorData."""
+        weather_correlation = MagicMock()
+        weather_correlation.get_diagnostics.return_value = {
+            "total_samples": 100,
+            "average_cooling_slope": 0.3,
+            "average_heating_slope": 0.1,
+            "average_r_squared": 0.5,
+            "hourly_regression": {},
+            "away_masked_hours": 42,
+        }
+        weather_correlation.get_current_temperature.return_value = None
+        engine = WeatherDiagnosticsEngine(_away_entry())
+        data = CoordinatorData()
+
+        engine.populate_weather_diagnostics(data, weather_correlation)
+
+        assert data.weather_away_masked_hours == 42
+
+    def test_zero_when_key_absent(self):
+        """The bridge defaults to 0 when get_diagnostics() omits the key."""
+        weather_correlation = MagicMock()
+        weather_correlation.get_diagnostics.return_value = {
+            "total_samples": 0,
+            "average_cooling_slope": 0.0,
+            "average_heating_slope": 0.0,
+            "average_r_squared": 0.0,
+            "hourly_regression": {},
+        }
+        weather_correlation.get_current_temperature.return_value = None
+        engine = WeatherDiagnosticsEngine(_away_entry())
+        data = CoordinatorData()
+
+        engine.populate_weather_diagnostics(data, weather_correlation)
+
+        assert data.weather_away_masked_hours == 0
+
+    def test_zero_when_learning_disabled(self):
+        """W2: disabled learning short-circuits before get_diagnostics() runs,
+        and weather_away_masked_hours is 0, overwriting any stale value."""
+        engine = WeatherDiagnosticsEngine(_away_entry(weather_learning_enabled=False))
+        data = CoordinatorData()
+        data.weather_away_masked_hours = 7  # stale value from a prior cycle
+        weather_correlation = MagicMock()
+
+        engine.populate_weather_diagnostics(data, weather_correlation)
+
+        assert data.weather_away_masked_hours == 0
+        weather_correlation.get_diagnostics.assert_not_called()
+
+    def test_zero_when_weather_correlation_none(self):
+        """No WeatherCorrelation instance also reports 0, not stale data."""
+        engine = WeatherDiagnosticsEngine(_away_entry())
+        data = CoordinatorData()
+        data.weather_away_masked_hours = 7
+
+        engine.populate_weather_diagnostics(data, None)
+
+        assert data.weather_away_masked_hours == 0

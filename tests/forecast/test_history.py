@@ -1837,3 +1837,314 @@ class TestAwayMasking:
         assert masked["combined_avg"][8] == pytest.approx(home_kw)
         assert unmasked["combined_avg"][8] < home_kw
         assert masked["away_masked_hours"] == 7
+
+
+# =============================================================================
+# I. AWAY-MODE CONSUMPTION PROFILE (docs/holiday-away/plan.md item 2)
+# =============================================================================
+
+
+class TestAwayProfile:
+    """Tests for the away-mode consumption profile and overnight floor."""
+
+    def test_full_hour_away_rows_produce_away_profile(self, history_fetcher):
+        """H1: rows inside a fully-away hour populate away_avg/away_counts."""
+        days = [datetime(2026, 7, d, 8, 0, tzinfo=UTC) for d in (6, 7, 8)]
+        rows = [{"start": day, "mean": 0.5} for day in days]
+        intervals = [(day, day + timedelta(hours=1)) for day in days]
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=intervals,
+            ),
+        ):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        assert result["away_avg"][8] == pytest.approx(0.5)
+        assert result["away_counts"][8] == 3
+
+    def test_partial_hour_masked_from_home_but_excluded_from_away(
+        self, history_fetcher
+    ):
+        """H2: a row in an hour only partly covered by the away interval is
+        masked out of the at-home profile but never enters away_avg either."""
+        row_start = datetime(2026, 7, 8, 8, 0, tzinfo=UTC)
+        rows = [{"start": row_start, "mean": 0.7}]
+        # Away only from 08:40 onward: the 08:00 hour is only partly away.
+        intervals = [
+            (
+                datetime(2026, 7, 8, 8, 40, tzinfo=UTC),
+                datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+            )
+        ]
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=intervals,
+            ),
+        ):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        # Masked out of at-home (the coarse mask is generous: any overlap masks).
+        assert result["combined_avg"] == {}
+        assert result["away_masked_hours"] == 1
+        # But the row never qualifies for the away profile either.
+        assert result["away_avg"] == {}
+        assert result["away_counts"] == {}
+
+    def test_floor_is_mean_of_at_home_hours_0_1_2(self, history_fetcher):
+        """H3: away_floor_kw is the mean of the at-home combined_avg at hours
+        0-2; an away row at 01:00 (masked out of at-home) doesn't move it."""
+        home_rows = [
+            {"start": datetime(2026, 7, d, h, 0, tzinfo=UTC), "mean": 0.3 + h * 0.05}
+            for d in (6, 7)
+            for h in (0, 1, 2)
+        ]
+        away_day = datetime(2026, 7, 8, 1, 0, tzinfo=UTC)
+        # A wildly different value: if it leaked into the floor, the assert below fails.
+        rows = home_rows + [{"start": away_day, "mean": 9.9}]
+        intervals = [(away_day, away_day + timedelta(hours=1))]
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=intervals,
+            ),
+        ):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        expected = sum(result["combined_avg"][h] for h in (0, 1, 2)) / 3
+        assert result["away_floor_kw"] == pytest.approx(expected)
+        assert result["away_floor_kw"] < 9.9
+
+    def test_floor_partial_hours_present_is_their_mean(self, history_fetcher):
+        """H4a: only hours 0 and 1 present at home -> floor is their mean."""
+        rows = [
+            {"start": datetime(2026, 7, 6, 0, 0, tzinfo=UTC), "mean": 0.2},
+            {"start": datetime(2026, 7, 6, 1, 0, tzinfo=UTC), "mean": 0.4},
+        ]
+
+        with _stub_recorder_pipeline(history_fetcher, rows):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        assert result["away_floor_kw"] == pytest.approx(0.3)
+
+    def test_floor_none_when_no_overnight_hours_present(self, history_fetcher):
+        """H4b: no data at hours 0-2 at all -> floor is None."""
+        rows = [{"start": datetime(2026, 7, 6, 10, 0, tzinfo=UTC), "mean": 1.0}]
+
+        with _stub_recorder_pipeline(history_fetcher, rows):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        assert result["away_floor_kw"] is None
+
+    def test_no_entity_means_empty_away_fields_and_no_fetch(self, history_fetcher):
+        """H5: away_entity_id=None means no interval fetch and empty away fields."""
+        rows = [{"start": datetime(2026, 7, 6, 8, 0, tzinfo=UTC), "mean": 1.0}]
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync"
+            ) as mock_fetch,
+        ):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test", datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
+            )
+
+        mock_fetch.assert_not_called()
+        assert result["away_avg"] == {}
+        assert result["away_counts"] == {}
+        assert result["away_floor_kw"] is None
+
+    def test_empty_result_carries_away_keys(self, history_fetcher):
+        """H6a: _empty_result() carries the three away keys."""
+        result = history_fetcher._empty_result()
+
+        assert result["away_avg"] == {}
+        assert result["away_counts"] == {}
+        assert result["away_floor_kw"] is None
+
+    def test_get_away_profiles_default(self, history_fetcher):
+        """H6b: a fresh fetcher's getter returns empty/None."""
+        from custom_components.localshift.forecast.load import AwayProfiles
+
+        assert history_fetcher.get_away_profiles() == AwayProfiles(
+            away_avg={}, away_counts={}, floor_kw=None
+        )
+
+    def test_clear_historical_cache_resets_away_profile(self, history_fetcher):
+        """H6c: clear_historical_cache() resets the away profile fields."""
+        history_fetcher._away_avg = {8: 0.5}
+        history_fetcher._away_counts = {8: 3}
+        history_fetcher._away_floor_kw = 0.35
+
+        history_fetcher.clear_historical_cache()
+
+        profiles = history_fetcher.get_away_profiles()
+        assert profiles.away_avg == {}
+        assert profiles.away_counts == {}
+        assert profiles.floor_kw is None
+
+    @pytest.mark.asyncio
+    async def test_long_trip_stores_away_profile_despite_thin_at_home(
+        self, history_fetcher
+    ):
+        """H7a: fewer than 6 at-home hours still stores a rich away profile."""
+        history_fetcher.entry.options = {
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
+        }
+
+        # Only 3 at-home hours of data.
+        home_rows = [
+            {"start": datetime(2026, 7, 1, h, 0, tzinfo=UTC), "mean": 1.0}
+            for h in (5, 6, 7)
+        ]
+        # A 10-day trip, every hour fully away every day.
+        away_days = [datetime(2026, 7, d, tzinfo=UTC) for d in range(2, 12)]
+        away_rows = [
+            {"start": day.replace(hour=h), "mean": 0.35}
+            for day in away_days
+            for h in range(24)
+        ]
+        rows = home_rows + away_rows
+        intervals = [(day, day + timedelta(days=1)) for day in away_days]
+
+        async def _run_sync_job(fn, *args):
+            return fn(*args)
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=intervals,
+            ),
+            patch(
+                "homeassistant.components.recorder.get_instance"
+            ) as mock_get_instance,
+        ):
+            mock_recorder = MagicMock()
+            mock_recorder.async_add_executor_job = AsyncMock(
+                side_effect=_run_sync_job
+            )
+            mock_get_instance.return_value = mock_recorder
+
+            await history_fetcher.async_get_historical_hourly_averages("sensor.test")
+
+        profiles = history_fetcher.get_away_profiles()
+        assert len(profiles.away_avg) == 24
+        for hour in range(24):
+            assert profiles.away_counts[hour] == 10
+
+    @pytest.mark.asyncio
+    async def test_failed_fetch_does_not_wipe_stored_away_profile(
+        self, history_fetcher
+    ):
+        """H7b: a failed fetch (recorder error -> _empty_result()) never
+        overwrites a previously stored away profile."""
+        history_fetcher.entry.options = {
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
+        }
+        history_fetcher._away_avg = {8: 0.5}
+        history_fetcher._away_counts = {8: 5}
+        history_fetcher._away_floor_kw = 0.35
+        # A stale cache date so the fetch below actually runs.
+        history_fetcher._historical_load_cache_date = "2000-01-01"
+
+        with patch(
+            "homeassistant.components.recorder.get_instance"
+        ) as mock_get_instance:
+            mock_recorder = MagicMock()
+            mock_recorder.async_add_executor_job = AsyncMock(
+                return_value=history_fetcher._empty_result()
+            )
+            mock_get_instance.return_value = mock_recorder
+
+            await history_fetcher.async_get_historical_hourly_averages("sensor.test")
+
+        profiles = history_fetcher.get_away_profiles()
+        assert profiles.away_avg == {8: 0.5}
+        assert profiles.away_counts == {8: 5}
+        assert profiles.floor_kw == pytest.approx(0.35)
+
+    @pytest.mark.asyncio
+    async def test_success_branch_stores_away_profile_and_floor_via_async_fetch(
+        self, history_fetcher
+    ):
+        """H7c: the normal path — >=6 at-home hours (a normal day, so the
+        fetch takes the *success* branch of
+        ``async_get_historical_hourly_averages``, not the thin/failed
+        else-branch H7a/H7b exercise) plus full-hour away rows, driven end
+        to end through the real async fetch with a stubbed recorder rather
+        than by seeding ``_away_avg``/``_away_counts``/``_away_floor_kw``
+        directly. Proves the three success-branch storage lines actually
+        wire the sync fetch's away_avg/away_counts/away_floor_kw through to
+        get_away_profiles() — deleting those lines regresses this test even
+        though it regresses nothing that only checks the sync result dict.
+        """
+        history_fetcher.entry.options = {
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
+        }
+
+        # 9 at-home hours (>=6), hours 0-2 at 0.4kW for the floor.
+        home_day = datetime(2026, 7, 6, tzinfo=UTC)  # Monday
+        home_rows = [
+            {"start": home_day.replace(hour=h), "mean": 0.4 if h < 3 else 1.5}
+            for h in range(9)
+        ]
+        # A separate, fully-away hour on another day: feeds away_avg/away_counts.
+        away_hour_start = datetime(2026, 7, 8, 20, 0, tzinfo=UTC)
+        away_rows = [{"start": away_hour_start, "mean": 0.6}]
+        intervals = [(away_hour_start, away_hour_start + timedelta(hours=1))]
+        rows = home_rows + away_rows
+
+        async def _run_sync_job(fn, *args):
+            return fn(*args)
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=intervals,
+            ),
+            patch(
+                "homeassistant.components.recorder.get_instance"
+            ) as mock_get_instance,
+        ):
+            mock_recorder = MagicMock()
+            mock_recorder.async_add_executor_job = AsyncMock(
+                side_effect=_run_sync_job
+            )
+            mock_get_instance.return_value = mock_recorder
+
+            await history_fetcher.async_get_historical_hourly_averages("sensor.test")
+
+        profiles = history_fetcher.get_away_profiles()
+        assert profiles.floor_kw == pytest.approx(0.4)
+        assert profiles.away_avg[20] == pytest.approx(0.6)
+        assert profiles.away_counts[20] == 1

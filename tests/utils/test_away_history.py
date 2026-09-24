@@ -20,6 +20,7 @@ from custom_components.localshift.const import CONF_AWAY_ENTITY
 from custom_components.localshift.utils.away import (
     _iter_quarter_hours,
     async_get_away_intervals,
+    away_full_utc_hour_starts,
     away_local_hour_keys,
     away_utc_hour_starts,
     fetch_away_intervals_sync,
@@ -124,6 +125,90 @@ class TestIterQuarterHours:
             datetime(2026, 3, 1, 10, 30, tzinfo=UTC),
             datetime(2026, 3, 1, 10, 45, tzinfo=UTC),
         ]
+
+
+# =============================================================================
+# A2. away_full_utc_hour_starts
+# =============================================================================
+
+
+class TestAwayFullUtcHourStarts:
+    """Tests for away_full_utc_hour_starts (away-profile masking, plan item 2).
+
+    Strict, unlike away_utc_hour_starts: an hour counts only when the away
+    interval covers it entirely, so departure/return hours never contaminate
+    the away-mode profile mean.
+    """
+
+    def test_exact_boundaries_include_every_full_hour(self):
+        """U1: 08:00-11:00 gives {08, 09, 10} — the interval covers each
+        wholly, and the end hour (11:00-12:00) isn't started."""
+        start = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
+        end = datetime(2026, 3, 1, 11, 0, tzinfo=UTC)
+
+        result = away_full_utc_hour_starts([(start, end)])
+
+        assert result == {
+            datetime(2026, 3, 1, 8, 0, tzinfo=UTC),
+            datetime(2026, 3, 1, 9, 0, tzinfo=UTC),
+            datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
+        }
+
+    def test_partial_departure_and_return_hours_excluded(self):
+        """U2: 08:10-10:50 gives only {09} — the 08:00 and 10:00 hours are
+        each only partly covered."""
+        start = datetime(2026, 3, 1, 8, 10, tzinfo=UTC)
+        end = datetime(2026, 3, 1, 10, 50, tzinfo=UTC)
+
+        result = away_full_utc_hour_starts([(start, end)])
+
+        assert result == {datetime(2026, 3, 1, 9, 0, tzinfo=UTC)}
+
+    def test_sub_hour_interval_is_empty(self):
+        """U3: an interval shorter than one hour never fully covers any hour."""
+        start = datetime(2026, 3, 1, 8, 10, tzinfo=UTC)
+        end = datetime(2026, 3, 1, 8, 40, tzinfo=UTC)
+
+        assert away_full_utc_hour_starts([(start, end)]) == frozenset()
+
+    def test_exact_boundary_end_is_exclusive(self):
+        """U4: 08:00-09:00 gives {08} only — the hour *starting* at the end
+        boundary (09:00-10:00) is not included."""
+        start = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
+        end = datetime(2026, 3, 1, 9, 0, tzinfo=UTC)
+
+        result = away_full_utc_hour_starts([(start, end)])
+
+        assert result == {datetime(2026, 3, 1, 8, 0, tzinfo=UTC)}
+        assert datetime(2026, 3, 1, 9, 0, tzinfo=UTC) not in result
+
+    def test_non_utc_aware_input_is_converted(self):
+        """U5a: a non-UTC aware interval is converted to UTC before walking."""
+        start = datetime(2026, 3, 1, 18, 0, tzinfo=SYDNEY)  # 07:00 UTC (AEDT, +11)
+        end = datetime(2026, 3, 1, 21, 0, tzinfo=SYDNEY)  # 10:00 UTC
+
+        result = away_full_utc_hour_starts([(start, end)])
+
+        assert result == {
+            datetime(2026, 3, 1, 7, 0, tzinfo=UTC),
+            datetime(2026, 3, 1, 8, 0, tzinfo=UTC),
+            datetime(2026, 3, 1, 9, 0, tzinfo=UTC),
+        }
+
+    def test_empty_intervals_is_empty(self):
+        """U5b: no intervals means no fully-covered hours."""
+        assert away_full_utc_hour_starts([]) == frozenset()
+
+    def test_reversed_interval_is_empty(self):
+        """U5c: an end before start yields nothing."""
+        start = datetime(2026, 3, 1, 11, 0, tzinfo=UTC)
+        end = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
+
+        assert away_full_utc_hour_starts([(start, end)]) == frozenset()
+
+    def test_result_type_is_frozenset(self):
+        """The return value is a frozenset, per the interface contract."""
+        assert isinstance(away_full_utc_hour_starts([]), frozenset)
 
 
 # =============================================================================

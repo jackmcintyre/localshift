@@ -88,6 +88,15 @@ MIN_SAMPLES_PER_DAY_HOUR = 4
 # hour before it is trusted over the global (combined) average.
 MIN_SAMPLES_PER_AGGREGATE_HOUR = 8
 
+# Away-mode consumption profile (docs/holiday-away/plan.md "What to build"
+# item 2). Mirrors MIN_SAMPLES_PER_HOUR: an hour needs at least this many
+# full-away-hour samples before the away profile is trusted for that hour.
+MIN_AWAY_SAMPLES_PER_HOUR = 3
+
+# Local hours (00:00-03:00) whose at-home mean seeds the away-mode overnight
+# floor until enough away-hour samples accumulate for a real away profile.
+AWAY_FLOOR_HOURS = (0, 1, 2)
+
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Entity Selection (Step 1)
 # -----------------------------------------------------------------------------
