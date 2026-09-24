@@ -426,3 +426,61 @@ def test_b12_floor_guard_does_not_fire_well_above_away_floor():
         config=config,
     )
     assert blocked is False
+
+
+def test_b12_floor_guard_does_not_fire_below_away_floor():
+    """SOC 22 on a trip that started low: a 1.87pp charge is not blocked, since
+    HOLD doesn't drain under the away floor and there is no sawtooth there."""
+    config = _config(
+        min_soc_pct=10.0,
+        away_reserve_floor_pct=30.0,
+        min_soc_floor_buffer_pct=1.0,
+        min_floor_charge_gain_pct=2.0,
+    )
+    blocked = _floor_guard_blocks(
+        action=PlannerAction.CHARGE_GRID_NORMAL,
+        soc=22.0,
+        next_soc=23.87,
+        slot_idx=0,
+        terminal_penalty_idx=None,
+        config=config,
+    )
+    assert blocked is False
+
+
+@pytest.mark.parametrize("away_floor", [None, 30.0])
+def test_b12_floor_guard_min_soc_band_unchanged(away_floor):
+    """The original band at min_soc_pct fires as before, away or not."""
+    config = _config(
+        min_soc_pct=10.0,
+        away_reserve_floor_pct=away_floor,
+        min_soc_floor_buffer_pct=1.0,
+        min_floor_charge_gain_pct=2.0,
+    )
+    blocked = _floor_guard_blocks(
+        action=PlannerAction.CHARGE_GRID_NORMAL,
+        soc=10.5,
+        next_soc=10.6,
+        slot_idx=0,
+        terminal_penalty_idx=None,
+        config=config,
+    )
+    assert blocked is True
+
+
+def test_max_feasible_terminal_soc_clamps_at_away_floor():
+    """#1091: with no eligible charging, the forward simulation drains to the
+    away floor, not to min_soc_pct, matching the DP's own HOLD transitions."""
+    from custom_components.localshift.engine.constraints import (
+        compute_max_feasible_terminal_soc,
+    )
+
+    slots = _overnight_slots(n=24, buy=0.90)  # nothing cheap enough to charge
+    away = _config(min_soc_pct=10.0, away_reserve_floor_pct=30.0)
+    home = _config(min_soc_pct=10.0, away_reserve_floor_pct=None)
+
+    away_max = compute_max_feasible_terminal_soc(slots, away, 23, 35.0)
+    home_max = compute_max_feasible_terminal_soc(slots, home, 23, 35.0)
+
+    assert home_max is not None and home_max < 30.0  # proves the drain bites
+    assert away_max == pytest.approx(30.0)
