@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.util import dt as dt_util
 
@@ -75,6 +75,31 @@ def is_away_active(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     state = hass.states.get(entity_id)
     return state is not None and state.state == STATE_ON
+
+
+def away_state_unknown(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Report whether a configured away entity currently can't be read.
+
+    True when an away entity is configured but is missing, unavailable or
+    unknown. Callers hold their last known away state through such a gap
+    rather than reading it as "home" (Jack's call, 24 Sep 2026): a package
+    reload or an HA hiccup mid-trip must not release the away reserve, and a
+    flapping entity must not write the Powerwall reserve on every flip. Only
+    an explicit off, or clearing the option, ends away.
+
+    Args:
+        hass: Home Assistant instance
+        entry: LocalShift config entry
+
+    Returns:
+        True when the configured entity's state can't be read.
+
+    """
+    entity_id = get_away_entity_id(entry)
+    if not entity_id:
+        return False
+    state = hass.states.get(entity_id)
+    return state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
 
 
 def fetch_away_intervals_sync(

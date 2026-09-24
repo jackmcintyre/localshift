@@ -98,6 +98,7 @@ from .pricing.types import ForecastSlot
 from .utils.away import (
     async_get_away_intervals,
     away_local_hour_keys,
+    away_state_unknown,
     get_away_entity_id,
     is_away_active,
 )
@@ -172,6 +173,10 @@ class ComputationEngine:
         # WeatherCorrelation itself stays pure and just applies the mask it's
         # handed via set_away_hour_keys.
         self._away_mask_key: tuple[str, str | None] | None = None
+        # Last known away state, held while the away entity can't be read
+        # (see utils.away.away_state_unknown). Starts not-away after a restart.
+        self._away_active_held: bool = False
+        self._away_hold_logged: bool = False
 
         # Create core engines for DP optimizer pipeline
         self._load_forecaster = LoadForecaster(
@@ -455,6 +460,22 @@ class ComputationEngine:
         data.optimizer_precharge_backstop_active = False
         return True
 
+    def _resolve_away_active(self) -> bool:
+        """Return whether the house is away, holding the last known state
+        while the configured away entity is missing, unavailable or unknown."""
+        if away_state_unknown(self.hass, self.entry):
+            if not self._away_hold_logged:
+                _LOGGER.warning(
+                    "Away entity %s can't be read; holding last known away state (%s)",
+                    get_away_entity_id(self.entry),
+                    "away" if self._away_active_held else "home",
+                )
+                self._away_hold_logged = True
+            return self._away_active_held
+        self._away_hold_logged = False
+        self._away_active_held = is_away_active(self.hass, self.entry)
+        return self._away_active_held
+
     def _apply_away_forecast_state(self, data: CoordinatorData) -> None:
         """Forecast the empty house while away (docs/holiday-away/plan.md item 2).
 
@@ -466,7 +487,7 @@ class ComputationEngine:
         sensor stays truthful even in manual mode, since this runs before
         the manual-override early return.
         """
-        active = is_away_active(self.hass, self.entry)
+        active = self._resolve_away_active()
         fetched_profiles = self._history_fetcher.get_away_profiles()
         self._load_forecaster.set_away_profiles(fetched_profiles if active else None)
 
@@ -1283,7 +1304,7 @@ class ComputationEngine:
 
         # Away hours are kept out of learning entirely (docs/holiday-away/
         # plan.md item 3): the sample is simply never recorded.
-        if is_away_active(self.hass, self.entry):
+        if self._resolve_away_active():
             return
 
         # Only learn if we have valid temperature and load data

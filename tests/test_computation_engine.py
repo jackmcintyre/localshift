@@ -408,6 +408,11 @@ class TestAwayModeForecast:
         assert computation_engine._history_fetcher.get_away_profiles().floor_kw == (
             pytest.approx(0.4)
         )
+        # The seed configures the away entity; give it a readable state so the
+        # D2 hold (unreadable entity keeps the last known state) doesn't apply.
+        computation_engine.hass.states["input_boolean.holiday_mode"] = (
+            SimpleNamespace(state="on")
+        )
 
         with patch(
             "custom_components.localshift.computation_engine.is_away_active",
@@ -502,6 +507,61 @@ class TestAwayModeForecast:
         assert coordinator_data.load_forecast_slots == baseline_slots
         assert coordinator_data.away_active is False
         assert coordinator_data.away_profile_source == "at_home"
+
+    def test_away_off_slots_match_a_run_without_away_code(
+        self, computation_engine, coordinator_data
+    ):
+        """#1090: away off gives slots identical to a run where the away state
+        is never applied (set_away_profiles never called)."""
+        self._seed_at_home(computation_engine)
+
+        with patch.object(computation_engine, "_apply_away_forecast_state"):
+            computation_engine.compute_derived_values(coordinator_data)
+        no_away_code = list(coordinator_data.load_forecast_slots)
+        assert no_away_code
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.load_forecast_slots == no_away_code
+
+    def test_unreadable_away_entity_holds_last_known_state(
+        self, computation_engine, coordinator_data
+    ):
+        """D2 (Jack, 24 Sep): unavailable mid-trip holds 'away'; only an
+        explicit off releases it."""
+        self._seed_at_home(computation_engine)
+        computation_engine.entry.options = {
+            **computation_engine.entry.options,
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode",
+        }
+
+        def _state(value):
+            return SimpleNamespace(state=value)
+
+        computation_engine.hass.states = MagicMock()
+        states = computation_engine.hass.states
+        states.get = MagicMock(return_value=_state("on"))
+        computation_engine.compute_derived_values(coordinator_data)
+        assert coordinator_data.away_active is True
+
+        for gap in ("unavailable", "unknown", None):
+            states.get = MagicMock(return_value=None if gap is None else _state(gap))
+            computation_engine.compute_derived_values(coordinator_data)
+            assert coordinator_data.away_active is True, gap
+            assert coordinator_data.away_profile_source == "away_floor"
+
+        states.get = MagicMock(return_value=_state("off"))
+        computation_engine.compute_derived_values(coordinator_data)
+        assert coordinator_data.away_active is False
+
+        # Unreadable after an explicit off holds 'home'.
+        states.get = MagicMock(return_value=_state("unavailable"))
+        computation_engine.compute_derived_values(coordinator_data)
+        assert coordinator_data.away_active is False
 
 
 # =============================================================================

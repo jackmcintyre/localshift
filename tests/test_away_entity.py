@@ -32,6 +32,7 @@ from custom_components.localshift.const import (
     DOMAIN,
 )
 from custom_components.localshift.utils.away import (
+    away_state_unknown,
     get_away_entity_id,
     is_away_active,
 )
@@ -191,13 +192,12 @@ class TestValidateAwayEntity:
         assert result == "Entity 'input_boolean.gone' does not exist"
 
     @pytest.mark.parametrize("state", ["unavailable", "unknown"])
-    async def test_unavailable_or_unknown_reported(self, state):
-        """Entities resting in unavailable/unknown are surfaced."""
+    async def test_unavailable_or_unknown_passes(self, state):
+        """#1084: a temporarily unreadable entity doesn't block Settings; the
+        engine holds the last known away state through the gap."""
         hass = _hass_with_state(create_mock_state("input_boolean.away", state))
 
-        result = await validate_away_entity(hass, "input_boolean.away")
-
-        assert result == f"Entity 'input_boolean.away' is {state}"
+        assert await validate_away_entity(hass, "input_boolean.away") is None
 
     async def test_non_on_off_state_reported(self):
         """A sensor holding a numeric state is not an on/off entity."""
@@ -267,6 +267,29 @@ class TestAwayHelper:
         hass = _hass_with_state(create_mock_state("input_boolean.holiday_mode", state))
 
         assert is_away_active(hass, entry) is False
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [(None, True), ("unavailable", True), ("unknown", True), ("on", False), ("off", False)],
+    )
+    async def test_away_state_unknown(self, state, expected):
+        """Missing, unavailable or unknown can't be read; on and off can."""
+        entry = _entry_with_options({CONF_AWAY_ENTITY: "input_boolean.holiday_mode"})
+        hass = _hass_with_state(
+            None
+            if state is None
+            else create_mock_state("input_boolean.holiday_mode", state)
+        )
+
+        assert away_state_unknown(hass, entry) is expected
+
+    async def test_away_state_unknown_false_when_unset(self):
+        """No away entity configured is not 'unknown': it is plainly home."""
+        entry = _entry_with_options({})
+        hass = MagicMock()
+        hass.states.get = MagicMock(side_effect=AssertionError("should not call"))
+
+        assert away_state_unknown(hass, entry) is False
 
     async def test_options_are_the_single_source(self):
         """A value only in entry.data is ignored."""

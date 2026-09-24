@@ -62,7 +62,10 @@ async def validate_away_entity(
 
     Any domain is accepted (``input_boolean``, ``binary_sensor``, ``switch``);
     what matters is that the entity exists and rests in an on/off state. An
-    unset value is valid and never touches the state machine.
+    unset value is valid and never touches the state machine. Unavailable or
+    unknown passes: LocalShift holds the last known away state through such a
+    gap, so a temporarily unreadable entity must not block saving unrelated
+    settings (#1084).
 
     Args:
         hass: Home Assistant instance
@@ -79,7 +82,7 @@ async def validate_away_entity(
     if state is None:
         return f"Entity '{entity_id}' does not exist"
     if state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-        return f"Entity '{entity_id}' is {state.state}"
+        return None
     if state.state not in (STATE_ON, STATE_OFF):
         return (
             f"Entity '{entity_id}' is not an on/off entity (state is '{state.state}')"
