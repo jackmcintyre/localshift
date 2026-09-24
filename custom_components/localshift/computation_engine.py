@@ -1276,6 +1276,11 @@ class ComputationEngine:
                 now_dt - timedelta(days=SLIDING_WINDOW_DAYS),
                 now_dt,
             )
+            if intervals is None:
+                # Failed fetch: keep the current mask and don't stamp the key,
+                # so the next call retries instead of waiting for midnight
+                # (#1086).
+                return
             keys = away_local_hour_keys(intervals, dt_util.DEFAULT_TIME_ZONE)
 
         if self._weather_correlation is not None:

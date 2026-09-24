@@ -1941,7 +1941,13 @@ class TestAwayProfile:
             {"start": datetime(2026, 7, 6, 1, 0, tzinfo=UTC), "mean": 0.4},
         ]
 
-        with _stub_recorder_pipeline(history_fetcher, rows):
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=[],
+            ),
+        ):
             result = history_fetcher._fetch_historical_data_sync(
                 "sensor.test",
                 datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
@@ -1949,6 +1955,27 @@ class TestAwayProfile:
             )
 
         assert result["away_floor_kw"] == pytest.approx(0.3)
+
+    def test_failed_away_fetch_fails_the_whole_fetch(self, history_fetcher):
+        """#1086: a failed away fetch (None) returns the empty result, so the
+        caller keeps its previous cache and retries instead of caching an
+        unmasked profile for the day."""
+        rows = [{"start": datetime(2026, 7, 6, 0, 0, tzinfo=UTC), "mean": 0.2}]
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=None,
+            ),
+        ):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        assert result == history_fetcher._empty_result()
 
     def test_floor_none_when_no_overnight_hours_present(self, history_fetcher):
         """H4b: no data at hours 0-2 at all -> floor is None."""
@@ -2019,6 +2046,7 @@ class TestAwayProfile:
         history_fetcher.entry.options = {
             CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
         }
+        history_fetcher._away_floor_kw = 0.4  # a floor stored by an earlier fetch
 
         # Only 3 at-home hours of data.
         home_rows = [
@@ -2060,6 +2088,11 @@ class TestAwayProfile:
         assert len(profiles.away_avg) == 24
         for hour in range(24):
             assert profiles.away_counts[hour] == 10
+        # #1088: the masked count is kept current in this branch too.
+        assert history_fetcher.get_away_masked_hours() == 240
+        # No at-home rows at hours 0-2 here, so the stored floor (seeded 0.4
+        # before the fetch) survives instead of being overwritten with None.
+        assert profiles.floor_kw == pytest.approx(0.4)
 
     @pytest.mark.asyncio
     async def test_failed_fetch_does_not_wipe_stored_away_profile(

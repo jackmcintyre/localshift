@@ -260,7 +260,14 @@ class HistoryFetcher:
             if away_avg:
                 self._away_avg = away_avg
                 self._away_counts = result.get("away_counts", {})
-                self._away_floor_kw = result.get("away_floor_kw")
+                # The masked count is what the diagnostics sensor reports, so
+                # keep it current here too (#1088).
+                self._away_masked_hours = result.get("away_masked_hours", 0)
+                # Thin at-home rows may carry none of hours 0-2; don't replace
+                # a good stored floor with None.
+                floor_kw = result.get("away_floor_kw")
+                if floor_kw is not None:
+                    self._away_floor_kw = floor_kw
 
         # NEW: Return enhanced result including HVAC-separated profiles
         # If available, baseline and HVAC-separated profiles will be included.
@@ -332,9 +339,15 @@ class HistoryFetcher:
         masked_rows: list[dict[str, Any]] = []
         intervals: list[tuple[datetime, datetime]] = []
         if away_entity_id:
-            intervals = fetch_away_intervals_sync(
+            fetched = fetch_away_intervals_sync(
                 self.hass, away_entity_id, start_time, now
             )
+            if fetched is None:
+                # Don't cache an unmasked profile for the rest of the day on a
+                # transient recorder error: fail the fetch so the caller keeps
+                # its previous cache and retries next tick (#1086).
+                return self._empty_result()
+            intervals = fetched
             away_hours = away_utc_hour_starts(intervals)
             rows, masked_rows = self._split_away_rows(rows, away_hours)
             away_masked_hours = len(masked_rows)

@@ -1264,6 +1264,28 @@ class TestWeatherCorrelation:
         mock_fetch.assert_not_called()
         wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
 
+    async def test_failed_fetch_is_not_cached(self, computation_engine):
+        """#1086: a failed fetch (None) leaves the mask and the cache key alone,
+        so the next call retries instead of waiting for midnight."""
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+            "input_boolean.holiday_mode"
+        )
+        wc_instance = MagicMock()
+        computation_engine._weather_correlation = wc_instance
+        now = datetime(2026, 8, 3, 10, 0, 0)
+
+        with patch(
+            "custom_components.localshift.computation_engine.async_get_away_intervals",
+            new=AsyncMock(side_effect=[None, []]),
+        ) as mock_fetch:
+            await computation_engine._async_refresh_weather_away_mask(now)
+            wc_instance.set_away_hour_keys.assert_not_called()
+            assert computation_engine._away_mask_key is None
+
+            await computation_engine._async_refresh_weather_away_mask(now)
+            assert mock_fetch.call_count == 2
+            wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
+
     async def test_refresh_fetches_once_per_date_and_entity(self, computation_engine):
         """A (date, entity) pair fetches once; a date roll or entity change refetches."""
         computation_engine.entry.options[CONF_AWAY_ENTITY] = (

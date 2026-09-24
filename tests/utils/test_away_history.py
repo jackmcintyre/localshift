@@ -331,8 +331,9 @@ class TestFetchAwayIntervalsSync:
 
         assert result == [(start, end)]
 
-    def test_unavailable_between_on_states_splits_interval(self):
-        """unavailable between two "on" states closes and reopens the interval."""
+    def test_unavailable_between_on_states_holds_the_interval(self):
+        """unavailable between two "on" states holds 'away' (D2), so the trip
+        stays one interval instead of splitting."""
         hass = MagicMock()
         start = datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
         end = datetime(2026, 5, 2, 0, 0, tzinfo=UTC)
@@ -350,23 +351,43 @@ class TestFetchAwayIntervalsSync:
                 hass, "input_boolean.away", start, end
             )
 
-        assert result == [(t1, t2), (t3, end)]
+        assert result == [(t1, end)]
 
-    def test_unknown_also_closes_the_interval(self):
-        """"unknown" is not "on" either, so it closes an open interval."""
+    def test_unknown_holds_the_interval(self):
+        """"unknown" holds the open interval too; only a readable non-on
+        state closes it."""
         hass = MagicMock()
         start = datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
         end = datetime(2026, 5, 2, 0, 0, tzinfo=UTC)
         t1 = start + timedelta(hours=1)
         t2 = start + timedelta(hours=2)
-        states = [FakeState("on", t1), FakeState("unknown", t2)]
+        t3 = start + timedelta(hours=3)
+        states = [FakeState("on", t1), FakeState("unknown", t2), FakeState("off", t3)]
 
         with _patch_history({"input_boolean.away": states}):
             result = fetch_away_intervals_sync(
                 hass, "input_boolean.away", start, end
             )
 
-        assert result == [(t1, t2)]
+        assert result == [(t1, t3)]
+
+    def test_unavailable_while_home_stays_home(self):
+        """unavailable after "off" holds 'home': no interval opens."""
+        hass = MagicMock()
+        start = datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 5, 2, 0, 0, tzinfo=UTC)
+        states = [
+            FakeState("off", start),
+            FakeState("unavailable", start + timedelta(hours=1)),
+            FakeState("off", start + timedelta(hours=2)),
+        ]
+
+        with _patch_history({"input_boolean.away": states}):
+            result = fetch_away_intervals_sync(
+                hass, "input_boolean.away", start, end
+            )
+
+        assert result == []
 
     def test_no_states_returns_empty(self):
         """An empty state list returns no intervals."""
@@ -394,8 +415,9 @@ class TestFetchAwayIntervalsSync:
 
         assert result == []
 
-    def test_recorder_exception_returns_empty_and_warns(self, caplog):
-        """A recorder failure returns [] and logs a warning, never raises."""
+    def test_recorder_exception_returns_none_and_warns(self, caplog):
+        """A recorder failure returns None (not [], which means 'no away
+        time') and logs a warning, never raises (#1086)."""
         hass = MagicMock()
         start = datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
         end = datetime(2026, 5, 2, 0, 0, tzinfo=UTC)
@@ -411,7 +433,7 @@ class TestFetchAwayIntervalsSync:
                 hass, "input_boolean.away", start, end
             )
 
-        assert result == []
+        assert result is None
         assert any(
             record.levelno == logging.WARNING for record in caplog.records
         )

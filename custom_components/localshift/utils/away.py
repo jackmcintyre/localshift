@@ -104,19 +104,22 @@ def away_state_unknown(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 def fetch_away_intervals_sync(
     hass: HomeAssistant, entity_id: str, start: datetime, end: datetime
-) -> list[tuple[datetime, datetime]]:
+) -> list[tuple[datetime, datetime]] | None:
     """Fetch the away entity's on/off intervals from the recorder (sync).
 
     Runs in the recorder's executor. Walks the state-change history: an
-    interval opens on "on" (only "on" counts as away; unavailable/unknown
-    count as home) and closes on any other state. Each interval's start is
+    interval opens on "on" and closes on any other readable state.
+    Unavailable and unknown hold whatever state came before them, the same
+    hold-last-known rule the live away state uses (``away_state_unknown``), so
+    a reload mid-trip doesn't split the trip into away and home spells. Each interval's start is
     clamped to ``max(last_changed, start)`` so a state that was already "on"
     before the window doesn't produce an out-of-range start. An interval
     still open at ``end`` closes there.
 
-    Any failure (missing recorder, query error, ...) returns an empty list
-    and logs a warning rather than raising, so a broken away entity falls
-    back to today's (unmasked) behaviour.
+    Any failure (missing recorder, query error, ...) returns None and logs a
+    warning rather than raising. None is distinct from ``[]`` (no away time),
+    so callers can skip caching a failed fetch and retry on the next tick
+    instead of treating the day as unmasked (#1086).
 
     Args:
         hass: Home Assistant instance
@@ -126,7 +129,7 @@ def fetch_away_intervals_sync(
 
     Returns:
         List of (start, end) aware-datetime tuples, each an "on" interval
-        clamped to [start, end].
+        clamped to [start, end], or None if the fetch failed.
 
     """
     try:
@@ -152,6 +155,8 @@ def fetch_away_intervals_sync(
             changed = getattr(state, "last_changed", None)
             if changed is None:
                 continue
+            if state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                continue
             if state.state == STATE_ON:
                 if open_start is None:
                     open_start = max(changed, start)
@@ -165,15 +170,16 @@ def fetch_away_intervals_sync(
         return intervals
     except Exception:
         _LOGGER.warning(
-            "Failed to fetch away history for %s; treating as no away time",
+            "Failed to fetch away history for %s; retrying on the next refresh",
             entity_id,
+            exc_info=True,
         )
-        return []
+        return None
 
 
 async def async_get_away_intervals(
     hass: HomeAssistant, entity_id: str, start: datetime, end: datetime
-) -> list[tuple[datetime, datetime]]:
+) -> list[tuple[datetime, datetime]] | None:
     """Fetch the away entity's on/off intervals from the recorder (async).
 
     Args:
@@ -183,8 +189,8 @@ async def async_get_away_intervals(
         end: Window end (aware datetime)
 
     Returns:
-        List of (start, end) aware-datetime tuples; see
-        ``fetch_away_intervals_sync``.
+        List of (start, end) aware-datetime tuples, or None if the fetch
+        failed; see ``fetch_away_intervals_sync``.
 
     """
     from homeassistant.components import recorder
