@@ -4,18 +4,37 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **67 entities** grouped under a single "LocalShift" device:
+The integration creates **68 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 31 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 8 | `switch` |
-| Numbers | 13 | `number` |
+| Numbers | 14 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
 
 **Note:** Grid import/export power values are available as computed values in `CoordinatorData` but are not exposed as separate sensor entities. They can be accessed via template sensors if needed.
+
+---
+
+## Away Mode (Holiday Mode)
+
+The holiday-away slice (`docs/holiday-away/plan.md`) makes LocalShift aware the house is
+empty. It is driven by one config-flow/options entry, not a LocalShift-owned entity:
+
+| Option | Config key | Default | Notes |
+|--------|-----------|---------|-------|
+| Away entity | `away_entity` | unset (`""`) | Names any on/off entity (any domain) that is on while the house is empty, e.g. `input_boolean.holiday_mode`. LocalShift has no dependency on the house's own package — it just reads this entity's state. Unset means today's behaviour, exactly. |
+
+While the away entity is on:
+
+- **Forecast** — the historical load profile switches to the house's own away profile (or, until enough away-hour samples exist, the flat overnight floor); see `sensor.localshift_forecast_diagnostics` above.
+- **Learning** — hours the away entity was on are masked out of the 28-day consumption statistics and the 30-day weather correlation, so a trip doesn't drag down the profile for weeks afterward.
+- **Reserve** — the backup reserve (and the planner's discharge floor) rise to [`number.localshift_away_reserve`](#7-numberlocalshift_away_reserve) — see that entity's entry for exactly how each mode's reserve is computed.
+
+All of the above release automatically, within one cycle, when the away entity turns off — nothing needs to be reconfigured by hand.
 
 ---
 
@@ -47,6 +66,7 @@ user-facing entities with no category and appear on the main device card.
 | `binary_sensor.localshift_tesla_override_active` | `localshift_tesla_override_active` | `binary_sensor` | diagnostic |
 | `button.localshift_reset_decision_telemetry` | `localshift_reset_learning` | `button` | config |
 | `button.localshift_update_forecast` | `localshift_update_forecast` | `button` | — |
+| `number.localshift_away_reserve` | `localshift_away_reserve` | `number` | config |
 | `number.localshift_battery_target` | `localshift_battery_target` | `number` | config |
 | `number.localshift_charge_taper_min_factor` | `localshift_charge_taper_min_factor` | `number` | config |
 | `number.localshift_charge_taper_start` | `localshift_charge_taper_start_pct` | `number` | config |
@@ -1357,6 +1377,27 @@ State: 0.015
 **Example Data:**
 ```
 State: 0.25
+```
+
+---
+
+### 7. number.localshift_away_reserve
+
+**Purpose:** Backup reserve (and planner discharge floor) held while [away mode](#away-mode-holiday-mode) is active (docs/holiday-away/plan.md item 4). Sized higher than the everyday 10% reserve so an outage while the house is empty doesn't take the cameras, network and Home Assistant down with it.
+
+| Property | Value |
+|----------|-------|
+| Range | 10-80% |
+| Default | 30% |
+| Unit | % |
+
+**How it works:** While the [away entity](#away-mode-holiday-mode) is on, the SELF_CONSUMPTION/DEMAND_BLOCK backup reserve is `max(this value, preserve_soc or 10)`, HOLD's reserve is `max(this value, minimum_target_soc, fresh SOC)`, and PROACTIVE_EXPORT's dynamic reserve floors at `max(this value, minimum_target_soc)` instead of `minimum_target_soc` alone. The planner mirrors the same floor as a discharge feasibility rule (`OptimizerConfig.discharge_floor_pct`, `docs/PLANNING_MODEL.md`), so it never plans a discharge below the away reserve either — it only ever removes discharge actions, never unlocks grid charging to reach the reserve. Both the hardware reserve and the planner floor re-step within about a minute of away turning on (logged as `AWAY reserve stepped X% -> Y%`) and release on the next cycle after away turns off (`AWAY reserve released Y% -> X%`), without waiting for a mode change. Moving this slider mid-trip re-steps the hardware reserve the same way.
+
+**Firmware clamp:** the Tesla firmware silently resets backup-reserve values 81-99% to 80% (`BACKUP_RESERVE_MAX_VALID`), so this entity's own maximum is 80% rather than allowing a value the hardware would rewrite underneath it.
+
+**Example Data:**
+```
+State: 30.0
 ```
 
 ---

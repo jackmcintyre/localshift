@@ -400,7 +400,7 @@ def _floor_guard_blocks(
     """
 
     if not (
-        soc <= config.min_soc_pct + config.min_soc_floor_buffer_pct
+        soc <= config.discharge_floor_pct + config.min_soc_floor_buffer_pct
         and action in _GRID_CHARGE_ACTIONS
     ):
         return False

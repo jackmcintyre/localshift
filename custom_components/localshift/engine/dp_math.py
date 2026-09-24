@@ -165,7 +165,7 @@ def _simulate_solar_only_terminal_soc(
         else:
             delta = max(net_kwh, -max_slot_transfer_kwh) / config.discharge_efficiency
         soc += delta / config.battery_capacity_kwh * 100
-        soc = max(config.min_soc_pct, min(100.0, soc))
+        soc = max(config.discharge_floor_pct, min(100.0, soc))
         if terminal_penalty_idx is not None and i == terminal_penalty_idx:
             return soc
     return soc
@@ -198,7 +198,7 @@ def _simulate_max_soc_in_demand_window(
             delta = max(net_kwh, -max_transfer_kwh) / config.discharge_efficiency
 
         soc += delta / config.battery_capacity_kwh * 100
-        soc = max(config.min_soc_pct, min(100.0, soc))
+        soc = max(config.discharge_floor_pct, min(100.0, soc))
 
         if slot.is_demand_window_slot:
             in_bounds = True

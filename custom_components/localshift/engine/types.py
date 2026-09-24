@@ -179,6 +179,19 @@ class OptimizerConfig:
     max_soc_pct: float = 100.0
     """Maximum allowed SOC (%)."""
 
+    away_reserve_floor_pct: float | None = None
+    """Away-mode discharge floor (%), or None when away is not active
+    (docs/holiday-away/plan.md item 4).
+
+    This is a *discharge floor*, never a charge target: it only removes
+    actions from ``feasible_actions()`` and the HOLD/EXPORT transitions'
+    drain, so the planner never discharges below it while away — it never
+    unlocks grid charging to reach it. Read it through
+    ``discharge_floor_pct`` rather than directly; do not confuse it with
+    ``hard_target_floor`` (engine/types.py), which is the #885 floor that
+    makes the battery charge *up to* the demand-window target — the opposite
+    direction."""
+
     # --- Demand window target ---
     demand_window_target_soc_pct: float = 80.0
     """Required SOC (%) at demand window entry."""
@@ -614,6 +627,24 @@ class OptimizerConfig:
 
     min_floor_charge_gain_pct: float = 2.0
     """Minimum SOC gain required to justify charging within floor buffer."""
+
+    @property
+    def discharge_floor_pct(self) -> float:
+        """The SOC the planner may never discharge below this cycle.
+
+        ``max(min_soc_pct, away_reserve_floor_pct)`` when away is active, else
+        just ``min_soc_pct`` (docs/holiday-away/plan.md item 4). Every read
+        that means "how low can discharge go" — the export gate and landing
+        clamp in ``feasible_actions()``, the HOLD/EXPORT transitions, the
+        anti-sawtooth guard, the solar-only simulations, and the cost/penalty
+        floors — reads this property rather than ``min_soc_pct`` directly, so
+        the away floor takes effect everywhere at once. ``min_soc_pct`` alone
+        still governs the SOC discretisation grid and the starting-SOC clamp,
+        which must never be lifted to the away floor (see optimizer_runner.py
+        and dp_math._build_soc_grid)."""
+        if self.away_reserve_floor_pct is None:
+            return self.min_soc_pct
+        return max(self.min_soc_pct, self.away_reserve_floor_pct)
 
 
 # -----------------------------------------------------------------------------

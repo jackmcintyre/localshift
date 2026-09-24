@@ -105,7 +105,7 @@ def _transition_hold_deficit(
 
     discharge_by_rate_kwh = min(load_deficit_kwh, limit_kwh)
     available_battery_kwh = max(
-        0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh
+        0.0, (soc_pct - config.discharge_floor_pct) / 100.0 * capacity_kwh
     )
     max_load_from_battery_kwh = available_battery_kwh * config.discharge_efficiency
     battery_to_load_kwh = min(discharge_by_rate_kwh, max_load_from_battery_kwh)
@@ -281,7 +281,9 @@ def _transition_export(
     capacity_kwh = config.battery_capacity_kwh
 
     max_discharge_kwh = config.discharge_rate_kw * slot_hours
-    available_kwh = max(0.0, (soc_pct - config.min_soc_pct) / 100.0 * capacity_kwh)
+    available_kwh = max(
+        0.0, (soc_pct - config.discharge_floor_pct) / 100.0 * capacity_kwh
+    )
     battery_discharge_kwh = min(
         max_discharge_kwh, available_kwh * config.discharge_efficiency
     )

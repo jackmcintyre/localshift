@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+    CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_CHARGE_TAPER_MIN_FACTOR,
     CONF_CHARGE_TAPER_START_PCT,
@@ -35,6 +36,7 @@ from .const import (
     CONF_TARGET_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ABSENT_SOLAR_CONFIDENCE,
+    DEFAULT_AWAY_RESERVE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHARGE_TAPER_MIN_FACTOR,
     DEFAULT_CHARGE_TAPER_START_PCT,
@@ -956,6 +958,12 @@ class ComputationEngine:
             # _build_optimizer_config on the live path.
             CONF_PRECHARGE_RUNWAY_MARGIN_MIN: self.entry.options.get(
                 CONF_PRECHARGE_RUNWAY_MARGIN_MIN, DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+            ),
+            # Away reserve (docs/holiday-away/plan.md item 4): same decorative-slider
+            # trap as every knob above — the runner reads this dict, not entry.options
+            # directly, so this line is what keeps the away reserve live-effective.
+            CONF_AWAY_RESERVE: self.entry.options.get(
+                CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE
             ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE

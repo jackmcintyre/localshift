@@ -154,6 +154,15 @@ DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
 CONF_AWAY_ENTITY = "away_entity"
 DEFAULT_AWAY_ENTITY = ""
 
+# Away reserve (docs/holiday-away/plan.md "What to build" item 4): the backup
+# reserve (and planner discharge floor) held while away is active. Range
+# 10-80; the Tesla firmware silently clamps 81-99 to 80
+# (BACKUP_RESERVE_MAX_VALID), so the slider's own max matches that ceiling
+# rather than allowing a value the hardware would rewrite underneath it.
+CONF_AWAY_RESERVE = "away_reserve"
+DEFAULT_AWAY_RESERVE = 30
+AWAY_RESERVE_MIN = 10
+
 # Temperature thresholds for degree-day model
 CONF_COOLING_THRESHOLD = "cooling_threshold"
 CONF_HEATING_THRESHOLD = "heating_threshold"
@@ -433,6 +442,13 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "",
         "icon": "mdi:battery-architect",
+    },
+    CONF_AWAY_RESERVE: {
+        "min": AWAY_RESERVE_MIN,
+        "max": BACKUP_RESERVE_MAX_VALID,
+        "step": 1,
+        "unit": "%",
+        "icon": "mdi:bag-suitcase",
     },
 }
 
