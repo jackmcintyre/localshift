@@ -1264,6 +1264,35 @@ class TestWeatherCorrelation:
         mock_fetch.assert_not_called()
         wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
 
+    async def test_mask_projects_in_the_default_time_zone(self, computation_engine):
+        """#1087: the engine projects away intervals in dt_util.DEFAULT_TIME_ZONE,
+        the zone _today_key() and now_dt.hour use, not UTC or the config string."""
+        from homeassistant.util import dt as dt_util
+
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+            "input_boolean.holiday_mode"
+        )
+        computation_engine._weather_correlation = MagicMock()
+        intervals = [
+            (datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 2, tzinfo=UTC))
+        ]
+
+        with (
+            patch(
+                "custom_components.localshift.computation_engine.async_get_away_intervals",
+                new=AsyncMock(return_value=intervals),
+            ),
+            patch(
+                "custom_components.localshift.computation_engine.away_local_hour_keys",
+                return_value=frozenset(),
+            ) as mock_keys,
+        ):
+            await computation_engine._async_refresh_weather_away_mask(
+                datetime(2026, 8, 3, 10, 0, 0)
+            )
+
+        mock_keys.assert_called_once_with(intervals, dt_util.DEFAULT_TIME_ZONE)
+
     async def test_failed_fetch_is_not_cached(self, computation_engine):
         """#1086: a failed fetch (None) leaves the mask and the cache key alone,
         so the next call retries instead of waiting for midnight."""

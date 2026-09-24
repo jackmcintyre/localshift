@@ -505,6 +505,10 @@ class TestSolcastStepAwayEntity:
         assert result["errors"][CONF_AWAY_ENTITY] == (
             "Entity 'input_boolean.gone' does not exist"
         )
+        # #1083: the rejected value is carried back into the re-rendered form.
+        assert _away_marker(result["data_schema"]).description == {
+            "suggested_value": "input_boolean.gone"
+        }
 
 
 # =============================================================================

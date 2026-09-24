@@ -1347,8 +1347,7 @@ class TestSeparateSamplesByWeekday:
 
         # 1704067200 = Monday 2024-01-01; one row per day for a week.
         rows = [
-            {"start": 1704067200 + day * 86400, "mean": float(day)}
-            for day in range(7)
+            {"start": 1704067200 + day * 86400, "mean": float(day)} for day in range(7)
         ]
         by_weekday = history_fetcher._separate_samples_by_weekday(rows, timezone.utc)
 
@@ -1406,9 +1405,7 @@ class TestComputeDailyProfiles:
 
     def test_computes_average_and_count_per_day(self, history_fetcher):
         """Averages and counts are computed independently per day-of-week."""
-        by_weekday = {
-            dow: {h: [] for h in range(24)} for dow in range(7)
-        }
+        by_weekday = {dow: {h: [] for h in range(24)} for dow in range(7)}
         by_weekday[0][10] = [1.0, 3.0]  # Monday, hour 10 -> avg 2.0, count 2
         by_weekday[6][10] = [5.0]  # Sunday, hour 10 -> avg 5.0, count 1
 
@@ -1511,7 +1508,6 @@ class TestDailyProfileCacheLifecycle:
 
         assert daily_avg == {}
         assert daily_counts == {}
-
 
 
 # =============================================================================
@@ -1676,9 +1672,7 @@ class TestAwayMasking:
                 datetime(2026, 7, 7, 0, 0, tzinfo=UTC),
             )
         ]
-        history_fetcher.entry.options = {
-            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
-        }
+        history_fetcher.entry.options = {CONF_AWAY_ENTITY: "input_boolean.holiday_mode"}
 
         async def _run_sync_job(fn, *args):
             return fn(*args)
@@ -1694,9 +1688,7 @@ class TestAwayMasking:
             ) as mock_get_instance,
         ):
             mock_recorder = MagicMock()
-            mock_recorder.async_add_executor_job = AsyncMock(
-                side_effect=_run_sync_job
-            )
+            mock_recorder.async_add_executor_job = AsyncMock(side_effect=_run_sync_job)
             mock_get_instance.return_value = mock_recorder
 
             await history_fetcher.async_get_historical_hourly_averages("sensor.test")
@@ -1709,9 +1701,7 @@ class TestAwayMasking:
         from homeassistant.util import dt as dt_util
 
         today_str = dt_util.now().strftime("%Y-%m-%d")
-        history_fetcher.entry.options = {
-            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
-        }
+        history_fetcher.entry.options = {CONF_AWAY_ENTITY: "input_boolean.holiday_mode"}
         history_fetcher._historical_load_cache = {10: 1.5}
         history_fetcher._historical_load_sample_counts = {10: 5}
         history_fetcher._historical_load_cache_date = today_str
@@ -1956,6 +1946,37 @@ class TestAwayProfile:
 
         assert result["away_floor_kw"] == pytest.approx(0.3)
 
+    def test_masking_accepts_float_timestamp_rows(self, history_fetcher):
+        """#1087: HA's statistics_during_period returns 'start' as a float epoch,
+        not a datetime; masking must key those rows by the same UTC hour."""
+        trip_start = datetime(2026, 7, 6, 10, 30, tzinfo=UTC)
+        trip_end = datetime(2026, 7, 8, 15, 10, tzinfo=UTC)
+        rows = [
+            {
+                "start": (
+                    datetime(2026, 7, 6, tzinfo=UTC) + timedelta(hours=h)
+                ).timestamp(),
+                "mean": 0.5,
+            }
+            for h in range(24 * 4)
+        ]
+
+        with (
+            _stub_recorder_pipeline(history_fetcher, rows),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=[(trip_start, trip_end)],
+            ),
+        ):
+            result = history_fetcher._fetch_historical_data_sync(
+                "sensor.test",
+                datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
+                away_entity_id="input_boolean.holiday_mode",
+            )
+
+        # Every hour the trip touches, 10:00 Mon through 15:00 Wed: 54 rows.
+        assert result["away_masked_hours"] == 54
+
     def test_failed_away_fetch_fails_the_whole_fetch(self, history_fetcher):
         """#1086: a failed away fetch (None) returns the empty result, so the
         caller keeps its previous cache and retries instead of caching an
@@ -2043,9 +2064,7 @@ class TestAwayProfile:
         self, history_fetcher
     ):
         """H7a: fewer than 6 at-home hours still stores a rich away profile."""
-        history_fetcher.entry.options = {
-            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
-        }
+        history_fetcher.entry.options = {CONF_AWAY_ENTITY: "input_boolean.holiday_mode"}
         history_fetcher._away_floor_kw = 0.4  # a floor stored by an earlier fetch
 
         # Only 3 at-home hours of data.
@@ -2077,9 +2096,7 @@ class TestAwayProfile:
             ) as mock_get_instance,
         ):
             mock_recorder = MagicMock()
-            mock_recorder.async_add_executor_job = AsyncMock(
-                side_effect=_run_sync_job
-            )
+            mock_recorder.async_add_executor_job = AsyncMock(side_effect=_run_sync_job)
             mock_get_instance.return_value = mock_recorder
 
             await history_fetcher.async_get_historical_hourly_averages("sensor.test")
@@ -2100,9 +2117,7 @@ class TestAwayProfile:
     ):
         """H7b: a failed fetch (recorder error -> _empty_result()) never
         overwrites a previously stored away profile."""
-        history_fetcher.entry.options = {
-            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
-        }
+        history_fetcher.entry.options = {CONF_AWAY_ENTITY: "input_boolean.holiday_mode"}
         history_fetcher._away_avg = {8: 0.5}
         history_fetcher._away_counts = {8: 5}
         history_fetcher._away_floor_kw = 0.35
@@ -2140,9 +2155,7 @@ class TestAwayProfile:
         get_away_profiles() — deleting those lines regresses this test even
         though it regresses nothing that only checks the sync result dict.
         """
-        history_fetcher.entry.options = {
-            CONF_AWAY_ENTITY: "input_boolean.holiday_mode"
-        }
+        history_fetcher.entry.options = {CONF_AWAY_ENTITY: "input_boolean.holiday_mode"}
 
         # 9 at-home hours (>=6), hours 0-2 at 0.4kW for the floor.
         home_day = datetime(2026, 7, 6, tzinfo=UTC)  # Monday
@@ -2170,9 +2183,7 @@ class TestAwayProfile:
             ) as mock_get_instance,
         ):
             mock_recorder = MagicMock()
-            mock_recorder.async_add_executor_job = AsyncMock(
-                side_effect=_run_sync_job
-            )
+            mock_recorder.async_add_executor_job = AsyncMock(side_effect=_run_sync_job)
             mock_get_instance.return_value = mock_recorder
 
             await history_fetcher.async_get_historical_hourly_averages("sensor.test")

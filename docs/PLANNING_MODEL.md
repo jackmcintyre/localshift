@@ -362,10 +362,16 @@ things keep it from eroding the philosophy elsewhere:
   rest of the time, so everyday self-consumption is untouched.
 - **It is still only a hard constraint, never a soft charge target.** It
   removes discharge actions from `feasible_actions()` and clamps how far
-  HOLD/EXPORT may drain; it never adds a reason to grid-charge. An away trip
-  with the battery already below the floor is not topped up to reach it —
-  see `optimizer_runner.py`'s starting-SOC clamp, which stays at
-  `min_soc_pct`, never at the away floor.
+  HOLD/EXPORT may drain; it never adds a reason to grid-charge. The planner
+  does not plan a top-up for an away trip that starts below the floor — see
+  `optimizer_runner.py`'s starting-SOC clamp, which stays at `min_soc_pct`,
+  never at the away floor. The hardware is a different matter: the backup
+  reserve is written at the away value even when SOC is below it, and the
+  Powerwall is kept from grid-charging up to it only by
+  `grid_charging_allowed=False`, which Tesla's cloud periodically resets
+  (#394). So a trip that starts below the away reserve may be topped up
+  from the grid by the Powerwall itself (a few kWh at most). That is
+  accepted: the reserve exists for outage cover (#1092).
 
 If a future change is tempted to give the away floor a soft-penalty
 counterpart (e.g. to *encourage* charging up to it), that is new

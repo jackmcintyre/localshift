@@ -311,9 +311,7 @@ class TestFetchAwayIntervalsSync:
         ]
 
         with _patch_history({"input_boolean.away": states}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == [(t1, t2), (t3, end)]
 
@@ -325,9 +323,7 @@ class TestFetchAwayIntervalsSync:
         states = [FakeState("on", start - timedelta(hours=5))]
 
         with _patch_history({"input_boolean.away": states}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == [(start, end)]
 
@@ -347,14 +343,12 @@ class TestFetchAwayIntervalsSync:
         ]
 
         with _patch_history({"input_boolean.away": states}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == [(t1, end)]
 
     def test_unknown_holds_the_interval(self):
-        """"unknown" holds the open interval too; only a readable non-on
+        """ "unknown" holds the open interval too; only a readable non-on
         state closes it."""
         hass = MagicMock()
         start = datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
@@ -365,9 +359,7 @@ class TestFetchAwayIntervalsSync:
         states = [FakeState("on", t1), FakeState("unknown", t2), FakeState("off", t3)]
 
         with _patch_history({"input_boolean.away": states}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == [(t1, t3)]
 
@@ -383,9 +375,7 @@ class TestFetchAwayIntervalsSync:
         ]
 
         with _patch_history({"input_boolean.away": states}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == []
 
@@ -396,9 +386,7 @@ class TestFetchAwayIntervalsSync:
         end = datetime(2026, 5, 2, 0, 0, tzinfo=UTC)
 
         with _patch_history({"input_boolean.away": []}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == []
 
@@ -409,9 +397,7 @@ class TestFetchAwayIntervalsSync:
         end = datetime(2026, 5, 2, 0, 0, tzinfo=UTC)
 
         with _patch_history({}):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result == []
 
@@ -429,14 +415,10 @@ class TestFetchAwayIntervalsSync:
             ),
             caplog.at_level(logging.WARNING),
         ):
-            result = fetch_away_intervals_sync(
-                hass, "input_boolean.away", start, end
-            )
+            result = fetch_away_intervals_sync(hass, "input_boolean.away", start, end)
 
         assert result is None
-        assert any(
-            record.levelno == logging.WARNING for record in caplog.records
-        )
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
 # =============================================================================

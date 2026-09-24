@@ -484,3 +484,18 @@ def test_max_feasible_terminal_soc_clamps_at_away_floor():
 
     assert home_max is not None and home_max < 30.0  # proves the drain bites
     assert away_max == pytest.approx(30.0)
+
+
+def test_b9_starting_soc_is_never_lifted_to_the_away_floor():
+    """The runner's starting-SOC clamp stays at min_soc_pct while away: a real
+    22% SOC must reach the planner as 22, not the 30% away floor (the 6/30
+    stale-SOC class of error)."""
+    from custom_components.localshift.engine.optimizer_runner import (
+        _normalize_initial_soc,
+    )
+
+    config = _config(min_soc_pct=10.0, away_reserve_floor_pct=30.0)
+
+    soc, _info = _normalize_initial_soc(22.0, config)
+
+    assert soc == pytest.approx(22.0)
