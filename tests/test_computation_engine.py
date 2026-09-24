@@ -1,6 +1,6 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -307,6 +307,201 @@ class TestLoadForecastSlots:
             isinstance(v, float) and v >= 0
             for v in coordinator_data.load_forecast_slots
         )
+
+
+# =============================================================================
+# AWAY-MODE FORECAST ACCEPTANCE TESTS (docs/holiday-away/plan.md item 2)
+# =============================================================================
+
+
+class TestAwayModeForecast:
+    """Acceptance tests for "forecast the empty house while away".
+
+    A real LoadForecaster and a real HistoryFetcher (the ``computation_engine``
+    fixture wires both) and only the away entity's active/inactive state is
+    mocked (patched ``is_away_active``). E1 drives the fetcher's real
+    recorder-fetch success branch (a stubbed recorder, not a seeded private
+    field) so it proves the storage wiring in
+    ``async_get_historical_hourly_averages`` end to end; E2-E4 seed the
+    fetcher's cache directly via ``_seed_at_home`` since they exercise the
+    engine/forecaster side of the wiring (toggle, manual override, at-home
+    fallback), not the fetch itself.
+    """
+
+    def _seed_at_home(self, computation_engine):
+        """Hours 0-2 at 0.4kW, everything else at 1.5kW.
+
+        A real fetch would derive away_floor_kw as the mean of the at-home
+        combined profile over hours 0-2 (0.4 here); seed it directly since
+        this test doesn't run the recorder pipeline.
+        """
+        cache = {h: (0.4 if h < 3 else 1.5) for h in range(24)}
+        computation_engine._history_fetcher._historical_load_cache = cache
+        computation_engine._history_fetcher._away_floor_kw = 0.4
+
+    async def _seed_at_home_via_async_fetch(self, computation_engine):
+        """Same shape as ``_seed_at_home`` (hours 0-2 at 0.4kW, hours 3-8 at
+        1.5kW: 9 at-home hours, >=6 so the fetch takes the success branch),
+        but derives ``away_floor_kw`` through the real
+        ``async_get_historical_hourly_averages`` success-branch storage
+        path with a stubbed recorder, instead of seeding the fetcher's
+        private field directly. Proves the link the live system depends
+        on: that deleting the storage lines in the success branch would
+        break this test, not just the unit tests on the sync result dict.
+        """
+        fetcher = computation_engine._history_fetcher
+        fetcher.entry.options = {
+            **fetcher.entry.options,
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode",
+        }
+        fetcher.hass.config.time_zone = "Australia/Sydney"
+
+        home_day = datetime(2026, 7, 6, tzinfo=UTC)  # Monday
+        rows = [
+            {"start": home_day.replace(hour=h), "mean": 0.4 if h < 3 else 1.5}
+            for h in range(9)
+        ]
+
+        async def _run_sync_job(fn, *args):
+            return fn(*args)
+
+        with (
+            patch.object(
+                fetcher, "_import_recorder_statistics", return_value=MagicMock()
+            ),
+            patch.object(fetcher, "_list_statistic_ids", return_value=[]),
+            patch.object(
+                fetcher, "_resolve_statistic_id", return_value="sensor.test"
+            ),
+            patch.object(fetcher, "_get_statistics_fn", return_value=MagicMock()),
+            patch.object(
+                fetcher,
+                "_fetch_statistics_data",
+                return_value={"rows": rows, "statistic_id": "sensor.test"},
+            ),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=[],
+            ),
+            patch(
+                "homeassistant.components.recorder.get_instance"
+            ) as mock_get_instance,
+        ):
+            mock_recorder = MagicMock()
+            mock_recorder.async_add_executor_job = AsyncMock(
+                side_effect=_run_sync_job
+            )
+            mock_get_instance.return_value = mock_recorder
+
+            await fetcher.async_get_historical_hourly_averages("sensor.test")
+
+    @pytest.mark.asyncio
+    async def test_away_active_uses_the_floor_for_distant_slots(
+        self, computation_engine, coordinator_data
+    ):
+        """E1: away active with no away profile yet (only a floor) -> every
+        slot 4+ hours ahead is the flat floor, every source tag ends
+        ':away_floor', and the diagnostics fields agree. The floor comes
+        from the real async fetch's success-branch storage, not a seeded
+        private field (see ``_seed_at_home_via_async_fetch``)."""
+        await self._seed_at_home_via_async_fetch(computation_engine)
+        assert computation_engine._history_fetcher.get_away_profiles().floor_kw == (
+            pytest.approx(0.4)
+        )
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=True,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.away_active is True
+        assert coordinator_data.away_profile_source == "away_floor"
+
+        # hours_ahead = slot_index / 4.0; index 16 is exactly 4 hours ahead.
+        distant_slots = coordinator_data.load_forecast_slots[16:]
+        assert distant_slots  # sanity: the slice isn't empty
+        assert all(value == pytest.approx(0.4) for value in distant_slots)
+
+        assert coordinator_data.forecast_consumption_source_counts
+        assert all(
+            key.endswith(":away_floor")
+            for key in coordinator_data.forecast_consumption_source_counts
+        )
+
+    def test_away_inactive_uses_at_home_forecast(
+        self, computation_engine, coordinator_data
+    ):
+        """E2: away entity unset/off -> today's at-home behaviour, source
+        'at_home', no ':away_*' tag anywhere."""
+        self._seed_at_home(computation_engine)
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.away_active is False
+        assert coordinator_data.away_profile_source == "at_home"
+        assert coordinator_data.forecast_consumption_source_counts
+        assert all(
+            not key.endswith(":away_floor") and not key.endswith(":away_profile")
+            for key in coordinator_data.forecast_consumption_source_counts
+        )
+
+    def test_manual_override_still_sets_away_state(
+        self, computation_engine, coordinator_data
+    ):
+        """E3: away state is written even when manual override short-circuits
+        the rest of compute_derived_values — the helper runs before that
+        early return, so the diagnostics sensor stays truthful in manual
+        mode too."""
+        self._seed_at_home(computation_engine)
+        coordinator_data.manual_override = True
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=True,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.away_active is True
+        assert coordinator_data.away_profile_source == "away_floor"
+        # The rest of the pipeline (load_forecast_slots) never ran.
+        assert coordinator_data.load_forecast_slots == []
+
+    def test_toggle_on_then_off_restores_at_home_slots_exactly(
+        self, computation_engine, coordinator_data
+    ):
+        """E4: away on then off across two cycles restores exactly the
+        at-home slot values — no leftover state on the forecaster."""
+        self._seed_at_home(computation_engine)
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+        baseline_slots = list(coordinator_data.load_forecast_slots)
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=True,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+        away_slots = list(coordinator_data.load_forecast_slots)
+        assert away_slots != baseline_slots
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.load_forecast_slots == baseline_slots
+        assert coordinator_data.away_active is False
+        assert coordinator_data.away_profile_source == "at_home"
 
 
 # =============================================================================

@@ -16,6 +16,7 @@ from ..const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
     LOAD_FORECAST_CEILING_FACTOR,
+    MIN_AWAY_SAMPLES_PER_HOUR,
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
     MIN_SAMPLES_PER_DAY_HOUR,
 )
@@ -44,6 +45,25 @@ class LoadProfiles:
     weekday_counts: dict[int, int] = field(default_factory=dict)
     weekend_avg: dict[int, float] = field(default_factory=dict)
     weekend_counts: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass
+class AwayProfiles:
+    """The away-mode consumption profile and overnight floor.
+
+    Produced by ``HistoryFetcher`` (from rows already masked out of the
+    at-home profile — no new recorder IO) and injected into
+    ``LoadForecaster`` via ``set_away_profiles()`` (docs/holiday-away/plan.md
+    "What to build" item 2). ``away_avg`` / ``away_counts`` are the combined
+    (day-of-week-blind) hourly profile built only from hours that fell
+    entirely inside an away interval. ``floor_kw`` is the mean of the
+    (at-home) overnight hours ``AWAY_FLOOR_HOURS``, used until the away
+    profile has enough samples for every hour.
+    """
+
+    away_avg: dict[int, float] = field(default_factory=dict)
+    away_counts: dict[int, int] = field(default_factory=dict)
+    floor_kw: float | None = None
 
 
 class LoadForecaster:
@@ -75,6 +95,11 @@ class LoadForecaster:
         # Diagnostics: which resolution bucket won for each qualifying hour
         # in the profile resolved during the most recent estimate call.
         self._profile_bucket_counts: dict[str, int] = {}
+        # Away-mode consumption profile (docs/holiday-away/plan.md item 2),
+        # injected via set_away_profiles(). None means "at home" — every
+        # call then behaves exactly as it did before this feature existed.
+        self._away_profile: dict[int, float] | None = None
+        self._away_profile_source: str = "at_home"
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -103,6 +128,56 @@ class LoadForecaster:
         caller-supplied ``hourly_avg_kw`` combined profile.
         """
         self._daily_profiles = profiles
+
+    def set_away_profiles(self, profiles: AwayProfiles | None) -> None:
+        """Resolve and inject the away-mode consumption profile (plan item 2).
+
+        Resolved once, here, not per-``estimate_hourly_consumption_kw`` call:
+
+        1. Every hour 0-23 has at least ``MIN_AWAY_SAMPLES_PER_HOUR`` samples
+           and a numeric mean: the 24-hour away profile is used, source
+           ``"away_profile"``.
+        2. Otherwise, when ``floor_kw`` is a positive number: a flat 24-hour
+           profile at ``floor_kw``, source ``"away_floor"``.
+        3. Otherwise: no away profile, source ``"at_home"`` — today's
+           behaviour, identical to passing ``None``.
+
+        Args:
+            profiles: The fetcher's away profile and floor, or ``None`` to
+                clear it (also today's behaviour).
+
+        """
+        if profiles is None:
+            self._away_profile = None
+            self._away_profile_source = "at_home"
+            return
+
+        away_avg = profiles.away_avg
+        away_counts = profiles.away_counts
+        qualifies = all(
+            away_counts.get(hour, 0) >= MIN_AWAY_SAMPLES_PER_HOUR
+            and isinstance(away_avg.get(hour), int | float)
+            for hour in range(24)
+        )
+        if qualifies:
+            self._away_profile = {hour: float(away_avg[hour]) for hour in range(24)}
+            self._away_profile_source = "away_profile"
+            return
+
+        floor_kw = profiles.floor_kw
+        if isinstance(floor_kw, int | float) and floor_kw > 0:
+            self._away_profile = dict.fromkeys(range(24), float(floor_kw))
+            self._away_profile_source = "away_floor"
+            return
+
+        self._away_profile = None
+        self._away_profile_source = "at_home"
+
+    def get_away_profile_source(self) -> str:
+        """Diagnostics: which away-mode source the last ``set_away_profiles``
+        call resolved — ``"away_profile"``, ``"away_floor"`` or ``"at_home"``.
+        """
+        return self._away_profile_source
 
     def get_profile_bucket_counts(self) -> dict[str, int]:
         """Diagnostics: bucket tag -> qualifying-hour count for the most
@@ -267,7 +342,14 @@ class LoadForecaster:
         effective_hourly_avg_kw = hourly_avg_kw
         bucket_tag: str | None = None
         self._profile_bucket_counts = {}
-        if self._daily_profiles is not None and day_of_week is not None:
+        if self._away_profile is not None:
+            # Away mode (plan item 2): the empty-house profile replaces the
+            # at-home one outright, and the #679 day-of-week resolution
+            # below is skipped entirely — an empty house has no day-of-week
+            # pattern worth resolving.
+            effective_hourly_avg_kw = self._away_profile
+            bucket_tag = self._away_profile_source
+        elif self._daily_profiles is not None and day_of_week is not None:
             resolved, tags = self._resolve_daily_profile(day_of_week, hourly_avg_kw)
             if resolved:
                 effective_hourly_avg_kw = resolved

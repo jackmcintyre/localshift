@@ -223,6 +223,42 @@ def away_utc_hour_starts(
     return frozenset(q.replace(minute=0) for q in _iter_quarter_hours(intervals))
 
 
+def away_full_utc_hour_starts(
+    intervals: list[tuple[datetime, datetime]],
+) -> frozenset[datetime]:
+    """Return the UTC hours that fall *entirely* inside an away interval.
+
+    Unlike ``away_utc_hour_starts`` (which masks an hour touched by any part
+    of an away interval, deliberately generous for the at-home mask), this is
+    strict: for each interval it starts at ``ceil_hour(start)`` and includes
+    an hour only while ``hour_start + 1h <= end``. That keeps the departure
+    and return hours out of the away profile, so packing, the dryer running
+    before leaving, or arriving home don't contaminate a 3-sample mean
+    (docs/holiday-away/plan.md "What to build" item 2).
+
+    Args:
+        intervals: (start, end) aware-datetime tuples of away time, in any
+            timezone. A reversed or zero-length interval contributes nothing.
+
+    Returns:
+        Frozenset of aware UTC datetimes, each an hour start that is fully
+        covered by at least one interval.
+
+    """
+    hours: set[datetime] = set()
+    for start, end in intervals:
+        start_utc = dt_util.as_utc(start)
+        end_utc = dt_util.as_utc(end)
+        if end_utc <= start_utc:
+            continue
+        floored = start_utc.replace(minute=0, second=0, microsecond=0)
+        hour_start = floored if floored >= start_utc else floored + timedelta(hours=1)
+        while hour_start + timedelta(hours=1) <= end_utc:
+            hours.add(hour_start)
+            hour_start += timedelta(hours=1)
+    return frozenset(hours)
+
+
 def away_local_hour_keys(
     intervals: list[tuple[datetime, datetime]], tz: Any
 ) -> frozenset[tuple[str, int]]:

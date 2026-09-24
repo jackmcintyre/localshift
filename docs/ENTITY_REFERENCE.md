@@ -393,7 +393,20 @@ Attributes:
   weather_avg_heating_slope: 0.1845
   weather_avg_r_squared: 0.42
   weather_sample_count: 5723
+  away_active: false
+  away_profile_source: at_home
+  away_masked_hours: 0
+  weather_away_masked_hours: 0
+  away_floor_kw: null
 ```
+
+`away_active`, `away_profile_source` (`at_home` / `away_floor` / `away_profile`),
+`away_masked_hours` and `away_floor_kw` cover the empty-house forecast
+(docs/holiday-away/plan.md "What to build" item 2): while away, the historical
+profile is replaced by the away profile once there are enough full-away-hour
+samples, or by the flat overnight floor until then.
+`weather_away_masked_hours` is the away-hour count masked out of the separate
+weather-correlation learning window (item 3).
 
 ---
 

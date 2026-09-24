@@ -266,6 +266,14 @@ class CoordinatorData:
     recent_load_1hr_samples: int = 0
     recent_load_1hr_last_error: str = ""
 
+    # Away-mode forecast state (docs/holiday-away/plan.md "What to build"
+    # item 2), written by computation_engine._apply_away_forecast_state.
+    away_active: bool = False
+    away_profile_source: str = "at_home"
+    away_masked_hours: int = 0
+    weather_away_masked_hours: int = 0
+    away_floor_kw: float | None = None
+
     # Shared load forecast slots for DP optimizer
     # 96 entries, one per 15-min slot starting from the current 5-min boundary.
     load_forecast_slots: list[float] = field(default_factory=list)

@@ -561,6 +561,41 @@ class TestForecastDiagnosticsSensor:
         assert attrs["weather_avg_heating_slope"] == 0.03
         assert attrs["weather_avg_r_squared"] == 0.42
 
+    def test_extra_state_attributes_away_mode_fields(self):
+        """S1: the five away-mode attributes (plan item 2/5) are present."""
+        mock_coordinator, data = create_mock_coordinator_with_data(
+            away_active=True,
+            away_profile_source="away_floor",
+            away_masked_hours=12,
+            weather_away_masked_hours=9,
+            away_floor_kw=0.35456,
+        )
+        mock_entry = MagicMock()
+
+        sensor = ForecastDiagnosticsSensor(mock_coordinator, mock_entry)
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["away_active"] is True
+        assert attrs["away_profile_source"] == "away_floor"
+        assert attrs["away_masked_hours"] == 12
+        assert attrs["weather_away_masked_hours"] == 9
+        assert attrs["away_floor_kw"] == 0.355  # rounded to 3 decimals
+
+    def test_extra_state_attributes_away_mode_defaults(self):
+        """S2: the away-mode attributes default to their CoordinatorData
+        defaults — at_home, nothing masked, no floor."""
+        mock_coordinator, data = create_mock_coordinator_with_data()
+        mock_entry = MagicMock()
+
+        sensor = ForecastDiagnosticsSensor(mock_coordinator, mock_entry)
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["away_active"] is False
+        assert attrs["away_profile_source"] == "at_home"
+        assert attrs["away_masked_hours"] == 0
+        assert attrs["weather_away_masked_hours"] == 0
+        assert attrs["away_floor_kw"] is None
+
 
 class TestMinimumTargetSOCSensor:
     """Tests for MinimumTargetSOCSensor."""

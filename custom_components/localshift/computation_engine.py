@@ -453,6 +453,26 @@ class ComputationEngine:
         data.optimizer_precharge_backstop_active = False
         return True
 
+    def _apply_away_forecast_state(self, data: CoordinatorData) -> None:
+        """Forecast the empty house while away (docs/holiday-away/plan.md item 2).
+
+        Decided fresh every cycle (about a minute), not at midnight: the
+        moment the away entity switches on, the away profile — or, until
+        enough away-hour samples exist, the overnight floor — takes over
+        from the at-home profile within the hour. Injects into the
+        forecaster and writes the diagnostics fields onto ``data`` so the
+        sensor stays truthful even in manual mode, since this runs before
+        the manual-override early return.
+        """
+        active = is_away_active(self.hass, self.entry)
+        fetched_profiles = self._history_fetcher.get_away_profiles()
+        self._load_forecaster.set_away_profiles(fetched_profiles if active else None)
+
+        data.away_active = active
+        data.away_profile_source = self._load_forecaster.get_away_profile_source()
+        data.away_masked_hours = self._history_fetcher.get_away_masked_hours()
+        data.away_floor_kw = fetched_profiles.floor_kw
+
     def _bridge_history_results(self, data: CoordinatorData, now_dt: datetime) -> None:
         """Bridge HistoryFetcher results to CoordinatorData (Issue #493).
 
@@ -652,6 +672,11 @@ class ComputationEngine:
                 weekend_counts=weekend_counts,
             )
         )
+
+        # Away-mode forecast state (docs/holiday-away/plan.md item 2): decided
+        # once per cycle, before the manual-override return below, so the
+        # diagnostics sensor stays truthful in manual mode too.
+        self._apply_away_forecast_state(data)
 
         # ---- Step 2: Mode detection from Teslemetry state ----
         self._detect_hardware_modes(data)
