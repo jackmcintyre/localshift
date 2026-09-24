@@ -1549,9 +1549,10 @@ class TestAwayModeProfile:
         assert source == "profile_hour:away_floor"
         assert kw == 0.35
 
-    def test_weather_receives_floor_as_base_and_suffix_survives(self):
-        """L8: weather.predict_load receives base_load_kw == floor, and its
-        result still carries the ':away_floor' suffix."""
+    def test_weather_skipped_while_away(self):
+        """L8 (Jack's call, 24 Sep): no weather adjustment on the away profile.
+        The slope was learned from at-home hours (mostly the AC), so a hot day
+        must not lift the empty-house floor (#1089)."""
         mock_entry = _create_mock_entry()
         weather = MagicMock()
         weather.get_coefficients_for_hour.return_value = MagicMock(
@@ -1571,11 +1572,22 @@ class TestAwayModeProfile:
             temperature=30.0,
         )
 
-        weather.predict_load.assert_called_once_with(
-            hour=11, temperature=30.0, base_load_kw=0.35
+        weather.predict_load.assert_not_called()
+        assert source == "profile_hour:away_floor"
+        assert kw == 0.35
+
+        # Clearing away brings the weather adjustment straight back.
+        forecaster.set_away_profiles(None)
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            temperature=30.0,
         )
-        assert source == "weather_heating:away_floor"
-        assert kw == 0.9
+        weather.predict_load.assert_called_once()
+        assert source == "weather_heating"
 
     def test_switches_back_after_clearing(self):
         """L9: set_away_profiles(None) after an away profile restores at-home."""

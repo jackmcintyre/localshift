@@ -40,8 +40,10 @@ from LocalShift too; a second writer would fight it.
 2. **Empty-house forecast while away.** While the away entity is on, the historical profile is
    replaced by the house's own away profile: hourly means over past away hours, once there are
    enough of them. Until then it falls back to the overnight floor, the mean of 00:00–03:00 from
-   the at-home profile, flat across the day. Keep the live three-hour blend and the weather
-   adjustment on top.
+   the at-home profile, flat across the day. Keep the live three-hour blend on top. Skip the
+   weather adjustment while away (Jack, 24 Sep: it was learned from at-home hours, mostly the
+   AC). If the away entity can't be read (missing, unavailable, unknown), hold the last known
+   away state; only an explicit off or clearing the option ends away (Jack, 24 Sep).
 3. **Away hours kept out of learning.** Hours the away entity was on are masked out of the
    28-day consumption statistics and the 30-day weather correlation. Read the entity's on/off
    history from the recorder, which the house keeps for 90 days. The house's return then

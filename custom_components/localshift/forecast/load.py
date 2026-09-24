@@ -371,9 +371,17 @@ class LoadForecaster:
             hours_ahead,
             effective_hourly_avg_kw,
         )
-        adjusted_load_kw, adjusted_source = self._apply_weather_correlation(
-            base_load_kw, base_source, slot_hour, temperature
-        )
+        if self._away_profile is not None:
+            # Jack's call (24 Sep 2026): no weather adjustment while away. The
+            # weather slope was learned from at-home hours, so it mostly models
+            # the occupants' AC; on a 30°C day it would roughly triple the
+            # empty-house forecast and buy grid pre-charge for load that won't
+            # happen (#1089).
+            adjusted_load_kw, adjusted_source = base_load_kw, base_source
+        else:
+            adjusted_load_kw, adjusted_source = self._apply_weather_correlation(
+                base_load_kw, base_source, slot_hour, temperature
+            )
         final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
         if day_of_week is not None and season is not None:
             final_load_kw = self._apply_context_correction(

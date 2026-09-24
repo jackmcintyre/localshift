@@ -30,7 +30,8 @@ empty. It is driven by one config-flow/options entry, not a LocalShift-owned ent
 
 While the away entity is on:
 
-- **Forecast** — the historical load profile switches to the house's own away profile (or, until enough away-hour samples exist, the flat overnight floor); see `sensor.localshift_forecast_diagnostics` above.
+- **Forecast** — the historical load profile switches to the house's own away profile (or, until enough away-hour samples exist, the flat overnight floor); see `sensor.localshift_forecast_diagnostics` above. The weather adjustment is skipped while away: it was learned from at-home hours, so it models the occupants' air-con, not an empty house.
+- **Unreadable entity** — if the away entity goes missing, unavailable or unknown, LocalShift holds the last known away state. Only an explicit off, or clearing the option, ends away. After an HA restart it starts as home until the entity loads.
 - **Learning** — hours the away entity was on are masked out of the 28-day consumption statistics and the 30-day weather correlation, so a trip doesn't drag down the profile for weeks afterward.
 - **Reserve** — the backup reserve (and the planner's discharge floor) rise to [`number.localshift_away_reserve`](#7-numberlocalshift_away_reserve) — see that entity's entry for exactly how each mode's reserve is computed.
 
