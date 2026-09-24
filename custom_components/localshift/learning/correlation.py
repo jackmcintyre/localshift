@@ -316,6 +316,14 @@ class WeatherCorrelation:
         )
         self._anomaly_detector = WeatherAnomalyDetector(self._data.temperature_history)
 
+        # Away-hour mask (docs/holiday-away/plan.md item 3): local (date_key,
+        # hour) pairs to skip when aggregating snapshots. Owned by the caller
+        # (computation_engine.py, which does the recorder IO); this class
+        # stays pure and just applies whatever mask it's handed. Snapshots
+        # stay in storage — masking is non-destructive, so clearing or
+        # fixing the away entity restores the learning immediately.
+        self._away_hour_keys: frozenset[tuple[str, int]] = frozenset()
+
     async def _async_migrate_store_data(
         self,
         old_major_version: int,
@@ -384,6 +392,20 @@ class WeatherCorrelation:
         """Clear regression stats without touching temperature history."""
         self._data.daily_regression_stats.clear()
         await self.async_save()
+
+    def set_away_hour_keys(self, keys: frozenset[tuple[str, int]]) -> None:
+        """Set the local (date_key, hour) pairs to skip during aggregation.
+
+        Sync and side-effect-free beyond storing the mask: no recorder or
+        hass access happens here, so it stays safe to call from a caller
+        whose own ``_weather_correlation`` is a plain ``MagicMock()`` with no
+        awaitable methods.
+
+        Args:
+            keys: Local (ISO date, hour) pairs to exclude from aggregation.
+
+        """
+        self._away_hour_keys = keys
 
     def get_temperature_forecast(self) -> list[TemperatureForecast]:
         """Fetch forecasted temperatures from weather entity.
@@ -570,10 +592,16 @@ class WeatherCorrelation:
         if not snapshots:
             return None
         aggregated = HourlyRegressionData()
+        any_unmasked = False
         for snapshot in snapshots:
+            if (snapshot.date_key, hour) in self._away_hour_keys:
+                continue
+            any_unmasked = True
             self._merge_zone_stats(aggregated.mild, snapshot.data.mild)
             self._merge_zone_stats(aggregated.heating, snapshot.data.heating)
             self._merge_zone_stats(aggregated.cooling, snapshot.data.cooling)
+        if not any_unmasked:
+            return None
         return aggregated
 
     @staticmethod
@@ -682,6 +710,13 @@ class WeatherCorrelation:
             avg_base = sum(result.base_load_kw for result in hourly_results.values())
             avg_base /= len(hourly_results)
 
+        away_masked_hours = sum(
+            1
+            for hour, snapshots in self._data.daily_regression_stats.items()
+            for snapshot in snapshots
+            if (snapshot.date_key, hour) in self._away_hour_keys
+        )
+
         return {
             "weather_entity_id": self._data.weather_entity_id,
             "cooling_threshold": self._data.cooling_threshold,
@@ -694,6 +729,7 @@ class WeatherCorrelation:
             "average_r_squared": round(avg_r_squared, 4),
             "cooling_hours": cooling_count,
             "heating_hours": heating_count,
+            "away_masked_hours": away_masked_hours,
             "hourly_regression": {
                 hour: result.to_dict() for hour, result in hourly_results.items()
             },

@@ -1,6 +1,6 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.localshift.computation_engine import BatteryMode
 from custom_components.localshift.const import (
+    CONF_AWAY_ENTITY,
     CONF_STALE_SOLAR_CONFIDENCE_CEILING,
     CONF_WEATHER_LEARNING_ENABLED,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
@@ -912,6 +913,160 @@ class TestWeatherCorrelation:
             side_effect=Exception("boom")
         )
         assert await computation_engine.async_refresh_weather_forecast() is None
+
+    # =========================================================================
+    # AWAY-HOUR MASK (docs/holiday-away/plan.md "What to build" item 3)
+    # =========================================================================
+
+    async def test_away_on_skips_learning_away_off_learns(
+        self, computation_engine, coordinator_data
+    ):
+        """Away on: no learn_from_sample, no save. Away off: sample is learned."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_save = AsyncMock()
+        computation_engine._weather_correlation = wc_instance
+        coordinator_data.weather_temperature_current = 22.0
+        coordinator_data.load_power_kw = 1.5
+
+        with (
+            patch.object(
+                computation_engine,
+                "_async_refresh_weather_away_mask",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.localshift.computation_engine.is_away_active",
+                return_value=True,
+            ),
+        ):
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_not_called()
+        wc_instance.async_save.assert_not_awaited()
+
+        with (
+            patch.object(
+                computation_engine,
+                "_async_refresh_weather_away_mask",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.localshift.computation_engine.is_away_active",
+                return_value=False,
+            ),
+        ):
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_called_once()
+
+    async def test_refresh_runs_even_with_invalid_temperature(
+        self, computation_engine, coordinator_data
+    ):
+        """The mask refresh runs before the temp/load validity guards."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        computation_engine._weather_correlation = MagicMock()
+        coordinator_data.weather_temperature_current = 0.0
+        coordinator_data.load_power_kw = 1.0
+
+        with patch.object(
+            computation_engine, "_async_refresh_weather_away_mask", new=AsyncMock()
+        ) as mock_refresh:
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        mock_refresh.assert_awaited_once()
+
+    async def test_init_success_calls_refresh(self, computation_engine):
+        """A successful initialize also refreshes the away mask."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_initialize = AsyncMock()
+        computation_engine._load_forecaster.set_weather_correlation = MagicMock()
+
+        with (
+            patch(
+                "custom_components.localshift.computation_engine.WeatherCorrelation",
+                return_value=wc_instance,
+            ),
+            patch.object(
+                computation_engine,
+                "_async_refresh_weather_away_mask",
+                new=AsyncMock(),
+            ) as mock_refresh,
+        ):
+            await computation_engine.async_initialize_weather_correlation()
+
+        mock_refresh.assert_awaited_once()
+
+    async def test_unset_entity_clears_mask_without_recorder(
+        self, computation_engine
+    ):
+        """No away entity: set_away_hour_keys(frozenset()) and no recorder call."""
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = ""
+        wc_instance = MagicMock()
+        computation_engine._weather_correlation = wc_instance
+        now = datetime(2026, 8, 3, 10, 0, 0)
+
+        with patch(
+            "custom_components.localshift.computation_engine.async_get_away_intervals"
+        ) as mock_fetch:
+            await computation_engine._async_refresh_weather_away_mask(now)
+
+        mock_fetch.assert_not_called()
+        wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
+
+    async def test_refresh_fetches_once_per_date_and_entity(
+        self, computation_engine
+    ):
+        """A (date, entity) pair fetches once; a date roll or entity change refetches."""
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+            "input_boolean.holiday_mode"
+        )
+        wc_instance = MagicMock()
+        computation_engine._weather_correlation = wc_instance
+        now = datetime(2026, 8, 3, 10, 0, 0)
+        keys = frozenset({("2026-08-02", 3)})
+
+        with (
+            patch(
+                "custom_components.localshift.computation_engine.async_get_away_intervals",
+                new=AsyncMock(return_value=[]),
+            ) as mock_fetch,
+            patch(
+                "custom_components.localshift.computation_engine.away_local_hour_keys",
+                return_value=keys,
+            ),
+        ):
+            await computation_engine._async_refresh_weather_away_mask(now)
+            assert mock_fetch.call_count == 1
+            wc_instance.set_away_hour_keys.assert_called_once_with(keys)
+
+            # Same date/entity: served from cache, no refetch.
+            await computation_engine._async_refresh_weather_away_mask(now)
+            assert mock_fetch.call_count == 1
+            assert wc_instance.set_away_hour_keys.call_count == 1
+
+            # Date roll: refetch.
+            later = now.replace(day=4)
+            await computation_engine._async_refresh_weather_away_mask(later)
+            assert mock_fetch.call_count == 2
+            assert wc_instance.set_away_hour_keys.call_count == 2
+
+            # Entity change on the same date: refetch again.
+            computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+                "input_boolean.other"
+            )
+            await computation_engine._async_refresh_weather_away_mask(later)
+            assert mock_fetch.call_count == 3
+            assert wc_instance.set_away_hour_keys.call_count == 3
+
+            # The first call used the 30-day sliding window.
+            mock_fetch.assert_any_call(
+                computation_engine.hass,
+                "input_boolean.holiday_mode",
+                now - timedelta(days=30),
+                now,
+            )
 
 
 # =============================================================================

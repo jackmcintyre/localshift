@@ -84,6 +84,11 @@ from ..const import (
     MIN_SAMPLES_PER_HOUR,
     RECENT_LOAD_SHORT_WINDOW_SAMPLES,
 )
+from ..utils.away import (
+    away_utc_hour_starts,
+    fetch_away_intervals_sync,
+    get_away_entity_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -115,6 +120,11 @@ class HistoryFetcher:
         self._historical_load_sample_counts: dict[int, int] = {}
         self._historical_load_source: str = "unknown"
         self._historical_load_cache_date: str = ""
+        # Away-entity masking (docs/holiday-away/plan.md item 3): the cache is
+        # valid only while both the date AND the configured away entity match,
+        # so changing or clearing the option refetches on the next tick.
+        self._historical_load_cache_away_entity: str | None = None
+        self._away_masked_hours: int = 0
 
         # Day-of-week aware consumption profiles (issue-60)
         self._weekday_hourly_avg_kw: dict[int, float] = {}
@@ -152,11 +162,15 @@ class HistoryFetcher:
         """
         now = dt_util.now()
         today_str = now.strftime("%Y-%m-%d")
+        away = get_away_entity_id(self.entry)
 
-        # Check if cache is valid for today
+        # Check if cache is valid for today. The away entity is part of the
+        # key: changing or clearing the option must refetch, not serve a
+        # profile computed under the old (or no) mask.
         if (
             self._historical_load_cache_date == today_str
             and self._historical_load_cache
+            and self._historical_load_cache_away_entity == away
         ):
             return (
                 self._historical_load_cache,
@@ -171,7 +185,7 @@ class HistoryFetcher:
 
         recorder_instance = recorder.get_instance(self.hass)
         result = await recorder_instance.async_add_executor_job(
-            self._fetch_historical_data_sync, entity_id, now
+            self._fetch_historical_data_sync, entity_id, now, away
         )
 
         hourly_avg_kw = result.get("combined_avg", {})
@@ -210,6 +224,8 @@ class HistoryFetcher:
             self._daily_sample_counts = daily_counts
 
             self._historical_load_cache_date = today_str
+            self._historical_load_cache_away_entity = away
+            self._away_masked_hours = result.get("away_masked_hours", 0)
             _LOGGER.debug(
                 "Historical load profile fetched: %s hours (source: %s)",
                 len(hourly_avg_kw),
@@ -238,7 +254,10 @@ class HistoryFetcher:
         )
 
     def _fetch_historical_data_sync(
-        self, entity_id: str, now: datetime
+        self,
+        entity_id: str,
+        now: datetime,
+        away_entity_id: str | None = None,
     ) -> dict[str, Any]:
         """Fetch historical data using HA recorder/statistics (runs in thread pool).
 
@@ -250,12 +269,20 @@ class HistoryFetcher:
         - weekday_counts: Weekday sample counts
         - weekend_counts: Weekend sample counts
         - profile_source: "weekday_weekend" or "combined_fallback"
+        - away_masked_hours: count of rows dropped as away hours (0 when
+          away_entity_id is None)
 
         Additionally, HVAC-separated profiles (baseline and hvac) are exposed:
         - baseline_avg: baseline load by hour (non-HVAC), calculated using 25th percentile
         - baseline_counts: sample counts for baseline per hour
         - hvac_avg: HVAC load by hour
         - hvac_counts: sample counts for HVAC per hour
+
+        When ``away_entity_id`` is set, hours the house was away for any part
+        of are dropped from every profile below (docs/holiday-away/plan.md
+        item 3) before they're computed, so every downstream profile —
+        combined, weekday/weekend, per-day, baseline and hvac — is masked
+        from this one change point.
         """
         start_time = now - timedelta(days=HISTORY_WINDOW_DAYS)
 
@@ -277,8 +304,88 @@ class HistoryFetcher:
             return self._empty_result()
 
         rows = statistics_data.get("rows", [])
+
+        away_masked_hours = 0
+        if away_entity_id:
+            intervals = fetch_away_intervals_sync(
+                self.hass, away_entity_id, start_time, now
+            )
+            away_hours = away_utc_hour_starts(intervals)
+            rows, masked_rows = self._split_away_rows(rows, away_hours)
+            away_masked_hours = len(masked_rows)
+
         local_tz = dt_util.get_time_zone(self.hass.config.time_zone)
-        return self._compute_historical_profiles(rows, local_tz)
+        result = self._compute_historical_profiles(rows, local_tz)
+        result["away_masked_hours"] = away_masked_hours
+        return result
+
+    def _parse_row_start(self, start_val: Any) -> datetime | None:
+        """Parse a statistics row's 'start' field into an aware datetime.
+
+        Accepts the three shapes a row's 'start' can take: a datetime, a
+        Unix timestamp (int/float), or an ISO string. Anything else returns
+        None, and callers skip the row.
+
+        Args:
+            start_val: The row's 'start' value.
+
+        Returns:
+            An aware datetime, or None if it couldn't be parsed.
+
+        """
+        if isinstance(start_val, datetime):
+            return start_val
+        if isinstance(start_val, int | float):
+            # Unix timestamp (seconds since epoch)
+            return dt_util.utc_from_timestamp(start_val)
+        if isinstance(start_val, str):
+            return dt_util.parse_datetime(start_val)
+        return None
+
+    def _split_away_rows(
+        self,
+        rows: list[dict[str, Any]],
+        away_hours: frozenset[datetime],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Split statistics rows into (kept, masked) by away hour.
+
+        A row is masked when its 'start', floored to the UTC hour, is one of
+        the away entity's away hours. Rows whose start can't be parsed are
+        kept — the existing parser in _separate_samples_by_weekday skips
+        them the same way it always has, so a kept-but-unparseable row still
+        drops out of every profile downstream.
+
+        Args:
+            rows: Statistics rows with a 'start' field.
+            away_hours: Away hour starts (aware UTC datetimes), from
+                away_utc_hour_starts.
+
+        Returns:
+            Tuple of (kept, masked) row lists.
+
+        """
+        if not away_hours:
+            return rows, []
+
+        kept: list[dict[str, Any]] = []
+        masked: list[dict[str, Any]] = []
+        for row in rows:
+            parsed = (
+                self._parse_row_start(row.get("start"))
+                if isinstance(row, dict)
+                else None
+            )
+            if parsed is None:
+                kept.append(row)
+                continue
+            hour_start = dt_util.as_utc(parsed).replace(
+                minute=0, second=0, microsecond=0
+            )
+            if hour_start in away_hours:
+                masked.append(row)
+            else:
+                kept.append(row)
+        return kept, masked
 
     def _compute_historical_profiles(
         self, rows: list[dict[str, Any]], local_tz: Any
@@ -404,18 +511,7 @@ class HistoryFetcher:
             if not isinstance(row, dict):
                 continue
 
-            start_val = row.get("start")
-            row_dt = None
-
-            # Handle different timestamp formats
-            if isinstance(start_val, datetime):
-                row_dt = start_val
-            elif isinstance(start_val, int | float):
-                # Unix timestamp (seconds since epoch)
-                row_dt = dt_util.utc_from_timestamp(start_val)
-            elif isinstance(start_val, str):
-                row_dt = dt_util.parse_datetime(start_val)
-
+            row_dt = self._parse_row_start(row.get("start"))
             if row_dt is None:
                 continue
 
@@ -1019,6 +1115,13 @@ class HistoryFetcher:
         """
         return self._historical_load_cache
 
+    def get_away_masked_hours(self) -> int:
+        """Return how many hourly rows were dropped as away hours.
+
+        Zero when no away entity is configured, or before the first fetch.
+        """
+        return self._away_masked_hours
+
     def clear_historical_cache(self) -> None:
         """Clear historical load cache to force refresh on next update."""
         # Clear combined profile
@@ -1026,6 +1129,8 @@ class HistoryFetcher:
         self._historical_load_sample_counts = {}
         self._historical_load_source = "unknown"
         self._historical_load_cache_date = ""
+        self._historical_load_cache_away_entity = None
+        self._away_masked_hours = 0
 
         # Clear day-of-week profiles
         self._weekday_hourly_avg_kw = {}
