@@ -14,6 +14,7 @@ from homeassistant.helpers import selector
 from ..const import (
     COMPARISON_MODE_DISABLED,
     COMPARISON_MODE_ENABLED,
+    CONF_AWAY_ENTITY,
     CONF_COMPARISON_MODE,
     CONF_NOTIFY_SERVICE,
     CONF_PRICING_DATA_SOURCE,
@@ -239,6 +240,28 @@ def build_pricing_schema(
         ] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
 
     return vol.Schema(schema_fields)
+
+
+def build_away_entity_schema(current: str | None = None) -> vol.Schema:
+    """Build the schema fragment for the optional away entity.
+
+    The field is optional and has no default: an empty value must be left out
+    of the submitted data rather than validated as an entity id (issue #955).
+    A stored entity is offered back as a ``suggested_value`` instead.
+
+    Args:
+        current: Currently configured away entity id, if any
+
+    Returns:
+        Voluptuous schema containing only the away entity key
+
+    """
+    description = {"suggested_value": current} if current else None
+    return vol.Schema({
+        vol.Optional(CONF_AWAY_ENTITY, description=description): (
+            selector.EntitySelector(selector.EntitySelectorConfig())
+        )
+    })
 
 
 def build_solcast_schema(

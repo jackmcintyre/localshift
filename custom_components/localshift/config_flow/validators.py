@@ -8,6 +8,12 @@ from __future__ import annotations
 
 import re
 
+from homeassistant.const import (
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 
 from ..const import (
@@ -47,6 +53,39 @@ async def validate_all_entities(
             )
 
     return errors if errors else None
+
+
+async def validate_away_entity(
+    hass: HomeAssistant, entity_id: str | None
+) -> str | None:
+    """Validate the optional away entity, if one is configured.
+
+    Any domain is accepted (``input_boolean``, ``binary_sensor``, ``switch``);
+    what matters is that the entity exists and rests in an on/off state. An
+    unset value is valid and never touches the state machine.
+
+    Args:
+        hass: Home Assistant instance
+        entity_id: Configured away entity id, or None/"" when unset
+
+    Returns:
+        None if valid (or unset), or an error message string
+
+    """
+    if not entity_id:
+        return None
+
+    state = hass.states.get(entity_id)
+    if state is None:
+        return f"Entity '{entity_id}' does not exist"
+    if state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        return f"Entity '{entity_id}' is {state.state}"
+    if state.state not in (STATE_ON, STATE_OFF):
+        return (
+            f"Entity '{entity_id}' is not an on/off entity (state is '{state.state}')"
+        )
+
+    return None
 
 
 async def validate_notify_service(hass, notify_service: str) -> str | None:

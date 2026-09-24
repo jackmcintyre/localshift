@@ -15,6 +15,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from ..const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+    CONF_AWAY_ENTITY,
     CONF_BATTERY_TARGET,
     CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
@@ -49,6 +50,7 @@ from ..const import (
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
+    DEFAULT_AWAY_ENTITY,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
@@ -71,6 +73,7 @@ from ..const import (
 )
 from ..pricing import PRICING_SOURCE_AMBER_EXPRESS
 from .schemas import (
+    build_away_entity_schema,
     build_pricing_schema,
     build_pricing_source_schema,
     build_solcast_schema,
@@ -82,6 +85,7 @@ from .validators import (
     get_notify_services,
     get_weather_entities,
     validate_all_entities,
+    validate_away_entity,
     validate_notify_service,
 )
 
@@ -285,6 +289,13 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
             if notify_error:
                 errors[CONF_NOTIFY_SERVICE] = notify_error
 
+            # Validate the optional away entity
+            away_error = await validate_away_entity(
+                self.hass, user_input.get(CONF_AWAY_ENTITY)
+            )
+            if away_error:
+                errors[CONF_AWAY_ENTITY] = away_error
+
             if errors:
                 weather_entities = await get_weather_entities(self.hass)
                 return self.async_show_form(
@@ -293,6 +304,10 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                         notify_services=notify_services,
                         weather_entities=weather_entities,
                         user_input=user_input,
+                    ).extend(
+                        build_away_entity_schema(
+                            user_input.get(CONF_AWAY_ENTITY)
+                        ).schema
                     ),
                     errors=errors,
                 )
@@ -325,6 +340,8 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_WEATHER_ENTITY: user_input.get(
                     CONF_WEATHER_ENTITY, DEFAULT_WEATHER_ENTITY
                 ),
+                # Away (holiday mode) is options-only, so it can be cleared
+                CONF_AWAY_ENTITY: user_input.get(CONF_AWAY_ENTITY, DEFAULT_AWAY_ENTITY),
                 CONF_WEATHER_LEARNING_ENABLED: DEFAULT_WEATHER_LEARNING_ENABLED,
             }
 
@@ -342,7 +359,7 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_solcast_schema(
                 notify_services=notify_services,
                 weather_entities=weather_entities,
-            ),
+            ).extend(build_away_entity_schema().schema),
         )
 
     @staticmethod
@@ -484,6 +501,13 @@ class LocalShiftOptionsFlow(OptionsFlow):
             if notify_error:
                 errors[CONF_NOTIFY_SERVICE] = notify_error
 
+            # Validate the optional away entity
+            away_error = await validate_away_entity(
+                self.hass, user_input.get(CONF_AWAY_ENTITY)
+            )
+            if away_error:
+                errors[CONF_AWAY_ENTITY] = away_error
+
             if errors:
                 return self.async_show_form(
                     step_id="settings",
@@ -496,6 +520,12 @@ class LocalShiftOptionsFlow(OptionsFlow):
             # Merge with existing options to preserve other settings
             merged_options = dict(self.config_entry.options)
             merged_options.update(user_input)
+            # A blank optional selector is left out of user_input, so the old
+            # entity would otherwise survive the merge. Write the submitted
+            # value (or the default) explicitly so clearing works.
+            merged_options[CONF_AWAY_ENTITY] = user_input.get(
+                CONF_AWAY_ENTITY, DEFAULT_AWAY_ENTITY
+            )
             return self.async_create_entry(data=merged_options)
 
         current = self.config_entry.options
@@ -526,6 +556,11 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     CONF_OPTIMIZATION_MODE: current.get(
                         CONF_OPTIMIZATION_MODE,
                         DEFAULT_OPTIMIZATION_MODE,
+                    ),
+                    # Away (holiday mode) entity (optional)
+                    CONF_AWAY_ENTITY: current.get(
+                        CONF_AWAY_ENTITY,
+                        DEFAULT_AWAY_ENTITY,
                     ),
                 },
                 notify_services,
@@ -592,7 +627,7 @@ class LocalShiftOptionsFlow(OptionsFlow):
         import voluptuous as vol
         from homeassistant.helpers import selector
 
-        return vol.Schema({
+        settings_fields = {
             # Notification settings
             vol.Required(
                 CONF_NOTIFY_SERVICE,
@@ -676,7 +711,15 @@ class LocalShiftOptionsFlow(OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-        })
+        }
+
+        # Away entity (optional): appended so that the entity mappings and
+        # other settings schemas stay untouched.
+        settings_fields.update(
+            build_away_entity_schema(values.get(CONF_AWAY_ENTITY)).schema
+        )
+
+        return vol.Schema(settings_fields)
 
     async def async_step_advanced(
         self, user_input: dict[str, Any] | None = None
