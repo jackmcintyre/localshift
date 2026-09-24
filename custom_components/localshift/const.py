@@ -140,6 +140,11 @@ CONF_NOTIFY_SERVICE = "notify_service"
 CONF_WEATHER_ENTITY = "weather_entity"
 DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
 
+# Away entity: any on/off entity that is on while the house is empty
+# (e.g. input_boolean.holiday_mode). Unset means no behaviour change.
+CONF_AWAY_ENTITY = "away_entity"
+DEFAULT_AWAY_ENTITY = ""
+
 # Temperature thresholds for degree-day model
 CONF_COOLING_THRESHOLD = "cooling_threshold"
 CONF_HEATING_THRESHOLD = "heating_threshold"
