@@ -680,3 +680,128 @@ class TestConstants:
         assert getattr(correlation_module, "MAX_SLOPE_KW_PER_DEGREE", None) == 2.0
         assert getattr(correlation_module, "MAX_LOAD_MULTIPLIER", None) == 3.0
         assert getattr(correlation_module, "SLIDING_WINDOW_DAYS", None) == 30
+
+
+class TestAwayMask:
+    """Tests for the away-hour mask (docs/holiday-away/plan.md item 3).
+
+    The mask is applied at aggregation time, not at storage time: snapshots
+    stay in ``daily_regression_stats`` untouched, so clearing the mask (or
+    fixing a wrongly pointed away entity) restores the learning immediately.
+    """
+
+    def test_masked_date_hour_excluded_other_dates_and_hours_unaffected(
+        self, correlation
+    ):
+        """A masked (date, hour) drops out; a different date or hour doesn't."""
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-01",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+                DailySnapshot(
+                    date_key="2026-03-02",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+            ],
+            9: [
+                DailySnapshot(
+                    date_key="2026-03-01",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+            ],
+        }
+        correlation.set_away_hour_keys(frozenset({("2026-03-01", 8)}))
+
+        aggregated_8 = correlation._aggregate_hourly_stats(8)
+        assert aggregated_8 is not None
+        assert aggregated_8.cooling.n == 20  # only the 03-02 snapshot counted
+
+        aggregated_9 = correlation._aggregate_hourly_stats(9)
+        assert aggregated_9 is not None
+        assert aggregated_9.cooling.n == 20  # hour 9's 03-01 snapshot is unmasked
+
+    def test_all_snapshots_masked_returns_none_and_no_coefficients(
+        self, correlation
+    ):
+        """Every snapshot for an hour masked -> None, not a zero-stat fit."""
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-01",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+            ],
+        }
+        correlation.set_away_hour_keys(frozenset({("2026-03-01", 8)}))
+
+        assert correlation._aggregate_hourly_stats(8) is None
+
+        predicted, reason = correlation.predict_load(8, 26.0, 1.0)
+        assert predicted == 1.0
+        assert reason == "no_coefficients"
+
+    def test_clearing_mask_restores_result_and_storage_is_unchanged(
+        self, correlation
+    ):
+        """The mask is non-destructive: clearing it restores the aggregate,
+        and the underlying storage never changed in the first place."""
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-01",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+            ],
+        }
+        before = correlation._data.to_dict()
+
+        correlation.set_away_hour_keys(frozenset({("2026-03-01", 8)}))
+        assert correlation._aggregate_hourly_stats(8) is None
+
+        correlation.set_away_hour_keys(frozenset())
+        aggregated = correlation._aggregate_hourly_stats(8)
+        assert aggregated is not None
+        assert aggregated.cooling.n == 20
+
+        assert correlation._data.to_dict() == before
+
+    def test_diagnostics_away_masked_hours_count(self, correlation):
+        """get_diagnostics() counts how many stored snapshots the mask matches."""
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-01",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+                DailySnapshot(
+                    date_key="2026-03-02",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+            ],
+        }
+        correlation.set_away_hour_keys(frozenset({("2026-03-01", 8)}))
+
+        diagnostics = correlation.get_diagnostics()
+
+        assert diagnostics["away_masked_hours"] == 1
+
+    def test_diagnostics_away_masked_hours_zero_by_default(self, correlation):
+        """With no mask set, away_masked_hours is 0."""
+        correlation._data.daily_regression_stats = {
+            8: [
+                DailySnapshot(
+                    date_key="2026-03-01",
+                    data=HourlyRegressionData(cooling=_linear_stats(20, 1.0)),
+                ),
+            ],
+        }
+
+        diagnostics = correlation.get_diagnostics()
+
+        assert diagnostics["away_masked_hours"] == 0
+
+    def test_set_away_hour_keys_default_is_empty(self, correlation):
+        """A freshly constructed instance has no mask set."""
+        assert correlation._away_hour_keys == frozenset()
