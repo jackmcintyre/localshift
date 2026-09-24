@@ -1,8 +1,12 @@
 # LocalShift — away-aware (holiday mode, slice 5)
 
-The spec for the LocalShift half of the house's holiday mode. The source copy lives in the
-`homeassistant-100h` repo at `docs/holiday/slice-5-localshift.md`. The run copy is
-`docs/holiday-away/plan.md` in the LocalShift worktree. Decided by Jack on 24 Sep 2026.
+The spec for the LocalShift half of the house's holiday mode, decided by Jack on 24 Sep 2026.
+
+**Source of truth: the house's holiday-mode plan artifact,
+https://claude.ai/artifact/EX4kS2inMAm1FE8G6Ltp2F** (slice 5 and its LocalShift section). The
+build copies are `docs/holiday/slice-5-localshift.md` in the `homeassistant-100h` repo and
+`docs/holiday-away/plan.md` in the LocalShift worktree. When they differ, the artifact wins:
+change it there first, then here.
 
 ## Why
 
