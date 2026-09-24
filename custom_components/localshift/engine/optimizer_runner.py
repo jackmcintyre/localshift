@@ -240,8 +240,6 @@ def _build_optimizer_config(
     Uses safe defaults for tunable parameters that will be exposed in Phase C.
     """
     from custom_components.localshift.const import (
-        AWAY_RESERVE_MIN,
-        BACKUP_RESERVE_MAX_VALID,
         BATTERY_CAPACITY_KWH,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
@@ -280,6 +278,9 @@ def _build_optimizer_config(
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
+    )
+    from custom_components.localshift.state.mode_configs import (
+        resolve_away_reserve_pct,
     )
 
     # User-configurable target SOC for demand window
@@ -377,12 +378,10 @@ def _build_optimizer_config(
     # next cycle once away ends (no separate "release" step needed on this path).
     away_reserve_floor_pct: float | None = None
     if getattr(data, "away_active", False) is True:
-        away_reserve_floor_pct = max(
-            AWAY_RESERVE_MIN,
-            min(
-                BACKUP_RESERVE_MAX_VALID,
-                float(config_options.get(CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE)),
-            ),
+        # Same clamp-and-fallback as the state-machine path, so a corrupted
+        # option can't break the optimizer build.
+        away_reserve_floor_pct = resolve_away_reserve_pct(
+            config_options.get(CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE)
         )
 
     # Apply adaptive parameter transforms (Issue #444 Phase 2)

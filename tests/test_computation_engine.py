@@ -370,9 +370,7 @@ class TestAwayModeForecast:
                 fetcher, "_import_recorder_statistics", return_value=MagicMock()
             ),
             patch.object(fetcher, "_list_statistic_ids", return_value=[]),
-            patch.object(
-                fetcher, "_resolve_statistic_id", return_value="sensor.test"
-            ),
+            patch.object(fetcher, "_resolve_statistic_id", return_value="sensor.test"),
             patch.object(fetcher, "_get_statistics_fn", return_value=MagicMock()),
             patch.object(
                 fetcher,
@@ -388,9 +386,7 @@ class TestAwayModeForecast:
             ) as mock_get_instance,
         ):
             mock_recorder = MagicMock()
-            mock_recorder.async_add_executor_job = AsyncMock(
-                side_effect=_run_sync_job
-            )
+            mock_recorder.async_add_executor_job = AsyncMock(side_effect=_run_sync_job)
             mock_get_instance.return_value = mock_recorder
 
             await fetcher.async_get_historical_hourly_averages("sensor.test")
@@ -410,8 +406,8 @@ class TestAwayModeForecast:
         )
         # The seed configures the away entity; give it a readable state so the
         # D2 hold (unreadable entity keeps the last known state) doesn't apply.
-        computation_engine.hass.states["input_boolean.holiday_mode"] = (
-            SimpleNamespace(state="on")
+        computation_engine.hass.states["input_boolean.holiday_mode"] = SimpleNamespace(
+            state="on"
         )
 
         with patch(
@@ -1253,9 +1249,7 @@ class TestWeatherCorrelation:
 
         mock_refresh.assert_awaited_once()
 
-    async def test_unset_entity_clears_mask_without_recorder(
-        self, computation_engine
-    ):
+    async def test_unset_entity_clears_mask_without_recorder(self, computation_engine):
         """No away entity: set_away_hour_keys(frozenset()) and no recorder call."""
         computation_engine.entry.options[CONF_AWAY_ENTITY] = ""
         wc_instance = MagicMock()
@@ -1270,9 +1264,7 @@ class TestWeatherCorrelation:
         mock_fetch.assert_not_called()
         wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
 
-    async def test_refresh_fetches_once_per_date_and_entity(
-        self, computation_engine
-    ):
+    async def test_refresh_fetches_once_per_date_and_entity(self, computation_engine):
         """A (date, entity) pair fetches once; a date roll or entity change refetches."""
         computation_engine.entry.options[CONF_AWAY_ENTITY] = (
             "input_boolean.holiday_mode"
@@ -1308,9 +1300,7 @@ class TestWeatherCorrelation:
             assert wc_instance.set_away_hour_keys.call_count == 2
 
             # Entity change on the same date: refetch again.
-            computation_engine.entry.options[CONF_AWAY_ENTITY] = (
-                "input_boolean.other"
-            )
+            computation_engine.entry.options[CONF_AWAY_ENTITY] = "input_boolean.other"
             await computation_engine._async_refresh_weather_away_mask(later)
             assert mock_fetch.call_count == 3
             assert wc_instance.set_away_hour_keys.call_count == 3
@@ -1520,30 +1510,22 @@ class TestStampConfidenceOverforecastCap:
         assert analysis.confidence_ceiling == 1.0
         assert coordinator_data.solar_absent_confidence == 1.0
 
-    def test_cap_applies_to_fresh_analysis(
-        self, computation_engine, coordinator_data
-    ):
+    def test_cap_applies_to_fresh_analysis(self, computation_engine, coordinator_data):
         analysis = self._make_analysis(is_stale=False)
         coordinator_data.solcast_analysis_today = analysis
         coordinator_data.solcast_analysis_tomorrow = None
 
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=0.24))
 
         assert analysis.confidence_ceiling == pytest.approx(0.24)
 
-    def test_cap_bounds_absent_confidence(
-        self, computation_engine, coordinator_data
-    ):
+    def test_cap_bounds_absent_confidence(self, computation_engine, coordinator_data):
         """No analysis at all → absent_confidence is THE confidence, so the cap
         must bound it too (non-conservative default is 1.0)."""
         coordinator_data.solcast_analysis_today = None
         coordinator_data.solcast_analysis_tomorrow = None
 
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=0.24))
 
         assert coordinator_data.solar_absent_confidence == pytest.approx(0.24)
 
@@ -1554,23 +1536,19 @@ class TestStampConfidenceOverforecastCap:
         analysis = self._make_analysis(is_stale=True)
         coordinator_data.solcast_analysis_today = analysis
         coordinator_data.solcast_analysis_tomorrow = None
-        computation_engine._get_switch_state = lambda key: key == (
-            SWITCH_STALE_SOLAR_CONSERVATIVE
+        computation_engine._get_switch_state = lambda key: (
+            key == (SWITCH_STALE_SOLAR_CONSERVATIVE)
         )
         computation_engine.entry = SimpleNamespace(
             options={CONF_STALE_SOLAR_CONFIDENCE_CEILING: 0.3}
         )
 
         # Cap tighter than the knob → cap wins.
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=0.24))
         assert analysis.confidence_ceiling == pytest.approx(0.24)
 
         # Cap dormant (1.0) → knob wins.
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=1.0)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=1.0))
         assert analysis.confidence_ceiling == pytest.approx(0.3)
 
     def test_absent_confidence_conservative_floor_respected(
@@ -1580,8 +1558,8 @@ class TestStampConfidenceOverforecastCap:
         conservative default, still bounded by the (tighter) cap."""
         coordinator_data.solcast_analysis_today = None
         coordinator_data.solcast_analysis_tomorrow = None
-        computation_engine._get_switch_state = lambda key: key == (
-            SWITCH_STALE_SOLAR_CONSERVATIVE
+        computation_engine._get_switch_state = lambda key: (
+            key == (SWITCH_STALE_SOLAR_CONSERVATIVE)
         )
 
         self._stamp(

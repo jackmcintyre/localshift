@@ -270,7 +270,13 @@ class TestAwayHelper:
 
     @pytest.mark.parametrize(
         ("state", "expected"),
-        [(None, True), ("unavailable", True), ("unknown", True), ("on", False), ("off", False)],
+        [
+            (None, True),
+            ("unavailable", True),
+            ("unknown", True),
+            ("on", False),
+            ("off", False),
+        ],
     )
     async def test_away_state_unknown(self, state, expected):
         """Missing, unavailable or unknown can't be read; on and off can."""

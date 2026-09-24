@@ -1232,14 +1232,23 @@ class ComputationEngine:
             await self._weather_correlation.async_initialize()
             self._load_forecaster.set_weather_correlation(self._weather_correlation)
             _LOGGER.info("Weather correlation initialized successfully")
-            # Close the gap before the first medium tick after startup grace
-            # (docs/holiday-away/plan.md item 3): the first forecast after a
-            # restart following a trip should already see the mask.
-            await self._async_refresh_weather_away_mask(dt_util.now())
         except Exception as e:
             _LOGGER.error("Failed to initialize weather correlation: %s", e)
             self._weather_correlation = None
             self._load_forecaster.set_weather_correlation(None)
+            return
+
+        # Close the gap before the first medium tick after startup grace
+        # (docs/holiday-away/plan.md item 3): the first forecast after a
+        # restart following a trip should already see the mask. Its own guard:
+        # a mask failure must not tear down weather correlation (#1085).
+        try:
+            await self._async_refresh_weather_away_mask(dt_util.now())
+        except Exception:
+            _LOGGER.warning(
+                "Away-hour mask refresh failed; retrying on the next tick",
+                exc_info=True,
+            )
 
     async def _async_refresh_weather_away_mask(self, now_dt: datetime) -> None:
         """Refresh the weather-correlation away-hour mask if it's stale.

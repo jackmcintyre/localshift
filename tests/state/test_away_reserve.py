@@ -567,9 +567,7 @@ def _exporting_machine(
     machine._commanded_mode = BatteryMode.PROACTIVE_EXPORT
     machine._proactive_export_reserve = tracked
     mock_battery_controller.read_fresh_soc = MagicMock(return_value=fresh_soc)
-    mock_battery_controller.set_proactive_export_reserve = AsyncMock(
-        return_value=True
-    )
+    mock_battery_controller.set_proactive_export_reserve = AsyncMock(return_value=True)
     return machine
 
 

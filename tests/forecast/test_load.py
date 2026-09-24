@@ -1555,9 +1555,7 @@ class TestAwayModeProfile:
         must not lift the empty-house floor (#1089)."""
         mock_entry = _create_mock_entry()
         weather = MagicMock()
-        weather.get_coefficients_for_hour.return_value = MagicMock(
-            confidence="medium"
-        )
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
         weather.predict_load.return_value = (0.9, "weather_heating")
 
         forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
