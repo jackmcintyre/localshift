@@ -544,3 +544,165 @@ async def test_c10_failed_write_leaves_tracked_unchanged(
 
     assert stepped is False
     assert machine._self_consumption_reserve == 10.0  # unchanged, retried next tick
+
+
+# ---------------------------------------------------------------------------
+# #1082 re-step while away: PROACTIVE_EXPORT must never step below the away floor
+# ---------------------------------------------------------------------------
+
+
+def _exporting_machine(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    tracked: float,
+    fresh_soc: float,
+):
+    machine = _make_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        options={"away_reserve": 30, "minimum_target_soc": 20},
+    )
+    machine._commanded_mode = BatteryMode.PROACTIVE_EXPORT
+    machine._proactive_export_reserve = tracked
+    mock_battery_controller.read_fresh_soc = MagicMock(return_value=fresh_soc)
+    mock_battery_controller.set_proactive_export_reserve = AsyncMock(
+        return_value=True
+    )
+    return machine
+
+
+@pytest.mark.asyncio
+async def test_export_restep_floors_at_away_reserve(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """SOC drained to a 32% reserve while away: step to 30, not SOC - 5 = 26.6."""
+    machine = _exporting_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        tracked=32.0,
+        fresh_soc=31.6,
+    )
+    coordinator_data.away_active = True
+
+    stepped = await machine._step_proactive_export_reserve(coordinator_data)
+
+    assert stepped is True
+    mock_battery_controller.set_proactive_export_reserve.assert_awaited_once_with(
+        30.0, False
+    )
+    assert machine._proactive_export_reserve == 30.0
+
+
+@pytest.mark.asyncio
+async def test_export_restep_holds_at_away_floor(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """At the away floor, the re-step writes nothing more."""
+    machine = _exporting_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        tracked=30.0,
+        fresh_soc=30.2,
+    )
+    coordinator_data.away_active = True
+
+    stepped = await machine._step_proactive_export_reserve(coordinator_data)
+
+    assert stepped is False
+    mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_export_restep_lifts_reserve_when_away_starts(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """Away turns on mid-export with the reserve at 21.6: lift it to the floor."""
+    machine = _exporting_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        tracked=21.6,
+        fresh_soc=24.0,
+    )
+    coordinator_data.away_active = True
+
+    stepped = await machine._step_proactive_export_reserve(coordinator_data)
+
+    assert stepped is True
+    mock_battery_controller.set_proactive_export_reserve.assert_awaited_once_with(
+        30.0, False
+    )
+
+
+@pytest.mark.asyncio
+async def test_export_restep_not_away_keeps_minimum_target_floor(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """Not away: #1082's behaviour is unchanged (steps to SOC - 5 above 20)."""
+    machine = _exporting_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        tracked=27.0,
+        fresh_soc=26.6,
+    )
+    coordinator_data.away_active = False
+
+    stepped = await machine._step_proactive_export_reserve(coordinator_data)
+
+    assert stepped is True
+    mock_battery_controller.set_proactive_export_reserve.assert_awaited_once_with(
+        pytest.approx(21.6), False
+    )
+
+
+# ---------------------------------------------------------------------------
+# #1093: a reserve-only write is LocalShift's own command for override suppression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reserve_step_stamps_self_command(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """After the away release (80 -> 10), a bounced 80 still reads as self-inflicted."""
+    from homeassistant.util import dt as dt_util
+
+    machine = _make_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        options={"away_reserve": 80},
+    )
+    machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+    machine._self_consumption_reserve = 80.0
+    coordinator_data.away_active = False
+    coordinator_data.preserve_soc = None
+
+    assert await machine._step_self_consumption_reserve(coordinator_data) is True
+
+    assert machine._last_reserve_step is not None
+    assert machine._last_successful_transition is None  # no transition grace armed
+    assert machine._is_signature_self_inflicted(dt_util.now()) is True
+    # The tracked reserve is now 10, so only the stamp explains the signature.
+    machine._last_reserve_step = None
+    assert machine._is_signature_self_inflicted(dt_util.now()) is False

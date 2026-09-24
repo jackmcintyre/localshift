@@ -191,6 +191,10 @@ class StateMachine:
         self._skip_next_debounce: bool = False
         # Track last successful transition for health check intelligence
         self._last_successful_transition: datetime | None = None
+        # Last reserve-only write (away re-step/release, #1082 export re-step).
+        # Not a transition, so it must not arm the transition grace, but it is
+        # still LocalShift's own command for Tesla-override suppression (#1093).
+        self._last_reserve_step: datetime | None = None
         # Grace period after successful transition before health checks trigger corrections
         self._TRANSITION_GRACE_PERIOD = timedelta(
             seconds=STATE_MACHINE_TRANSITION_GRACE_SECONDS
@@ -262,9 +266,9 @@ class StateMachine:
             < TESLA_OVERRIDE_TOLERANCE_PERCENT
         ):
             return True
-        return (
-            self._last_successful_transition is not None
-            and now - self._last_successful_transition < self._SELF_COMMAND_GRACE
+        return any(
+            stamp is not None and now - stamp < self._SELF_COMMAND_GRACE
+            for stamp in (self._last_successful_transition, self._last_reserve_step)
         )
 
     def _detect_tesla_override(self, data: CoordinatorData, now: datetime) -> bool:
@@ -575,6 +579,21 @@ class StateMachine:
             spike_discharge_reserve=backup_reserve,
         )
 
+    def _proactive_export_floor(self, data: CoordinatorData) -> float:
+        """Return the PROACTIVE_EXPORT reserve floor: minimum_target_soc, or the
+        away reserve while away if that is higher.
+
+        Shared by the entry builder and the #1082 re-step, so a re-step while away
+        can never walk the reserve below the away floor.
+        """
+        min_target_soc = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        away_reserve_pct = self._resolve_away_reserve_pct(data)
+        if away_reserve_pct is None:
+            return min_target_soc
+        return max(min_target_soc, away_reserve_pct)
+
     def _build_proactive_export_config(self, data: CoordinatorData) -> ModeConfig:
         """Build PROACTIVE_EXPORT config."""
         # Issue #974: one shared formula with BatteryController.set_proactive_export,
@@ -585,16 +604,9 @@ class StateMachine:
         # automatically by the planner, so its reserve must also floor at the away
         # value — otherwise it steps down to minimum_target_soc while away, which
         # can sit well under the away reserve.
-        min_target_soc = float(
-            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        backup_reserve = calculate_proactive_export_reserve(
+            data.soc, self._proactive_export_floor(data)
         )
-        away_reserve_pct = self._resolve_away_reserve_pct(data)
-        floor = (
-            max(min_target_soc, away_reserve_pct)
-            if away_reserve_pct is not None
-            else min_target_soc
-        )
-        backup_reserve = calculate_proactive_export_reserve(data.soc, floor)
         return ModeConfig(
             operation_mode="autonomous",
             backup_reserve=backup_reserve,
@@ -1150,23 +1162,25 @@ class StateMachine:
         if self._commanded_mode != BatteryMode.PROACTIVE_EXPORT or tracked is None:
             return False
 
+        floor = self._proactive_export_floor(data)
         fresh_soc = self._battery_controller.read_fresh_soc()
         soc = fresh_soc if fresh_soc is not None else data.soc
         # Issue #895: SOC 0 means an unpopulated entity, not an empty battery —
         # stepping on it would drop the reserve straight to the floor.
-        if (
-            soc is None
-            or soc <= 0.0
-            or soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT
-        ):
+        if soc is None or soc <= 0.0:
             return False
 
-        minimum_target = float(
-            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
-        )
-        new_reserve = calculate_proactive_export_reserve(soc, minimum_target)
-        if new_reserve >= tracked:
-            return False
+        if tracked < floor:
+            # Away started (or its slider rose) while export stayed selected:
+            # lift the reserve to the away floor rather than waiting for a
+            # mode change (docs/holiday-away/plan.md item 4).
+            new_reserve = calculate_proactive_export_reserve(soc, floor)
+        else:
+            if soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT:
+                return False
+            new_reserve = calculate_proactive_export_reserve(soc, floor)
+            if new_reserve >= tracked:
+                return False
 
         if not await self._battery_controller.set_proactive_export_reserve(
             new_reserve, False
@@ -1186,6 +1200,7 @@ class StateMachine:
             soc,
         )
         self._proactive_export_reserve = new_reserve
+        self._last_reserve_step = dt_util.now()
         return True
 
     async def _handle_desired_mode_transition(
@@ -1964,6 +1979,7 @@ class StateMachine:
             fresh_reserve,
         )
         self._self_consumption_reserve = fresh_reserve
+        self._last_reserve_step = dt_util.now()
         return True
 
     async def _perform_health_check(self, data: CoordinatorData) -> None:
