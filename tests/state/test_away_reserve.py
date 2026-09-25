@@ -521,6 +521,111 @@ async def test_c9_perform_health_check_skips_restep_under_manual_override(
     mock_battery_controller.set_self_consumption_reserve.assert_not_awaited()
 
 
+def _away_machine_needing_a_step(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+    get_switch_state=None,
+):
+    """A SELF_CONSUMPTION machine whose tracked reserve (10) is owed a step to 30."""
+    machine = _make_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        options={"away_reserve": 30},
+    )
+    if get_switch_state is not None:
+        machine._get_switch_state = get_switch_state
+    machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+    machine._self_consumption_reserve = 10.0
+    coordinator_data.away_active = True
+    coordinator_data.preserve_soc = None
+    coordinator_data.manual_override = False
+    return machine
+
+
+@pytest.mark.asyncio
+async def test_c9_perform_health_check_skips_restep_under_tesla_override(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """A corroborated Tesla event (Storm Watch at reserve 80) owns the reserve."""
+    machine = _away_machine_needing_a_step(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        coordinator_data,
+    )
+    coordinator_data.operation_mode = "self_consumption"
+    coordinator_data.backup_reserve = 80.0
+    coordinator_data.storm_watch_active = True
+
+    await machine._perform_health_check(coordinator_data)
+
+    assert machine.is_tesla_override_active()
+    mock_battery_controller.set_self_consumption_reserve.assert_not_awaited()
+    assert machine._self_consumption_reserve == 10.0
+
+
+@pytest.mark.asyncio
+async def test_c9_perform_health_check_skips_restep_in_transition_grace(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """Straight after a transition, the re-step waits for the grace to pass."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    machine = _away_machine_needing_a_step(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        coordinator_data,
+    )
+    coordinator_data.operation_mode = "self_consumption"
+    coordinator_data.backup_reserve = 10.0
+    machine._last_successful_transition = dt_util.now() - timedelta(seconds=5)
+
+    await machine._perform_health_check(coordinator_data)
+    mock_battery_controller.set_self_consumption_reserve.assert_not_awaited()
+
+    # Once the grace has passed, the same tick shape steps the reserve.
+    machine._last_successful_transition = (
+        dt_util.now() - machine._TRANSITION_GRACE_PERIOD - timedelta(seconds=1)
+    )
+    await machine._perform_health_check(coordinator_data)
+    mock_battery_controller.set_self_consumption_reserve.assert_awaited_once_with(30.0)
+
+
+@pytest.mark.asyncio
+async def test_c9_dry_run_skips_the_self_consumption_restep(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """Dry run writes nothing: the stable-mode tick never reaches the re-step."""
+    machine = _away_machine_needing_a_step(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        coordinator_data,
+        get_switch_state=lambda key: key == "dry_run",
+    )
+
+    await machine._handle_stable_mode(coordinator_data)
+
+    mock_battery_controller.set_self_consumption_reserve.assert_not_awaited()
+    mock_battery_controller.verify_current_state.assert_not_awaited()
+    assert machine._self_consumption_reserve == 10.0
+
+
 @pytest.mark.asyncio
 async def test_c10_failed_write_leaves_tracked_unchanged(
     mock_battery_controller,
@@ -668,6 +773,31 @@ async def test_export_restep_not_away_keeps_minimum_target_floor(
     mock_battery_controller.set_proactive_export_reserve.assert_awaited_once_with(
         pytest.approx(21.6), False
     )
+
+
+@pytest.mark.asyncio
+async def test_export_restep_skipped_in_dry_run(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """Dry run: away starting mid-export doesn't lift the reserve either."""
+    machine = _exporting_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        tracked=21.6,
+        fresh_soc=24.0,
+    )
+    machine._get_switch_state = lambda key: key == "dry_run"
+    coordinator_data.away_active = True
+    coordinator_data.manual_override = False
+
+    await machine._handle_stable_mode(coordinator_data)
+
+    mock_battery_controller.set_proactive_export_reserve.assert_not_awaited()
+    assert machine._proactive_export_reserve == 21.6
 
 
 # ---------------------------------------------------------------------------

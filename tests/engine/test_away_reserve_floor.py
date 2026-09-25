@@ -149,6 +149,65 @@ def test_b4_negative_fit_avoidance_refuses_export_at_the_floor():
     assert PlannerAction.EXPORT_PROACTIVE not in actions
 
 
+def _avoidance_context(recoverability_floor_pct: float) -> NegativeFitAvoidanceContext:
+    return NegativeFitAvoidanceContext(
+        risk_window_start_idx=0,
+        risk_window_end_idx=5,
+        required_headroom_kwh=5.0,
+        recovery_deadline_idx=5,
+        conservative_recovery_kwh_by_slot=(50.0,) * 6,
+        recoverability_floor_pct_by_slot=(recoverability_floor_pct,) * 6,
+    )
+
+
+def test_b4_landing_clamp_admits_export_the_away_floor_bounds():
+    """Above the floor, the landing point is clamped at the away floor.
+
+    From SOC 40 a full-rate 30-min slot sheds 18.5pp. Without the floor it
+    would land at 21.5, under the recoverability floor of 25, so export is
+    refused. With the away floor at 30 the transition clamps there, which
+    clears 25, so export is admitted: the one branch where the floor adds an
+    action (docs/ENTITY_REFERENCE.md, number.localshift_away_reserve).
+    """
+    slot = _slot(buy=0.10, sell=0.20, interval_minutes=30)
+    context = _avoidance_context(25.0)
+
+    without_floor = feasible_actions(
+        40.0,
+        slot,
+        _config(away_reserve_floor_pct=None),
+        slot_idx=0,
+        negative_fit_avoidance_context=context,
+    )
+    with_floor = feasible_actions(
+        40.0,
+        slot,
+        _config(away_reserve_floor_pct=30.0),
+        slot_idx=0,
+        negative_fit_avoidance_context=context,
+    )
+
+    assert PlannerAction.EXPORT_PROACTIVE not in without_floor
+    assert PlannerAction.EXPORT_PROACTIVE in with_floor
+    next_soc, _import, _export = _transition_export(
+        40.0, slot, _config(away_reserve_floor_pct=30.0)
+    )
+    assert next_soc == pytest.approx(30.0)
+
+
+def test_b4_landing_clamp_still_refuses_under_a_higher_recoverability_floor():
+    """The clamp never lets an export land under the recoverability floor."""
+    slot = _slot(buy=0.10, sell=0.20, interval_minutes=30)
+    actions = feasible_actions(
+        40.0,
+        slot,
+        _config(away_reserve_floor_pct=30.0),
+        slot_idx=0,
+        negative_fit_avoidance_context=_avoidance_context(35.0),
+    )
+    assert PlannerAction.EXPORT_PROACTIVE not in actions
+
+
 # ---------------------------------------------------------------------------
 # B5: a small "subset" sweep — actions with the floor never exceed actions
 # without it (the floor only removes actions, never unlocks anything).
