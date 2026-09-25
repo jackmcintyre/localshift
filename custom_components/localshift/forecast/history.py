@@ -77,6 +77,12 @@ except Exception:  # pragma: no cover
         def as_local(dt):  # pragma: no cover
             return dt
 
+        @staticmethod
+        def as_utc(dt):  # pragma: no cover
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
+
     dt_util = _DTUtilStub()  # pragma: no cover
 
 from ..const import (
