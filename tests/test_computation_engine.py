@@ -1,6 +1,6 @@
 """Unit tests for ComputationEngine."""
 
-from datetime import datetime, time
+from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.localshift.computation_engine import BatteryMode
 from custom_components.localshift.const import (
+    CONF_AWAY_ENTITY,
     CONF_STALE_SOLAR_CONFIDENCE_CEILING,
     CONF_WEATHER_LEARNING_ENABLED,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
@@ -306,6 +307,257 @@ class TestLoadForecastSlots:
             isinstance(v, float) and v >= 0
             for v in coordinator_data.load_forecast_slots
         )
+
+
+# =============================================================================
+# AWAY-MODE FORECAST ACCEPTANCE TESTS (docs/holiday-away/plan.md item 2)
+# =============================================================================
+
+
+class TestAwayModeForecast:
+    """Acceptance tests for "forecast the empty house while away".
+
+    A real LoadForecaster and a real HistoryFetcher (the ``computation_engine``
+    fixture wires both) and only the away entity's active/inactive state is
+    mocked (patched ``is_away_active``). E1 drives the fetcher's real
+    recorder-fetch success branch (a stubbed recorder, not a seeded private
+    field) so it proves the storage wiring in
+    ``async_get_historical_hourly_averages`` end to end; E2-E4 seed the
+    fetcher's cache directly via ``_seed_at_home`` since they exercise the
+    engine/forecaster side of the wiring (toggle, manual override, at-home
+    fallback), not the fetch itself.
+    """
+
+    def _seed_at_home(self, computation_engine):
+        """Hours 0-2 at 0.4kW, everything else at 1.5kW.
+
+        A real fetch would derive away_floor_kw as the mean of the at-home
+        combined profile over hours 0-2 (0.4 here); seed it directly since
+        this test doesn't run the recorder pipeline.
+        """
+        cache = {h: (0.4 if h < 3 else 1.5) for h in range(24)}
+        computation_engine._history_fetcher._historical_load_cache = cache
+        computation_engine._history_fetcher._away_floor_kw = 0.4
+
+    async def _seed_at_home_via_async_fetch(self, computation_engine):
+        """Same shape as ``_seed_at_home`` (hours 0-2 at 0.4kW, hours 3-8 at
+        1.5kW: 9 at-home hours, >=6 so the fetch takes the success branch),
+        but derives ``away_floor_kw`` through the real
+        ``async_get_historical_hourly_averages`` success-branch storage
+        path with a stubbed recorder, instead of seeding the fetcher's
+        private field directly. Proves the link the live system depends
+        on: that deleting the storage lines in the success branch would
+        break this test, not just the unit tests on the sync result dict.
+        """
+        fetcher = computation_engine._history_fetcher
+        fetcher.entry.options = {
+            **fetcher.entry.options,
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode",
+        }
+        fetcher.hass.config.time_zone = "Australia/Sydney"
+
+        home_day = datetime(2026, 7, 6, tzinfo=UTC)  # Monday
+        rows = [
+            {"start": home_day.replace(hour=h), "mean": 0.4 if h < 3 else 1.5}
+            for h in range(9)
+        ]
+
+        async def _run_sync_job(fn, *args):
+            return fn(*args)
+
+        with (
+            patch.object(
+                fetcher, "_import_recorder_statistics", return_value=MagicMock()
+            ),
+            patch.object(fetcher, "_list_statistic_ids", return_value=[]),
+            patch.object(fetcher, "_resolve_statistic_id", return_value="sensor.test"),
+            patch.object(fetcher, "_get_statistics_fn", return_value=MagicMock()),
+            patch.object(
+                fetcher,
+                "_fetch_statistics_data",
+                return_value={"rows": rows, "statistic_id": "sensor.test"},
+            ),
+            patch(
+                "custom_components.localshift.forecast.history.fetch_away_intervals_sync",
+                return_value=[],
+            ),
+            patch(
+                "homeassistant.components.recorder.get_instance"
+            ) as mock_get_instance,
+        ):
+            mock_recorder = MagicMock()
+            mock_recorder.async_add_executor_job = AsyncMock(side_effect=_run_sync_job)
+            mock_get_instance.return_value = mock_recorder
+
+            await fetcher.async_get_historical_hourly_averages("sensor.test")
+
+    @pytest.mark.asyncio
+    async def test_away_active_uses_the_floor_for_distant_slots(
+        self, computation_engine, coordinator_data
+    ):
+        """E1: away active with no away profile yet (only a floor) -> every
+        slot 4+ hours ahead is the flat floor, every source tag ends
+        ':away_floor', and the diagnostics fields agree. The floor comes
+        from the real async fetch's success-branch storage, not a seeded
+        private field (see ``_seed_at_home_via_async_fetch``)."""
+        await self._seed_at_home_via_async_fetch(computation_engine)
+        assert computation_engine._history_fetcher.get_away_profiles().floor_kw == (
+            pytest.approx(0.4)
+        )
+        # The seed configures the away entity; give it a readable state so the
+        # D2 hold (unreadable entity keeps the last known state) doesn't apply.
+        computation_engine.hass.states["input_boolean.holiday_mode"] = SimpleNamespace(
+            state="on"
+        )
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=True,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.away_active is True
+        assert coordinator_data.away_profile_source == "away_floor"
+
+        # hours_ahead = slot_index / 4.0; index 16 is exactly 4 hours ahead.
+        distant_slots = coordinator_data.load_forecast_slots[16:]
+        assert distant_slots  # sanity: the slice isn't empty
+        assert all(value == pytest.approx(0.4) for value in distant_slots)
+
+        assert coordinator_data.forecast_consumption_source_counts
+        assert all(
+            key.endswith(":away_floor")
+            for key in coordinator_data.forecast_consumption_source_counts
+        )
+
+    def test_away_inactive_uses_at_home_forecast(
+        self, computation_engine, coordinator_data
+    ):
+        """E2: away entity unset/off -> today's at-home behaviour, source
+        'at_home', no ':away_*' tag anywhere."""
+        self._seed_at_home(computation_engine)
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.away_active is False
+        assert coordinator_data.away_profile_source == "at_home"
+        assert coordinator_data.forecast_consumption_source_counts
+        assert all(
+            not key.endswith(":away_floor") and not key.endswith(":away_profile")
+            for key in coordinator_data.forecast_consumption_source_counts
+        )
+
+    def test_manual_override_still_sets_away_state(
+        self, computation_engine, coordinator_data
+    ):
+        """E3: away state is written even when manual override short-circuits
+        the rest of compute_derived_values — the helper runs before that
+        early return, so the diagnostics sensor stays truthful in manual
+        mode too."""
+        self._seed_at_home(computation_engine)
+        coordinator_data.manual_override = True
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=True,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.away_active is True
+        assert coordinator_data.away_profile_source == "away_floor"
+        # The rest of the pipeline (load_forecast_slots) never ran.
+        assert coordinator_data.load_forecast_slots == []
+
+    def test_toggle_on_then_off_restores_at_home_slots_exactly(
+        self, computation_engine, coordinator_data
+    ):
+        """E4: away on then off across two cycles restores exactly the
+        at-home slot values — no leftover state on the forecaster."""
+        self._seed_at_home(computation_engine)
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+        baseline_slots = list(coordinator_data.load_forecast_slots)
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=True,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+        away_slots = list(coordinator_data.load_forecast_slots)
+        assert away_slots != baseline_slots
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.load_forecast_slots == baseline_slots
+        assert coordinator_data.away_active is False
+        assert coordinator_data.away_profile_source == "at_home"
+
+    def test_away_off_slots_match_a_run_without_away_code(
+        self, computation_engine, coordinator_data
+    ):
+        """#1090: away off gives slots identical to a run where the away state
+        is never applied (set_away_profiles never called)."""
+        self._seed_at_home(computation_engine)
+
+        with patch.object(computation_engine, "_apply_away_forecast_state"):
+            computation_engine.compute_derived_values(coordinator_data)
+        no_away_code = list(coordinator_data.load_forecast_slots)
+        assert no_away_code
+
+        with patch(
+            "custom_components.localshift.computation_engine.is_away_active",
+            return_value=False,
+        ):
+            computation_engine.compute_derived_values(coordinator_data)
+
+        assert coordinator_data.load_forecast_slots == no_away_code
+
+    def test_unreadable_away_entity_holds_last_known_state(
+        self, computation_engine, coordinator_data
+    ):
+        """D2 (Jack, 24 Sep): unavailable mid-trip holds 'away'; only an
+        explicit off releases it."""
+        self._seed_at_home(computation_engine)
+        computation_engine.entry.options = {
+            **computation_engine.entry.options,
+            CONF_AWAY_ENTITY: "input_boolean.holiday_mode",
+        }
+
+        def _state(value):
+            return SimpleNamespace(state=value)
+
+        computation_engine.hass.states = MagicMock()
+        states = computation_engine.hass.states
+        states.get = MagicMock(return_value=_state("on"))
+        computation_engine.compute_derived_values(coordinator_data)
+        assert coordinator_data.away_active is True
+
+        for gap in ("unavailable", "unknown", None):
+            states.get = MagicMock(return_value=None if gap is None else _state(gap))
+            computation_engine.compute_derived_values(coordinator_data)
+            assert coordinator_data.away_active is True, gap
+            assert coordinator_data.away_profile_source == "away_floor"
+
+        states.get = MagicMock(return_value=_state("off"))
+        computation_engine.compute_derived_values(coordinator_data)
+        assert coordinator_data.away_active is False
+
+        # Unreadable after an explicit off holds 'home'.
+        states.get = MagicMock(return_value=_state("unavailable"))
+        computation_engine.compute_derived_values(coordinator_data)
+        assert coordinator_data.away_active is False
 
 
 # =============================================================================
@@ -913,6 +1165,205 @@ class TestWeatherCorrelation:
         )
         assert await computation_engine.async_refresh_weather_forecast() is None
 
+    # =========================================================================
+    # AWAY-HOUR MASK (docs/holiday-away/plan.md "What to build" item 3)
+    # =========================================================================
+
+    async def test_away_on_skips_learning_away_off_learns(
+        self, computation_engine, coordinator_data
+    ):
+        """Away on: no learn_from_sample, no save. Away off: sample is learned."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_save = AsyncMock()
+        computation_engine._weather_correlation = wc_instance
+        coordinator_data.weather_temperature_current = 22.0
+        coordinator_data.load_power_kw = 1.5
+
+        with (
+            patch.object(
+                computation_engine,
+                "_async_refresh_weather_away_mask",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.localshift.computation_engine.is_away_active",
+                return_value=True,
+            ),
+        ):
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_not_called()
+        wc_instance.async_save.assert_not_awaited()
+
+        with (
+            patch.object(
+                computation_engine,
+                "_async_refresh_weather_away_mask",
+                new=AsyncMock(),
+            ),
+            patch(
+                "custom_components.localshift.computation_engine.is_away_active",
+                return_value=False,
+            ),
+        ):
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_called_once()
+
+    async def test_refresh_runs_even_with_invalid_temperature(
+        self, computation_engine, coordinator_data
+    ):
+        """The mask refresh runs before the temp/load validity guards."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        computation_engine._weather_correlation = MagicMock()
+        coordinator_data.weather_temperature_current = 0.0
+        coordinator_data.load_power_kw = 1.0
+
+        with patch.object(
+            computation_engine, "_async_refresh_weather_away_mask", new=AsyncMock()
+        ) as mock_refresh:
+            await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        mock_refresh.assert_awaited_once()
+
+    async def test_init_success_calls_refresh(self, computation_engine):
+        """A successful initialize also refreshes the away mask."""
+        computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
+        wc_instance = MagicMock()
+        wc_instance.async_initialize = AsyncMock()
+        computation_engine._load_forecaster.set_weather_correlation = MagicMock()
+
+        with (
+            patch(
+                "custom_components.localshift.computation_engine.WeatherCorrelation",
+                return_value=wc_instance,
+            ),
+            patch.object(
+                computation_engine,
+                "_async_refresh_weather_away_mask",
+                new=AsyncMock(),
+            ) as mock_refresh,
+        ):
+            await computation_engine.async_initialize_weather_correlation()
+
+        mock_refresh.assert_awaited_once()
+
+    async def test_unset_entity_clears_mask_without_recorder(self, computation_engine):
+        """No away entity: set_away_hour_keys(frozenset()) and no recorder call."""
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = ""
+        wc_instance = MagicMock()
+        computation_engine._weather_correlation = wc_instance
+        now = datetime(2026, 8, 3, 10, 0, 0)
+
+        with patch(
+            "custom_components.localshift.computation_engine.async_get_away_intervals"
+        ) as mock_fetch:
+            await computation_engine._async_refresh_weather_away_mask(now)
+
+        mock_fetch.assert_not_called()
+        wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
+
+    async def test_mask_projects_in_the_default_time_zone(self, computation_engine):
+        """#1087: the engine projects away intervals in dt_util.DEFAULT_TIME_ZONE,
+        the zone _today_key() and now_dt.hour use, not UTC or the config string."""
+        from homeassistant.util import dt as dt_util
+
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+            "input_boolean.holiday_mode"
+        )
+        computation_engine._weather_correlation = MagicMock()
+        intervals = [
+            (datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 2, tzinfo=UTC))
+        ]
+
+        with (
+            patch(
+                "custom_components.localshift.computation_engine.async_get_away_intervals",
+                new=AsyncMock(return_value=intervals),
+            ),
+            patch(
+                "custom_components.localshift.computation_engine.away_local_hour_keys",
+                return_value=frozenset(),
+            ) as mock_keys,
+        ):
+            await computation_engine._async_refresh_weather_away_mask(
+                datetime(2026, 8, 3, 10, 0, 0)
+            )
+
+        mock_keys.assert_called_once_with(intervals, dt_util.DEFAULT_TIME_ZONE)
+
+    async def test_failed_fetch_is_not_cached(self, computation_engine):
+        """#1086: a failed fetch (None) leaves the mask and the cache key alone,
+        so the next call retries instead of waiting for midnight."""
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+            "input_boolean.holiday_mode"
+        )
+        wc_instance = MagicMock()
+        computation_engine._weather_correlation = wc_instance
+        now = datetime(2026, 8, 3, 10, 0, 0)
+
+        with patch(
+            "custom_components.localshift.computation_engine.async_get_away_intervals",
+            new=AsyncMock(side_effect=[None, []]),
+        ) as mock_fetch:
+            await computation_engine._async_refresh_weather_away_mask(now)
+            wc_instance.set_away_hour_keys.assert_not_called()
+            assert computation_engine._away_mask_key is None
+
+            await computation_engine._async_refresh_weather_away_mask(now)
+            assert mock_fetch.call_count == 2
+            wc_instance.set_away_hour_keys.assert_called_once_with(frozenset())
+
+    async def test_refresh_fetches_once_per_date_and_entity(self, computation_engine):
+        """A (date, entity) pair fetches once; a date roll or entity change refetches."""
+        computation_engine.entry.options[CONF_AWAY_ENTITY] = (
+            "input_boolean.holiday_mode"
+        )
+        wc_instance = MagicMock()
+        computation_engine._weather_correlation = wc_instance
+        now = datetime(2026, 8, 3, 10, 0, 0)
+        keys = frozenset({("2026-08-02", 3)})
+
+        with (
+            patch(
+                "custom_components.localshift.computation_engine.async_get_away_intervals",
+                new=AsyncMock(return_value=[]),
+            ) as mock_fetch,
+            patch(
+                "custom_components.localshift.computation_engine.away_local_hour_keys",
+                return_value=keys,
+            ),
+        ):
+            await computation_engine._async_refresh_weather_away_mask(now)
+            assert mock_fetch.call_count == 1
+            wc_instance.set_away_hour_keys.assert_called_once_with(keys)
+
+            # Same date/entity: served from cache, no refetch.
+            await computation_engine._async_refresh_weather_away_mask(now)
+            assert mock_fetch.call_count == 1
+            assert wc_instance.set_away_hour_keys.call_count == 1
+
+            # Date roll: refetch.
+            later = now.replace(day=4)
+            await computation_engine._async_refresh_weather_away_mask(later)
+            assert mock_fetch.call_count == 2
+            assert wc_instance.set_away_hour_keys.call_count == 2
+
+            # Entity change on the same date: refetch again.
+            computation_engine.entry.options[CONF_AWAY_ENTITY] = "input_boolean.other"
+            await computation_engine._async_refresh_weather_away_mask(later)
+            assert mock_fetch.call_count == 3
+            assert wc_instance.set_away_hour_keys.call_count == 3
+
+            # The first call used the 30-day sliding window.
+            mock_fetch.assert_any_call(
+                computation_engine.hass,
+                "input_boolean.holiday_mode",
+                now - timedelta(days=30),
+                now,
+            )
+
 
 # =============================================================================
 # Threshold Consistency Tests (Fix: planner/UI threshold mismatch)
@@ -1110,30 +1561,22 @@ class TestStampConfidenceOverforecastCap:
         assert analysis.confidence_ceiling == 1.0
         assert coordinator_data.solar_absent_confidence == 1.0
 
-    def test_cap_applies_to_fresh_analysis(
-        self, computation_engine, coordinator_data
-    ):
+    def test_cap_applies_to_fresh_analysis(self, computation_engine, coordinator_data):
         analysis = self._make_analysis(is_stale=False)
         coordinator_data.solcast_analysis_today = analysis
         coordinator_data.solcast_analysis_tomorrow = None
 
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=0.24))
 
         assert analysis.confidence_ceiling == pytest.approx(0.24)
 
-    def test_cap_bounds_absent_confidence(
-        self, computation_engine, coordinator_data
-    ):
+    def test_cap_bounds_absent_confidence(self, computation_engine, coordinator_data):
         """No analysis at all → absent_confidence is THE confidence, so the cap
         must bound it too (non-conservative default is 1.0)."""
         coordinator_data.solcast_analysis_today = None
         coordinator_data.solcast_analysis_tomorrow = None
 
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=0.24))
 
         assert coordinator_data.solar_absent_confidence == pytest.approx(0.24)
 
@@ -1144,23 +1587,19 @@ class TestStampConfidenceOverforecastCap:
         analysis = self._make_analysis(is_stale=True)
         coordinator_data.solcast_analysis_today = analysis
         coordinator_data.solcast_analysis_tomorrow = None
-        computation_engine._get_switch_state = lambda key: key == (
-            SWITCH_STALE_SOLAR_CONSERVATIVE
+        computation_engine._get_switch_state = lambda key: (
+            key == (SWITCH_STALE_SOLAR_CONSERVATIVE)
         )
         computation_engine.entry = SimpleNamespace(
             options={CONF_STALE_SOLAR_CONFIDENCE_CEILING: 0.3}
         )
 
         # Cap tighter than the knob → cap wins.
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=0.24)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=0.24))
         assert analysis.confidence_ceiling == pytest.approx(0.24)
 
         # Cap dormant (1.0) → knob wins.
-        self._stamp(
-            computation_engine, coordinator_data, self._make_tracker(cap=1.0)
-        )
+        self._stamp(computation_engine, coordinator_data, self._make_tracker(cap=1.0))
         assert analysis.confidence_ceiling == pytest.approx(0.3)
 
     def test_absent_confidence_conservative_floor_respected(
@@ -1170,8 +1609,8 @@ class TestStampConfidenceOverforecastCap:
         conservative default, still bounded by the (tighter) cap."""
         coordinator_data.solcast_analysis_today = None
         coordinator_data.solcast_analysis_tomorrow = None
-        computation_engine._get_switch_state = lambda key: key == (
-            SWITCH_STALE_SOLAR_CONSERVATIVE
+        computation_engine._get_switch_state = lambda key: (
+            key == (SWITCH_STALE_SOLAR_CONSERVATIVE)
         )
 
         self._stamp(

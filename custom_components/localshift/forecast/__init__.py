@@ -6,7 +6,7 @@ from .bootstrapper import ForecastBootstrapper
 from .corrections import ForecastCorrectionProvider
 from .history import HistoryFetcher
 from .history_store import ForecastHistoryStore
-from .load import LoadForecaster, LoadProfiles
+from .load import AwayProfiles, LoadForecaster, LoadProfiles
 from .pipeline import ForecastPipeline
 from .solar import (
     get_solar_for_5min_slot,
@@ -17,6 +17,7 @@ from .solar_accuracy import SolarAccuracyTracker
 
 __all__ = [
     "AccuracyMetricsStore",
+    "AwayProfiles",
     "ForecastAccuracyEngine",
     "ForecastBootstrapper",
     "ForecastCorrectionProvider",

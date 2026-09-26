@@ -399,10 +399,15 @@ def _floor_guard_blocks(
 
     """
 
-    if not (
-        soc <= config.min_soc_pct + config.min_soc_floor_buffer_pct
-        and action in _GRID_CHARGE_ACTIONS
-    ):
+    buffer = config.min_soc_floor_buffer_pct
+    # The min_soc band is the original guard, byte-identical when not away. The
+    # away band is bounded below at the away floor: under it HOLD no longer
+    # drains, so there is no sawtooth to guard against and a small charge on a
+    # trip that started low must not be blocked.
+    in_floor_band = soc <= config.min_soc_pct + buffer or (
+        config.discharge_floor_pct <= soc <= config.discharge_floor_pct + buffer
+    )
+    if not (in_floor_band and action in _GRID_CHARGE_ACTIONS):
         return False
     charge_soc_gain = next_soc - soc
     in_urgency_window = (

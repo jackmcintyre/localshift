@@ -104,7 +104,7 @@ def stage_cost(
                 max_discharge_kwh = config.discharge_rate_kw * slot_hours
                 available_kwh = max(
                     0.0,
-                    (soc_pct - config.min_soc_pct)
+                    (soc_pct - config.discharge_floor_pct)
                     / 100.0
                     * config.battery_capacity_kwh,
                 )
@@ -212,7 +212,7 @@ def terminal_salvage_value(
         return 0.0
 
     usable_kwh = (
-        max(0.0, final_soc_pct - config.min_soc_pct)
+        max(0.0, final_soc_pct - config.discharge_floor_pct)
         / 100.0
         * (config.battery_capacity_kwh * config.discharge_efficiency)
     )

@@ -52,6 +52,7 @@ Determines which actions are physically/legal possible for a given state.
 | Solar sufficiency | Suppress grid charging when solar covers deficit | L1378-1416 |
 | Export profitability | Only export if sell price exceeds threshold | L1437-1446 |
 | Negative-FIT DW guardrail | In avoidance mode, DW export allowed only if net benefit >= $0.02/kWh | `engine/constraints.py` / `engine/core.py` |
+| Away discharge floor | While away is active, `can_discharge = soc > config.discharge_floor_pct` (`max(min_soc_pct, away_reserve_floor_pct)`), and the HOLD/EXPORT transitions clamp their drain at it too | `engine/constraints.py:58,112`, `engine/transitions.py:108,285` (docs/holiday-away/plan.md item 4) |
 
 ### When to Add Hard Constraints
 
@@ -347,6 +348,35 @@ Before proposing changes to optimizer behavior, ask:
 - "Is this adding reserve-holding behavior?" If yes, it needs explicit approval.
 - "Am I treating low overnight SOC as a bug?" If yes, reconsider the framing.
 - "Does this change make proactive charging easier?" If yes, make sure it is gated by a real deadline, not just comfort.
+
+### Exception: the away discharge floor
+
+The away discharge floor (`OptimizerConfig.away_reserve_floor_pct` /
+`discharge_floor_pct`, docs/holiday-away/plan.md item 4) is a deliberate,
+Jack-requested exception to "holding a meaningful reserve without explicit
+reason" above (24 Sep 2026) — it is exactly the reserve-holding behavior the
+anti-goals list warns against, made explicit rather than accidental. Two
+things keep it from eroding the philosophy elsewhere:
+
+- **It is scoped to "away is active".** It is `None` — no floor at all — the
+  rest of the time, so everyday self-consumption is untouched.
+- **It is still only a hard constraint, never a soft charge target.** It
+  removes discharge actions from `feasible_actions()` and clamps how far
+  HOLD/EXPORT may drain; it never adds a reason to grid-charge. The planner
+  does not plan a top-up for an away trip that starts below the floor — see
+  `optimizer_runner.py`'s starting-SOC clamp, which stays at `min_soc_pct`,
+  never at the away floor. The hardware is a different matter: the backup
+  reserve is written at the away value even when SOC is below it, and the
+  Powerwall is kept from grid-charging up to it only by
+  `grid_charging_allowed=False`, which Tesla's cloud periodically resets
+  (#394). So a trip that starts below the away reserve may be topped up
+  from the grid by the Powerwall itself (a few kWh at most). That is
+  accepted: the reserve exists for outage cover (#1092).
+
+If a future change is tempted to give the away floor a soft-penalty
+counterpart (e.g. to *encourage* charging up to it), that is new
+reserve-holding behavior beyond what was requested here and needs the same
+explicit approval as any other addition to the anti-goals list.
 
 ## References
 

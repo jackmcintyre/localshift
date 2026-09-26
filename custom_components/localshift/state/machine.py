@@ -14,9 +14,11 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
+    CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MINIMUM_TARGET_SOC,
+    DEFAULT_AWAY_RESERVE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MINIMUM_TARGET_SOC,
@@ -38,6 +40,8 @@ from .mode_configs import (
     MODE_EXECUTORS,
     ModeConfig,
     calculate_proactive_export_reserve,
+    calculate_self_consumption_reserve,
+    resolve_away_reserve_pct,
 )
 
 if TYPE_CHECKING:
@@ -187,6 +191,10 @@ class StateMachine:
         self._skip_next_debounce: bool = False
         # Track last successful transition for health check intelligence
         self._last_successful_transition: datetime | None = None
+        # Last reserve-only write (away re-step/release, #1082 export re-step).
+        # Not a transition, so it must not arm the transition grace, but it is
+        # still LocalShift's own command for Tesla-override suppression (#1093).
+        self._last_reserve_step: datetime | None = None
         # Grace period after successful transition before health checks trigger corrections
         self._TRANSITION_GRACE_PERIOD = timedelta(
             seconds=STATE_MACHINE_TRANSITION_GRACE_SECONDS
@@ -258,9 +266,9 @@ class StateMachine:
             < TESLA_OVERRIDE_TOLERANCE_PERCENT
         ):
             return True
-        return (
-            self._last_successful_transition is not None
-            and now - self._last_successful_transition < self._SELF_COMMAND_GRACE
+        return any(
+            stamp is not None and now - stamp < self._SELF_COMMAND_GRACE
+            for stamp in (self._last_successful_transition, self._last_reserve_step)
         )
 
     def _detect_tesla_override(self, data: CoordinatorData, now: datetime) -> bool:
@@ -492,9 +500,26 @@ class StateMachine:
         builder_name = MODE_CONFIG_BUILDERS.get(target)
         return getattr(self, builder_name)(data) if builder_name else None
 
+    def _resolve_away_reserve_pct(self, data: CoordinatorData) -> float | None:
+        """Return the clamped away reserve while away is active, else None.
+
+        ``is True`` rather than truthy: test data built from a bare
+        ``MagicMock``/``SimpleNamespace`` carries a truthy ``away_active``
+        attribute even when nothing set it, and that must not silently arm
+        the away reserve (docs/holiday-away/plan.md item 4, same guard as
+        ``optimizer_runner._build_optimizer_config``).
+        """
+        if getattr(data, "away_active", False) is not True:
+            return None
+        return resolve_away_reserve_pct(
+            self._get_option(CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE)
+        )
+
     def _build_self_consumption_config(self, data: CoordinatorData) -> ModeConfig:
         """Build SELF_CONSUMPTION / DEMAND_BLOCK config."""
-        backup_reserve = data.preserve_soc if data.preserve_soc is not None else 10.0
+        backup_reserve = calculate_self_consumption_reserve(
+            data.preserve_soc, self._resolve_away_reserve_pct(data)
+        )
         return ModeConfig(
             operation_mode="self_consumption",
             backup_reserve=backup_reserve,
@@ -554,16 +579,33 @@ class StateMachine:
             spike_discharge_reserve=backup_reserve,
         )
 
+    def _proactive_export_floor(self, data: CoordinatorData) -> float:
+        """Return the PROACTIVE_EXPORT reserve floor: minimum_target_soc, or the
+        away reserve while away if that is higher.
+
+        Shared by the entry builder and the #1082 re-step, so a re-step while away
+        can never walk the reserve below the away floor.
+        """
+        min_target_soc = float(
+            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        )
+        away_reserve_pct = self._resolve_away_reserve_pct(data)
+        if away_reserve_pct is None:
+            return min_target_soc
+        return max(min_target_soc, away_reserve_pct)
+
     def _build_proactive_export_config(self, data: CoordinatorData) -> ModeConfig:
         """Build PROACTIVE_EXPORT config."""
         # Issue #974: one shared formula with BatteryController.set_proactive_export,
         # floored at minimum_target_soc rather than the absolute 4% — the old floor
         # let SOC just above the configured minimum discharge below it.
+        #
+        # docs/holiday-away/plan.md item 4: while away, PROACTIVE_EXPORT is picked
+        # automatically by the planner, so its reserve must also floor at the away
+        # value — otherwise it steps down to minimum_target_soc while away, which
+        # can sit well under the away reserve.
         backup_reserve = calculate_proactive_export_reserve(
-            data.soc,
-            float(
-                self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
-            ),
+            data.soc, self._proactive_export_floor(data)
         )
         return ModeConfig(
             operation_mode="autonomous",
@@ -595,6 +637,12 @@ class StateMachine:
                 data.soc,
                 backup_reserve,
             )
+        # docs/holiday-away/plan.md item 4: HOLD reserve = max(away, min_soc, SOC).
+        # A trip's HOLD slots must never park the Powerwall under the away floor,
+        # even when it sits above the demand-window target (e.g. away=80, target=70).
+        away_reserve_pct = self._resolve_away_reserve_pct(data)
+        if away_reserve_pct is not None:
+            backup_reserve = max(backup_reserve, away_reserve_pct)
         return ModeConfig(
             operation_mode="self_consumption",
             backup_reserve=backup_reserve,
@@ -1114,23 +1162,25 @@ class StateMachine:
         if self._commanded_mode != BatteryMode.PROACTIVE_EXPORT or tracked is None:
             return False
 
+        floor = self._proactive_export_floor(data)
         fresh_soc = self._battery_controller.read_fresh_soc()
         soc = fresh_soc if fresh_soc is not None else data.soc
         # Issue #895: SOC 0 means an unpopulated entity, not an empty battery —
         # stepping on it would drop the reserve straight to the floor.
-        if (
-            soc is None
-            or soc <= 0.0
-            or soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT
-        ):
+        if soc is None or soc <= 0.0:
             return False
 
-        minimum_target = float(
-            self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
-        )
-        new_reserve = calculate_proactive_export_reserve(soc, minimum_target)
-        if new_reserve >= tracked:
-            return False
+        if tracked < floor:
+            # Away started (or its slider rose) while export stayed selected:
+            # lift the reserve to the away floor rather than waiting for a
+            # mode change (docs/holiday-away/plan.md item 4).
+            new_reserve = calculate_proactive_export_reserve(soc, floor)
+        else:
+            if soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT:
+                return False
+            new_reserve = calculate_proactive_export_reserve(soc, floor)
+            if new_reserve >= tracked:
+                return False
 
         if not await self._battery_controller.set_proactive_export_reserve(
             new_reserve, False
@@ -1150,6 +1200,7 @@ class StateMachine:
             soc,
         )
         self._proactive_export_reserve = new_reserve
+        self._last_reserve_step = dt_util.now()
         return True
 
     async def _handle_desired_mode_transition(
@@ -1871,6 +1922,66 @@ class StateMachine:
 
         return False
 
+    async def _step_self_consumption_reserve(self, data: CoordinatorData) -> bool:
+        """Re-step the SELF_CONSUMPTION/DEMAND_BLOCK reserve mid-trip.
+
+        docs/holiday-away/plan.md item 4: without this, the away reserve only
+        takes effect on the *next mode change* — while the mode stays
+        SELF_CONSUMPTION or DEMAND_BLOCK, ``_handle_stable_mode`` only runs the
+        health check, which compares hardware against the stale tracked
+        value. It would never step up when away starts, never release when
+        away ends, and never pick up the slider being moved mid-trip.
+
+        Runs right after the ``_should_skip_health_check`` guard, so it
+        inherits the manual-override, Tesla-override and transition-grace
+        skips without a second ``_handle_tesla_override_state`` call; dry run
+        is already excluded by ``_handle_stable_mode``. Only fires for
+        SELF_CONSUMPTION/DEMAND_BLOCK — GRID_CHARGING and BOOST_CHARGING use a
+        different reserve entirely.
+
+        Returns:
+            True when it wrote a new reserve (this tick's health check is
+            skipped — the reserve write itself is this tick's correction).
+
+        """
+        if self._commanded_mode not in (
+            BatteryMode.SELF_CONSUMPTION,
+            BatteryMode.DEMAND_BLOCK,
+        ):
+            return False
+
+        fresh_reserve = calculate_self_consumption_reserve(
+            data.preserve_soc, self._resolve_away_reserve_pct(data)
+        )
+        tracked_reserve = (
+            self._self_consumption_reserve
+            if self._self_consumption_reserve is not None
+            else 10.0
+        )
+        if fresh_reserve == tracked_reserve:
+            return False
+
+        success = await self._battery_controller.set_self_consumption_reserve(
+            fresh_reserve
+        )
+        if not success:
+            _LOGGER.warning(
+                "AWAY reserve step failed (%.0f%% -> %.0f%%); retrying next tick",
+                tracked_reserve,
+                fresh_reserve,
+            )
+            return False
+
+        _LOGGER.info(
+            "AWAY reserve %s %.0f%% -> %.0f%%",
+            "stepped" if fresh_reserve > tracked_reserve else "released",
+            tracked_reserve,
+            fresh_reserve,
+        )
+        self._self_consumption_reserve = fresh_reserve
+        self._last_reserve_step = dt_util.now()
+        return True
+
     async def _perform_health_check(self, data: CoordinatorData) -> None:
         """Verify hardware state matches commanded mode.
 
@@ -1886,6 +1997,9 @@ class StateMachine:
         """
         now = dt_util.now()
         if await self._should_skip_health_check(data, now):
+            return
+
+        if await self._step_self_consumption_reserve(data):
             return
 
         expected_op, expected_reserve, expected_export, expected_grid_charging = (

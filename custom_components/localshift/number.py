@@ -15,6 +15,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_CHARGE_TAPER_MIN_FACTOR,
     CONF_CHARGE_TAPER_START_PCT,
@@ -28,6 +29,7 @@ from .const import (
     CONF_SWITCHING_PENALTY,
     CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
+    DEFAULT_AWAY_RESERVE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHARGE_TAPER_MIN_FACTOR,
     DEFAULT_CHARGE_TAPER_START_PCT,
@@ -98,6 +100,7 @@ NUMBER_DEFINITIONS: list[tuple[str, str, float]] = [
         "Charge Taper Min Factor",
         DEFAULT_CHARGE_TAPER_MIN_FACTOR,
     ),
+    (CONF_AWAY_RESERVE, "Away Reserve", DEFAULT_AWAY_RESERVE),
 ]
 
 

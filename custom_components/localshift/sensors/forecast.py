@@ -353,6 +353,14 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
                 if len(self.coordinator.data.load_forecast_slots) > 8
                 else None,
             },
+            # Away-mode forecast state (docs/holiday-away/plan.md item 2/5).
+            "away_active": self.coordinator.data.away_active,
+            "away_profile_source": self.coordinator.data.away_profile_source,
+            "away_masked_hours": self.coordinator.data.away_masked_hours,
+            "weather_away_masked_hours": self.coordinator.data.weather_away_masked_hours,
+            "away_floor_kw": round(self.coordinator.data.away_floor_kw, 3)
+            if self.coordinator.data.away_floor_kw is not None
+            else None,
         }
 
 

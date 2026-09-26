@@ -167,7 +167,7 @@ def get_futile_cycling_penalty_factor(
     total_drained = 0.0
 
     capacity_kwh = config.battery_capacity_kwh
-    min_soc = config.min_soc_pct
+    min_soc = config.discharge_floor_pct
     discharge_eff = config.discharge_efficiency
 
     from custom_components.localshift.engine.constraints import (

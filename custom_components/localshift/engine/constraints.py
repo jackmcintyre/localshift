@@ -55,7 +55,7 @@ def _determine_export_actions(
     from custom_components.localshift.engine.types import PlannerAction
 
     actions = []
-    can_discharge = soc_pct > config.min_soc_pct
+    can_discharge = soc_pct > config.discharge_floor_pct
 
     if not can_discharge:
         return actions
@@ -109,7 +109,7 @@ def _determine_export_actions(
                 / config.battery_capacity_kwh
                 * 100.0
             )
-            landing_soc_pct = max(soc_pct - max_export_pp, config.min_soc_pct)
+            landing_soc_pct = max(soc_pct - max_export_pp, config.discharge_floor_pct)
             if landing_soc_pct >= floor_pct:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)
     else:
@@ -716,7 +716,11 @@ def compute_max_feasible_terminal_soc(
                     / config.battery_capacity_kwh
                     * 100.0
                 )
-        soc = max(config.min_soc_pct, min(charge_ceiling, soc))
+        # Clamp at the discharge floor like the sibling simulations in dp_math:
+        # while away the DP's HOLD never drains below the away floor, so
+        # clamping at min_soc_pct under-reported reachable SOC and could drop
+        # the #885 hard floor under a reachable target (#1091).
+        soc = max(config.discharge_floor_pct, min(charge_ceiling, soc))
     return soc
 
 

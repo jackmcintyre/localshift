@@ -120,3 +120,29 @@ def test_the_969_sliders_reach_the_engine_on_the_live_path(
 
     assert options[conf] == value
     assert getattr(_build_optimizer_config(SimpleNamespace(), options), attr) == value
+
+
+def test_away_reserve_reaches_the_engine_on_the_live_path() -> None:
+    """A4/docs/holiday-away/plan.md item 4: CONF_AWAY_RESERVE flows
+    entry.options -> dict -> config.discharge_floor_pct, only while away."""
+    from custom_components.localshift.computation_engine import ComputationEngine
+    from custom_components.localshift.const import CONF_AWAY_RESERVE
+    from custom_components.localshift.engine.optimizer_runner import (
+        _build_optimizer_config,
+    )
+
+    engine = ComputationEngine.__new__(ComputationEngine)
+    engine.entry = SimpleNamespace(options={CONF_AWAY_RESERVE: 40})
+    engine._get_switch_state = lambda _key: False
+
+    options = engine._build_optimizer_config_options()
+    assert options[CONF_AWAY_RESERVE] == 40
+
+    away_config = _build_optimizer_config(SimpleNamespace(away_active=True), options)
+    assert away_config.away_reserve_floor_pct == 40
+    assert away_config.discharge_floor_pct == 40
+
+    not_away_config = _build_optimizer_config(
+        SimpleNamespace(away_active=False), options
+    )
+    assert not_away_config.away_reserve_floor_pct is None

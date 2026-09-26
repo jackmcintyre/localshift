@@ -245,6 +245,7 @@ def _build_optimizer_config(
         CHARGE_RATE_GRID_KW,
         CHARGE_RATE_SOLAR_KW,
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+        CONF_AWAY_RESERVE,
         CONF_BATTERY_TARGET,
         CONF_CHARGE_TAPER_MIN_FACTOR,
         CONF_CHARGE_TAPER_START_PCT,
@@ -261,6 +262,7 @@ def _build_optimizer_config(
         CONF_SWITCHING_PENALTY_PER_KWH,
         CONF_TARGET_PENALTY,
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
+        DEFAULT_AWAY_RESERVE,
         DEFAULT_BATTERY_TARGET,
         DEFAULT_CHARGE_TAPER_MIN_FACTOR,
         DEFAULT_CHARGE_TAPER_START_PCT,
@@ -276,6 +278,9 @@ def _build_optimizer_config(
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
+    )
+    from custom_components.localshift.state.mode_configs import (
+        resolve_away_reserve_pct,
     )
 
     # User-configurable target SOC for demand window
@@ -365,6 +370,20 @@ def _build_optimizer_config(
         config_options.get(CONF_MAX_PRECHARGE_PRICE, DEFAULT_MAX_PRECHARGE_PRICE)
     )
 
+    # Away reserve (docs/holiday-away/plan.md item 4): a discharge floor, set only
+    # while away is active. ``is True`` rather than truthy — test data built from
+    # MagicMock/SimpleNamespace carries a truthy ``away_active`` attribute by
+    # default even when nothing set it, and that must not silently arm the floor.
+    # Rebuilt every cycle from config_options, so the floor releases on the very
+    # next cycle once away ends (no separate "release" step needed on this path).
+    away_reserve_floor_pct: float | None = None
+    if getattr(data, "away_active", False) is True:
+        # Same clamp-and-fallback as the state-machine path, so a corrupted
+        # option can't break the optimizer build.
+        away_reserve_floor_pct = resolve_away_reserve_pct(
+            config_options.get(CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE)
+        )
+
     # Apply adaptive parameter transforms (Issue #444 Phase 2)
     adaptive = getattr(data, "adaptive_params", None)
 
@@ -412,6 +431,7 @@ def _build_optimizer_config(
         # --- SOC constraints ---
         min_soc_pct=min_soc,  # User-configured minimum
         max_soc_pct=100.0,  # Hard ceiling
+        away_reserve_floor_pct=away_reserve_floor_pct,  # None unless away is active
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,

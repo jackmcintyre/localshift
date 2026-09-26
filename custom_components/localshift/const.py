@@ -88,6 +88,15 @@ MIN_SAMPLES_PER_DAY_HOUR = 4
 # hour before it is trusted over the global (combined) average.
 MIN_SAMPLES_PER_AGGREGATE_HOUR = 8
 
+# Away-mode consumption profile (docs/holiday-away/plan.md "What to build"
+# item 2). Mirrors MIN_SAMPLES_PER_HOUR: an hour needs at least this many
+# full-away-hour samples before the away profile is trusted for that hour.
+MIN_AWAY_SAMPLES_PER_HOUR = 3
+
+# Local hours (00:00-03:00) whose at-home mean seeds the away-mode overnight
+# floor until enough away-hour samples accumulate for a real away profile.
+AWAY_FLOOR_HOURS = (0, 1, 2)
+
 # -----------------------------------------------------------------------------
 # Config Flow Keys — Entity Selection (Step 1)
 # -----------------------------------------------------------------------------
@@ -139,6 +148,20 @@ CONF_NOTIFY_SERVICE = "notify_service"
 # Weather entity (for temperature-based consumption prediction)
 CONF_WEATHER_ENTITY = "weather_entity"
 DEFAULT_WEATHER_ENTITY = ""  # No default - user must configure
+
+# Away entity: any on/off entity that is on while the house is empty
+# (e.g. input_boolean.holiday_mode). Unset means no behaviour change.
+CONF_AWAY_ENTITY = "away_entity"
+DEFAULT_AWAY_ENTITY = ""
+
+# Away reserve (docs/holiday-away/plan.md "What to build" item 4): the backup
+# reserve (and planner discharge floor) held while away is active. Range
+# 10-80; the Tesla firmware silently clamps 81-99 to 80
+# (BACKUP_RESERVE_MAX_VALID), so the slider's own max matches that ceiling
+# rather than allowing a value the hardware would rewrite underneath it.
+CONF_AWAY_RESERVE = "away_reserve"
+DEFAULT_AWAY_RESERVE = 30
+AWAY_RESERVE_MIN = 10
 
 # Temperature thresholds for degree-day model
 CONF_COOLING_THRESHOLD = "cooling_threshold"
@@ -419,6 +442,13 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "",
         "icon": "mdi:battery-architect",
+    },
+    CONF_AWAY_RESERVE: {
+        "min": AWAY_RESERVE_MIN,
+        "max": BACKUP_RESERVE_MAX_VALID,
+        "step": 1,
+        "unit": "%",
+        "icon": "mdi:bag-suitcase",
     },
 }
 

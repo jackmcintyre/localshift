@@ -41,6 +41,7 @@ class WeatherDiagnosticsEngine:
             data.weather_avg_heating_slope = 0.0
             data.weather_avg_r_squared = 0.0
             data.weather_sample_count = 0
+            data.weather_away_masked_hours = 0
             return
 
         diagnostics = weather_correlation.get_diagnostics()
@@ -50,6 +51,10 @@ class WeatherDiagnosticsEngine:
         data.weather_avg_cooling_slope = diagnostics.get("average_cooling_slope", 0.0)
         data.weather_avg_heating_slope = diagnostics.get("average_heating_slope", 0.0)
         data.weather_avg_r_squared = diagnostics.get("average_r_squared", 0.0)
+        # docs/holiday-away/plan.md item 2, decision D4: report both learning
+        # windows' masked-hour counts. WeatherCorrelation.get_diagnostics()
+        # already returns this; bridge it the same way as the rest above.
+        data.weather_away_masked_hours = diagnostics.get("away_masked_hours", 0)
 
         # Majority rule: the old "high if ANY hour is high" let a single good
         # hour brand the whole forecast "high". Report the label the bulk of

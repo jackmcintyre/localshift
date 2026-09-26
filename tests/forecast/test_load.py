@@ -7,11 +7,14 @@ import pytest
 from custom_components.localshift.const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+    LOAD_FORECAST_CEILING_FACTOR,
+    MIN_AWAY_SAMPLES_PER_HOUR,
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
     MIN_SAMPLES_PER_DAY_HOUR,
 )
 from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
 from custom_components.localshift.forecast.load import (
+    AwayProfiles,
     LoadForecaster,
     LoadProfiles,
 )
@@ -1318,3 +1321,322 @@ class TestPerDayOfWeekProfiles:
 
         assert source == "profile_hour"
         assert kw == 0.5
+
+
+class TestAwayModeProfile:
+    """docs/holiday-away/plan.md item 2: forecast the empty house while away.
+
+    ``set_away_profiles`` resolves once (away profile -> floor -> at_home)
+    and, when it resolves to something other than "at_home", replaces the
+    #679 day-of-week resolution outright in
+    ``estimate_hourly_consumption_kw``.
+    """
+
+    def _away_profiles(
+        self,
+        away_avg: dict[int, float] | None = None,
+        away_counts: dict[int, int] | None = None,
+        floor_kw: float | None = None,
+    ) -> AwayProfiles:
+        return AwayProfiles(
+            away_avg=away_avg or {},
+            away_counts=away_counts or {},
+            floor_kw=floor_kw,
+        )
+
+    def test_none_is_identical_to_never_called(self):
+        """L1a: set_away_profiles(None) is byte-identical to no call at all,
+        swept over every hour."""
+        cleared = _create_load_forecaster()
+        cleared.set_away_profiles(None)
+
+        for hour in range(24):
+            kwargs = dict(
+                hourly_avg_kw=_full_profile(0.6),
+                slot_hour=hour,
+                current_hour=11,
+                current_load_kw=0.0,
+                recent_load_kw=0.0,
+            )
+            plain = _create_load_forecaster().estimate_hourly_consumption_kw(**kwargs)
+            assert cleared.estimate_hourly_consumption_kw(**kwargs) == plain
+
+    def test_none_is_identical_with_daily_profiles_also_injected(self):
+        """L1b: with daily profiles ALSO injected, away=None changes nothing."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_daily_profiles(
+            LoadProfiles(
+                daily_avg={2: {11: 2.0}},
+                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR}},
+            )
+        )
+        forecaster.set_away_profiles(None)
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(0.5),
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            day_of_week=2,
+        )
+
+        assert source == "profile_hour:day_2"
+        assert kw == 2.0
+
+    def test_qualifying_away_profile_used_with_tag(self):
+        """L2: every hour >= MIN_AWAY_SAMPLES_PER_HOUR -> the away profile wins."""
+        forecaster = _create_load_forecaster()
+        away_avg = _full_profile(0.35)
+        away_counts = {h: MIN_AWAY_SAMPLES_PER_HOUR for h in range(24)}
+        forecaster.set_away_profiles(self._away_profiles(away_avg, away_counts))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+
+        assert source == "profile_hour:away_profile"
+        assert kw == 0.35
+        assert forecaster.get_away_profile_source() == "away_profile"
+
+    def test_one_thin_hour_falls_back_to_flat_floor_everywhere(self):
+        """L3: one hour below threshold anywhere -> the whole day uses the
+        flat floor, not a per-hour mix."""
+        forecaster = _create_load_forecaster()
+        away_avg = _full_profile(0.35)
+        away_counts = {h: MIN_AWAY_SAMPLES_PER_HOUR for h in range(24)}
+        away_counts[7] = MIN_AWAY_SAMPLES_PER_HOUR - 1
+        forecaster.set_away_profiles(
+            self._away_profiles(away_avg, away_counts, floor_kw=0.4)
+        )
+
+        for hour in (0, 7, 23):
+            kw, source = forecaster.estimate_hourly_consumption_kw(
+                hourly_avg_kw=_full_profile(2.0),
+                slot_hour=hour,
+                current_hour=None,
+                current_load_kw=0.0,
+                recent_load_kw=0.0,
+            )
+            assert source == "profile_hour:away_floor"
+            assert kw == 0.4
+
+    def test_no_away_samples_uses_the_floor(self):
+        """L4: no away samples anywhere -> the floor."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=3,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+
+        assert source == "profile_hour:away_floor"
+        assert kw == 0.35
+
+    def test_no_floor_and_no_profile_is_at_home(self):
+        """L5a: neither a qualifying profile nor a positive floor -> at_home,
+        today's behaviour, no ':away_*' suffix at all."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=None))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=3,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+
+        assert source == "profile_hour"
+        assert kw == 2.0
+        assert forecaster.get_away_profile_source() == "at_home"
+
+    def test_zero_floor_is_also_at_home(self):
+        """L5b: a zero (or negative) floor_kw doesn't count as a usable floor."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.0))
+
+        assert forecaster.get_away_profile_source() == "at_home"
+
+    def test_away_beats_a_qualifying_day_of_week_bucket(self):
+        """L6: away mode skips the #679 day-of-week resolution outright, even
+        when the day bucket itself would qualify."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_daily_profiles(
+            LoadProfiles(
+                daily_avg={2: {11: 9.0}},
+                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR}},
+            )
+        )
+        away_avg = _full_profile(0.35)
+        away_counts = {h: MIN_AWAY_SAMPLES_PER_HOUR for h in range(24)}
+        forecaster.set_away_profiles(self._away_profiles(away_avg, away_counts))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            day_of_week=2,
+        )
+
+        assert source == "profile_hour:away_profile"
+        assert kw == 0.35
+
+    def test_hour_distance_0_still_uses_live_load(self):
+        """L7a: at hour_distance 0, away mode doesn't override live blending."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=0.5,
+            recent_load_kw=0.6,
+        )
+
+        assert source == "blended_live:away_floor"
+        expected = round(0.3 * 0.5 + 0.7 * 0.6, 3)
+        assert kw == expected
+
+    def test_hour_distance_1_to_3_blends_recent_load_with_the_floor(self):
+        """L7b: hour_distance 1-3 blends recent load with the FLOOR (not the
+        at-home historical value) using DEFAULT_LOAD_INITIAL_WEIGHT*0.8^d."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        for distance in (1, 2, 3):
+            kw, source = forecaster.estimate_hourly_consumption_kw(
+                hourly_avg_kw=_full_profile(2.0),
+                slot_hour=(10 + distance) % 24,
+                current_hour=10,
+                current_load_kw=0.0,
+                recent_load_kw=1.0,
+                hours_ahead=float(distance),
+            )
+            live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
+                DEFAULT_LOAD_DECAY_FACTOR**distance
+            )
+            expected = round(live_weight * 1.0 + (1.0 - live_weight) * 0.35, 3)
+            assert source == f"decay_load_d{distance}:away_floor"
+            assert kw == expected
+
+    def test_hour_distance_4_is_the_pure_floor(self):
+        """L7c: hour_distance >= 4 (beyond the decay window) is the floor,
+        with no live blend at all."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=15,
+            current_hour=10,
+            current_load_kw=0.0,
+            recent_load_kw=1.0,
+            hours_ahead=4.0,
+        )
+
+        assert source == "profile_hour:away_floor"
+        assert kw == 0.35
+
+    def test_weather_skipped_while_away(self):
+        """L8 (Jack's call, 24 Sep): no weather adjustment on the away profile.
+        The slope was learned from at-home hours (mostly the AC), so a hot day
+        must not lift the empty-house floor (#1089)."""
+        mock_entry = _create_mock_entry()
+        weather = MagicMock()
+        weather.get_coefficients_for_hour.return_value = MagicMock(confidence="medium")
+        weather.predict_load.return_value = (0.9, "weather_heating")
+
+        forecaster = LoadForecaster(mock_entry, weather_correlation=weather)
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            temperature=30.0,
+        )
+
+        weather.predict_load.assert_not_called()
+        assert source == "profile_hour:away_floor"
+        assert kw == 0.35
+
+        # Clearing away brings the weather adjustment straight back.
+        forecaster.set_away_profiles(None)
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            temperature=30.0,
+        )
+        weather.predict_load.assert_called_once()
+        assert source == "weather_heating"
+
+    def test_switches_back_after_clearing(self):
+        """L9: set_away_profiles(None) after an away profile restores at-home."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+        forecaster.set_away_profiles(None)
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+
+        assert source == "profile_hour"
+        assert kw == 2.0
+        assert forecaster.get_away_profile_source() == "at_home"
+
+    def test_ceiling_still_derived_from_at_home_peak(self):
+        """L10: the #826 ceiling takes the max across the away AND at-home
+        profiles, so a quiet away floor can only loosen it, never tighten it."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        at_home = _full_profile(1.0)
+        at_home[11] = 10.0
+        kw, _source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=at_home,
+            slot_hour=11,
+            current_hour=11,
+            current_load_kw=999.0,
+            recent_load_kw=999.0,
+        )
+
+        assert kw == pytest.approx(round(10.0 * LOAD_FORECAST_CEILING_FACTOR, 3))
+
+    def test_day_of_week_none_still_swaps(self):
+        """L11: day_of_week=None (the soc_simulator/excess_solar callers)
+        still resolves the away profile — the swap doesn't depend on it."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+            day_of_week=None,
+        )
+
+        assert source == "profile_hour:away_floor"
+        assert kw == 0.35

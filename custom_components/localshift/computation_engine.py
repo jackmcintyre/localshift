@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
+    CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_CHARGE_TAPER_MIN_FACTOR,
     CONF_CHARGE_TAPER_START_PCT,
@@ -35,6 +36,7 @@ from .const import (
     CONF_TARGET_PENALTY,
     CONF_WEATHER_LEARNING_ENABLED,
     DEFAULT_ABSENT_SOLAR_CONFIDENCE,
+    DEFAULT_AWAY_RESERVE,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_CHARGE_TAPER_MIN_FACTOR,
     DEFAULT_CHARGE_TAPER_START_PCT,
@@ -91,8 +93,15 @@ from .forecast import (
     LoadProfiles,
     sum_solar_before_target,
 )
-from .learning.correlation import WeatherCorrelation
+from .learning.correlation import SLIDING_WINDOW_DAYS, WeatherCorrelation
 from .pricing.types import ForecastSlot
+from .utils.away import (
+    async_get_away_intervals,
+    away_local_hour_keys,
+    away_state_unknown,
+    get_away_entity_id,
+    is_away_active,
+)
 
 # Backward-compatible re-export for tests/importers that import BatteryMode
 # from computation_engine.
@@ -157,6 +166,17 @@ class ComputationEngine:
 
         # Weather correlation for temperature-based consumption prediction
         self._weather_correlation: WeatherCorrelation | None = None
+
+        # Away-hour mask for weather learning (docs/holiday-away/plan.md item
+        # 3): (today's date, away entity id) the mask was last built for.
+        # None until the first refresh. Owns the recorder IO; the
+        # WeatherCorrelation itself stays pure and just applies the mask it's
+        # handed via set_away_hour_keys.
+        self._away_mask_key: tuple[str, str | None] | None = None
+        # Last known away state, held while the away entity can't be read
+        # (see utils.away.away_state_unknown). Starts not-away after a restart.
+        self._away_active_held: bool = False
+        self._away_hold_logged: bool = False
 
         # Create core engines for DP optimizer pipeline
         self._load_forecaster = LoadForecaster(
@@ -440,6 +460,42 @@ class ComputationEngine:
         data.optimizer_precharge_backstop_active = False
         return True
 
+    def _resolve_away_active(self) -> bool:
+        """Return whether the house is away, holding the last known state
+        while the configured away entity is missing, unavailable or unknown."""
+        if away_state_unknown(self.hass, self.entry):
+            if not self._away_hold_logged:
+                _LOGGER.warning(
+                    "Away entity %s can't be read; holding last known away state (%s)",
+                    get_away_entity_id(self.entry),
+                    "away" if self._away_active_held else "home",
+                )
+                self._away_hold_logged = True
+            return self._away_active_held
+        self._away_hold_logged = False
+        self._away_active_held = is_away_active(self.hass, self.entry)
+        return self._away_active_held
+
+    def _apply_away_forecast_state(self, data: CoordinatorData) -> None:
+        """Forecast the empty house while away (docs/holiday-away/plan.md item 2).
+
+        Decided fresh every cycle (about a minute), not at midnight: the
+        moment the away entity switches on, the away profile — or, until
+        enough away-hour samples exist, the overnight floor — takes over
+        from the at-home profile within the hour. Injects into the
+        forecaster and writes the diagnostics fields onto ``data`` so the
+        sensor stays truthful even in manual mode, since this runs before
+        the manual-override early return.
+        """
+        active = self._resolve_away_active()
+        fetched_profiles = self._history_fetcher.get_away_profiles()
+        self._load_forecaster.set_away_profiles(fetched_profiles if active else None)
+
+        data.away_active = active
+        data.away_profile_source = self._load_forecaster.get_away_profile_source()
+        data.away_masked_hours = self._history_fetcher.get_away_masked_hours()
+        data.away_floor_kw = fetched_profiles.floor_kw
+
     def _bridge_history_results(self, data: CoordinatorData, now_dt: datetime) -> None:
         """Bridge HistoryFetcher results to CoordinatorData (Issue #493).
 
@@ -639,6 +695,11 @@ class ComputationEngine:
                 weekend_counts=weekend_counts,
             )
         )
+
+        # Away-mode forecast state (docs/holiday-away/plan.md item 2): decided
+        # once per cycle, before the manual-override return below, so the
+        # diagnostics sensor stays truthful in manual mode too.
+        self._apply_away_forecast_state(data)
 
         # ---- Step 2: Mode detection from Teslemetry state ----
         self._detect_hardware_modes(data)
@@ -919,6 +980,12 @@ class ComputationEngine:
             CONF_PRECHARGE_RUNWAY_MARGIN_MIN: self.entry.options.get(
                 CONF_PRECHARGE_RUNWAY_MARGIN_MIN, DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
             ),
+            # Away reserve (docs/holiday-away/plan.md item 4): same decorative-slider
+            # trap as every knob above — the runner reads this dict, not entry.options
+            # directly, so this line is what keeps the away reserve live-effective.
+            CONF_AWAY_RESERVE: self.entry.options.get(
+                CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE
+            ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
             ),
@@ -1169,6 +1236,59 @@ class ComputationEngine:
             _LOGGER.error("Failed to initialize weather correlation: %s", e)
             self._weather_correlation = None
             self._load_forecaster.set_weather_correlation(None)
+            return
+
+        # Close the gap before the first medium tick after startup grace
+        # (docs/holiday-away/plan.md item 3): the first forecast after a
+        # restart following a trip should already see the mask. Its own guard:
+        # a mask failure must not tear down weather correlation (#1085).
+        try:
+            await self._async_refresh_weather_away_mask(dt_util.now())
+        except Exception:
+            _LOGGER.warning(
+                "Away-hour mask refresh failed; retrying on the next tick",
+                exc_info=True,
+            )
+
+    async def _async_refresh_weather_away_mask(self, now_dt: datetime) -> None:
+        """Refresh the weather-correlation away-hour mask if it's stale.
+
+        Refreshes once per (today's date, away entity) pair: a date roll, or
+        the away entity option changing, triggers a refetch on the next
+        call. Recorder IO only happens when an away entity is configured; an
+        unset entity just clears the mask.
+
+        Args:
+            now_dt: The current local datetime.
+
+        """
+        entity = get_away_entity_id(self.entry)
+        key = (now_dt.date().isoformat(), entity)
+        if key == self._away_mask_key:
+            return
+
+        if entity is None:
+            keys: frozenset[tuple[str, int]] = frozenset()
+        else:
+            intervals = await async_get_away_intervals(
+                self.hass,
+                entity,
+                now_dt - timedelta(days=SLIDING_WINDOW_DAYS),
+                now_dt,
+            )
+            if intervals is None:
+                # Failed fetch: keep the current mask and don't stamp the key,
+                # so the next call retries instead of waiting for midnight
+                # (#1086).
+                return
+            keys = away_local_hour_keys(intervals, dt_util.DEFAULT_TIME_ZONE)
+
+        if self._weather_correlation is not None:
+            # Sync call: keeps this safe against tests (and callers) whose
+            # weather correlation is a plain MagicMock() with no awaitable
+            # methods.
+            self._weather_correlation.set_away_hour_keys(keys)
+        self._away_mask_key = key
 
     async def async_learn_weather_sample(self, data: CoordinatorData) -> None:
         """Learn from current temperature/load observation.
@@ -1190,6 +1310,17 @@ class ComputationEngine:
         if not weather_learning_enabled:
             return
 
+        now_dt = dt_util.now()
+
+        # Refresh the away-hour mask before the validity guards below: the
+        # mask also affects predictions, not just what gets learned here.
+        await self._async_refresh_weather_away_mask(now_dt)
+
+        # Away hours are kept out of learning entirely (docs/holiday-away/
+        # plan.md item 3): the sample is simply never recorded.
+        if self._resolve_away_active():
+            return
+
         # Only learn if we have valid temperature and load data
         current_temp = data.weather_temperature_current
         if current_temp <= 0:  # Invalid temperature
@@ -1199,7 +1330,6 @@ class ComputationEngine:
         if current_load <= 0:
             return
 
-        now_dt = dt_util.now()
         current_hour = now_dt.hour
 
         # Learn from this sample
